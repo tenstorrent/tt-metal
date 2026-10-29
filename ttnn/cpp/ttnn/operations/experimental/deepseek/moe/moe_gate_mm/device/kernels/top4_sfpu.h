@@ -42,24 +42,19 @@ inline void _top4_configure_addrmod_() {
     constexpr uint32_t ADDRMOD_OFFSET = 4;
 
     addr_mod_t{
-        .dest = {.incr = 0, .clr = 0, .cr = 0, .c_to_cr = 0},
+        .dest = {.incr = 6, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_0);
 
     addr_mod_t{
-        .dest = {.incr = 2, .clr = 0, .cr = 0, .c_to_cr = 0},
+        .dest = {.incr = -6, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_1);
 
     addr_mod_t{
-        .dest = {.incr = 6, .clr = 0, .cr = 0, .c_to_cr = 0},
+        .dest = {.incr = 2, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_2);
-
-    addr_mod_t{
-        .dest = {.incr = -6, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
 inline void _calculate_top4_() {
@@ -69,18 +64,18 @@ inline void _calculate_top4_() {
     //-------------------------------------------------------------------------
     // Step 1: Load BF16 values to HI 16 bits from offsets 0, 2, 8, 10 -> 4-3
     //-------------------------------------------------------------------------
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);  // offset 8
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 32);  // offset 10
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_0, 32);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);  // offset 8
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);  // offset 10
 
     //-------------------------------------------------------------------------
     // Step 2: Load BF16 values to HI 16 bits from offsets 4, 6, 12, 14 -> LREG4-7
     //-------------------------------------------------------------------------
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);  // offset 12
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 32);  // offset 14
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_0, 32);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 32);  // offset 12
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_1, 32);  // offset 14
 
     //-------------------------------------------------------------------------
     // Step 3: Transpose
@@ -161,7 +156,7 @@ inline void _calculate_top4_() {
     // Using LO16 mode to write the lower 16 bits (the indices)
     //-------------------------------------------------------------------------
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 0);  // Write 1st index
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 0);  // Write 1st index
 }
 
 }  // namespace sfpu
