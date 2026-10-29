@@ -9,6 +9,7 @@
 #include <device.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
+#include <tt-metalium/experimental/global_semaphore_pool.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_metal.hpp>
@@ -163,6 +164,10 @@ GlobalSemaphore CreateGlobalSemaphore(
 
 void ReserveGlobalSemaphorePool(distributed::MeshDevice& device, uint32_t num_slots) {
     device.impl().reserve_global_semaphore_pool(num_slots);
+}
+
+GlobalSemaphore CreateGlobalSemaphoreFromPool(distributed::MeshDevice& device, const CoreRangeSet& cores) {
+    return GlobalSemaphore{GlobalSemaphoreImpl{device, cores}};
 }
 }  // namespace experimental
 

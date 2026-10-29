@@ -69,7 +69,7 @@ public:
      * Make sure no kernel is updating the semaphore while it is reset. Chips on other hosts are not written, and
      * a reset cannot be captured in a trace.
      *
-     * `sub_device_ids` is only supported for semaphores from CreateGlobalSemaphore(device, cores).
+     * `sub_device_ids` is only supported for semaphores from experimental::CreateGlobalSemaphoreFromPool.
      */
     void reset_semaphore_value(uint32_t reset_value, ttsl::Span<const SubDeviceId> sub_device_ids) const;
 

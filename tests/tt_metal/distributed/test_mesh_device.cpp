@@ -17,6 +17,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/experimental/global_semaphore_pool.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
@@ -384,7 +385,7 @@ TEST_F(MeshDeviceTest, PoolGlobalSemaphoreHasOneAddressAndResetsEveryChip) {
         GTEST_SKIP() << "Skipping: TT_METAL_GLOBAL_SEMAPHORE_POOL_SLOTS=0";
     }
     const CoreRangeSet cores(std::vector<CoreRange>{CoreRange({0, 0}, {1, 1}), CoreRange({3, 2}, {3, 2})});
-    auto sem = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto sem = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     ExpectGlobalSemaphoreValue(*mesh_device_, cores, sem.address(), 0);
     sem.reset_semaphore_value(0x1234);
     ExpectGlobalSemaphoreValue(*mesh_device_, cores, sem.address(), 0x1234);
@@ -403,7 +404,7 @@ TEST_F(MeshDevice2x4Test, SubmeshesShareTheParentsGlobalSemaphorePool) {
     std::vector<GlobalSemaphore> sems;
     for (const auto& submesh : submeshes) {
         EXPECT_EQ(submesh->impl().global_semaphore_pool(), pool);
-        sems.push_back(CreateGlobalSemaphore(*submesh, cores));
+        sems.push_back(experimental::CreateGlobalSemaphoreFromPool(*submesh, cores));
         sems.back().reset_semaphore_value(static_cast<uint32_t>(sems.size()));
     }
     EXPECT_EQ(pool->num_live(), submeshes.size());

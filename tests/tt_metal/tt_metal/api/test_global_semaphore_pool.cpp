@@ -20,6 +20,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/global_semaphore_pool.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -140,7 +141,7 @@ TEST_F(GlobalSemaphorePoolFixture, StartsAtZeroAndResetReachesOnlyItsCores) {
     const CoreRangeSet sem_cores(std::vector<CoreRange>{CoreRange({0, 0}, {2, 1}), CoreRange({3, 3}, {3, 3})});
     const CoreRangeSet untouched(CoreRange({0, 2}, {0, 2}));
     for (const auto& mesh_device : devices_) {
-        auto sem = CreateGlobalSemaphore(*mesh_device, sem_cores);
+        auto sem = experimental::CreateGlobalSemaphoreFromPool(*mesh_device, sem_cores);
         EXPECT_EQ(sem.attribute_values(), std::make_tuple(sem_cores, BufferType::L1));
         const auto& pool = PoolOf(*mesh_device);
         EXPECT_GE(sem.address(), pool.base_address());
@@ -160,13 +161,13 @@ TEST_F(GlobalSemaphorePoolFixture, CopiesShareASlot) {
         const auto& pool = PoolOf(*mesh_device);
         const uint32_t live_before = pool.num_live();
         {
-            std::optional<GlobalSemaphore> first = CreateGlobalSemaphore(*mesh_device, cores);
+            std::optional<GlobalSemaphore> first = experimental::CreateGlobalSemaphoreFromPool(*mesh_device, cores);
             const DeviceAddr first_address = first->address();
             GlobalSemaphore copy = *first;
             first.reset();
             EXPECT_EQ(copy.address(), first_address);
             EXPECT_EQ(pool.num_live(), live_before + 1) << "the copy should keep the slot";
-            auto second = CreateGlobalSemaphore(*mesh_device, cores);
+            auto second = experimental::CreateGlobalSemaphoreFromPool(*mesh_device, cores);
             EXPECT_NE(second.address(), first_address);
             EXPECT_EQ(pool.num_live(), live_before + 2);
         }
@@ -178,7 +179,7 @@ TEST_F(GlobalSemaphorePoolFixture, RejectsCoresOutsideTheWorkerGrid) {
     for (const auto& mesh_device : devices_) {
         const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
         const CoreRangeSet outside(CoreRange({0, 0}, {grid.x, 0}));
-        EXPECT_ANY_THROW(CreateGlobalSemaphore(*mesh_device, outside));
+        EXPECT_ANY_THROW(experimental::CreateGlobalSemaphoreFromPool(*mesh_device, outside));
     }
 }
 
@@ -214,7 +215,7 @@ TEST_F(GlobalSemaphorePoolFixture, CreatedAfterCachedProgramsSealedTheirCores) {
 
         std::vector<GlobalSemaphore> sems;
         for (const auto& cores : sem_core_sets) {
-            sems.push_back(CreateGlobalSemaphore(*mesh_device, cores));
+            sems.push_back(experimental::CreateGlobalSemaphoreFromPool(*mesh_device, cores));
             ExpectValueOnCores(*mesh_device, cores, sems.back().address(), 0);
         }
         EXPECT_EQ(arena.high_water_mark(program_cores), high_water_mark);
@@ -291,10 +292,10 @@ TEST_F(GlobalSemaphorePoolOwnDevice, FullPoolErrorNamesCapacityPeakAndOverride) 
         return;
     }
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
-    auto first = CreateGlobalSemaphore(*mesh_device_, cores);
-    auto second = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto first = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
+    auto second = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     EXPECT_THAT(
-        [&] { CreateGlobalSemaphore(*mesh_device_, cores); },
+        [&] { experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores); },
         ThrowsMessage<std::runtime_error>(
             AllOf(HasSubstr("all 2 slots"), HasSubstr("peak 2"), HasSubstr("ReserveGlobalSemaphorePool"))));
     EXPECT_EQ(PoolOf(*mesh_device_).num_live(), 2u);
@@ -308,11 +309,11 @@ TEST_F(GlobalSemaphorePoolOwnDevice, ReleasedSlotIsReused) {
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
     DeviceAddr address = 0;
     {
-        auto sem = CreateGlobalSemaphore(*mesh_device_, cores);
+        auto sem = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
         address = sem.address();
         sem.reset_semaphore_value(9);
     }
-    auto again = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto again = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     EXPECT_EQ(again.address(), address);
     ExpectValueOnCores(*mesh_device_, cores, again.address(), 0);
     EXPECT_EQ(PoolOf(*mesh_device_).peak_live(), 1u);
@@ -327,7 +328,7 @@ TEST_F(GlobalSemaphorePoolOwnDevice, WithoutReserveThereIsNoPoolAndL1IsUnchanged
 
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
     EXPECT_THAT(
-        [&] { CreateGlobalSemaphore(*mesh_device_, cores); },
+        [&] { experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores); },
         ThrowsMessage<std::runtime_error>(HasSubstr("ReserveGlobalSemaphorePool")));
     {
         auto sem = CreateGlobalSemaphore(*mesh_device_, cores, 3);
@@ -401,7 +402,7 @@ TEST_F(GlobalSemaphorePoolOwnDevice, ReleasedSlotWaitsForInFlightWork) {
     const CoreRangeSet cores(CoreRange(core, core));
     auto& cq1 = mesh_device_->mesh_command_queue(1);
 
-    std::optional<GlobalSemaphore> old_sem = CreateGlobalSemaphore(*mesh_device_, cores);
+    std::optional<GlobalSemaphore> old_sem = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     const DeviceAddr address = old_sem->address();
 
     Program program = CreateProgram();
@@ -412,7 +413,7 @@ TEST_F(GlobalSemaphorePoolOwnDevice, ReleasedSlotWaitsForInFlightWork) {
     distributed::EnqueueMeshWorkload(cq1, workload, /*blocking=*/false);
 
     old_sem.reset();
-    auto new_sem = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto new_sem = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     ASSERT_EQ(new_sem.address(), address);
     distributed::Finish(cq1);
     ExpectValueOnCores(*mesh_device_, cores, address, 0);
@@ -432,9 +433,9 @@ TEST_F(GlobalSemaphorePoolOwnDevice, QuiesceFreesSlotsWaitingOnEvents) {
     const CoreRangeSet cores(CoreRange(core, core));
     const auto& pool = PoolOf(*mesh_device_);
 
-    auto kept = CreateGlobalSemaphore(*mesh_device_, cores);
-    std::optional<GlobalSemaphore> first = CreateGlobalSemaphore(*mesh_device_, cores);
-    std::optional<GlobalSemaphore> second = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto kept = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
+    std::optional<GlobalSemaphore> first = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
+    std::optional<GlobalSemaphore> second = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
 
     Program program = CreateProgram();
     const KernelHandle kernel = CreateKernel(program, kLateWriteKernel, core, Riscv0());
@@ -445,12 +446,12 @@ TEST_F(GlobalSemaphorePoolOwnDevice, QuiesceFreesSlotsWaitingOnEvents) {
     first.reset();
     second.reset();
     // Both returned slots wait behind the kernel. This takes one of them; the other stays pending.
-    auto reused = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto reused = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     ASSERT_EQ(pool.num_pending(), 1u);
 
     mesh_device_->quiesce_devices();
     EXPECT_EQ(pool.num_pending(), 0u);
-    auto after_quiesce = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto after_quiesce = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     ExpectValueOnCores(*mesh_device_, cores, after_quiesce.address(), 0);
 }
 
@@ -471,7 +472,8 @@ TEST_F(GlobalSemaphorePoolOwnDevice, ResetCanReleaseAKernelOnAnotherSubDevice) {
     auto manager = mesh_device_->create_sub_device_manager({sub_device_0, sub_device_1}, kLocalL1Size);
     mesh_device_->load_sub_device_manager(manager);
 
-    auto sem = CreateGlobalSemaphore(*mesh_device_, CoreRangeSet(CoreRange(syncer_core, syncer_core)));
+    auto sem =
+        experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, CoreRangeSet(CoreRange(syncer_core, syncer_core)));
     Program program = CreateProgram();
     const KernelHandle kernel = CreateKernel(program, kSyncerKernel, syncer_core, Riscv0());
     SetRuntimeArgs(program, kernel, syncer_core, {static_cast<uint32_t>(sem.address())});
@@ -503,9 +505,9 @@ TEST_F(GlobalSemaphorePoolOwnDevice, SubmeshSharesItsParentsPool) {
     EXPECT_GE(submesh->allocator_impl()->persistent_l1().high_water_mark(cores), PoolEnd(PoolOf(*mesh_device_)));
 
     // Only one of the two meshes may have used a command queue when the submesh closes.
-    auto on_submesh = CreateGlobalSemaphore(*submesh, cores);
+    auto on_submesh = experimental::CreateGlobalSemaphoreFromPool(*submesh, cores);
     mesh_device_->quiesce_devices();
-    auto on_parent = CreateGlobalSemaphore(*mesh_device_, cores);
+    auto on_parent = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
     EXPECT_NE(on_parent.address(), on_submesh.address());
     EXPECT_EQ(PoolOf(*mesh_device_).num_live(), 2u);
 }
@@ -531,11 +533,11 @@ TEST_F(GlobalSemaphorePoolOwnDevice, UseAfterCloseThrows) {
         return;
     }
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
-    std::optional<GlobalSemaphore> sem = CreateGlobalSemaphore(*mesh_device_, cores);
+    std::optional<GlobalSemaphore> sem = experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores);
 
     mesh_device_->close();
     EXPECT_ANY_THROW(sem->reset_semaphore_value(1));
-    EXPECT_ANY_THROW(CreateGlobalSemaphore(*mesh_device_, cores));
+    EXPECT_ANY_THROW(experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores));
 
     const std::weak_ptr<distributed::MeshDevice> weak_device = mesh_device_;
     mesh_device_.reset();
@@ -562,7 +564,7 @@ TEST_F(GlobalSemaphorePoolOwnDevice, SemaphoreInProgramCacheIsReleasedWithTheMes
         CreateKernel(program, kBlankKernel, cores, Riscv0());
         program_cache::detail::CachedMeshWorkload<SharedVariables> cached(
             MakeWorkload(*mesh_device_, std::move(program)),
-            SharedVariables{CreateGlobalSemaphore(*mesh_device_, cores)});
+            SharedVariables{experimental::CreateGlobalSemaphoreFromPool(*mesh_device_, cores)});
         mesh_device_->get_program_cache().insert(
             program_cache::detail::ProgramCacheKey{.hash = 0x6E5E, .canonical = "global-semaphore-pool-lifetime"},
             program_cache::detail::CachedProgramFactory(std::move(cached), 0));
@@ -656,7 +658,7 @@ protected:
 };
 
 void RunCounterHub(distributed::MeshDevice& mesh_device, HubMode hub_mode) {
-    auto sem = CreateGlobalSemaphore(mesh_device, kHubAndSenders);
+    auto sem = experimental::CreateGlobalSemaphoreFromPool(mesh_device, kHubAndSenders);
     auto counter = MakeCounterProgram(mesh_device, hub_mode, sem);
 
     const uint32_t report_addr = ReportAddr(mesh_device);
@@ -681,7 +683,7 @@ TEST_F(GlobalSemaphoreKernelTest, ManyToOneUpThenDown) { RunCounterHub(*devices_
 // The semaphore outlives the program: a second program keeps counting from where the first stopped.
 TEST_F(GlobalSemaphoreKernelTest, ValuePersistsAcrossPrograms) {
     auto& mesh_device = *devices_.at(0);
-    auto sem = CreateGlobalSemaphore(mesh_device, kHubAndSenders);
+    auto sem = experimental::CreateGlobalSemaphoreFromPool(mesh_device, kHubAndSenders);
     for (int run = 0; run < 2; run++) {
         auto workload = MakeWorkload(mesh_device, MakeCounterProgram(mesh_device, HubMode::NONE, sem).program);
         distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
@@ -693,8 +695,8 @@ TEST_F(GlobalSemaphoreKernelTest, ValuePersistsAcrossPrograms) {
 TEST_F(GlobalSemaphoreKernelTest, UpdatingTheAddressArgSwitchesSemaphore) {
     auto& mesh_device = *devices_.at(0);
     auto& cq = mesh_device.mesh_command_queue();
-    auto first = CreateGlobalSemaphore(mesh_device, kHubAndSenders);
-    auto second = CreateGlobalSemaphore(mesh_device, kHubAndSenders);
+    auto first = experimental::CreateGlobalSemaphoreFromPool(mesh_device, kHubAndSenders);
+    auto second = experimental::CreateGlobalSemaphoreFromPool(mesh_device, kHubAndSenders);
     ASSERT_NE(first.address(), second.address());
 
     auto counter = MakeCounterProgram(mesh_device, HubMode::NONE, first);
@@ -714,7 +716,7 @@ TEST_F(GlobalSemaphoreKernelTest, UpdatingTheAddressArgSwitchesSemaphore) {
 TEST_F(GlobalSemaphoreKernelTest, ResetIsOrderedWithPrograms) {
     auto& mesh_device = *devices_.at(0);
     auto& cq = mesh_device.mesh_command_queue();
-    auto sem = CreateGlobalSemaphore(mesh_device, kHubAndSenders);
+    auto sem = experimental::CreateGlobalSemaphoreFromPool(mesh_device, kHubAndSenders);
     auto workload = MakeWorkload(mesh_device, MakeCounterProgram(mesh_device, HubMode::NONE, sem).program);
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
@@ -732,7 +734,7 @@ TEST_F(GlobalSemaphoreKernelTest, ResetIsOrderedWithPrograms) {
 void RunMcast(distributed::MeshDevice& mesh_device, bool increment, uint32_t initial, uint32_t value) {
     const CoreRange dests({1, 0}, {3, 1});
     const CoreRangeSet all(std::vector<CoreRange>{CoreRange(kHub, kHub), dests});
-    auto sem = CreateGlobalSemaphore(mesh_device, all);
+    auto sem = experimental::CreateGlobalSemaphoreFromPool(mesh_device, all);
     sem.reset_semaphore_value(initial);
 
     std::map<std::string, std::string> defines;
@@ -773,7 +775,7 @@ TEST_F(GlobalSemaphoreKernelTest, IncMulticastAddsToEveryDest) { RunMcast(*devic
 // The host flips the semaphore while the kernel is polling value().
 TEST_F(GlobalSemaphoreKernelTest, StopFlagSeenThroughValue) {
     auto& mesh_device = *devices_.at(0);
-    auto sem = CreateGlobalSemaphore(mesh_device, CoreRangeSet(CoreRange(kHub)));
+    auto sem = experimental::CreateGlobalSemaphoreFromPool(mesh_device, CoreRangeSet(CoreRange(kHub)));
 
     Program program = CreateProgram();
     const KernelHandle kernel = CreateKernel(program, kStopFlagKernel, kHub, Riscv0());
@@ -798,8 +800,8 @@ TEST_F(GlobalSemaphoreKernelTest, StopFlagSeenThroughValue) {
 TEST_F(GlobalSemaphoreTraceTest, TraceReplayUsesCaptureTimeAddress) {
     auto& mesh_device = *devices_.at(0);
     auto& cq = mesh_device.mesh_command_queue();
-    auto first = CreateGlobalSemaphore(mesh_device, kHubAndSenders);
-    auto second = CreateGlobalSemaphore(mesh_device, kHubAndSenders);
+    auto first = experimental::CreateGlobalSemaphoreFromPool(mesh_device, kHubAndSenders);
+    auto second = experimental::CreateGlobalSemaphoreFromPool(mesh_device, kHubAndSenders);
 
     auto counter = MakeCounterProgram(mesh_device, HubMode::NONE, first);
     const KernelHandle senders = counter.senders;

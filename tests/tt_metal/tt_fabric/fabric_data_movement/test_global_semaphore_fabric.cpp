@@ -15,6 +15,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/global_semaphore_pool.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -68,7 +69,8 @@ void RunGlobalSemaphoreUpOverFabric(BaseFabricFixture* fixture, bool is_2d) {
     }
 
     const CoreCoord core{0, 0};
-    auto sem = tt::tt_metal::CreateGlobalSemaphore(*dst_device, CoreRangeSet(CoreRange(core, core)));
+    auto sem =
+        tt::tt_metal::experimental::CreateGlobalSemaphoreFromPool(*dst_device, CoreRangeSet(CoreRange(core, core)));
     const uint32_t sem_address = static_cast<uint32_t>(sem.address());
     const uint32_t report_addr =
         dst_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1) + 32 * 1024;
