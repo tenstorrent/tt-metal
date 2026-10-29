@@ -126,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
             math_format, math_format, CT_DIM, RT_DIM, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
