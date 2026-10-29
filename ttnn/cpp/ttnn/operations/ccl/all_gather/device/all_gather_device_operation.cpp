@@ -4,6 +4,7 @@
 
 #include "all_gather_device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
+#include "all_gather_test_knobs.hpp"  // TEST ONLY
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -252,6 +253,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // Pick the kernel algorithm based on limitations and heuristics
     bool use_unicast = false;
+    bool heuristic = false;  // TEST ONLY
     // The factories build for the output tensor itself, and a persistent one may live in another memory.
     const auto& output_spec = tensor_args.persistent_output_tensor.has_value()
                                   ? tensor_args.persistent_output_tensor->tensor_spec()
@@ -281,6 +283,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         // must also be cut on the output's read alignment
         use_unicast = false;
     } else {
+        heuristic = true;  // TEST ONLY: TT_AG_FORCE may override from here on
         // Heuristics: Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
@@ -313,6 +316,16 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
             }
             default: break;  // uncalibrated arch
         }
+    }
+    if (const auto force = ag_test::env_str("TT_AG_FORCE")) {  // TEST ONLY
+        TT_FATAL(*force == "unicast" || *force == "multicast", "TT_AG_FORCE must be unicast or multicast");
+        TT_FATAL(
+            heuristic || use_unicast == (*force == "unicast"),
+            "TT_AG_FORCE={}: a legality rule requires {} here (true 2D, bent 2D axis, neighbor exchange, < 4 cores, or "
+            "no unicast walk geometry)",
+            *force,
+            use_unicast ? "unicast" : "multicast");
+        use_unicast = *force == "unicast";
     }
 
     return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
@@ -451,7 +464,7 @@ uint32_t compute_packets_per_slot(
     // A slot's packets are read behind one read barrier: enough of them to keep about 30 KB of reads in flight, which
     // hides DRAM read latency whatever the fabric payload (BH: two 15168 B packets per barrier take 24% less worker
     // time per packet than one), at least two slots per worker iteration so both work, and only as many as fit in L1.
-    constexpr uint32_t read_bytes_per_barrier = 30336;
+    const uint32_t read_bytes_per_barrier = ag_test::env_u32("TT_AG_READ_BYTES").value_or(30336);  // TEST ONLY env
     constexpr uint32_t max_packets_per_slot = 32;
     const uint32_t num_elements = input_tensor.buffer()->num_pages() * geo.in_page_units / geo.element_units;
     const uint64_t iter_packets = tt::div_up(
@@ -460,6 +473,9 @@ uint32_t compute_packets_per_slot(
         std::min<uint64_t>(tt::div_up(read_bytes_per_barrier, packet_cap), iter_packets / all_gather_walk::kNumSlots),
         1,
         max_packets_per_slot));
+    if (const auto k = ag_test::env_u32("TT_AG_K")) {  // TEST ONLY
+        packets_per_slot = std::max(*k, 1u);
+    }
     auto cb_bytes = [&](uint32_t k) {
         return all_gather_walk::kNumSlots *
                all_gather_walk::slot_offsets(k, geo.unit_bytes, header_bytes, packet_cap).slot_bytes;

@@ -4,6 +4,7 @@
 
 #include "all_gather_unicast_factory.hpp"
 #include "all_gather_device_operation.hpp"
+#include "all_gather_test_knobs.hpp"  // TEST ONLY
 
 #include <algorithm>
 #include <map>
@@ -144,6 +145,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         constexpr uint64_t line_three_worker_packets = 160;
         workers_per_dir = (is_ring || busiest_link_packets >= line_three_worker_packets) ? 3 : 2;
     }
+    workers_per_dir = std::max(ag_test::env_u32("TT_AG_WORKERS").value_or(workers_per_dir), 1u);  // TEST ONLY env
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
     const uint32_t num_available_cores = available_cores.num_cores();
@@ -221,9 +223,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
         if (grouped.size() == all_cores.size()) {
             all_cores = std::move(grouped);
+            return true;
         }
+        return false;
     };
-    group_by_row();
+    const bool no_row_group = ag_test::env_u32("TT_AG_NO_ROW_GROUP").value_or(0) != 0;  // TEST ONLY
+    const bool row_grouped = !no_row_group && group_by_row();
 
     // Helpers to index into the flat core vector (dir: 0 = forward, 1 = backward).
     auto core_at = [&](uint32_t link, uint32_t dir, uint32_t idx_in_dir) -> const CoreCoord& {
@@ -251,7 +256,9 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // Fabric mux config. One worker per direction needs 4 buffers per channel to keep the link busy (2 are 12-14%
     // slower); from 2 workers, 2 buffers are within 3% of 4. The mux map runs up from the allocator base and stays
     // below the floor of the L1_SMALL region, where the semaphores live.
-    const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : 2;
+    const uint32_t mux_bufs = ag_test::env_u32("TT_AG_MUX_BUFS").value_or(workers_per_dir == 1 ? 4 : 2);  // TEST ONLY
+    TT_FATAL(mux_bufs >= 1 && mux_bufs <= 255, "TT_AG_MUX_BUFS must be 1-255 (Mux V2 takes any count that fits L1)");
+    const uint8_t num_buffers_per_channel = static_cast<uint8_t>(mux_bufs);
     const tt::tt_fabric::FabricMuxV2Config mux_config(
         *mesh_device,
         static_cast<uint8_t>(workers_per_dir),
@@ -288,8 +295,10 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     // KERNEL CREATION
     // NOCs: the writer on NOC0 is 5-10% faster on a ring, 3-8% slower on a line (BH); the reader takes the other.
-    const auto writer_noc = is_ring ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
-    const auto reader_noc = is_ring ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+    const auto writer_noc =
+        ag_test::env_noc("TT_AG_UC_WR_NOC", is_ring ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1);
+    const auto reader_noc =
+        ag_test::env_noc("TT_AG_UC_RD_NOC", is_ring ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0);
 
     // Reader
     std::vector<uint32_t> reader_compile_args = {
@@ -356,6 +365,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     // Mux kernels: one fabric connection per active direction per link, to that direction's neighbor. The forwarder
     // writes every packet into an ethernet core, 1.8-2.3x faster on NOC0 (BH).
+    const auto mux_noc = ag_test::env_noc("TT_AG_MUX_NOC", tt::tt_metal::NOC::NOC_0);  // TEST ONLY env
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < num_directions; ++dir) {
             if (dir_active(dir)) {
@@ -366,14 +376,47 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     sender_fabric_node_id,
                     mesh_device->get_fabric_node_id(*dir_neighbor(dir)),
                     link,
-                    tt::tt_metal::NOC::NOC_0);
+                    mux_noc);
             }
         }
     }
 
     // Data_valid cadence: about 4 signals per worker iteration, every 2 to 16 packets. Each signal is a packet: fewer
     // save link time, more start the downstream relay sooner (BH: 1-packet cadence up to 1.5x slower at 8-26 MB).
-    constexpr uint64_t signals_per_iter = 4, min_cadence_packets = 2, max_cadence_packets = 16;
+    const uint64_t signals_per_iter = ag_test::env_u32("TT_AG_SIG_PER_ITER").value_or(4),  // TEST ONLY env
+        min_cadence_packets = ag_test::env_u32("TT_AG_SIG_MIN").value_or(2),
+                   max_cadence_packets = ag_test::env_u32("TT_AG_SIG_MAX").value_or(16);
+    TT_FATAL(signals_per_iter > 0 && min_cadence_packets <= max_cadence_packets, "bad TT_AG_SIG_* values");
+    auto cadence_for = [&](uint64_t slice_packets) {
+        return std::clamp(tt::div_up(slice_packets, signals_per_iter), min_cadence_packets, max_cadence_packets);
+    };
+
+    if (ag_test::log_enabled() && device_idx == 0) {  // TEST ONLY; slice 0 is the largest slice
+        const uint64_t iter_packets = tt::div_up(
+            uint64_t{tt::div_up(num_elements, total_slices)} * geo.element_units * unit_bytes, uint64_t{packet_cap});
+        log_info(
+            tt::LogOp,
+            "AGCFG factory=unicast arch={} topology={} num_devices={} num_links={} workers_per_dir={} mux_bufs={} k={} "
+            "packet_cap={} max_packet_bytes={} unit_bytes={} cadence_pkts={} cadence_slots={} rd_noc={} wr_noc={} "
+            "mux_noc={} row_group={} iter_packets={}",
+            input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 ? "wh" : "bh",
+            is_ring ? "ring" : "line",
+            num_devices,
+            num_links,
+            workers_per_dir,
+            num_buffers_per_channel,
+            packets_per_slot,
+            packet_cap,
+            geo.max_packet_bytes,
+            unit_bytes,
+            cadence_for(iter_packets),
+            tt::div_up(cadence_for(iter_packets), uint64_t{packets_per_slot}),
+            static_cast<int>(reader_noc),
+            static_cast<int>(writer_noc),
+            static_cast<int>(mux_noc),
+            no_row_group ? "off" : (row_grouped ? "on" : "fallback"),
+            iter_packets);
+    }
 
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
@@ -385,8 +428,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
             const uint32_t half = slice_count / 2;
             const uint32_t iter_units = slice_count * geo.element_units;
             const uint64_t slice_packets = tt::div_up(uint64_t{iter_units} * unit_bytes, uint64_t{packet_cap});
-            const uint64_t cadence_packets =
-                std::clamp(tt::div_up(slice_packets, signals_per_iter), min_cadence_packets, max_cadence_packets);
+            const uint64_t cadence_packets = cadence_for(slice_packets);
             const uint32_t data_valid_cadence = tt::div_up(cadence_packets, uint64_t{packets_per_slot});
 
             // Both directions (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused as the

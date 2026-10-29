@@ -5,6 +5,7 @@
 #include "all_gather_multicast_factory.hpp"
 
 #include "all_gather_device_operation.hpp"
+#include "all_gather_test_knobs.hpp"  // TEST ONLY
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -218,6 +219,30 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
 
     // KERNEL CREATION
     // NOCs: the writer on NOC0 is 1.13x (line) to 1.42x (ring) faster (BH); the reader takes the other.
+    const auto reader_noc = ag_test::env_noc("TT_AG_MC_RD_NOC", tt::tt_metal::NOC::NOC_1);  // TEST ONLY env
+    const auto writer_noc = ag_test::env_noc("TT_AG_MC_WR_NOC", tt::tt_metal::NOC::NOC_0);  // TEST ONLY env
+    if (ag_test::log_enabled() && device_idx == 0) {  // TEST ONLY; link 0 has the largest slice
+        const uint64_t iter_packets = tt::div_up(
+            uint64_t{tt::div_up(num_elements, min_num_links)} * geo.element_units * unit_bytes, uint64_t{packet_cap});
+        log_info(
+            tt::LogOp,
+            "AGCFG factory=multicast arch={} topology={} num_devices={} num_links={} k={} packet_cap={} "
+            "max_packet_bytes={} unit_bytes={} rd_noc={} wr_noc={} iter_packets={}",
+            mesh_device->arch() == tt::ARCH::WORMHOLE_B0 ? "wh" : "bh",
+            operation_attributes.is_true_2d() ? "2d"
+            : tt::tt_fabric::is_ring_or_torus(operation_attributes.axis_topology[operation_attributes.get_1d_axis()])
+                ? "ring"
+                : "line",
+            num_devices,
+            min_num_links,
+            packets_per_slot,
+            packet_cap,
+            geo.max_packet_bytes,
+            unit_bytes,
+            static_cast<int>(reader_noc),
+            static_cast<int>(writer_noc),
+            iter_packets);
+    }
     // Reader (no fabric: reads the input, writes the local output, fills the CB)
     std::vector<uint32_t> reader_compile_args = {
         unit_bytes,            // cut quantum
@@ -254,7 +279,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     reader_kernel_desc.core_ranges = worker_core_range;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
     reader_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
     desc.kernels.push_back(std::move(reader_kernel_desc));
 
     // Writer
@@ -264,7 +289,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     writer_kernel_desc.core_ranges = worker_core_range;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
     writer_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_noc};
     desc.kernels.push_back(std::move(writer_kernel_desc));
 
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
