@@ -477,6 +477,13 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
     # row 1 arriving a step later, so every shared wave pairs A's start with B's start - 2048; both beyond the dense
     # range from step 3 on; then both decode jointly, each against its own SP path from scratch
     p6, p7 = _served_ids(6000, 7, vocab), _served_ids(4500, 8, vocab)
+    # stale slot content first (the served slots hold earlier, longer prompts): a 6000-token prompt alone takes the
+    # eager SP chunks into slot index 0 of EVERY row, released; B's waves then read rows past its own 4500 that hold
+    # real latent data (user_rows_rm covers the wave's longest prefix on every row) and must never select them
+    stale = _served_ids(6000, 9, vocab)
+    step_prefill([(7, stale, 0)])
+    assert a.slots.physical(7).user == 0 and a.slots.physical(7).sp_only  # the SP replica in slot index 0 everywhere
+    a.release_request(7)
     step_prefill([(6, p6[:2048], 0)])  # A alone: a traced wave of one
     step_prefill([(6, p6[:4096], 2048), (7, p7[:2048], 0)])  # A's sparse continuation beside B's fresh chunk
     first_a = step_prefill([(6, p6, 4096), (7, p7[:4096], 2048)])  # A's tail at 4096 beside B at 2048: both sparse
