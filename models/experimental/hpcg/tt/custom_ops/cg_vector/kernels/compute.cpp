@@ -5,7 +5,8 @@
 // Fused CG vector kernels, compute (SFPU, fp32 in DEST). DOT keeps the running partial in DEST; XR chains its
 // partial r.r through CB_ACC (pack the running tile, unpack it with the next one). Each core's 1024-lane partial is
 // then reduced on the SFPU to one value at element (0, 0), so the finish step adds only one number per core.
-// The mode (0 dot, 1 axpy, 2 xr) is a runtime argument, checked once per launch or per tile: one binary for all three.
+// The mode (0 dot, 1 axpy, 2 xr, 3 zero) is a runtime argument, checked once per launch or per tile: one binary for
+// all four. Zero has no compute (the writer stores zeros).
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
@@ -15,6 +16,9 @@
 
 void kernel_main() {
     const uint32_t nt = get_arg_val<uint32_t>(0), mode = get_arg_val<uint32_t>(1);
+    if (mode == 3) {
+        return;
+    }
     compute_kernel_hw_startup(CB_A, CB_OUT);
     if (mode != 0) {
         cb_wait_front(CB_S, 1);

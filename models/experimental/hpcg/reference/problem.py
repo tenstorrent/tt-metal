@@ -26,8 +26,8 @@ usage: python -m models.experimental.hpcg.reference.problem nx {32|64} [colour o
 
 import numpy as np
 
-TILE = 1024
-NLEV = 4
+from models.experimental.hpcg.tt.constants import NLEV, TILE
+
 COLOUR_ORDER = (7, 6, 5, 4, 3, 2, 1, 0)  # forward-sweep colour order (fewest CG iterations of 5 orders tested)
 
 

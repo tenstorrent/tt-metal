@@ -7,13 +7,11 @@
 import numpy as np
 
 from models.experimental.hpcg.host import native
+from models.experimental.hpcg.tt import constants as C
 from models.experimental.hpcg.tt.layout import TILE, u32_rows
 
-ALIGN = 32  # rows per ownership unit (128 B of fp32 values)
-MAX_PIECES = (256, 4096)  # window pieces per core the planner first makes room for, then retries with
-MAX_NB = 14  # 16 semaphores per core: 1 ready flag + 1 own progress slot + up to 14 neighbour slots
-GRAN = 16  # window granule (words) = 64 B: every window piece is NoC-aligned in DRAM and in L1
-WGAP = 8  # column runs at most this many granules apart share one window piece
+# shared with xhpcg/tt/plan.cpp (tt/shared_constants.h, where each is described)
+ALIGN, MAX_PIECES, MAX_NB, GRAN, WGAP = C.ALIGN, C.MAX_PIECES, C.MAX_NB, C.GRAN, C.WGAP
 
 
 _NOC = {}

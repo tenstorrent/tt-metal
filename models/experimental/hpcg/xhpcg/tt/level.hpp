@@ -9,9 +9,9 @@
 #include <cstdint>
 #include <vector>
 
-namespace hpcg_tt {
+#include "../../tt/shared_constants.h"  // TILE and the other constants shared with the Python ops and the kernels
 
-constexpr int64_t TILE = 1024;
+namespace hpcg_tt {
 
 struct Level {
     int32_t nx = 0, bands = 1;

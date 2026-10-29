@@ -12,8 +12,6 @@
 namespace hpcg_tt {
 
 namespace {
-constexpr int64_t MAX_PIECES[2] = {256, 4096};  // window pieces per core first made room for, then retried with
-
 int clamp_cores(int ncores, const std::vector<std::pair<int64_t, int64_t>>& blocks) {
     int64_t most = 0;
     for (const auto& [s, e] : blocks) {

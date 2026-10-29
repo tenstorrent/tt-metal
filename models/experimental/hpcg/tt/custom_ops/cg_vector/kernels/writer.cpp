@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Fused CG vector kernels, writer (NCRISC). DOT: this core's partial tile -> PART[core]. AXPY: w tiles over b.
-// XR: x and r tiles in place, partial r.r tile -> PART[core].
+// XR: x and r tiles in place, partial r.r tile -> PART[core]. ZERO: zero tiles over both outputs, nothing read (so a
+// NaN or inf in them does not survive, as it would x - x).
 #include "api/dataflow/dataflow_api.h"
 #include <cstdint>
 
@@ -13,7 +14,7 @@ void kernel_main() {
     const uint32_t base = get_common_arg_val<uint32_t>(3), rem = get_common_arg_val<uint32_t>(4);
     const uint32_t core = get_absolute_logical_y() * get_common_arg_val<uint32_t>(5) + get_absolute_logical_x();
     const uint32_t nt = base + (core < rem), t0 = core * base + (core < rem ? core : rem);
-    const uint32_t mode = get_common_arg_val<uint32_t>(7);  // 0 dot, 1 axpy, 2 xr (one binary for all three)
+    const uint32_t mode = get_common_arg_val<uint32_t>(7);  // 0 dot, 1 axpy, 2 xr, 3 zero (one binary for all four)
     const bool dot = mode == 0, xr = mode == 2;
     constexpr auto a1 = TensorAccessorArgs<0>();
     constexpr auto a2 = TensorAccessorArgs<a1.next_compile_time_args_offset()>();
@@ -27,6 +28,18 @@ void kernel_main() {
     (void)O2;
     (void)PART;
     (void)Dv;
+    if (mode == 3) {  // CB_OUT's L1 is free in this mode (no compute): one zeroed page, written over every tile
+        volatile tt_l1_ptr uint32_t* z = (volatile tt_l1_ptr uint32_t*)get_write_ptr(CB_OUT);
+        for (uint32_t i = 0; i < 1024; ++i) {
+            z[i] = 0;
+        }
+        for (uint32_t t = t0; t < t0 + nt; ++t) {
+            noc_async_write(get_write_ptr(CB_OUT), O1.get_noc_addr(t), 4096);
+            noc_async_write(get_write_ptr(CB_OUT), O2.get_noc_addr(t), 4096);
+        }
+        noc_async_write_barrier();
+        return;
+    }
     if (!dot) {
         for (uint32_t t = t0; t < t0 + nt; ++t) {
             cb_wait_front(CB_OUT, 1);

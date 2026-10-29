@@ -6,13 +6,11 @@
 // generate_trisc.cpp on the compute RISCs, which share the offset slots of each chunk.
 #pragma once
 #include <cstdint>
+// RUN_WORDS and MAX_RUNS (a run's description, written by the data-movement RISC that owns the chunk) and the
+// mailbox offsets MB_*: shared with the host code, which sizes the mailbox
+#define HPCG_KERNEL_SIDE
+#include "../../../shared_constants.h"
 
-// A run's description, written by the data-movement RISC that owns the chunk (uint32 words): [0] word of the run's
-// first row in the staging page [1] x index i0 of that row [2] rows [3] window offset of the first row itself, then
-// per slot j: [4 + 3 j] window offset at x index 0 (K), [5 + 3 j], [6 + 3 j]: rows [a, e) of the run that have the
-// slot's neighbour (the others take their own row's offset)
-constexpr uint32_t RUN_WORDS = 4 + 3 * 27;
-constexpr uint32_t MAX_RUNS = 96;  // runs described per chunk; the owning RISC writes all slots of any more itself
 // the work mailbox (CB_W, uint32 words): message (h, s) at 16 (2 h + s): [0] sequence number (1, 2, ...) [1] runs
 // [2] L1 address of the staging set's offset pages [3] L1 address of the run list [4] the launch's nonce; done
 // (t, h, s) at 64 + 16 (4 t + 2 h + s): [0] the sequence number TRISC t finished [1] the nonce; end (h) at
@@ -20,8 +18,6 @@ constexpr uint32_t MAX_RUNS = 96;  // runs described per chunk; the owning RISC 
 // The nonce is a random nonzero 32-bit number per launch (a common argument), so words left in L1 by any earlier
 // launch, of this process or another, are not taken for this launch's (a counter restarted at 1 in each process, and
 // a short run's leftovers then matched the next process's first launches).
-constexpr uint32_t MB_DONE = 64, MB_END = 256, MB_RUNS = 512;
-constexpr uint32_t MB_WORDS = MB_RUNS + 4 * MAX_RUNS * RUN_WORDS;
 
 // o[0 .. n) = v, v + 4, v + 8, ...: a pointer walk, 8 stores per step with immediate offsets. Written as o[t] = v + 4 t
 // the compiler rebuilt each address from the value (5 instructions per store, about 5.7 cycles on a data-movement RISC

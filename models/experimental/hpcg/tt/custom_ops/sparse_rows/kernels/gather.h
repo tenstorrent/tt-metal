@@ -7,12 +7,10 @@
 // cycles per word; 4-way 7.26, 12-way 5.62). Byte offsets avoid a shift per word. Not inlined: inlined copies ran up
 // to 2x slower depending on where the compiler placed them.
 #pragma once
-// Launch options, passed as one runtime flags word (reader arg 10, writer arg 12, compute arg 3) rather than defines,
-// so launches that differ only in options share one kernel binary
-constexpr uint32_t F_WSPLIT = 1;  // the writer loads the odd window pieces (both NoCs load the window)
-constexpr uint32_t F_ZEROX = 2;   // x = 0 on entry: the windows are zeroed on chip, x is not read
-constexpr uint32_t F_RESTF = 4;   // the SpMV pass over block 0 outputs r - A z (the restriction's input)
-constexpr uint32_t F_ADDB = 8;    // every output is b + A x (prolongation)
+// Launch options F_WSPLIT, F_ZEROX, F_RESTF, F_ADDB: one runtime flags word (reader arg 10, writer arg 12, compute arg
+// 3) rather than defines, so launches that differ only in options share one kernel binary; shared with the host code
+#define HPCG_KERNEL_SIDE
+#include "../../../shared_constants.h"
 
 __attribute__((noinline, aligned(64))) void gather_tile(
     uint32_t xbuf, const uint32_t* o, uint32_t* g, uint32_t w0, uint32_t w1) {

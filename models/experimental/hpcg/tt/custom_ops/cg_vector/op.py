@@ -8,17 +8,18 @@
         DotFinishOp adds the slots
   axpy  b = a + (s1 / s2) b                  (CG's p = z + beta p, beta = rtz / rtz_old)
   xr    x += (s1 / s2) p, r -= (s1 / s2) Ap, and this core's share of r . r in its slot of part   (alpha = rtz / pAp)
+  zero  a = 0, b = 0: zeros written, nothing read (x - x would keep a NaN or inf)
 The scalar quotient s1 / s2 is computed on chip (IEEE fp32 division in the reader), so no host round trip.
 """
 
 import ttnn
 
+from models.experimental.hpcg.tt import constants as C
 from models.experimental.hpcg.tt.layout import TILE
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import core_ranges, logical_coords
 
 KERNEL_ROOT = "models/experimental/hpcg/tt/custom_ops/cg_vector/kernels"
-CB = dict(CB_A=0, CB_B=1, CB_C=2, CB_D=3, CB_S=4, CB_ACC=5, CB_OUT=16, CB_OUT2=17, CB_OUT3=18)
-VB = 2  # tiles per read batch (1-8 measured within 3%)
+CB, VB = C.CBS["CG_VECTOR"], C.VB  # shared with xhpcg/tt/ops.cpp (tt/shared_constants.h)
 
 
 _PARTS = {}
@@ -71,13 +72,13 @@ def _shared_parts(device, nc, base, rem, mcode):
 
 class CgVectorOp:
     """mode dot: (a, b, part). axpy: (a, b, s1, s2), writes b. xr: (a=x, b=p, c=r, d=Ap, s1, s2, part), writes x
-    and r. All vectors are fp32 TILE [P / 32, 32] with the same P; s1 and s2 are one 4 KB page each, the value in
+    and r. zero: (a, b), writes zeros to both. All vectors are fp32 TILE [P / 32, 32] with the same P; s1 and s2 are one 4 KB page each, the value in
     word 0 (element (0, 0) of a tile)."""
 
     def __init__(self, device, mode, a, b, c=None, d=None, s1=None, s2=None, part=None):
-        if mode not in ("dot", "axpy", "xr"):
-            raise ValueError(f"mode must be dot, axpy or xr, got {mode!r}")
-        need = {"dot": (part,), "axpy": (s1, s2), "xr": (c, d, s1, s2, part)}[mode]
+        if mode not in ("dot", "axpy", "xr", "zero"):
+            raise ValueError(f"mode must be dot, axpy, xr or zero, got {mode!r}")
+        need = {"dot": (part,), "axpy": (s1, s2), "xr": (c, d, s1, s2, part), "zero": ()}[mode]
         if any(t is None for t in need):
             raise ValueError(f"mode {mode} is missing an input")
         for t in (a, b, c, d):
@@ -95,9 +96,9 @@ class CgVectorOp:
         s2 = s2 if s2 is not None else a
         part = part if part is not None else a
         o1 = b if mode == "axpy" else a  # axpy writes over b (p = z + beta p); xr writes x (a) and r (c)
-        o2 = b if mode == "dot" else c  # dot: the writer reads b
-        # the mode is a runtime argument (0 dot, 1 axpy, 2 xr): one kernel binary for all three modes
-        mcode = {"dot": 0, "axpy": 1, "xr": 2}[mode]
+        o2 = b if mode in ("dot", "zero") else c  # dot: the writer reads b; zero: writes a and b
+        # the mode is a runtime argument (0 dot, 1 axpy, 2 xr, 3 zero): one kernel binary for all four modes
+        mcode = {"dot": 0, "axpy": 1, "xr": 2, "zero": 3}[mode]
         # reader / writer: common arguments (a core derives its tile range from its logical position); the compute
         # kernel keeps its per-core tile count
         reader_common = [x.buffer_address() for x in (a, b, c, d, s1, s2)] + [base, rem, g.x, mcode]
@@ -130,7 +131,7 @@ class CgVectorOp:
             compute,
         ]
         self.prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        self.io = [x for x in (a, b, c, d, s1, s2) if x is not None] + [part if mode != "axpy" else o1]
+        self.io = [x for x in (a, b, c, d, s1, s2) if x is not None] + [part if mode not in ("axpy", "zero") else o1]
         self.nc = nc
 
     def __call__(self):
@@ -145,7 +146,7 @@ def _finish_parts():
     made once per process."""
     if not _FINISH:
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-        cbs_ids = dict(CB_A=0, CB_OUT=16, CB_T=17)
+        cbs_ids = C.CBS["DOT_FINISH"]
         # keep_old and sqrt are runtime arguments: the three finishes of an iteration share one binary
         defs = [(k, str(v)) for k, v in cbs_ids.items()] + [("VB", str(VB))]
 

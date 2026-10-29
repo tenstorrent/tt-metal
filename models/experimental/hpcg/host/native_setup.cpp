@@ -797,12 +797,16 @@ int64_t hpcg_plan_offsets(
     return bad;
 }
 
+}  // extern "C"
+
+namespace {
+
 // Exchange entries of a Gauss-Seidel launch: for each block b, each core m that owns rows, and each piece of m's
 // window, every other core k whose own rows of block b overlap the piece gets an entry (k, b, m, s, f, dst): rows
-// [s, f) go to byte offset dst of m's window. With ent == nullptr only counts. Own ranges of a block are sorted by
-// core. Returns the number of entries. The (b, m) pairs run in parallel: counted, then each writes its entries at
-// its offset, so the order is the serial order (b, then m, then piece, then k).
-int64_t hpcg_plan_exchange(
+// [s, f) go to byte offset dst of m's window. Own ranges of a block are sorted by core. Returns the entries, 6 words
+// each. The (b, m) pairs run in parallel, each into its own list (one pass), and the lists are joined in the serial
+// order (b, then m, then piece, then k).
+std::vector<int64_t> exchange_entries(
     int32_t nc,
     int32_t NB,
     const int64_t* own,
@@ -810,8 +814,7 @@ int64_t hpcg_plan_exchange(
     const int64_t* piece_lo,
     const int64_t* piece_ln,
     const int64_t* piece_l1,
-    const int64_t* npieces,
-    int64_t* ent) {
+    const int64_t* npieces) {
     std::vector<uint8_t> has_rows(nc, 0);
     for (int32_t m = 0; m < nc; ++m) {
         for (int32_t b = 0; b < NB; ++b) {
@@ -837,11 +840,10 @@ int64_t hpcg_plan_exchange(
             }
         }
     }
-    // entries of pair (b, m), written from out (counted only when out == nullptr)
-    auto pair = [&](int32_t b, int32_t m, int64_t* out) {
-        int64_t n = 0;
+    // entries of pair (b, m), appended to out
+    auto pair = [&](int32_t b, int32_t m, std::vector<int64_t>& out) {
         if (!has_rows[m] || span_hi[b] <= span_lo[b]) {
-            return n;  // a core without rows reads no window: its placeholder piece gets nothing
+            return;  // a core without rows reads no window: its placeholder piece gets nothing
         }
         const int64_t* Eb = E.data() + (size_t)b * nc;
         const int64_t* lo_m = piece_lo + m * max_pieces;
@@ -858,37 +860,50 @@ int64_t hpcg_plan_exchange(
                 if (Ek <= A || k == m) {
                     continue;
                 }
-                if (out) {
-                    const int64_t s = std::max(A, plo), f = std::min(Ek, phi);
-                    int64_t* e = out + n * 6;
-                    e[0] = k;
-                    e[1] = b;
-                    e[2] = m;
-                    e[3] = s;
-                    e[4] = f;
-                    e[5] = piece_l1[m * max_pieces + p] + (s - plo) * 4;
-                }
-                ++n;
+                const int64_t s = std::max(A, plo), f = std::min(Ek, phi);
+                out.insert(out.end(), {k, b, m, s, f, piece_l1[m * max_pieces + p] + (s - plo) * 4});
             }
         }
-        return n;
     };
     const int64_t npair = (int64_t)NB * nc;
+    std::vector<std::vector<int64_t>> lists(npair);
+#pragma omp parallel for schedule(dynamic, 8)
+    for (int64_t i = 0; i < npair; ++i) {
+        pair((int32_t)(i / nc), (int32_t)(i % nc), lists[i]);
+    }
     std::vector<int64_t> at(npair + 1, 0);
+    for (int64_t i = 0; i < npair; ++i) {
+        at[i + 1] = at[i] + (int64_t)lists[i].size();
+    }
+    std::vector<int64_t> ent(at[npair]);
 #pragma omp parallel for schedule(dynamic, 8)
     for (int64_t i = 0; i < npair; ++i) {
-        at[i + 1] = pair((int32_t)(i / nc), (int32_t)(i % nc), nullptr);
+        std::copy(lists[i].begin(), lists[i].end(), ent.begin() + at[i]);
     }
-    for (int64_t i = 0; i < npair; ++i) {
-        at[i + 1] += at[i];
-    }
+    return ent;
+}
+
+}  // namespace
+
+extern "C" {
+
+// exchange_entries' entries (k, b, m, s, f, dst) into ent; with ent == nullptr only counts. Returns the number of
+// entries.
+int64_t hpcg_plan_exchange(
+    int32_t nc,
+    int32_t NB,
+    const int64_t* own,
+    int64_t max_pieces,
+    const int64_t* piece_lo,
+    const int64_t* piece_ln,
+    const int64_t* piece_l1,
+    const int64_t* npieces,
+    int64_t* ent) {
+    const std::vector<int64_t> e = exchange_entries(nc, NB, own, max_pieces, piece_lo, piece_ln, piece_l1, npieces);
     if (ent) {
-#pragma omp parallel for schedule(dynamic, 8)
-        for (int64_t i = 0; i < npair; ++i) {
-            pair((int32_t)(i / nc), (int32_t)(i % nc), ent + at[i] * 6);
-        }
+        std::copy(e.begin(), e.end(), ent);
     }
-    return at[npair];
+    return (int64_t)e.size() / 6;
 }
 
 // Per-core metadata rows of one sparse-row launch (layout in tt/custom_ops/sparse_rows/kernels/common.h), the
@@ -1229,7 +1244,7 @@ int64_t hpcg_plan_meta_into(
     return longest;
 }
 
-// hpcg_plan_exchange's entries, already as SparseRowPlan uses them: grouped by (k, b) in their original order (a
+// exchange_entries' entries, already as SparseRowPlan uses them: grouped by (k, b) in their original order (a
 // stable counting sort), each as (NoC x, NoC y of m, s, f, dst) in rows[at[k * NB + b] .. at[k * NB + b + 1]); and
 // every core's neighbours (the cores it sends rows to or receives rows from), sorted, in nbr[nat[k] .. nat[k + 1]].
 // noc_xy[2 m], noc_xy[2 m + 1]: NoC x, y of core m. Returns the number of entries, or -needed when it exceeds cap
@@ -1249,12 +1264,11 @@ int64_t hpcg_plan_exchange_grouped(
     int64_t* at,
     int64_t* nbr,
     int64_t* nat) {
-    const int64_t n = hpcg_plan_exchange(nc, NB, own, max_pieces, piece_lo, piece_ln, piece_l1, npieces, nullptr);
+    const std::vector<int64_t> ent = exchange_entries(nc, NB, own, max_pieces, piece_lo, piece_ln, piece_l1, npieces);
+    const int64_t n = (int64_t)ent.size() / 6;
     if (n > cap) {
         return -n;
     }
-    std::vector<int64_t> ent(n * 6);
-    hpcg_plan_exchange(nc, NB, own, max_pieces, piece_lo, piece_ln, piece_l1, npieces, ent.data());
     const int64_t nkey = (int64_t)nc * NB;
     for (int64_t i = 0; i <= nkey; ++i) {
         at[i] = 0;

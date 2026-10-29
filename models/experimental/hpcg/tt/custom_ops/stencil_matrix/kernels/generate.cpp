@@ -39,8 +39,8 @@
 
 namespace {
 constexpr uint32_t F_MINUS1 = 0xBF800000u, F_26 = 0x41D00000u, F_1 = 0x3F800000u;
-constexpr uint32_t SET = 55 * 4096;  // one staging set: 27 offset pages, 27 value pages, one b page
-constexpr uint32_t XCAP = 2048;      // value exceptions recorded per staging set (CB_X0 / CB_X1: 2 x 8 KB)
+// one staging set: 27 offset pages, 27 value pages, one b page (SET_PAGES and XCAP: tt/shared_constants.h)
+constexpr uint32_t SET = SET_PAGES * 4096;
 
 // The value pages of a staging set hold the interior template (-1, and 26 in slot 13) between chunks; a chunk writes
 // only its exceptions (0 for a missing neighbour; padding rows' 0 / 1) and records them as (slot, word, count), so

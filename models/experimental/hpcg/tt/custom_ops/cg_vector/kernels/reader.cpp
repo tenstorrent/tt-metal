@@ -7,6 +7,7 @@
 // MODE_DOT : A = a, B = b                         (partial a.b per core)
 // MODE_AXPY: A = a, B = b, S = s1 / s2            (w = a + S*b, written over b: p = z + beta*p)
 // MODE_XR  : A = x, B = p, C = r, D = Ap, S = s1 / s2   (x += S*p, r -= S*Ap, partial r.r; S = alpha)
+// MODE_ZERO 3: nothing read (the writer stores zeros)
 // The scalar S is divided here in IEEE fp32 software arithmetic (correctly rounded) and broadcast into a tile.
 #include "api/dataflow/dataflow_api.h"
 #include <cstdint>
@@ -20,6 +21,9 @@ void kernel_main() {
     const uint32_t i = get_absolute_logical_y() * get_common_arg_val<uint32_t>(8) + get_absolute_logical_x();
     const uint32_t nt = base + (i < rem), t0 = i * base + (i < rem ? i : rem);
     const uint32_t mode = get_common_arg_val<uint32_t>(9);
+    if (mode == 3) {
+        return;
+    }
     const bool dot = mode == 0, xr = mode == 2;
     constexpr auto aa = TensorAccessorArgs<0>();
     constexpr auto ab = TensorAccessorArgs<aa.next_compile_time_args_offset()>();

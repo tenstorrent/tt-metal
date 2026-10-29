@@ -126,7 +126,20 @@ def test_hpcg_ops_and_cg(device, nx, bands):
         h.reset()
         nr0 = float(ttnn.to_torch(h.start()).reshape(-1)[0])
     _, hist64 = ref.cg(levels, iters, np.float64, order)
+    hist = []
     for k in range(iters):
         nr = float(ttnn.to_torch(h.iteration()).reshape(-1)[0]) / nr0
+        hist.append(nr)
         logger.info(f"CG {k + 1}: device {nr:.6e}  numpy fp64 {hist64[k]:.6e}")
         assert abs(nr - hist64[k]) <= 1e-5 * hist64[k], f"CG iteration {k + 1}"
+
+    # a diverged solve leaves NaN in x and p: reset() writes zeros (x - x would stay NaN), so the next solve gives
+    # the same residuals
+    nan = np.full(L0.P, np.nan, np.float32)
+    ttnn.copy(to_device(device, nan), h.x)
+    ttnn.copy(to_device(device, nan), h.p)
+    h.reset()
+    assert not np.any(from_device(h.x)) and not np.any(from_device(h.p)), "reset() writes x = 0 and p = 0"
+    nr0 = float(ttnn.to_torch(h.start()).reshape(-1)[0])
+    again = [float(ttnn.to_torch(h.iteration()).reshape(-1)[0]) / nr0 for _ in range(iters)]
+    assert again == hist, f"CG after a NaN x and p: {again} != {hist}"

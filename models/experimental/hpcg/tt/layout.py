@@ -15,8 +15,7 @@ import torch
 import ttnn
 
 from models.experimental.hpcg.host import native
-
-TILE = 1024
+from models.experimental.hpcg.tt.constants import TILE
 
 
 def word_of_flat(k):

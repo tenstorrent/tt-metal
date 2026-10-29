@@ -5,6 +5,7 @@
 #include "ops.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -28,30 +29,9 @@ namespace {
 const std::string SR_ROOT = "models/experimental/hpcg/tt/custom_ops/sparse_rows/kernels";
 const std::string CG_ROOT = "models/experimental/hpcg/tt/custom_ops/cg_vector/kernels";
 
-// sparse_rows/op.py's constants
-constexpr uint32_t L1_BUDGET = 1461248;
-constexpr uint32_t F_WSPLIT = 1, F_ZEROX = 2, F_RESTF = 4, F_ADDB = 8;
-const std::vector<std::pair<std::string, uint32_t>> SR_CB = {
-    {"CB_V", 0},
-    {"CB_G", 1},
-    {"CB_B", 2},
-    {"CB_G2", 5},
-    {"CB_RDY", 6},
-    {"CB_G3", 8},
-    {"CB_OFF3", 9},
-    {"CB_MB", 10},
-    {"CB_G4", 11},
-    {"CB_OFF4", 12},
-    {"CB_V2", 13},
-    {"CB_OUT", 16},
-    {"CB_WIN", 24},
-    {"CB_OFF", 25},
-    {"CB_META", 26},
-    {"CB_META2", 27},
-    {"CB_OFF2", 28}};
-constexpr int NGATH = 4, NGRP = 3, VDEP = 27;
-constexpr int GDEP[] = {8, 6, 4, 3, 2};
-const std::vector<int> NOC_FLIP_RECT = {7, 12, 0, 9};
+// L1_BUDGET, F_*, NGATH, NGRP, VDEP, GDEP and the CB tables: tt/shared_constants.h (shared with sparse_rows/op.py)
+const std::vector<std::pair<std::string, uint32_t>> SR_CB = {HPCG_SPARSE_ROWS_CBS(HPCG_CB_PAIR)};
+const std::vector<int> NOC_FLIP = {std::begin(NOC_FLIP_RECT), std::end(NOC_FLIP_RECT)};
 
 uint8_t sr_cb(const char* name) {
     for (const auto& [k, v] : SR_CB) {
@@ -253,7 +233,7 @@ Op sparse_row_op(
     if (total > L1_BUDGET) {
         throw std::runtime_error("L1: circular buffers exceed the budget; grid too large");
     }
-    const std::vector<int>& flip = a.noc_flip ? *a.noc_flip : ((!a.gs || a.out2) ? NOC_FLIP_RECT : std::vector<int>{});
+    const std::vector<int>& flip = a.noc_flip ? *a.noc_flip : ((!a.gs || a.out2) ? NOC_FLIP : std::vector<int>{});
     KernelDescriptor::Defines define_list;
     for (const auto& [k, v] : defs) {
         define_list.emplace_back(k, std::to_string(v));
@@ -312,17 +292,17 @@ Op sparse_row_op(
 }
 
 namespace {
-const std::vector<std::pair<std::string, uint32_t>> VEC_CB = {
-    {"CB_A", 0},
-    {"CB_B", 1},
-    {"CB_C", 2},
-    {"CB_D", 3},
-    {"CB_S", 4},
-    {"CB_ACC", 5},
-    {"CB_OUT", 16},
-    {"CB_OUT2", 17},
-    {"CB_OUT3", 18}};
-constexpr uint32_t VB = 2;
+const std::vector<std::pair<std::string, uint32_t>> VEC_CB = {HPCG_CG_VECTOR_CBS(HPCG_CB_PAIR)};  // VB: shared header
+const std::vector<std::pair<std::string, uint32_t>> FINISH_CB = {HPCG_DOT_FINISH_CBS(HPCG_CB_PAIR)};
+
+uint32_t cb_index(const std::vector<std::pair<std::string, uint32_t>>& table, const char* name) {
+    for (const auto& [k, v] : table) {
+        if (k == name) {
+            return v;
+        }
+    }
+    throw std::logic_error(name);
+}
 
 CBDescriptor page_cb(const CoreRangeSet& cores, uint32_t idx, uint32_t pages) {
     return cb(cores, (uint8_t)idx, pages * 4096, 4096, false);
@@ -358,7 +338,7 @@ const VecParts& vec_parts(const Dev& D, int nc, int base, int rem, int mcode) {
             }
         }
     }
-    p.cbs.push_back(page_cb(p.cores, 4, 1));  // CB_S
+    p.cbs.push_back(page_cb(p.cores, cb_index(VEC_CB, "CB_S"), 1));
     for (const auto& [k, v] : VEC_CB) {
         p.defs.emplace_back(k, std::to_string(v));
     }
@@ -396,7 +376,7 @@ VecOp cg_vector_op(
     const Tensor& S2 = s2 ? *s2 : a;
     const Tensor& PART = part ? *part : a;
     const Tensor& o1 = mode == VecMode::axpy ? b : a;  // axpy writes over b; xr writes x (a) and r (c)
-    const Tensor& o2 = mode == VecMode::dot ? b : C;   // dot: the writer reads b
+    const Tensor& o2 = mode == VecMode::dot || mode == VecMode::zero ? b : C;  // dot: the writer reads b
     const uint32_t mcode = (uint32_t)mode;
     const VecParts& p = vec_parts(D, nc, base, rem, (int)mcode);
     std::vector<uint32_t> reader_common = {
@@ -424,7 +404,7 @@ VecOp cg_vector_op(
     op.prog.kernels.push_back(w);
     op.prog.kernels.push_back(p.compute);
     op.prog.cbs = p.cbs;
-    op.io = {a, b, C, Dd, S1, S2, mode != VecMode::axpy ? PART : o1};
+    op.io = {a, b, C, Dd, S1, S2, mode != VecMode::axpy && mode != VecMode::zero ? PART : o1};
     op.nc = nc;
     return op;
 }
@@ -436,9 +416,8 @@ Op dot_finish_op(
     }
     const Tensor& O = old ? *old : out;
     const CoreRangeSet cores(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    const std::vector<std::pair<std::string, uint32_t>> ids = {{"CB_A", 0}, {"CB_OUT", 16}, {"CB_T", 17}};
     KernelDescriptor::Defines defs;
-    for (const auto& [k, v] : ids) {
+    for (const auto& [k, v] : FINISH_CB) {
         defs.emplace_back(k, std::to_string(v));
     }
     defs.emplace_back("VB", std::to_string(VB));
@@ -471,9 +450,9 @@ Op dot_finish_op(
     op.prog.kernels.push_back(r);
     op.prog.kernels.push_back(w);
     op.prog.kernels.push_back(c);
-    op.prog.cbs.push_back(page_cb(cores, 0, 2 * VB));
-    op.prog.cbs.push_back(page_cb(cores, 16, 1));
-    op.prog.cbs.push_back(page_cb(cores, 17, 1));
+    op.prog.cbs.push_back(page_cb(cores, cb_index(FINISH_CB, "CB_A"), 2 * VB));
+    op.prog.cbs.push_back(page_cb(cores, cb_index(FINISH_CB, "CB_OUT"), 1));
+    op.prog.cbs.push_back(page_cb(cores, cb_index(FINISH_CB, "CB_T"), 1));
     op.io = {part, O, out};
     return op;
 }

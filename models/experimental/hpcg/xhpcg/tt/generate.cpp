@@ -20,12 +20,8 @@ using tt::tt_metal::KernelDescriptor;
 namespace {
 const std::string KERNEL = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate.cpp";
 const std::string KERNEL_TRISC = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate_trisc.cpp";
-const std::vector<std::pair<std::string, uint32_t>> GEN_CB = {
-    {"CB_S0", 0}, {"CB_S1", 1}, {"CB_M0", 2}, {"CB_M1", 3}, {"CB_Z", 4}, {"CB_X0", 5}, {"CB_X1", 6}, {"CB_W", 7}};
-constexpr uint32_t DM_SLOTS = 6;
-constexpr uint32_t MB_BYTES = 4 * (512 + 4 * 96 * (4 + 3 * 27));  // kernels/fill.h's MB_WORDS
-constexpr uint32_t CHUNKS_RISC1_DEFAULT = 5;  // of every 8 chunks, the writer RISC's share (stencil_matrix/op.py)
-constexpr uint32_t XCAP = 2048, SET_PAGES = 55, JOB_ARGS = 10, MIN_META_PAGES = 8;
+// DM_SLOTS, MB_BYTES, CHUNKS_RISC1_DEFAULT, XCAP, SET_PAGES, JOB_ARGS, MIN_META_PAGES: tt/shared_constants.h
+const std::vector<std::pair<std::string, uint32_t>> GEN_CB = {HPCG_STENCIL_MATRIX_CBS(HPCG_CB_PAIR)};
 uint32_t launch_id() {  // a random nonzero 32-bit nonce per launch: the TRISCs tell this launch's messages from
                         // words any earlier launch left in L1 (kernels/fill.h)
     static std::mt19937 gen{std::random_device{}()};

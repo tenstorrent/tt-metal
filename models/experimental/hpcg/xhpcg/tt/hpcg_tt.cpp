@@ -35,7 +35,6 @@ namespace hpcg_tt {
 namespace {
 
 const std::vector<int64_t> COLOUR_ORDER = {7, 6, 5, 4, 3, 2, 1, 0};  // forward-sweep colour order
-constexpr int NLEV = 4;
 
 struct DLevel {
     std::unique_ptr<Level> L;
@@ -271,10 +270,11 @@ void set_x(State& S, const Vector& x) {
     for (int64_t i = 0; i < d.L->n; ++i) {
         nonzero |= x.values[i] != 0.0;
     }
+    // x = 0 and p = 0 first, whatever x is: iteration 1 needs p = 0 (ComputeSPMV borrows p for its input), and zeros
+    // are written, so a NaN or inf left by a diverged solve does not carry over
+    S.v.at("x0")();
     if (nonzero) {
         to_device(d, x.values, S.x);
-    } else {
-        S.v.at("x0")();  // x = x - x: exact zeros (the card's x is always finite)
     }
 }
 
@@ -456,8 +456,9 @@ int optimize(const SparseMatrix& A, const Vector& b) {
     S.v["p"] = cg_vector_op(D, VecMode::axpy, z, S.p, nullptr, nullptr, &S.rtz, &S.rtz_old, nullptr, P0);
     S.v["xr"] = cg_vector_op(D, VecMode::xr, S.x, S.p, &S.r, &S.Ap, &S.rtz, &S.pAp, &S.part, P0);
     S.v["nr_fin"] = dot_finish_op(D, S.part, n, S.normr, nullptr, false, true);
-    // reset and CG start with the same binaries: x = x - x, r = b - A x; r.z = inf so iteration 1's p is z
-    S.v["x0"] = cg_vector_op(D, VecMode::axpy, S.x, S.x, nullptr, nullptr, &S.minus_one, &S.one, nullptr, P0);
+    // reset and CG start with the same binaries: x = 0 and p = 0 (written, not computed), r = b - A x; r.z = inf so
+    // iteration 1's p is z
+    S.v["x0"] = cg_vector_op(D, VecMode::zero, S.x, S.p, nullptr, nullptr, nullptr, nullptr, nullptr, P0);
     S.v["r_b"] = cg_vector_op(D, VecMode::axpy, S.b, S.r, nullptr, nullptr, &S.minus_one, &S.one, nullptr, P0);
     S.v["rtz_inf"] = dot_finish_op(D, S.inf_slot, 1, S.rtz, nullptr, false, false);
 

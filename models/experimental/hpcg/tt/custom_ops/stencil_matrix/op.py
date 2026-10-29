@@ -20,19 +20,17 @@ import numpy as np
 import ttnn
 
 from models.experimental.hpcg.host import native
+from models.experimental.hpcg.tt import constants as C
 from models.experimental.hpcg.tt.layout import TILE, allocate, u32_rows
 from models.experimental.hpcg.tt.custom_ops.sparse_rows.op import core_ranges
 
 KERNEL = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate.cpp"
-CB = dict(CB_S0=0, CB_S1=1, CB_M0=2, CB_M1=3, CB_Z=4, CB_X0=5, CB_X1=6, CB_W=7)
 KERNEL_TRISC = "models/experimental/hpcg/tt/custom_ops/stencil_matrix/kernels/generate_trisc.cpp"
-DM_SLOTS = 6  # offset slots each data-movement RISC writes itself; the three TRISCs write the other 21 (7 each)
-MB_BYTES = 4 * (512 + 4 * 96 * (4 + 3 * 27))  # the work mailbox (kernels/fill.h's MB_WORDS)
-# of every 8 chunks, the writer RISC's (NoC 1) share. Its NoC writes stall less: on the P150 the reader RISC's (NoC 0)
-# writes from the top core rows wait on congested routes. Generation A + B (ms) for shares 4 / 5 / 6, median of 3:
-# 192^3 8.60 / 6.84 / 7.41, 288^3 24.55 / 22.40 / 25.42, 104^3 2.39 / 2.66 / 2.81 (104^3 setup waits on the host)
-CHUNKS_RISC1_DEFAULT = 5
-CHUNKS_RISC1 = {}  # per core row y
+# shared with xhpcg/tt/generate.cpp and the kernels (tt/shared_constants.h, where each is described)
+CB = C.CBS["STENCIL_MATRIX"]
+DM_SLOTS, MB_BYTES, CHUNKS_RISC1_DEFAULT = C.DM_SLOTS, C.MB_BYTES, C.CHUNKS_RISC1_DEFAULT
+XCAP, SET_PAGES, JOB_ARGS, MIN_META_PAGES = C.XCAP, C.SET_PAGES, C.JOB_ARGS, C.MIN_META_PAGES
+CHUNKS_RISC1 = {}  # per core row y: overrides of CHUNKS_RISC1_DEFAULT
 
 
 def _chunk_shares(rows):
@@ -45,12 +43,6 @@ def _launch_id():
     """A random nonzero 32-bit nonce for each generation launch: the TRISCs tell this launch's messages from words any
     earlier launch, of this process or another, left in L1 (kernels/fill.h)."""
     return int.from_bytes(os.urandom(4), "little") or 1
-
-
-XCAP = 2048  # value exceptions per staging set (generate.cpp)
-SET_PAGES = 55  # staging set per RISC: 27 offset pages, 27 value pages, one b page (generate.cpp's SET)
-JOB_ARGS = 10  # common arguments per job (generate.cpp)
-MIN_META_PAGES = 8  # META circular buffer pages per RISC at least (a program's buffer sizes are part of its cache key)
 
 
 def _rows(device, n):

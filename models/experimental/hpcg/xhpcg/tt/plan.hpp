@@ -15,10 +15,7 @@
 
 namespace hpcg_tt {
 
-constexpr int64_t ALIGN = 32;  // rows per ownership unit
-constexpr int MAX_NB = 14;     // neighbour slots per core (16 semaphores)
-constexpr int32_t GRAN = 16;   // window granule (words)
-constexpr int32_t WGAP = 8;    // column runs at most this many granules apart share one window piece
+// ALIGN, MAX_NB, GRAN, WGAP, MAX_PIECES: tt/shared_constants.h (through level.hpp)
 
 struct Meta {  // one launch's metadata rows, uploaded, and its per-core segment counts
     Tensor t;

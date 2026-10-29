@@ -41,8 +41,9 @@ Op sparse_row_op(
     const SparseRowArgs& a,
     const Tensor& dbg);
 
-enum class VecMode { dot = 0, axpy = 1, xr = 2 };
-// dot: (a, b, part). axpy: b = a + (s1 / s2) b. xr: x += (s1 / s2) p, r -= (s1 / s2) Ap, partials of r.r
+enum class VecMode { dot = 0, axpy = 1, xr = 2, zero = 3 };
+// dot: (a, b, part). axpy: b = a + (s1 / s2) b. xr: x += (s1 / s2) p, r -= (s1 / s2) Ap, partials of r.r.
+// zero: a = 0, b = 0 (zeros written, nothing read)
 struct VecOp : Op {
     int nc = 0;
 };

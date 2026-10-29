@@ -19,40 +19,15 @@ Modes
 
 import ttnn
 
+from models.experimental.hpcg.tt import constants as C
 from models.experimental.hpcg.tt.layout import TILE, allocate, u32_rows
 
 KERNEL_ROOT = "models/experimental/hpcg/tt/custom_ops/sparse_rows/kernels"
 
-# circular buffers must end below 1,572,864 B of L1 and start 111,616 B in (measured: 1,500,480 B of CBs ended at
-# 1,612,096 B), so at most 1,461,248 B of CBs per core
-L1_BUDGET = 1461248
-F_WSPLIT, F_ZEROX, F_RESTF, F_ADDB = 1, 2, 4, 8  # launch option flags, as in kernels/gather.h
-CB = dict(
-    CB_V=0,
-    CB_G=1,
-    CB_B=2,
-    CB_G2=5,
-    CB_RDY=6,
-    CB_G3=8,
-    CB_OFF3=9,
-    CB_MB=10,
-    CB_G4=11,
-    CB_OFF4=12,
-    CB_V2=13,
-    CB_OUT=16,
-    CB_WIN=24,
-    CB_OFF=25,
-    CB_META=26,
-    CB_META2=27,
-    CB_OFF2=28,
-)
-NGATH = 4  # gathering processors per core: reader, writer, pack thread, unpack thread
-NGRP = 3  # slot groups per segment: a work unit is (segment, group); its reads are issued one unit ahead
-GDEP = (8, 6, 4, 3, 2)  # gathered pages in flight per gatherer, largest that fits L1 first
-VDEP = 27  # matrix-value pages in flight (reader)
-# NoC per core: reader on NoC 0 / writer on NoC 1, swapped inside this core rectangle (logical x0, x1, y0, y1).
-# DRAM read responses congest some links; the swap measured fastest for every launch with an SpMV pass.
-NOC_FLIP_RECT = (7, 12, 0, 9)
+# shared with xhpcg's C++ ops and the kernels (tt/shared_constants.h, where each is described)
+L1_BUDGET, NGATH, NGRP, GDEP, VDEP, NOC_FLIP_RECT = C.L1_BUDGET, C.NGATH, C.NGRP, C.GDEP, C.VDEP, C.NOC_FLIP_RECT
+F_WSPLIT, F_ZEROX, F_RESTF, F_ADDB = C.F_WSPLIT, C.F_ZEROX, C.F_RESTF, C.F_ADDB
+CB = C.CBS["SPARSE_ROWS"]
 
 
 _NOC_XY = {}

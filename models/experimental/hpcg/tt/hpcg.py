@@ -296,7 +296,7 @@ class HPCG:
             xr=CgVectorOp(device, "xr", self.x, self.p, self.r, self.Ap, s1=self.rtz, s2=self.pAp, part=self.part),
             nr_fin=DotFinishOp(device, self.part, n, self.normr, sqrt=True),
             # reset and CG start with the same binaries (no TT-NN copy / subtract / fill programs to load):
-            x0=CgVectorOp(device, "axpy", self.x, self.x, s1=self._minus_one, s2=self._one),  # x = x - x = 0
+            x0=CgVectorOp(device, "zero", self.x, self.p),  # x = 0, p = 0 (zeros written, nothing read)
             r_b=CgVectorOp(device, "axpy", self.b, self.r, s1=self._minus_one, s2=self._one),  # r = b - A x
             # r.z = inf + 0 + ... = inf whatever r.z held before (so start() can run again before an iteration)
             rtz_inf=DotFinishOp(device, self._inf_slot, 1, self.rtz),
@@ -322,8 +322,9 @@ class HPCG:
             self.ops[("gs", l)]()
 
     def reset(self):
-        """x = 0. HPCG zeroes x before each CG call (main.cpp), outside the CG timer. Computed as x - x, exact for
-        finite x (x starts at 0 and stays finite)."""
+        """x = 0 and p = 0. HPCG zeroes x before each CG call (main.cpp), outside the CG timer; p is zeroed with it
+        for iteration 1 (start()). Zeros are written, not computed, so a NaN or inf left by a diverged solve does not
+        carry over to the next one."""
         self.vops["x0"]()
 
     def start(self):
@@ -331,7 +332,7 @@ class HPCG:
         copies x to p and multiplies p; multiplying x gives the same r) and normr0 = |r|. Device only and
         trace-capturable; returns normr0 as a 1x1 device tensor. The update is r = b + (-1) A x: the same bits as
         b - A x. r.z starts at +inf, so iteration 1 keeps inf as the previous r.z and its p = z + (r.z / inf) p =
-        z + 0 p = z exactly (p is always finite: the device zeroes it at setup)."""
+        z + 0 p = z exactly (p = 0: zeroed at setup and by reset())."""
         v = self.vops
         self.ops["spmv_start"]()  # A x, into r
         v["r_b"]()
