@@ -243,9 +243,20 @@ def cause_hang_with_app(request):
             request.cls.exalens_context = wait_for_simulated_hang(proc, output, app, expected_results)
         else:
             auto_timeout = app_configuration.get("auto_timeout", False)
-            # auto_timeout apps exit 0 once they detect their own hang; expect_running ones stay wedged.
+            # auto_timeout apps print a line once they detect their own hang and then stay alive; expect_running ones
+            # stay wedged.
             expect_running = app_configuration.get("expect_running", False)
-            if auto_timeout or expect_running:
+            if auto_timeout:
+                # Wait for the application to detect its own hang
+                deadline = time.monotonic() + timeout
+                while "Device timeout detected as expected." not in output.text():
+                    if proc.poll() is not None or time.monotonic() > deadline:
+                        # Print process output for debugging
+                        print("The application did not hang as expected.")
+                        output.print()
+                        raise RuntimeError("The application did not hang as expected.")
+                    time.sleep(0.1)
+            elif expect_running:
                 # Wait for the application to hang itself
                 try:
                     proc.wait(timeout=timeout)
@@ -253,7 +264,7 @@ def cause_hang_with_app(request):
                     pass
 
                 # Check if the process has exited
-                if proc.returncode != (None if expect_running else 0):
+                if proc.returncode is not None:
                     # Print process output for debugging
                     print("The application did not hang as expected.")
                     output.print()
@@ -263,9 +274,6 @@ def cause_hang_with_app(request):
 
         request.cls.app_configuration = app_configuration
         request.cls.expected_results = expected_results
-        if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
-            metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
-            os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
 
         yield
     finally:
@@ -283,37 +291,28 @@ def cause_hang_with_app(request):
     "cause_hang_with_app",
     [
         (
-            # Manual hang detection with timeout from outside
-            HANG_APP_ADD_2_INTEGERS,
-            [],
-            {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
-            },
-            10,
-        ),
-        (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
+            # Automatic hang detection with timeout inside the app, fast dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
             60,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, slow dispatch
+            # Automatic hang detection with timeout inside the app, slow dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
@@ -328,7 +327,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
             },
@@ -342,7 +341,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
