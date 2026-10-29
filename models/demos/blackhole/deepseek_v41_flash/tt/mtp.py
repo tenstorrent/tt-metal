@@ -621,6 +621,7 @@ class DSparkDrafter:
             layer = DraftLayer(md, mesh_config, ccl, a, w["norms"], w["mhc"], w["moe"], T_d, moe_buffers=bufs)
             if bufs is None:
                 bufs = layer.moe.decode.buffers
+            layer.mhc_pool_tag = "mtp"
             self.layers.append(layer)
             _l1v(md, f"after layer {len(self.layers) - 1} init")
         w0 = stage_w[0]

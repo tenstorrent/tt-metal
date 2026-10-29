@@ -31,10 +31,12 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import mhc_stream_pool
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import mhc_collapse, mhc_collapse_norm, mhc_norm_apply
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_ep import mhc_expand_proj
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand import mhc_expand
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand2 import mhc_expand2
+from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand3 import mhc_expand3
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_mixes import mhc_post, mhc_proj
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_mixes2 import mhc_post2, mhc_proj2, proj_plan
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_pre import mhc_mixes_cn
@@ -281,9 +283,12 @@ class DSV41MHC:
         h, part = mhc_collapse(x, pre)
         return mhc_norm_apply(h, part, w4, eps, emit_rm=True)
 
-    def expand(self, y, residual, post, comb, y2=None, lite=False):
+    def expand(self, y, residual, post, comb, y2=None, lite=False, pool=None):
         """new_j = post_j * (y [+ y2]) + sum_i comb[i, j] residual_i -> [T,1,n,C] fp32. y: [T,1,1,C] fp32 or [1,1,T,C]
-        (token rows) fp32/bf16; optional y2 [1,1,T,C] fp32 (added to y inside the kernel)."""
+        (token rows) fp32/bf16; optional y2 [1,1,T,C] fp32 (added to y inside the kernel).
+        pool=(tag, role) with DSV41_MHC_EXPAND_VALID=1: write only the valid rows into the persistent zero-padded stream buffer of mhc_stream_pool
+        (decode layer path only; the result is that shared buffer, valid until the next expand of the same (tag, T, role)).
+        """
         T = residual.shape[0]
         if _odd_t(T):
             yd = 2 if y.shape[2] == T and y.shape[0] == 1 else 0
@@ -293,8 +298,12 @@ class DSV41MHC:
                 _pad_rows(post, T, 8, 0),
                 _pad_rows(comb, T, 8, 0),
                 None if y2 is None else _pad_rows(y2, T, 8, 2),
+                pool=pool,
             )
             return _slice_rows(out, T, 0)
+        if pool is not None and _flag("DSV41_MHC_EXPAND_VALID") and _flag("DSV41_MHC_EXPAND_V2", "1") and T <= 32:
+            buf = mhc_stream_pool.get(residual.device(), T, residual.shape[3], pool[0], pool[1])
+            return mhc_expand3(y, residual, post, comb, buf, y2)
         if _flag("DSV41_MHC_EXPAND_V2", "1"):
             return mhc_expand2(y, residual, post, comb, y2, lite=lite)
         return mhc_expand(y, residual, post, comb, y2)

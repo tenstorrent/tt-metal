@@ -40,6 +40,8 @@ def _rnd_bf16(t):
 
 
 class DSV41Layer:
+    mhc_pool_tag = "main"  # mHC stream pool chain (mhc_stream_pool): the drafter's layers set "mtp" so a drafter stage never shares a buffer with the main chain
+
     def __init__(
         self,
         mesh_device,
@@ -265,7 +267,10 @@ class DSV41Layer:
             ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
         elif fuse_pre:
             # DSV41_MHC_X2LITE=1: x2 only feeds the FFN-side mHC kernels (rows 0..3 read with 256 B reads): write just those rows
-            x2 = self.mhc_attn.expand(P2(a), xp, attn_post, attn_comb, None, lite=_X2LITE)
+            # (superseded by the valid-row write when DSV41_MHC_EXPAND_VALID=1 and the pooled buffer applies)
+            x2 = self.mhc_attn.expand(
+                P2(a), xp, attn_post, attn_comb, None, lite=_X2LITE, pool=(self.mhc_pool_tag, "attn")
+            )
         else:
             x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
                 P2(a), xp, attn_post, attn_comb, None, self.mhc_ffn
@@ -310,7 +315,9 @@ class DSV41Layer:
                 shared=sh,
             )
         x3 = S0o(
-            self.mhc_ffn.expand(P2(m), x2, ffn_post, ffn_comb, None if sh is None else P2(sh))
+            self.mhc_ffn.expand(
+                P2(m), x2, ffn_post, ffn_comb, None if sh is None else P2(sh), pool=(self.mhc_pool_tag, "ffn")
+            )
         )  # post * (routed + shared) + comb^T x, summed inside the kernel
         if _STREAM_BF16:
             x3 = _rnd_bf16(x3)
