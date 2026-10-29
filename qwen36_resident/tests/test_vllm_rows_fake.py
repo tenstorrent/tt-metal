@@ -185,8 +185,11 @@ class Req:
 class Sim:
     """vLLM's side of the contract, with the plugin's own slot bookkeeping"""
 
-    def __init__(self, seed, max_seqs=12, unit=128, nb=600, sample=False, max_len=2048, max_tokens=(1, 40)):
+    def __init__(self, seed, max_seqs=12, unit=128, nb=600, sample=False, max_len=2048, max_tokens=(1, 40), sync=False):
         self.rng = random.Random(seed)
+        # sync: the runner without async scheduling hands decode_forward's handle straight to
+        # process_decode_output_host (finalize_decode); async: read_decode_output(async_read=True) first
+        self.sync = sync
         self.max_tokens = max_tokens
         self.adapter, self.model = make_adapter(max_seqs, unit, sample)
         self.sample, self.unit, self.max_seqs, self.max_len = sample, unit, max_seqs, max_len
@@ -352,8 +355,11 @@ class Sim:
             slot_remap=remap,
         )
         TTModelRunner.note_decode_state_slots_settled(self.runner)
-        host, _events = self.adapter.read_decode_output(handle, async_read=True)
-        res = self.adapter.process_decode_output_host(host)
+        if self.sync:
+            res = self.adapter.process_decode_output_host(handle, is_tokens=self.sample)
+        else:
+            host, _events = self.adapter.read_decode_output(handle, async_read=True)
+            res = self.adapter.process_decode_output_host(host, is_tokens=self.sample)
         self.last_rows, self.last_tokens, self.last_table, self.layout_changed = list(rids), (tokens, pos), table, False
         for i, r in enumerate(rs):
             if self.sample:
@@ -450,8 +456,9 @@ def _count_decodes(sim):
 
 @pytest.mark.parametrize("seed", range(6))
 @pytest.mark.parametrize("sample", [False, True], ids=["host-sampled", "device-sampled"])
-def test_churn(seed, sample):
-    sim = Sim(seed, sample=sample)
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+def test_churn(seed, sample, sync):
+    sim = Sim(seed, sample=sample, sync=sync)
     n = _count_decodes(sim)
     stats = sim.run(700)
     assert stats["tokens"] > 1000 and stats["chunks"] > 5 and stats["finished"] > 10
@@ -561,3 +568,36 @@ def test_device_sampling_without_the_hub_feed_is_refused():
             torch.tensor([[1]] * 4),
             sampling_params=sp,
         )
+
+
+@pytest.mark.parametrize("sample", [False, True], ids=["host-sampled", "device-sampled"])
+def test_sync_scheduling_processes_the_raw_handle(sample):
+    """the plugin's synchronous path (finalize_decode) calls process_decode_output_host on decode_forward's own return
+    value: no read_decode_output in between (review finding 2; the reviewer's probe_sync.py)"""
+    from vllm_tt_plugin.async_decode import _is_host_decode_output
+
+    adapter, _ = make_adapter(4, 128, sample)
+    adapter.prefill_forward(
+        torch.ones(1, 3, dtype=torch.int64),
+        torch.tensor([[1]]),
+        [],
+        torch.tensor([3]),
+        start_pos=torch.tensor([0]),
+        empty_slots=[0],
+        prefill_final_mask=[True],
+    )
+    sp = SimpleNamespace(temperature=[0.0] * 4, top_k=[1] * 4, top_p=[1.0] * 4, seed=[0] * 4) if sample else None
+    h = adapter.decode_forward(
+        torch.zeros(4, 1, dtype=torch.int64),
+        torch.tensor([3, -1, -1, -1]),
+        torch.tensor([[1]] * 4),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=sample,
+        reset_sampling_state=sample,
+        read_from_device=False,
+        sampling_params=sp,
+    )
+    assert not _is_host_decode_output(h), "the plugin must route the handle through process_decode_output_host"
+    out = adapter.process_decode_output_host(h, is_tokens=sample)
+    assert out.shape == ((4, 1) if sample else (4, 1, V))

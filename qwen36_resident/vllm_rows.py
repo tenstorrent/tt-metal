@@ -33,6 +33,21 @@ ROWS = 8  # users per launch: the rows-mode build is compiled at width 8 for eve
 BLOCK = 64  # KV block (positions) = vLLM block_size
 
 
+class DecodeHandle:
+    """what decode_forward returns when it does not read: the step's rows and their slots, nothing read yet. A plain
+    class, not a tuple: the plugin takes a tuple of tensors for host output and skips the model's processing"""
+
+    def __init__(self, device, rows, row_slot, n):
+        self.device, self.rows, self.row_slot, self.n = device, rows, row_slot, n
+
+
+class DecodeRead:
+    """read_decode_output's host-side result: the rows and the engine's read (logits, or the out words' reads)"""
+
+    def __init__(self, device, rows, n, read):
+        self.device, self.rows, self.n, self.read = device, rows, n, read
+
+
 class SlotMap:
     """vLLM state slot -> resident slot, and the free resident slots.
 
@@ -267,7 +282,7 @@ class ResidentRowsAdapter:
             remap = [int(j) for j in slot_remap]
             self._expect_moves = {j: i for i, j in enumerate(remap) if i != j}
             self.slots.res_of = res_of
-        handle = (device, rows, row_slot, len(pos))
+        handle = DecodeHandle(device, rows, row_slot, len(pos))
         if read_from_device:
             return self.process_decode_output_host(self.read_decode_output(handle))
         return handle
@@ -281,27 +296,35 @@ class ResidentRowsAdapter:
         self.engine.set_sampling(cur)
 
     def read_decode_output(self, out, async_read=False, **kwargs):
+        """async scheduling: the runner calls this right after decode_forward, then waits the events and processes"""
         if isinstance(out, torch.Tensor):
             return (out, []) if async_read else out
-        device, rows, row_slot, n = out
-        read = self.engine.read_tokens(row_slot, async_read) if device else self.engine.read_logits(row_slot)
-        host = (device, rows, n, read)
+        if not isinstance(out, DecodeHandle):
+            raise TypeError(f"read_decode_output takes decode_forward's handle, not {type(out).__name__}")
+        read = (
+            self.engine.read_tokens(out.row_slot, async_read) if out.device else self.engine.read_logits(out.row_slot)
+        )
+        host = DecodeRead(out.device, out.rows, out.n, read)
         # host-sampled logits are read synchronously (as the single-user adapter does); device-sampled tokens are
         # enqueued reads of the launches' out words, complete at the events
-        return (host, self.engine.read_events(read) if device else []) if async_read else host
+        return (host, self.engine.read_events(read) if out.device else []) if async_read else host
 
     def process_decode_output_host(self, out, is_tokens=True, **kwargs):
+        """synchronous scheduling hands decode_forward's handle straight here (no read_decode_output): read it now"""
         if isinstance(out, torch.Tensor):
             return out
-        device, rows, n, read = out
-        if device:
-            got = self.engine.tokens_from(read)  # [len(rows)] int
-            res = torch.zeros(n, 1, dtype=torch.int32)
-            res[: len(rows), 0] = torch.as_tensor(got, dtype=torch.int32)
+        if isinstance(out, DecodeHandle):
+            out = self.read_decode_output(out)
+        if not isinstance(out, DecodeRead):
+            raise TypeError(f"process_decode_output_host takes a decode handle or its read, not {type(out).__name__}")
+        if out.device:
+            got = self.engine.tokens_from(out.read)  # [len(rows)] int
+            res = torch.zeros(out.n, 1, dtype=torch.int32)
+            res[: len(out.rows), 0] = torch.as_tensor(got, dtype=torch.int32)
             return res
-        lg = self.engine.logits_from(read)  # [len(rows), vocab]
-        res = torch.zeros(n, 1, self.vocab)
-        res[: len(rows), 0] = lg
+        lg = self.engine.logits_from(out.read)  # [len(rows), vocab]
+        res = torch.zeros(out.n, 1, self.vocab)
+        res[: len(out.rows), 0] = lg
         return res
 
     # ------------------------------------------------------------------ lifecycle
