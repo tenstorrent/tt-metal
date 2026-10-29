@@ -21,6 +21,7 @@ Contract
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
@@ -67,16 +68,50 @@ def _sdpa_heuristic(head_dim: int, batch: int, num_heads: int, seq_len: int, num
     return q_chunk, 128, units / q_chunk > 64
 
 
+def _sdpa_tuned_12x10() -> dict[tuple[int, int], tuple[int, int, tuple[int, int] | None]]:
+    """E9.4 kept SDPA configs for the 12 x 10 grid at batch 1 (doc/prefill/04-attention/README.md):
+    (head_dim, bucket) -> (q_chunk, k_chunk, grid or None = the full compute grid). head_dim 256 is
+    the sliding layers' call, 512 the full layers'."""
+    t: dict[tuple[int, int], tuple[int, int, tuple[int, int] | None]] = {}
+    return t
+
+
+# (head_dim, bucket) -> (q_chunk, k_chunk, grid) per compute grid (columns, rows), batch 1 only. The
+# P150a's 13 x 10 has no entry and keeps `_SDPA_TABLE` / `_sdpa_heuristic`. `EG2_SDPA_TUNED=0`
+# disables the table (same-session control). `SDPA_OVERRIDES[(head_dim, bucket)]` (in-process, empty
+# by default) takes precedence on every grid: the in-model search (tt-ops e9/04-attention) sets it.
+SDPA_TUNED: dict[tuple[int, int], dict[tuple[int, int], tuple[int, int, tuple[int, int] | None]]] = {
+    (12, 10): _sdpa_tuned_12x10()
+}
+SDPA_TUNED_ON = os.environ.get("EG2_SDPA_TUNED", "1") == "1"
+SDPA_OVERRIDES: dict[tuple[int, int], tuple[int, int, tuple[int, int] | None]] = {}
+
+
+def lookup_sdpa(head_dim: int, seq_len: int, batch: int, gx: int, gy: int):
+    """Tuned / searched (q_chunk, k_chunk, grid) for this call, or None (rule below)."""
+    if batch != 1:
+        return None
+    spec = SDPA_OVERRIDES.get((head_dim, seq_len))
+    if spec is None and SDPA_TUNED_ON:
+        spec = SDPA_TUNED.get((gx, gy), {}).get((head_dim, seq_len))
+    return spec
+
+
 def sdpa_program_config(
     head_dim: int, seq_len: int, batch: int = 1, num_heads: int = 4, device_grid=None, exp_approx: bool = False
 ) -> ttnn.SDPAProgramConfig:
     """Chunk sizes keep every core busy: the op parallelizes over batch x Q heads x Q chunks.
 
     Every bucket is a power of two >= 32, so S % chunk == 0 for the power-of-two chunks used here.
+    A per-grid tuned entry (`SDPA_TUNED`, batch 1) replaces the table / heuristic on that grid only.
     """
     gx, gy = (device_grid.x, device_grid.y) if device_grid is not None else P150_GRID
     key = (head_dim, batch, seq_len)
-    if key in _SDPA_TABLE:
+    tuned = lookup_sdpa(head_dim, seq_len, batch, gx, gy)
+    if tuned is not None:
+        q_chunk, k_chunk, grid = tuned
+        grid = grid or (gx, gy)
+    elif key in _SDPA_TABLE:
         q_chunk, k_chunk, grid = _SDPA_TABLE[key]
         grid = grid or (gx, gy)
     else:

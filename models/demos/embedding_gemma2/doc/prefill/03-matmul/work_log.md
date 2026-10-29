@@ -103,7 +103,16 @@ Analysis (CPU): `roles.py <bucket>:<csv> ...` (`roles_before.md`, `roles_after.m
 | gate at 65536: the profile predicts about 32 ms less device time (2691 -> about 1361 us per call x 24, before the multiply's added SFPU work) but no gate candidate moved the 65536 burst beyond the drift | `gelu_long_65536`: -0.17 % (gelu in the multiply) ... -0.60 % (2D chunked), drift 0.19 %; `final_65536`: -0.67 %, drift 0.71 % | same session controls | not kept; not attributed (no profile of the candidate at 65536, clock power-limited during the burst windows). Open item |
 | Last hidden PCC vs the control 0.996-0.998 for gelu-placement and family changes (not bitwise) | `search/*.jsonl` `pcc_vs_ctl` | HF gate on the final table (README) | expected: a different accumulation / rounding order through 24 layers; the contract gate vs HF fp32 passes at every bucket with the kept table (`gate_track`, `sweep_new`) |
 | Sustained AICLK at >= 8192 is 12-25 MHz lower after than before | `perf_summary.json` telemetry: 1318 / 1237 / 1156 / 1100 vs 1331 / 1256 / 1181 / 1112 MHz | same session, back to back | recorded as in stage 2: less light work between the heavy ops at the same power limit **[I]**; sustained still -1.9 to -4.8 % |
-| 65536 after profile: kernel sum barely changes although ple_gate is 1.77 ms faster per layer | `roles_after.md` vs `roles_before.md` (other roles +2-3 % per call) | the stage-2 profile at the same bucket | not attributed (one eager forward per profile); the wall-time A/B is the claim. Open item in README |
+| 65536 after profile: kernel sum barely changes although ple_gate is 1.77 ms faster per layer | `roles_after.md` vs `roles_before.md` (other roles +2-3 % per call) | the stage-2 profile at the same bucket | **fixed (E9.4)**: the captures convert cycles at 1331.0 vs 1293.0 MHz; in cycles unchanged ops move -1.9 / +1.6 %, the kernel sum drops 55.2 Mcyc (-41.5 ms at 1331 MHz) = the ple_gate change (README "Open", `e9/04-attention/logs/c1_profile_clock_attr_65536.log`) |
+
+## E9.4 commit 1 (stage-3 review remediation)
+
+| time | run | command | result |
+|---|---|---|---|
+| 12:15-12:19 | `c1_ctl` | `e9/04-attention/scripts/c1_ab.sh ctl` (prefill.py, buckets 128,256,1024,4096,8192, HF_CHECK + SUSTAINED + TELEMETRY, 12 x 10, code `05a8aa15d7`) | 15 passed |
+| 12:20-12:24 | `c1_new` | same, `tt/linear.py` without gate@256, ple_gate@128, qkv_sliding@1024, ple_layer@8192, ple_gate@4096 | 15 passed; `logs/c1_ab_table.md` (README "E9.4 amendments"): +0.05 ... +0.27 %, 256 PCC 0.99336 -> 0.99432 |
+| - | (host) | `profile_clock_attr.py tracy/{before,after}/b1_s65536/ops_perf_results.csv` | 65536 anomaly attributed to the capture clock (above) |
+| - | (host) | `pytest tests/perf/test_tuned_config_identity.py` with a planted `TUNED_CONFIGS[(13, 10)]` entry, then reverted | 1 failed (`down@b1_s4096` named), then 6 passed (`logs/c1_identity_{planted,clean}.log`) |
 
 ## Self-check against prefill-stage-review (not independent)
 

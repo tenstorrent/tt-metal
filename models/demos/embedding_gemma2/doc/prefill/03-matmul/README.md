@@ -36,6 +36,32 @@ at 128 / 2048 / 8192 / 65536; the 8192 and 65536 differences follow the sustaine
 then vs 1331 / 1112 MHz now) **[M]**. The per-bucket "all kept" burst of the final sweep agrees with
 `sweep_new` (2048: -5.14 % vs -5.16 %; 8192: -5.46 % vs -5.44 %).
 
+## E9.4 amendments (stage-3 review remediation, E9.4 commit 1) [M]
+
+The independent review (verdicts.md row E9.3) asked to drop five entries. Dropped from
+`TUNED_CONFIGS[(12, 10)]`: `gate@256` (its -0.17 % came with a last-hidden PCC drop 0.99432 -> 0.99336)
+and the four entries whose final-sweep wins were <= 0.1 %: `ple_gate@128`, `qkv_sliding@1024`,
+`ple_layer@8192`, `ple_gate@4096`. Each changed bucket has exactly one dropped entry, so each row
+below is that entry's own A/B: control = the table above (`7febde8744` code), candidate = the
+table without the entry, back to back in one tmux job (`c1_ctl` then `c1_new`, gate + burst +
+sustained + telemetry; `tt-ops/runs/embeddinggemma-2/e9/04-attention/run_ab/c1_{ctl,new}/prefill.jsonl`,
+`logs/c1_ab_table.md`).
+
+| bucket | dropped entry | burst ctl -> new (ms) | change | sustained ctl -> new (ms, AICLK) | change | last hidden PCC / cos new (ctl) |
+|---|---|---|---|---|---|---|
+| 128 | ple_gate@128 | 4.839 -> 4.853 | +0.27 % | 4.836 -> 4.848 (1350) | +0.26 % | 0.99424 / 0.99834 (same) |
+| 256 | gate@256 | 5.855 -> 5.868 | +0.22 % | 5.852 -> 5.864 (1350) | +0.21 % | **0.99432** / 0.99861 (0.99336 / 0.99879) |
+| 1024 | qkv_sliding@1024 | 11.510 -> 11.528 | +0.16 % | 11.506 -> 11.523 (1350) | +0.15 % | 0.99577 / 0.99947 (same) |
+| 4096 | ple_gate@4096 | 41.625 -> 41.657 | +0.08 % | 41.669 -> 41.690 (1350) | +0.05 % | 0.99537 / 0.99952 (same) |
+| 8192 | ple_layer@8192 | 94.849 -> 94.960 | +0.12 % | 96.608 -> 96.544 (1312) | -0.07 % | 0.99676 / 0.99966 (same) |
+
+Every drop costs 0.05-0.27 % (8192 sustained is clock-bound and moves -0.07 %). The 256 gate PCC is back
+to 0.99432 as expected. 128 and 1024 cost more than their stage-3 single-entry wins (-0.08 % / -0.07 %
+in `final_sweep.md`): the entries were worth more in the full table than alone **[I]**. The drops stand as
+the review decided; restoring `ple_gate@128` (+0.27 %) is the orchestrator's call. The headline table
+above is the stage-3 closure and is not re-derived; stage 4 (`../04-attention/`) re-measures all 10 buckets
+on the amended table.
+
 ## Matmul roles per shape (before)
 
 Every matmul of the forward, by role, from the stage-2 code's Tracy profiles at 12 x 10 (one warmed
@@ -88,10 +114,11 @@ each kept config alone and all together per bucket, against the stage-2 control.
 ### Known targets from the brief
 
 - **2D matmuls on 110 cores at 12 x 10.** Cause: `mcast2d_config` sets per_core_N = ceil(N_tiles / 12);
-  for N = 2048 (64 tiles) that is 6, so 11 columns are used (and per_core_M = ceil(M_tiles / 10)). It is
-  not fixable at tile granularity: any rectangular split of a 64 x 64-tile output (2048 tokens) on 12 x 10
-  has at least 42 tiles on the busiest core (6 x 7); using all 120 cores needs 5.33 N tiles per core. The
-  alternatives were measured and are slower: grid 12 x 8 +0.21 %, 8 x 10 +0.54 %, 8 x 8 +1.22 %,
+  for N = 2048 (64 tiles) that is 6, so 11 columns are used (and per_core_M = ceil(M_tiles / 10)). For
+  rectangular program configs (2D / 1D multicast) it is not fixable at tile granularity: any rectangular
+  split of a 64 x 64-tile output (2048 tokens) on 12 x 10 has at least 42 tiles on the busiest core (6 x 7);
+  using all 120 cores needs 5.33 N tiles per core. The non-rectangular `minimal_matmul` does run on all
+  120 cores and was measured +0.66 % slower (below). The alternatives were measured and are slower: grid 12 x 8 +0.21 %, 8 x 10 +0.54 %, 8 x 8 +1.22 %,
   transpose_mcast +1.08 %, `minimal_matmul` on all 120 cores (pads N to 70 tiles) +0.66 %, subblock 1 x 2
   -0.04 % (2048). Kept instead: in0_block_w 16 on the same grid. Blocker recorded: tile granularity.
 - **gelu gate on `minimal_matmul` from 8192 tokens.** Selection rule and fix in the first finding above.
@@ -106,7 +133,11 @@ each kept config alone and all together per bucket, against the stage-2 control.
 - **13 x 10 unchanged.** `TUNED_CONFIGS` has only a (12, 10) key and is consulted at batch 1 only.
   `config_dump.py` (`$U/logs/config_dump.log`): 13 x 10 issues the same 168 (role, shape) calls as
   `a12d330bb3`, including the batched shapes; 12 x 10 differs in exactly the 39 kept entries. Gates pass
-  at 13 x 10 (below).
+  at 13 x 10 (below). E9.4 moved this proof into the repo as a CPU-only test,
+  `tests/perf/test_tuned_config_identity.py` (table on vs `TUNED_ON` off: 13 x 10 identical, 12 x 10
+  differs in exactly the listed entries, batched shapes included); with a planted 13 x 10 entry
+  (`down@4096`) it fails, reverted it passes (`04-attention/logs/c1_identity_{planted,clean}.log`).
+  After the E9.4 drops the table has 34 entries.
 
 ### Floors and blockers per material role
 
@@ -146,9 +177,16 @@ each kept config alone and all together per bucket, against the stage-2 control.
 - gelu_tanh exact-mode SFPU cost (the remaining gate gap): precision, stage 7.
 - After profiles at 6 buckets (128, 2048, 4096, 8192, 16384, 65536: `profiles_after/`, `roles_after.md`).
   The 65536 after profile's kernel sum (1418.9 ms) is almost equal to before (1420.5 ms) although ple_gate
-  drops 2206 -> 433 us per call: the other roles are 2-3 % slower in that one eager forward (up 1363 ->
-  1403 us) **[M]**; not attributed (single profiled forward, clock not recorded per op). Wall time
-  (burst -2.21 %, sustained -1.90 %) is the claim.
+  drops 2206 -> 433 us per call. **Attributed in E9.4 [M]:** the two captures convert device cycles to ns
+  at different clocks (DEVICE FW END - START CYCLE over DEVICE FW DURATION: 1331.0 MHz before, 1293.0 MHz
+  after; the profiler reads AICLK once per capture, and `op_table.json`'s `clock_mhz` 1350 is the nominal
+  value, not the capture's). In cycles every unchanged op group is within -1.9 / +1.6 % (full SDPA
+  -0.04 %, MLP matmuls +0.01 / +0.16 %), and the kernel sum per forward drops 1901.8 -> 1846.7 Mcyc
+  (-55.2 Mcyc = -41.5 ms at 1331 MHz): ple_gate's matmul -70.5 Mcyc, its plain minimal_matmul calls +13.5,
+  the gelu moved into the multiply +19.8, the other multiplies -15.2. The "other roles 2-3 % slower" was
+  the 2.9 % clock ratio (1331 / 1293). Script and output:
+  `tt-ops/runs/embeddinggemma-2/e9/04-attention/scripts/profile_clock_attr.py`,
+  `logs/c1_profile_clock_attr_65536.log`. Wall time (burst -2.21 %, sustained -1.90 %) remains the claim.
 - Batched shapes (b8 x 512, b32 x 128) were not re-measured (batch-1-only decision); they issue the
   stage-2 calls.
 - Independent stage review: not done by me (the orchestrator's reviewer runs it).

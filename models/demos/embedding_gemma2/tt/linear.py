@@ -152,13 +152,12 @@ def _tuned_12x10() -> dict[tuple[str, int], MMSpec]:
     t[("qkv_sliding", 128)] = MMSpec("1d", grid=(8, 8))
     t[("qkv_full", 128)] = MMSpec("1d")
     t[("ple_wide", 128)] = MMSpec("1d")
-    t[("ple_gate", 128)] = bw16
-    # 256: in0_block_w 16 on the gated roles, gelu fused in the MLP gate matmul. 512: the rule is kept
-    t[("gate", 256)] = MMSpec("2d", in0_block_w=16, gelu="mm")
+    # 256: in0_block_w 16 on the PLE gate. 512: the rule is kept. (E9.4 dropped gate@256: -0.17 % for a
+    # last-hidden PCC drop 0.99432 -> 0.99336; and ple_gate@128, qkv_sliding@1024, ple_layer@8192,
+    # ple_gate@4096, whose wins were <= 0.1 %: doc/prefill/04-attention/README.md, commit 1.)
     t[("ple_gate", 256)] = bw16
-    # 1024: in0_block_w 16 on the N = 2048 roles; gelu fused in the gate matmul with it
-    for r in ("up", "qkv_sliding"):
-        t[(r, 1024)] = bw16
+    # 1024: in0_block_w 16 on the up projection; gelu fused in the gate matmul with it
+    t[("up", 1024)] = bw16
     t[("gate", 1024)] = MMSpec("2d", in0_block_w=16, gelu="mm")
     # 2048 / 4096: in0_block_w 16 on every K = 512 2D role, gelu in the multiply, smaller minimal blocks
     for m in (2048, 4096):
@@ -171,7 +170,6 @@ def _tuned_12x10() -> dict[tuple[str, int], MMSpec]:
     t[("ple_gate", 2048)] = MMSpec("2d", gelu="mul")
     t[("down", 4096)] = m_4_8_4
     t[("o_sliding", 4096)] = m_4_8_4
-    t[("ple_gate", 4096)] = MMSpec("2d", in0_block_w=16)
     # >= 8192: both gated roles on plain minimal_matmul with gelu_tanh in the multiply (the fused
     # activation doubles minimal_matmul's time; the 2D config does not fit L1 at these M)
     for m in (8192, 16384, 32768, 65536):
@@ -180,7 +178,7 @@ def _tuned_12x10() -> dict[tuple[str, int], MMSpec]:
             t[("gate", m)] = gelu_mul
     for m in (8192, 16384):  # at 32768 / 65536 their burst gain is inside the session drift: not kept
         t[("down", m)] = m_4_8_2
-        t[("ple_layer", m)] = m_4_8_4
+    t[("ple_layer", 16384)] = m_4_8_4
     t[("o_sliding", 8192)] = m_4_8_4
     t[("up", 8192)] = MMSpec("2d", chunk=4096, in0_block_w=8)
     t[("up", 16384)] = MMSpec("2d", chunk=4096, in0_block_w=8)

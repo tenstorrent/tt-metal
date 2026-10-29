@@ -17,16 +17,20 @@ vs the mean of the stage-2 controls at the start and end of the session). At 327
 contained down / ple_layer (and at 65536 the gate), which were then dropped (gain inside the drift);
 the closure sweep in `README.md` measures the final table.
 
+**E9.4 amendment:** five rows below were dropped from the table after the stage-3 review (README "E9.4
+amendments"): 128 ple_gate, 256 gate, 1024 qkv_sliding, 4096 ple_gate, 8192 ple_layer. They are marked
+"(dropped E9.4)"; the table now has 34 entries.
+
 | bucket | role | M x K x N | stage-2 call (rule) | kept call | final sweep: alone | all kept | session drift |
 |---|---|---|---|---|---|---|---|
-| 128 | ple_gate | 128x512x512 | 2D grid 12x4, per_core 1x2, bw 8, sb 1x2; multiply with gelu pre-activation | 2D grid 12x10, per_core 1x2, bw 16, sb 1x2; multiply with gelu pre-activation | -0.08 % | -0.78 % | +0.01 % |
+| 128 | ple_gate (dropped E9.4) | 128x512x512 | 2D grid 12x4, per_core 1x2, bw 8, sb 1x2; multiply with gelu pre-activation | 2D grid 12x10, per_core 1x2, bw 16, sb 1x2; multiply with gelu pre-activation | -0.08 % | -0.78 % | +0.01 % |
 | 128 | ple_wide | 128x512x12288 | 2D grid 12x4, per_core 1x32, bw 8, sb 1x4 | 1D in0-mcast grid 12x10, per_core 4x4, bw 8, sb 1x4 | -0.18 % | -0.78 % | +0.01 % |
 | 128 | qkv_full | 128x512x3072 | 2D grid 12x4, per_core 1x8, bw 8, sb 1x4 | 1D in0-mcast grid 12x10, per_core 4x1, bw 8, sb 4x1 | -0.16 % | -0.78 % | +0.01 % |
 | 128 | qkv_sliding | 128x512x2048 | 2D grid 12x4, per_core 1x6, bw 8, sb 1x3 | 1D in0-mcast grid 8x8, per_core 4x1, bw 8, sb 4x1 | -0.13 % | -0.78 % | +0.01 % |
-| 256 | gate | 256x512x2048 | 2D grid 12x8, per_core 1x6, bw 8, sb 1x3; multiply with gelu pre-activation | 2D grid 12x10, per_core 1x6, bw 16, sb 1x3, gelu fused; multiply | -0.18 % | -0.34 % | +0.01 % |
+| 256 | gate (dropped E9.4) | 256x512x2048 | 2D grid 12x8, per_core 1x6, bw 8, sb 1x3; multiply with gelu pre-activation | 2D grid 12x10, per_core 1x6, bw 16, sb 1x3, gelu fused; multiply | -0.18 % | -0.34 % | +0.01 % |
 | 256 | ple_gate | 256x512x512 | 2D grid 12x8, per_core 1x2, bw 8, sb 1x2; multiply with gelu pre-activation | 2D grid 12x10, per_core 1x2, bw 16, sb 1x2; multiply with gelu pre-activation | -0.13 % | -0.34 % | +0.01 % |
 | 1024 | gate | 1024x512x2048 | 2D grid 12x10, per_core 4x6, bw 8, sb 1x3; multiply with gelu pre-activation | 2D grid 12x10, per_core 4x6, bw 16, sb 1x3, gelu fused; multiply | -0.85 % | -1.19 % | -0.00 % |
-| 1024 | qkv_sliding | 1024x512x2048 | 2D grid 12x10, per_core 4x6, bw 8, sb 1x3 | 2D grid 12x10, per_core 4x6, bw 16, sb 1x3 | -0.07 % | -1.19 % | -0.00 % |
+| 1024 | qkv_sliding (dropped E9.4) | 1024x512x2048 | 2D grid 12x10, per_core 4x6, bw 8, sb 1x3 | 2D grid 12x10, per_core 4x6, bw 16, sb 1x3 | -0.07 % | -1.19 % | -0.00 % |
 | 1024 | up | 1024x512x2048 | 2D grid 12x10, per_core 4x6, bw 8, sb 1x3 | 2D grid 12x10, per_core 4x6, bw 16, sb 1x3 | -0.16 % | -1.19 % | -0.00 % |
 | 2048 | down | 2048x2048x512 | minimal_matmul defaults (8,8,8) sb 2x2 | minimal_matmul blocks (4,8,2) sb 2x2 | -0.37 % | -5.14 % | -0.01 % |
 | 2048 | gate | 2048x512x2048 | 2D grid 12x10, per_core 7x6, bw 8, sb 1x3, gelu fused; multiply | 2D grid 12x10, per_core 7x6, bw 16, sb 1x3; multiply with gelu pre-activation | -1.15 % | -5.14 % | -0.01 % |
@@ -39,7 +43,7 @@ the closure sweep in `README.md` measures the final table.
 | 4096 | down | 4096x2048x512 | minimal_matmul defaults (8,8,8) sb 2x2 | minimal_matmul blocks (4,8,4) sb 2x2 | -0.64 % | -5.26 % | -0.01 % |
 | 4096 | gate | 4096x512x2048 | 2D grid 12x10, per_core 13x6, bw 4, sb 1x3, gelu fused; multiply | 2D grid 12x10, per_core 13x6, bw 16, sb 1x3; multiply with gelu pre-activation | -1.29 % | -5.26 % | -0.01 % |
 | 4096 | o_sliding | 4096x1024x512 | minimal_matmul defaults (8,8,8) sb 2x2 | minimal_matmul blocks (4,8,4) sb 2x2 | -0.46 % | -5.26 % | -0.01 % |
-| 4096 | ple_gate | 4096x512x512 | 2D grid 12x10, per_core 13x2, bw 8, sb 1x2, gelu fused; multiply | 2D grid 12x10, per_core 13x2, bw 16, sb 1x2, gelu fused; multiply | -0.10 % | -5.26 % | -0.01 % |
+| 4096 | ple_gate (dropped E9.4) | 4096x512x512 | 2D grid 12x10, per_core 13x2, bw 8, sb 1x2, gelu fused; multiply | 2D grid 12x10, per_core 13x2, bw 16, sb 1x2, gelu fused; multiply | -0.10 % | -5.26 % | -0.01 % |
 | 4096 | ple_proj | 4096x512x512 | minimal_matmul defaults (8,8,8) sb 2x2 | 2D grid 12x10, per_core 13x2, bw 8, sb 1x2 | -0.94 % | -5.26 % | -0.01 % |
 | 4096 | qkv_full | 4096x512x3072 | 2D grid 12x10, per_core 13x8, bw 4, sb 1x4 | 2D grid 12x10, per_core 13x8, bw 16, sb 1x4 | -0.18 % | -5.26 % | -0.01 % |
 | 4096 | qkv_sliding | 4096x512x2048 | 2D grid 12x10, per_core 13x6, bw 4, sb 1x3 | 2D grid 12x10, per_core 13x6, bw 16, sb 1x3 | -0.79 % | -5.26 % | -0.01 % |
@@ -48,7 +52,7 @@ the closure sweep in `README.md` measures the final table.
 | 8192 | gate | 8192x512x2048 | minimal_matmul defaults (8,8,8) sb 2x2, gelu fused; multiply | minimal_matmul defaults (8,8,8) sb 2x2; multiply with gelu pre-activation | -3.50 % | -5.46 % | -0.03 % |
 | 8192 | o_sliding | 8192x1024x512 | minimal_matmul defaults (8,8,8) sb 2x2 | minimal_matmul blocks (4,8,4) sb 2x2 | -0.11 % | -5.46 % | -0.03 % |
 | 8192 | ple_gate | 8192x512x512 | 2D grid 12x10, per_core 26x2, bw 4, sb 2x2, gelu fused; multiply | minimal_matmul defaults (8,8,8) sb 2x2; multiply with gelu pre-activation | -1.35 % | -5.46 % | -0.03 % |
-| 8192 | ple_layer | 8192x512x512 | minimal_matmul defaults (8,8,8) sb 2x2 | minimal_matmul blocks (4,8,4) sb 2x2 | -0.07 % | -5.46 % | -0.03 % |
+| 8192 | ple_layer (dropped E9.4) | 8192x512x512 | minimal_matmul defaults (8,8,8) sb 2x2 | minimal_matmul blocks (4,8,4) sb 2x2 | -0.07 % | -5.46 % | -0.03 % |
 | 8192 | up | 8192x512x2048 | minimal_matmul defaults (8,8,8) sb 2x2 | 2D grid 12x10, per_core 13x6, bw 8, sb 1x3, M fold 4096 rows x 2 | -0.27 % | -5.46 % | -0.03 % |
 | 16384 | down | 16384x2048x512 | minimal_matmul defaults (8,8,8) sb 2x2 | minimal_matmul blocks (4,8,2) sb 2x2 | -0.21 % | -4.93 % | -0.01 % |
 | 16384 | gate | 16384x512x2048 | minimal_matmul defaults (8,8,8) sb 2x2, gelu fused; multiply | minimal_matmul defaults (8,8,8) sb 2x2; multiply with gelu pre-activation | -2.90 % | -4.93 % | -0.01 % |
