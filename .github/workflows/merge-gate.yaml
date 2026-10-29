@@ -728,21 +728,39 @@ jobs:
           HEAD_REF: ${{ github.event.merge_group.head_ref }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          ARCHES=$(python3 -c 'import json, os; print(*[a for a, t in json.loads(os.environ["THRESHOLDS"]).items() if t["blocking"]])')
+          if [ -z "$ARCHES" ]; then
+            echo "::error::No blocking arch in the thresholds; the gate cannot decide."
+            exit 1
+          fi
           FAIL=0
-          for ARCH in $(python3 -c 'import json, os; print(*[a for a, t in json.loads(os.environ["THRESHOLDS"]).items() if t["blocking"]])'); do
+          for ARCH in $ARCHES; do
             CODE=$(cat "verdicts/llk-perf-gate-verdict-${ARCH}/gate_verdict.txt" 2>/dev/null || echo missing)
             echo "${ARCH}: ${CODE}"
             [ "$CODE" = 0 ] || FAIL=1
           done
-          # An accepted slowdown: the PR in this queue entry carries the llk-perf-accepted label.
-          if [ "$FAIL" = 1 ] && [[ "$HEAD_REF" =~ /pr-([0-9]+)- ]]; then
+          [ "$FAIL" = 0 ] && exit 0
+          if [[ "$HEAD_REF" =~ /pr-([0-9]+)- ]]; then
             PR=${BASH_REMATCH[1]}
-            if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -qx llk-perf-accepted; then
-              echo "::notice::#${PR} has the llk-perf-accepted label, so its LLK perf slowdown is accepted."
-              FAIL=0
+            # Accepted: someone other than the author added llk-perf-accepted after the PR's last commit.
+            AUTHOR=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .user.login)
+            HEAD_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq .head.sha)
+            HEAD_DATE=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}" --jq .commit.committer.date)
+            HAS=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -cx llk-perf-accepted || true)
+            BY=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/events" \
+              --jq ".[] | select(.event == \"labeled\" and .label.name == \"llk-perf-accepted\"
+                    and .actor.login != \"${AUTHOR}\" and .created_at > \"${HEAD_DATE}\") | .actor.login" | tail -n 1)
+            if [ "$HAS" != 0 ] && [ -n "$BY" ]; then
+              echo "::notice::${BY} accepted the LLK perf slowdown of #${PR} (llk-perf-accepted after its last commit)."
+              exit 0
             fi
           fi
-          exit "$FAIL"
+          echo "::error::The LLK perf merge gate blocks this entry. See the Blackhole gate report in this run."
+          echo "To look closer: add the llk-perf-gate label to the PR, then run the LLK perf gate workflow by hand"
+          echo "with placement_run_id set to that PR-gate run (stage 2 with no test limit)."
+          echo "To accept the slowdown: a reviewer other than the author adds the llk-perf-accepted label after"
+          echo "the PR's last commit, then the PR is queued again."
+          exit 1
 
   # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
   # One message for both arches; a regression on one also shows the same points on the other.
@@ -875,16 +893,16 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    # The LLK perf merge gate is in needs, so the queue waits for its verdict. Only
-    # llk-perf-merge-gate-blocking is in optional-jobs; it checks the blocking arches.
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-measure, llk-perf-merge-gate, llk-perf-merge-gate-blocking]
+    # The LLK perf merge gate is in needs, so the queue waits for its verdict. Only its changes job and
+    # llk-perf-merge-gate-blocking are in optional-jobs: a failed changes job would skip the blocking one.
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate, llk-perf-merge-gate-blocking]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-blocking"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-blocking"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

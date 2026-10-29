@@ -18,6 +18,7 @@ regression, review and unmeasured.
     placement_check.py nodes  --candidates R.regressions.csv --map 'current/**/*.windowhash' --out nodes.txt
     placement_check.py decide --candidates R.regressions.csv --baseline DIR --current DIR --report stage2.md
     placement_check.py render --results 'legs/**/stage2.json' --report stage2.md   (exit 1: it blocks)
+    placement_check.py gate   --results 'legs/**/stage2.json' --legs 4 --stage1 R.regressions.csv --bases 'legs/**/stage2.base' --report stage2.md
 """
 
 import argparse
@@ -178,7 +179,7 @@ def decide(
     cur, cur_windows = _side(current_root)
     results = []
     index = {}
-    for key in base[0]:
+    for key in set(base[0]) | set(cur[0]):
         marker, cfg, run_type = key
         config = dict(cfg)
         module = config.pop(MODULE_COL, None)
@@ -205,10 +206,13 @@ def decide(
             row.update(outcome="unmeasured", why="over the test limit")
             results.append(row)
             continue
-        if lookup is None or not all(lookup in side for side in base + cur):
-            row.update(
-                outcome="unmeasured", why="not measured at every position on both sides"
-            )
+        on_base = lookup is not None and all(lookup in side for side in base)
+        on_head = lookup is not None and all(lookup in side for side in cur)
+        if not (on_base and on_head):
+            why = "not measured at every position on both sides"
+            if on_head:
+                why = "not measured on the base (renamed or new test?)"
+            row.update(outcome="unmeasured", why=why)
             results.append(row)
             continue
         deltas, slower = [], []
@@ -370,6 +374,47 @@ def render(results, arch, limit_note=""):
     return "\n".join(lines)
 
 
+def _row_key(row):
+    return (
+        row["marker"],
+        row["module"],
+        row["run_type"],
+        frozenset((c, _value(v)) for c, v in row["config"]),
+    )
+
+
+def gate(results_by_leg, legs, stage1, gate_base, leg_bases):
+    """(results, notes): the stage-2 rows of every leg, plus a not-re-measured row for each stage-1 regression
+    no leg reported, and the notes that explain why stage 2 cannot clear the gate.
+
+    The merge gate blocks when notes is not empty or blocks(results). It needs a result from every leg, every leg
+    compared against the gate's own baseline, and every stage-1 regression judged by some leg.
+    """
+    results = [row for rows in results_by_leg for row in rows]
+    notes = []
+    if not legs or len(results_by_leg) < legs:
+        notes.append(f"{len(results_by_leg)} of {legs} leg(s) left a stage-2 result.")
+    other = sorted({b for b in leg_bases if b != gate_base})
+    if other:
+        notes.append(
+            f"A leg compared against {', '.join(other)}, not the gate's baseline {gate_base or '(none)'}."
+        )
+    judged = {_row_key(r) for r in results}
+    missing = [c for c in stage1 if _row_key(c) not in judged]
+    results += [
+        dict(
+            c,
+            deltas=[],
+            threads=[],
+            slower=0,
+            outcome="unmeasured",
+            why="no stage-2 result",
+        )
+        for c in missing
+    ]
+    return results, notes
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -397,7 +442,40 @@ def main(argv=None):
     r.add_argument("--results", required=True, help="glob of decide's .json files")
     r.add_argument("--arch", default="")
     r.add_argument("--report", required=True)
+    g = sub.add_parser(
+        "gate", help="the merge gate's stage-2 verdict (exit 1: it blocks)"
+    )
+    g.add_argument(
+        "--results", required=True, help="glob of the legs' stage2.json files"
+    )
+    g.add_argument(
+        "--legs", type=int, required=True, help="measuring legs of this arch"
+    )
+    g.add_argument("--stage1", required=True, help="the gate's stage-1 regressions CSV")
+    g.add_argument("--gate-base", default="", help="commit of the gate's baseline")
+    g.add_argument("--bases", required=True, help="glob of the legs' stage2.base files")
+    g.add_argument("--arch", default="")
+    g.add_argument("--report", required=True)
     a = ap.parse_args(argv)
+    if a.cmd == "gate":
+        paths = sorted(glob.glob(a.results, recursive=True))
+        results, notes = gate(
+            [json.loads(Path(path).read_text()) for path in paths],
+            a.legs,
+            read_candidates(a.stage1) if Path(a.stage1).exists() else [],
+            a.gate_base,
+            [
+                Path(b).read_text().strip()
+                for b in sorted(glob.glob(a.bases, recursive=True))
+            ],
+        )
+        report = render(results, a.arch)
+        if notes:
+            report += "\n\n" + "\n".join(
+                f"> ⚠️ {n} The gate keeps blocking." for n in notes
+            )
+        Path(a.report).write_text(report + "\n")
+        return 1 if notes or blocks(results) else 0
     if a.cmd == "render":
         results = [
             row

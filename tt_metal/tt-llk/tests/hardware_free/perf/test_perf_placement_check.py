@@ -20,6 +20,7 @@ from placement_check import (  # noqa: E402
     _value,
     blocks,
     decide,
+    gate,
     main,
     nodes,
     read_candidates,
@@ -333,3 +334,87 @@ def test_positions_measured_in_parts_are_read(tmp_path):
     [result] = _decide(tmp_path, base, cur)
 
     assert result["outcome"] == "regression"
+
+
+def _cleared(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 4 + [_BASE], window="aaa")
+    return _decide(tmp_path, base, cur)
+
+
+def test_gate_passes_when_every_leg_cleared_every_regression(tmp_path):
+    rows = _cleared(tmp_path)
+
+    results, notes = gate([rows, []], 2, _candidates(tmp_path), "abc", ["abc", "abc"])
+
+    assert notes == []
+    assert not blocks(results)
+
+
+def test_gate_blocks_when_a_leg_left_no_result(tmp_path):
+    rows = _cleared(tmp_path)
+
+    _, notes = gate([rows], 2, _candidates(tmp_path), "abc", ["abc"])
+
+    assert notes == ["1 of 2 leg(s) left a stage-2 result."]
+
+
+def test_gate_blocks_when_a_leg_used_another_baseline(tmp_path):
+    rows = _cleared(tmp_path)
+
+    _, notes = gate([rows], 1, _candidates(tmp_path), "abc", ["def"])
+
+    assert notes == ["A leg compared against def, not the gate's baseline abc."]
+
+
+def test_gate_blocks_a_stage1_regression_no_leg_judged(tmp_path):
+    results, notes = gate([[]], 1, _candidates(tmp_path), "abc", ["abc"])
+
+    assert notes == []
+    assert [(r["outcome"], r["why"]) for r in results] == [
+        ("unmeasured", "no stage-2 result")
+    ]
+    assert blocks(results)
+
+
+def test_gate_command_exit_code(tmp_path):
+    rows = _cleared(tmp_path)
+    leg = tmp_path / "legs" / "1"
+    leg.mkdir(parents=True)
+    (leg / "stage2.json").write_text(json.dumps(rows, default=str))
+    (leg / "stage2.base").write_text("abc\n")
+    args = [
+        "gate",
+        "--results",
+        f"{tmp_path}/legs/**/stage2.json",
+        "--bases",
+        f"{tmp_path}/legs/**/stage2.base",
+        "--stage1",
+        str(tmp_path / "s1.regressions.csv"),
+        "--gate-base",
+        "abc",
+        "--report",
+        str(tmp_path / "r.md"),
+    ]
+
+    assert main(args + ["--legs", "1"]) == 0
+    assert main(args + ["--legs", "2"]) == 1
+    assert (
+        "1 of 2 leg(s) left a stage-2 result. The gate keeps blocking."
+        in (tmp_path / "r.md").read_text()
+    )
+
+
+def test_a_test_the_base_does_not_have_is_named(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
+    for pos in POSITIONS:
+        for f in (base / pos).rglob("*.csv"):
+            f.unlink()
+
+    [result] = _decide(tmp_path, base, cur)
+
+    assert (result["outcome"], result["why"]) == (
+        "unmeasured",
+        "not measured on the base (renamed or new test?)",
+    )
