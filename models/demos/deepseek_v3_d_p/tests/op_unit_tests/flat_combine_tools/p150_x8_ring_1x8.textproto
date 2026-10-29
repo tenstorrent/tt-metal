@@ -1,0 +1,10 @@
+# LoudBox (8 x P150, physically a 2 x 4 grid): a 1 x 8 mesh whose 8-long axis is a RING (the grid's perimeter) - a TP
+# ring of 8 (SP 1); p150_x8_ring_8x1's transpose
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 8 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

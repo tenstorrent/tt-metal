@@ -39,6 +39,14 @@ constexpr uint32_t RP = get_compile_time_arg_val(3), CR = get_compile_time_arg_v
 constexpr uint32_t NV = get_compile_time_arg_val(6), KLT = get_compile_time_arg_val(7), GROUP = get_compile_time_arg_val(8);
 constexpr uint32_t INC = get_compile_time_arg_val(9), GX = get_compile_time_arg_val(10), GY = get_compile_time_arg_val(11);
 constexpr uint32_t S0 = get_compile_time_arg_val(12), S1 = get_compile_time_arg_val(13), G = get_compile_time_arg_val(14);
+// (a core's tiles of block b from its counts word: a byte a block, or past TP 4 two (block, count) pairs - se_rs)
+FORCE_INLINE uint32_t cnt_of(uint32_t cnts, uint32_t b) {
+    if constexpr (G > 4) {
+        return ((cnts & 0xFF) == b ? (cnts >> 8) & 0xFF : 0) + (((cnts >> 16) & 0xFF) == b ? cnts >> 24 : 0);
+    } else {
+        return (cnts >> (8 * b)) & 0xFF;
+    }
+}
 constexpr uint32_t RSX = 10;  // (the RS block's words past the entry order: FINB, mailbox, zone, counter, P, FINB-free,
                               // zone credit, zone free, the zone-free signals a chunk, the credits a call expected)
 """
@@ -112,10 +120,10 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* se
         const uint32_t w0 = get_arg_val<uint32_t>(u0 + 2 * un), e = w0 & 0xFF, b = (w0 >> 8) & 0xFF, mask = (w0 >> 16) & 3;
         for (uint32_t i = 0; i < nc; ++i) {
             const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), cnts = get_arg_val<uint32_t>(c0 + 2 * i + 1);
-            const uint32_t cnt = (cnts >> (8 * b)) & 0xFF;
+            const uint32_t cnt = cnt_of(cnts, b);
             if (!((mask >> ((cw >> 16) & 1)) & 1) || cnt == 0) continue;
             uint32_t fo = 0;  // (the sub-block's FINB offset: the core's tiles of the entries before e)
-            for (uint32_t e2 = 0; e2 < e; ++e2) fo += (cnts >> (8 * get_arg_val<uint32_t>(en0 + e2))) & 0xFF;
+            for (uint32_t e2 = 0; e2 < e; ++e2) fo += cnt_of(cnts, get_arg_val<uint32_t>(en0 + e2));
             volatile tt_l1_ptr uint32_t* mb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + XG_HS * (cw >> 20));
             const uint32_t target = ++seen[i];
             invalidate_l1_cache();
@@ -318,7 +326,7 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
         const uint32_t b = (w0 >> 8) & 0xFF, mask = (w0 >> 16) & 3;
         for (uint32_t i = 0; i < nc; ++i) {
             const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i), cnts = get_arg_val<uint32_t>(c0 + 2 * i + 1);
-            const uint32_t cnt = (cnts >> (8 * b)) & 0xFF, hf = (cw >> 16) & 1;
+            const uint32_t cnt = cnt_of(cnts, b), hf = (cw >> 16) & 1;
             if (!((mask >> hf) & 1) || cnt == 0) continue;
             const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
             uint32_t zo;

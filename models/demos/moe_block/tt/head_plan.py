@@ -319,8 +319,11 @@ def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
     G, L, (gx, gy) = shape.G, shape.links, shape.grid
     ring = shape.ring and G > 2
     # (the SE reduce-scatter's per-core counts word: a byte a block)
-    if G > 4 or rs_plan.P >= 256:
-        return f"reduce-scatter counts word: TP {G} <= 4 blocks of < 256 tiles (P {rs_plan.P})"
+    if rs_plan.P >= 256 or (G > 4 and rs_plan.scatter != -2):
+        return f"reduce-scatter counts word: blocks of < 256 tiles (P {rs_plan.P}), past TP 4 the rows scatter only"
+    if G > 4 and not lay.on_engine:  # (TP 8 on the LoudBox's perimeter ring / line, logits on the router cores: the
+        # picks of one x differed between calls in 200-360 of 1024 tokens; on the engine: bit-identical - open)
+        return f"TP {G} > 4: the router's logits on the router cores differ call to call - on the engine only"
     if PORT_GROUP + 1 > HEADERS:
         return "packet headers"
     if shape.latent:
@@ -607,11 +610,13 @@ def shape_checks(shape: HeadShape):
     G, H = shape.G, shape.H
     if G < 2:
         return f"TP {G}: the fused head gathers x over the TP axis (TP >= 2)"
-    if G > 4:
+    if G > 4 and shape.latent:
         return (
-            f"TP {G} > 4: the SE reduce-scatter's per-block tile counts are a byte each in one word (se_rs counts_word) "
-            f"- a mesh with TP 2 or 4"
+            f"TP {G} > 4 with a latent: the latent all-to-all sends a port's destination blocks under one packet header "
+            f"each - at most 3 (x_gather3 la_block) - a mesh with TP 2 or 4"
         )
+    if G > 8:
+        return f"TP {G} > 8: the routing / combine port tables (a mesh with TP <= 8)"
     if shape.links not in (1, 2):
         return f"{shape.links} links: 1 or 2 (a port per direction and link)"
     if H % (32 * G):

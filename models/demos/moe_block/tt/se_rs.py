@@ -88,8 +88,17 @@ class RsPlan:
         return self.rows_in(cy, b)[1] * self.pn[cx]
 
     def counts_word(self, cx, cy):
-        assert self.G <= 4 and self.P < 256
-        return sum(self.count(cx, cy, b) << (8 * b) for b in range(self.G))
+        """Core (cx, cy)'s tile counts a block in one word for the ports: a byte a block (TP <= 4), or past TP 4 its (block,
+        count) pairs - the rows scatter: a core's MT <= 2 rows fall in at most two blocks (x_gather3's cnt_of)."""
+        assert self.P < 256, f"se_rs: a core's sub-block of {self.P} tiles > 255 (the counts word's bytes)"
+        if self.G <= 4:
+            return sum(self.count(cx, cy, b) << (8 * b) for b in range(self.G))
+        nz = [(b, self.count(cx, cy, b)) for b in range(self.G) if self.count(cx, cy, b)]
+        assert (
+            self.scatter == -2 and len(nz) <= 2
+        ), f"se_rs: TP {self.G} > 4 needs the rows scatter with a core's rows in at most two blocks (core {cx},{cy}: {nz})"
+        nz += [(0xFF, 0)] * (2 - len(nz))
+        return nz[0][0] | nz[0][1] << 8 | nz[1][0] << 16 | nz[1][1] << 24
 
     # ---- per chip ----
     def entries(self, p, h=0):
