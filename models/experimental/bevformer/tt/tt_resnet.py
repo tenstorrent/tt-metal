@@ -130,7 +130,7 @@ class TTResLayer:
     """One ResNet layer (layer1 .. layer4), one bottleneck per block in ``conv_pth``.
 
     ``input_dtype``, ``input_layout`` and ``dram_input`` describe the layer input, which
-    only the first block reads. The other arguments go to every block.
+    only the first block reads. The other arguments go to every block, except with ``cameras``.
 
     With ``cameras``, the layer runs its blocks on that many cameras at a time with every activation
     in L1 (TTCameraBottleneck): each group's rows of the DRAM input go into L1, pass through every
@@ -138,7 +138,9 @@ class TTResLayer:
     batch first (``whole_first_block``) when its group input would take more than
     CAMERA_INPUT_MAX_SHARD_BYTES per core, as the subsample holds a second copy of that input, or
     when its stride is on the 3x3 conv2 (pytorch style), which TTCameraBottleneck does not take.
-    Such a layer takes the weights of a DRAM layer.
+    Only that whole first block takes the DRAM, slicing, sharding, act_block_h and dtype arguments;
+    the per-camera blocks size their own (TTCameraBottleneck) and emit bfloat16. Such a layer takes
+    the weights of a DRAM layer.
     """
 
     CAMERA_INPUT_MAX_SHARD_BYTES = 512 * 1024
@@ -251,13 +253,16 @@ class TTResLayer:
     def run_per_camera(layers, x, group_input=None, first_subsample=None, next_conv1=None):
         """Consecutive per-camera ``layers`` with one group size on the DRAM batch ``x``, a group of
         cameras at a time: its rows go into L1, pass through every block of every layer there, and
-        the last layer's output is written back into one DRAM batch. Only that output crosses DRAM.
-        ``group_input``, given a group's index, returns its input already in L1 instead.
+        the last layer's output is written back into one DRAM batch. ``group_input``, given a group's
+        index, returns its input already in L1 instead. Apart from that output, DRAM sees only a
+        whole first block, a group whose rows start inside a tile row (``slice_group``) and a DCN
+        without a sharded input.
 
         Each group writes its rows straight into the batch (``slice_write``) rather than the groups
         being concatenated afterwards, which would copy the whole batch once more. A group whose rows
         are whole tiles writes its TILE shards as they are. A tiled write must start on a tile row,
-        so groups that do not write ROW_MAJOR instead, untilized in L1; that batch suits its
+        so groups whose rows are not whole tiles write ROW_MAJOR instead, untilized in L1, and the
+        layer then emits ROW_MAJOR; that batch suits its
         consumers too, as a strided first block subsamples ROW_MAJOR and an FPN lateral tilizes its
         DRAM input itself.
 
@@ -492,7 +497,8 @@ class TTCameraBottleneck:
         )
         ttnn.deallocate(self._conv2(warmup))
 
-    # The tallest act blocks a per-camera non-DCN conv2 was measured with.
+    # Act blocks up to this many tile rows fit L1 beside the block's identity and the double-buffered
+    # weights at layer1's and layer2's shapes; taller ones are unverified.
     CONV2_MAX_ACT_BLOCK_TILES = 9
 
     def conv2_act_block_h(self):
@@ -661,7 +667,8 @@ class TTBottleneck:
     a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
     ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
     covers the convs that read the block input, for a block fed by a DRAM layer whose own
-    activations fit in L1. ``block_sharded`` block-shards the downsample and a non-DCN conv2.
+    activations fit in L1. ``block_sharded`` block-shards a non-DCN conv2, and a downsample that
+    runs as conv2d.
     ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
     non-DCN conv2, conv3 and the downsample; a DCN conv2 always has it
     (TTModulatedDeformConv2dPack). ``conv2_act_block_h`` is a non-DCN conv2's act_block_h
@@ -838,14 +845,14 @@ class TTResNet:
     ``block_sharded_stages`` lists the layers whose non-DCN conv2s, and conv2d downsamples, are
     block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
     fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
-    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). The stem conv and the
-    max pool read their DRAM inputs in ``stem_conv_height_slices`` and ``stem_maxpool_height_slices``
-    height slices. ``stem_act_block_h`` and ``conv2_act_block_h`` are the stem conv's and the
-    whole-batch non-DCN conv2s' act_block_h overrides, None for conv2d's own (a per-camera conv2
-    sizes its own, TTCameraBottleneck.conv2_act_block_h), and
-    ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives the
-    configured variant's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its
-    ``out_indices``.
+    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). The stem conv reads its
+    DRAM input in ``stem_conv_height_slices`` height slices, and the max pool after it, when layer1
+    runs on the whole batch, in ``stem_maxpool_height_slices``. ``stem_act_block_h`` and
+    ``conv2_act_block_h`` are the stem conv's and the whole-batch non-DCN conv2s' act_block_h
+    overrides, None for conv2d's own (a per-camera conv2 sizes its own,
+    TTCameraBottleneck.conv2_act_block_h), and ``weights_dtype`` the convs' weight dtype.
+    ``model_config.tt_resnet_kwargs`` gives the configured variant's values, and
+    ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
     """
 
     num_layers = 4
@@ -878,8 +885,10 @@ class TTResNet:
             slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=stem_maxpool_height_slices
         )
 
-        # The max pool and every layer emit bfloat16 TILE: layer1's first block feeds its input to
-        # two linears, conv1 and the downsample, which would each tilize a ROW_MAJOR one.
+        # The max pool and every whole-batch layer emit TILE: layer1's first block feeds its input to
+        # two linears, conv1 and the downsample, which would each tilize a ROW_MAJOR one. A
+        # per-camera layer whose groups are not whole tile rows emits ROW_MAJOR (TTResLayer.
+        # run_per_camera), which a strided first block subsamples as it is and a linear tilizes.
         # Activations stay bfloat16: outlier channels lose their neighbours to bfloat8_b's shared
         # block exponent.
         layer_input_dtype = ttnn.bfloat16
@@ -977,7 +986,7 @@ class TTResNet:
             dram_slice_config=self.maxpool_slice_config,
             output_layout=ttnn.TILE_LAYOUT,
         )
-        # The pool writes NHWC tiles with its 400-wide rows padded; flattening them copies, so it
+        # The pool writes NHWC tiles with its rows padded to whole tiles; flattening them copies, so it
         # happens once here rather than in both of layer1's first linears.
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
         signpost(header="ResNet Stem End")
