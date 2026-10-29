@@ -1186,16 +1186,16 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 16},
+        .dest = {.incr = static_cast<std::int16_t>(skip_rows)},
     }
-        .set(ADDR_MOD_6);
+        .set(ADDR_MOD_5);
 
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = static_cast<std::int16_t>(skip_rows)},
+        .dest = {.incr = 16},
     }
-        .set(ADDR_MOD_5);
+        .set(ADDR_MOD_4);
 }
 
 // ============================================================================
@@ -1275,7 +1275,7 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
 
     // Dummy loads to increment dest counters
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_6, 0);
+    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_4, 0);
     TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_5, 0);
 }
 
