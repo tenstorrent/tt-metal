@@ -76,7 +76,10 @@ consecutive rows a page (ckv_bfp4 blocks=True; two reads a block) the 8-bit wind
 512 q, read + write, compressed layers 1255 -> 1216 us (-3 %), window-only 500 -> 432 us (-14 %). Part of that is the
 bulk read itself, which a bf16 window in blocks would also get (not built). The 4-bit compressed rows pay the same
 per-row exponent read (switching it off: compressed layers 1229 -> 986 us); their gather is random, so that needs the
-exponents beside the values in the unpacker's read (not built).
+exponents beside the values in the unpacker's read (not built). Diagnosis: the same exponent read from local L1
+(same transaction count) gives 970 us, so the cost is DRAM serving 32 B reads. Fixed (default, bit-identical): one DRAM
+read of the whole 320 B record into a scratch, then two local copies: compressed layers 512 q 1242 -> 978 us (-21 %),
+160 q 352 -> 293 us (-17 %).
 Window as records (first measurement): +15 us write + 3 % (compressed layers) / +4-15 % (window-only layers) read, no memory gained: the
 window table is per-chunk scratch (2 MB); the served window cache (0_window_kv, the contract) stays bf16 unless the
 owner / server change it.

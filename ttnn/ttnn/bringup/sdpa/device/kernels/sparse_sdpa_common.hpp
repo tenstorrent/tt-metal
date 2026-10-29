@@ -54,6 +54,10 @@ constexpr uint32_t ROW_BFP4_ALIGN = 64;
 constexpr uint32_t row_bfp4_block_bytes(uint32_t k_dim, uint32_t k_chunk) {
     return k_chunk * (row_bfp4_exp_bytes(k_dim) + k_dim / 2) + ROW_BFP4_ALIGN;
 }
+// the 4-bit chunk's record scratch: whole records land here (one DRAM read a row), then split by local copies
+constexpr uint32_t row_bfp4_rec_bytes(uint32_t k_dim, uint32_t k_chunk) {
+    return k_chunk * row_bfp4_bytes(k_dim) + ROW_BFP4_ALIGN;
+}
 // bfloat8_b row records (the window: kv_window uint8, or kv with ROW_BFP8): the same with one byte a value
 constexpr uint32_t row_bfp8_bytes(uint32_t k_dim) { return 2 * row_bfp4_exp_bytes(k_dim) + k_dim; }
 constexpr uint32_t row_bfp8_block_bytes(uint32_t k_dim, uint32_t k_chunk) {
@@ -202,7 +206,7 @@ enum : uint32_t {
 // staging row CB, tile CB, staging row stride; compute: the tile CB), then the tensor accessors.
 // SPARSE_SDPA_WINDOW_BFP8 (with it): the window's bfloat8_b staging row CB and tile CB follow (COUNT_BFP8).
 namespace row_bfp4_ct_arg {
-enum : uint32_t { CB_K4_RM = 0, CB_K4, K_CHUNK, COUNT, CB_K8_RM = COUNT, CB_K8, COUNT_BFP8 };
+enum : uint32_t { CB_K4_RM = 0, CB_K4, K_CHUNK, CB_K4_REC, COUNT, CB_K8_RM = COUNT, CB_K8, COUNT_BFP8 };
 }
 #if defined(SPARSE_SDPA_ROW_BFP4) && defined(SPARSE_SDPA_WINDOW_BFP8)
 constexpr uint32_t ROW_BFP4_CT_COUNT = row_bfp4_ct_arg::COUNT_BFP8;
