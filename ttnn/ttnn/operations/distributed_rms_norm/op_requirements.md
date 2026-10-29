@@ -58,7 +58,7 @@
   | 32×1792 | 13.07 µs | 9.64 µs | 3.43 µs | 0.45 / 0.6 µs |
   | 2048×1280 | 41.83 µs | 32.40 µs | 9.43 µs | 20.5 / 27.3 µs |
 
-### [ ] Refinement 1 — L1 fit for wide-row / tall-shard / long-prefill cells, and sharded-output resharding
+### [~] Refinement 1 — L1 fit for wide-row / tall-shard / long-prefill cells, and sharded-output resharding
 
 **Goal**: move every `supported_fail` cell to passing. All 455 are host-side refusals inside SUPPORTED (no wrong
 result, no hang); none is an axis value, so nothing is added to SUPPORTED and nothing goes to EXCLUSIONS:
@@ -104,6 +104,31 @@ predicate-guarded, so every shape that fits today keeps its exact Phase 0 plan:
 **Done when**: the 440 golden `supported_fail` cells and the 15 failing translated tests pass (golden run with
 `EVAL_CAPTURE_L1=0`: `supported_fail` 0), acceptance + ring-mock + regression green, and the three perf cases'
 traced slowest-chip times are within noise of the Phase 0 baseline.
+
+**Outcome** (implementer, partial): every golden `test_op` cell passes (6 shape chunks covering all 36 INPUTS, 0
+failures; `test_op_loose` + regression + ring-mock 39/39); translated 278/279 (all 12 resharding cells, prefill 8192
+and 32768 pass). Remaining: `test_ds_distributed_norm[random_weights-prefill-131072]` refuses cleanly
+(`NotImplementedError`) → Refinement 1a. Perf contract held: focus 640×1792 traced slowest 25.98 µs (baseline 25.86),
+32×1792 12.45 (13.07), 2048×1280 43.05 median vs 42.67 measured the same session on the pre-refinement code;
+`plan_summary` of the three perf cases unchanged.
+
+### [ ] Refinement 1a — long-prefill L1: x re-read (two-pass) streaming or a credit-managed landing ring
+
+**Goal**: `test_ds_distributed_norm[random_weights-prefill-131072]` (4096 tile-rows × 3584 per device, bf16, RM γ,
+16-bit DEST, interleaved) — the last cell of Refinement 1. Nothing to add to SUPPORTED.
+
+**Blocker (measured)**: the landing scratch holds every row's records for every wave (`num_waves·G·seg_stride` ≈ 650 KB
+per L1 bank at 12 waves, reserved on every core) and one pass block of x needs ≈ 800 KB even at 12 waves (≈ 4,400 tiles
+per worker); no ladder rung fits the ≈ 920 KB left. Waves cannot grow further (port own_stats semaphores).
+
+**Next lever** (pick one): (a) **x re-read** — interleaved only: Phase A streams x per tile-row through a 2-row
+`cb_x_tiles` (square + collapse), Phase B re-reads x per tile-row into a second writer-produced CB (x read twice from
+DRAM, only on this rung); the x term drops to ~4 rows; (b) **landing ring** — TRANSPORT: `K` wave slots reused with a
+per-slot credit from the collecting roots back to the senders (cross-chip back-pressure), landing ∝ `K` instead of
+`num_waves`. (a) is local and cheaper; (b) also lifts the 12-wave cap.
+
+**Done when**: the 131072 translated cell passes; acceptance, rung tests (`test_distributed_rms_norm_l1_fallbacks.py`)
+and the golden slices stay green; the three perf cases' plans unchanged.
 
 ### [ ] Refinement 2 — LOCAL: bring the per-chip local work toward the DRAM roofline on the perf-flagged case
 

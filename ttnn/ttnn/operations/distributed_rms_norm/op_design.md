@@ -461,3 +461,43 @@ Recorded against the binding / advisory items above; each has a reason, and wher
 | SHARD-IN-INTERLEAVED-OUT deferred | built (compute streams per tile-row, writer stores with the shard's chunk widths) | cheap once output placement is its own flag; a sharded output must still carry the input's shard spec |
 | srcB-hold γ / inv passes (base Perf 2) | kernel-lib chains everywhere | lamp L11; per-core blocks here are 3–5 tile-rows |
 | γ multicast | per-core γ reads (as designed: G-MC deferred) | — |
+
+## Refinement 1 — L1 fallback ladder, passes, resharding (implementer)
+
+**Ladder** (`blocking_options` / `first_fit`, predicate-guarded first fit; option 0 is the Phase 0 plan, so every shape
+that fit keeps it bit-for-bit — `plan_summary` of the perf cases is unchanged):
+1. per-wave `x·γ` (`GAMMA_WAVE`, Phase 0's fallback);
+2. per-chunk `x·γ` (`GAMMA_CHUNK`: `cb_x_gamma = q_w·C`, the γ pass fused per chunk ahead of the inv pass), γ resident,
+   then γ streamed (`gamma_stream`: `cb_gamma_tiles = STREAM_DEPTH·C`, the writer pushes one chunk per (wave with rows,
+   chunk), one item ahead of its stores — base `GAMMA_RESIDENT = False`);
+3. chunk-cap halving (`cap` 32 → 1, base `_search_blocking`);
+4. **passes** (multi-block rows): the core's rows run in `ceil(NW / PW)` pass blocks of `PW` waves; `cb_x_tiles`
+   (interleaved: `x_depth·R_pass·WS`, `x_depth` 2 then 1), `cb_inv_rms` (`PW·q_w`), `cb_gather` (`regions` =
+   owned waves per pass) and `cb_x_gamma` (block mode) are sized for one pass. Waves stay numbered across passes, so the
+   exchange (landing slots, own_stats, landed notifies, records) is untouched. Reuse safety: before a pass writes into
+   other members' gather regions / inv slots, a row-group barrier (`SEM_PASS`: each reader waits until its compute has
+   popped every inv page of the previous pass, clears its `SEM_GATHER` fields, then increments every member's
+   `SEM_PASS`); gather regions are addressed by owned-wave ordinal mod `regions`, which follows the owner's CB ring;
+5. lean: the whole ladder again with `cb_partial_col` single-buffered and one tile-row per square→collapse round
+   (`SQ_ROWS`, raw Σx² CBs of one tile-row);
+6. the pass rungs again at up to `WAVES_MAX_PASSES = 12` smaller waves (`rewave`): worker semaphores (GATHER, INV, PASS,
+   LANDED) live on worker cores only and the ports' per-wave own_stats ids start at 0 on the port cores (ids are per
+   core), so the wave count is bounded by `NUM_SEMAPHORES` minus the fabric connection's appended ids;
+7. scratch-backed CBs (last resort, only where the op would otherwise refuse): when the caller's tensors sit at the
+   bottom of L1 the static CB region is tiny; every CB is then carved out of one per-worker scratch L1 tensor placed in
+   the largest free hole (`cb_descriptor_from_sharded_tensor` with offsets, dynamic CB addresses).
+
+**Budget** = the gap below the lowest allocated L1 block (CBs grow up from the bank base), not the largest free block;
+re-measured after the plan's exchange scratch exists (re-plan if it grew); cached exchange resources are evicted and
+the budget re-measured once before refusing.
+
+**Exchange resources** are cached per (mesh, port cores, G) and grown / shrunk on demand (Phase 0 cached one landing +
+semaphore set per plan, which piled up in L1 over a long run), and are released explicitly when dropped (a reference
+held by a failed call's traceback otherwise pins them low in L1).
+
+**Resharding**: the output CB is shard-backed only when the output carries the input's own shard placement; any other
+output (interleaved, a different shard spec, an interleaved input with a sharded output) streams through `cb_output`
+to the writer's output `TensorAccessor` (non-local writes to the output's shard cores). One dispatch.
+
+**Not built**: the 131,072-row prefill (translated `test_ds_distributed_norm`): the landing scratch holds every row's
+records for every wave (~650 KB per bank at 12 waves) and one pass block of x needs ~800 KB — Refinement 1a.

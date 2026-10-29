@@ -7,9 +7,11 @@
 //                      GAMMA_DIRECT_READ = PREFIX)
 //     ROW_MAJOR sticks: stick t (32 γ values of tile column t) read to the page start (fills face 0 rows 0-1), then
 //                      elements 16..31 moved L1 -> L1 to face 1 row 0 (BroadcastDim::Row reads row 0 only)
-//   store_wave (interleaved): per wave, per C-chunk, per tile-row: the chunk's valid tiles -> DRAM (TensorAccessor);
-//     sharded output: the output CB is backed on the output shard (compute packs in place) — nothing to write.
-//     (a sharded input with an interleaved output streams like the interleaved path, chunk widths from the shard)
+//     streamed (L1 fallback GAMMA_STREAM): one C-tile chunk per (wave with rows, chunk), one item ahead of the stores
+//   store_wave: per wave, per C-chunk, per tile-row: the chunk's valid tiles -> the output TensorAccessor (interleaved
+//     DRAM / L1, or a sharded output with a placement other than the input's: resharding — its pages live on their
+//     shard cores); output with the input's own shard placement: the output CB is backed on the output shard
+//     (compute packs in place) — nothing to write.
 
 #include <stdint.h>
 

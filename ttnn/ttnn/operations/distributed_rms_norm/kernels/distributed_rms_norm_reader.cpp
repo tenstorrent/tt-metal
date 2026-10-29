@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // distributed_rms_norm reader (NCRISC, NoC0) on every worker core (op_design.md -> Block schedule).
+// Passes (Refinement 1): Phase A + Phase B below run once per pass block of PW waves (one pass in Phase 0). Before a
+// later pass writes into other members' cb_gather regions / cb_inv_rms slots, a row-group barrier (SEM_PASS) makes
+// sure every member's compute is done with the previous pass; SEM_GATHER fields are cleared at that barrier.
 //
 // Prologue: reduce scaler (1.0; [full, partial] on the sharded W-pad mask path), cb_stats pages zeroed once (only
 // column 0 is ever rewritten).

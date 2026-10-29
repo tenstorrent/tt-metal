@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// distributed_rms_norm compute (op_design.md -> Block schedule). One block per core (the whole assignment resident),
-// cut into NUM_WAVES row waves of Q_W tile-rows.
+// distributed_rms_norm compute (op_design.md -> Block schedule). The core's rows run in NP pass blocks of PW row waves
+// of Q_W tile-rows (Phase 0: one pass, the whole assignment resident); waves are numbered across passes, so the
+// exchange is unchanged. Each pass is Phase A + Phase B below. L1 fallback ladder (Refinement 1, host
+// blocking_options): GAMMA_MODE 0 x·γ of the pass block / 1 per wave / 2 per C-chunk (GAMMA_STREAM: γ chunks streamed
+// by the writer), passes (PW < NW), SQ_ROWS tile-rows per square -> collapse round.
 //
 // Phase A (needs no remote data), per wave w:
 //   square_collapse_wave   eltwise_chain x*x DEST-accumulated per tile-row -> cb_sumsq_partial, then

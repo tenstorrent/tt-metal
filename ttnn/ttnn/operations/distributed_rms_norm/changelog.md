@@ -86,3 +86,41 @@ What moved it (each measured on a device-zone timeline, `DRMS_PERF_ZONES=1`):
 
 Debug / measurement aids: `test_distributed_rms_norm_debug.py` (row-scaled inputs localize any row ↔ statistic
 mix-up), `test_distributed_rms_norm_perf.py` (perf driver); both run with `--no-precompile`.
+
+## Refinement 1 — L1 fit for wide-row / tall-shard / long-prefill cells, and sharded-output resharding
+- Date: 2026-10-29
+- What was done: an L1 fallback ladder on the block surface the design names, predicate-guarded first fit
+  (`blocking_options` / `first_fit`; option 0 = the Phase 0 plan, so every shape that fit keeps it): per-wave x·γ →
+  per-chunk x·γ (γ resident, then streamed by the writer one chunk ahead of its stores) → chunk-cap halving → **passes**
+  (multi-block rows: CBs sized for `PW` waves, waves numbered across passes so the exchange is unchanged; a row-group
+  `SEM_PASS` barrier guards reuse of gather regions / inv slots; interleaved x_depth 2 then 1) → lean (single-buffered
+  `cb_partial_col`, one-row square→collapse rounds) → up to 12 smaller waves (port own_stats semaphore ids made
+  port-only; the fabric connection's semaphores are now appended after ours instead of being overwritten) →
+  scratch-backed CBs (last resort: all CBs carved out of one L1 scratch tensor in the largest free hole when the
+  caller's tensors leave no static CB region). Budget = gap below the lowest allocated L1 block, re-measured after the
+  exchange scratch exists. Exchange resources cached per (mesh, ports, G), grown / shrunk on demand and released
+  explicitly (Phase 0 kept one landing + semaphore set per distinct plan alive forever: the L1 it pinned was why many
+  listed cells failed only inside the full suite). Resharding: any output other than the input's own shard placement
+  streams through `cb_output` to the writer's output `TensorAccessor` (validate() no longer refuses it; one dispatch).
+  `cb_table()` is the single source of the CB descriptors and `footprint()`.
+  Reused: the Phase 0 kernels (pass loop around the existing Phase A / Phase B, existing γ chain with an offset per
+  chunk, existing output store loop for resharded outputs). Added: no new kernel file; knobs `PW`, `cap`,
+  `gamma_mode`, `gamma_stream`, `x_depth`, `combine_depth`, `sq_rows` (host, single source), `SEM_PASS`.
+- Accuracy achieved: within the golden suite's per-(dtype, fp32_dest_acc_en) PCC / rel-RMS tolerances on every
+  supported cell (e.g. HEIGHT_SHARDED 32×4096 / 32×8192 / 128×8192, WIDTH_SHARDED 4096×1024 / 2048×1280 incl. fp32,
+  long prefill 8192 / 32768); rung tests at the acceptance PCC (0.999 fp32 / 0.995 bf16 / 0.99 bf8b).
+- Golden test progress: `test_op` all cells green across 6 chunks covering all 36 INPUTS (0 failures, 0 hangs);
+  `test_op_loose` + `test_regression` + `test_ring_mock` 39/39; `test_translated` 278/279 (was 264/279) — the 12
+  resharding cells and prefill 8192 / 32768 now pass; prefill 131072 refuses cleanly (Refinement 1a).
+- Perf (traced slowest chip, 1×4 ring): 640×1792 25.98 µs (Phase 0 25.86), 32×1792 12.45 (13.07), 2048×1280 43.05
+  median vs 42.67 for the pre-refinement code measured in the same session — within noise; perf-case plans unchanged.
+- Issues encountered: (1) fabric `setup_fabric_connection` appends its semaphores to the descriptor; Phase 0 overwrote
+  them (it only worked because worker ids covered those slots) — moving own_stats to id 0 hung the ports in
+  `close()` until our semaphores were set first. (2) Inside the suite, L1 fragmentation by the harness's own tensor
+  creation (an input shard at the very bottom of L1) left a 13–400 KB static CB region → evict-and-retry, lean rung,
+  scratch-backed CBs. (3) Running this directory's rung tests and a golden fp32 WIDTH_SHARDED cell in ONE session with
+  precompile makes the golden helper build an all-zero device input (not the op; reproducer gated behind
+  `DRMS_R1_DEBUG=1` in `test_distributed_rms_norm_r1_debug.py`). (4) 131072-row prefill: landing (~650 KB per bank)
+  + one pass block of x (~800 KB) — Refinement 1a.
+- Tests added: `test_distributed_rms_norm_l1_fallbacks.py` (every ladder rung forced on small shapes, >8-wave pass
+  regime, scratch-backed CBs, 4 resharding placements; 22 cases), `test_distributed_rms_norm_r1_debug.py` (opt-in).

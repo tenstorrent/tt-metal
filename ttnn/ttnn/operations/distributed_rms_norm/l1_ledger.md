@@ -118,3 +118,28 @@ Totals: DRAM 4,800,768 B; on-chip NoC ≈ 1.08 MB; fabric ≈ 8 KiB sent per dev
 > column-major core reorder per slice, the CBs are unchanged. Among the splits that need no new mechanism, the
 > implemented D3 is the cheapest at the DRAM tier (D1 reads γ 20× at the focus case; the `G_h = 1` D3 variant
 > saves the same γ bytes as G-MC but adds 3.4 MB of on-chip combine traffic and a fan-in of 56).
+
+
+## Refinement 1 deltas (implementer) — `cb_table()` is now the single source of both the CB descriptors and `footprint()`
+
+| CB | Phase 0 | With the L1 ladder (Refinement 1) |
+|----|---------|-----------------------------------|
+| `cb_x_tiles` (interleaved) | `R·Wp` | `x_depth·R_pass·WS`, `R_pass = min(rows_max, PW·q_w)` (passes; `x_depth` 2 when it fits) |
+| `cb_inv_rms` | `num_waves·q_w` | `PW·q_w` (one pass; slots reused after the `SEM_PASS` row-group barrier) |
+| `cb_gather` | `max_owned·G_w·q` | `regions·G_w·q`, `regions = max_owned_waves(PW, owners, G_w)` (owned-wave ordinal mod regions) |
+| `cb_partial_col` | `2·q_w` | `combine_depth·q_w` (lean rung: 1) |
+| `cb_sumsq_partial` (+ `_last`, `_acc` masked) | `q_w` | `SQ = min(sq_rows, q_w)` (lean rung: 1 tile-row per square→collapse round) |
+| `cb_gamma_tiles` | `Wp` | `Wp`, or `STREAM_DEPTH·C` when γ streams |
+| `cb_x_gamma` | `R·WS` / `q_w·WS` | block `R_pass·WS` / wave `q_w·WS` / chunk `q_w·C` |
+| `cb_output` | `STREAM_DEPTH·C` (interleaved out) | same, keyed on `out_resident` (input's own shard placement); resharded outputs stream |
+| all CBs (last resort) | static region | carved out of one scratch L1 tensor in the largest free hole (dynamic CB addresses) |
+
+`C` follows the halved chunk cap. Phase 0 plans are option 0 of the ladder: their CB sizes are unchanged.
+
+**Budget**: gap below the lowest allocated L1 block (CBs grow up from the bank base), re-measured after the plan's
+exchange scratch exists. **Port core**: landing `num_waves·G·seg_stride` (floor 4 KiB), one per (mesh, ports, G),
+grown / shrunk on demand.
+
+**Data movement** (fallback rungs only; Phase 0 unchanged): streamed γ reads each slice chunk's row-0 prefix once per
+(wave with rows) instead of once per kernel — γ DRAM bytes × waves (≤ 12) on the cores that stream; x, out: one DRAM
+crossing each in every rung (passes keep x resident per pass block; no re-read).
