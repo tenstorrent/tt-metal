@@ -476,9 +476,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             dev_msgs::launch_msg_t msg = kernel->launch_msg;  // copy
             dev_msgs::go_msg_t::ConstView go_msg = kernel->go_msg.view();
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
-            tt::llrt::write_launch_msg_to_core(
-                MetalEnvAccessor(*env_).impl(),
-                this->id(),
+            slow_dispatch::WriteLaunchMsgToCore(
+                *this,
                 virtual_core,
                 msg.view(),
                 go_msg,

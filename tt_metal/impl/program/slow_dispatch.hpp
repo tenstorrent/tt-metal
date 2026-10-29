@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "core_coord.hpp"
+#include "llrt/hal.hpp"
+
 namespace tt::tt_metal {
 class IDevice;
 class Program;
@@ -26,5 +29,14 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
 
 // Waits until all cores used by the program, i.e. the cores LaunchProgramAsync sends the go signal to, are idle.
 void WaitProgramDone(IDevice& device, const Program& program);
+
+// Writes a kernel group's launch message, and its go message when send_go is set, to a core, counting them as
+// program config in host transfer stats.
+void WriteLaunchMsgToCore(
+    IDevice& device,
+    const CoreCoord& virtual_core,
+    dev_msgs::launch_msg_t::View launch_msg,
+    dev_msgs::go_msg_t::ConstView go_msg,
+    bool send_go);
 
 }  // namespace tt::tt_metal::slow_dispatch
