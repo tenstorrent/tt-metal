@@ -908,23 +908,39 @@ _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 
 # Interesting magnitudes only, since a shift is exact: powers of two, a few odd values, and
-# zero. 2**30 keeps a large right shift working on a non-zero operand.
-_SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
+# zero. 2**30 keeps a large right shift working on a non-zero operand, and +-_INT32_MAX are the
+# int32 ends the custom stimuli deliver (they clamp INT32_MIN to -_INT32_MAX).
+_SHIFT_STIMULUS_MAGNITUDES = [
+    0,
+    1,
+    2,
+    3,
+    7,
+    255,
+    256,
+    1023,
+    65535,
+    65536,
+    2**30,
+    _INT32_MAX,
+]
 
 
 def _shift_stimulus_values(mathop, shift_amount):
-    """Values that stay representable after *mathop* shifts them by *shift_amount*.
+    """Values of both signs that stay representable after *mathop* shifts them by *shift_amount*.
 
     A left shift is the only one that can leave int32, so the value set is chosen per variant.
-    Positive-only, because Dst stores integers as sign-magnitude and a negative operand does
-    not survive the round trip -- which also means the out-of-range half only covers the
-    positive side, where the two kernels' rules coincide at 0.
+    The negative half is what the right shift's sign fill acts on: an arithmetic shift of a
+    negative operand, in range and at the clamp to 31 where it gives -1.
     """
-    magnitudes = _SHIFT_STIMULUS_MAGNITUDES
-    if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
-        limit = _INT32_MAX >> shift_amount
-        magnitudes = [m for m in magnitudes if m <= limit]
-    return [float(m) for m in magnitudes]
+    values = set()
+    for m in _SHIFT_STIMULUS_MAGNITUDES:
+        for v in (m, -m):
+            if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
+                if not -(2**31) <= v << shift_amount <= _INT32_MAX:
+                    continue
+            values.add(v)
+    return [float(v) for v in sorted(values)]
 
 
 @pytest.mark.nightly
@@ -943,14 +959,11 @@ def test_eltwise_unary_sfpu_int_shift(
     """Sweep the unary shift ops over the amounts worth driving, in range and out.
 
     Not the full axis -- see _UNARY_SHIFT_AMOUNTS for which amounts are kept and why.
+    Int32 stimuli are two's complement, which is how ttnn feeds the device and what the
+    kernels' raw I32 loads expect; under this file's sign-magnitude default a negative
+    operand would reach the kernel as a different bit pattern.
     """
     values = _shift_stimulus_values(mathop, shift_amount)
-    if not any(v for v in values):
-        # Only 0 survives the representable-result filter, so the variant would assert
-        # 0 << n == 0 and nothing else. Skipped rather than left as a green vacuous pass.
-        pytest.skip(
-            reason=f"every non-zero value overflows int32 at a left shift of {shift_amount}"
-        )
     formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -962,6 +975,7 @@ def test_eltwise_unary_sfpu_int_shift(
         input_dimensions,
         spec_A=StimuliSpec.custom(values=values, seed=0),
         shift_amount=shift_amount,
+        twos_complement=True,
     )
 
 
