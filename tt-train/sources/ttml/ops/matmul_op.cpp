@@ -22,8 +22,14 @@ uint64_t batch_volume(const ttnn::Tensor& t) {
 
 autograd::TensorPtr matmul_op(
     const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b) {
-    // The shape limits below are backward's, so they apply only when this forward records a backward node.
-    if (autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED && autograd::any_requires_grad(a, b)) {
+    auto out = autograd::create_tensor();
+    auto res = ttnn_fixed::matmul(a->get_value(), b->get_value(), transpose_a, transpose_b);
+    out->set_value(res);
+
+    // Each grad's matmul runs only for an input that requires grad; a frozen input's grad is never computed.
+    autograd::GradFunction grad = [a, b, out, transpose_a, transpose_b]() {
+        // The shape limits below are backward's, so they are checked here: forward alone (e.g. inference) takes any
+        // shape ttnn's matmul does.
         // With transpose_a, a's stored rows are op(a)'s columns, so flattening a batched a misaligns its rows with
         // dL/dout's: dA would come back scrambled and dB would fail on a shape mismatch.
         if (transpose_a) {
@@ -41,14 +47,7 @@ autograd::TensorPtr matmul_op(
             "matmul_op backward does not support a batched b: got b of shape {} (batch {}).",
             b->get_value().logical_shape(),
             b_batch);
-    }
 
-    auto out = autograd::create_tensor();
-    auto res = ttnn_fixed::matmul(a->get_value(), b->get_value(), transpose_a, transpose_b);
-    out->set_value(res);
-
-    // Each grad's matmul runs only for an input that requires grad; a frozen input's grad is never computed.
-    autograd::GradFunction grad = [a, b, out, transpose_a, transpose_b]() {
         auto [a_grad, b_grad] = ttnn_fixed::matmul_backward(
             a->get_value(),
             b->get_value(),

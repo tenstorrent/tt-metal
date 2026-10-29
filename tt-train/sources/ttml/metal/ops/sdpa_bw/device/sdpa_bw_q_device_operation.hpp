@@ -39,13 +39,10 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability = 0.0F,
+    const ttml::metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs& outputs = {},
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_u_scaler = std::nullopt,
     const std::optional<ttnn::Tensor>& gate = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_gate = std::nullopt,
-    bool compute_grad_query = true,
-    bool compute_u_scaler = true,
-    bool compute_grad_gate = false,           // needs a gate; same defaults as SDPABackwardQParams
-    bool compute_gated_grad_output = false);  // needs a gate
+    const std::optional<ttnn::Tensor>& preallocated_grad_gate = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -460,10 +460,11 @@ TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_CacheHit_PreallocatedOutputsAdd
 // ============================================================================
 // Skipping grads in the LayerNorm backward kernel
 // ============================================================================
-// layernorm_bw takes a flag for each of dx, dgamma and dbeta. A skipped grad is nullopt; the kernel drops its compute
-// and its output CB and, for dx, gamma and both row sums. Rows cover dx off on both kernel paths (everything in L1,
-// with several rows per core so gamma is read once, and not), dgamma and dbeta each skipped, and each output as the
-// one the writer takes its tile size from.
+// layernorm_bw takes a flag for each of dx, dgamma and dbeta. A skipped grad is nullopt. dbeta is reduced from dL_dout
+// on the host, so only dx and dgamma reach the kernel, which drops a skipped grad's compute and output CB and, for dx,
+// gamma and both row sums. Rows cover dx off on both kernel paths (everything in L1, with several rows per core so
+// gamma is read once, and not), dgamma and dbeta each skipped, and each output as the one the writer takes its tile
+// size from.
 // ============================================================================
 
 namespace {
@@ -474,8 +475,6 @@ struct LayerNormBwSkipCase {
     bool compute_grad_input = true;
     bool compute_grad_gamma = true;
     bool compute_grad_beta = true;
-    // dbeta alone is reduced straight from dL_dout, so no layernorm_bw program runs.
-    bool runs_kernel = true;
 };
 
 // gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
@@ -517,8 +516,9 @@ protected:
 };
 
 // Each requested grad must equal the one from the full backward bit for bit: the kernel does the same per-tile
-// arithmetic either way. The flags are compile-time, so the first skipping run must compile its own program; a second
-// run with other live inputs must hit that program and read and write the new buffers.
+// arithmetic either way. The dx and dgamma flags are compile-time, so a first skipping run that changes them must
+// compile its own program; a second run with other live inputs must hit that program and read and write the new
+// buffers.
 TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
     using namespace ttml;
     const LayerNormBwSkipCase& c = GetParam();
@@ -540,7 +540,7 @@ TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
                 {.input = compute_grad_input, .gamma = compute_grad_gamma, .beta = compute_grad_beta});
         };
     const std::array<bool, 3> requested{c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta};
-    // The full backward also compiles the dgamma / dbeta reductions, so the skipping runs below only add their own
+    // The full backward also compiles the dgamma / dbeta reductions, so the skipping runs below only add their kernel's
     // program.
     const auto to_host = [](const std::vector<std::optional<ttnn::Tensor>>& grads) {
         std::vector<xt::xarray<float>> host;
@@ -555,8 +555,10 @@ TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
     const auto entries_before = device->num_program_cache_entries();
     const auto skip_first = run(first, c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta);
     const auto entries_after_first = device->num_program_cache_entries();
-    EXPECT_EQ(entries_after_first, entries_before + (c.runs_kernel ? 1U : 0U))
-        << c.name << ": the skipping run must compile exactly one program of its own, or none without a kernel";
+    // With both dx and dgamma the kernel is the full backward's; with neither (dbeta alone) no kernel runs.
+    const bool compiles_own_program = c.compute_grad_input != c.compute_grad_gamma;
+    EXPECT_EQ(entries_after_first, entries_before + (compiles_own_program ? 1U : 0U))
+        << c.name << ": the skipping run must compile exactly one program of its own, or none without new kernel flags";
     const auto skip_second = run(second, c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta);
     EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
         << c.name << ": the second skipping run at identical shapes missed the program cache";
@@ -593,10 +595,7 @@ INSTANTIATE_TEST_SUITE_P(
             .name = "BetaOnly_FitsInL1",
             .shape = {1U, 1U, 8192U, 127U},
             .compute_grad_input = false,
-            .compute_grad_gamma = false,
-            .runs_kernel = false},
-        LayerNormBwSkipCase{
-            .name = "NoBeta_DoesNotFitInL1", .shape = {1U, 1U, 64U, 16383U}, .compute_grad_beta = false},
+            .compute_grad_gamma = false},
         LayerNormBwSkipCase{
             .name = "InputOnly_DoesNotFitInL1",
             .shape = {1U, 1U, 64U, 16383U},
@@ -611,7 +610,7 @@ INSTANTIATE_TEST_SUITE_P(
             .compute_grad_beta = false}),
     [](const ::testing::TestParamInfo<LayerNormBwSkipCase>& info) { return info.param.name; });
 
-// The kernel always writes at least one output, so a call that requests none must be refused.
+// A call that requests no grad must be refused.
 TEST_F(LayerNormBackwardOpTest, BackwardRejectsNoRequestedGrad) {
     const LayerNormBwInputs in = make_layernorm_bw_inputs({1U, 1U, 32U, 64U}, 1U);
     EXPECT_THAT(
@@ -619,6 +618,6 @@ TEST_F(LayerNormBackwardOpTest, BackwardRejectsNoRequestedGrad) {
             ttml::metal::layernorm_bw(
                 in.input, in.gamma, in.mean, in.rstd, in.dL_dout, {.input = false, .gamma = false, .beta = false});
         },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "at least one of compute_grad_input, compute_grad_gamma and compute_grad_beta must be set")));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("at least one of grads.input, grads.gamma and grads.beta must be set")));
 }

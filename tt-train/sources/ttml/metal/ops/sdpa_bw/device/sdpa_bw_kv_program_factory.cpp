@@ -169,8 +169,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     const kv::operation_attributes_t& args, const kv::tensor_args_t& tensor_args, kv::tensor_return_value_t& output) {
     // Which outputs to produce. Both need P (recomputed from Q, K, mask and lse) and dO. grad_V = P^T @ dO needs
     // nothing else; grad_K additionally needs V (for dP = dO @ V^T), u_scaler and dS.
-    const bool compute_grad_key = args.compute_grad_key;
-    const bool compute_grad_value = args.compute_grad_value;
+    const bool compute_grad_key = args.outputs.grad_key;
+    const bool compute_grad_value = args.outputs.grad_value;
 
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split

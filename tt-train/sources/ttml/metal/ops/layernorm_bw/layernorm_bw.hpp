@@ -10,7 +10,7 @@
 
 namespace ttml::metal {
 
-// Which grads layernorm_bw computes. A field set to false drops that grad's kernel work; at least one must be set.
+// Which grads layernorm_bw computes. A field set to false drops that grad's work; at least one must be set.
 struct LayerNormBackwardGrads {
     bool input = true;
     bool gamma = true;

@@ -120,7 +120,7 @@ void kernel_main() {
             }
         }
 
-        // Final pass: one read of each block feeds dx, dgamma_components and dbeta_components
+        // Final pass: one read of each block feeds dx and dgamma_components
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
             const uint32_t current_block_size = std::min(block_size, Wt - c);

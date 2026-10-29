@@ -9,12 +9,16 @@
 
 namespace ttml::metal::ops::sdpa_bw::device::kv {
 
+// Which outputs to produce. grad_K needs u_scaler; grad_V does not.
+struct SDPABackwardKVOutputs {
+    bool grad_key{true};
+    bool grad_value{true};
+};
+
 struct SDPABackwardKVParams {
     AttentionMaskType mask_type{AttentionMaskType::Arbitrary};
     float dropout_probability{0.0F};
-    // Which outputs to produce. grad_K needs u_scaler; grad_V does not.
-    bool compute_grad_key{true};
-    bool compute_grad_value{true};
+    SDPABackwardKVOutputs outputs{};
 };
 
 struct SDPABackwardKVInputs {
@@ -35,7 +39,7 @@ struct SDPABackwardKVInputs {
 using operation_attributes_t = SDPABackwardKVParams;
 using tensor_args_t = SDPABackwardKVInputs;
 
-// [grad_K, grad_V]; an output is nullopt when its compute_* flag is false.
+// [grad_K, grad_V]; an output is nullopt when its outputs flag is false.
 using tensor_return_value_t = std::tuple<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>>;
 
 using spec_return_value_t =
