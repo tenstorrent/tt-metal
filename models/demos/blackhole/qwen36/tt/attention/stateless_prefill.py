@@ -112,8 +112,7 @@ def stateless_attention_prefill(attn, x, cos, sin):
     # Heads -> [B, S, Hq * D], sigmoid gate, out-projection.
     attn_out = ttnn.experimental.nlp_concat_heads(attn_out)
     attn_out = ttnn.reshape(attn_out, [B, S, Hq * D])
-    gate = ttnn.sigmoid(gate)
-    gated = ttnn.multiply(attn_out, gate)
+    gated = ttnn.multiply(attn_out, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID])
     ttnn.deallocate(gate)
     ttnn.deallocate(attn_out)
     ttnn.deallocate(out)
