@@ -213,6 +213,24 @@ def test_rejects(device, expect_error, dtype, layout, source_shape, destination_
         ttnn.experimental.kda.indexed_entry_copy(source, destination, _index(device, 0), index_scale=1, index_offset=0)
 
 
+# Entries are strided by the single-entry side's padded shape, so a destination whose logical shape matches the
+# 7-entry source but whose padding does not would read or write past an entry.
+@pytest.mark.parametrize(
+    "destination_padded, message",
+    [((1, 64, 32), "and destination padded"), ((2, 32, 32), "must not pad dim 0")],
+    ids=["padded-entry", "padded-dim-0"],
+)
+def test_rejects_padding(device, expect_error, destination_padded, message):
+    source = _to_device(torch.zeros(7, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)
+    destination = ttnn.reshape(
+        _to_device(torch.zeros(destination_padded), device, ttnn.float32, ttnn.TILE_LAYOUT),
+        (1, 32, 32),
+        padded_shape=destination_padded,
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.kda.indexed_entry_copy(source, destination, _index(device, 6), index_scale=1, index_offset=0)
+
+
 # Kimi-K3's per-chip carry staging at TP4 (24 local heads of 128, three history rows), with two user slots of the
 # rank's 18 KDA layers in the slab and the layer at position 5: every KDA layer does each of these once per chunk.
 _K3_LAYERS, _K3_SLOTS, _K3_POSITION = 18, 2, 5

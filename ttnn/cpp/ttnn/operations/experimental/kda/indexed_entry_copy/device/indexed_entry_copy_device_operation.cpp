@@ -51,6 +51,16 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
             (source.layout() != tt::tt_metal::Layout::TILE || source_shape.rank() >= 3),
         "{}: source and destination must have equal rank, at least 3 for TILE",
         kOperation);
+    // The program strides both sides by one entry of the single-entry side's padded shape, so the padding must agree
+    // past dim 0 and leave dim 0 unpadded.
+    const auto& source_padded = source.padded_shape();
+    const auto& destination_padded = destination.padded_shape();
+    TT_FATAL(
+        source_padded[0] == source_shape[0] && destination_padded[0] == destination_shape[0],
+        "{}: source {} / destination {} must not pad dim 0",
+        kOperation,
+        source_padded,
+        destination_padded);
     for (int dim = 1; dim < static_cast<int>(source_shape.rank()); ++dim) {
         TT_FATAL(
             source_shape[dim] == destination_shape[dim],
@@ -58,6 +68,12 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
             kOperation,
             source_shape,
             destination_shape);
+        TT_FATAL(
+            source_padded[dim] == destination_padded[dim],
+            "{}: source padded {} and destination padded {} differ past dim 0",
+            kOperation,
+            source_padded,
+            destination_padded);
     }
     TT_FATAL(
         source_shape[0] == 1 || destination_shape[0] == 1,
