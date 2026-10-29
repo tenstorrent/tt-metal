@@ -7,13 +7,15 @@
     PYTHONPATH=$TT_METAL_HOME python generate.py --prompt "..." --lora lora/pixelart-300 --out out/clip
 
 The adapter is applied at weight-load time: `W + scale * B @ A` on the 300 adapted matrices of the torch state
-dict the pipeline reads, before upload. No merged checkpoint on disk. The tt_dit weight cache is keyed per
-adapter under --cache-dir, because its key carries no weight hash.
+dict the pipeline reads, before upload. No merged checkpoint on disk. tt_dit's own cache key carries no weight
+hash, so each (adapter file content, scale) gets its own folder under --cache-dir: retraining into the same
+adapter folder never reuses stale merged weights.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -65,6 +67,14 @@ def load_adapter(folder: Path):
     if args_path.exists():
         trigger = json.loads(args_path.read_text()).get("trigger")
     return {k: (v["A"], v["B"]) for k, v in pairs.items()}, trigger
+
+
+def adapter_digest(folder: Path, length: int = 12) -> str:
+    h = hashlib.sha256()
+    with open(folder / LORA_WEIGHT_NAME, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 24), b""):
+            h.update(chunk)
+    return h.hexdigest()[:length]
 
 
 def make_pipeline_class(adapter: dict, scale: float):
@@ -197,16 +207,19 @@ def main(argv=None) -> int:
     )
 
     adapter, trigger = ({}, None)
-    lora_name = "base"
+    cache_key = f"base-s{args.lora_scale:g}"
     if args.lora:
         adapter, trigger = load_adapter(Path(args.lora))
         lora_name = (
             Path(args.lora).name if Path(args.lora).name not in ("raw",) else Path(args.lora).parent.name + "-raw"
         )
-        log.info("adapter %s: %d matrices, trigger %r", args.lora, len(adapter), trigger)
+        digest = adapter_digest(Path(args.lora))
+        cache_key = f"{lora_name}-{digest}-s{args.lora_scale:g}"
+        log.info("adapter %s (sha256 %s): %d matrices, trigger %r", args.lora, digest, len(adapter), trigger)
     if args.trigger is not None:
         trigger = args.trigger or None
-    os.environ["TT_DIT_CACHE_DIR"] = str(Path(args.cache_dir) / f"{lora_name}-s{args.lora_scale:g}")
+    os.environ["TT_DIT_CACHE_DIR"] = str(Path(args.cache_dir) / cache_key)
+    log.info("tt_dit cache %s", os.environ["TT_DIT_CACHE_DIR"])
 
     import ttnn
     from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import MINIMAX_H3_BUCKET_LADDER_4X8, MiniMaxH3Pipeline
