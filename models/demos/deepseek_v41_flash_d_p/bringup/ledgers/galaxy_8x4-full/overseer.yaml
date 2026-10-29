@@ -491,6 +491,22 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p
   - ttnn/ttnn/bringup
   placed: '2026-10-29T12:18:47'
+- id: FIX.12
+  title: Verify the 2x2's bit-identical 4-bit speedups at full size (merged 7f55821f579)
+  gate:
+  - P.10
+  status: queued
+  t: '2026-10-29T13:44:29'
+  text: 'OWNER 2026-10-29 (was ''P.12''). The 2x2''s lowbit phase 1 is merged (7f55821f579, branch dnijemcevic/model_bringup_lowbit
+    @ 2bf71707602) and ttnn rebuilt. Default-on and bit-identical: sparse_sdpa ROW_BFP4 reads each 320 B record in ONE DRAM
+    read into a scratch, then two local copies (2x2 single card: compressed-layer attention -17..-21 %); the SFPU round
+    to nearest even as |x| + 2^23 LSB - 2^23 LSB (~-30 % 4-bit write). Opt-in only (defaults off, NOT to be switched on
+    here): ckv_bfp4 dtype=bfloat8_b / blocks, ROW_BFP8, bfp_round, indexer_score bfp4 q / k. Job: confirm on the 8x4 that
+    outputs are unchanged (the gate) and measure sparse_sdpa kernel time and the attention section / device total / warm
+    wall per chunk vs P.10''s numbers (device 206.0, wall ~371-385, DS41_ENGRAM_TABLE=resident). No model change expected;
+    if something breaks at 8x4 sizes, fix it in the forks behind the same behaviour. Do not touch tt/engram*.py.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
 classified:
   L.smoke:
     kind: framework
