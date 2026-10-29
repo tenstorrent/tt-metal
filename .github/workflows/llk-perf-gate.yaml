@@ -42,6 +42,14 @@ on:
         description: "Stage 2 without the test limit, for this PR gate run's stage-1 regressions (posts to its PR)"
         required: false
         type: string
+      placement_head:
+        description: "Stage 2: the commit to measure as the head (blank = the stage-1 run's own head)"
+        required: false
+        type: string
+      placement_base:
+        description: "Stage 2: the commit to measure as the base (blank = the branch point of that head)"
+        required: false
+        type: string
 permissions:
   actions: read
   contents: read
@@ -206,15 +214,28 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BRANCH_POINT: ${{ needs.branch-point.outputs.sha }}
+          GIVEN_HEAD: ${{ inputs.placement_head }}
+          GIVEN_BASE: ${{ inputs.placement_base }}
         run: |
           CAP="$PLACEMENT_CAP"
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             # The full check: every stage-1 regression of that run, no test limit.
             CAP=1000000
-            PR_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN}" --jq .head_sha)
+            PR_HEAD="${GIVEN_HEAD:-$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN}" --jq .head_sha)}"
             PR_NUMBER=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN}" --jq '.pull_requests[0].number // empty')
-            BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
-            BRANCH_POINT=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${PR_HEAD}" --jq .merge_base_commit.sha)
+            if [ -n "$GIVEN_BASE" ]; then
+              BRANCH_POINT="$GIVEN_BASE"
+            else
+              # A run started on a branch, or replayed, carries no PR. Fall back to
+              # the default branch, which is what such a branch forked from.
+              if [ -n "$PR_NUMBER" ]; then
+                BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+              else
+                BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch)
+                echo "Run ${SOURCE_RUN} names no PR. Taking the branch point against ${BASE_REF}."
+              fi
+              BRANCH_POINT=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${PR_HEAD}" --jq .merge_base_commit.sha)
+            fi
           fi
           echo "Stage 1 from run ${SOURCE_RUN}: PR #${PR_NUMBER}, head ${PR_HEAD}, branch point ${BRANCH_POINT}, cap ${CAP}"
           {
