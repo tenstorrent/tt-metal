@@ -281,17 +281,9 @@ def test_threshold(device, threshold_val, value):
     _assert_bitwise_equal(result, golden, f"threshold({threshold_val}, {value})")
 
 
-@pytest.mark.parametrize(
-    "run_op",
-    [
-        lambda tt_in, scalar: ttnn.threshold(tt_in, 0.0, scalar),
-        lambda tt_in, scalar: ttnn.clamp(tt_in, scalar, 1.0),
-        lambda tt_in, scalar: ttnn.clip(tt_in, scalar, 1.0),
-    ],
-    ids=["threshold_value", "clamp_min", "clip_min"],
-)
+@pytest.mark.parametrize("ttnn_op", [ttnn.threshold, ttnn.clamp, ttnn.clip])
 @pytest.mark.parametrize("scalars", [(0.0, -0.0, 0.0), (-0.0, 0.0, -0.0)], ids=["pos_first", "neg_first"])
-def test_signed_zero_scalar_program_cache(device, run_op, scalars):
+def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
     """+0.0 and -0.0 scalars must not share a cached program (#62557).
 
     | Input | Check               | Reason                                         |
@@ -299,6 +291,7 @@ def test_signed_zero_scalar_program_cache(device, run_op, scalars):
     | -1.0  | exact (bit pattern) | every output is the scalar, whose bits are     |
     |       |                     | embedded in the kernel defines                 |
 
+    The scalar is threshold's value (threshold 0.0) or clamp/clip's min (max 1.0).
     Each sign compiles its own program on first use and hits it on reuse, so the
     output does not depend on which sign ran first.
     """
@@ -309,7 +302,10 @@ def test_signed_zero_scalar_program_cache(device, run_op, scalars):
     prev_entries = device.num_program_cache_entries()
     for scalar in scalars:
         expected = torch.full((64, 64), scalar, dtype=torch.float32)
-        tt_out = run_op(tt_in, scalar)
+        if ttnn_op is ttnn.threshold:
+            tt_out = ttnn.threshold(tt_in, 0.0, scalar)
+        else:
+            tt_out = ttnn_op(tt_in, scalar, 1.0)
         entries = device.num_program_cache_entries()
         sign = math.copysign(1.0, scalar)
         if sign in seen_signs:
