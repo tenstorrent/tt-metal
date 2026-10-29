@@ -220,13 +220,16 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
     writer_kernel.emplace_runtime_args(core, {config.buffer()});
 
     // DO NOT MERGE -- fault injection. TT_INJECT_MOE_HANG_POS=<tokens> wedges this kernel once a
-    // chunk's actual_start reaches that value; TT_INJECT_MOE_HANG_RANK picks the rank (default 2).
-    // Only chip 0 of the rank's mesh is armed. Fully inert when POS is unset.
+    // chunk's actual_start reaches that value; TT_INJECT_MOE_HANG_RANK picks the rank (default 2) and
+    // TT_INJECT_MOE_HANG_DEVICE the device's row-major index in the rank's mesh (default 0). Fully inert
+    // when POS is unset.
     if (const char* hang_pos = std::getenv("TT_INJECT_MOE_HANG_POS")) {
         const char* rank_env = std::getenv("TT_INJECT_MOE_HANG_RANK");
         const int hang_rank = (rank_env != nullptr) ? std::atoi(rank_env) : 2;
+        const char* device_env = std::getenv("TT_INJECT_MOE_HANG_DEVICE");
+        const size_t hang_device = (device_env != nullptr) ? std::strtoull(device_env, nullptr, 10) : 0;
         const auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-        const bool armed_chip = coord.to_linear_index(mesh_view.shape()) == 0;
+        const bool armed_chip = coord.to_linear_index(mesh_view.shape()) == hang_device;
         if (static_cast<int>(*ctx->rank()) == hang_rank && armed_chip) {
             writer_kernel.defines.emplace_back("TT_INJECT_HANG_POS", hang_pos);
             log_warning(

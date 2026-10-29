@@ -285,6 +285,19 @@ cleanup() {
       echo "---- ${f#"${RANKLOGS}"/} ----"
       tail -n 40 "$f" 2>/dev/null || true
     done
+    # DO NOT MERGE -- hang-injection experiment: what the watcher's command left in TRIAGE_OUTPUT_DIR.
+    for f in "${TRIAGE_OUTPUT_DIR:-/nonexistent}"/*/postkill.txt "${TRIAGE_OUTPUT_DIR:-/nonexistent}"/*/triage_summary*.txt; do
+      if [ -e "$f" ]; then
+        echo "==================== ${f} ===================="
+        cat "$f" || true
+      fi
+    done
+    for f in "${TRIAGE_OUTPUT_DIR:-/nonexistent}"/*/triage_output.txt; do
+      if [ -e "$f" ]; then
+        echo "==================== tail of ${f} ===================="
+        tail -n 80 "$f" || true
+      fi
+    done
     emit_summary
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
