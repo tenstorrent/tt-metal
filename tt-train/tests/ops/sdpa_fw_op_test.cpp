@@ -1910,6 +1910,25 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
         },
         ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")))
         << "a user config that overflows L1 must be refused with a message, not die in the allocator";
+
+    // validate rejects a config that cannot fit even with the unset chunk sizes at one tile, and accepts one
+    // that fits at the floor, without building a program.
+    {
+        using namespace ttml::metal::ops::sdpa_fw::device;
+        const SDPAForwardShape wide = shape_of(
+            wide_query,
+            wide_key,
+            wide_value,
+            metal::AttentionMaskType::Causal,
+            /*has_gate=*/false,
+            /*return_intermediates=*/false);
+        const uint64_t budget = ttml::metal::available_l1_bytes(ttml::autograd::ctx().get_device());
+        EXPECT_THAT(
+            [&] { check_chunks({.q_chunk_size = S}, wide, budget); },
+            ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")));
+        EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget));
+        EXPECT_NO_THROW(check_chunks({}, wide, budget));
+    }
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
