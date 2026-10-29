@@ -627,6 +627,34 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT);
 }
 
+// The fused all-gather bakes its out_ready semaphore address into the reader (arg 2) and writer (arg 4)
+// at create time. The caller's semaphore can change between dispatches (e.g. a CCLManager pool hands
+// out a different slot per call), so re-apply the current address on every cache hit, as the
+// standalone ring attention all-gather does.
+void apply_ring_joint_all_gather_semaphore_args(Program& program, const ttnn::prim::RingJointSDPAParams& args) {
+    if (args.has_sliding_window()) {
+        return;
+    }
+    namespace dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
+    const auto& semaphore = args.all_gather_operation_attributes.semaphore;
+    const auto patch_semaphore_arg = [&program](uint32_t kernel_id, uint32_t arg_idx, uint32_t address) {
+        auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
+        for (auto& col_args : grid_args) {
+            for (auto& core_args : col_args) {
+                if (core_args.size() > arg_idx) {  // skip cores that don't run this kernel
+                    write_runtime_arg(core_args, arg_idx, address, "all_gather.out_ready_semaphore");
+                }
+            }
+        }
+    };
+    const auto forward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kForwardSemaphoreIdx).address());
+    const auto backward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kBackwardSemaphoreIdx).address());
+    patch_semaphore_arg(kAllGatherReaderForwardKernelIndex, dyn::kReaderSemaphoreArg, forward_sem_addr);
+    patch_semaphore_arg(kAllGatherWriterForwardKernelIndex, dyn::kWriterSemaphoreArg, forward_sem_addr);
+    patch_semaphore_arg(kAllGatherReaderBackwardKernelIndex, dyn::kReaderSemaphoreArg, backward_sem_addr);
+    patch_semaphore_arg(kAllGatherWriterBackwardKernelIndex, dyn::kWriterSemaphoreArg, backward_sem_addr);
+}
+
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
@@ -3784,6 +3812,7 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
+        apply_ring_joint_all_gather_semaphore_args(program, args);
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
     }
 }
