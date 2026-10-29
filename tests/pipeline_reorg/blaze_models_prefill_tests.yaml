@@ -2258,6 +2258,36 @@
   sp_config: sc4
 
 
+# GLM-5.3 as 8 stages of 4x4 across four galaxies (two per galaxy), against the 8x4 SC4 leg above.
+# Bound by tt-run discovery like the Kimi-K3 4x4 leg. Own test_type: dispatch it by name. The 4x4
+# cache is not under GLM-5.3-Cache-prefill yet, so this points at the copy infra made (job 161770's
+# build, 78 layers, no MTP).
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC4 4x4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/rkim/glm53_ttnn_cache
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4
+  test_type: glm_prefill_runner_4x4
+  test_tags: [glm_5_3, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # Not yet measured. The 8x4 leg takes ~16.5 min of chunks plus ~7 min of unwind; eight
+      # ranks load their slices of a 399 GB cache from Weka at once on top of that.
+      timeout: 120
+      tier: 1
+      release_ready: false
+  owner_id: U084DDYSWCW # Adrian Morrison
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
 # Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
 # the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
 # decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
