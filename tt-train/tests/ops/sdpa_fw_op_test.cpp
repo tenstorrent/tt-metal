@@ -1869,6 +1869,45 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
     EXPECT_ANY_THROW(split_work(causal, four_rows, 65U, kPairCores)) << "more cores than pairs is a caller bug";
 }
 
+// The production pick (four-row chunks, eight K/V tiles, light/heavy pairs) only lands on device when there
+// is a pair per core; every other blocking shape is too small for that and resolves to one-row chunks. B is
+// sized from the grid: S=512 gives four chunks per sequence (two pairs), so B*H = cores/2 + 2 sequences give
+// cores + 4 pairs. A core with the (0, 3) pair walks two non-consecutive runs of its work list, and the two
+// cores with two pairs run the multi-item list, as TinyLlama does. D=32 keeps the host references cheap; the
+// pick does not depend on it below 128.
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPairedOnDevice) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    constexpr uint32_t H = 2U, S = 512U, D = 32U;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t cores = static_cast<uint32_t>(grid.x * grid.y);
+    const uint32_t B = (cores / 2U + 2U + H - 1U) / H;
+    const SDPAForwardShape shape{
+        .batch = B,
+        .q_heads = H,
+        .kv_heads = H,
+        .St = S / 32U,
+        .qWt = D / 32U,
+        .vWt = D / 32U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .has_gate = false,
+        .return_intermediates = true};
+    const auto picked = resolve_chunks({}, shape, ttml::metal::available_l1_bytes(*device), cores);
+    ASSERT_EQ(picked.Sq_chunk_t, 4U) << "the shape must take the production pick";
+    ASSERT_EQ(picked.Sk_chunk_t, 8U);
+    ASSERT_GE(num_causal_pairs(shape, picked), cores) << "a pair per core, so the split pairs";
+    run_sdpa_test(SDPATestConfig{
+        .batch_size = B,
+        .sequence_length = S,
+        .query_dim = H * D,
+        .key_value_dim = H * D,
+        .num_query_heads = H,
+        .num_key_heads = H,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_DefaultPairedOnDevice"});
+}
+
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultFitsLargeHeadDim) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     run_sdpa_test(SDPATestConfig{
