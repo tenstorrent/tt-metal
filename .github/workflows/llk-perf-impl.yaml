@@ -457,6 +457,8 @@ jobs:
         run: |
           # JOB_START_EPOCH is stamped after container init (up to ~3 min on a cold pull); 2 more stay for the uploads.
           export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))
+          # The container runs as another user than the checkout's owner; stage 2 fetches the base with git.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           LLK_STAGE2_BASE_REF="${{ inputs.stage2-baseline-ref }}" \
             tests/run_llk_perf_merge_stage2.sh "$RUNNER_TEMP/stage2-baseline/$CHIP_ARCH" "$RUNNER_TEMP/stage2"
       - name: "Stage 2: upload the result"
