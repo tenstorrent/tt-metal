@@ -101,6 +101,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          # Named explicitly rather than left to default to github.repository:
+          # the `uses: tenstorrent/tt-metal/...@main` this replaces always
+          # resolved against the upstream repo, so when the workflow runs
+          # inside a fork this has to as well, or the matrix would be built
+          # with the fork's main instead of upstream's.
+          repository: tenstorrent/tt-metal
           ref: main
           path: ci-main
           sparse-checkout: |
