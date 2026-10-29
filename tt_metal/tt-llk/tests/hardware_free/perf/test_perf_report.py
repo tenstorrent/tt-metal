@@ -1153,7 +1153,10 @@ def test_worker_csv_keeps_every_chunk_of_a_module(tmp_path, monkeypatch):
 
     monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", tmp_path)
     monkeypatch.setattr(plugin, "_MODULE_REPORTS", {})
+    (tmp_path / "perf_mod.gw0.csv").write_text("x\n99\n")  # left by an earlier session
     plugin._dump_perf_report("perf_mod", "gw0", _chunk_report([1, 2]))
+    # every test of this chunk skipped
+    plugin._dump_perf_report("perf_mod", "gw0", PerfReport())
     plugin._dump_perf_report("perf_mod", "gw0", _chunk_report([3]))
 
     for name in ("perf_mod.gw0.csv", "perf_mod.gw0.post.csv"):
@@ -1173,4 +1176,3 @@ def test_worker_csv_rejects_chunks_with_different_columns(tmp_path, monkeypatch)
         plugin._dump_perf_report("perf_mod", "gw0", _chunk_report([2], "y"))
 
     assert pd.read_csv(tmp_path / "perf_mod.gw0.csv")["x"].tolist() == [1]
-
