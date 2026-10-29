@@ -188,6 +188,7 @@ class Handoff:
     stage_idx: int
     pid: int
     layers: str
+    warmup: int
     dummy: int
     timeout_s: float
     first_chunk_timeout_s: float
@@ -243,10 +244,15 @@ def main(probe_path: str) -> int:
 
         try:
             moved = dev00.read()
-        except Exception:
+        except Exception as e:
+            print(
+                f"PREFILL HANG: stage {handoff.stage_idx}: reading device (0,0) failed, no longer watching: {e!r}",
+                file=sys.stderr,
+                flush=True,
+            )
             return 1
         # Until the first real chunk is out, the trace capture can hold the stage still for seconds.
-        limit_s = handoff.timeout_s if dev00.produced >= 1 + handoff.dummy else handoff.first_chunk_timeout_s
+        limit_s = handoff.timeout_s if dev00.produced >= 1 + handoff.warmup else handoff.first_chunk_timeout_s
 
         now = time.monotonic()
         if moved:

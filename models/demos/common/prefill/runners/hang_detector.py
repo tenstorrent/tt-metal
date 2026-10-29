@@ -8,7 +8,7 @@ L1 address) and how far it moves per chunk. hang_watcher.py polls them out of pr
 them after arming. The hand-off is one line of JSON. Spread out, with one device of a GLM-5.3 middle rank
 (addresses made up):
 
-    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "dummy": 0, "timeout_s": 10.0,
+    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "warmup": 1, "dummy": 0, "timeout_s": 10.0,
      "first_chunk_timeout_s": 100.0, "poll_s": 2.0, "command": "",
      "devices": [
        {"uid": 81985529, "r": 0, "c": 0,
@@ -123,8 +123,8 @@ class HangDetector:
         None when it is off, or when the rank has neither a D2D output nor layer acks: then nothing says a
         chunk finished.
 
-        dummy: output chunks this rank sends without having received them, 1 on a traced run: rank 0's warm-up
-        record, or a single rank's capture acks.
+        dummy: output chunks this rank produces before its first real chunk, 1 on a traced run: its warm-up send,
+        or its capture's layer acks on the last and single rank.
         """
         if os.environ.get(ENABLED_ENV, "0") != "1" or (d2d_out is None and d2h is None):
             return None
@@ -157,6 +157,8 @@ class HangDetector:
             "stage_idx": rank,
             "pid": os.getpid(),
             "layers": layers,
+            # Every traced rank's first output is its warm-up, not a real chunk.
+            "warmup": dummy,
             # Other ranks take in a dummy for each they send, so theirs cancels.
             "dummy": dummy if rank == 0 else 0,
             "timeout_s": float(os.environ.get(TIMEOUT_ENV, DEFAULT_TIMEOUT_S)),
