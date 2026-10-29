@@ -332,6 +332,10 @@ class Qwen36ResidentDFlashForCausalLM(Qwen36ResidentMTPForCausalLM):
         # positions one block step may write from its start: holding block - 1 tokens, one more iteration verifies
         # DFLASH_VERIFY rows past them; doubled verify for slack (the drafter's ring is its own memory)
         tt_block_kv_extent_tokens=DFLASH_BLOCK + 2 * DFLASH_VERIFY,
+        # synchronous serving (the platform turns --async-scheduling off): a block step runs on the host to its end,
+        # so the async schedule overlaps nothing, and its batch queue held the prefill's first token until the first
+        # block step had run (one block, ~60 ms, of TTFT). RESIDENT_DFLASH_ASYNC=1: async as before (A/B)
+        supports_async_decode=os.environ.get("RESIDENT_DFLASH_ASYNC", "0") == "1",
     )
 
     def __init__(self, mesh, ck, max_seq_len, mrope):

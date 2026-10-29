@@ -130,6 +130,9 @@ def test_the_plugin_resolves_the_dflash_block_output():
     assert get_tt_output_tokens_per_step(cfg) == 8 and is_tt_adaptive_block_output_model(cfg)
     assert cls.model_capabilities["tt_block_kv_extent_tokens"] == 8 + 2 * G.DFLASH_VERIFY
     assert cfg.model_config.generation_config == "vllm", "a block-output model owns its generation defaults"
+    # launched with --async-scheduling (as every profile is), served synchronously: the batch queue would hold the
+    # prefill's first token until the first block step had run
+    assert not cfg.scheduler_config.async_scheduling
 
 
 def test_dflash_takes_every_prompt_vllm_admits():
