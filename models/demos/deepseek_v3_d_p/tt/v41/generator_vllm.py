@@ -36,7 +36,14 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import TtV41BatchDecoder
-from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables, V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.cache import (
+    PACK_LAYOUTS,
+    V41ChunkTables,
+    V41PrefillState,
+    match_pack_layout,
+    pack_enabled,
+    parse_pack_layouts,
+)
 from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS
 from models.demos.deepseek_v3_d_p.tt.v41.dspark_drafter import TtDSparkDrafter
 from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import seeding_weights
@@ -100,6 +107,15 @@ DEFER_FINAL = "TT_V41_DEFER_FINAL"
 
 def defer_final() -> bool:
     return os.environ.get(DEFER_FINAL, "0") == "1"
+
+
+# ``TT_V41_PACK=1`` with ``TT_V41_PACK_LAYOUTS`` (cache.PACK_LAYOUTS): one more generic
+# prefill state on the full-chunk model (``pack_state``, its context the first score bucket rounded to the chunk)
+# runs several whole prompts of a listed layout as one packed chunk (``TtV41Transformer.prefill_packed``; captured
+# per layout at warm-up, ``V41PackTrace``), each prompt joining its decode slot from its own segment of the state.
+# A ``prefill_forward`` whose whole-prompt rows begin with a listed layout's lengths packs them; every other row
+# takes the single path as before. Without the layouts the flag changes nothing in the generator.
+PACK_MAX_SEQ = "TT_V41_PACK_MAX_SEQ"  # the packed state's context (default: the first bucket rounded to the chunk)
 
 
 def _round_up(x: int, m: int) -> int:
@@ -212,8 +228,31 @@ class DeepseekV41ForCausalLM:
                 f"DeepSeek-V4.1-Flash: chunk {chunk} geometry (max_seq_len {view.max_seq_len}) built in "
                 f"{time.time() - t0:.1f} s, {(_dram_bytes(mesh_device) - dram0) / 2**20:.0f} MB of DRAM a chip"
             )
+        # the packed prefill state and its layouts (TT_V41_PACK, TT_V41_PACK_LAYOUTS)
+        self.pack_state: V41PrefillState | None = None
+        self.pack_layouts: list[tuple] = []
+        self.pack_traces: dict = {}  # layout -> its capture (V41PackTrace)
+        self.pack_last: dict = {}  # the last packed call (the tests read it)
+        ratios = {C.compress_ratio(l) for l in model.layers}
+        layouts = parse_pack_layouts(os.environ.get(PACK_LAYOUTS), model.chunk, ratios) if pack_enabled() else []
+        if layouts:
+            assert self.generic, f"{PACK_LAYOUTS} needs TT_V41_PREFILL_GENERIC=1 (packed chunks run on generic states)"
+            kmax = max(len(layout) for layout in layouts)
+            t0, dram0 = time.time(), _dram_bytes(mesh_device)
+            max_seq = int(os.environ.get(PACK_MAX_SEQ, _round_up(V41ChunkTables.MIN_BUCKET, model.chunk)))
+            assert max_seq % model.chunk == 0 and max_seq <= model.max_seq_len, (max_seq, model.chunk)
+            self.pack_state = model.new_state(generic=True, max_seq_len=max_seq, pack_segments=kmax)
+            self.pack_state.tables.prepare_layouts(layouts)  # the layouts' window tables: resident, before captures
+            self.pack_layouts = layouts
+            self.models[id(self.pack_state)] = model
+            logger.info(
+                f"DeepSeek-V4.1-Flash: packed prefill state (max_seq_len {max_seq}, {kmax} segments) for layouts "
+                f"{[[n for _, n in layout] for layout in layouts]} built in {time.time() - t0:.1f} s, "
+                f"{(_dram_bytes(mesh_device) - dram0) / 2**20:.0f} MB of DRAM a chip"
+            )
         # requests prefilled (wholly or up to a chunk boundary) but not yet joined into a decode slot:
-        # request key -> (its prefill state, the prefix so far); oldest first
+        # request key -> (its prefill state, the prefix so far, the resume dict; a packed segment's carries
+        # ``segment`` (offset, length, g)); oldest first
         self.pending: OrderedDict[int, tuple[V41PrefillState, torch.Tensor, dict]] = OrderedDict()
         self.next_prefill_state = 0
         # speculative decode (TT_V41_SPEC): the draft length, the drafter (attached to the verify decoder), the slot
@@ -458,7 +497,8 @@ class DeepseekV41ForCausalLM:
             short = self._short_state(whole)
             if key in self.pending:  # the same request restarted (preempted and resumed from position 0)
                 state = self.pending.pop(key)[0]
-                if short is None or short is state:
+                # (a restarted packed segment leaves its state to the pack's other segments and starts afresh)
+                if state is not self.pack_state and (short is None or short is state):
                     return state
             candidates = [short] if short is not None else self.prefill_states
             owned = {id(st) for st, _, _ in self.pending.values()}
@@ -474,6 +514,7 @@ class DeepseekV41ForCausalLM:
             return self._restore(key, start)
         assert key in self.pending, f"request {key}: a chunk at {start} without its earlier chunks"
         state, _, _ = self.pending[key]
+        assert state is not self.pack_state, f"request {key}: a chunk at {start} of a packed segment"
         assert state.start == start, f"request {key}: chunk at {start}, its state is at {state.start}"
         return state
 
@@ -503,6 +544,34 @@ class DeepseekV41ForCausalLM:
         )
         return state
 
+    def _pack_state_for(self, keys: list[int]) -> V41PrefillState:
+        """The packed state for a new pack of requests ``keys``: a restarted request among them gives up its
+        pending entry, and every segment still pending on the packed state (owned by the previous pack's
+        requests) joins its decode slot first, oldest first: one allocation, freed for reuse only once all its
+        segments have joined."""
+        for key in keys:
+            self.pending.pop(key, None)
+        for old_key, (state, _, _) in list(self.pending.items()):
+            if state is self.pack_state:
+                self._join_pending(old_key)
+        return self.pack_state
+
+    def _pack_rows(self, rows: list[int], lengths, start_pos, total_lens) -> tuple | None:
+        """The FIFO prefix of this call's whole-prompt rows (``start_pos`` 0, one call) whose lengths, in row order,
+        form a listed layout: (the layout, its rows), or None."""
+        if self.pack_state is None:
+            return None
+        whole = [
+            i
+            for i in rows
+            if (start_pos is None or int(start_pos[i]) == 0)
+            and (total_lens is None or int(total_lens[i]) <= int(lengths[i]))
+        ]
+        layout = match_pack_layout([int(lengths[i]) for i in whole], self.pack_layouts)
+        if layout is None:
+            return None
+        return layout, whole[: len(layout)]
+
     def prefill_forward(self, **kwargs) -> torch.Tensor:
         """``tokens`` [B, S] (padded), ``prompt_lens`` [B], ``page_table`` [B, blocks], ``start_pos`` [B] ->
         fp32 logits ``[B, 1, vocab]`` of each row's last token (host sampling reads row -1). A row is a prompt
@@ -519,6 +588,41 @@ class DeepseekV41ForCausalLM:
         out = torch.zeros(tokens.shape[0], 1, self.config.VOCAB_SIZE, dtype=torch.float32)
         rows = [i for i in range(tokens.shape[0]) if int(lengths[i]) > 0]
         rows.sort(key=lambda i: 0 if start_pos is not None and int(start_pos[i]) > 0 else 1)
+        packed = self._pack_rows(rows, lengths, start_pos, total_lens)
+        if packed is not None:
+            # the packed chunk (TT_V41_PACK_LAYOUTS): the listed prefix of whole prompts in one call, each row's
+            # logits its segment's, each request pending on its segment of the packed state
+            layout, pack_rows = packed
+            keys = [self._request_key(page_table, i) for i in pack_rows]
+            assert len(set(keys)) == len(keys), f"a pack of one request twice: {keys}"
+            prompts = [tokens[i, : int(lengths[i])].to(torch.int64) for i in pack_rows]
+            for prompt in prompts:
+                assert prompt.numel() >= self.config.SLIDING_WINDOW, "decode needs a full window"
+            t0 = time.time()
+            state = self._pack_state_for(keys)
+            model = self.models[id(state)]
+            trace = self.pack_traces.get(layout)
+            if trace is not None:
+                logits, segments = trace.run(prompts)
+                mode, phases = "replay", trace.last
+            else:
+                phases = {}
+                logits, segments = model.prefill_packed(prompts, state, self.prefill_buffers[id(model)], timings=phases)
+                mode = "eager"
+            assert segments == layout, (segments, layout)
+            total = segments[-1][0] + segments[-1][1]
+            for g, (i, key) in enumerate(zip(pack_rows, keys)):
+                out[i, 0] = logits[g]
+                self.pending[key] = (state, prompts[g], {"segment": (segments[g][0], segments[g][1], g)})
+                self.pending.move_to_end(key)
+            logger.info(
+                f"DeepSeek-V4.1-Flash: prefill of {total} tokens at 0 ({' + '.join(str(n) for _, n in layout)} packed) "
+                f"in {time.time() - t0:.2f} s ({mode}"
+                f"{'' if not phases else ' ' + ' '.join(f'{k} {v:.3f}' for k, v in phases.items() if isinstance(v, float))})"
+            )
+            self.prefill_last = {"tokens": total, "start": 0, "mode": mode, "chunk": model.chunk, "pack": layout}
+            self.pack_last = {"rows": list(pack_rows), "layout": layout, "mode": mode, "s": round(time.time() - t0, 4)}
+            rows = [i for i in rows if i not in pack_rows]
         for i in rows:
             n = int(lengths[i])
             start = 0 if start_pos is None else int(start_pos[i])
@@ -572,13 +676,15 @@ class DeepseekV41ForCausalLM:
 
     def _join_pending(self, key: int) -> None:
         """Move request ``key``'s prefilled state into its decode slot (its first decode step)."""
-        state, prompt, _ = self.pending.pop(key)
+        state, prompt, resume = self.pending.pop(key)
+        segment = resume.get("segment")  # a packed segment: the whole prompt is the segment's
         slot = self._slot_for_prefill(key)
         t0 = time.time()
-        self.decoder.join(slot, prompt[: state.start], state)
+        self.decoder.join(slot, prompt if segment is not None else prompt[: state.start], state, segment)
         if self.drafter is not None:
             # the drafter's rings take this request's seeding: the slot's own ring on its rank (rings per slot), or
             # the one set of rings (the last joined request speculates)
+            assert segment is None, "a packed segment does not seed the drafter's rings yet"
             assert state.dspark_rings is not None, "the prefill did not seed the drafter's rings"
             if self.spec_rings_per_slot:
                 r, u = divmod(slot, self.users_per_rank)
@@ -590,10 +696,12 @@ class DeepseekV41ForCausalLM:
             self.buffered.pop(slot, None)
             self.handed.pop(slot, None)
         if defer_final() and state.start < prompt.numel():  # a bulk's join: the request is parked, its carries kept
+            assert segment is None, "a packed segment is a whole prompt: never parked"
             self.decoder.park(slot, state)
         logger.info(
             f"DeepSeek-V4.1-Flash: request of {prompt.numel()} tokens joined slot {slot} in {time.time() - t0:.3f} s "
-            f"({self.decoder.last_join.get('mode')} width {self.decoder.last_join.get('width')})"
+            f"({self.decoder.last_join.get('mode')} width {self.decoder.last_join.get('width')}"
+            f"{'' if segment is None else f' segment {segment[2]} at {segment[0]}'})"
         )
 
     def _capture_prefill(self, state: V41PrefillState, n: int) -> V41PrefillTrace:
@@ -945,6 +1053,8 @@ class DeepseekV41ForCausalLM:
         model = self.model if model is None else model
         chunk = model.chunk
         lengths = {chunk, WARMUP_PROMPT}
+        if model is self.model:  # the packed layouts' totals (the packed state runs on the full-chunk model)
+            lengths |= {layout[-1][0] + layout[-1][1] for layout in self.pack_layouts}
         for n in self.trace_lengths:
             if model is self.model:
                 lengths.add(n if n <= chunk else n - (n - 1) // chunk * chunk)
@@ -997,6 +1107,22 @@ class DeepseekV41ForCausalLM:
             self.ring_owner = 0
         logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
         _l1_probe(self.mesh_device, "after warm-up joins")
+        if self.pack_state is not None:
+            # one eager pack of the largest layout: the chunk's programs at the pack's shapes and every persistent
+            # tensor of the packed path (the layouts' tables and padding configs are built above) before the decode
+            # captures; its segments join slots 0.. (the segment join's scatter programs compiled)
+            layout = self.pack_layouts[0]
+            prompts = [self._warmup_prompt(n) for _, n in layout]
+            t0 = time.time()
+            _l1_probe(self.mesh_device, "before warm-up packed prefill")
+            self.model.prefill_packed(prompts, self.pack_state, self.prefill_buffers[id(self.model)])
+            for g, (offset, n) in enumerate(layout):
+                self.decoder.join(g % self.max_batch_size, prompts[g], self.pack_state, (offset, n, g))
+            logger.info(
+                f"DeepSeek-V4.1-Flash warm-up: packed prefill of {[n for _, n in layout]} tokens and its "
+                f"{len(layout)} segment joins in {time.time() - t0:.1f} s"
+            )
+            _l1_probe(self.mesh_device, "after warm-up packed prefill")
         if defer_final():
             self._prewarm_restore()
 

@@ -4,26 +4,37 @@
 
 """DeepSeek-V4.1 batched decode: one step for every user of the mesh (harness; eager, or traced once).
 
-``TtV41BatchDecoder`` runs ``TtV41Decoder``'s step on a tile whose rows are different users: row ``u`` of the chips
-of mesh row ``r`` is slot ``r * users_per_rank + u`` of the :class:`V41DecodePool`, so the SP ranks decode different
-users (TP splits hidden and heads as before) and the per-step host inputs are per rank: the slots' tokens, RoPE rows
+``TtV41BatchDecoder`` runs ``TtV41Decoder``'s step on a tile whose rows are different users: row ``u`` of the
+chips
+of mesh row ``r`` is slot ``r * users_per_rank + u`` of the :class:`V41DecodePool`, so the SP ranks decode
+different
+users (TP splits hidden and heads as before) and the per-step host inputs are per rank: the slots' tokens,
+RoPE rows
 at their positions, the indexer masks' visible counts, the ring slot and the compressed rows the step writes.
 
 Per step and layer the graph is the single-token one with the position-dependent pieces made per row:
 
-* the window row of every user goes to its layer ring at slot ``step % 128`` (``scatter_rows``; the window index
+* the window row of every user goes to its layer ring at slot ``step % 128`` (``scatter_rows``; the window
+index
   rows are a constant per layer, the ring being the window);
-* a ratio-2 source pools every row with the pool's carry buffers and writes the carry back unconditionally (the odd
-  rows' pooled result is their group's row, the even rows' is junk the scatter skips: the step's write indices are
-  the sentinel for rows that complete no group), a ratio-1 source writes every active row; both go straight to the
+* a ratio-2 source pools every row with the pool's carry buffers and writes the carry back unconditionally
+(the odd
+  rows' pooled result is their group's row, the even rows' is junk the scatter skips: the step's write indices
+  are
+  the sentinel for rows that complete no group), a ratio-1 source writes every active row; both go straight to
+  the
   user's row ``position // ratio`` (no scratch row, no copy after the step);
-* an index source scores the query tile against each slot's index keys (``cache_batch_idx``), takes row ``u`` of
+* an index source scores the query tile against each slot's index keys (``cache_batch_idx``), takes row ``u``
+of
   slot ``u``'s selection, and the attention reads the pool with per-row offsets;
 * the MoE sees ``users_per_rank`` real rows per chip (``padding_config``), so only they are dispatched.
 
-Users join from a prefill state (``join``: the pool copies the state's caches into the slot) and leave by being
-forgotten; a free slot's rows still run (its inputs are zeros, its writes go nowhere). The step's graph is the same
-for every position, so a single capture replays every step (``trace=True``); with ``V41_DECODE_C1_MOE=1`` a second
+Users join from a prefill state (``join``: the pool copies the state's caches into the slot) and leave by
+being
+forgotten; a free slot's rows still run (its inputs are zeros, its writes go nowhere). The step's graph is the
+same
+for every position, so a single capture replays every step (``trace=True``); with ``V41_DECODE_C1_MOE=1`` a
+second
 capture serves the steps with exactly one live row (the MoEs on that row broadcast to every chip,
 ``tt/v41/moe_c1.py``). Limits as ``TtV41Decoder``: text only, positions from ``SLIDING_WINDOW - 1`` to below
 ``max_seq_len``, compressed rows within the candidate budget.
@@ -67,11 +78,16 @@ _C1_HIFI4 = ttnn.types.BlackholeComputeKernelConfig(
 
 
 def c1_place(topk, put_row):
-    """The live user's selection ``topk`` [1, 1, 1, K] uint32 row-major into its row of the tile, the other rows the
-    sentinel -> [1, 1, ROWS, K] uint32 row-major. ``put_row`` is the step's ``c1put`` page ([1, 1, 1, ROWS] uint32
-    row-major: word u is 0 on the live rank's row u, the one-hot sentinel elsewhere; ``C1Moe.host_rows``). The row
-    is repeated over the tile and masked by the live row's column in fp32 (ids below 2^24 and the 0 / 1 mask are
-    exact there; a matmul is not: the FPU keeps ~10 bits of an fp32 input), 1 added first so the masked rows and
+    """The live user's selection ``topk`` [1, 1, 1, K] uint32 row-major into its row of the tile, the other
+    rows the
+    sentinel -> [1, 1, ROWS, K] uint32 row-major. ``put_row`` is the step's ``c1put`` page ([1, 1, 1, ROWS]
+    uint32
+    row-major: word u is 0 on the live rank's row u, the one-hot sentinel elsewhere; ``C1Moe.host_rows``). The
+    row
+    is repeated over the tile and masked by the live row's column in fp32 (ids below 2^24 and the 0 / 1 mask
+    are
+    exact there; a matmul is not: the FPU keeps ~10 bits of an fp32 input), 1 added first so the masked rows
+    and
     the sentinel tail read -1 after it is taken back."""
     rows = topk.shape[2]
     col = ttnn.to_layout(ttnn.reshape(put_row, (1, 1, put_row.shape[3], 1)), ttnn.TILE_LAYOUT)  # [ROWS, 1]
@@ -93,13 +109,17 @@ class _User:
 
 
 class StepPacker:
-    """The step's small per-rank inputs packed into few host tensors (``V41_DECODE_HOST_INPUTS=packed``): every ``from_torch`` with a mesh mapper and every ``copy_host_to_device_tensor`` cost
+    """The step's small per-rank inputs packed into few host tensors (``V41_DECODE_HOST_INPUTS=packed``):
+    every ``from_torch`` with a mesh mapper and every ``copy_host_to_device_tensor`` cost
     0.2 to 0.4 ms for 32 chips whatever the size, and the step had 19 of each (11 + 6 ms a step at two rows).
     ``pack`` builds one uint32 row-major tensor of the integer rows (``[sp, 1, R, ROWS]``: token, ring, the
     per-ratio newest and comp pages, the sampler's k), one bf16 row-major tensor of the sampler's p and
-    temperature, one bf16 tiled tensor of the six RoPE rows side by side (``[sp, 1, ROWS, 6 * rope_dim]``) and,
-    when the step masks, one fp32 tiled tensor of the per-ratio visible counts as columns; ``unpack`` slices the
-    device buffers back into the tensors the graph reads, keyed as before (a dozen tiny ops inside the capture).
+    temperature, one bf16 tiled tensor of the six RoPE rows side by side (``[sp, 1, ROWS, 6 * rope_dim]``)
+    and,
+    when the step masks, one fp32 tiled tensor of the per-ratio visible counts as columns; ``unpack`` slices
+    the
+    device buffers back into the tensors the graph reads, keyed as before (a dozen tiny ops inside the
+    capture).
     The row and column orders are fixed at the first ``pack``."""
 
     INTS = "ints"
@@ -111,13 +131,18 @@ class StepPacker:
     def __init__(self, pool, sp: int, mode: str = "packed"):
         """``mode`` ``packed``: the three host tensors above (four when the step masks); ``one``
         (``V41_DECODE_HOST_INPUTS=one``): the integer rows, the sampler's rows and the RoPE
-        rows in one uint32 row-major tensor of one row per rank (``[sp, 1, 1, (ints + floats) * ROWS + ROWS * 6 *
-        rope_dim]``, one page; a bf16 value travels as its fp32 bit pattern, ``bits << 16``) built from per-chip
-        host shards (``ttnn.from_host_shards``) and uploaded once: a ``from_torch`` with a mesh mapper costs 0.4 to
+        rows in one uint32 row-major tensor of one row per rank (``[sp, 1, 1, (ints + floats) * ROWS + ROWS *
+        6 *
+        rope_dim]``, one page; a bf16 value travels as its fp32 bit pattern, ``bits << 16``) built from
+        per-chip
+        host shards (``ttnn.from_host_shards``) and uploaded once: a ``from_torch`` with a mesh mapper costs
+        0.4 to
         0.5 ms a call for 32 chips whatever the size, and a ``copy_host_to_device_tensor`` pays per page (the
         14-row integer tensor 1.66 ms against 0.2 for the one-row ones). ``unpack`` then
-        bitcasts the bf16 rows (``ttnn.bitcast`` to fp32, ``typecast`` to bf16: exact, the low half is zero) and
-        reshapes and tilizes the RoPE block on device, a dozen tiny ops inside the capture as before plus ten. The
+        bitcasts the bf16 rows (``ttnn.bitcast`` to fp32, ``typecast`` to bf16: exact, the low half is zero)
+        and
+        reshapes and tilizes the RoPE block on device, a dozen tiny ops inside the capture as before plus ten.
+        The
         visible counts (the masks' input, not served) stay a tensor of their own."""
         assert mode in ("packed", "one"), mode
         self.pool, self.sp, self.mode = pool, sp, mode
@@ -139,9 +164,11 @@ class StepPacker:
         return have
 
     def pack(self, ints: dict, floats: dict, rope: dict, visible: dict, wide: dict | None = None) -> dict:
-        """``ints`` name -> int32 ``[sp, ROWS]``; ``floats`` name -> fp32 ``[sp, ROWS]``; ``rope`` name -> (cos, sin)
+        """``ints`` name -> int32 ``[sp, ROWS]``; ``floats`` name -> fp32 ``[sp, ROWS]``; ``rope`` name ->
+        (cos, sin)
         bf16 ``[sp * ROWS, rope_dim]``; ``visible`` name -> fp32 ``[sp, ROWS]``; ``wide`` name -> fp32
-        ``[sp * ROWS, w]`` (``w`` a multiple of 32; tiled columns after the visible ones in the same tensor) -> the
+        ``[sp * ROWS, w]`` (``w`` a multiple of 32; tiled columns after the visible ones in the same tensor)
+        -> the
         host tensors (per rank)."""
         sp, pool = self.sp, self.pool
         out = {}
@@ -189,8 +216,10 @@ class StepPacker:
         return t.to(torch.bfloat16).contiguous().view(torch.int16).to(torch.int32) << 16
 
     def _pack_one(self, ints: dict, floats: dict, rope: dict) -> ttnn.Tensor:
-        """The "one" mode's host tensor, one row (one page) per rank: int row i at columns ``[i * ROWS, (i + 1) *
-        ROWS)``, then the float rows (bf16 bits << 16), then the RoPE block (``[ROWS, 2 * len(rope) * rope_dim]``
+        """The "one" mode's host tensor, one row (one page) per rank: int row i at columns ``[i * ROWS, (i +
+        1) *
+        ROWS)``, then the float rows (bf16 bits << 16), then the RoPE block (``[ROWS, 2 * len(rope) *
+        rope_dim]``
         bf16 flattened row-major, bits << 16)."""
         sp, tp = self.sp, self.pool.tp
         rows_i = self._order(self.int_rows, ints)
@@ -218,8 +247,10 @@ class StepPacker:
         return ttnn.from_host_shards(parts, ttnn.MeshShape(sp, tp))
 
     def _unpack_one(self, buffers: dict) -> dict:
-        """The "one" mode's device buffer -> the graph's tensors (as ``unpack`` keys them): the int rows sliced,
-        the float rows sliced, bitcast to fp32 and typecast to bf16 (exact: the low half is zero), the RoPE block
+        """The "one" mode's device buffer -> the graph's tensors (as ``unpack`` keys them): the int rows
+        sliced,
+        the float rows sliced, bitcast to fp32 and typecast to bf16 (exact: the low half is zero), the RoPE
+        block
         sliced, reshaped, bitcast, typecast and tilized, then its pairs sliced."""
         out = {}
         one = buffers[self.ONE]
@@ -252,7 +283,8 @@ class StepPacker:
                 start += w
 
     def unpack(self, buffers: dict) -> dict:
-        """The device buffers of ``pack`` -> the graph's tensors by name: the int and float rows as ``[1, 1, 1,
+        """The device buffers of ``pack`` -> the graph's tensors by name: the int and float rows as ``[1, 1,
+        1,
         ROWS]`` (the sampler's as ``[ROWS]``), the RoPE pairs as tiled ``[1, 1, ROWS, rope_dim]``, the visible
         counts as tiled ``[1, 1, ROWS, 1]``."""
         if self.mode == "one":
@@ -278,10 +310,13 @@ class StepPacker:
 
 
 class DeviceSampler:
-    """The step's sampling on device: each TP chip's top-32 of its vocabulary shard, gathered over TP into every
-    row's top-128 candidates, ``ttnn.sampling`` with per-row top-k (1..32), top-p and temperature, the sampled ids
+    """The step's sampling on device: each TP chip's top-32 of its vocabulary shard, gathered over TP into
+    every
+    row's top-128 candidates, ``ttnn.sampling`` with per-row top-k (1..32), top-p and temperature, the sampled
+    ids
     gathered over SP. The cores' random generators are seeded once (``ttnn.manual_seed``; random seeds, or the
-    per-row seeds derived from ``seed`` / ``V41_SAMPLE_SEED`` so that two processes draw the same stream); the captured sampling (seed None) leaves them running, so replays draw fresh numbers.
+    per-row seeds derived from ``seed`` / ``V41_SAMPLE_SEED`` so that two processes draw the same stream); the
+    captured sampling (seed None) leaves them running, so replays draw fresh numbers.
     The seeds are replicated over the mesh: the same row index on every rank draws the same uniform."""
 
     SEED = "V41_SAMPLE_SEED"  # an integer: reproducible draws (unset or 0: random seeds)
@@ -303,7 +338,8 @@ class DeviceSampler:
         self.debug = None  # a dict: the last call keeps clones of its logits, candidates and ids (tests)
 
     def host_inputs(self, k: torch.Tensor, p: torch.Tensor, temp: torch.Tensor) -> dict:
-        """Per-row (rank-major, ``sp * ROWS``) top-k (1..32), top-p and inverse temperature -> the host tensors
+        """Per-row (rank-major, ``sp * ROWS``) top-k (1..32), top-p and inverse temperature -> the host
+        tensors
         of ``__call__``'s buffers (``k``, ``p``, ``temp``: one ``[ROWS]`` row-major tensor per rank)."""
         shard = ttnn.ShardTensor2dMesh(self.mesh_device, (self.sp, self.tp), dims=(0, None))
         return {
@@ -312,8 +348,10 @@ class DeviceSampler:
         }
 
     def candidates(self, logits):
-        """``logits`` ``[1, 1, ROWS, vocab/tp]`` fp32 tiled per chip (consumed) -> (values ``[1, 1, ROWS, 128]``
-        bf16 tiled, indices ``[1, 1, ROWS, 128]`` int32 row-major): every row's top-128 candidates, the same on the
+        """``logits`` ``[1, 1, ROWS, vocab/tp]`` fp32 tiled per chip (consumed) -> (values ``[1, 1, ROWS,
+        128]``
+        bf16 tiled, indices ``[1, 1, ROWS, 128]`` int32 row-major): every row's top-128 candidates, the same
+        on the
         TP chips of a rank."""
         values, indices = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), 32, dim=-1, largest=True, sorted=True)
         ttnn.deallocate(logits)
@@ -323,12 +361,14 @@ class DeviceSampler:
         return values, indices
 
     def __call__(self, logits, buffers: dict):
-        """``logits`` ``[1, 1, ROWS, vocab/tp]`` fp32 tiled per chip (consumed) -> the sampled ids of every rank's
+        """``logits`` ``[1, 1, ROWS, vocab/tp]`` fp32 tiled per chip (consumed) -> the sampled ids of every
+        rank's
         rows on every chip (``to_host`` reads them)."""
         return self.gather(self.sample(logits, buffers))
 
     def sample(self, logits, buffers: dict):
-        """``logits`` (consumed) -> this rank's sampled ids ``[1, 1, 1, ROWS]`` uint32 row-major (the same on the
+        """``logits`` (consumed) -> this rank's sampled ids ``[1, 1, 1, ROWS]`` uint32 row-major (the same on
+        the
         rank's TP chips)."""
         if self.debug is not None:
             self.debug["logits"] = ttnn.clone(logits)
@@ -359,9 +399,12 @@ class DeviceSampler:
         return ids
 
     def gather(self, row):
-        """A rank's row ``[1, 1, 1, W]`` uint32 row-major (``W`` a multiple of 32) -> one tile per rank gathered over
-        SP: ``[1, 1, sp * 32, W]`` uint32 tiled, rows ``[r * 32, (r + 1) * 32)`` rank r's row, every row the same
-        (the 128-byte row of ids gathered by all_gather_async arrived on the other ranks' chips as stale memory)."""
+        """A rank's row ``[1, 1, 1, W]`` uint32 row-major (``W`` a multiple of 32) -> one tile per rank
+        gathered over
+        SP: ``[1, 1, sp * 32, W]`` uint32 tiled, rows ``[r * 32, (r + 1) * 32)`` rank r's row, every row the
+        same
+        (the 128-byte row of ids gathered by all_gather_async arrived on the other ranks' chips as stale
+        memory)."""
         tile = ttnn.to_layout(ttnn.concat([row] * ROWS, dim=2), ttnn.TILE_LAYOUT)
         return self.gather_sp(tile, dim=2)
 
@@ -395,8 +438,10 @@ class TtV41BatchDecoder(TtV41Decoder):
     ):
         """``users_per_rank`` slots per mesh row (``sp * users_per_rank`` users); ``max_seq_len`` of the pool
         (default the model's). ``trace``: capture the step once after ``warmup`` eager steps and replay it.
-        ``sample_on_device``: the step ends in ``ttnn.sampling`` over each row's top-128 logits (the four TP chips'
-        top-32 each) with per-row top-k, top-p and temperature, and ``decode`` returns token ids instead of logits
+        ``sample_on_device``: the step ends in ``ttnn.sampling`` over each row's top-128 logits (the four TP
+        chips'
+        top-32 each) with per-row top-k, top-p and temperature, and ``decode`` returns token ids instead of
+        logits
         (``sampling`` keyword: ``{slot: (k, p, temperature)}``; a temperature of 0 is argmax: k 1)."""
         self.users = users_per_rank  # before the decoder builds the MoEs: their decode routing takes the real rows
         super().__init__(model, weight_cache_path, routed_expert_weights_dtype, trace=trace, warmup=warmup)
@@ -427,7 +472,8 @@ class TtV41BatchDecoder(TtV41Decoder):
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
             )
         )
-        # per ratio: fp32 column indices [1, 1, ROWS, cap + 32] of an index source's score (the mask compares them
+        # per ratio: fp32 column indices [1, 1, ROWS, cap + 32] of an index source's score (the mask compares
+        # them
         # with the step's per-row visible counts); the sentinel tail of the pad rows' selection
         self.iota = {}
         for src, slot in self.pool.slots.items():
@@ -444,8 +490,10 @@ class TtV41BatchDecoder(TtV41Decoder):
         )
         self.sample_on_device = sample_on_device
         # the single-query scorer: every densely scored source scores one user's query against
-        # the visible prefix of its tiled pool (range_scores, the bound read on device, the keys split over the cores
-        # as rows of a split layout) and selects by merging the rows' top-k (select_split); no 32-row dense score,
+        # the visible prefix of its tiled pool (range_scores, the bound read on device, the keys split over
+        # the cores
+        # as rows of a split layout) and selects by merging the rows' top-k (select_split); no 32-row dense
+        # score,
         # no mask round-trip, no per-step mask build
         self.single_query = os.environ.get("V41_DECODE_SINGLE_QUERY", "0") == "1"
         # V41_DECODE_SDPA=local: the SDPA of both captures on the chip's own heads;
@@ -469,7 +517,8 @@ class TtV41BatchDecoder(TtV41Decoder):
             if sample_on_device
             else None
         )
-        # the step's captures by variant: "full" (the 32-row tile), and with V41_DECODE_C1_MOE=1 "c1" (one live
+        # the step's captures by variant: "full" (the 32-row tile), and with V41_DECODE_C1_MOE=1 "c1" (one
+        # live
         # row: the MoEs on that row broadcast to every chip); each variant runs ``warmup``
         # eager steps before its capture (a capture cannot load binaries)
         self.captures: dict[str, object] = {}
@@ -482,9 +531,11 @@ class TtV41BatchDecoder(TtV41Decoder):
             self.c1_moes = [C1Moe(moe, ccl, self.pool, rows=self.C1_ROWS) for moe in self.moes]
             self.c1_table = C1Moe.identity_table(self.mesh_device)
         # V41_DECODE_C1_INDEX=1: in the c1 capture the index sources select for the live
-        # user alone (``_index_c1``): its user index, newest row and block page are per-step host rows (``c1usr``,
+        # user alone (``_index_c1``): its user index, newest row and block page are per-step host rows
+        # (``c1usr``,
         # ``c1pin`` per ratio, ``c1all``), read on device by the scorers, so the capture carries no slot; the
-        # selection is placed into the tile's row by the ``c1put`` page (``c1_place``), the other rows sentinels
+        # selection is placed into the tile's row by the ``c1put`` page (``c1_place``), the other rows
+        # sentinels
         self.c1_index = os.environ.get("V41_DECODE_C1_INDEX", "0") == "1"
         if self.c1_index:
             assert (
@@ -519,23 +570,26 @@ class TtV41BatchDecoder(TtV41Decoder):
         self.next_histories: dict[int, torch.Tensor] = {}  # slot -> its Engram history after this step's token
         self.rope_tables = RopeTables(self.config, self.pool.max_seq_len) if self.packer else None
         self.inputs = self.buffers  # what the graph reads: the buffers, or their unpacked slices (``_forward``)
-        # a join's compressed index is as wide as the prompt's bucket, not the pool: at a 1M pool
-        # the full-width index was ~200 MB of host sharding and copies per join, 65 ms on the path
-        # between two prefills at c32; captures are per (state, slot, width)
+        # a join's compressed index is as wide as the prompt's bucket, not the pool: at a 1M pool the
+        # full-width
+        # index was ~200 MB of host sharding and copies per join, 65 ms on the path between two prefills at
+        # c32;
+        # captures are per (state, slot, width)
         self.join_widths = []
         w = JOIN_MIN_WIDTH
         while w < self.pool.max_seq_len:
             self.join_widths.append(w)
             w *= 2
         self.join_widths.append(self.pool.max_seq_len)
-        self.join_traces: dict[tuple[int, int, int], SubDeviceTraceController] = {}
+        self.join_traces: dict[tuple, SubDeviceTraceController] = {}
         self.join_buffers: dict[int, dict] = {}  # width -> the index buffers
         self.last_join: dict = {}
         # TT_V41_RESTORE_TRACE=1: a restore replays a capture per (state, slot, width bucket)
         # as the join does, the whole bucket restored (its rows past the prefix are stale and unread), so no
         # eager collective runs between the captured steps' replays; 0: every restore eager
         self.restore_traced = os.environ.get("TT_V41_RESTORE_TRACE", "0") == "1"
-        # TT_V41_RESTORE_TRACE_MAX_WIDTH (tokens, default every width): the widest bucket captured; the wider ones
+        # TT_V41_RESTORE_TRACE_MAX_WIDTH (tokens, default every width): the widest bucket captured; the wider
+        # ones
         # restore eagerly. A capture's trace bytes grow with its pieces (192 MB for 8 slots x 9 widths,
         # the 256K to 1M buckets 45 of the 51 pieces a slot), and the served region holds ~0.9 GB beside the
         # decode, join and prefill captures
@@ -556,32 +610,49 @@ class TtV41BatchDecoder(TtV41Decoder):
         self.eager_counts["full"] = value
 
     def variant(self, tokens: dict) -> str:
-        """The step variant for ``tokens``: "c1" with the c1 MoE on and exactly one slot stepping, else "full"."""
+        """The step variant for ``tokens``: "c1" with the c1 MoE on and exactly one slot stepping, else
+        "full"."""
         return "c1" if self.c1 and len(tokens) == 1 else "full"
 
-    # --- users -------------------------------------------------------------------------------------------------
+    # --- users
+    # -------------------------------------------------------------------------------------------------
     @property
     def num_slots(self) -> int:
         return self.sp * self.users
 
-    def join(self, slot: int, tokens: torch.Tensor, state: V41PrefillState) -> None:
-        """Slot ``slot`` takes over ``state`` after ``prefill(tokens)`` filled it: its caches move into the pool
-        (``V41DecodePool.join_ops``; replayed when ``capture_join`` captured this state and slot, else eager), its
-        Engram history is seeded from the last compressed ids."""
+    @staticmethod
+    def join_key(state: V41PrefillState, slot: int, width: int, segment=None) -> tuple:
+        """The key of a join's capture: the state, slot and index width, and for a packed segment its offset
+        and
+        carry index (what the capture bakes: the scatter's source rows and the carry buffers' addresses)."""
+        return (id(state), slot, width) + (() if segment is None else (int(segment[0]), int(segment[2])))
+
+    def join(self, slot: int, tokens: torch.Tensor, state: V41PrefillState, segment=None) -> None:
+        """Slot ``slot`` takes over ``state`` after ``prefill(tokens)`` filled it: its caches move into the
+        pool
+        (``V41DecodePool.join_ops``; replayed when ``capture_join`` captured this state and slot, else eager),
+        its
+        Engram history is seeded from the last compressed ids. ``segment`` ``(offset, length, g)``: the slot
+        takes
+        one prompt of a packed chunk (``prefill_packed``; ``tokens`` that prompt alone): its rows from the
+        segment's offset, its own window carries, and its position ``length`` (the masks' and the live-user
+        index's bound: the slot is exactly a prompt of ``length`` tokens, whatever the pack's total)."""
         assert 0 <= slot < self.num_slots, slot
-        assert state.start >= self.config.SLIDING_WINDOW - 1, f"a prompt of {state.start}: decode needs a full window"
-        user = _User(state.start)
+        length = state.start if segment is None else int(segment[1])
+        assert segment is None or length == int(tokens.numel()), (segment, tokens.numel())
+        assert length >= self.config.SLIDING_WINDOW - 1, f"a prompt of {length}: decode needs a full window"
+        user = _User(length)
         if self.model.engram:
             hash_ = self.model.engram_hash
             n = hash_.layout.max_ngram_size - 1
             user.engram_history = hash_.token_map[tokens[-n:].to(torch.int64)].clone()
         t0 = time.time()
-        width = self.join_width(state.start)
-        inputs = self.pool.join_inputs(slot, state, width)
-        trace = self.join_traces.get((id(state), slot, width))
+        width = self.join_width(length)
+        inputs = self.pool.join_inputs(slot, state, width, segment)
+        trace = self.join_traces.get(self.join_key(state, slot, width, segment))
         if trace is None:
             idx = {k: ttnn.to_device(v, self.mesh_device) for k, v in inputs.items()}
-            self.pool.join_ops(slot, state, idx)
+            self.pool.join_ops(slot, state, idx, segment)
             for t in idx.values():
                 ttnn.deallocate(t)
             mode = "eager"
@@ -590,10 +661,13 @@ class TtV41BatchDecoder(TtV41Decoder):
             trace.replay(blocking=False)
             mode = "replay"
         self.last_join = {"mode": mode, "s": round(time.time() - t0, 4), "width": width}
+        if segment is not None:
+            self.last_join["segment"] = tuple(int(x) for x in segment)
         self.slots[slot] = user
 
     def join_width(self, start: int) -> int:
-        """The join index width (tokens) of a prompt of ``start`` tokens: the smallest of ``join_widths`` at or
+        """The join index width (tokens) of a prompt of ``start`` tokens: the smallest of ``join_widths`` at
+        or
         above it."""
         for w in self.join_widths:
             if start <= w:
@@ -608,40 +682,46 @@ class TtV41BatchDecoder(TtV41Decoder):
         for k, v in inputs.items():
             ttnn.copy_host_to_device_tensor(v, buffers[k])
 
-    def capture_join(self, state: V41PrefillState, slot: int, width: int | None = None) -> None:
-        """Capture the join of ``state`` into ``slot`` at index ``width`` (default: every width of
-        ``join_widths``; their tensors are persistent, the index buffers are uploaded per join), so later joins
-        of the triple replay it: a join is ~60 small ops, 20 to 80 ms issued eagerly."""
+    def capture_join(self, state: V41PrefillState, slot: int, width: int | None = None, segment=None) -> None:
+        """Capture the join of ``state`` (or its packed ``segment``) into ``slot`` at index ``width``
+        (default:
+        every width of ``join_widths``; their tensors are persistent, the index buffers are uploaded per
+        join), so
+        later joins of the key replay it: a join is ~60 small ops, 20 to 80 ms issued eagerly."""
         if width is None:
             for w in self.join_widths:
-                self.capture_join(state, slot, w)
+                self.capture_join(state, slot, w, segment)
             return
-        key = (id(state), slot, width)
+        key = self.join_key(state, slot, width, segment)
         if key in self.join_traces:
             return
-        self._stage_join(self.pool.join_inputs(slot, state, width), width)
-        # each width's scatter is its own program (the row count is a runtime argument of a generic op): compile
+        self._stage_join(self.pool.join_inputs(slot, state, width, segment), width)
+        # each width's scatter is its own program (the row count is a runtime argument of a generic op):
+        # compile
         # it with one eager join before the capture, which cannot load binaries
-        self.pool.join_ops(slot, state, self.join_buffers[width])
+        self.pool.join_ops(slot, state, self.join_buffers[width], segment)
         controller = SubDeviceTraceController(self.mesh_device)
         ttnn.synchronize_device(self.mesh_device)
         controller.begin_capture()
         try:
-            self.pool.join_ops(slot, state, self.join_buffers[width])
+            self.pool.join_ops(slot, state, self.join_buffers[width], segment)
         finally:
             controller.end_capture()
         self.join_traces[key] = controller
 
     def park(self, slot: int, state: V41PrefillState) -> None:
         """After ``join(slot, ...)`` of a request's bulk chunks (TT_V41_DEFER_FINAL): keep the
-        state's window carries in the slot's parking buffers, so ``restore`` can put the prefix back into a state
+        state's window carries in the slot's parking buffers, so ``restore`` can put the prefix back into a
+        state
         after decode steps have written the slot's rings."""
         self.pool.park_carries(slot, state)
 
     def restore(self, slot: int, state: V41PrefillState, length: int, piece: int = 65536, probe=None) -> None:
-        """The parked prefix of ``length`` tokens in ``slot`` back into ``state`` (``V41DecodePool.restore_ops``
+        """The parked prefix of ``length`` tokens in ``slot`` back into ``state``
+        (``V41DecodePool.restore_ops``
         of the width bucket ``join_width(length)``): the capture of ``(state, slot, width)`` replayed when
-        ``capture_restore`` made it, else eager; ``last_restore`` records the host issue time and the op counts
+        ``capture_restore`` made it, else eager; ``last_restore`` records the host issue time and the op
+        counts
         (the device time is the caller's to measure with a synchronize)."""
         assert slot in self.slots and self.slots[slot].position == length, (slot, self.slots.get(slot), length)
         t0 = time.time()
@@ -662,8 +742,10 @@ class TtV41BatchDecoder(TtV41Decoder):
 
     def capture_restore(self, state: V41PrefillState, slot: int, width: int | None = None) -> None:
         """Capture the restore of ``slot``'s first ``width`` tokens into ``state`` (default: every width of
-        ``join_widths``), so later restores of the triple replay it (``restore``). As ``capture_join``: one eager
-        run compiles the width's programs (a capture cannot load binaries), then the capture; the eager run and
+        ``join_widths``), so later restores of the triple replay it (``restore``). As ``capture_join``: one
+        eager
+        run compiles the width's programs (a capture cannot load binaries), then the capture; the eager run
+        and
         the capture write ``state``'s caches, so this runs on a free state at warm-up, before the prefill
         captures. Nothing is uploaded per restore: the ops read the slot and the parking buffers only."""
         if width is None:
@@ -690,11 +772,13 @@ class TtV41BatchDecoder(TtV41Decoder):
     def position(self, slot: int) -> int:
         return self.slots[slot].position
 
-    # --- host inputs ---------------------------------------------------------------------------------------------
+    # --- host inputs
+    # ---------------------------------------------------------------------------------------------
     def _host_inputs(self, tokens: dict[int, int], sampling: dict | None = None) -> dict:
         """The step's host tensors (per rank, device layouts), keyed as the device buffers: ``tokens`` slot ->
         token of the slots that step (the others get zeros and write nothing); ``sampling`` slot -> (k, p,
-        temperature) when sampling on device (other slots: argmax). Under ``V41_DECODE_HOST_INPUTS=packed`` the
+        temperature) when sampling on device (other slots: argmax). Under ``V41_DECODE_HOST_INPUTS=packed``
+        the
         keys are the ``StepPacker``'s (plus ``engram``) and ``_forward`` unpacks them."""
         cfg, sp, users = self.config, self.sp, self.users
         tick = self._tick("in")
@@ -773,14 +857,16 @@ class TtV41BatchDecoder(TtV41Decoder):
         tick("ring")
         for ratio in sorted(self.iota):
             visible = torch.where(active, (positions + 1) // ratio, torch.zeros_like(positions)).float()
-            # the selection's per-row pins: each row's newest compressed row, the sentinel for an idle or empty row
+            # the selection's per-row pins: each row's newest compressed row, the sentinel for an idle or
+            # empty row
             newest = torch.where(visible > 0, visible - 1, torch.full_like(visible, -1)).to(torch.int32)
             writes = active & (positions % ratio == ratio - 1)
             comp = torch.where(writes, positions // ratio, torch.full_like(positions, -1)).to(
                 torch.int32
             )  # -1: sentinel
             if self.c1_index:
-                # the c1 capture's index pages: ``c1usr`` word 0 the live user (0 when none: row 0 is read, nothing
+                # the c1 capture's index pages: ``c1usr`` word 0 the live user (0 when none: row 0 is read,
+                # nothing
                 # is visible), word 1 the page of its block 0, word 2 its newest row (the sentinel for none);
                 # ``c1pin`` its newest in every word (the candidate scorer's per-row page)
                 usr = torch.full((sp, ROWS), -1, dtype=torch.int32)
@@ -821,7 +907,8 @@ class TtV41BatchDecoder(TtV41Decoder):
                 self.next_histories = {slot: histories[k] for k, slot in enumerate(order)}
             tick("engram_hash")
             inputs["engram"] = {}
-            # packed: the rows of the chips that hold a live row only; the others read the all-zero shard (their
+            # packed: the rows of the chips that hold a live row only; the others read the all-zero shard
+            # (their
             # rows are idle: nothing reads what they compute)
             live = active.flatten().nonzero().flatten() if packed else None
             for l, e in self.model.engram.items():
@@ -834,10 +921,13 @@ class TtV41BatchDecoder(TtV41Decoder):
                 tick(f"engram{l}_rows")
         return inputs
 
-    # --- one step ----------------------------------------------------------------------------------------------
+    # --- one step
+    # ----------------------------------------------------------------------------------------------
     def decode(self, tokens: dict[int, int], sampling: dict | None = None) -> dict:
-        """Append ``tokens`` (slot -> token) at the slots' positions -> slot -> fp32 logits ``[vocab]`` of the next
-        position (or, sampling on device, slot -> the sampled token id); the slots advance by one, the pool's step
+        """Append ``tokens`` (slot -> token) at the slots' positions -> slot -> fp32 logits ``[vocab]`` of the
+        next
+        position (or, sampling on device, slot -> the sampled token id); the slots advance by one, the pool's
+        step
         too."""
         for slot in tokens:
             user = self.slots[slot]
@@ -959,7 +1049,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         return capture.controller.num_segments if capture is not None else 0
 
     def _forward(self, on_block, c1: bool = False):
-        """The step's device graph on the staged buffers -> the logits tile ``[1, 1, ROWS, vocab/tp]`` per chip
+        """The step's device graph on the staged buffers -> the logits tile ``[1, 1, ROWS, vocab/tp]`` per
+        chip
         (row u: slot u of the chip's rank); the pool is updated in place. ``c1``: the MoEs on the one live row
         (``C1Moe``; the idle rows' MoE output zero)."""
         model = self.model
@@ -981,7 +1072,8 @@ class TtV41BatchDecoder(TtV41Decoder):
                 sel_all, _ = C1Moe.onehots(self.inputs["c1all"], self.inputs["c1all"], self.c1_table)
                 selection["c1"] = sel_all
             if self.flash is not None:
-                # the flash SDPA's live page: ``c1put`` (word u 0 on the live rank's live row, the one-hot sentinel
+                # the flash SDPA's live page: ``c1put`` (word u 0 on the live rank's live row, the one-hot
+                # sentinel
                 # elsewhere); the 32-row capture keeps sparse_sdpa
                 selection["flash_live"] = self.inputs["c1put"]
         else:
@@ -1036,7 +1128,8 @@ class TtV41BatchDecoder(TtV41Decoder):
             out = moe(x, actual_isl=self.moe_real_rows(), padding_config=self.padding_config)
         return out if MOE_ROWS == ROWS else ttnn.slice(out, [0, 0, 0, 0], [1, 1, ROWS, out.shape[3]])
 
-    # --- attention ------------------------------------------------------------------------------------------------
+    # --- attention
+    # ------------------------------------------------------------------------------------------------
     def _attention(self, attn: TtV41Attention, x, masks: dict, selection: dict):
         """``TtV41Attention.forward`` for the tile of users (``x`` [1, 1, ROWS, hidden/tp] bf16)."""
         layer, pool, cfg = attn.layer, self.pool, self.config
@@ -1096,7 +1189,8 @@ class TtV41BatchDecoder(TtV41Decoder):
 
         k_chunk = next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0)
         if self.sdpa_local and self.tp > 1:
-            # this chip's heads alone (padded with zero heads to sparse_sdpa's 32; their output rows are never read):
+            # this chip's heads alone (padded with zero heads to sparse_sdpa's 32; their output rows are never
+            # read):
             # no all-gather of the queries, half the SDPA, no partition of the output; with
             # ``flash`` the live rows' keys split over the grid
             qh = q_heads(q, cos, sin, attn.trans_mat, attn.local_heads, attn.rope_dim, out_heads=attn.sdpa_heads)
@@ -1159,7 +1253,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         return out
 
     def _encode(self, rows, fmt: MlaKvCacheFormat):
-        """Logical ``[1, 1, ROWS, 512]`` rows -> the row-major rows of ``fmt`` (as ``V41PrefillState._encode``)."""
+        """Logical ``[1, 1, ROWS, 512]`` rows -> the row-major rows of ``fmt`` (as
+        ``V41PrefillState._encode``)."""
         rows = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
         if fmt == MlaKvCacheFormat.BF16_RM:
             return rows
@@ -1172,7 +1267,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         return packed
 
     def _compress(self, compressor, x, layer: int):
-        """The reference ``Compressor`` for every row: ratio 1 the row's latent; ratio 2 the pool of the pool's
+        """The reference ``Compressor`` for every row: ratio 1 the row's latent; ratio 2 the pool of the
+        pool's
         carry (the previous step's projections) and this step's, the carry then replaced by this step's."""
         if compressor.ratio == 1:
             kv = compressor._project(x, compressor.wkv, ttnn.bfloat16)
@@ -1189,11 +1285,15 @@ class TtV41BatchDecoder(TtV41Decoder):
         return ttnn.rms_norm(ttnn.typecast(pooled, ttnn.bfloat16), weight=compressor.norm, epsilon=compressor.eps)
 
     def _index(self, indexer: TtV41Indexer, x, qr, source: int, mask, candidates: dict | None):
-        """The indexer of every slot's user over its index keys -> (top-k rows ``[1, 1, ROWS, INDEX_TOPK]`` uint32
+        """The indexer of every slot's user over its index keys -> (top-k rows ``[1, 1, ROWS, INDEX_TOPK]``
+        uint32
         row-major, row u slot u's selection (the pad rows all sentinels); the candidate source's published
-        ``CandidateBlocks`` per user, else None). The selection is the prefill's (``TtV41Indexer.select``) with the
-        tile's per-row pins (``DecodePins``): the candidate source publishes each user's candidate blocks (none
-        below CANDIDATE_TOPK_BLOCKS blocks of capacity: every block is a candidate), and a candidate index source
+        ``CandidateBlocks`` per user, else None). The selection is the prefill's (``TtV41Indexer.select``)
+        with the
+        tile's per-row pins (``DecodePins``): the candidate source publishes each user's candidate blocks
+        (none
+        below CANDIDATE_TOPK_BLOCKS blocks of capacity: every block is a candidate), and a candidate index
+        source
         selects inside its user's published blocks (``candidates[u]``)."""
         cfg, pool = self.config, self.pool
         cap = pool.slots[source].cap
@@ -1220,10 +1320,12 @@ class TtV41BatchDecoder(TtV41Decoder):
             # user's keys, discarded
             mine = candidates[u] if candidates is not None else None
             if single:
-                # the user's own pin page [1, 1, 1, 1]: the split selection pins by it, the candidate scorer bounds
+                # the user's own pin page [1, 1, 1, 1]: the split selection pins by it, the candidate scorer
+                # bounds
                 pin_u = ttnn.slice(pins.newest, [0, 0, 0, u], [1, 1, 1, u + 1])
             if in_blocks and mine.ids is not None:
-                # a candidate index source over published blocks: score the user's candidate rows only, from the
+                # a candidate index source over published blocks: score the user's candidate rows only, from
+                # the
                 # pool's block pages (the kernel masks the rows past the user's pin)
                 base = u * (cap + 32) // cfg.CANDIDATE_BLOCK_SIZE
                 topk = indexer.select_user_in_blocks(
@@ -1232,8 +1334,10 @@ class TtV41BatchDecoder(TtV41Decoder):
                 parts.append(topk)
                 continue
             if single:
-                # the single-query scorer: the user's query row against the visible prefix of its tiled keys, the
-                # bound read from the newest page on device, -inf past it (the mask's value), the keys split over
+                # the single-query scorer: the user's query row against the visible prefix of its tiled keys,
+                # the
+                # bound read from the newest page on device, -inf past it (the mask's value), the keys split
+                # over
                 # the rows of the split layout (one core each); the selection merges the rows' top-k
                 score = range_scores(q_rm, w_rm, k, pins.newest, u, cap + 32)
                 topk, blocks = indexer.select_split(score, pin_u, cap + 32, cfg.INDEX_TOPK, mine)
@@ -1241,7 +1345,8 @@ class TtV41BatchDecoder(TtV41Decoder):
                     published[u] = blocks
                 parts.append(topk)
                 continue
-            # every row sees every key (the causal window starts past the slot's rows); the mask then hides the
+            # every row sees every key (the causal window starts past the slot's rows); the mask then hides
+            # the
             # rows past each user's visible count, and the pad tile
             score = ttnn.experimental.indexer_score_dsa(
                 q, k, w, chunk_start_idx=cap, seq_shard_axes=[], program_config=config, cache_batch_idx=u
@@ -1256,10 +1361,13 @@ class TtV41BatchDecoder(TtV41Decoder):
         return ttnn.concat(parts, dim=2), published
 
     def _index_c1(self, indexer: TtV41Indexer, x, qr, source: int, candidates: CandidateBlocks | None, sel_all):
-        """``_index`` for the c1 capture (``V41_DECODE_C1_INDEX=1``): the live user's selection alone, the user read
-        on device from the step's ``c1usr`` page (``range_scores(dyn=True)``, ``select_live_in_blocks``), placed into
+        """``_index`` for the c1 capture (``V41_DECODE_C1_INDEX=1``): the live user's selection alone, the
+        user read
+        on device from the step's ``c1usr`` page (``range_scores(dyn=True)``, ``select_live_in_blocks``),
+        placed into
         its row of the tile by the ``c1put`` page (``c1_place``; the other rows sentinels) -> (the top-k tile
-        ``[1, 1, ROWS, INDEX_TOPK]`` uint32 row-major, the candidate source's published ``CandidateBlocks`` of the
+        ``[1, 1, ROWS, INDEX_TOPK]`` uint32 row-major, the candidate source's published ``CandidateBlocks`` of
+        the
         live user or None). ``sel_all``: the one-hot that repeats the live row over the tile (``c1all``)."""
         cfg, pool = self.config, self.pool
         cap = pool.slots[source].cap
@@ -1274,7 +1382,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         w = indexer.ccl.tp_all_reduce(ttnn.linear(x, indexer.weights_proj))
         blocks_of = pool.index_k_blocks.get(source)
         if blocks_of is not None and candidates is not None and candidates.ids is not None:
-            # a candidate index source over the live user's published blocks: its query and head weights in every
+            # a candidate index source over the live user's published blocks: its query and head weights in
+            # every
             # row of the tile by the one-hot matmul (exact: one 1.0 a row), the scorer's per-row pin page the
             # ``c1pin`` row, its block 0 read by the scorer from ``c1usr``
             q_n = ttnn.to_layout(
@@ -1294,7 +1403,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         return c1_place(topk, self.inputs["c1put"]), published
 
     def _index_rows(self, layer: int, compressed):
-        """``sparse_sdpa`` index rows ``[1, 1, ROWS, K]`` uint32 row-major: the layer's window ring, then the selected
+        """``sparse_sdpa`` index rows ``[1, 1, ROWS, K]`` uint32 row-major: the layer's window ring, then the
+        selected
         compressed rows of each row's user (offset to its slot) with their sentinel tail."""
         pool = self.pool
         window = pool.window_rows(layer)

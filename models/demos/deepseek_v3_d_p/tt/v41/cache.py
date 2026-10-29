@@ -81,6 +81,44 @@ def check_pack(segments, chunk: int, ratios) -> None:
     assert end <= chunk, f"pack of {end} rows does not fit the {chunk}-row chunk"
 
 
+# The served layouts (``TT_V41_PACK_LAYOUTS``): a comma list of ``<k>x<length>`` (k whole
+# prompts of exactly ``length`` tokens, e.g. ``4x1028,3x1028,2x1028,2x2052``) or ``<l1>+<l2>+...`` (distinct
+# lengths in row order). A ``prefill_forward`` whose rows (in order) begin with a listed layout's lengths runs them
+# as one packed chunk; its capture is made at warm-up. Unset: no packing in the generator.
+PACK_LAYOUTS = "TT_V41_PACK_LAYOUTS"
+
+
+def parse_pack_layouts(spec: str | None, chunk: int, ratios) -> list[tuple[tuple[int, int], ...]]:
+    """The layouts of ``spec`` (``PACK_LAYOUTS``' form) as ``pack_segments`` tuples, each checked against the chunk;
+    longest (in prompts) first, so a FIFO prefix matches the largest layout it can."""
+    layouts = []
+    for item in (spec or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "x" in item:
+            k, n = item.split("x")
+            lengths = [int(n)] * int(k)
+        else:
+            lengths = [int(x) for x in item.split("+")]
+        assert len(lengths) >= 2, f"{PACK_LAYOUTS} {item!r}: a layout packs at least two prompts"
+        segments = pack_segments(lengths)
+        check_pack(segments, chunk, ratios)
+        if segments not in layouts:
+            layouts.append(segments)
+    layouts.sort(key=lambda s: (-len(s), -(s[-1][0] + s[-1][1])))
+    return layouts
+
+
+def match_pack_layout(lengths: list[int], layouts) -> tuple | None:
+    """The first layout of ``layouts`` whose lengths are a prefix of ``lengths`` (prompt lengths in row order)."""
+    for segments in layouts:
+        k = len(segments)
+        if len(lengths) >= k and all(int(lengths[i]) == segments[i][1] for i in range(k)):
+            return segments
+    return None
+
+
 # per-chip bytes of the one zero block a state uploads per tensor; larger caches are zeroed by device copies of it (a
 # replicated 0.5 GB host upload is a 4 GB host write that outlasts the safe runner's 5 s dispatch timeout)
 ZERO_BLOCK_BYTES = 4 << 20
@@ -472,6 +510,15 @@ class V41ChunkTables:
         the query's segment (the previous prompt's last rows are not its window)."""
         return self._per_query_chip(self.pack_window_rows_host(segments), ttnn.int32)
 
+    def prepare_layouts(self, layouts) -> None:
+        """Build the resident window table and the host fills of every layout now (a served packed state: the
+        tables are persistent device tensors, so they exist before any capture)."""
+        for segments in layouts:
+            segments = tuple(segments)
+            if segments not in self._pack_windows:
+                self._pack_windows[segments] = self._pack_window_table(segments)
+            self.prepare_pack_host(segments)
+
     def pack_window_rows_host(self, segments) -> torch.Tensor:
         """The host form of the layout's window table ([chunk, window] int32, chunk query order)."""
         window = self.config.SLIDING_WINDOW
@@ -653,6 +700,7 @@ class V41PrefillState:
         generic: bool = False,
         tiled_index_k: bool = False,
         dspark: bool = False,
+        pack_segments: int = 0,
     ):
         """``generic``: position-generic chunk graphs (``V41ChunkTables`` generic mode; ``V41GenericPrefillTrace``):
         the cache writes scatter by an uploaded row index instead of a start-dependent slice. ``tiled_index_k``
@@ -661,7 +709,10 @@ class V41PrefillState:
         score kernel reads a tile-aligned prefix of it (one slice) instead of slicing, tilizing and padding the
         row-major rows at every chunk. The row-major cache stays the one the candidate scorer
         and the decode join read. ``dspark`` (generic only): the tables keep the DSpark seed rows' RoPE pair as a
-        host-filled chunk input, so a generic chunk graph seeds the rings (``V41ChunkTables.dspark_rope``)."""
+        host-filled chunk input, so a generic chunk graph seeds the rings (``V41ChunkTables.dspark_rope``).
+        ``pack_segments``: allocate the window carries of that many packed segments now (a served packed state:
+        every persistent tensor before any capture) instead of at a segment's first
+        packed chunk."""
         assert kv_format in self.FORMATS, f"V4.1 KV format must be one of {self.FORMATS}, got {kv_format}"
         self.mesh_device = mesh_device
         self.config = config
@@ -722,6 +773,9 @@ class V41PrefillState:
         # at a segment's first packed chunk (``segment_window_carry``); the join of a segment takes them instead of
         # ``window_carry`` (which holds the pack's last segment's, as a single prompt's would)
         self.segment_carry: dict[int, dict[int, ttnn.Tensor]] = {}
+        for seg in range(pack_segments):
+            for layer in self.layers:
+                self.segment_window_carry(seg, layer)
         # chunk-transient sharing: the latest index source's top-k and the candidate source's CandidateBlocks
         self.selection = {}
         # DSpark window rings (one per DSpark layer, slot p % window), set by the transformer when DSpark runs

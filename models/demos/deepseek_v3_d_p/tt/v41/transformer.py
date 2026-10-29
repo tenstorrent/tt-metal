@@ -362,19 +362,24 @@ class TtV41Transformer(LightweightModule):
         assert token_types is None or self.image_delimiters is not None, "prompts with images need image_embeds"
         return _Request(tokens, total - logit_positions, token_types, image_features)
 
-    def _new_state(self, generic: bool = False) -> V41PrefillState:
+    def _new_state(
+        self, generic: bool = False, max_seq_len: int | None = None, pack_segments: int = 0
+    ) -> V41PrefillState:
         """``generic``: a state whose chunk graphs are position-generic (``V41GenericPrefillTrace``); its chunk
-        inputs are host-filled per chunk (``_run`` does it), so the untraced prefill runs through it as well."""
+        inputs are host-filled per chunk (``_run`` does it), so the untraced prefill runs through it as well.
+        ``max_seq_len``: the state's context (default the model's; a packed state needs the first score bucket
+        only); ``pack_segments``: its segment carries allocated now (``V41PrefillState``)."""
         state = V41PrefillState(
             self.mesh_device,
             self.config,
-            self.max_seq_len,
+            self.max_seq_len if max_seq_len is None else max_seq_len,
             self.chunk,
             self.layers,
             kv_format=self.kv_format,
             generic=generic,
             tiled_index_k=generic and prefill_mask_once(),
             dspark=self.dspark is not None,
+            pack_segments=pack_segments,
         )
         if self.dspark is not None:
             state.dspark_rings = self.dspark.new_rings()
@@ -655,8 +660,10 @@ class TtV41Transformer(LightweightModule):
         scored = self._run(request, state, {}, lambda c, forward: forward(), start=start, end=end, resume=resume)
         return self._logits(scored)
 
-    def new_state(self, generic: bool = False) -> V41PrefillState:
-        return self._new_state(generic)
+    def new_state(
+        self, generic: bool = False, max_seq_len: int | None = None, pack_segments: int = 0
+    ) -> V41PrefillState:
+        return self._new_state(generic, max_seq_len, pack_segments)
 
     # --- packed chunks (TT_V41_PACK) ----------------------------------------------
     def _host_pack(self, prompts: list[torch.Tensor]) -> _HostChunk:
