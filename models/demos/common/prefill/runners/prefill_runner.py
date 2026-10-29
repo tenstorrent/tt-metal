@@ -128,7 +128,7 @@ assert MTP_DECODE_LEVELS == MTP_LEVELS or (
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-# Image deployments add media_pending_count to the engine's per-chunk metadata (tt-d-gen docs/multimodal_media_ipc.md).
+# Image deployments add media_pending_count to the engine's per-chunk metadata.
 MEDIA_ENABLED = os.environ.get("PREFILL_MEDIA", "0") == "1"
 CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MEDIA_ENABLED else 0)
 

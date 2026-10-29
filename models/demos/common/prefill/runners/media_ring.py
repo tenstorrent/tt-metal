@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Runner side of the media ring: the shm segment the d-gen prefill engine writes each chunk's images into.
+"""Runner side of the media ring: the shm segment the prefill engine writes each chunk's images into.
 
-The runner creates /tt_prefill_media_<service_id>; the engine attaches and writes. Layout and protocol are in
-tt-d-gen docs/multimodal_media_ipc.md and must match engine/include/engine/pipeline/media_ring.hpp byte for byte.
-Host-only: no ttnn.
+The runner creates /tt_prefill_media_<service_id>; the engine attaches and writes. The layout and protocol must
+match the engine's ring writer byte for byte. Host-only: no ttnn.
 """
 
 import ctypes

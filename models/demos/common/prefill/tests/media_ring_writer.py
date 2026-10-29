@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Test-only writer for the media ring that follows the engine's protocol (tt-d-gen MediaRingWriter)."""
+"""Test-only writer for the media ring that follows the engine's protocol."""
 
 import ctypes
 import mmap
@@ -12,8 +12,6 @@ from models.demos.common.prefill.runners import media_ring as mr
 
 
 class EngineWriter:
-    """The engine's write protocol (tt-d-gen MediaRingWriter), for driving the reader."""
-
     def __init__(self, name):
         fd = os.open("/dev/shm" + name, os.O_RDWR)
         try:
