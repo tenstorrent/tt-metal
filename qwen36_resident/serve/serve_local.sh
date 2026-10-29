@@ -10,7 +10,7 @@
 #          speculative decode (4 tokens per step) through the plugin's adaptive block output.
 #   dflash2: one user, greedy only (as mtp), DFlash2 speculative decode (8 tokens per step; lane dfl's
 #          qwen36_resident.dflash.ResidentDFlash) through the plugin's adaptive block output.
-#   multi: MAX_NUM_SEQS users (default 8) on the rows-mode build (launches of 8, paged KV pool), chunked prefill of
+#   multi: MAX_NUM_SEQS users (default 16) on the rows-mode build (launches of 8, paged KV pool), chunked prefill of
 #          PREFILL_CHUNK_TOKENS (default 1024) between decode steps. Needs vllm-tt-plugin branch resident-mu (TT chunk
 #          core). Host sampling unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).
 #
@@ -18,7 +18,7 @@
 #   SERVED_MODEL_NAME (Qwen/Qwen3.8-27B), MAX_MODEL_LEN (32768), VLLM_VENV (a venv with vLLM 0.26 + vllm-tt-plugin),
 #   VLLM_TT_PLUGIN_SRC (put a plugin source tree first on PYTHONPATH), TT_VISIBLE_DEVICES (0,1,2,3);
 #   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
-#   MAX_MODEL_LEN per user), RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS (default 28 / 4 for this profile).
+#   1,540,096 = 24,064 blocks), RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS (default 28 / 4 for this profile).
 set -euo pipefail
 PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi [vllm serve args...]}
 shift
@@ -47,10 +47,12 @@ case $PROFILE in
   mtp) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentMTPForCausalLM ;;
   dflash2) export TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=qwen36_resident.generator_vllm:Qwen36ResidentDFlashForCausalLM ;;
   multi)
-    SEQS=${MAX_NUM_SEQS:-8}
+    SEQS=${MAX_NUM_SEQS:-16}  # the shipped multi profile: two launches
     # the rows build's attention / GDN core split: 28 attention workers, 4 GDN head groups (accuracy-gated, -6 to -9 %
     # step time at <= 32K); the single-user profiles keep the defaults (32 workers)
     export RESIDENT_ATTN_WORKERS=${RESIDENT_ATTN_WORKERS:-28} RESIDENT_HEAD_GROUPS=${RESIDENT_HEAD_GROUPS:-4}
+    # the shipped KV pool: 24,064 blocks of 64 positions (16 slots leave ~0.66 GB/chip; 24,640 fails at build)
+    export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1540096}
     SAMPLING=''
     [ "${SAMPLE_ON_DEVICE:-0}" = 1 ] && SAMPLING=', "sample_on_device_mode": "decode_only"'
     TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING}}"
