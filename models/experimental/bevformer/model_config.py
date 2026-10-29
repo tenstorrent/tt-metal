@@ -286,25 +286,26 @@ _C3_C4_LEVELS = tuple(level for level, layer in enumerate(_VARIANT.out_indices) 
 # fits.
 DRAM_ACTIVATION_LEVELS = _C3_C4_LEVELS
 
-# Width slices for the spatial convs of the DRAM layers and levels without a count of their own
-# below. TTConv2D lowers the count per conv to its output width in tiles, as a width slice is
-# whole tiles wide.
+# The most width slices for the spatial convs of the DRAM layers and levels without a count of
+# their own below. TTConv2D lowers it per conv to its output width in tiles, as a width slice is
+# whole tiles wide; every such conv here is narrower than 8 tiles, so it runs one slice per tile.
 DRAM_CONV_SLICES = 8
 
 # Layers run on a group of cameras at a time with every activation in L1, by layer (0 is layer1): the
 # whole batch does not fit L1, so its blocks would move each tensor through DRAM, several times
 # over; a group's do fit. One camera for layer1 and layer2; three for layer3, whose DCN runs slower
-# per camera on fewer. A strided first block whose group input would not fit runs on the whole
-# batch (TTResLayer), as base's and tiny's layer3 do. layer4 runs
-# whole: its DCN alone takes about 1.1 MB of L1 per core, which leaves no room for a group's
-# activations. A listed layer is also in DRAM_ACTIVATION_STAGES, whose weights it takes.
+# per camera on fewer. A strided first block runs on the whole batch (TTResLayer) when its group
+# input would not fit, as base's layer3's does, or when its stride is on conv2, as in tiny's
+# pytorch-style layer2 and layer3. layer4 runs whole: for base and small its DCN alone takes about
+# 1.1 MB of L1 per core, which leaves no room for a group's activations. A listed layer is also in
+# DRAM_ACTIVATION_STAGES, whose weights it takes.
 CAMERA_GROUPS = {0: 1, 1: 1, 2: 3}
 
 # Layers whose non-DCN conv2s are block sharded (layer3, layer4): height sharded, each core of
 # tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
 BLOCK_SHARDED_STAGES = (2, 3)
 
-# Width slices for the DRAM levels' 3x3 output convs, by level, over DRAM_CONV_SLICES: height
+# Width slices for the DRAM levels' 3x3 output convs, by level, in place of DRAM_CONV_SLICES: height
 # sharded, C3 takes 4 slices and C4 fits L1 whole, so it runs on conv2d's L1 path (TTConv2D).
 FPN_OUTPUT_CONV_DRAM_CONV_SLICES = dict(zip(_C3_C4_LEVELS, (4, 1)))
 

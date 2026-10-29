@@ -291,7 +291,8 @@ tt/tt_bevformer.py
 tt/tt_resnet.py
     img_backbone (TTResNet)
     img_backbone.layer1-4 (TTResLayer)
-    img_backbone.layer1-4 Bottleneck (TTBottleneck)
+    img_backbone.layer1-4 Bottleneck, on the whole batch (TTBottleneck)
+    img_backbone.layer1-3 Bottleneck, per camera group (TTCameraBottleneck)
     img_backbone.layer3-4.conv2 (TTModulatedDeformConv2dPack)
 
 tt/tt_modulated_deform_conv.py

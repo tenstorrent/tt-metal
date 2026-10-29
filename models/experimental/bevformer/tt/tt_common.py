@@ -8,7 +8,7 @@ the ResNet101-DCN backbone and the FPN share.
 conv2d lays the conv's weights out once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 conv whose
 activation lives in DRAM runs as a matmul, over a subsample of its input when strided; a spatial
-conv there runs in a fixed number of width slices.
+conv there runs in a fixed number of width or height slices.
 """
 
 import math
@@ -251,7 +251,9 @@ class TTConv2D:
 
     def _l1_output_config(self, grid, fp32_dest_acc_en):
         """Rows over every core, each core's output rows kept in its own L1 as a height shard, when
-        that shard fits L1_OUTPUT_MAX_SHARD_BYTES."""
+        that shard fits L1_OUTPUT_MAX_SHARD_BYTES. The shard then takes much of the core's L1, so
+        the matmul works in output blocks of one tile row and inner blocks of at most 4 tiles,
+        whose buffers stay small beside it."""
         per_core_m = grid_shard_tiles(self.device, self.batch_size * self.output_height * self.output_width)
         if per_core_m * ttnn.TILE_SIZE * self.out_channels * self.output_element_bytes > self.L1_OUTPUT_MAX_SHARD_BYTES:
             return
@@ -277,8 +279,10 @@ class TTConv2D:
     LINEAR_2D_MIN_ROWS_PER_GRID_ROW = 64
 
     def _linear_program_config(self, grid, fp32_dest_acc_en):
-        """The pointwise linear's program config, None for ttnn.linear's own, which splits the
-        backbone's activations far from DRAM bandwidth. A linear that narrows to at most 8 tiles
+        """The pointwise linear's program config. It is None, for ttnn.linear's own, when the rows
+        are fewer tile rows than cores, or when a widening linear gives each grid row fewer than
+        LINEAR_2D_MIN_ROWS_PER_GRID_ROW; elsewhere ttnn.linear's own split runs the backbone's
+        activations far from DRAM bandwidth. A linear that narrows to at most 8 tiles
         splits the rows over every core with the weights multicast; a wider output also splits its
         columns over up to 8 grid columns, which keeps a write-heavy linear off a few cores."""
         num_cores = grid.x * grid.y
@@ -370,6 +374,7 @@ class TTConv2D:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         if self.linear_program_config is not None:
+            # The ReLU runs as the program config's fused_activation.
             return ttnn.linear(
                 x,
                 self.linear_weight,
