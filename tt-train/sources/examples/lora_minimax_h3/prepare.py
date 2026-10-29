@@ -178,16 +178,19 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.perf_counter()
     for i, (png, raw_caption) in enumerate(pairs):
         key = png.stem
+        caption = apply_trigger(clean_caption(raw_caption) if clean else raw_caption, args.trigger)
         if (
             key in manifest
+            and manifest[key]["caption"] == caption
             and (cache / "pixels" / f"{key}.npy").exists()
             and (cache / "tokens" / f"{key}.npy").exists()
         ):
             continue
+        # encode_text.py skips existing embeds, which would still hold the old caption.
+        (cache / "embeds" / f"{key}.npy").unlink(missing_ok=True)
         image = Image.open(png)
         height, width = training_canvas(image.width, image.height, args.short_edge)
         image = fit_image(image, height, width, resample)
-        caption = apply_trigger(clean_caption(raw_caption) if clean else raw_caption, args.trigger)
         tokens = tokenize(tokenizer, caption, args.max_tokens)
 
         np.save(cache / "pixels" / f"{key}.npy", np.asarray(image, dtype=np.uint8))
