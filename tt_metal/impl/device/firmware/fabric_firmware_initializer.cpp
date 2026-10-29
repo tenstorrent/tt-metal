@@ -503,13 +503,23 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     fabric_programs_.resize(devices_.size());
 
     std::vector<std::shared_future<void>> events;
+    // The tasks write into this object, and detail::async futures do not join on destruction, so every exit
+    // (including a throw from get() or configure_fabric()) must wait for all of them.
+    struct WaitForCompiles {
+        std::vector<std::shared_future<void>>& events;
+        ~WaitForCompiles() {
+            for (const auto& event : events) {
+                event.wait();
+            }
+        }
+    } wait_for_compiles{events};
+
     events.reserve(devices_.size());
     for (size_t i = 0; i < devices_.size(); ++i) {
         events.emplace_back(detail::async([this, i]() { fabric_programs_[i] = compile_fabric(devices_[i]); }));
     }
 
     if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
-        // Tasks write into fabric_programs_, so they must finish before we return.
         for (const auto& event : events) {
             event.get();
         }
