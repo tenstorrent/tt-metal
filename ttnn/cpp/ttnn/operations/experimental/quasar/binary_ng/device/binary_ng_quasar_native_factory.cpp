@@ -169,11 +169,12 @@ std::array<OperandMode, 2> operand_modes(
             return {a_one_value ? OperandMode::VALUE : OperandMode::SCALAR, OperandMode::FULL};
         case SubtileBroadcastType::SCALAR_B:
             return {OperandMode::FULL, b_one_value ? OperandMode::VALUE : OperandMode::SCALAR};
-        case SubtileBroadcastType::ROW_A_COL_B:
-        case SubtileBroadcastType::ROW_B_COL_A: break;
+        // A mix: the ROW operand is expanded per tile, and the COL operand is held.
+        case SubtileBroadcastType::ROW_A_COL_B: return {OperandMode::ROW, OperandMode::COL};
+        case SubtileBroadcastType::ROW_B_COL_A: return {OperandMode::COL, OperandMode::ROW};
     }
     TT_THROW(
-        "binary_ng Quasar-native: subtile broadcast type {} does not run native; the gate refuses it",
+        "binary_ng Quasar-native: subtile broadcast type {} is not a SubtileBroadcastType",
         static_cast<int>(subtile_broadcast_type));
 }
 

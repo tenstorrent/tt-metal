@@ -2581,6 +2581,90 @@ def test_native_value_broadcast_matches_the_oracle(name, knobs):
     _check_arm(p, f"value broadcast, {name}")
 
 
+# Mixed broadcast: one operand has one row and the other has one column. In ROW_A_COL_B the last two dims are [1, W] on
+# a and [H, 1] on b; ROW_B_COL_A swaps them. The op combines each row value with each column value, which is an outer
+# sum only for add. The ROW operand runs as ROW does and the COL operand is held, so a mix needs no code of its own.
+# bf16 only. Add, subtract and fast multiply run the FPU kernel, and multiply and divide run the SFPU kernel. Only
+# ROW_A_COL_B runs in L1 and beside a sharded output; ROW_B_COL_A runs in DRAM only. Two DRAM cases, row_a_col_b and
+# row_b_col_a/subtract, broadcast outer dims on both sides, and the others do not. In row_a_col_b_split the output is
+# sharded on 2 clusters. Production does not borrow it beside a ROW operand, so the native path takes no anchor and
+# walks 15 tiles per cluster, 2.5 rows, over 32 clusters. The case has two twins: row_a_col_b_split/multiply_fast runs
+# ELWMUL, the one FPU op with several fidelity phases, and row_a_col_b_split/multiply runs the SFPU kernel. Across the
+# three cases, the FPU kernel's batches of 8 at R1C1W1 and the SFPU kernel's batches of 4 end early at COL changes. On
+# the FPU kernel, a batch that crossed a multiple of 8 would cross the end of the staging ring.
+_H2_6 = ("height", [40 * 32, 6 * 32], (0, 0, 1, 0))  # on [1, 1, 2560, 192]: 2 shards of 40 x 6 tiles
+_MIXED_BCAST = [
+    _bcast(
+        "row_a_col_b",
+        [2, 1, 1, 160],
+        [1, 3, 64, 1],
+        _modes(a="ROW", b="COL", a_outer=True, b_outer=True),
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_col_a/subtract",
+        [1, 3, 64, 1],
+        [2, 1, 1, 160],
+        _modes(a="COL", b="ROW", a_outer=True, b_outer=True),
+        op="subtract",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_a_col_b_L1/multiply",
+        [2, 3, 1, 160],
+        [2, 3, 64, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast("row_b_col_a/divide", [2, 3, 64, 1], [2, 3, 1, 160], _modes(a="COL", b="ROW"), op="divide", walk=_NOC_WALK),
+    _bcast("row_a_col_b_act", [2, 3, 1, 160], [2, 3, 64, 1], _modes(a="ROW", b="COL"), act="both", walk=_NOC_WALK),
+    _bcast(
+        "row_a_col_b_split",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_a_col_b_split/multiply_fast",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        op="multiply_fast",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_a_col_b_split/multiply",
+        [1, 1, 1, 192],
+        [1, 1, 2560, 1],
+        _modes(a="ROW", b="COL"),
+        a=_IL1,
+        b=_IL1,
+        out=_H2_6,
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_mixed_broadcast_matches_the_oracle(name, knobs):
+    """Both mixes must run native on both kernels, with a ROW operand beside a held one, and give the oracle's bits."""
+    p = _run_shard_arm(_MIXED_BCAST, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"mixed broadcast, {name}")
+
+
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
 # programs apart where the clusters do not, as both bind the same kernel sources.
 _MIXED_ROUTED = (
@@ -2815,7 +2899,13 @@ def test_native_illegal_thread_knobs_fall_back():
 
 
 # Every broadcast table, for the no-device checks below.
-_BCAST_TABLES = {"outer": _OUTER + _OUTER_FP32, "row": _ROW, "held": _HELD, "value": _VALUE + _VALUE_FP32}
+_BCAST_TABLES = {
+    "outer": _OUTER + _OUTER_FP32,
+    "row": _ROW,
+    "held": _HELD,
+    "value": _VALUE + _VALUE_FP32,
+    "mixed": _MIXED_BCAST,
+}
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")

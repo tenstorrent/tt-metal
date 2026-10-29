@@ -671,6 +671,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
         case SubtileBroadcastType::ROW_B:
         case SubtileBroadcastType::COL_A:
         case SubtileBroadcastType::COL_B:
+        case SubtileBroadcastType::ROW_A_COL_B:
+        case SubtileBroadcastType::ROW_B_COL_A:
             if (a.dtype() != DataType::BFLOAT16) {
                 return false;
             }
@@ -685,8 +687,6 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
                 return false;
             }
             break;
-        case SubtileBroadcastType::ROW_A_COL_B:
-        case SubtileBroadcastType::ROW_B_COL_A: return false;
     }
     // In bf16, add and subtract run the FPU kernel, multiply and divide run the SFPU kernel, and multiply runs the FPU
     // kernel in fast and approximate mode. In fp32 all four run the SFPU kernel. The SFPU kernel runs no other op here:
