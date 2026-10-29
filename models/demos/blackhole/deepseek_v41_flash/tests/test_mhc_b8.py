@@ -34,7 +34,7 @@ MODES = {
     "pre16exp40": {"DSV41_MHC_PRE16": "1", "DSV41_MHC_EXP_CORES": "40"},
     "pre16exp64": {"DSV41_MHC_PRE16": "1", "DSV41_MHC_EXP_CORES": "64"},
 }
-KEYS = ("DSV41_MHC_PRE16", "DSV41_MHC_EXP_CORES", "DSV41_MHC_EXP_WMODE", "DSV41_MHC_X2LITE")
+KEYS = {k for m in MODES.values() for k in m} | {"DSV41_MHC_PRE24"}
 
 
 def set_mode(name):
@@ -188,10 +188,10 @@ def test_mhc_b8_groups(mesh_device):
     )
     m = DSV41MHC(md, torch.randn(24, 4 * D) * 0.02, torch.randn(24) * 0.3, torch.tensor([0.4, 0.3, 0.5]))
     w = up(torch.rand(1, 1, 1, D) + 0.5)
-    os.environ["DSV41_MHC_PRE16"] = "1"
+    os.environ["DSV41_MHC_PRE16"] = os.environ["DSV41_MHC_PRE24"] = "1"
     bad = tot = 0
     for trial in range(2):
-        for T in (8, 9, 10, 11, 12, 13, 14, 15, 16):
+        for T in range(8, 25):
             x_h = torch.randn(T, 1, 1, D) + 0.3 * torch.randn(T, 1, 4, D)
             x_h[..., :4] *= 300.0
             pre_h = torch.rand(T, 1, 1, 4)

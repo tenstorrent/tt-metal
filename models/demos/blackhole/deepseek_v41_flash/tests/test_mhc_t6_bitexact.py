@@ -85,3 +85,25 @@ def test_mhc_t6_bitexact(mesh_device):
         ttnn.release_trace(md, tid)
         print(f"MIXES_T4={t4}: T=8 mixes {us:.1f} us per call (traced)", flush=True)
     assert bad["1"] == 0
+
+    # T = 9..16 (DSV41_MHC_PRE16=1): every row of the natural-T mixes equals the row of the T=4 program (4-token groups); T=12 and the hoisted-pad case included
+    os.environ["DSV41_MHC_PRE16"] = os.environ["DSV41_MHC_PRE24"] = "1"
+    os.environ["DSV41_MHC_MIXES_T4"] = "1"
+    nb16 = 0
+    wn = up(torch.rand(1, 1, 1, D) + 0.5)
+    for trial in range(3):
+        xx = torch.randn(24, 1, 1, D) + 0.3 * torch.randn(24, 1, 4, D)
+        xx[..., :4] *= 300.0
+        ref = [[host(o) for o in new.mixes(up(xx[lo : lo + 4].clone()))] for lo in range(0, 24, 4)]
+        want = [torch.cat([r[i] for r in ref], 0).reshape(24, -1) for i in range(3)]
+        for T in range(9, 25):
+            got = [
+                host(o).reshape(T, -1)
+                for o in new.mixes_collapse(up(xx[:T].clone()), up(torch.rand(T, 1, 1, 4)), wn, 1e-20)[0]
+            ]
+            for i in range(3):
+                nb16 += int(not torch.equal(want[i][:T], got[i]))
+    os.environ.pop("DSV41_MHC_PRE16", None)
+    os.environ.pop("DSV41_MHC_PRE24", None)
+    print(f"PRE24 T=9..24: differing tensors {nb16} of 144", flush=True)
+    assert nb16 == 0

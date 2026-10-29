@@ -203,7 +203,11 @@ class DSV41MHC:
         """mixes + collapse + norm of a sub-block as ONE program (mhc_pre.py): T = 1..8 token rows (9..16 with DSV41_MHC_PRE16=1), T-aware kernels, DSV41_MHC_PRE=1 (default)"""
         return (
             _taware()
-            and (T <= 8 or (T <= 16 and _flag("DSV41_MHC_PRE16")))
+            and (
+                T <= 8
+                or (T <= 16 and (_flag("DSV41_MHC_PRE16") or _flag("DSV41_MHC_PRE24")))
+                or (T <= 24 and _flag("DSV41_MHC_PRE24"))
+            )
             and _flag("DSV41_MHC_PRE", "1")
             and _flag("DSV41_MHC_MIXES_V2", "1")
             and _flag("DSV41_MHC_CN_FUSED", "1")

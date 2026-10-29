@@ -32,6 +32,7 @@ def host(t):
 )
 @torch.no_grad()
 def test_mhc_taware(mesh_device):
+    os.environ["DSV41_MHC_PRE16"] = os.environ["DSV41_MHC_PRE24"] = "1"
     md = mesh_device
     torch.manual_seed(3)
     rep = ttnn.ReplicateTensorToMesh(md)
@@ -71,33 +72,39 @@ def test_mhc_taware(mesh_device):
         return out
 
     for trial in range(3):
-        for T in (1, 2, 3, 4, 5, 6, 7, 8):
+        for T in range(1, 25):
             x_h = torch.randn(T, 1, 1, D) + 0.3 * torch.randn(T, 1, 4, D)
             x_h[..., :4] *= 300.0
             x, pre = up(x_h), up(torch.rand(T, 1, 1, 4))
             y_bf, y2 = up(torch.randn(1, 1, T, D), ttnn.bfloat16), up(torch.randn(1, 1, T, D))
             y_f = up(torch.randn(T, 1, 1, D))
             post, comb = up(torch.rand(T, 1, 4, 1) * 2), up(torch.rand(T, 1, 4, 4))
-            new = run(T, x, pre, y_bf, y_f, y2, post, comb, "1")
-            old = run(T, x, pre, y_bf, y_f, y2, post, comb, "0")
-            for k in new:
-                if k == "mixes":
-                    for i in range(3):
-                        cmp(f"T{T}.mixes{i}.vs_old", new[k][i], old[k][i])
-                else:
-                    cmp(f"T{T}.{k}.vs_old", new[k], old[k])
+            if T <= 8:  # the padded reference (TAWARE=0) exists only for T <= 8
+                new = run(T, x, pre, y_bf, y_f, y2, post, comb, "1")
+                old = run(T, x, pre, y_bf, y_f, y2, post, comb, "0")
+                for k in new:
+                    if k == "mixes":
+                        for i in range(3):
+                            cmp(f"T{T}.mixes{i}.vs_old", new[k][i], old[k][i])
+                    else:
+                        cmp(f"T{T}.{k}.vs_old", new[k], old[k])
             # vs the T=4 programs (rows 0..3 / 4..7 of a natural T=8 reference); T=4 vs T=4-chunks
             if T > 4:
                 os.environ["DSV41_MHC_TAWARE"] = "1"
-                lo, hi = x_h[:4].clone(), x_h[4:].clone()
-                r_lo = [host(o).reshape(4, -1) for o in ma.mixes(up(lo))]
-                hi4 = torch.zeros(4, 1, 4, D)
-                hi4[: T - 4] = hi.reshape(T - 4, 1, 4, D) if hi.shape[2] == 4 else hi.expand(T - 4, 1, 4, D)
-                x4b = up(hi4)
-                r_hi = [host(o).reshape(4, -1) for o in ma.mixes(x4b)]
-                nn_ = [host(o).reshape(T, -1) for o in ma.mixes(x)]
+                parts = [[] for _ in range(3)]
+                for lo in range(0, T, 4):
+                    nv = min(4, T - lo)
+                    g4 = torch.zeros(4, 1, 4, D)
+                    g4[:nv] = x_h[lo : lo + nv].expand(nv, 1, 4, D)
+                    r = [host(o).reshape(4, -1) for o in ma.mixes(up(g4))]
+                    for i in range(3):
+                        parts[i].append(r[i][:nv])
+                if T <= 8:
+                    nn_ = [host(o).reshape(T, -1) for o in ma.mixes(x)]
+                else:  # T = 9..16: the fused front (DSV41_MHC_PRE16 = 4-token groups of the T=4 program)
+                    nn_ = [host(o).reshape(T, -1) for o in ma.mixes_collapse(x, pre, w, 1e-20)[0]]
                 for i in range(3):
-                    cmp(f"T{T}.mixes{i}.vs_T4prog", torch.cat([r_lo[i], r_hi[i][: T - 4]], 0), nn_[i])
+                    cmp(f"T{T}.mixes{i}.vs_T4prog", torch.cat(parts[i], 0), nn_[i])
     for k in sorted(tot):
         print(f"GATE {k}: {bad.get(k, 0)}/{tot[k]} differing")
     print("TOTAL differing tensors:", sum(bad.values()), "of", sum(tot.values()), flush=True)
