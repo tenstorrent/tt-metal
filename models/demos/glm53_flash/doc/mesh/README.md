@@ -1331,3 +1331,29 @@ each start is a new program; the sparse path's prefix read is already bucketed (
 (shape-static prefix attention): read the whole dense prefix [0, 2048) with a host-built mask over [start, 2048) in
 `_dense_attention`, a fixed dense query-row count per slab (superset rows, `_select_rows`), and the masked SDPA variant warmed per
 bucket. Until then the served default restores at chunk-aligned snapshots only (16 K on the served profiles).
+
+### 2026-10-29 00:30: merged-tree smokes, the APC switch, dense-static chip 0, A0 built
+
+- Text smoke on wt_frozen102 (45 layers, 1 M profile, the merged adapter + plugin `arg/stable_prefill_slot`): a/b/c/d PASS
+  (twice: a patch of the running smoke script made bash resume at a stale offset and rerun the client; same numbers both
+  passes). Step 73.1 ms = 13.7 tok/s per user at 4 live users; bench 128 x 128 x 32 requests: 10.9 tok/s per user, TTFT
+  43.1 s mean (8 waves of `max_num_seqs` 4). Image PASS (TTFT 13.6 s); clip = HTTP 400: vLLM 0.30.0
+  `get_video_processor_cls_name_from_config` returns transformers 5.20's `{'torchvision': 'Glm5NextVideoProcessor'}` and the
+  loader registry's dict lookup raises (upstream main unwraps it). Workaround (host-validated through
+  `parse_chat_messages`): the vllm arg `media-io-kwargs: {"video": {"video_backend": "glm5next"}}`; in the next smoke and the
+  catalog.
+- APC smoke "no round-2 hits": vLLM prefix caching was off. The catalog pins `no-enable-prefix-caching: true` (from before
+  APC) and the plugin's capability gate only ever disables, so `GLM53_VLLM_PREFIX_CACHING=1` enabled the adapter's ring while
+  vLLM never hashed a block (`enable_prefix_caching=False`, hit rate 0.0 %, round-2 TTFT = round-1; the one "restore" was the
+  chunked-prefill continuation at 49152). `serve_smoke_glm53.sh` now flips the vLLM flag with the knob; `serve_smoke_apc_f102_r3`
+  (stages a, c x 2 rounds, e with the video backend) is queued after the row-local KDA test. Plan: D7.
+- Dense-static prefix attention (A3, `GLM53_DENSE_PREFIX_STATIC=1`) on chip 0, layer 3, three chunk plans
+  (1024x3+1025, 320+2048+1729, 320+704+1024+2049): static vs dynamic PCC 1.000000 on all three, both 0.999932 vs HF
+  (`test_dense_prefix_static_matches_dynamic`, 6 min). Next: the served unaligned-restore check, then
+  `GLM53_VLLM_APC_HIT_ALIGN` 16384 -> 32.
+- A0 (ttnn `sequence_parallel_size`, branch `arg/kda_sequence_parallel_size` @089a6daba60, 43 files): built and importing
+  after two fixes: the public .cpp of `reduce_affine_transforms` / `affine_exclusive_scan` had the optional before `actual_end`
+  while the .hpp (and the symbol nanobind references) had it after (an import-time undefined symbol), and the test's feature
+  guard read `inspect.signature` of the `FastOperation` wrapper (`(*args, **kwargs)`): it now reads the binding's
+  `__call__` docstring. `kda_local_8x4_sp1` (one prompt per row vs HF per row, cross-row independence, local vs SP) started
+  00:27 on the 8x4.

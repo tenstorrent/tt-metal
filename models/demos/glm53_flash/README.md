@@ -109,6 +109,15 @@ prompts), greedy determinism across rounds through the chat template (thinking o
 (TTFT 26.5 / 52.6 / 78.6 / 104.8 s: the sequence-parallel prefill serves prompts one after another at ~2.5 K tok/s), `vllm bench`
 128 x 128 tokens at 32 requests (4 at a time) 32/32.
 
+Served 2026-10-29 on the merged serving tree (`arg/glm53_served`: APC + image/video + speculative decode in one adapter, 45
+layers, 1 M profile, one smoke run): exact first tokens (128-token TTFT 160 ms incl. HTTP), greedy determinism across rounds,
+4 concurrent 65 514-token needles 4/4 (TTFT 59.7 / 59.7 / 119.3 / 119.3 s: two prefills share a step), decode step 73.1 ms =
+13.7 tok/s per user at 4 live users (54.8 tok/s output); `vllm bench` 128 x 128 at 32 requests 4 at a time: 10.9 tok/s per user
+(42 tok/s output), TTFT 43.1 s mean = the 8 admission waves of `max_num_seqs` 4 (lifted by the per-row prefill ownership,
+`doc/mesh/galaxy_throughput_plan.md` A). Image through the chat API: TTFT 13.6 s (one 448x448 window, eager stream prefill), the
+three shapes and the word named; the clip request needs `media-io-kwargs: {"video": {"video_backend": "glm5next"}}` on
+vLLM 0.30.0 (its video-processor lookup returns transformers 5.20's per-backend dict; fixed upstream).
+
 Served decode (2026-10-27, today's defaults, `vllm bench` 128 x 128 tokens): 1 M profile 94.2 ms per token = 10.6 tok/s per user at
 concurrency 1 (TTFT 272 ms) and 103.4 ms = 9.7 tok/s per user at 4 (37 tok/s output); 128 K profile (28 users per row, 224 traced
 slots) 150.9 ms = 6.6 tok/s per user at 1 and 172.8 ms = 5.8 tok/s per user at 28 (142 tok/s output); boot ~10 min on a warm cache.
