@@ -89,6 +89,15 @@ concurrently (aggregate 2.2K -> 2.6-7K tok/s depending on p(W)), APC hits at any
 and wave numerics differ at the last ulp (rows already differ); a lone arrival at full occupancy is 3-8x slower in a
 wave than under SP (policy (c) keeps SP for it); idle rows cost wasted expert work proportional to the idle share.
 
+## 2b. Server completeness (user definition 2026-10-29 20:02; the order of work: completeness, then parity, then metal)
+
+| item | status 2026-10-29 20:25 | gate |
+|---|---|---|
+| multimodal (image + video) on the 1 M profile | DONE 19:16 (served_8x4_mm_32_r3: both answers correct, TTFT 5.4 / 5.7 s) | stage e of every later smoke |
+| 1 M context through the API | queued: served_8x4_needle1m_r1 (one 1 040 000-token needle, ~485 s of SP prefill) | the needle found, TTFT + decode booked in the README |
+| APC on (both switches) at 32 slots | coded fec8111b9ba (the cache under the resident chain, confirms_prefix_cache_hits, the ring sized from the live DRAM) + plugin 4d96dec (identifiers, hit confirmation); queued: served_8x4_apc_r1 (a-e, two needle rounds, one device entry per slot) | the multi-turn hit served from the snapshot, the bench within noise of APC off, stage e twice (the image hit) |
+| 32 users x 1 M | the profile admits it (32 slots, pool 33.5 M tokens); the capstone run (~4.5 h of prefill) needs the queue runner restarted with a 7 h stage budget and `SMOKE_CLIENT_TIMEOUT_S=20000` | 32 needles found under APC + resident; TTFT per arrival and the decode at 32 x ~1 M booked |
+
 ## 3. Workstream B: the decode step to the roofline floor
 
 `tt/roofline.py` (`tests/test_roofline_host.py`) models the step from measured per-op rows (refreshed 2026-10-29 from the per-layer decode profiles today_8x4_dsa3 / kda4: the stream expert op 264 us, the gather glue 175 + 67 us, the padded reduce-scatter 269 us, the mHC pre-block 82 us; model 64.9 ms vs the 61.5 ms e2e step); floor 29.0 ms at 4
