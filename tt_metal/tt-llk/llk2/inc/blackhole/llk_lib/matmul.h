@@ -196,7 +196,7 @@ inline __attribute__((always_inline)) void matmul_execute(std::uint32_t dest_row
         {
             // Output tiles are row-major: (row, column) = (reused, streamed) when in0 is reused, else swapped.
             const std::uint32_t output_tile = P.reuse_in0 ? P.ct_dim * reused_tile + streamed_tile : reused_tile + streamed_tile * P.ct_dim;
-            cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + output_tile * dest_rows_per_tile(P));
+            set_math_dest_tile<P>(dest_row, output_tile);
             hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
             if (streamed_tile == streamed_tiles - 1)
             {

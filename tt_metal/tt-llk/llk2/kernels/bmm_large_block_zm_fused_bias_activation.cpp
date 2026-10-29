@@ -21,7 +21,7 @@
 //     acc = reserve_back<AccRing>()                            a zeroed Dest section
 //     reload: copy(wait_front(partials), acc)                  the previous blocks' sum back into Dest
 //     y = matmul(x, w, acc)                                    y = acc + x * w
-//     last block: pack(activation(y), reserve_back(out))       the activation on activation_thread; PACK_RELU
+//     last block: pack(activation(y), reserve_back(out))       the activation on the pack thread; PACK_RELU
 //                 (FUSE_BIAS: pack into the partials instead)
 //     else:       pack(y, reserve_back(partials))              spill, or with L1 acc add into the partials
 //     release everything
@@ -62,10 +62,10 @@
 #define LLK2_DEST_FP32     DST_ACCUM_MODE
 #define LLK2_MATH_FIDELITY static_cast<std::uint32_t>(MATH_FIDELITY)
 #include "api/dataflow/dataflow_buffer.h"
-#include "compute_api/add.h"
 #include "compute_api/copy.h"
 #include "compute_api/dataflow.h"
 #include "compute_api/dest.h"
+#include "compute_api/eltwise_binary.h"
 #include "compute_api/matmul.h"
 #include "compute_api/pack.h"
 #include "compute_api/sync.h"
@@ -116,16 +116,6 @@ constexpr std::uint32_t activation_p0 = kernel_activation == KernelActivation::R
 constexpr std::uint32_t activation_p1 = get_named_compile_time_arg_val("activation_param1");
 #endif
 
-// The thread that drives the SFPU for the activation. TRISC2 (pack) by default, as the 1.0 kernel does
-// (apply_activation_from_pack): math moves on to the next block while pack runs the activation. With
-// SFPU_ACTIVATION_ON_MATH (new: the 1.0 kernel has no such define), TRISC1 (math) runs it right after the FPU, as
-// most other kernels do. Nothing else changes: the hand-offs follow the owners (compute_api/sync.h).
-#ifdef SFPU_ACTIVATION_ON_MATH
-constexpr Thread activation_thread = Thread::Math;
-#else
-constexpr Thread activation_thread = Thread::Pack;
-#endif
-
 #ifndef SFPU_ACTIVATION
 constexpr VecFunction activation_function = VecFunction::None;
 constexpr std::uint32_t activation_p0     = 0;
@@ -167,11 +157,13 @@ constexpr bool relu_on_matmul_out = pack_relu && !fuse_bias;
 /// Two Dest sections: math writes one block while pack reads the other.
 using AccRing = DestRing<acc_spec>;
 
-/// The activation on y, driven from activation_thread. Without one, y.
+/// The activation on y, driven from the pack thread, as the 1.0 kernel's apply_activation_from_pack: math moves on to
+/// the next block while pack runs it. Without one, y. The thread is per call: .thread = Thread::Math here would run it
+/// on math instead, and a kernel can switch between calls with migrate (compute_api/sync.h).
 template <const TensorSpec<tensor_rank>& D, class R>
 inline __attribute__((always_inline)) auto activation(const Tensor<D, R>& y)
 {
-    constexpr vec_modifiers mods {.thread = activation_thread};
+    constexpr vec_modifiers mods {.thread = Thread::Pack};
     if constexpr (activation_function == VecFunction::Silu)
     {
         return vec_silu<mods>(y);
