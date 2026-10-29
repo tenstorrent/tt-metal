@@ -12,13 +12,7 @@
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE>
-inline void lerp_init() {
-    // calculate_lerp's second store walks dest through physical addr_mod slot 6, advancing by
-    // the two rows the iteration just wrote (one sfpi row is two dest counter steps), so the
-    // loop body needs no separate increment. The ternary SFPU dispatch sets addr_mod_base, so
-    // the store names ADDR_MOD_2, which maps to physical slot 6.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
-}
+inline void lerp_init() {}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_lerp(
@@ -26,6 +20,8 @@ inline void calculate_lerp(
     const uint dst_index_in1,  // end
     const uint dst_index_in2,  // weight
     const uint dst_index_out) {
+    // The second store advances dest through ADDR_MOD_6 past the two rows just written.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_lerp(). Supported data formats are: Float32, Float16_b.");
@@ -64,6 +60,9 @@ inline void calculate_lerp(
         sfpi::dst_reg[off_out] = a_res;
         sfpi::dst_reg[off_out + 1].mode(ADDR_MOD_2) = b_res;
     }
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 }  // namespace ckernel::sfpu
