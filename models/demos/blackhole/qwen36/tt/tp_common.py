@@ -105,6 +105,28 @@ def verify_layout_cuts_enabled():
     return os.environ.get("QWEN36_VERIFY_LAYOUT_CUTS", "1") == "1"
 
 
+def attn_glue_cuts_enabled():
+    """QWEN36_ATTN_GLUE_CUTS (default "0" = today's ops, byte for byte): drop pure data-movement ops in the B > 1
+    decode attention (the traced verify, the drafter steps and reseed, plain batched decode): the partial-RoPE
+    pass-through slice lands in DRAM itself instead of slice-to-L1 + a to_memory_config copy (one op less per q / k
+    rope call). Same bytes into the same concat, so every output is bit-identical."""
+    return os.environ.get("QWEN36_ATTN_GLUE_CUTS", "0") == "1"
+
+
+def verify_heads_dense_enabled():
+    """QWEN36_VERIFY_HEADS_DENSE (default "0" = today's traced-verify attention, byte for byte): the lean verify
+    attention (TPAttention._forward_verify_lean) splits heads with the prefill nlp_create_qkv_heads into the dense
+    [1, heads, rows, HD] layout (rows = users x candidates in one tile-row per head: 32 tiles for q|k instead of 256
+    mostly-padding tiles) and runs the q and k RMSNorm, the (1+w) weight multiply and the partial RoPE ONCE over q|k
+    stacked as heads, then transposes q / k / v into the decode layout the spec SDPA and the KV write read. Same
+    arithmetic ops on the same values (each is row-wise or element-wise), only data movement changes: 15 ops per
+    attention layer instead of 24 (no decode head split + 3 sharded-to-interleaved, one norm / multiply / RoPE instead
+    of two, no per-head-group transposes and copies). After the SDPA the heads are concatenated the same way round
+    (transpose + prefill nlp_concat_heads: 2 ops instead of reshard + nlp_concat_heads_decode + sharded-to-interleaved).
+    Read when the attention weights are loaded (the stacked [1, NH+NKV, 1, HD] norm weight) and at trace capture."""
+    return os.environ.get("QWEN36_VERIFY_HEADS_DENSE", "0") == "1"
+
+
 _PREFILL_RS_LINKS = None
 
 

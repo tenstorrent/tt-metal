@@ -332,7 +332,14 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     ttnn.deallocate(roped_t)
     if rope_dim == hd:
         return roped
-    x_pass = ttnn.to_memory_config(ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG)
+    from models.demos.blackhole.qwen36.tt.tp_common import attn_glue_cuts_enabled
+
+    if attn_glue_cuts_enabled():  # QWEN36_ATTN_GLUE_CUTS: the slice writes DRAM itself (same bytes, no copy op)
+        x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        x_pass = ttnn.to_memory_config(
+            ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG
+        )
     result = ttnn.concat([roped, x_pass], dim=-1)
     ttnn.deallocate(roped)
     ttnn.deallocate(x_pass)

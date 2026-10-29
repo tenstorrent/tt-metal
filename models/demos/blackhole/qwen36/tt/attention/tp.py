@@ -204,6 +204,13 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+    if tpc.verify_heads_dense_enabled():
+        # QWEN36_VERIFY_HEADS_DENSE: the same bf16 (1+w) rows, one per local head of the stacked q|k
+        # ([1, NH+NKV, 1, HD]), so one row-broadcast multiply scales q heads by q_norm and the k head(s) by k_norm.
+        qn = (state_dict["q_norm.weight"].to(torch.float32) + 1.0).to(torch.bfloat16).reshape(1, 1, 1, -1)
+        kn = (state_dict["k_norm.weight"].to(torch.float32) + 1.0).to(torch.bfloat16).reshape(1, 1, 1, -1)
+        stacked = torch.cat([qn] * args.n_local_heads + [kn] * args.n_local_kv_heads, dim=1)
+        tw["qk_norm_dense"] = tpc.replicate(stacked, mesh, None)
     return tw
 
 
@@ -1364,6 +1371,78 @@ class TPAttention:
         ttnn.deallocate(k_sh)
         ttnn.deallocate(v_sh)
 
+    def _heads_dense_ok(self, B):
+        """QWEN36_VERIFY_HEADS_DENSE eligibility of the lean verify: the stacked norm weight exists (built at load
+        with the flag on), the rows fit one tile-row and the RoPE / pass-through split is tile aligned. Else legacy."""
+        return (
+            tpc.verify_heads_dense_enabled()
+            and "qk_norm_dense" in self.tw
+            and B <= tpc.TILE_SIZE
+            and 0 < self.rope_dim < self.HD
+            and self.rope_dim % ttnn.TILE_SIZE == 0
+        )
+
+    def _verify_qkv_dense(self, qkv3, cos_tt, sin_tt, B):
+        """QWEN36_VERIFY_HEADS_DENSE: q / k / v of the lean verify from the contiguous q|k|v block ``qkv3``
+        ([1,1,B,(NH+2NKV)*HD], L1), in the layouts the legacy sequence hands on: q [1,B,NH,HD] DRAM (the spec SDPA's q)
+        and k / v [1,B,NKV,HD] (the KV write's inputs). Consumes qkv3.
+
+        The legacy sequence (decode head split, 3 sharded_to_interleaved, rms_norm + (1+w) multiply for q and again for
+        k, apply_partial_rope_decode for q and again for k: 24 ops) runs the arithmetic on the decode layout, one
+        (row, head) per 32-row tile. Here the prefill head split puts head h's B rows in one tile-row
+        ([1, heads, B, HD]) and q|k go through the same three arithmetic ops ONCE, stacked as NH+NKV heads: rms_norm
+        (row-wise), the multiply by the same bf16 (1+w) rows (row broadcast; q heads by q_norm, k heads by k_norm), and
+        rotary_embedding_hf in prefill mode with per-row cos/sin on the first rope_dim dims, which is the call the
+        legacy RoPE makes after its transpose on the same [heads, B, rope_dim] values. Every output element is the same
+        arithmetic on the same inputs, so q / k / v are bit-identical; only data movement differs (15 ops)."""
+        NH, NKV, HD, rd = self.NH, self.NKV, self.HD, self.rope_dim
+        NQK = NH + NKV
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv3, num_heads=NH, num_kv_heads=NKV, transpose_k_heads=False, memory_config=_L1
+        )
+        ttnn.deallocate(qkv3)
+        qk = ttnn.concat([q, k], dim=1, memory_config=_L1)  # [1, NQK, B, HD]
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        normed = ttnn.rms_norm(qk, epsilon=1e-6, memory_config=_L1)
+        ttnn.deallocate(qk)
+        qk = ttnn.multiply(normed, self.tw["qk_norm_dense"], memory_config=_L1)
+        ttnn.deallocate(normed)
+        cos_p = ttnn.reshape(cos_tt, (1, 1, B, rd))  # the verify stages [1,1,B,rd] already: a view
+        sin_p = ttnn.reshape(sin_tt, (1, 1, B, rd))
+        part = ttnn.slice(qk, (0, 0, 0, 0), (1, NQK, B, rd), memory_config=_L1)
+        roped = ttnn.experimental.rotary_embedding_hf(part, cos_p, sin_p, is_decode_mode=False, memory_config=_L1)
+        ttnn.deallocate(part)
+        tail = ttnn.slice(qk, (0, 0, 0, rd), (1, NQK, B, HD), memory_config=_L1)
+        ttnn.deallocate(qk)
+        qk = ttnn.concat([roped, tail], dim=-1, memory_config=_L1)
+        ttnn.deallocate(roped)
+        ttnn.deallocate(tail)
+        q_h = ttnn.slice(qk, (0, 0, 0, 0), (1, NH, B, HD), memory_config=_L1)
+        k_h = ttnn.slice(qk, (0, NH, 0, 0), (1, NQK, B, HD), memory_config=_L1)
+        ttnn.deallocate(qk)
+        q = ttnn.transpose(q_h, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, B, NH, HD]: paged SDPA wants DRAM q
+        ttnn.deallocate(q_h)
+        k = ttnn.transpose(k_h, 1, 2, memory_config=_L1)  # [1, B, NKV, HD]
+        ttnn.deallocate(k_h)
+        vt = ttnn.transpose(v, 1, 2, memory_config=_L1)
+        ttnn.deallocate(v)
+        return q, k, vt
+
+    def _concat_heads_dense(self, attn, B):
+        """QWEN36_VERIFY_HEADS_DENSE: [1,B,NH,HD] L1 -> [1,B,NH*HD] L1 with the bytes _concat_heads_decode produces
+        (row b = head 0 | head 1 | ... of row b): transpose the heads onto dim 1 ([1,NH,B,HD], one tile-row per head)
+        and lay them side by side with the prefill nlp_concat_heads (2 ops instead of a reshard,
+        nlp_concat_heads_decode and a sharded-to-interleaved; no 32-row pad to slice off below 32 rows).
+        Consumes attn."""
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        heads = ttnn.transpose(attn, 1, 2, memory_config=_L1)
+        ttnn.deallocate(attn)
+        out = ttnn.experimental.nlp_concat_heads(heads, memory_config=_L1)  # [1, 1, B, NH*HD]
+        ttnn.deallocate(heads)
+        return ttnn.reshape(out, (1, B, self.NH * self.HD), memory_config=_L1)
+
     def _forward_verify_lean(
         self,
         x,
@@ -1395,18 +1474,21 @@ class TPAttention:
         T = B // spec_n_users
 
         qkv3, gate, _ = self._qkv(x, decode_qkv3_l1=True)
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
-            qkv3, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        )
-        ttnn.deallocate(qkv3)
-        q = ttnn.sharded_to_interleaved(q, _L1)
-        k = ttnn.sharded_to_interleaved(k, _L1)
-        v = ttnn.sharded_to_interleaved(v, _L1)
+        if self._heads_dense_ok(B):  # QWEN36_VERIFY_HEADS_DENSE: same q / k / v, dense-layout data movement
+            q, k, v = self._verify_qkv_dense(qkv3, cos_tt, sin_tt, B)
+        else:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+                qkv3, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+            )
+            ttnn.deallocate(qkv3)
+            q = ttnn.sharded_to_interleaved(q, _L1)
+            k = ttnn.sharded_to_interleaved(k, _L1)
+            v = ttnn.sharded_to_interleaved(v, _L1)
 
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
-        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
-        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+            q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
+            k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
+            q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+            k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
         self._write_kv_fused_groups(k, v, cur_pos_tt, spec_n_users, spec_user_page_table, spec_pos_groups, B)
         # The paged SDPA-decode derives its batch from the page table's row count and checks nothing (legacy comment).
@@ -1436,7 +1518,10 @@ class TPAttention:
         ttnn.deallocate(q)
         attn_out = ttnn.reshape(attn_out, ttnn.Shape([1, B, NH, HD]), ttnn.Shape([1, B, ttnn.TILE_SIZE, HD]))
 
-        attn_flat = self._concat_heads_decode(attn_out, B)  # consumes attn_out -> [1, B, NH*HD] L1
+        if self._heads_dense_ok(B):  # QWEN36_VERIFY_HEADS_DENSE: the same bytes via transpose + prefill head concat
+            attn_flat = self._concat_heads_dense(attn_out, B)
+        else:
+            attn_flat = self._concat_heads_decode(attn_out, B)  # consumes attn_out -> [1, B, NH*HD] L1
         gate_flat = ttnn.reshape(gate, (1, B, NH * HD))  # [1,1,B,NH*HD] -> [1,B,NH*HD]: a pure view
         gated_flat = ttnn.multiply(attn_flat, ttnn.sigmoid(gate_flat, memory_config=_L1), memory_config=_L1)
         ttnn.deallocate(attn_flat)
