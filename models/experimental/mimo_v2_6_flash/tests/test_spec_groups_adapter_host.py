@@ -31,6 +31,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    LAYOUT,
     DRAFT_GROUPS,
     GROUP_SLOTS,
     MAX_DRAFTS,
@@ -82,6 +83,7 @@ class GroupsMTP:
         self.lane, self.last_inputs_s = lane, 0.0
         self.chained = self.planned = 0
         self.layers, self.multi, self.history = [0, 1, 2], True, object()
+        self.drafting = {LAYOUT: self.layers}
         self.backfills = []
 
     def _run(self):
@@ -96,19 +98,19 @@ class GroupsMTP:
                 heads[k][anchor] = draft_of(bonus, k)
         lane.chain.words[DRAFTS_AT:] = drafts_step(mtp, heads, layers=MAX_DRAFTS)
 
-    def enqueue_chained(self):
+    def enqueue_chained(self, layout=None):
         self.chained += 1
         self._run()
 
-    def enqueue_layers(self, commits):
+    def enqueue_layers(self, commits, layout=None):
         self.planned += 1
         self.lane.mtp_words = pack_mtp_commits(B, commits).tolist()
         self._run()
 
-    def enqueue_backfill(self, slot, a, group):
+    def enqueue_backfill(self, slot, a, group, layout=None):
         self.backfills.append((slot, a, group))
 
-    def read_drafts(self, anchor, group):
+    def read_drafts(self, anchor, group, layout=None):
         chain = self.lane.chain.read().groups[group]
         assert chain.draft_anchor == anchor == (group + 1) * GROUP_SLOTS - 1
         return chain.drafts
@@ -148,7 +150,7 @@ class GroupsDFlash:
             self.head[g * MAX_DRAFTS : (g + 1) * MAX_DRAFTS] = [draft_of(start, k) for k in range(MAX_DRAFTS)]
         lane.chain.words[DRAFTS_AT:] = dflash_drafts_step(w, self.head, DFLASH)
 
-    def enqueue_chained(self):
+    def enqueue_chained(self, layout=None):
         self.chained += 1
         self._run()
 
@@ -171,6 +173,7 @@ class Lane:
         self.decode_trace = {"id": 0}
         self.mesh_device = None
         self.chain = self.spec_chain = Chain(self)
+        self.spec_chains = {LAYOUT: self.spec_chain}
         self.verify_sampler = SimpleNamespace(tally=lambda out: None, groups=0, truncated=0)
         self.mtp = GroupsMTP(self) if drafter == "mtp" else None
         self.dflash = GroupsDFlash(self) if drafter == "dflash" else None
@@ -184,7 +187,7 @@ class Lane:
     def set_vllm_page_tables(self, rows):
         pass
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, layout=None):
         if accept is not None:
             self.ctrl = control_words(accept[1])
         self.verify_words, self.ctrl = relay_step(
@@ -194,7 +197,7 @@ class Lane:
         self.argmax = [SEQ[int(p) + 1] if p >= 0 else 0 for p in self.verify_words[B : 2 * B]]
         return {"next_tokens": self.argmax}
 
-    def verify_accept_enqueue(self, slots=None, groups=None):
+    def verify_accept_enqueue(self, slots=None, groups=None, layout=None):
         if groups is not None:
             self.ctrl = control_words(groups)
         accept = verify_pass(None, None, self.argmax, self.ctrl, VOCAB)

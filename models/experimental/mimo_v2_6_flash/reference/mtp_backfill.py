@@ -71,7 +71,7 @@ SCRATCH_BLOCK = RING_BLOCKS  # the ring cache's blocks RING_BLOCKS .. 2 RING_BLO
 TABLE_WORDS = 2 * RING_BLOCKS  # the fill's page table row: as wide as the cache (paged_update_cache's limit)
 HIST_POSITIONS, HIST_TOKENS = 0, SPEC_SLOTS * HISTORY_ROWS
 HIST_WORDS = 2 * SPEC_SLOTS * HISTORY_ROWS
-BACKFILL_DRAFTING, BACKFILL_SLOT, BACKFILL_A, BACKFILL_GROUP = 0, 1, 2, 3
+BACKFILL_DRAFTING, BACKFILL_SLOT, BACKFILL_A, BACKFILL_GROUP, BACKFILL_KEEP_STASH = 0, 1, 2, 3, 4
 # S0 is at most a block below the window's start, and BACKFILL_ROWS rows from it reach a - 1.
 assert MTP_WINDOW + BLOCK <= BACKFILL_ROWS
 
@@ -150,13 +150,14 @@ def pack_writes(writes, entries):
 
 
 # ---------------------------------------------------------------------- the backfill
-def backfill_row(max_batch, slot=None, a=None, group=0):
+def backfill_row(max_batch, slot=None, a=None, group=0, keep_stash=False):
     """The backfill upload's int32 values [max_batch]: the request in lane slot ``slot``, the draft's first row at
-    ``a``, into draft group ``group``'s ring and stash slots; None: idle."""
+    ``a``, into draft group ``group``'s ring and stash slots (``keep_stash``: the ring only, for a draft in groups of
+    one draft, which re-runs no row: adaptive draft length's K = 1 layout); None: idle."""
     row = [0] * max_batch
     if slot is not None:
         row[BACKFILL_DRAFTING], row[BACKFILL_SLOT], row[BACKFILL_A] = 1, int(slot), int(a)
-        row[BACKFILL_GROUP] = int(group)
+        row[BACKFILL_GROUP], row[BACKFILL_KEEP_STASH] = int(group), int(bool(keep_stash))
     return row
 
 
@@ -204,7 +205,7 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
             for i in range(layers):
                 if held(q + i + 1):
                     out["tokens"][i][r] = token(q + i + 1)
-    if stash is None or layers == 1:  # one layer re-runs no row: the stash is never read (mtp_history.cpp)
+    if stash is None or layers == 1 or upload[BACKFILL_KEEP_STASH]:  # no row re-run: the stash is never read
         return out, stash
     from .spec_chain import STASH_POSITIONS, STASH_TOKENS
 

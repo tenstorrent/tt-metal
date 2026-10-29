@@ -720,7 +720,7 @@ def test_warm_leaves_the_stash_a_prompt_emptied():
         live.mtp = pack_mtp(B).tolist()
 
     chain = SpecChain.__new__(SpecChain)
-    chain.spec_inputs, chain.layer_inputs = SimpleNamespace(reset=reset), object()
+    chain.spec_inputs, chain.layer_inputs, chain.layers = SimpleNamespace(reset=reset), object(), MAX_DRAFTS
     chain.relay = lambda ctrl: setattr(live, "verify", relay_step(live.verify, [0] * RESULT_WORDS, ctrl)[0])
     chain.chain = lambda: setattr(live, "mtp", chain_step(live.verify, accept, [0] * B, layers=MAX_DRAFTS)[0])
     chain.drafts = chain.tokens = lambda *args: None

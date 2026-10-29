@@ -35,7 +35,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     relay_step,
     unpack_result,
 )
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import LAYOUT, MAX_DRAFTS, SPEC_SLOTS, DraftSource
 from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
     pack_mtp,
     pack_mtp_commits,
@@ -91,6 +91,7 @@ class FakeMTP:
         self.lane, self.last_inputs_s = lane, 0.0
         self.chained = self.planned = 0
         self.layers, self.multi = [0], False
+        self.drafting = {LAYOUT: self.layers}
         self.history, self.backfills = None, []
 
     def _run(self):
@@ -105,7 +106,7 @@ class FakeMTP:
                     heads[k][s] = draft_of(bonus, k)
         lane.chain.words[64:] = drafts_step(mtp, heads)
 
-    def enqueue_chained(self):
+    def enqueue_chained(self, layout=None):
         assert self.lane.rope_tables is not None
         self.chained += 1
         self._run()
@@ -115,7 +116,7 @@ class FakeMTP:
         self.lane.mtp_words = pack_mtp(B, tokens, plan).tolist()
         self._run()
 
-    def read_drafts(self, anchor, group=0):
+    def read_drafts(self, anchor, group=0, layout=None):
         result = self.lane.chain.read()
         assert group == 0 and result.draft_anchor == anchor
         return result.drafts
@@ -130,6 +131,7 @@ class FakeLane:
         self.verify_trace = {"accept": 1}
         self.mesh_device = None
         self.chain = self.spec_chain = FakeChain(self)
+        self.spec_chains = {LAYOUT: self.spec_chain}
         self.mtp = FakeMTP(self)
         self.dflash = None
         self.verify_sampler = SimpleNamespace(tally=lambda out: None, groups=0, truncated=0)
@@ -141,7 +143,7 @@ class FakeLane:
     def set_vllm_page_tables(self, rows):
         pass
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, layout=None):
         """The verify trace: the relay step on the upload (and the control page, staged first), then the oracle."""
         if accept is not None:
             self.verify_accept_stage(*accept)
@@ -155,7 +157,7 @@ class FakeLane:
         assert slots == {}, "greedy requests only"
         self.ctrl = control_words(groups)
 
-    def verify_accept_enqueue(self, slots=None, groups=None):
+    def verify_accept_enqueue(self, slots=None, groups=None, layout=None):
         if groups is not None:
             self.verify_accept_stage(slots, groups)
         self.accepts += 1
@@ -354,22 +356,23 @@ class LayersMTP:
         self.lane, self.last_inputs_s = lane, 0.0
         self.chained = self.planned = 0
         self.layers, self.multi = list(mtps), True
+        self.drafting = {LAYOUT: self.layers}
         self.history = None
         self.program = MtpProgramMirror(mtps, embedding, lm_head, table_rows=B)
 
     def _run(self):
         self.lane.chain.words[64:] = self.program.run(self.lane.mtp_words, self.lane.step_hidden)
 
-    def enqueue_chained(self):
+    def enqueue_chained(self, layout=None):
         self.chained += 1
         self._run()
 
-    def enqueue_layers(self, commits):
+    def enqueue_layers(self, commits, layout=None):
         self.planned += 1
         self.lane.mtp_words = pack_mtp_commits(B, commits).tolist()
         self._run()
 
-    def read_drafts(self, anchor, group=0):
+    def read_drafts(self, anchor, group=0, layout=None):
         result = self.lane.chain.read()
         assert group == 0 and result.draft_anchor == anchor == SPEC_SLOTS - 1
         return result.drafts
@@ -384,7 +387,7 @@ class LayersLane(FakeLane):
         self.mtp = LayersMTP(self, mtps, embedding, lm_head)
         self.step_hidden = torch.zeros(B, HIDDEN)
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, layout=None):
         """The verify trace: the relay step (a chained verify's tokens and positions from the lane's last page), then
         the target over the slots."""
         if accept is not None:
@@ -525,12 +528,12 @@ def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
     host-planned on a differing commit) do not. Every verify pass's chain row names its slots' request slot."""
     lane = adapter.models[1]
     lane.mtp.history = object()
-    lane.mtp.enqueue_backfill = lambda slot, a, group=0: lane.mtp.backfills.append((slot, a))
+    lane.mtp.enqueue_backfill = lambda slot, a, group=0, layout=None: lane.mtp.backfills.append((slot, a))
     adapter.chain_check = True
     rows_seen = []
     enqueue = lane.verify_enqueue
 
-    def verify_enqueue(tokens, positions, chain=None, accept=None):
+    def verify_enqueue(tokens, positions, chain=None, accept=None, layout=None):
         rows_seen.append(chain[CHAIN_HSLOTS : CHAIN_HSLOTS + SPEC_SLOTS].tolist())
         return enqueue(tokens, positions, chain, accept)
 
@@ -592,7 +595,7 @@ class FakeDFlash:
             self.head[:MAX_DRAFTS] = [draft_of(start, k) for k in range(MAX_DRAFTS)]
         lane.chain.words[DRAFTS_AT:] = dflash_drafts_step(w, self.head, DFLASH)
 
-    def enqueue_chained(self):
+    def enqueue_chained(self, layout=None):
         assert self.lane.rope_tables is not None
         self.chained += 1
         self._run()
@@ -616,12 +619,12 @@ class DFlashLane(FakeLane):
         self.dflash_words = dflash_inputs(DFLASH)
         self.tap_positions = [-1] * B
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, layout=None):
         out = super().verify_enqueue(tokens, positions, chain, accept)
         self.tap_positions = list(self.verify_words[B : 2 * B])
         return out
 
-    def verify_accept_enqueue(self, slots=None, groups=None):
+    def verify_accept_enqueue(self, slots=None, groups=None, layout=None):
         if groups is not None:
             self.verify_accept_stage(slots, groups)
         self.accepts += 1

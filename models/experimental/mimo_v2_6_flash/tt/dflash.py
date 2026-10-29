@@ -47,7 +47,7 @@ import ttnn
 
 from ..reference.dflash import DFlashConfig, load_dflash_weights
 from ..reference.spec_chain import DFlashLayout, dflash_inputs
-from ..reference.spec_decode import DRAFT_GROUPS, MAX_DRAFTS
+from ..reference.spec_decode import ADAPTIVE, DRAFT_GROUPS, LAYOUT, MAX_DRAFTS
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .decoder import TtRMSNorm
 from .greedy_head import GreedyHead
@@ -130,6 +130,7 @@ class TtDFlash:
     def __init__(self, model, model_path, cache_dir=None, weight_dtype=ttnn.bfloat8_b, load=True):
         """``model``: the replica's TtMiMoModel (embedding, LM head, the decode traces' taps). Loads the draft weights
         from ``model_path``/dflash (``load``; a later replica passes False and reads the tensor cache)."""
+        assert not ADAPTIVE, "adaptive draft length (MIMO_SPEC_GROUPS=2,4) drafts with the MTP layers"
         self.model, self.plan = model, model.plan
         cfg = self.cfg = DFlashConfig.from_model_path(model_path)
         plan, tp = self.plan, self.plan.tp
@@ -293,6 +294,7 @@ class TtDFlash:
                 [self.head.next_tokens],
                 dflash=(self.inputs["packed"], self.layout),
             )
+            m.spec_chains = {LAYOUT: m.spec_chain}
 
     def reset(self, group=0):
         """Forget draft group ``group``'s ring (a new request, or one whose context the ring does not continue)."""
@@ -660,9 +662,11 @@ class TtDFlash:
         self.upload(drafts)
         ttnn.execute_trace(self.model.mesh_device, self.trace, cq_id=0, blocking=False)
 
-    def enqueue_chained(self):
+    def enqueue_chained(self, layout=LAYOUT):
         """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
-        the packed upload from the pass's accepted count and committed tokens, so nothing is copied."""
+        the packed upload from the pass's accepted count and committed tokens, so nothing is copied. DFlash drafts in
+        the launch's one layout."""
+        assert layout == LAYOUT
         self._require_trace()
         ttnn.execute_trace(self.model.mesh_device, self.trace, cq_id=0, blocking=False)
 

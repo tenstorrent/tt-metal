@@ -253,11 +253,11 @@ class MtpHistory:
             t.deallocate(True)
 
     # ------------------------------------------------------------------ host
-    def upload_backfill(self, slot=None, a=None, group=0):
+    def upload_backfill(self, slot=None, a=None, group=0, keep_stash=False):
         """Copy the backfill upload (the request in lane slot ``slot``, the draft's first row ``a``, into draft group
-        ``group``'s ring and stash slots; None: idle)."""
+        ``group``'s ring and stash slots, or its ring alone with ``keep_stash``; None: idle)."""
         host = ttnn.from_torch(
-            torch.tensor(backfill_row(self.max_batch, slot, a, group), dtype=torch.int32),
+            torch.tensor(backfill_row(self.max_batch, slot, a, group, keep_stash), dtype=torch.int32),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=self.plan.replicate(),

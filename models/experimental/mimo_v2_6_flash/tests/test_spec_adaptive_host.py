@@ -117,12 +117,13 @@ def test_a_layouts_rows_take_their_groups(groups):
 
 
 def test_the_header_is_the_same_in_both_layouts():
-    """The accept page, argmax ids, positions and status sit at the same words in both layouts, and so does the drafts
-    section; only the chain blocks and the drafts section's group stride differ."""
+    """The accept page, argmax ids, positions and status sit at the same words in both layouts, and so do the drafts
+    section and the chain row's history words; only the chain blocks and the drafts section's group stride differ."""
     k3, k1 = (PAGES[layout] for layout in LAYOUTS)
     assert k3.drafts_at == k1.drafts_at and k3.result_words == k1.result_words
     assert (k3.group_words, k1.group_words, k3.draft_words, k1.draft_words) == (8, 6, 4, 2)
-    assert k3.hslots + SPEC_SLOTS <= B and k1.hslots + SPEC_SLOTS <= B
+    # The history's words follow both layouts' blocks, at one offset.
+    assert k3.hslots == k1.hslots == max(k3.words, k1.words) and k1.hslots + SPEC_SLOTS <= B
 
 
 @pytest.mark.parametrize("groups", [2, 4])

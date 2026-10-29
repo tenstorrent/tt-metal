@@ -90,9 +90,9 @@ PAIR_SPLIT_OPS = all(
 #   0.58, 32K 0.17 / 0.16 / 0.12 / 0.11, 4K 0.086 / 0.083 / 0.090 / 0.041;
 # - 1 request of 4: 1M 2.18 / 1.57 / 0.87 / 0.62, 128K 0.31 / 0.30 / 0.18 / 0.12, 8K 0.063 / 0.126 / 0.089 / 0.064.
 # On by default for groups of 2 slots, off for 4 (MIMO_VERIFY_GROUPED=1 / 0 overrides; packed, groups of 4 win from
-# ~32K and lose 0.2 ms a step at 8K); the adapter then packs a verify's requests one per group of GROUP_SLOTS slots
-# (verify_grouped()).
-VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 else "0") == "1"
+# ~32K and lose 0.2 ms a step at 8K); the adapter then packs a verify's requests one per draft group of its layout
+# (verify_grouped(group_slots)).
+VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED")
 GROUPED_VERIFY_OPS = "spec_multi_pos_tiles" in (
     ttnn.transformer.paged_flash_multi_latent_attention_decode.__doc__ or ""
 )
@@ -101,11 +101,13 @@ GROUPED_PACKED_OPS = "spec_multi_pos_packed" in (
 )
 
 
-def verify_grouped():
-    """Whether a pair-split verify runs its global attention one KV scan per request (VERIFY_GROUPED, groups of 2 or 4
-    candidates, and a ttnn build with spec_multi_pos_tiles on paged MLA decode). 8 candidates (DFlash's one group)
-    need 128-token K chunks and at most 32 cores per request to fit L1 beside decode's buffers: not wired."""
-    return VERIFY_GROUPED and GROUPED_VERIFY_OPS and GROUP_SLOTS in (2, 4)
+def verify_grouped(group_slots=GROUP_SLOTS):
+    """Whether a pair-split verify in draft groups of ``group_slots`` slots runs its global attention one KV scan per
+    request (VERIFY_GROUPED, default on for groups of 2; groups of 2 or 4 candidates, and a ttnn build with
+    spec_multi_pos_tiles on paged MLA decode). 8 candidates (DFlash's one group) need 128-token K chunks and at most 32
+    cores per request to fit L1 beside decode's buffers: not wired."""
+    on = VERIFY_GROUPED == "1" if VERIFY_GROUPED is not None else group_slots == 2
+    return on and GROUPED_VERIFY_OPS and group_slots in (2, 4)
 
 
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
@@ -1192,19 +1194,19 @@ class TtMiMoAttention:
         )
         return attn, lse
 
-    def _verify_grouped(self, q, kv_cache, table, cur_pos):
+    def _verify_grouped(self, q, kv_cache, table, cur_pos, cands=GROUP_SLOTS):
         """A verify's global SDPA with its LSE, one KV scan per request (paged MLA decode's spec_multi_pos_tiles): the
-        pass's SPEC_SLOTS slots are SPEC_SLOTS / GROUP_SLOTS groups, each one request's candidates (the adapter packs
+        pass's SPEC_SLOTS slots are SPEC_SLOTS / ``cands`` groups, each one request's candidates (the adapter packs
         them so: reference.spec_decode.plan_verify_passes with ``aligned``), candidate j of group g in slot
-        g * GROUP_SLOTS + j. q [1, B, 16, 192] (each slot's 16 heads in its own 32-row tile) goes in as
-        [1, groups, GROUP_SLOTS * 32, 192], the table ``table`` (a row per slot) as each group's first row, and every
+        g * cands + j. q [1, B, 16, 192] (each slot's 16 heads in its own 32-row tile) goes in as
+        [1, groups, cands * 32, 192], the table ``table`` (a row per slot) as each group's first row, and every
         candidate keeps its SDPA position ``cur_pos`` [SPEC_SLOTS] (-1: no local key or a gap, output 0 and lse
         NO_KEY_LSE). Returns what _paged_mla_decode_lse returns for the slots: output [1, SPEC_SLOTS, 16, 128] in L1,
         lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads).
         With GROUPED_PACKED_OPS the op computes two candidates per tile (spec_multi_pos_packed, half the compute) on
         the same views."""
         k_cache, v_cache = kv_cache
-        slots, cands = SPEC_SLOTS, GROUP_SLOTS
+        slots = SPEC_SLOTS
         groups = slots // cands
         nh, dk, width = q.shape[-2], q.shape[-1], table.shape[-1]
         packed = GROUPED_PACKED_OPS and cands % 2 == 0 and 2 * nh == TILE
@@ -1496,9 +1498,12 @@ class TtMiMoAttention:
         if positions.get("page_table_sdpa") is not None:
             table, pos = positions["page_table_sdpa"], positions["pos_sdpa"]
         # A verify over exactly its pass's slots (the compact rows): one KV scan per request.
-        grouped = positions.get("pair_serial") and verify_grouped() and pos is not positions["pair_sdpa"]
+        cands = positions.get("verify_group_slots", GROUP_SLOTS)
+        grouped = positions.get("pair_serial") and verify_grouped(cands) and pos is not positions["pair_sdpa"]
         if grouped and pos.shape[0] == SPEC_SLOTS:
-            attn, lse = self._verify_grouped(q_rot, kv_cache, table, pos)  # [1, SPEC_SLOTS, 16, 128], [.., 16, 1]
+            attn, lse = self._verify_grouped(
+                q_rot, kv_cache, table, pos, cands
+            )  # [1, SPEC_SLOTS, 16, 128], [.., 16, 1]
         else:
             attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
         q_rot.deallocate(True)

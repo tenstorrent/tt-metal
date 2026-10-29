@@ -50,7 +50,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     stash_page,
     tokens_step,
 )
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import LAYOUT, MAX_DRAFTS, SPEC_SLOTS
 from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_commits
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
@@ -92,6 +92,7 @@ class OracleLayersMTP(FakeMTP):
     def __init__(self, lane):
         super().__init__(lane)
         self.layers, self.multi = [0, 1, 2], True
+        self.drafting = {LAYOUT: self.layers}
         self.stash, self.plans = stash_page(B), []
 
     def _run(self):
@@ -113,7 +114,7 @@ class OracleLayersMTP(FakeMTP):
             self.plans.append([(inputs["rope"][j], inputs["hidden"][j], inputs["tokens0"][j]) for j in rows])
         lane.chain.words[64:] = drafts_step(mtp, heads, layers=MAX_DRAFTS)
 
-    def enqueue_layers(self, commits):
+    def enqueue_layers(self, commits, layout=None):
         self.planned += 1
         self.lane.mtp_words = pack_mtp_commits(B, commits).tolist()
         self._run()
@@ -722,7 +723,7 @@ def with_history(lane):
     """Give the lane's drafter a history (tt/mtp_backfill.py): its backfills recorded as (slot, a, the drafts it had
     enqueued before), so that a backfill is seen to precede the draft it serves."""
     lane.mtp.history = object()
-    lane.mtp.enqueue_backfill = lambda slot, a, group=0: lane.mtp.backfills.append(
+    lane.mtp.enqueue_backfill = lambda slot, a, group=0, layout=None: lane.mtp.backfills.append(
         (slot, a, lane.mtp.planned + lane.mtp.chained)
     )
 

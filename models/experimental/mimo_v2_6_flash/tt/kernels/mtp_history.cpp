@@ -13,7 +13,8 @@
 // request's slot (the chain row's word chain_hslots + j, slot + 1; 0 none).
 // Mode 2, a write list (prefill): per entry (source row, entry, position, token); source -1 invalidates the entry,
 // -2 skips it.
-// Mode 3, the backfill plan (backfill trace): from the upload (drafting, slot, A, draft group g) and the page, the fill
+// Mode 3, the backfill plan (backfill trace): from the upload (drafting, slot, A, draft group g, keep the stash) and the
+// page, the fill
 // of draft group g's whole
 // ring from S0 = floor(max(0, A - W + 1) / block) * block (W the MTP window, H >= W + S - 1: the window before a
 // verify pass at A and the pass's rows): row r at position q = S0 + r takes history entry slot * H + q % H when the
@@ -22,7 +23,8 @@
 // page table row (ring blocks from S0's, then the scratch blocks); with every layer the stash rows A - 2, A - 1
 // (positions, layer-0 tokens, hidden rows copied into the stash's hidden buffer) when the history holds them and their
 // tokens, in group g's last two stash slots (its other slots emptied; a group's ring and scratch blocks start at
-// g * table_words). Idle: group 0's scratch blocks, the stash left alone.
+// g * table_words), unless the upload keeps the stash (a draft in groups of one draft, which re-runs no row). Idle:
+// group 0's scratch blocks, the stash left alone.
 
 #include <cstdint>
 
@@ -166,6 +168,7 @@ void kernel_main() {
             table[k] = static_cast<int32_t>(ring_blocks + k % ring_blocks);  // the scratch blocks
         }
         const bool drafting = upload[0] != 0;
+        const bool restash = drafting && upload[4] == 0;
         if (drafting) {
             const uint32_t slot = static_cast<uint32_t>(upload[1]);
             const int32_t a = upload[2];
@@ -193,7 +196,7 @@ void kernel_main() {
                     }
                 }
             }
-            if constexpr (layers > 1) {
+            if (layers > 1 && restash) {
                 // The group's stash slots: its last two hold rows A - 2, A - 1 when the history holds them and their
                 // layer-0 tokens; their hidden rows go to those slots' stash hidden rows.
                 for (uint32_t k = first; k < first + GS; ++k) {
@@ -223,7 +226,7 @@ void kernel_main() {
                 out_l1 + (2 + i) * out_bytes, dram_addr(get_arg_val<uint32_t>(8 + i), out_bytes), out_bytes);
         }
         if constexpr (layers > 1) {
-            if (drafting) {
+            if (restash) {
                 noc_async_write(stash_l1, dram_addr(stash_addr, B * 4), B * 4);
             }
         }

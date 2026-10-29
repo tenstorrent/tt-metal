@@ -48,6 +48,13 @@ slots 4 g .. 4 g + 3 with its own ring (the page table maps those slots to ring 
 its own description (row g of the packed upload). A group's first draft for a request backfills its ring and stash
 (the history is per request slot), so a prompt resets nothing.
 
+With adaptive draft length (MIMO_SPEC_GROUPS=2,4) the drafter keeps a draft program per layout, each captured in its
+own trace with its own SpecChain and ring page table: two groups of 4 slots draft 3 tokens with the three layers, four
+groups of 2 slots one token with layer 0. The rings (every layer, the most groups of any layout), the heads, the
+LayerInputs, the history and the backfill are shared; group g's ring is the same blocks in both layouts, so a lane
+that changes layout backfills each request's ring before its first draft in the other one (the K = 1 layout keeps the
+stash: it re-runs no row).
+
 An MTP layer is a decoder block with SWA attention (sinks, window 128) and a dense MLP, so it is a TtMiMoDecoderLayer
 at the MTP layer index; ``eh_proj`` (column-parallel) mixes cat(enorm(embedding), hnorm(hidden)) into it, and its own
 final norm feeds the target's LM head. Each layer's KV cache is a small ring addressed at mtp_cache_position(t) with
@@ -65,7 +72,17 @@ import ttnn
 from ..reference.mtp import load_mtp_weights
 from ..reference.mtp_backfill import MTP_WINDOW
 from ..reference.spec_chain import stash_page
-from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_table_row, planned_drafts
+from ..reference.spec_decode import (
+    ADAPTIVE,
+    DRAFT_GROUPS,
+    GROUP_SLOTS,
+    LAYOUT,
+    LAYOUTS,
+    MAX_DRAFTS,
+    SPEC_SLOTS,
+    mtp_table_row,
+    planned_drafts,
+)
 from ..reference.spec_inputs import pack_mtp_commits
 from .common import TILE, as_weight, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
@@ -168,16 +185,24 @@ class TtMiMoMTP:
         assert planned or GROUP_SLOTS == 4, "the one-layer program drafts 3 tokens (MIMO_SPEC_SLOTS / GROUPS = 4)"
         assert len(layers) == 1 or layers == tuple(range(MAX_DRAFTS)), f"MTP layers {layers}: one, or one per draft"
         assert planned or DRAFT_GROUPS == 1, "the one-layer program drafts for one request per lane"
+        assert not ADAPTIVE or len(layers) == MAX_DRAFTS, "adaptive draft length drafts 3 tokens with the 3 layers"
         self.model, self.cfg, self.plan = model, model.cfg, model.plan
         self.layers = [TtMtpLayer(model, ckpt, cache_dir, i, weight_dtype) for i in layers]
         self.multi = planned  # the planned program (plan step, hidden gather, a pass per layer)
+        # Per layout, the layers drafting its drafts: one per draft (layer 0 alone for one draft), or the only one.
+        self.drafting = {
+            layout: self.layers if len(self.layers) == 1 else self.layers[: layout.max_drafts] for layout in LAYOUTS
+        }
+        assert all(planned_drafts(len(d), layout) == planned for layout, d in self.drafting.items())
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
-        self.page_table = None
+        self.page_table = None  # LAYOUT's ring page table (page_tables: every layout's)
+        self.page_tables = {}
         self.heads = None  # one GreedyHead per draft: their persistent token rows are the drafts
         self.inputs = None  # every layer: LayerInputs
         self.backfill = backfill
         self.history = None  # MtpHistory (setup_cache, with ``backfill`` and the decode RoPE tables)
-        self.trace = None
+        self.trace = None  # LAYOUT's draft trace (traces: every layout's)
+        self.traces = {}
         self.backfill_trace = None
         self._inputs = None  # the one-layer draft program's inputs (``_trace_inputs``)
 
@@ -188,19 +213,23 @@ class TtMiMoMTP:
         m = self.model
         assert self.page_table is None and m.decode_users is not None and m.decode_users >= SPEC_SLOTS
         row, blocks = mtp_table_row(m.block_size)
+        rings = max(layout.groups for layout in LAYOUTS)  # ring g: draft group g of any layout
         for layer in self.layers:
-            layer.kv_cache = layer.block.attn.allocate_kv_cache(DRAFT_GROUPS * blocks, m.block_size, m.kv_dtype)
-        table = torch.zeros(m.max_batch, len(row), dtype=torch.int32)
-        for g in range(DRAFT_GROUPS):  # draft group g's slots read and write its own ring
-            group_row = mtp_table_row(m.block_size, group=g)[0]
-            table[g * GROUP_SLOTS : (g + 1) * GROUP_SLOTS] = torch.tensor(group_row, dtype=torch.int32)
-        self.page_table = ttnn.from_torch(
-            table,
-            device=m.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self.plan.replicate(),
-        )
+            layer.kv_cache = layer.block.attn.allocate_kv_cache(rings * blocks, m.block_size, m.kv_dtype)
+        for layout in LAYOUTS:
+            table = torch.zeros(m.max_batch, len(row), dtype=torch.int32)
+            gs = layout.group_slots
+            for g in range(layout.groups):  # draft group g's slots read and write its own ring
+                group_row = mtp_table_row(m.block_size, group=g)[0]
+                table[g * gs : (g + 1) * gs] = torch.tensor(group_row, dtype=torch.int32)
+            self.page_tables[layout] = ttnn.from_torch(
+                table,
+                device=m.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.plan.replicate(),
+            )
+        self.page_table = self.page_tables[LAYOUT]
         self.heads = [GreedyHead(self.plan, m.vocab_local, m.decode_users, m.max_batch) for _ in range(MAX_DRAFTS)]
         if self.multi:
             # The hidden table's first part is the final norm buffer (TtMiMoModel.norm_buffers, one tile of rows).
@@ -216,9 +245,19 @@ class TtMiMoMTP:
         assert DRAFT_GROUPS == 1 or self.history is not None, "draft groups need the MTP history (MIMO_MTP_BACKFILL)"
         assert m.verify_sampler is not None and m.greedy_head is not None, "the chain reads the verify's buffers"
         heads = [h.next_tokens for h in self.heads]
-        m.spec_chain = SpecChain(
-            self.plan, m.spec_inputs, m.verify_sampler.out, m.greedy_head.next_tokens, heads, self.inputs
-        )
+        m.spec_chains = {
+            layout: SpecChain(
+                self.plan,
+                m.spec_inputs,
+                m.verify_sampler.out,
+                m.greedy_head.next_tokens,
+                heads[: layout.max_drafts],
+                self.inputs,
+                layout=layout,
+            )
+            for layout in LAYOUTS
+        }
+        m.spec_chain = m.spec_chains[LAYOUT]
 
     def reset(self):
         """Zero the rings and empty the stash (a new request's prompt): its attention reads no K / V of an earlier
@@ -238,12 +277,14 @@ class TtMiMoMTP:
             )
 
     # ------------------------------------------------------------------ device
-    def _pass(self, tokens_tt, hidden, pos_tt, serial, cos, sin, head, layer=None):
+    def _pass(self, tokens_tt, hidden, pos_tt, serial, cos, sin, head, layer=None, table=None):
         """One MTP layer step over the slots (``layer``, default the only one): tokens [1, B] u32, hidden [1, 1, B,
         hidden] (final normed), cache positions [B] i32 (-1 skips a slot), cos / sin [1, 1, B, D] of the true
-        positions. Writes the greedy tokens into ``head.next_tokens`` and returns the layer's final normed output."""
+        positions, ``table`` the rings' page table (default LAYOUT's). Writes the greedy tokens into
+        ``head.next_tokens`` and returns the layer's final normed output."""
         m = self.model
         layer = layer or self.layers[0]
+        table = self.page_table if table is None else table
         e = ttnn.embedding(tokens_tt, m.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         e = ttnn.reshape(e, (1, 1, m.max_batch, self.cfg.hidden_size))
         en = layer.enorm(e)
@@ -266,7 +307,7 @@ class TtMiMoMTP:
         positions = {"pos": pos_tt}
         if serial:
             positions["serial"] = serial
-        y = layer.block.forward_decode(x, {True: rot}, positions, self.page_table, layer.kv_cache)
+        y = layer.block.forward_decode(x, {True: rot}, positions, table, layer.kv_cache)
         x.deallocate(True)
         for t in rot:
             t.deallocate(True)
@@ -327,17 +368,19 @@ class TtMiMoMTP:
         rows.deallocate(True)
         return hidden
 
-    def _body_layers(self):
-        """The every-layer draft program: the plan step, the hidden gather, then pass i on MTP layer i with its tokens
-        (written by the tokens step for i >= 1), and the drafts step. Reads the decode RoPE tables once."""
-        m, li, chain = self.model, self.inputs, self.model.spec_chain
+    def _body_layers(self, layout=LAYOUT):
+        """The every-layer draft program in ``layout``'s draft groups: the plan step, the hidden gather, then pass i on
+        MTP layer i with its tokens (written by the tokens step for i >= 1), and the drafts step. Reads the decode
+        RoPE tables once."""
+        m, li, chain = self.model, self.inputs, self.model.spec_chains[layout]
+        table = self.page_tables[layout]
         chain.plan_layers()
         cos, sin = m.rope_table_rows(li.rope, m.rope_tables[:2])
         hidden = self._gather_hidden()
-        for i, layer in enumerate(self.layers):
+        for i, layer in enumerate(self.drafting[layout]):
             if i:
                 chain.tokens(i)
-            h = self._pass(li.tokens[i], hidden, li.pos, li.serial, cos, sin, self.heads[i], layer)
+            h = self._pass(li.tokens[i], hidden, li.pos, li.serial, cos, sin, self.heads[i], layer, table)
             h.deallocate(True)
         hidden.deallocate(True)
         cos.deallocate(True)
@@ -419,9 +462,9 @@ class TtMiMoMTP:
             ]
         return self._inputs
 
-    def _run_body(self, inputs):
+    def _run_body(self, inputs, layout=LAYOUT):
         if self.multi:
-            self._body_layers()
+            self._body_layers(layout)
         else:
             self._body(inputs)
 
@@ -432,29 +475,33 @@ class TtMiMoMTP:
         writes on replay. Every position -1 (no K / V written); with every layer an idle description, which leaves the
         stash as it was."""
         self.model.spec_inputs.reset()
-        self._run_body(self._trace_inputs())
+        for layout in LAYOUTS:
+            self._run_body(self._trace_inputs(), layout)
         if self.history is not None:
             self.history.upload_backfill()
             self._body_backfill()
 
     def capture_trace(self):
-        """Compile with an idle run (warm: a hit by now), then capture the draft program."""
+        """Compile with an idle run (warm: a hit by now), then capture the draft program of every layout."""
         assert self.trace is None and self.heads is not None
         m = self.model
         inputs = self._trace_inputs()
+        for layout in LAYOUTS:
 
-        def body():
-            self._run_body(inputs)
+            def body():
+                self._run_body(inputs, layout)
 
-        # The packed upload still holds the last served draft (a recapture): idle it, so the runs below write no K / V.
-        m.spec_inputs.reset()
-        body()
-        ttnn.synchronize_device(m.mesh_device)
-        trace_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
-        body()
-        ttnn.end_trace_capture(m.mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(m.mesh_device)
-        self.trace = {"id": trace_id, "inputs": inputs}
+            # The packed upload still holds the last served draft (a recapture): idle it, so the runs below write no
+            # K / V.
+            m.spec_inputs.reset()
+            body()
+            ttnn.synchronize_device(m.mesh_device)
+            trace_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
+            body()
+            ttnn.end_trace_capture(m.mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(m.mesh_device)
+            self.traces[layout] = {"id": trace_id, "inputs": inputs}
+        self.trace = self.traces[LAYOUT]
         if self.history is not None:
             # The backfill program: compiled by an idle run (an idle upload fills the rings' scratch blocks and leaves
             # the stash), then captured.
@@ -468,9 +515,9 @@ class TtMiMoMTP:
             self.backfill_trace = backfill_id
 
     def release_trace(self):
-        if self.trace is not None:
-            ttnn.release_trace(self.model.mesh_device, self.trace["id"])
-            self.trace = None
+        for trace in self.traces.values():
+            ttnn.release_trace(self.model.mesh_device, trace["id"])
+        self.traces, self.trace = {}, None
         if self.backfill_trace is not None:
             ttnn.release_trace(self.model.mesh_device, self.backfill_trace)
             self.backfill_trace = None
@@ -483,14 +530,15 @@ class TtMiMoMTP:
                 "the plugin's trace_mode 'all' or 'decode_only', with enable_model_warmup)"
             )
 
-    def enqueue_backfill(self, slot, a, group=0):
+    def enqueue_backfill(self, slot, a, group=0, layout=LAYOUT):
         """Fill every layer's ring of draft group ``group`` from the history of the request in lane ``slot`` before a
         draft whose first row is at ``a`` (non-blocking; enqueue the draft right after it): the window
         a - MTP_WINDOW + 1 .. a - 1, and with every layer the stash rows a - 2, a - 1 the draft then re-runs (those of
-        them its commit leaves stale), in the group's stash slots."""
+        them its commit leaves stale), in the group's stash slots of ``layout`` (none in groups of one draft, which
+        re-run no row)."""
         self._require_trace()  # captured with the draft trace (capture_trace)
-        assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS and 0 <= group < DRAFT_GROUPS
-        self.history.upload_backfill(slot, a, group)
+        assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS and 0 <= group < layout.groups
+        self.history.upload_backfill(slot, a, group, keep_stash=len(self.drafting[layout]) == 1)
         ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)
 
     def enqueue(self, tokens, plan):
@@ -513,35 +561,37 @@ class TtMiMoMTP:
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 
-    def enqueue_layers(self, commits):
+    def enqueue_layers(self, commits, layout=LAYOUT):
         """Every layer: draft after the replica's last decode or verify step (non-blocking) from ``commits``
-        [(DraftSource, committed tokens, committed positions, accepted count)], one per draft group: copies their
-        descriptions (reference.spec_inputs.pack_mtp_commits); the plan step plans the passes on device."""
+        [(DraftSource, committed tokens, committed positions, accepted count)], one per draft group of ``layout``:
+        copies their descriptions (reference.spec_inputs.pack_mtp_commits); the plan step plans the passes on
+        device."""
         self._require_trace()
         assert self.multi, "one layer: enqueue"
         m = self.model
         assert all(int(positions[int(n) - 1]) < m.max_seq_len for _, _, positions, n in commits)
         t = time.perf_counter()
-        packed = pack_mtp_commits(m.max_batch, commits)
+        packed = pack_mtp_commits(m.max_batch, commits, layout)
         host = ttnn.from_torch(
             packed, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
         )
         self.last_inputs_s = time.perf_counter() - t
         ttnn.copy_host_to_device_tensor(host, m.spec_inputs.mtp_packed)
-        ttnn.execute_trace(m.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        ttnn.execute_trace(m.mesh_device, self.traces[layout]["id"], cq_id=0, blocking=False)
 
-    def enqueue_chained(self):
-        """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
-        the packed upload's buffer from the pass's accepted count and committed tokens, so nothing is copied. Needs the
-        decode RoPE tables (without them the host copies the draft's cos / sin: ``enqueue``)."""
+    def enqueue_chained(self, layout=LAYOUT):
+        """Draft right behind a verify pass and its accept trace (non-blocking), both in ``layout``: the accept
+        trace's chain step wrote the packed upload's buffer from the pass's accepted count and committed tokens, so
+        nothing is copied. Needs the decode RoPE tables (without them the host copies the draft's cos / sin:
+        ``enqueue``)."""
         self._require_trace()
         assert self.model.rope_tables is not None, "a chained draft reads its cos / sin from the decode RoPE tables"
-        ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
+        ttnn.execute_trace(self.model.mesh_device, self.traces[layout]["id"], cq_id=0, blocking=False)
 
-    def read_drafts(self, anchor, group=0):
-        """Draft group ``group``'s drafts of the anchor slot, from the result page the drafts step wrote (blocks until
-        it finished)."""
-        chain = self.model.spec_chain.read().groups[group]
+    def read_drafts(self, anchor, group=0, layout=LAYOUT):
+        """Draft group ``group``'s drafts of the anchor slot, from ``layout``'s result page the drafts step wrote
+        (blocks until it finished)."""
+        chain = self.model.spec_chains[layout].read().groups[group]
         if chain.draft_anchor != anchor:
             raise RuntimeError(f"the draft ran at slot {chain.draft_anchor}, the host planned slot {anchor}")
         return chain.drafts

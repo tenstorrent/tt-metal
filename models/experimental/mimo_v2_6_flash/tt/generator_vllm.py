@@ -88,6 +88,15 @@ by every decode step, verify pass and prefill chunk), and a draft whose request'
 (``mtp_ring``: after the request's prompt, after the lane served several requests) is preceded by the backfill trace,
 which fills every MTP layer's ring from that history: its drafts are those of an MTP that saw every position.
 
+Adaptive draft length (MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=2,4). Each lane step drafts in the layout with the most drafts
+that holds its requests (reference.spec_decode.layout_for): two draft groups of 4 slots (3 drafts each) for up to two
+requests, four of 2 slots (1 draft each) for three or four; past four the step drafts for none. ``spec_plan`` declares
+the cap per lane load (SpecPlan.k_by_rows), so the plugin sizes each lane's drafts to it. A lane's groups and rings
+belong to its current layout (``lane_layout``): when its layout changes they start afresh, and each request's next
+draft backfills its group's rings. The verify, accept and draft traces are the layout's (TtMiMoModel.verify_traces,
+TtMiMoMTP.traces), as is the result page, so a chain does not cross a change of layout (the plugin chains only a lane
+whose request count did not change).
+
 Asynchronous scheduling (MIMO_ASYNC_SPEC=1, the default: ``supports_async_spec_decode``). An ordinary step of a
 speculating launch overlaps the step in flight as it does without speculation, and the plugin proposes for it when it
 commits, a step after its submission. By then the lane's next step may already be enqueued, and the resident hidden
@@ -124,16 +133,23 @@ from ..reference.config import MiMoConfig
 from ..reference.sample_verify import commit_pass, pass_inputs
 from ..reference.spec_chain import chain_row, chained_draft
 from ..reference.spec_decode import (
+    ADAPTIVE,
     DRAFT_GROUPS,
     GROUP_SLOTS,
+    LAYOUT,
+    LAYOUTS,
     MAX_DRAFTS,
     SPEC_SLOTS,
     DraftSource,
     draft_sources,
+    k_by_rows,
+    layout_for,
     plan_mtp,
     plan_verify_passes,
     planned_drafts,
 )
+
+RINGS = max(layout.groups for layout in LAYOUTS)  # a lane's draft groups' rings: the most groups of any layout
 from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
@@ -293,6 +309,7 @@ class VerifyHandle:
         self.events = {}  # lane: the event after its last page copy
         self.timing_events = {}  # lane: the event at its accept trace's end (MIMO_VLLM_TIMING)
         self.sources = {}  # lane: the DraftSources whose drafts chained behind its pass
+        self.layouts = {}  # lane: the layout its passes ran in (reference.spec_decode.SpecLayout)
         self.relayed = set()  # the chain rows, whose column-0 position the device chose
         self.hints = None  # per row: the drafts verified
         self.prev = None  # a chained verify's: the deferred verify it chained onto, until this one is read
@@ -442,9 +459,12 @@ class MiMoV2ForCausalLM:
         # selects the sampled decode trace.
         self.lane_sampled = [False] * self.dp
         # Per lane: where the last step left its requests' committed tokens (reference.spec_decode.DraftSource), one
-        # per draft group, none when that step ran no request or more than DRAFT_GROUPS; propose_draft_tokens drafts
-        # from them.
+        # per draft group, none when that step ran no request or more than its layout's groups; propose_draft_tokens
+        # drafts from them, in the layout they were planned in (``source_layout``).
         self.spec_sources = [[] for _ in range(self.dp)]
+        self.source_layout = [LAYOUT] * self.dp
+        # Per lane: the layout its draft groups and rings are in (``_layout``; adaptive draft length switches it).
+        self.lane_layout = [LAYOUT] * self.dp
         # Per lane: {row: the position of the token it committed} when the last step was a plain decode step (empty
         # after a verify, whose propose always follows it directly): a propose for an older step is told apart by its
         # committed position (``_stale_source``).
@@ -466,6 +486,7 @@ class MiMoV2ForCausalLM:
             "misplaced": 0,
             "uncovered": 0,
             "backfills": 0,
+            "layout_switches": 0,
         }
         # The deferred verifies' tip ids, and the newest one while no other step followed it (the one a chained
         # verify may build on).
@@ -475,13 +496,13 @@ class MiMoV2ForCausalLM:
         # that row (the last draft's B - 1), None after a prompt reset them; (lane slot, VerifyHandle) after a draft
         # chained behind a verify, whose row the handle's page gives (``_ring``). A draft for another request, or past
         # a gap, backfills first.
-        self.mtp_ring = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
+        self.mtp_ring = [[None] * RINGS for _ in range(self.dp)]
         # Per lane and draft group: (lane slot, last position) of the request whose context the group's DFlash ring
         # holds up to that position, None when it holds none (tt/dflash.py), or (lane slot, VerifyHandle) after a
         # draft chained behind a verify (``_ring``); a draft or prefill chunk that does not continue it resets it.
-        self.dflash_ring = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
+        self.dflash_ring = [[None] * RINGS for _ in range(self.dp)]
         # Per lane: each draft group's request (its lane slot; ``_draft_groups``), and the step each slot last ran in.
-        self.group_owners = [[None] * DRAFT_GROUPS for _ in range(self.dp)]
+        self.group_owners = [[None] * LAYOUT.groups for _ in range(self.dp)]
         self.slot_seen = [{} for _ in range(self.dp)]
         self._steps = 0
         self.chain_stats["dflash_resets"] = 0
@@ -572,7 +593,10 @@ class MiMoV2ForCausalLM:
         if requested_k < 1:
             return SpecReject(reason=f"num_speculative_tokens {requested_k} < 1", supported_k=(MAX_DRAFTS,))
         k = min(requested_k, MAX_DRAFTS)
+        # Adaptive draft length: each lane's drafts by its load (the plugin's SpecPlan.k_by_rows).
+        by_rows = {"k_by_rows": tuple((n, min(k, d)) for n, d in k_by_rows(max_num_seqs))} if ADAPTIVE else {}
         return SpecPlan(
+            **by_rows,
             effective_k=k,
             lanes_per_request=k + 1,
             # The MTP ring cache is per lane, not per request; its weights are the replica's.
@@ -1074,10 +1098,12 @@ class MiMoV2ForCausalLM:
             handles.append((lane, last - first, handle))
             live = [s for s in range(last - first) if active[s]]
             self._seen(lane, live)
-            groups = self._draft_groups(lane, live) if len(live) <= DRAFT_GROUPS else {}
+            layout = self._layout(lane, len(live))
+            groups = self._draft_groups(lane, live) if len(live) <= layout.groups else {}
             if live and all(groups.get(s) is not None for s in live):
                 self.spec_sources[lane] = [DraftSource(row=first + s, slots=[s], group=groups[s]) for s in live]
                 self.source_positions[lane] = {first + s: int(pos[s]) + 1 for s in live}
+                self.source_layout[lane] = layout
         out = {"rows": rows, "handles": handles, "tokens": on_device}
         if TIMING:
             self._decode_timing(t0, reload_inputs, on_device)
@@ -1189,7 +1215,8 @@ class MiMoV2ForCausalLM:
             spec_sampling = self._check_spec_sampling(spec_sampling, rows, tokens.shape[1] - 1)
         # The next verify writes the bonus and K drafts at positions bonus .. bonus + K: the chain drafts below that.
         limit = self.max_seq_len - max(tokens.shape[1] - 1, 1)
-        lanes, chains, sources = [], [], [[] for _ in range(self.dp)]
+        lanes, chains, sources, layouts = [], [], [[] for _ in range(self.dp)], [LAYOUT] * self.dp
+        relayed_lanes = {r // self.per_lane for r in relayed}
         for lane, model in enumerate(self.models):
             first, last = lane * self.per_lane, min((lane + 1) * self.per_lane, rows)
             active = [
@@ -1199,11 +1226,15 @@ class MiMoV2ForCausalLM:
             ]
             live = [r - first for r, *_ in active]
             self._seen(lane, live)
+            layout = layouts[lane] = self._layout(lane, len(live))
+            if lane in relayed_lanes and pending.layouts.get(lane) != layout:
+                raise RuntimeError(f"lane {lane}: a chained verify in {layout}, its deferred one in another layout")
             groups = None
-            if DRAFT_GROUPS > 1:  # each row in its request's draft group
+            if layout.groups > 1:  # each row in its request's draft group
                 groups = {first + s: g for s, g in self._draft_groups(lane, live).items() if g is not None}
             # The grouped verify attention scans each group's KV once: one request per group (verify_grouped).
-            passes = plan_verify_passes(active, groups=groups, aligned=KV_PAIR_SPLIT and verify_grouped())
+            aligned = KV_PAIR_SPLIT and verify_grouped(layout.group_slots)
+            passes = plan_verify_passes(active, groups=groups, group_slots=layout.group_slots, aligned=aligned)
             lanes.append(passes)
             lane_sources = sources[lane] = draft_sources(passes)
             # The draft sources run one pass: its chain row goes with it, a block per source.
@@ -1218,23 +1249,28 @@ class MiMoV2ForCausalLM:
         # A deferred verify's sources travel with its handle: a propose without one (an ordinary step's) drafts
         # nothing from them.
         self.spec_sources = [[] for _ in range(self.dp)] if defer else sources
+        self.source_layout = list(layouts)
         self.source_positions = [{} for _ in range(self.dp)]
         self.chained = [{} for _ in range(self.dp)]
         self._tip = None
         if not accept:
-            return self._verify_unchained(spec_mode, lanes, tables, tokens.shape, t0)
+            return self._verify_unchained(spec_mode, lanes, tables, tokens.shape, t0, layouts)
         handle = VerifyHandle(rows, tokens.shape[1], positions[:, 0], fused)
         handle.relayed = set(relayed)
         handle.hints = counts.to(torch.int64).clone()
         handle.prev = pending if relayed else None
+        handle.layouts = {lane: layouts[lane] for lane, p in enumerate(lanes) if p}
         for k in range(max(map(len, lanes))):
             for lane, p in enumerate(lanes):
                 if k >= len(p):
                     continue
                 model = self.models[lane]
                 # The accept step's inputs are staged before the verify: its relay step writes a chain row's drafts.
-                self._enqueue_verify_pass(lane, p[k], tables, chains[lane], pass_inputs(p[k], spec_sampling))
-                model.verify_accept_enqueue()
+                layout = layouts[lane]
+                self._enqueue_verify_pass(
+                    lane, p[k], tables, chains[lane], pass_inputs(p[k], spec_sampling), layout=layout
+                )
+                model.verify_accept_enqueue(layout=layout)
                 if chains[lane] is not None:
                     # MIMO_VLLM_TIMING splits the wait at the accept trace's end: verify vs chained draft.
                     if TIMING:
@@ -1253,9 +1289,10 @@ class MiMoV2ForCausalLM:
                                 self._dflash_continue(lane, slot, first, group=source.group)
                         # The group's rings now hold the request's rows up to the bonus - 1, which the page gives.
                         rings[lane][source.group] = (slot, handle)
-                    self._drafter(lane).enqueue_chained()
+                    self._drafter(lane).enqueue_chained(layout=layout)
                     handle.sources[lane] = sources[lane]
-                handle.pages.append((lane, p[k], model.spec_chain, model.spec_chain.read_async()))
+                chain = model.spec_chains[layout]
+                handle.pages.append((lane, p[k], chain, chain.read_async()))
         for lane, p in enumerate(lanes):
             if p:
                 handle.events[lane] = ttnn.record_event(self.models[lane].mesh_device, 0)
@@ -1273,8 +1310,11 @@ class MiMoV2ForCausalLM:
         results = handle.read()
         for lane, lane_sources in handle.sources.items():
             result = next(res for ln, _, res in results if ln == lane)
+            layout = handle.layouts[lane]
             for source in lane_sources:
-                self.chained[lane][source.row] = chained_draft(result, source, layers=self._mtp_layers(lane))
+                self.chained[lane][source.row] = chained_draft(
+                    result, source, layers=self._mtp_layers(lane, layout), layout=layout
+                )
         if TIMING:
             self._spec_timing(
                 "verify",
@@ -1381,9 +1421,9 @@ class MiMoV2ForCausalLM:
         model = self.models[lane]
         return model.mtp if model.mtp is not None else model.dflash
 
-    def _verify_unchained(self, spec_mode, lanes, tables, shape, t0):
+    def _verify_unchained(self, spec_mode, lanes, tables, shape, t0, layouts):
         """A logits verify, or an argmax_ids verify with MIMO_SPEC_CHAIN=0: no accept trace; each pass's greedy
-        tokens (and logit rows) read before the next pass of its lane overwrites them."""
+        tokens (and logit rows) read before the next pass of its lane overwrites them. ``layouts``: each lane's."""
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         argmax = torch.zeros(shape, dtype=torch.int32)
@@ -1393,7 +1433,8 @@ class MiMoV2ForCausalLM:
             pending = []
             for lane, p in enumerate(lanes):
                 if k < len(p):
-                    pending.append((lane, p[k], self._enqueue_verify_pass(lane, p[k], tables)))
+                    handle = self._enqueue_verify_pass(lane, p[k], tables, layout=layouts[lane])
+                    pending.append((lane, p[k], handle))
             for lane, vp, handle in pending:
                 model = self.models[lane]
                 t = time.perf_counter()
@@ -1471,18 +1512,19 @@ class MiMoV2ForCausalLM:
             buffers[shape] = torch.zeros(*shape, self.gen.cfg.vocab_size, dtype=torch.float32)
         return buffers[shape]
 
-    def _enqueue_verify_pass(self, lane, vp, tables, chain=None, accept=None):
+    def _enqueue_verify_pass(self, lane, vp, tables, chain=None, accept=None, layout=LAYOUT):
         """``chain``: ([DraftSource], limit, relay) of the drafts chained behind the pass, None when none does. The
         pass's chain row (reference.spec_chain.chain_row) carries them and, with the MTP history, each slot's request
         slot (the verify trace writes the slots' final norm rows into their requests' rings). ``accept``: its accept
-        step's (slots, groups), staged before the verify (TtMiMoModel.verify_enqueue)."""
+        step's (slots, groups), staged before the verify (TtMiMoModel.verify_enqueue). ``layout``: the pass's draft
+        groups (its verify trace and chain row)."""
         model = self.models[lane]
         hslots = None
         if model.mtp is not None and model.mtp.history is not None:
             first = lane * self.per_lane
             hslots = [None if row is None else row - first for row in vp.table_rows]
         if chain is not None or hslots is not None:
-            chain = chain_row(model.max_batch, *(chain or ([], 0, False)), hslots=hslots)
+            chain = chain_row(model.max_batch, *(chain or ([], 0, False)), hslots=hslots, layout=layout)
         tok = torch.zeros(model.max_batch, dtype=torch.int32)
         pos = torch.full((model.max_batch,), -1, dtype=torch.int32)
         tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
@@ -1496,7 +1538,7 @@ class MiMoV2ForCausalLM:
         model.set_vllm_page_tables({s: by_row[row] for s, row in enumerate(vp.table_rows) if row is not None})
         self._verify_tables_s += time.perf_counter() - t
         chain = None if chain is None else torch.tensor(chain, dtype=torch.int32)
-        return model.verify_enqueue(tok, pos, chain, accept=accept)
+        return model.verify_enqueue(tok, pos, chain, accept=accept, layout=layout)
 
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
         """Drafts for the next step: the drafter drafts for the requests of each lane whose last step ran one pass (one
@@ -1522,9 +1564,12 @@ class MiMoV2ForCausalLM:
         valid = torch.zeros(rows, dtype=torch.int32)
         jobs, inputs_s, hits, kept = [], 0.0, 0, set()
         for lane, lane_sources in enumerate(self.spec_sources):
-            drafter = self._drafter(lane)
+            drafter, layout = self._drafter(lane), self.source_layout[lane]
             if not lane_sources or drafter is None or not 1 <= num_drafts <= MAX_DRAFTS:
                 continue
+            if layout != self.lane_layout[lane]:
+                continue  # a later step changed the lane's layout: the sources' groups are gone
+            k = min(num_drafts, layout.max_drafts)  # the layout's drafts (the plugin takes fewer than asked)
             commits = []  # the sources the host plans a draft for: (source, tokens, positions, m, hit)
             for source in lane_sources:
                 if source.row >= rows:
@@ -1539,34 +1584,36 @@ class MiMoV2ForCausalLM:
                     # The source is a newer step's: kept for that step's propose.
                     kept.add(lane)
                     if stale:
-                        drafts[r] = committed_tokens[r, m - 1].to(torch.int32)
-                        valid[r] = num_drafts
+                        drafts[r, :k] = committed_tokens[r, m - 1].to(torch.int32)
+                        valid[r] = k
                     continue
                 chained = self.chained[lane].get(r)
                 hit = chained is not None
                 hit = hit and chained.matches(committed_tokens[r].tolist(), committed_positions[r].tolist(), m)
                 if hit:
-                    drafts[r] = torch.tensor(chained.drafts[:num_drafts], dtype=torch.int32)
-                    valid[r] = num_drafts
+                    drafts[r, :k] = torch.tensor(chained.drafts[:k], dtype=torch.int32)
+                    valid[r] = k
                     hits += 1
                     if not self.chain_check:
                         continue
                 commits.append((source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m, hit))
             if commits:
-                anchors = self._enqueue_host_drafts(lane, [c[:4] for c in commits])
+                anchors = self._enqueue_host_drafts(lane, [c[:4] for c in commits], layout)
                 inputs_s += drafter.last_inputs_s
                 jobs += [(lane, c[0], anchor, c[4]) for c, anchor in zip(commits, anchors)]
         waited = 0.0
         for lane, source, anchor, hit in jobs:
             r = source.row
             t = time.perf_counter()
-            host = torch.tensor(self._read_drafts(lane, anchor, source.group)[:num_drafts], dtype=torch.int32)
+            drafted = self._read_drafts(lane, anchor, source.group, self.source_layout[lane])
+            k = min(num_drafts, len(drafted))
+            host = torch.tensor(drafted[:k], dtype=torch.int32)
             waited += time.perf_counter() - t
             if hit:
-                self._check_chained(lane, drafts[r], host)
+                self._check_chained(lane, drafts[r, :k], host)
                 continue
-            drafts[r] = host
-            valid[r] = num_drafts
+            drafts[r, :k] = host
+            valid[r] = k
         planned = sum(not hit for *_, hit in jobs)
         self.chain_stats["chained"] += hits
         self.chain_stats["host"] += planned
@@ -1577,23 +1624,23 @@ class MiMoV2ForCausalLM:
             self._spec_timing("propose", t0, waited, planned, inputs_s, chained=hits)
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
 
-    def _read_drafts(self, lane, anchor, group=0):
-        """Draft group ``group``'s drafts of the lane's last host-planned draft (blocks): the MTP's of slot ``anchor``,
-        or DFlash's."""
+    def _read_drafts(self, lane, anchor, group=0, layout=LAYOUT):
+        """Draft group ``group``'s drafts of the lane's last host-planned draft in ``layout`` (blocks): the MTP's of
+        slot ``anchor``, or DFlash's."""
         model = self.models[lane]
         if model.mtp is not None:
-            return model.mtp.read_drafts(anchor, group)
+            return model.mtp.read_drafts(anchor, group, layout)
         return model.dflash.read_drafts(group)
 
-    def _enqueue_host_drafts(self, lane, commits):
+    def _enqueue_host_drafts(self, lane, commits, layout=LAYOUT):
         """The drafter's host-planned draft for ``commits`` [(DraftSource, tokens, positions, m)] of the lane's last
-        step, one per draft group, in one program (non-blocking). Returns each commit's anchor slot (MTP's; None with
-        DFlash)."""
+        step, one per draft group of ``layout``, in one program (non-blocking). Returns each commit's anchor slot
+        (MTP's; None with DFlash)."""
         if self.models[lane].mtp is None:
             return self._enqueue_dflash(lane, commits)
-        return self._enqueue_host_draft(lane, commits)
+        return self._enqueue_host_draft(lane, commits, layout)
 
-    def _enqueue_host_draft(self, lane, commits):
+    def _enqueue_host_draft(self, lane, commits, layout=LAYOUT):
         """The MTP draft of the host plan for ``commits`` [(DraftSource, tokens, positions, m)]: per commit of ``m``
         tokens ``tokens`` at ``positions`` (non-blocking), behind the backfill when its group's rings do not hold the
         request's rows before it: with one layer (one commit) reference.spec_decode.plan_mtp, with every layer the
@@ -1606,8 +1653,8 @@ class MiMoV2ForCausalLM:
             self._backfill(lane, slot, int(positions[0]) - 1, source.group)
             self.mtp_ring[lane][source.group] = (slot, int(positions[m - 1]) - 1)
         if mtp.multi:
-            mtp.enqueue_layers(commits)
-            return [(source.group + 1) * GROUP_SLOTS - 1 for source, *_ in commits]
+            mtp.enqueue_layers(commits, layout)
+            return [(source.group + 1) * layout.group_slots - 1 for source, *_ in commits]
         assert len(commits) == 1, "one MTP layer drafts for one request"
         ((source, tokens, positions, m),) = commits
         plan = plan_mtp(source, positions, m)
@@ -1622,8 +1669,10 @@ class MiMoV2ForCausalLM:
         keeps its group while it runs, so its drafter state (rings, stash) stays its own. A slot without one takes a
         group no live slot owns, the one whose request ran least recently; None when every group belongs to another
         live slot (more requests than groups: the step drafts for none). A prompt's slot always takes one (the request
-        that owned it is gone or will be found without one). One draft group: always 0."""
-        if DRAFT_GROUPS == 1:
+        that owned it is gone or will be found without one). One draft group: always 0. The groups are the lane's
+        layout's (``lane_layout``)."""
+        groups = self.lane_layout[lane].groups
+        if groups == 1:
             return {s: 0 for s in slots}
         owners, seen = self.group_owners[lane], self.slot_seen[lane]
         out = {}
@@ -1632,7 +1681,7 @@ class MiMoV2ForCausalLM:
                 out[s] = owners.index(s)
                 continue
             taken = set(slots) if not prompt else {s}
-            free = [g for g in range(DRAFT_GROUPS) if owners[g] is None or owners[g] not in taken]
+            free = [g for g in range(groups) if owners[g] is None or owners[g] not in taken]
             if not free:
                 out[s] = None
                 continue
@@ -1640,6 +1689,21 @@ class MiMoV2ForCausalLM:
             owners[g], out[s] = s, g
             self.mtp_ring[lane][g] = self.dflash_ring[lane][g] = None  # another request's rows
         return out
+
+    def _layout(self, lane, requests):
+        """The layout of a lane step of ``requests`` requests: with adaptive draft length layout_for's (past the
+        layouts' groups the one with the most groups, which drafts for none of them), else the launch's. A lane whose
+        layout changes starts its draft groups and rings afresh: each request's next draft backfills its group's
+        rings (in the K = 1 layout only layer 0 advances, so the K = 3 layout cannot continue its rings)."""
+        if requests == 0:
+            return self.lane_layout[lane]
+        layout = (layout_for(requests) or LAYOUTS[-1]) if ADAPTIVE else LAYOUT
+        if layout != self.lane_layout[lane]:
+            self.lane_layout[lane] = layout
+            self.group_owners[lane] = [None] * layout.groups
+            self.mtp_ring[lane] = [None] * RINGS
+            self.chain_stats["layout_switches"] += 1
+        return layout
 
     def _seen(self, lane, slots):
         """A step ran the lane's ``slots`` (the groups' recency, ``_draft_groups``)."""
@@ -1689,17 +1753,18 @@ class MiMoV2ForCausalLM:
         jobs = []
         for lane, lane_sources in handle.sources.items():
             result = next(res for ln, _, res in results if ln == lane)
-            redrafts = []
+            redrafts, layout = [], handle.layouts[lane]
             for source in lane_sources:
-                chained = chained_draft(result, source, layers=self._mtp_layers(lane))
+                chained = chained_draft(result, source, layers=self._mtp_layers(lane, layout), layout=layout)
                 if chained is not None:
                     redrafts.append((source, chained))
             if redrafts:
                 commits = [(src, c.tokens, c.positions, len(c.tokens)) for src, c in redrafts]
-                anchors = self._enqueue_host_drafts(lane, commits)
+                anchors = self._enqueue_host_drafts(lane, commits, layout)
                 jobs += [(lane, src, c, anchor) for (src, c), anchor in zip(redrafts, anchors)]
         for lane, source, chained, anchor in jobs:
-            host = torch.tensor(self._read_drafts(lane, anchor, source.group), dtype=torch.int32)
+            drafted = self._read_drafts(lane, anchor, source.group, handle.layouts[lane])
+            host = torch.tensor(drafted, dtype=torch.int32)
             self._check_chained(lane, torch.tensor(chained.drafts, dtype=torch.int32), host)
 
     def _propose_deferred(self, handle, num_drafts, committed_tokens, committed_positions, accepted_counts):
@@ -1727,27 +1792,29 @@ class MiMoV2ForCausalLM:
         hits = 0
         for lane, lane_sources in handle.sources.items():
             result = next(res for ln, _, res in results if ln == lane)
+            layout = handle.layouts[lane]
             for source in lane_sources:
-                chained = chained_draft(result, source, layers=self._mtp_layers(lane))
+                chained = chained_draft(result, source, layers=self._mtp_layers(lane, layout), layout=layout)
                 r = source.row
                 if chained is None or r >= rows or int(committed_positions[r, 0]) < 0:
                     continue
                 if not 1 <= num_drafts <= MAX_DRAFTS:
                     continue
+                k = min(num_drafts, layout.max_drafts)
                 if chained.matches(committed_tokens[r].tolist(), committed_positions[r].tolist(), int(counts[r])):
-                    drafts[r] = torch.tensor(chained.drafts[:num_drafts], dtype=torch.int32)
-                    valid[r] = num_drafts
+                    drafts[r, :k] = torch.tensor(chained.drafts[:k], dtype=torch.int32)
+                    valid[r] = k
                     hits += 1
         self.chain_stats["chained"] += hits
         if TIMING:
             self._spec_timing("propose", t0, 0.0, 0, chained=hits, verify_wait=handle.waited + handle.draft_wait)
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
 
-    def _mtp_layers(self, lane):
-        """The MTP layers drafting on ``lane`` (1, or MAX_DRAFTS: the chain's anchor is then the last slot); DFlash's
-        chain anchors at the last committed column, as one layer's."""
+    def _mtp_layers(self, lane, layout=None):
+        """The MTP layers drafting on ``lane`` in ``layout`` (default the lane's: 1, or one per draft: the chain's
+        anchor is then the last slot); DFlash's chain anchors at the last committed column, as one layer's."""
         mtp = self.models[lane].mtp
-        return 1 if mtp is None else len(mtp.layers)
+        return 1 if mtp is None else len(mtp.drafting[layout or self.lane_layout[lane]])
 
     def _ring(self, lane, rings=None, group=0):
         """``rings[lane][group]`` (default ``mtp_ring``; ``dflash_ring``): (lane slot, last row) or None. A draft
@@ -1773,7 +1840,7 @@ class MiMoV2ForCausalLM:
             return
         ring = self._ring(lane, group=group)
         if ring is None or ring[0] != slot or ring[1] < a - 1:
-            mtp.enqueue_backfill(slot, a, group)
+            mtp.enqueue_backfill(slot, a, group, self.lane_layout[lane])
             self.chain_stats["backfills"] += 1
 
     def _stale_source(self, lane, row, committed_positions, count):

@@ -140,8 +140,9 @@ class ChainPages:
 
     @property
     def hslots(self):
-        """The history's words: each verify slot's request slot + 1 (0: none; reference/mtp_backfill.py)."""
-        return self.words
+        """The history's words: each verify slot's request slot + 1 (0: none; reference/mtp_backfill.py), after the
+        blocks of every layout of the launch, so that the history's verify write reads them in either."""
+        return max(layout.groups * (CHAIN_SLOTS + layout.group_slots + 1) for layout in LAYOUTS)
 
     @property
     def draft_words(self):

@@ -38,6 +38,10 @@ With draft groups (MIMO_SPEC_GROUPS=2: two requests of a lane in one pass, refer
 group: the chain row and the result page have a block per group, the chain step writes each group's commit, the
 drafts step each group's drafts, the plan and tokens steps each group's slots, and the relay each relayed group.
 
+With both layouts of adaptive draft length (MIMO_SPEC_GROUPS=2,4) a replica keeps one SpecChain per layout
+(``layout``): its kernel's group arguments, its chain blocks and its result page. A lane's chain breaks when its layout
+changes (the relay reads the page of its own layout).
+
 With DFlash drafting (``dflash``, tt/dflash.py) the chain step writes the DFlash draft's packed upload instead of
 ``mtp_packed`` (reference.spec_chain.dflash_chain_step), and the drafts step, at the end of the DFlash draft trace,
 reads its anchor from that upload and the drafts from the drafter's GreedyHead (dflash_drafts_step). The result page
@@ -55,27 +59,26 @@ from ..reference.spec_chain import (
     ARGMAX_AT,
     CHAIN_COLUMNS,
     CHAIN_LIMIT,
-    CHAIN_RELAY,
     CHAIN_ROW,
     CHAIN_SLOTS,
     CHAIN_SOURCE,
     CTRL_DRAFTS,
-    DRAFTS_AT,
+    PAGES,
     POSITIONS_AT,
-    RESULT_WORDS,
     STASH_POSITIONS,
     STASH_TOKENS,
     STATUS_AT,
     unpack_result,
 )
-from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, MTP_RING_TOKENS, SPEC_SLOTS
-from ..reference.spec_inputs import DESC_A, DESC_COUNT, DESC_DRAFTING, DESC_SLOTS, DESC_TOKENS, MTP_ROWS, VERIFY_ROWS
+from ..reference.spec_decode import LAYOUT, LAYOUTS, MTP_RING_TOKENS, SPEC_SLOTS
+from ..reference.spec_inputs import DESC_A, DESC_COUNT, DESC_DRAFTING, DESC_SLOTS, MTP_ROWS, VERIFY_ROWS, desc_tokens
 from .device_sampler import CB_SCRATCH, _cb, _is_dram, _kernel, _ranges
 
 # kernels/spec_chain.cpp addresses the chain row's words at these offsets, and the accept page at the result's start.
 assert (CHAIN_SOURCE, CHAIN_COLUMNS, CHAIN_LIMIT, CHAIN_SLOTS) == (0, 1, 2, 3) and ACCEPT_AT == 0
 # ... and the description's and the stash page's words at these.
-assert (DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS, DESC_TOKENS) == (0, 1, 2, 3, 3 + GROUP_SLOTS)
+assert (DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS) == (0, 1, 2, 3)
+assert all(desc_tokens(layout.group_slots) == 3 + layout.group_slots for layout in LAYOUTS)
 assert (STASH_POSITIONS, STASH_TOKENS) == (0, SPEC_SLOTS)
 CHAIN, DRAFTS, RELAY, PLAN, TOKENS = 0, 1, 2, 3, 4  # the kernel's modes
 CTRL_WORDS = GROUPS * GROUP_WORDS  # VerifySampler's control page
@@ -86,35 +89,38 @@ def _align64(nbytes):
 
 
 class SpecChain:
-    def __init__(self, plan, spec_inputs, accept, argmax, heads, layer_inputs=None, dflash=None):
+    def __init__(self, plan, spec_inputs, accept, argmax, heads, layer_inputs=None, dflash=None, layout=LAYOUT):
         """``spec_inputs``: the replica's SpecInputs (``verify_packed``, ``mtp_packed``). ``accept``: VerifySampler's
         output page. ``argmax``: the verify step's greedy tokens (GreedyHead's ``next_tokens``). ``heads``: the MTP
         passes' greedy token rows (TtMiMoMTP's heads). ``layer_inputs``: with every MTP layer, TtMiMoMTP's
         LayerInputs (the plan and tokens steps' outputs, the stash page, ``table_rows``); None with one layer.
         ``dflash``: with DFlash drafting, (TtDFlash's packed upload, its reference.spec_chain.DFlashLayout), and
-        ``heads`` its GreedyHead's token row alone (row k: draft k). All persistent DRAM buffers; allocates the result
-        page."""
+        ``heads`` its GreedyHead's token row alone (row k: draft k). ``layout``: the draft groups of the passes it
+        chains behind (reference.spec_decode.SpecLayout); ``heads`` then holds its drafts' rows. All persistent DRAM
+        buffers; allocates the result page."""
         self.plan, self.max_batch, self.spec_inputs = plan, spec_inputs.max_batch, spec_inputs
         self.verify, self.mtp = spec_inputs.verify_packed, spec_inputs.mtp_packed
         self.accept, self.argmax, self.heads = accept, argmax, list(heads)
         self.layer_inputs = layer_inputs
-        self.layers = MAX_DRAFTS if layer_inputs is not None else 1
+        self.layout, self.pages = layout, PAGES[layout]
+        self.layers = layout.max_drafts if layer_inputs is not None else 1
         self.dflash = None if dflash is None else dflash[1]
         if dflash is not None:
             # The chain step writes the DFlash draft's upload, which the drafts step reads.
             assert layer_inputs is None and dflash[0].shape[-1] == self.dflash.words
             self.mtp = dflash[0]
-        assert len(self.heads) == (1 if dflash is not None else MAX_DRAFTS)
+        assert len(self.heads) == (1 if dflash is not None else layout.max_drafts)
         assert accept.shape[-1] == ACCEPT_WORDS and ACCEPT_WORDS % OUT_WORDS == 0
         steps = []
         if layer_inputs is not None:
             li = layer_inputs
             steps = [li.pos, li.rope, li.hidden, *li.tokens, *li.serial, li.stash]
-            assert self.max_batch <= li.table_rows and len(li.tokens) == MAX_DRAFTS and len(li.serial) == SPEC_SLOTS
+            assert self.max_batch <= li.table_rows and len(li.tokens) >= layout.max_drafts
+            assert len(li.serial) == SPEC_SLOTS
         for t in (self.verify, self.mtp, accept, argmax, *self.heads, *steps):
             assert _is_dram(t) and t.layout == ttnn.ROW_MAJOR_LAYOUT, "the chain reads one-page DRAM buffers"
         self.result = ttnn.from_torch(
-            torch.zeros(1, RESULT_WORDS, dtype=torch.int32),
+            torch.zeros(1, self.pages.result_words, dtype=torch.int32),
             device=plan.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -129,7 +135,7 @@ class SpecChain:
             mode,
             self.max_batch,
             SPEC_SLOTS,
-            MAX_DRAFTS,
+            self.layout.max_drafts,
             VERIFY_ROWS,
             CHAIN_ROW,
             MTP_ROWS,
@@ -137,18 +143,18 @@ class SpecChain:
             MTP_RING_TOKENS,
             ARGMAX_AT,
             STATUS_AT,
-            DRAFTS_AT,
-            RESULT_WORDS,
+            self.pages.drafts_at,
+            self.pages.result_words,
             CB_SCRATCH,
             POSITIONS_AT,
-            CHAIN_RELAY,
+            self.pages.relay,
             CTRL_WORDS,
             CTRL_DRAFTS,
             self.layers,
             self.layer_inputs.table_rows if self.layer_inputs is not None else self.max_batch,
             layer,
             *self._dflash_args(),
-            DRAFT_GROUPS,
+            self.layout.groups,
             OUT_WORDS,
             GROUP_WORDS,
             int(self.layer_inputs is not None),  # planned: the MTP drafter's planned program (LayerInputs)
@@ -161,7 +167,7 @@ class SpecChain:
         d = self.dflash
         if d is None:
             return [0] * 6
-        assert d.groups == DRAFT_GROUPS
+        assert d.groups == self.layout.groups
         return [1, d.words, d.ring, d.block, d.heads, d.last]
 
     def _draft_bytes(self):
@@ -178,7 +184,7 @@ class SpecChain:
             + _align64(ACCEPT_WORDS * 4)
             + _align64(b * 4)
             + _align64(self._draft_bytes())
-            + _align64(DRAFTS_AT * 4)
+            + _align64(self.pages.drafts_at * 4)
         )
         prog = self._program(CHAIN, args, scratch)
         ttnn.generic_op([self.verify, self.accept, self.argmax, self.mtp, self.result], prog)
@@ -187,9 +193,8 @@ class SpecChain:
         """The drafts step (after the drafter's passes wrote their heads' tokens)."""
         b = self.max_batch
         args = [self.mtp.buffer_address(), self.result.buffer_address()] + [h.buffer_address() for h in self.heads]
-        scratch = (
-            _align64(self._draft_bytes()) + MAX_DRAFTS * _align64(b * 4) + _align64((RESULT_WORDS - DRAFTS_AT) * 4)
-        )
+        drafts = self.pages.result_words - self.pages.drafts_at
+        scratch = _align64(self._draft_bytes()) + len(self.heads) * _align64(b * 4) + _align64(drafts * 4)
         prog = self._program(DRAFTS, args, scratch)
         ttnn.generic_op([self.mtp, *self.heads, self.result], prog)
 
@@ -199,7 +204,7 @@ class SpecChain:
         (reference.spec_chain.relay_step). Writes nothing unless the upload's chain row says relay."""
         b = self.max_batch
         args = [self.verify.buffer_address(), self.result.buffer_address(), ctrl.buffer_address()]
-        scratch = _align64(VERIFY_ROWS * b * 4) + _align64(RESULT_WORDS * 4) + _align64(CTRL_WORDS * 4)
+        scratch = _align64(VERIFY_ROWS * b * 4) + _align64(self.pages.result_words * 4) + _align64(CTRL_WORDS * 4)
         prog = self._program(RELAY, args, scratch)
         ttnn.generic_op([self.result, ctrl, self.verify], prog)
 
@@ -209,14 +214,14 @@ class SpecChain:
         outs = [li.pos, li.rope, li.hidden, li.tokens[0], *li.serial]
         args = [self.mtp.buffer_address(), li.stash.buffer_address()] + [t.buffer_address() for t in outs]
         row = _align64(self.max_batch * 4)
-        prog = self._program(PLAN, args, (DRAFT_GROUPS + 2 + len(outs)) * row)
+        prog = self._program(PLAN, args, (self.layout.groups + 2 + len(outs)) * row)
         ttnn.generic_op([self.mtp, li.stash, *outs], prog)
 
     def tokens(self, layer):
         """The tokens step of pass ``layer`` >= 1 (every layer): its tokens from the layer-0 tokens and the earlier
         passes' heads."""
         li = self.layer_inputs
-        assert 1 <= layer < MAX_DRAFTS
+        assert 1 <= layer < self.layers
         ins = [li.tokens[0], *self.heads[:layer]]
         args = [li.tokens[0].buffer_address(), li.tokens[layer].buffer_address()]
         args += [h.buffer_address() for h in self.heads[:layer]]
@@ -237,14 +242,14 @@ class SpecChain:
         self.drafts()
         if self.layer_inputs is not None:
             self.plan_layers()
-            for layer in range(1, MAX_DRAFTS):
+            for layer in range(1, self.layers):
                 self.tokens(layer)
 
     # ------------------------------------------------------------------ host
     def read(self):
         """The result page (reference.spec_chain.ChainResult; blocks until the steps writing it finished)."""
         words = ttnn.to_torch(ttnn.get_device_tensors(self.result)[0]).reshape(-1).to(torch.int64) & 0xFFFFFFFF
-        return unpack_result(words.tolist())
+        return unpack_result(words.tolist(), self.layout)
 
     def read_async(self):
         """Enqueue a copy of the result page to the host behind the work already enqueued, without blocking (the
@@ -253,8 +258,7 @@ class SpecChain:
         next pass meanwhile."""
         return self.result.cpu(blocking=False)
 
-    @staticmethod
-    def unpack(host):
+    def unpack(self, host):
         """The ChainResult of a host copy made by ``read_async`` (after its event completed; touches no device)."""
         words = ttnn.to_torch(ttnn.get_device_tensors(host)[0]).reshape(-1).to(torch.int64) & 0xFFFFFFFF
-        return unpack_result(words.tolist())
+        return unpack_result(words.tolist(), self.layout)

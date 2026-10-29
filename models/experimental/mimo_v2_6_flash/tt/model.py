@@ -29,7 +29,7 @@ import ttnn
 from ..reference import kv_pair_split
 from ..reference.model import load_layer_weights
 from ..reference.mtp_backfill import HISTORY_ROWS
-from ..reference.spec_decode import SPEC_SLOTS, serial_positions
+from ..reference.spec_decode import LAYOUT, LAYOUTS, SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
 from . import attention as attention_lib
 from .attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split, page_table_width
@@ -268,14 +268,18 @@ class TtMiMoModel:
         self.page_table_host = None
         self.table_scratch = None
         self.decode_trace = None
-        self.verify_trace = None  # speculative verify step (capture_verify_trace)
+        self.verify_trace = None  # speculative verify step (capture_verify_trace), LAYOUT's
+        self.verify_traces = {}  # every layout's (reference.spec_decode.LAYOUTS)
         self.mtp = None  # the MTP drafter (setup_mtp)
         self.dflash = None  # the DFlash drafter (setup_dflash, tt/dflash.py)
         self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp / setup_dflash, tt/spec_inputs.py)
         self.greedy_head = None
         self.sampler = None  # vLLM mode: temperature / top-k / top-p decode sampling (setup_vllm_kv_cache)
         self.verify_sampler = None  # vLLM mode with MTP: a verify's acceptance on device (setup_vllm_kv_cache)
-        self.spec_chain = None  # the draft chained behind a verify, and its result page (TtMiMoMTP.setup_cache)
+        self.spec_chain = (
+            None  # the draft chained behind a verify, and its result page (TtMiMoMTP.setup_cache), LAYOUT's
+        )
+        self.spec_chains = {}  # every layout's
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
         # Traced later chunks (setup_prefill_chunk_traces): key (_chunk_trace_key) -> trace; their inputs per padded
         # length; and per slot the persistent logits row a replay's output is copied into.
@@ -1433,13 +1437,19 @@ class TtMiMoModel:
             out.append(row)
         return out
 
-    def _decode_inputs(self, inputs, greedy_only=False, sample=False, serial=0):
+    def _decode_inputs(self, inputs, greedy_only=False, sample=False, serial=0, group_slots=None):
         """decode_forward_device's arguments from the trace's input list (with a ``rope_pos`` input after the nine
-        when the decode RoPE tables are set up, then ``serial`` per-slot position inputs)."""
+        when the decode RoPE tables are set up, then ``serial`` per-slot position inputs). ``group_slots``: a verify's
+        draft groups (its layout's)."""
         base, slots = inputs[: len(inputs) - serial], list(inputs[len(inputs) - serial :])
         rope = {"rope_pos_tt": base[9]} if len(base) > 9 else {}
         return self.decode_forward_device(
-            *base[:9], greedy_only=greedy_only, sample=sample, serial_pos=slots or None, **rope
+            *base[:9],
+            greedy_only=greedy_only,
+            sample=sample,
+            serial_pos=slots or None,
+            verify_group_slots=group_slots,
+            **rope,
         )
 
     def decode_forward_device(
@@ -1457,6 +1467,7 @@ class TtMiMoModel:
         greedy_only=False,
         sample=False,
         serial_pos=None,
+        verify_group_slots=None,
     ):
         """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp].
 
@@ -1465,7 +1476,8 @@ class TtMiMoModel:
         from the device tables at these positions, not from the cos / sin inputs. ``sample`` (vLLM mode): the
         DeviceSampler draws each row's token with its temperature / top-k / top-p (greedy rows take the argmax, as
         GreedyHead). ``serial_pos``: per-slot position tensors; every layer writes K / V one slot at a time (a
-        speculative verify, reference/spec_decode.py)."""
+        speculative verify, reference/spec_decode.py), its requests in draft groups of ``verify_group_slots`` slots
+        (None: the launch's)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         made = []
@@ -1490,6 +1502,8 @@ class TtMiMoModel:
             positions["pos_update"] = cur_pos_tt  # both chips of a pair keep every slot's K / V
         if serial_pos:
             positions["serial"] = serial_pos
+            if verify_group_slots is not None:
+                positions["verify_group_slots"] = verify_group_slots
         # Global layers' SDPA over the decode users' rows only (see attention._forward_decode_split): with fewer
         # users than table rows the kernel would spread its cores over 32 rows of mostly idle slots.
         compact_sdpa = self.decode_users < self.max_batch and os.environ.get("MIMO_COMPACT_SDPA", "1") == "1"
@@ -1622,9 +1636,10 @@ class TtMiMoModel:
             self.verify_sampler(None, self.greedy_head.next_tokens)
         if self.spec_chain is not None:
             # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces, and the verify trace's relay
-            # step, compile here too, on the persistent buffers their captures use; so do the history's kernel steps
-            # (tt/mtp_backfill.py).
-            self.spec_chain.warm(self.verify_sampler.ctrl)
+            # step, compile here too, on the persistent buffers their captures use (every layout's chain); so do the
+            # history's kernel steps (tt/mtp_backfill.py).
+            for chain in self.spec_chains.values():
+                chain.warm(self.verify_sampler.ctrl)
         if self._history() is not None:
             self._history().warm(self.mtp.inputs)
         if self.spec_chain is not None:
@@ -1705,32 +1720,34 @@ class TtMiMoModel:
         kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
         self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
 
-    def capture_verify_trace(self):
-        """Compile, then capture the verify step: the decode step with every layer's K / V written one slot at a time
-        and no feed-back (a verify always reloads its inputs). Every slot idle while capturing: no K / V written.
+    def capture_verify_trace(self, layout=LAYOUT):
+        """Compile, then capture the verify step of passes in ``layout``'s draft groups: the decode step with every
+        layer's K / V written one slot at a time and no feed-back (a verify always reloads its inputs). Every slot idle
+        while capturing: no K / V written. Adaptive draft length captures one per layout (its relay and chain steps,
+        and its global attention, follow the layout).
 
         The trace starts with the relay step (tt/spec_chain.py: a chained verify's tokens and positions from the
         lane's last result page; a no-op on an upload the host built) and SpecInputs.derive_verify, which writes every
         input but the cos / sin from the packed upload (``verify_enqueue``); the decode step after them is the one
         captured before, followed by the MTP history's verify write (``_verify_step``), which reads the tokens and
         positions the relay left."""
-        assert self.verify_trace is None and self.layer_groups is not None, "a verify serves vLLM's KV blocks"
+        assert layout not in self.verify_traces and self.layer_groups is not None, "a verify serves vLLM's KV blocks"
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
         rope = self.rope_tables is not None
         # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
         self.spec_inputs.reset()
-        self._relay()
+        self._relay(layout)
         self.spec_inputs.derive_verify(inputs, rope)
-        self._release(self._verify_step(inputs))
+        self._release(self._verify_step(inputs, layout))
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        self._relay()
+        self._relay(layout)
         self.spec_inputs.derive_verify(inputs, rope)
-        output = self._verify_step(inputs)
+        output = self._verify_step(inputs, layout)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         # As the decode traces (capture_decode_trace): an even number of fabric reductions, so verify and decode
         # replays interleave on the gather phases they were captured with.
@@ -1739,69 +1756,75 @@ class TtMiMoModel:
         ttnn.synchronize_device(self.mesh_device)
         # The MTP draft program reads the step's final hidden from the norm buffer it was captured on.
         assert output.get("hidden") is self.norm_buffers[0], "the final norm is not the persistent fused-norm buffer"
-        self.verify_trace = {"id": trace_id, "inputs": inputs, "output": output, "accept": None}
+        trace = self.verify_traces[layout] = {"id": trace_id, "inputs": inputs, "output": output, "accept": None}
+        if layout == LAYOUT:
+            self.verify_trace = trace
         if self.verify_sampler is not None:
             # The accept step (VerifySampler) in its own trace on the verify trace's output logits and greedy tokens,
             # then the chain step (tt/spec_chain.py: the result page, and the MTP draft's inputs when a draft chains
             # behind the pass), replayed after an argmax_ids or fused_sample verify; a logits verify replays the
             # verify trace alone. Their programs compiled in capture_decode_trace; this eager run hits the cache.
-            assert self.spec_chain is not None and output["next_tokens"] is self.greedy_head.next_tokens
+            chain = self.spec_chains[layout]
+            assert output["next_tokens"] is self.greedy_head.next_tokens
             self.verify_sampler(output["logits"], output["next_tokens"])
-            self.spec_chain.chain()
+            chain.chain()
             ttnn.synchronize_device(self.mesh_device)
             fabric = getattr(self.plan, "fabric_gather", None)
             phase = fabric.phase if fabric is not None else None
             accept_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             self.verify_sampler(output["logits"], output["next_tokens"])
-            self.spec_chain.chain()
+            chain.chain()
             ttnn.end_trace_capture(self.mesh_device, accept_id, cq_id=0)
             # No fabric reduction in the accept step: replays leave the gather phases where the verify left them.
             fabric = getattr(self.plan, "fabric_gather", None)
             assert fabric is None or fabric.phase == (phase if phase is not None else 0), "fabric phase moved"
             ttnn.synchronize_device(self.mesh_device)
-            self.verify_trace["accept"] = accept_id
+            trace["accept"] = accept_id
 
-    def _relay(self):
-        """The verify trace's relay step (tt/spec_chain.py), when the replica accepts on device (VerifySampler)."""
-        if self.spec_chain is not None and self.verify_sampler is not None:
-            self.spec_chain.relay(self.verify_sampler.ctrl)
+    def _relay(self, layout=LAYOUT):
+        """The verify trace's relay step (tt/spec_chain.py, ``layout``'s chain), when the replica accepts on device
+        (VerifySampler)."""
+        if self.spec_chains and self.verify_sampler is not None:
+            self.spec_chains[layout].relay(self.verify_sampler.ctrl)
 
-    def _verify_step(self, inputs):
+    def _verify_step(self, inputs, layout=LAYOUT):
         """The verify trace's step: with the MTP history, its slots' final norm rows written into their requests'
-        rings (the verify upload's chain row names them) at the end."""
-        output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
+        rings (the verify upload's chain row names them, at the same words in every layout) at the end."""
+        output = self._decode_inputs(inputs, serial=SPEC_SLOTS, group_slots=layout.group_slots)
         hist = self._history()
         if hist is not None:
             hist.verify(self.spec_inputs.verify_packed, output["hidden"])
         return output
 
     def capture_spec_traces(self):
-        """The verify step and the drafter's program (MTP or DFlash), after the decode trace (persistent buffers
-        already exist)."""
-        self.capture_verify_trace()
+        """The verify step (one per layout) and the drafter's program (MTP or DFlash), after the decode trace
+        (persistent buffers already exist)."""
+        for layout in LAYOUTS:
+            self.capture_verify_trace(layout)
         if self.mtp is not None:
             self.mtp.capture_trace()
         if self.dflash is not None:
             self.dflash.capture_trace()
 
     def release_spec_traces(self):
-        if self.verify_trace is not None:
-            ttnn.release_trace(self.mesh_device, self.verify_trace["id"])
-            if self.verify_trace["accept"] is not None:
-                ttnn.release_trace(self.mesh_device, self.verify_trace["accept"])
-            self.verify_trace = None
+        for trace in self.verify_traces.values():
+            ttnn.release_trace(self.mesh_device, trace["id"])
+            if trace["accept"] is not None:
+                ttnn.release_trace(self.mesh_device, trace["accept"])
+        self.verify_traces, self.verify_trace = {}, None
         if self.mtp is not None:
             self.mtp.release_trace()
         if self.dflash is not None:
             self.dflash.release_trace()
 
-    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None, layout=LAYOUT):
         """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify
         trace's output (its ``next_tokens`` are the slots' greedy tokens). Copies the packed tokens and positions
         (the trace derives its other inputs from them) with the chain row ``chain`` (reference.spec_chain.chain_row;
         None: no draft chains behind the pass), and the RoPE cos / sin unless the trace reads them from the device
         tables. ``accept``: the pass's (slots, groups) for the accept trace (``verify_accept_enqueue``), staged first:
-        the verify trace's relay step writes a chained pass's drafts into the control page."""
+        the verify trace's relay step writes a chained pass's drafts into the control page. ``layout``: the pass's
+        draft groups (the verify trace replayed, and the chain row's)."""
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         if accept is not None:
             self.verify_sampler.stage(*accept)
@@ -1812,20 +1835,21 @@ class TtMiMoModel:
                 *self.rope_setups["swa"].decode_host_inputs(positions),
                 *self.rope_setups["full"].decode_host_inputs(positions),
             )
-            for h, d in zip(host, self.verify_trace["inputs"][2:6]):
+            for h, d in zip(host, self.verify_traces[layout]["inputs"][2:6]):
                 ttnn.copy_host_to_device_tensor(h, d)
-        ttnn.execute_trace(self.mesh_device, self.verify_trace["id"], cq_id=0, blocking=False)
-        return self.verify_trace["output"]
+        ttnn.execute_trace(self.mesh_device, self.verify_traces[layout]["id"], cq_id=0, blocking=False)
+        return self.verify_traces[layout]["output"]
 
-    def verify_accept_enqueue(self, slots=None, groups=None):
+    def verify_accept_enqueue(self, slots=None, groups=None, layout=LAYOUT):
         """After ``verify_enqueue``: the pass's acceptance on device (VerifySampler) with its sampled slots' parameters
         and its requests (reference.sample_verify.pass_inputs; staged here unless ``verify_enqueue`` staged them),
-        then the chain step. Non-blocking; ``spec_chain.read`` returns the pass's result page (after
+        then ``layout``'s chain step. Non-blocking; ``spec_chains[layout].read`` returns the pass's result page (after
         ``mtp.enqueue_chained``, with the drafts chained behind it)."""
-        assert self.verify_trace is not None and self.verify_trace["accept"] is not None, "no accept trace captured"
+        trace = self.verify_traces.get(layout)
+        assert trace is not None and trace["accept"] is not None, "no accept trace captured"
         if groups is not None:
             self.verify_sampler.stage(slots, groups)
-        ttnn.execute_trace(self.mesh_device, self.verify_trace["accept"], cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh_device, trace["accept"], cq_id=0, blocking=False)
 
     def read_next_tokens(self, handle):
         """The greedy token of every slot of a decode or verify step, int64 [max_batch] (blocks)."""
@@ -1873,7 +1897,7 @@ class TtMiMoModel:
 
     def _release(self, handle):
         trace = self.decode_trace
-        traced = (trace, trace["sampled"] if trace is not None else None, self.verify_trace)
+        traced = (trace, trace["sampled"] if trace is not None else None, *self.verify_traces.values())
         if not any(t is not None and handle is t["output"] for t in traced):
             persistent = [h.next_tokens for h in (self.greedy_head, self.sampler) if h is not None]
             persistent += list(self.norm_buffers or ())
