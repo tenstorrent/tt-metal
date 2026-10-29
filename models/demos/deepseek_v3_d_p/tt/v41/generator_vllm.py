@@ -1090,8 +1090,13 @@ class DeepseekV41ForCausalLM:
         model = self.model if model is None else model
         chunk = model.chunk
         lengths = {chunk, WARMUP_PROMPT}
-        if model is self.model:  # the packed layouts' totals (the packed state runs on the full-chunk model)
+        if model is self.model:  # the packed layouts' totals (the packed state runs on the full-chunk model), and
+            # their segment lengths: a packable prompt runs alone on this model when it is not a traced length
+            # (the join test's references; a queue of one in serving), and a config built lazily after the decode
+            # capture is overwritten by the decode replays (the join test's k=2
+            # references drifted, and its 40-layer traced run hung in the first eager chunk after the c1 replays)
             lengths |= {layout[-1][0] + layout[-1][1] for layout in self.pack_layouts}
+            lengths |= {n for layout in self.pack_layouts for _, n in layout}
         for n in self.trace_lengths:
             if model is self.model:
                 lengths.add(n if n <= chunk else n - (n - 1) // chunk * chunk)
@@ -1145,21 +1150,26 @@ class DeepseekV41ForCausalLM:
         logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
         _l1_probe(self.mesh_device, "after warm-up joins")
         if self.pack_state is not None:
-            # one eager pack of the largest layout: the chunk's programs at the pack's shapes and every persistent
-            # tensor of the packed path (the layouts' tables and padding configs are built above) before the decode
-            # captures; its segments join slots 0.. (the segment join's scatter programs compiled)
-            layout = self.pack_layouts[0]
-            prompts = [self._warmup_prompt(n) for _, n in layout]
-            t0 = time.time()
-            _l1_probe(self.mesh_device, "before warm-up packed prefill")
-            self.model.prefill_packed(prompts, self.pack_state, self.prefill_buffers[id(self.model)])
-            for g, (offset, n) in enumerate(layout):
-                self.decoder.join(g % self.max_batch_size, prompts[g], self.pack_state, (offset, n, g))
-            logger.info(
-                f"DeepSeek-V4.1-Flash warm-up: packed prefill of {[n for _, n in layout]} tokens and its "
-                f"{len(layout)} segment joins in {time.time() - t0:.1f} s"
-            )
-            _l1_probe(self.mesh_device, "after warm-up packed prefill")
+            # one eager pack of every listed layout: the chunk's programs at each pack's shapes and
+            # every persistent tensor of the packed path (the layouts' tables and padding configs
+            # are built above) before any capture (warming only the largest layout left other
+            # layouts' first runs after the captures); the largest layout's segments join slots 0..
+            # (the segment join's scatter programs compiled)
+            for layout in self.pack_layouts:
+                prompts = [self._warmup_prompt(n) for _, n in layout]
+                t0 = time.time()
+                _l1_probe(self.mesh_device, f"before warm-up packed prefill {[n for _, n in layout]}")
+                self.model.prefill_packed(prompts, self.pack_state, self.prefill_buffers[id(self.model)])
+                joins = 0
+                if layout is self.pack_layouts[0]:
+                    for g, (offset, n) in enumerate(layout):
+                        self.decoder.join(g % self.max_batch_size, prompts[g], self.pack_state, (offset, n, g))
+                    joins = len(layout)
+                logger.info(
+                    f"DeepSeek-V4.1-Flash warm-up: packed prefill of {[n for _, n in layout]} tokens and "
+                    f"{joins} segment joins in {time.time() - t0:.1f} s"
+                )
+                _l1_probe(self.mesh_device, f"after warm-up packed prefill {[n for _, n in layout]}")
         if defer_final():
             self._prewarm_restore()
 

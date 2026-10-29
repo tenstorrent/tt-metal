@@ -313,6 +313,17 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         pack_logits = prefill(list(zip(pack_keys, prompts)))
         checks[f"{tag} pack_call"] = {**model.pack_last, "wall_s": round(time.time() - t0, 3)}
         pack_logits_by_k[k] = pack_logits
+        # the same prompt packed under another layout (the kmax pack's first k segments hold these prompts): the
+        # single path is deterministic and segment 0 equals it, so segment 0 of every pack is one tensor; the other
+        # segments are reported (their TP all-reduce order differs with the layout's total)
+        for other, logits_o in pack_logits_by_k.items():
+            if other == k:
+                continue
+            for g in range(min(k, other)):
+                rec = _logits_record(logits_o[g], pack_logits[g])
+                checks[f"{tag} vs k{other} logits[{g}]"] = rec
+                if not rec["equal"]:
+                    judge(f"{tag} vs k{other} logits[{g}]", [f"{tag}: segment {g} vs the k{other} pack's {rec}"], must=g == 0)
         assert model.pack_last.get("rows") == list(range(k)), model.pack_last
         assert model.prefill_last.get("mode") == ("replay" if traced else "eager"), model.prefill_last
         assert all(model.pending[key][0] is model.pack_state for key in pack_keys)
@@ -346,6 +357,13 @@ def test_v41_pack_join(mesh_device, device_params, monkeypatch):
         c1_steps = min(steps, 4)
         ref_keys2, pack_keys2 = new_keys(k), new_keys(k)
         ref_logits2 = [prefill([(key, p)])[0] for key, p in zip(ref_keys2, prompts)]
+        # the references are stable: the single path of the same prompt after the decode replays equals its run
+        # before them (a padding config built lazily after the decode capture drifted here)
+        for g in range(k):
+            rec = _logits_record(ref_logits[g], ref_logits2[g])
+            checks[f"{tag} reference_stable[{g}]"] = rec
+            if not rec["equal"]:
+                judge(f"{tag} reference_stable[{g}]", [f"{tag}: reference {g} after the decode replays {rec}"], must=True)
         join(ref_keys2)
         pack_logits2 = prefill(list(zip(pack_keys2, prompts)))
         join(pack_keys2)
