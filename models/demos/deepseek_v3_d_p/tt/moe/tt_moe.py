@@ -28,7 +28,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENAB
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     combine_overlap_payload_size,
+    get_ep_mesh_composer,
     get_ep_mesh_mapper,
+    mesh_shard_dims,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -122,6 +124,7 @@ class TtMoe(LightweightModule):
         routed_emb_dim: int | None = None,
         latent_weights: dict | None = None,
         latent_use_norm: bool = True,
+        sp_axis: int = 0,
     ):
         """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy.
 
@@ -129,7 +132,12 @@ class TtMoe(LightweightModule):
         intermediate differs from the routed experts' (Kimi-K3: 6144 vs 3072). Note the routed-expert
         cache needs no dim arguments -- it derives shapes from the weight tensors themselves -- so
         ``routed_emb_dim`` does not appear here.
+
+        ``sp_axis`` is the mesh axis the dispatch groups run along (TP is the other one); it decides
+        the per-device placement baked into every cached tensor, so it must match the TtMoe that
+        loads the cache (see mesh_cache_key for keeping the two layouts' caches apart).
         """
+        tp_axis = 1 - sp_axis
         if shared_hidden_dim is None:
             shared_hidden_dim = hidden_dim
         # Build gate cache (delegate to TtMoEGatePrefill)
@@ -141,6 +149,8 @@ class TtMoe(LightweightModule):
                 dim=emb_dim,
                 n_routed_experts=gate_weights["weight"].shape[0],
             )
+            gate_config.ccl_config["DISPATCH_AXIS"] = sp_axis
+            gate_config.ccl_config["TP_AXIS"] = tp_axis
 
             TtMoEGatePrefill.build_ttnn_cache(
                 torch_weight=gate_weights["weight"],
@@ -160,6 +170,7 @@ class TtMoe(LightweightModule):
                 routed_expert_weights_dtype,
                 cache_path,
                 f"layer_{layer_idx}.routed_expert",
+                sp_axis=sp_axis,
             )
 
         # Build shared expert cache
@@ -172,6 +183,7 @@ class TtMoe(LightweightModule):
                 shared_expert_weights_dtype,
                 cache_path,
                 f"layer_{layer_idx}.shared_expert",
+                tp_axis=tp_axis,
             )
 
         # Gated on the weights, not the dims alone: without weights the placeholder branch would write
@@ -186,6 +198,7 @@ class TtMoe(LightweightModule):
                 cache_path=cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.latent_proj",
                 use_norm=latent_use_norm,
+                tp_axis=tp_axis,
             )
 
     def __init__(
@@ -236,6 +249,7 @@ class TtMoe(LightweightModule):
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
         overlap_routed_expert_with_combine: Optional[bool] = False,
+        sp_axis: int = 0,
     ):
         """
         Initialize TtMoe module.
@@ -256,9 +270,9 @@ class TtMoe(LightweightModule):
             emb_dim: Embedding dimension (default: 7168)
             hidden_dim: Hidden/intermediate dimension (default: 2048)
             num_links: Number of ethernet links for CCL. Int applies to both axes;
-                       tuple (row, col) allows separate config per axis.
+                       tuple (axis 0, axis 1) allows separate config per mesh axis.
             topology: CCL topology. Scalar applies to both axes;
-                      tuple (row, col) allows separate config per axis.
+                      tuple (axis 0, axis 1) allows separate config per mesh axis.
             routed_expert_weights: Optional list of dicts with gate_proj, up_proj, down_proj
                                    per expert. Length must be experts_per_chip.
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj
@@ -331,6 +345,10 @@ class TtMoe(LightweightModule):
                 attached (set_trace_controller): eager it runs the routed expert then combine, since the
                 overlapped program is host-bound when dispatched op by op. Its three global semaphores live in the mesh's TT_CCL; everything else it
                 places in L1 is freed when the op returns.
+            sp_axis: Mesh axis the dispatch groups (SP) run along; TP is the other axis. 0 (default)
+                is the 8x4 Galaxy layout; 1 puts SP on the 4-wide ring axis for the 4x4 prefill
+                stages. Dispatch / combine run on sp_axis; the gate all-reduce, shared expert, latent
+                projections, x all-gather and post-combine reduce run on the TP axis.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -349,17 +367,21 @@ class TtMoe(LightweightModule):
         self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
         self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
         self.use_latent_moe = self.routed_emb_dim != emb_dim
+        assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+        self.sp_axis = sp_axis
+        self.tp_axis = 1 - sp_axis
 
-        # Unpack row/col CCL config
+        # Per-axis CCL config: tuples are indexed by mesh axis (axis 0, axis 1), so pick the SP and TP
+        # entries by axis.
         if isinstance(num_links, tuple):
-            self.row_num_links, self.col_num_links = num_links
+            self.sp_num_links, self.tp_num_links = num_links[self.sp_axis], num_links[self.tp_axis]
         else:
-            self.row_num_links = self.col_num_links = num_links
+            self.sp_num_links = self.tp_num_links = num_links
 
         if isinstance(topology, tuple):
-            self.row_topology, self.col_topology = topology
+            self.sp_topology, self.tp_topology = topology[self.sp_axis], topology[self.tp_axis]
         else:
-            self.row_topology = self.col_topology = topology
+            self.sp_topology = self.tp_topology = topology
 
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
         # Optional SubDeviceTraceController (capture phase): the shared-expert/dispatch overlap's
@@ -377,11 +399,9 @@ class TtMoe(LightweightModule):
         # rings on SP. The forcing is gated on the overlap flag: with overlap disabled the reduce-
         # scatter runs alone (no concurrent dispatch on the shared routers), so Ring is safe and kept.
         # Every other TP-axis collective (MLA, dense FFN, gate, pre-dispatch all-gather, post-combine
-        # reduce) is never overlapped and keeps col_topology (Ring).
-        force_shared_expert_linear = (
-            self.overlap_shared_expert_with_dispatch and self.col_topology == ttnn.Topology.Ring
-        )
-        self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
+        # reduce) is never overlapped and keeps tp_topology (Ring).
+        force_shared_expert_linear = self.overlap_shared_expert_with_dispatch and self.tp_topology == ttnn.Topology.Ring
+        self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.tp_topology
         if force_shared_expert_linear:
             logger.info(
                 "TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with dispatch on a "
@@ -404,9 +424,11 @@ class TtMoe(LightweightModule):
             route_scale=route_scale,
             max_sp_dim=max_gate_seq_len_per_chip,
         )
-        gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
-        # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
-        gate_config.ccl_config["TOPOLOGY"] = self.col_topology
+        gate_config.ccl_config["DISPATCH_AXIS"] = self.sp_axis
+        gate_config.ccl_config["TP_AXIS"] = self.tp_axis
+        gate_config.ccl_config["NUM_LINKS"] = self.tp_num_links if isinstance(num_links, tuple) else num_links
+        # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows tp_topology.
+        gate_config.ccl_config["TOPOLOGY"] = self.tp_topology
         if gate_score_func is not None:
             gate_config.score_func = gate_score_func
 
@@ -437,6 +459,7 @@ class TtMoe(LightweightModule):
             num_links=gate_config.ccl_config["NUM_LINKS"],
             experts_per_chip=experts_per_chip,
             use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+            sp_axis=self.sp_axis,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -446,7 +469,7 @@ class TtMoe(LightweightModule):
         logger.debug(f"  seq_len_per_chip={seq_len_per_chip}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
 
         self.tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
-            mesh_device, expert_dispatch_table, dispatch_axis=0
+            mesh_device, expert_dispatch_table, dispatch_axis=self.sp_axis
         )
 
         # ========================================
@@ -488,7 +511,7 @@ class TtMoe(LightweightModule):
             self.shared_sd_cores = None
             logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
 
-        # Initialize dispatch module (row axis: axis 0)
+        # Initialize dispatch module (SP axis)
         self.dispatch_module = TtDispatchModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -499,13 +522,13 @@ class TtMoe(LightweightModule):
             max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=self.routed_emb_dim,
-            cluster_axis=0,
-            num_links=self.row_num_links,
-            topology=self.row_topology,
+            cluster_axis=self.sp_axis,
+            num_links=self.sp_num_links,
+            topology=self.sp_topology,
             subdevice_id=self.dispatch_sd_id,
         )
 
-        # Initialize combine module (row axis: axis 0)
+        # Initialize combine module (SP axis)
         self.combine_module = TtCombineModule(
             mesh_device=mesh_device,
             dispatch_group_size=dispatch_group_size,
@@ -513,9 +536,9 @@ class TtMoe(LightweightModule):
             experts_per_chip=experts_per_chip,
             num_experts_per_tok=num_experts_per_tok,
             seq_len_per_chip=seq_len_per_chip,
-            cluster_axis=0,
-            num_links=self.row_num_links,
-            topology=self.row_topology,
+            cluster_axis=self.sp_axis,
+            num_links=self.sp_num_links,
+            topology=self.sp_topology,
             init_zeros=False,
         )
 
@@ -529,7 +552,7 @@ class TtMoe(LightweightModule):
                 dispatch_group_size=dispatch_group_size,
                 num_dispatch_groups=num_dispatch_groups,
             ),
-            mesh_mapper=get_ep_mesh_mapper(mesh_device),
+            mesh_mapper=get_ep_mesh_mapper(mesh_device, self.sp_axis),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             dtype=ttnn.uint32,
@@ -538,14 +561,15 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
         # An opted-in model (None) overlaps wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
-        # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is at most two fabric packets so
+        # around a ring so the 2D fabric must wrap along the SP mesh axis, and each token is at most two fabric packets so
         # the payload must fit half of one. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that
         # does not wrap, runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for
         # the overlap.
         overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
         fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
+        # TORUS_Y wraps mesh axis 0, TORUS_X wraps axis 1, TORUS_XY both.
         ring_axis_wraps = ttnn.get_fabric_config() in (
-            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            ttnn.FabricConfig.FABRIC_2D_TORUS_Y if self.sp_axis == 0 else ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         )
         overlap_fits = is_blackhole() and ring_axis_wraps and fabric_payload >= overlap_payload
@@ -553,19 +577,19 @@ class TtMoe(LightweightModule):
             overlap_routed_expert_with_combine = overlap_fits
         elif overlap_routed_expert_with_combine and not overlap_fits:
             raise ValueError(
-                f"overlap_routed_expert_with_combine needs Blackhole, a 2D fabric that wraps along mesh axis 0 (got "
+                f"overlap_routed_expert_with_combine needs Blackhole, a 2D fabric that wraps along mesh axis {self.sp_axis} (got "
                 f"{'a ring' if ring_axis_wraps else 'no ring'}), and a fabric payload of at least {overlap_payload} B "
                 f"for half a bf16 token plus combine_fabric2d's routing tail (got {fabric_payload} B); open the mesh "
                 f"with moe_fabric_payload_size on a torus"
             )
         logger.info(
             f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} when traced, "
-            f"never eager (axis 0 {'ring' if ring_axis_wraps else 'linear'}, fabric payload {fabric_payload} B, "
+            f"never eager (axis {self.sp_axis} {'ring' if ring_axis_wraps else 'linear'}, fabric payload {fabric_payload} B, "
             f"overlap needs {overlap_payload} B)"
         )
         # combine_fabric2d relays tokens between the chips of one ring, so each chip needs its own dispatch
-        # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on mesh axis
-        # 0, so a group is a mesh column: shard the groups across columns and replicate down each one.
+        # group's rows of the table -- one row per ring chip -- and no other group's. Combine runs on the SP mesh
+        # axis, so a group is a line along it: shard the groups across the TP axis and replicate along SP.
         self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
         # Fetched here, not in forward: the first call creates them and synchronizes, which a trace cannot capture.
         self.combine_overlap_semaphores = (
@@ -576,15 +600,17 @@ class TtMoe(LightweightModule):
         self.replicated_global_expert_idx_tt = None
         if overlap_routed_expert_with_combine:
             assert (
-                tuple(mesh_device.shape)[1] == num_dispatch_groups
-            ), f"{num_dispatch_groups} dispatch groups on a {tuple(mesh_device.shape)} mesh: expected one per column"
+                tuple(mesh_device.shape)[self.tp_axis] == num_dispatch_groups
+            ), f"{num_dispatch_groups} dispatch groups on a {tuple(mesh_device.shape)} mesh: expected one per TP index"
             self.replicated_global_expert_idx_tt = ttnn.from_torch(
                 ExpertMapping.create_global_expert_idx_table(
                     experts_per_chip=experts_per_chip,
                     dispatch_group_size=dispatch_group_size,
                     num_dispatch_groups=num_dispatch_groups,
                 ),
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=mesh_shard_dims(0, self.tp_axis)
+                ),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh_device,
                 dtype=ttnn.uint32,
@@ -606,16 +632,17 @@ class TtMoe(LightweightModule):
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
             weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
+            sp_axis=self.sp_axis,
         )
 
-        # Initialize shared expert (col axis: axis 1)
+        # Initialize shared expert (TP axis)
         self.shared_expert = TtSharedExpert(
             mesh_device=mesh_device,
             # The shared expert reads the pre-projection hidden, so it stays at the full emb_dim.
             emb_dim=emb_dim,
             hidden_dim=self.shared_hidden_dim,
             torch_weights=shared_expert_weights,
-            num_links=self.col_num_links,
+            num_links=self.tp_num_links,
             topology=self.shared_expert_topology,
             activations_dtype=shared_expert_activations_dtype,
             weights_dtype=shared_expert_weights_dtype,
@@ -627,6 +654,7 @@ class TtMoe(LightweightModule):
             situ_beta=shared_expert_situ_beta,
             situ_linear_beta=shared_expert_situ_linear_beta,
             clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
+            tp_axis=self.tp_axis,
         )
 
         self.latent_projections = (
@@ -639,24 +667,25 @@ class TtMoe(LightweightModule):
                 rms_norm_eps=rms_norm_eps,
                 # ~10% of routed-expert FLOPs, so they take the shared expert's precision.
                 weights_dtype=shared_expert_weights_dtype,
-                num_links=self.col_num_links,
-                topology=self.col_topology,
+                num_links=self.tp_num_links,
+                topology=self.tp_topology,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.latent_proj",
+                tp_axis=self.tp_axis,
             )
             if self.use_latent_moe
             else None
         )
 
-        # Initialize reduce module for post-combine reduction (col axis: axis 1)
+        # Initialize reduce module for post-combine reduction (TP axis)
         # topk_dim=3 because combine output is (1, dispatch_group_size, seq_len, topk, emb_dim)
-        # cluster_axis=1 to reduce-scatter across TP axis (same as shared expert)
+        # cluster_axis=tp_axis to reduce-scatter across the TP axis (same as shared expert)
         self.reduce_module = TtReduceModule(
             mesh_device=mesh_device,
             topk_dim=3,  # topk is at dim 3 in 5D tensor from combine
-            cluster_axis=1,  # TP axis for reduce-scatter
-            num_links=self.col_num_links,
-            topology=self.col_topology,
+            cluster_axis=self.tp_axis,  # TP axis for reduce-scatter
+            num_links=self.tp_num_links,
+            topology=self.tp_topology,
         )
 
         # Load debug flags from environment
@@ -679,7 +708,8 @@ class TtMoe(LightweightModule):
                 self.experts_per_chip,
                 self.num_experts_per_tok,
                 self.seq_len_per_chip,
-                self.row_num_links,
+                self.sp_num_links,
+                combine_axis=self.sp_axis,
             )
 
     def release_sub_device_manager(self):
@@ -735,19 +765,23 @@ class TtMoe(LightweightModule):
                 )
             return
         try:
-            # SP is mesh axis 0 and the gate output is TP-replicated (the logits all-reduce), so concat
-            # along axis 0 over the SP rows and collapse the TP columns -- the same composition
+            # The gate output is TP-replicated (the logits all-reduce), so concat on tensor dim 0 over the
+            # SP axis and collapse the TP replicas -- the same composition
             # TtMoEGatePrefill._compose_logits_to_host uses.
             composer = ttnn.create_mesh_composer(
                 self.mesh_device,
                 config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),
-                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], 1),
+                    dims=(0, -1) if self.sp_axis == 0 else (-1, 0),
+                    mesh_shape_override=(
+                        ttnn.MeshShape(self.mesh_device.shape[0], 1)
+                        if self.sp_axis == 0
+                        else ttnn.MeshShape(1, self.mesh_device.shape[1])
+                    ),
                 ),
             )
             host_indices = ttnn.to_torch(indices, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
             host_scores = ttnn.to_torch(scores, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
-            sp_factor = int(self.mesh_device.shape[0])
+            sp_factor = int(self.mesh_device.shape[self.sp_axis])
             os.makedirs(dump_dir, exist_ok=True)
             torch.save(
                 {
@@ -788,8 +822,8 @@ class TtMoe(LightweightModule):
             metadata,
             all_expert_offsets,
             self.replicated_global_expert_idx_tt,
-            combine_axis=0,
-            combine_num_links=self.row_num_links,
+            combine_axis=self.sp_axis,
+            combine_num_links=self.sp_num_links,
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
@@ -814,8 +848,9 @@ class TtMoe(LightweightModule):
 
         Args:
             x: Input tensor - ROW_MAJOR, sharded:
-               - For 2D mesh: sharded dims=(0, -1) - dim 0 across axis 0, dim -1 across axis 1
-               - Shape per device: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
+               - For 2D mesh: dim 0 sharded across the SP axis, dim -1 across the TP axis
+                 (dims=(0, -1) at sp_axis=0, (-1, 0) at sp_axis=1)
+               - Shape per device: (dispatch_group_size/SP, seq_len_per_chip, emb_dim/TP)
             return_intermediates: If True, return intermediate tensors for debugging
             actual_isl: Actual ISL of the sequence (None = no padding). Doubles as the padding-config
                 GUARD: not-None enables padding awareness. On the traced path (`metadata` set) that is
@@ -949,7 +984,7 @@ class TtMoe(LightweightModule):
         if self.debug_token_count:
             # DEBUG: Print full token counts per expert for monitoring (controlled by env var)
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-            _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+            _ep_composer = get_ep_mesh_composer(self.mesh_device, self.sp_axis)
             _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
             logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 
@@ -975,18 +1010,18 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
         # ========================================
-        # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
+        # Input x is sharded: (dispatch_group_size over the SP axis, seq_len_per_chip, emb_dim over the TP axis)
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
-        # Only needed if there are multiple devices in TP axis (axis 1)
-        if self.mesh_device.shape[1] > 1:
+        # Only needed if there are multiple devices in the TP axis
+        if self.mesh_device.shape[self.tp_axis] > 1:
             x = ttnn.experimental.all_gather_async(
                 x,
                 dim=-1,  # Gather along emb_dim
-                cluster_axis=1,  # Gather across axis 1 (TP axis)
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-                num_links=self.col_num_links,
-                topology=self.col_topology,
+                cluster_axis=self.tp_axis,  # Gather across the TP axis
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.tp_num_links,
+                topology=self.tp_topology,
             )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
@@ -1181,7 +1216,7 @@ class TtMoe(LightweightModule):
             # chunk of _counts_host holds that chip's nonzero counts; the sum of each chunk is
             # the chip's total dispatched tokens and must fit in the dispatch buffer.
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-            _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
+            _ep_composer = get_ep_mesh_composer(self.mesh_device, self.sp_axis)
             _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
             _per_chip_sums = _counts_host.to(torch.int64).flatten().view(-1, self.experts_per_chip).sum(dim=1)
             max_per_chip_sum = int(_per_chip_sums.max().item())

@@ -52,4 +52,11 @@ constexpr uint32_t row_major_index(uint32_t ring_index, uint32_t num_rows, uint3
     return row * num_cols + col;
 }
 
+constexpr uint32_t column_major_index(
+    uint32_t ring_index, uint32_t num_rows, uint32_t num_cols, Orientation orientation) {
+    const uint32_t row = coordinate_row(ring_index, num_rows, num_cols, orientation);
+    const uint32_t col = coordinate_col(ring_index, num_rows, num_cols, orientation);
+    return col * num_rows + row;
+}
+
 }  // namespace ttnn::ccl::snake_ring

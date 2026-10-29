@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tests.conftest import find_local_model
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    torus_x_device_params,
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import (
@@ -52,7 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, mesh_cache_key
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
@@ -634,7 +635,7 @@ _OTHER_ROWS_PER_CHIP = (256, 1280)
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (8, 4),
@@ -643,6 +644,7 @@ _OTHER_ROWS_PER_CHIP = (256, 1280)
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             ),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
@@ -655,8 +657,35 @@ _OTHER_ROWS_PER_CHIP = (256, 1280)
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
             ),
             1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
+        ),
+        # LoudBox analog of a 4x4 stage: SP=2 on the axis-1 ring and TP=4 on axis 0, so the chips are ordered
+        # column-major as on 4x4 and each chip keeps 16 heads (the heads<->sequence all-to-all still runs).
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
+            1,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-4x2-sp1",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring, TP=4 on
+        # the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -678,12 +707,13 @@ def test_glm_prefill_block(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     seq_len,
     layer_type,
     request,
 ):
     """One fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
-    sp_factor = mesh_device.shape[0]
+    sp_factor = mesh_device.shape[sp_axis]
     rows_per_chip = seq_len // sp_factor
     if rows_per_chip != PREFILL_CHUNK_TOKENS_PER_CHIP and rows_per_chip not in _OTHER_ROWS_PER_CHIP:
         pytest.skip(f"seq_len {seq_len} on SP={sp_factor} is {rows_per_chip} rows/chip, not a shape under test")
@@ -700,7 +730,7 @@ def test_glm_prefill_block(
     # (ReuseIndexer.forward raises). glm_5_3 -> 6 (3-5 shared).
     layer_idx = _first_full_moe_layer(config) if is_moe else 0
     hidden = config.hidden_size
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
 
     # Weight source: use the prebuilt ttnn tensorbin cache when present AND complete -> real weights (device
@@ -708,7 +738,9 @@ def test_glm_prefill_block(
     # Never (re)build the cache here.
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
     experts_per_chip = GLM53Config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
-    effective_cache = (weight_cache_path / f"{sp_factor}x{tp_factor}") if weight_cache_path is not None else None
+    effective_cache = (
+        (weight_cache_path / mesh_cache_key(mesh_shape, sp_axis)) if weight_cache_path is not None else None
+    )
     # The isolated MoE block is only meaningful on RANDOM weights, so it never consults the ttnn cache:
     # a random block input drives GLM's trained near-degenerate top-8 gate to pick different experts on
     # device vs the CPU reference (block PCC collapses to ~0.1), though the same layer scores ~0.995

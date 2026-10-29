@@ -16,7 +16,8 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -46,17 +47,16 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
-    [
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 64, 2, 2),
-    ],
+    with_sp4_depth([(PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 64, 2, 2)]),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (2, 2),
             fabric2d_device_params(fabric_payload_size=7 * 1024),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-mesh-2x2",
         ),
@@ -64,8 +64,18 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
             (2, 4),
             fabric2d_device_params(fabric_payload_size=7 * 1024),
             2 if is_blackhole() else 1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): the dispatch axis is mesh axis 1.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(fabric_payload_size=7 * 1024),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -80,6 +90,7 @@ def test_prep_dispatch_combine(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
+    sp_axis,
     device_params,
     use_predictable_data,
     padded_percent,
@@ -109,12 +120,11 @@ def test_prep_dispatch_combine(
             dispatch_group_size dimension). Equals global_expert_offsets minus the
             per-source-device local offset.
     """
-    topology = per_axis_topology(device_params["fabric_config"])[0]
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     torch.manual_seed(42)
     num_devices = mesh_device.get_num_devices()
 
-    mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
@@ -183,7 +193,7 @@ def test_prep_dispatch_combine(
     mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
-        dims=(sp_axis, None),
+        dims=(0, None) if sp_axis == 0 else (None, 0),
     )
 
     # masked_bincount consumes the gate's UINT16, TILE, L1-interleaved indices directly (untiled in-kernel).
@@ -226,6 +236,7 @@ def test_prep_dispatch_combine(
         expert_dispatch_table=expert_dispatch_table,
         num_links=num_links,
         experts_per_chip=experts_per_chip,
+        sp_axis=sp_axis,
     )
 
     (
@@ -247,7 +258,7 @@ def test_prep_dispatch_combine(
     tt_expert_token_counts = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
     tt_expert_region_offsets = ttnn.unsqueeze_to_4D(tt_expert_region_offsets)
 
-    ep_composer = get_ep_mesh_composer(mesh_device)
+    ep_composer = get_ep_mesh_composer(mesh_device, sp_axis)
     # squeeze(2) removes only the singleton dim from unsqueeze_to_4D, preserving [groups, chips, experts]
     host_expert_offsets = ttnn.to_torch(tt_expert_offsets, mesh_composer=ep_composer).squeeze(2)
     host_expert_token_counts = ttnn.to_torch(tt_expert_token_counts, mesh_composer=ep_composer).squeeze(2)
@@ -294,10 +305,11 @@ def test_prep_dispatch_combine(
     for r in [replication_result, region_replication_result, offsets_result, counts_result, region_offsets_result]:
         r.assert_passed(f"{r.name} validation failed")
 
-    # Every chip in dispatch group g holds group g's whole offsets table (groups run along mesh columns).
+    # Every chip in dispatch group g holds group g's whole offsets table. Groups run along the axis SP
+    # does not use: mesh columns at sp_axis 0, mesh rows at sp_axis 1.
     mesh_cols = mesh_device.shape[1]
     for dev_idx, tensor in enumerate(ttnn.get_device_tensors(tt_all_dispatch_offsets)):
+        row, col = divmod(dev_idx, mesh_cols)
+        group = col if sp_axis == 0 else row
         table = ttnn.to_torch(tensor).reshape(dispatch_group_size, num_routed_experts).int()
-        assert torch.equal(
-            table, expert_offsets[dev_idx % mesh_cols].int()
-        ), f"all_dispatch_offsets mismatch on device {dev_idx}"
+        assert torch.equal(table, expert_offsets[group].int()), f"all_dispatch_offsets mismatch on device {dev_idx}"

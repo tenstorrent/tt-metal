@@ -40,7 +40,11 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.demos.deepseek_v3_d_p.utils.chunk_config import (
+    PREFILL_CHUNK_TOKENS,
+    PREFILL_CHUNK_TOKENS_PER_CHIP,
+    SP4_CHUNK_TOKENS_PER_CHIP,
+)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
@@ -57,11 +61,18 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 
 
 # Each mesh carries the isl_total that lands PREFILL_CHUNK_TOKENS_PER_CHIP on every one of its chips, so there
-# is one ISL per mesh instead of a cross product to prune. The id carries it because
-# perf/test_prefill_block_perf.py selects rows by it.
-def _with_isl(param):
-    isl_total = PREFILL_CHUNK_TOKENS_PER_CHIP * param.values[0][0]
+# is one ISL per mesh instead of a cross product to prune; the 4x4 mesh also gets the SP=4 depth of a full
+# 5120-token chunk (SP4_CHUNK_TOKENS_PER_CHIP). The id carries it because perf/test_prefill_block_perf.py
+# selects rows by it.
+def _with_isl(param, per_chip=PREFILL_CHUNK_TOKENS_PER_CHIP):
+    isl_total = per_chip * param.values[0][0]
     return pytest.param(*param.values, isl_total, marks=param.marks, id=f"{param.id}-isl_{isl_total}")
+
+
+def _isl_rows(param):
+    yield _with_isl(param)
+    if tuple(param.values[0]) == (4, 4):
+        yield _with_isl(param, SP4_CHUNK_TOKENS_PER_CHIP)
 
 
 def _ci_unsupported_param_combos(**params):
@@ -103,7 +114,7 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, isl_total",
     [
-        _with_isl(param)
+        row
         for param in (
             pytest.param(
                 (2, 4),
@@ -116,6 +127,7 @@ def _ci_unsupported_param_combos(**params):
             # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
             *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
         )
+        for row in _isl_rows(param)
     ],
     indirect=["mesh_device", "device_params"],
 )

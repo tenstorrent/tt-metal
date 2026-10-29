@@ -925,6 +925,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
         "ring_attention_all_gather_writer.cpp";
 
+    // 0 = axis ring, 1 = full mesh with row-major tensor ranks, 2 = full mesh with column-major tensor ranks.
+    const uint32_t full_mesh_rank_order = rank_mapping.full_mesh ? (rank_mapping.column_major ? 2u : 1u) : 0u;
     const auto make_reader_compile_time_args = [&](uint32_t cb_index, bool worker_direction) {
         std::vector<uint32_t> args = {
             ring_index,                                         // kMyTransportRank
@@ -941,7 +943,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            full_mesh_rank_order,                               // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols
@@ -999,7 +1001,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             meta_cb_index,                                      // kCbMetaId
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            full_mesh_rank_order,                               // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols

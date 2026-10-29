@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    torus_x_device_params,
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
@@ -68,26 +69,34 @@ def _metadata_msg(mesh_device, words):
 # Two links is what the galaxy runs; one is the shared LoudBox block-test default.
 @pytest.mark.parametrize("num_links", [1, 2], ids=["link1", "link2"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, sp_axis",
     [
         pytest.param(
-            (2, 4),
+            mesh_shape,
             fabric2d_device_params(
                 fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM53Adapter.l1_small_size,
                 trace_region_size=_TRACE_REGION_SIZE,
             ),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="loudbox-fabric2d-2x4",
-        ),
+            sp_axis,
+            marks=pytest.mark.requires_mesh_topology(
+                mesh_shape=mesh_shape, topology=f"mesh-{mesh_shape[0]}x{mesh_shape[1]}"
+            ),
+            id=mesh_id,
+        )
+        # 4x2 with SP on axis 1 is the LoudBox analog of a 4x4 stage (SP=2 on the axis-1 ring, TP=4).
+        for mesh_id, mesh_shape, sp_axis in (
+            ("loudbox-fabric2d-2x4", (2, 4), 0),
+            ("loudbox-fabric2d-4x2-sp1", (4, 2), 1),
+        )
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 def test_glm_packed_forward_perf(
-    variant, config_only, mesh_device, device_params, num_links, num_layers, forward_chunks
+    variant, config_only, mesh_device, device_params, sp_axis, num_links, num_layers, forward_chunks
 ):
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[sp_axis]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     seq_cache = (_DEPTH_CHUNKS + 1) * chunk
     start = _DEPTH_CHUNKS * chunk
@@ -109,6 +118,8 @@ def test_glm_packed_forward_perf(
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
         use_trace=True,
         tp_shard_kv=True,
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
     )
     mesh_device.enable_program_cache()
     state_dict = glm_random_transformer_state_dict(config, GLM53Config, num_layers)
@@ -123,8 +134,8 @@ def test_glm_packed_forward_perf(
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=num_layers,
             num_users=slots,
         ),
@@ -133,8 +144,8 @@ def test_glm_packed_forward_perf(
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
             num_users=slots,
             dtype=ttnn.bfloat8_b,
@@ -182,7 +193,7 @@ def test_glm_packed_forward_perf(
 
     median_ms = statistics.median(times_ms)
     logger.warning(
-        f"GLM_PACKED_PERF mesh={sp}x{mesh_device.shape[1]} links={num_links} layers={num_layers} forward_chunks={forward_chunks} "
+        f"GLM_PACKED_PERF mesh={mesh_device.shape[0]}x{mesh_device.shape[1]} sp_axis={sp_axis} links={num_links} layers={num_layers} forward_chunks={forward_chunks} "
         f"chunk={chunk} depth={start} forward_ms={median_ms:.2f} per_chunk_ms={median_ms / forward_chunks:.2f} "
         f"runs_ms={' '.join(f'{t:.2f}' for t in times_ms)}"
     )
@@ -197,37 +208,38 @@ def test_glm_packed_forward_perf(
 # Rows per chip of one chunk: 640 is the production chunk (5K on 8x4); 256 is 8x4's 2,048-token chunk.
 @pytest.mark.parametrize("rows_per_chip", [PREFILL_CHUNK_TOKENS_PER_CHIP, 256], ids=["r640", "r256"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
-            (2, 4),
-            fabric2d_device_params(
+            mesh_shape,
+            make_device_params(
                 fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM53Adapter.l1_small_size
             ),
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="loudbox-fabric2d-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM53Adapter.l1_small_size
+            num_links,
+            sp_axis,
+            marks=pytest.mark.requires_mesh_topology(
+                mesh_shape=mesh_shape, topology=f"mesh-{mesh_shape[0]}x{mesh_shape[1]}"
             ),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="galaxy-8x4",
-        ),
+            id=mesh_id,
+        )
+        for mesh_id, mesh_shape, make_device_params, num_links, sp_axis in (
+            ("loudbox-fabric2d-2x4", (2, 4), fabric2d_device_params, 1, 0),
+            ("loudbox-fabric2d-4x2-sp1", (4, 2), fabric2d_device_params, 1, 1),
+            ("galaxy-8x4", (8, 4), torus_xy_device_params, 2, 0),
+            # One 4x4 stage (a galaxy tray half): SP on the axis-1 ring, TP=4 on the axis-0 line.
+            ("galaxy-4x4-sp1", (4, 4), torus_x_device_params, 2, 1),
+        )
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 def test_glm_packed_forward_profile(
-    variant, config_only, mesh_device, device_params, num_links, rows_per_chip, forward_chunks
+    variant, config_only, mesh_device, device_params, num_links, sp_axis, rows_per_chip, forward_chunks
 ):
     from tracy import signpost
 
     num_layers = 4
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[sp_axis]
     chunk = rows_per_chip * sp
     start = _PROFILE_DEPTH or _DEPTH_CHUNKS * chunk
     assert start % chunk == 0, f"GLM_PROFILE_DEPTH={start} must be a whole number of {chunk}-token chunks"
@@ -249,6 +261,8 @@ def test_glm_packed_forward_profile(
         routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
         tp_shard_kv=True,
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
     )
     mesh_device.enable_program_cache()
     state_dict = glm_random_transformer_state_dict(config, GLM53Config, num_layers)
@@ -262,8 +276,8 @@ def test_glm_packed_forward_profile(
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=num_layers,
             num_users=forward_chunks,
         ),
@@ -272,8 +286,8 @@ def test_glm_packed_forward_profile(
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
             num_users=forward_chunks,
             dtype=ttnn.bfloat8_b,

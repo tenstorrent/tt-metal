@@ -1,0 +1,29 @@
+# 2-stage intra-galaxy pipeline prefill at stage shape [4,4] with SP on mesh axis 1: one 8x4 galaxy
+# carved into its top tray half (rows 0-3, mesh 0) and bottom tray half (rows 4-7, mesh 1), the
+# layout of the 4x4 SC4 stages. Inside a half only the 4-wide axis keeps its ring, so SP=4 runs on
+# axis 1 (ring) and TP=4 on axis 0 (line).
+#
+# TT_VISIBLE_DEVICES is PER-GALAXY: another galaxy enumerates differently and a wrong map does not
+# error. The bottom half is listed with its rows reversed (asking for TP row t on physical row 7-t,
+# shorter D2D hops across the seam); the topology mapper currently ignores list order, so that needs
+# descriptor pinnings to take effect. Regenerate for your host with
+#   python models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --layout 4x4
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto
+
+global_env:
+  # SP's ring is the X axis, matched by the descriptor's dim_types [LINE, RING].
+  PREFILL_FABRIC_MODE: "2d_torus_x"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_SP_AXIS: "1"
+  PREFILL_MAX_SEQ_LEN: "10240"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  # PREFILL_PP_D2D_FIFO_BYTES stays at the runner's 256 B default. The receiver FIFO is L1 on the
+  # D2D worker cores, and at SP=4 (1280 tokens per chip) ring_mla's static CBs reach to within ~1.5 KB
+  # of the top of L1: 32 KB and 16 KB both clash on rank 1's first MLA layer.
+  LOGURU_LEVEL: "INFO"
