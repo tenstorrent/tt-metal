@@ -285,6 +285,10 @@ def test_demo(
         pytest.skip("CI only runs the CI-only tests")
     if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
+    # Quasar replaces each case's prompt and sizes with its cut-down run (below) but keeps the batch size, so the
+    # other cases either fail the paged-KV size check or repeat batch-1.
+    if is_quasar() and not test_id.endswith("batch-1"):
+        pytest.skip("Quasar runs the batch-1 case only")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
