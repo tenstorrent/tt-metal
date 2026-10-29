@@ -274,9 +274,9 @@ def e8m0_scale_factors(scales_e8m0_array):
       no NaN at all -- so the packer's NaN-to-zero coercion loses it outright
       and it reads back as 0.0, not NaN.
 
-    That loss is the format's, not the model's: the RTL excludes NaN from the
-    max-exponent tree the same way (``special_exp_flush``). It does mean NaN is
-    recorded at block granularity only, all-or-nothing, for those formats.
+    That loss is the format's, not the model's. The hardware excludes NaN from
+    the max-exponent tree the same way. It does mean NaN is recorded at block
+    granularity only, all-or-nothing, for those formats.
 
     A harmless code is substituted before exponentiating because ``exp2(128)``
     overflows float32. Computing it and masking afterwards gives the same
