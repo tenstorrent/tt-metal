@@ -174,3 +174,20 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 
 ### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
 - Taken: two kernel include changes, the arch read from the device. Clean merge, no behaviour change.
+
+### q / k as bfloat4_b
+- What: q and k (and k_local) may be BFLOAT4_B (validation; the CB formats come from the dtypes, not a bf16 / bfp8
+  switch). The default fidelity is LoFi when both are block float (bfloat8_b or bfloat4_b), else HiFi2, as before for
+  bfloat8_b; a caller config overrides it (DeepSeek-V4.1 passes HiFi2: at LoFi the gate step reads relu(q.k) with 4
+  bits).
+- Why: deepseek_v41_flash_d_p lowbit, the index keys and query at the reference's fp4 width (owner 2026-10-29). bf16 /
+  bfloat8_b programs unchanged (same formats).
+- Tests: two ds41 ring cases (2x2, ratio 2 / 1, 55296-token context) with bfloat4_b q / k on the host packer's grid
+  (`reference.bfp_grid`): within the noise limit, deterministic. Whole folder: 27 pass, 1 skipped (test_key_stride_ring
+  needs 8 devices).
+- Time, one p150b (indexer_score_dsa, 32 heads x 128, 512 queries, HiFi2 + fp32 DEST): T 27648 787 -> 774 us, T 55296
+  1519 -> 1507 us (-1.7 %; compute-bound). The ring's key traffic drops 3.6x (bfloat4_b tile 576 B vs bf16 2048 B), not
+  measured on one card.
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit phase 1)
+- Files: device/indexer_score_device_operation.cpp, device/indexer_score_program_factory.cpp,
+  device/ring_indexer_score_dsa_program_factory.cpp, tests/cases.py, tests/reference.py, tests/test_indexer_score.py

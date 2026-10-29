@@ -63,9 +63,13 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     const uint32_t expected_kv_width = attrs.has_scaled_kv()
                                            ? ::sparse_sdpa::packed_kv_payload_bytes(K_DIM, attrs.v_dim)
                                        : attrs.has_row_bfp4() ? ::sparse_sdpa::row_bfp4_bytes(K_DIM)
+                                       : attrs.has_row_bfp8() ? ::sparse_sdpa::row_bfp8_bytes(K_DIM)
                                                               : K_DIM;
+    // ROW_BFP8 also takes the window as blocks of 32 rows a page ([n / 32, window_block_bytes])
+    const bool kv_blocks =
+        attrs.has_row_bfp8() && kvs.rank() == 4 && kvs[3] == ::sparse_sdpa::window_block_bytes(K_DIM);
     TT_FATAL(
-        kvs.rank() == 4 && kvs[1] == 1 && kvs[3] == expected_kv_width,
+        kvs.rank() == 4 && kvs[1] == 1 && (kvs[3] == expected_kv_width || kv_blocks),
         "kv must be [B,1,T,{}] (got {})",
         expected_kv_width,
         kvs);
@@ -87,16 +91,21 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     if (t.kv_window.has_value()) {
         const auto& w = t.kv_window.value();
         TT_FATAL(w.device() == q.device(), "sparse_sdpa: kv_window must be on q's device");
-        TT_FATAL(w.dtype() == DataType::BFLOAT16, "sparse_sdpa: kv_window must be bf16");
+        const bool rec8 = w.dtype() == DataType::UINT8;  // bfloat8_b row records (fork option)
+        TT_FATAL(
+            w.dtype() == DataType::BFLOAT16 || rec8, "sparse_sdpa: kv_window must be bf16 or uint8 bfloat8_b records");
         TT_FATAL(w.layout() == Layout::ROW_MAJOR, "sparse_sdpa: kv_window must be ROW_MAJOR");
         TT_FATAL(w.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa: kv_window must be in DRAM");
         TT_FATAL(!w.memory_config().is_sharded(), "sparse_sdpa: kv_window must be interleaved");
         TT_FATAL(w.padded_shape() == w.logical_shape(), "sparse_sdpa: kv_window must not be padded");
         const auto ws = w.logical_shape();
         TT_FATAL(
-            ws.rank() == 4 && ws[0] == 1 && ws[1] == 1 && ws[2] > 0 && ws[3] == K_DIM,
-            "sparse_sdpa: kv_window must be [1,1,Tw,{}] (got {})",
-            K_DIM,
+            ws.rank() == 4 && ws[0] == 1 && ws[1] == 1 && ws[2] > 0 &&
+                (ws[3] == (rec8 ? ::sparse_sdpa::row_bfp8_bytes(K_DIM) : K_DIM) ||
+                 (rec8 && ws[3] == ::sparse_sdpa::window_block_bytes(K_DIM))),
+            "sparse_sdpa: kv_window must be [1,1,Tw,{}] (or bfloat8_b blocks [1,1,Tw/32,{}]) (got {})",
+            rec8 ? ::sparse_sdpa::row_bfp8_bytes(K_DIM) : K_DIM,
+            ::sparse_sdpa::window_block_bytes(K_DIM),
             ws);
     }
 }
@@ -122,8 +131,8 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
         q.dtype() == DataType::BFLOAT16 || q_is_fp8 || (q.dtype() == DataType::FLOAT32 && attrs.fp32_scores),
         "q must be bf16 or fp8_e4m3 (float32 only with fp32_scores)");
     TT_FATAL(
-        kv.dtype() == DataType::BFLOAT16 || kv_is_fp8 || attrs.has_row_bfp4(),
-        "kv must be bf16 or fp8_e4m3 (uint8 with ROW_BFP4)");
+        kv.dtype() == DataType::BFLOAT16 || kv_is_fp8 || attrs.has_row_bfp4() || attrs.has_row_bfp8(),
+        "kv must be bf16 or fp8_e4m3 (uint8 with ROW_BFP4 / ROW_BFP8)");
     switch (attrs.kv_format) {
         case transformer::bringup::SparseKVFormat::BF16:
             TT_FATAL(kv.dtype() == DataType::BFLOAT16, "BF16 sparse KV format requires bfloat16 storage");
@@ -145,6 +154,16 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
             TT_FATAL(
                 t.indices.logical_shape()[3] > attrs.k_chunk_size,
                 "ROW_BFP4 needs TOPK > k_chunk_size (the first k_chunk is the window)");
+            break;
+        case transformer::bringup::SparseKVFormat::ROW_BFP8:
+            TT_FATAL(kv.dtype() == DataType::UINT8, "ROW_BFP8 sparse KV format requires uint8 row records");
+            TT_FATAL(q.dtype() == DataType::BFLOAT16, "ROW_BFP8 sparse KV format requires a bf16 q");
+            TT_FATAL(!attrs.has_block_cyclic(), "ROW_BFP8 sparse KV format does not support block_cyclic");
+            TT_FATAL(!attrs.has_indexed_kv_cache(), "ROW_BFP8 sparse KV format does not support cache_batch_idx");
+            TT_FATAL(q.logical_shape()[3] == 512, "ROW_BFP8 needs K_DIM 512, got {}", q.logical_shape()[3]);
+            TT_FATAL(
+                t.indices.logical_shape()[3] == attrs.k_chunk_size,
+                "ROW_BFP8 needs TOPK == k_chunk_size (the window only)");
             break;
     }
     if (attrs.has_scaled_kv()) {
@@ -243,7 +262,7 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     // matches q (compute_output_specs), so its row width uses q's element size.
     const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
     TT_FATAL((K_DIM * q.element_size()) % dram_align == 0, "Q row bytes must be {}B aligned", dram_align);
-    if (!attrs.has_scaled_kv() && !attrs.has_row_bfp4()) {
+    if (!attrs.has_scaled_kv() && !attrs.has_row_bfp4() && !attrs.has_row_bfp8()) {
         TT_FATAL(
             (kv.logical_shape()[3] * kv.element_size()) % dram_align == 0,
             "K row bytes must be {}B aligned",
@@ -329,7 +348,13 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.bf16_probs,
         // ROW_BFP4: the window tensor's memory config (its accessor's compile-time args); absent otherwise.
         t.kv_window.has_value() ? std::optional<tt::tt_metal::MemoryConfig>(t.kv_window->memory_config())
-                                : std::nullopt);
+                                : std::nullopt,
+        // the window's dtype (bf16 rows or bfloat8_b records: SPARSE_SDPA_WINDOW_BFP8)
+        t.kv_window.has_value() ? std::optional<DataType>(t.kv_window->dtype()) : std::nullopt,
+        // the window's row width: records or blocks (SPARSE_SDPA_WINDOW_BLOCKS)
+        t.kv_window.has_value() ? t.kv_window->logical_shape()[-1]
+        : attrs.has_row_bfp8()  ? t.kv.logical_shape()[-1]
+                                : 0u);
 }
 
 Tensor sparse_sdpa(

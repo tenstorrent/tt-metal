@@ -186,3 +186,33 @@ CASES += [
         "block_max_pin": True,
     },
 ]
+
+# deepseek_v41_flash_d_p lowbit (2x2, DS41-150): the same geometry with the index query and keys as bfloat4_b (the
+# reference's fp4 width; INDEX_Q_FORMAT / INDEX_K_FORMAT=bfp4): inputs on the host packer's bfloat4_b grid, the ring
+# gathering bfloat4_b key tiles. Limits as above, the noise floor's inputs at bfp4 (the values are on the grid).
+CASES += [
+    {
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-ring-natural-ratio2-q512-t27648-h32-d128-hifi2-qk-bfp4",
+        "sig": "lowbit-qk-bfp4-r2",
+        "key_compression_ratio": 2,
+        "t": 27648,
+        "k_local_rows": 13824,
+        "kv_len": 27648,
+        "seed": 4,
+        "qk_dtype": "bfloat4_b",
+        "noise": {"inputs": ["bfp4", "bfp4", "bf16"], "out": "bf16"},
+    },
+    {
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-ring-natural-ratio1-q512-t55296-h32-d128-hifi2-qk-bfp4",
+        "sig": "lowbit-qk-bfp4-r1",
+        "key_compression_ratio": 1,
+        "t": 55296,
+        "k_local_rows": 27648,
+        "kv_len": 55296,
+        "seed": 5,
+        "qk_dtype": "bfloat4_b",
+        "noise": {"inputs": ["bfp4", "bfp4", "bf16"], "out": "bf16"},
+    },
+]

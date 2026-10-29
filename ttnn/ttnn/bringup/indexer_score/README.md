@@ -33,6 +33,8 @@ prefer the source op then.
 Fork additions marked; the rest as the source (`indexer_score_nanobind.cpp`).
 
 Realistic (use by default):
+- q / k (k_local) bf16, bfloat8_b or (fork) bfloat4_b tiled; block-float pairs default to LoFi (pass HiFi2 when the gate
+  step's relu(q.k) needs more than 4 bits).
 - `IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=1)`; value `__repr__` (fork).
 - `indexer_score_dsa(q, k, weights, *, chunk_start_idx=None, key_compression_ratio=1, program_config=IndexerScoreProgramConfig(),
   compute_kernel_config=None, cache_batch_idx=None, kv_len=None, seq_shard_axes=None, block_cyclic_sp_axis=None,

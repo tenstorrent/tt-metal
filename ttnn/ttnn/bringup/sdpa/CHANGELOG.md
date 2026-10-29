@@ -435,3 +435,59 @@ Build fixes after fork_op.py (no behaviour change):
   `device/sparse_sdpa_program_factory.cpp`, `device/kernels/sparse_sdpa_common.hpp`,
   `device/kernels/dataflow/sparse_sdpa_{reader,writer,gather}.{cpp,hpp}`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
   `tests/unit/test_sparse_sdpa_row_bfp4.py`
+
+### sparse_sdpa: a bfloat8_b window (kv_window uint8) and kv_format ROW_BFP8
+- What: with ROW_BFP4, `kv_window` may be `[1, 1, Tw, 576]` uint8 bfloat8_b row records (`ckv_bfp4(dtype=bfloat8_b)`;
+  define `SPARSE_SDPA_WINDOW_BFP8`): the window chunk is gathered like the top-k chunks (two NoC reads a row: the
+  congruent exponent copy, the 512 value bytes) into its own staging block (`cb_k8_rm`) and turned into bfloat8_b K tiles
+  (`cb_k8`) by the same unpacker conversion; the bf16 window CBs shrink to one page. New `SparseKVFormat.ROW_BFP8` (a
+  window-only layer): kv = the records, TOPK == k_chunk_size, no kv_window (the ROW_BFP4 kernels with kv as the window).
+  Default unchanged: everything behind the define, added only for a uint8 window; the hash adds the window's dtype.
+- Why: deepseek_v41_flash_d_p lowbit, the window KV at the reference's fp8 width (owner 2026-10-29).
+- Tests (`tests/unit/test_sparse_sdpa_row_bfp4.py`, 5 new): the bfloat8_b window equals the bf16 window holding the
+  same values bit for bit (full and partial windows, top-k parts 0 / 37 / 512, fp32 DEST off / on); ROW_BFP8 equals
+  the BF16 path on the same values (H 32 / 64, windows 1..128 keys); both deterministic; the refusals. Regression: 38
+  unit + the model case pass.
+- Time, one p150b (H 64, K 512): compressed layers (640 keys) 160 q 351 -> 362 us (+3.3 %), 512 q 1250 -> 1286 us
+  (+2.9 %); window-only layers (128 keys) 160 q 133 -> 138 us, 512 q 494 -> 567 us (BF16 -> ROW_BFP8); plain fp8 rows
+  (FP8_E4M3, no scales) 119 / 484 us.
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit phase 1)
+- Files: sparse_sdpa.hpp, sdpa_nanobind.cpp, device/sparse_sdpa_device_operation*.{hpp,cpp},
+  device/sparse_sdpa_program_factory.cpp, device/kernels/sparse_sdpa_common.hpp,
+  device/kernels/dataflow/sparse_sdpa_{reader,writer,gather}.{cpp,hpp}, device/kernels/compute/sparse_sdpa_compute.cpp,
+  tests/unit/test_sparse_sdpa_row_bfp4.py
+
+### sparse_sdpa: the bfloat8_b window as blocks of 32 rows (two NoC reads a block)
+- What: kv_window (ROW_BFP4) or kv (ROW_BFP8) may be uint8 [1, 1, Tw / 32, 18496]: 32 consecutive window rows a page,
+  [their exponents | the same, 32 B on | their values] (ckv_bfp4 blocks=True). The window's ids must be consecutive
+  (the model's are: rows p - 127 .. p); the gather reads each 32-row block in two reads (exponents from the copy whose
+  64 B phase matches the staging slot, then the values) instead of two reads a row (SPARSE_SDPA_WINDOW_BLOCKS). Off
+  (records or bf16): the program is unchanged; the window width is in the program hash.
+- Why: the 576 B records' cost was the per-row exponent read (switching it off took the window-only layers 567 -> 461
+  us); batching the bfp8 -> tile conversion, a deeper trid ring and one address lookup a row changed nothing.
+- Exactness: equal to the records bit for bit (full / partial consecutive windows, odd / even starts, top-k 0 / 37 /
+  512, DEST 16 / 32, H 32 / 64), deterministic. Regression: unit 62 pass, 10 skipped (ring tests needing 8 devices),
+  the model case passes.
+- Time, one p150b, consecutive windows (bf16 / records / blocks): compressed layers 512 q 1242 / 1280 / 1188 us, 160 q
+  352 / 360 / 339 us; window-only layers 512 q 487 / 560 / 404 us, 160 q 132 / 137 / 110 us.
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit)
+- Files: device/sparse_sdpa_{device_operation,program_factory}.cpp, device/kernels/sparse_sdpa_common.hpp,
+  device/kernels/dataflow/sparse_sdpa_{gather.hpp,reader.cpp,writer.cpp}, tests/unit/test_sparse_sdpa_row_bfp4.py
+
+### sparse_sdpa ROW_BFP4: one DRAM read a 4-bit row (default; output bit-identical)
+- What: the bfloat4_b chunks' gather reads each whole 320 B record from DRAM into a record scratch (cb_k4_rec, 41 KB),
+  then two local NoC copies put its exponents and values into the staging block (gather_bfp4_rows_staged). Before:
+  two DRAM reads a row (32 B exponents + 256 B values). The staging block, the unpacker and the record format are
+  unchanged. This changes the default ROW_BFP4 program (one more CB, one more compile-time arg); the output is the
+  same bit for bit.
+- Why: the 32 B DRAM read cost about as much as the values (diagnosis: the exponent read from local L1 instead of DRAM,
+  same transaction count, compressed layers 1242 -> 970 us; a deeper trid ring, one address lookup a row and a
+  batched bfp -> tile conversion changed nothing).
+- Time, one p150b, compressed layers (640 keys), bf16 window: 512 q 1242 -> 978 us (-21 %), 160 q 352 -> 293 us
+  (-17 %); with the bfloat8_b window blocks 1188 -> 938 / 339 -> 284 us.
+- Exactness: tests/unit 62 pass (10 skipped: ring tests needing 8 devices), the model case passes; the DeepSeek-V4.1
+  compressed attention step tests on the 2x2 give the same numbers as before the change (3 of 5 fail the same way
+  before and after: the second-input checks chunk0 / layer2 / mixed at rel 0.037-0.043 > 0.03, pre-existing).
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit)
+- Files: device/sparse_sdpa_program_factory.cpp, device/kernels/sparse_sdpa_common.hpp,
+  device/kernels/dataflow/sparse_sdpa_{gather.hpp,reader.cpp,writer.cpp}

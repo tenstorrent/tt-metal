@@ -4,13 +4,14 @@
 
 #pragma once
 
-// Round a DEST tile onto the bfloat4_b grid with tt-metal's host packer rule (convert_u32_to_bfp: per 16-value
-// group the max exponent E, each value's 24-bit significand shifted by E - e, rounded to nearest even to 3 bits,
-// clamped at 7), so that the packer's own bfp4 conversion (round half away to bfp8, then drop 4 bits: truncation in
-// effect, models/demos/deepseek_v41_flash_d_p/tests/test_bfp_packer_rounding.py) only copies bits. A value's group is
+// Round a DEST tile onto the bfloat4_b (MBITS 3) or bfloat8_b (MBITS 7) grid with tt-metal's host packer rule
+// (convert_u32_to_bfp: per 16-value group the max exponent E, each value's 24-bit significand shifted by E - e, rounded
+// to nearest even to MBITS bits, clamped at 2^MBITS - 1), so that the packer's own conversion (bfp4: round half away
+// to bfp8, then drop 4 bits, truncation in effect; bfp8: half away, models/demos/deepseek_v41_flash_d_p/tests/
+// test_bfp_packer_rounding.py) only copies bits. A value's group is
 // its face row's 16 columns: an SFPU load holds 4 rows x the 8 even (or odd) columns, so the group max is the max of
 // the even and odd loads, then across the 8 lanes of each row (rotate by 4, 2, 1).
-// Exact against the host packer for groups whose max is >= 2^-124 (smaller ones come out 0).
+// Exact against the host packer for groups whose max is >= 2^(MBITS - 127) (smaller ones come out 0).
 
 #ifdef TRISC_MATH
 
@@ -31,34 +32,32 @@ sfpi_inline sfpi::vInt ckv_imax(sfpi::vInt a, sfpi::vInt b) {
     return a;
 }
 
-// x rounded to q 2^(E - 129) (q = host rule), sign kept, 0 as +0. Round to nearest even in one add:
-// (mm + 2^20 - 1 + lsb) >> 21. A shift past 4 already gives q = 0, so diff is capped there.
+// x rounded to q 2^(E - 127 - (MBITS - 1)) (q = host rule), sign kept, 0 as +0. The SFPU adder rounds to nearest
+// even (tt-llk _round_even_), so |x| + M - M with M = 2^23 step (step = the group's LSB) is |x| rounded to a multiple
+// of step; then clamped at (2^MBITS - 1) step (the host clamps q). Equal to the host rule for bf16 inputs: its
+// alignment shift (at most MBITS + 1 bits) drops only zero bits of an 8-bit significand. Groups whose max is below
+// 2^(MBITS - 127) come out 0; maxima above 2^(232 - 127) are out of range.
+template <int MBITS>
 sfpi_inline sfpi::vFloat ckv_round_one(sfpi::vFloat x, sfpi::vInt e_max) {
-    sfpi::vInt u = sfpi::as<sfpi::vInt>(x);
-    sfpi::vInt ex = sfpi::exexp(x, sfpi::ExponentMode::Biased);
-    sfpi::vInt diff = e_max - ex;
-    v_if(diff > 4) { diff = 4; }
+    constexpr float QMAX_FRAC = 2.0f - 1.0f / (1 << (MBITS - 1));  // (2^MBITS - 1) step / 2^(E - 127)
+    const sfpi::vFloat m = sfpi::setexp(sfpi::vFloat(1.0f), e_max + (23 - (MBITS - 1)));
+    sfpi::vFloat a = sfpi::setsgn(x, 0);
+    a = a + m;
+    a = a - m;
+    const sfpi::vFloat lim = sfpi::setexp(sfpi::vFloat(QMAX_FRAC), e_max);
+    v_if(a > lim) { a = lim; }
     v_endif;
-    sfpi::vUInt man = sfpi::as<sfpi::vUInt>((u & 0x7FFFFF) | 0x800000);
-    v_if(ex == 0) { man = 0; }
+    sfpi::vFloat r = sfpi::copysgn(a, x);
+    v_if(a == 0.0f) { r = 0.0f; }
     v_endif;
-    sfpi::vUInt mm = man >> sfpi::as<sfpi::vUInt>(diff);
-    sfpi::vInt q = sfpi::as<sfpi::vInt>((mm + 0xFFFFF + ((mm >> 21) & 1)) >> 21);
-    v_if(q > 7) { q = 7; }
-    v_endif;
-    sfpi::vFloat r = sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(q), sfpi::RoundMode::Nearest);
-    r = r * sfpi::setexp(sfpi::vFloat(1.0f), e_max - 2);
-    v_if(x < 0.0f) { r = -r; }
-    v_endif;
-    v_if(q == 0) { r = 0.0f; }
-    v_endif;
-    v_if(e_max < 3) { r = 0.0f; }
+    v_if(e_max < MBITS) { r = 0.0f; }
     v_endif;
     return r;
 }
 
 // One face (called per face by _llk_math_eltwise_unary_sfpu_params_ with VectorMode::RC).
-inline void ckv_round_bfp4_face() {
+template <int MBITS>
+inline void ckv_round_bfp_face() {
 #pragma GCC unroll 4
     for (int g = 0; g < 4; g++) {  // 4-row groups of the face
         sfpi::vFloat ev = sfpi::dst_reg[0];
@@ -68,11 +67,13 @@ inline void ckv_round_bfp4_face() {
         m = ckv_imax(m, ckv_rot(m, 4));
         m = ckv_imax(m, ckv_rot(m, 2));
         m = ckv_imax(m, ckv_rot(m, 1));
-        sfpi::dst_reg[0] = ckv_round_one(ev, m);
-        sfpi::dst_reg[1] = ckv_round_one(od, m);
+        sfpi::dst_reg[0] = ckv_round_one<MBITS>(ev, m);
+        sfpi::dst_reg[1] = ckv_round_one<MBITS>(od, m);
         sfpi::dst_reg += 2;
     }
 }
+
+inline void ckv_round_bfp4_face() { ckv_round_bfp_face<3>(); }
 
 }  // namespace ckernel::sfpu
 

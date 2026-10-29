@@ -44,6 +44,9 @@ struct SparseSDPAParams {
     bool has_scaled_kv() const { return kv_format == transformer::bringup::SparseKVFormat::SCALED_FP8; }
     // Fork option: bfloat4_b row records + a bf16 window tensor (define SPARSE_SDPA_ROW_BFP4; hashed via kv_format).
     bool has_row_bfp4() const { return kv_format == transformer::bringup::SparseKVFormat::ROW_BFP4; }
+    // Fork option: bfloat8_b row records, the window only (the ROW_BFP4 kernels with the bfloat8_b window; kv is the
+    // window).
+    bool has_row_bfp8() const { return kv_format == transformer::bringup::SparseKVFormat::ROW_BFP8; }
 };
 
 struct SparseSDPAInputs {
@@ -52,7 +55,8 @@ struct SparseSDPAInputs {
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
     // [1, 1, 1, H] ROW_MAJOR BF16; scaled like QK.
     std::optional<Tensor> attention_sink;
-    // ROW_BFP4 only: [1, 1, Tw, K_DIM] bf16 ROW_MAJOR, the rows the first k_chunk of the index list point at.
+    // ROW_BFP4 only: [1, 1, Tw, K_DIM] bf16 ROW_MAJOR (or [1, 1, Tw, 576] uint8 bfloat8_b row records), the rows the
+    // first k_chunk of the index list point at.
     std::optional<Tensor> kv_window;
 };
 

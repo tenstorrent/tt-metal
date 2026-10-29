@@ -622,8 +622,13 @@ class DS41Reference:
         return x.float() if self.native else K.act_quant_dequant(x, 32)
 
     def _q4(self, x: torch.Tensor, block: int, e4m3_scale: bool = False) -> torch.Tensor:
-        """The fp4 quant-dequant of the compressed KV / index key / index query; native: x in fp32."""
-        return x.float() if self.native else K.fp4_quant_dequant(x, block, e4m3_scale=e4m3_scale)
+        """The fp4 quant-dequant of the compressed KV / index key / index query; native: x in fp32 (nudged inside its
+        fp4 cell in a noise-floor run of a step marked nudge_inner, F224)."""
+        if self.native:
+            from models.demos.common.bringup.testing import noise_floor as NF
+
+            return NF.nudge_inner(x.float(), f"fp4/{block}" if e4m3_scale else f"fp4e8/{block}")
+        return K.fp4_quant_dequant(x, block, e4m3_scale=e4m3_scale)
 
     def _fp8_linear(self, x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
         """fp8_linear (official) or the plain fp32 GEMM of x (native)."""

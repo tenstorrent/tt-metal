@@ -103,8 +103,8 @@ FORCE_INLINE void trid_ring_gather(
 
 // ROW_BFP4 (fork option): rows [lo, hi) of a chunk, two NoC reads a row (the data-movement RISC only issues reads):
 // the exponent copy congruent with exps + p * eb (mod 64) -> there, the nibbles -> data + p * k_dim / 2. block_l1 is
-// 64 B aligned (data then is too: k_chunk * eb is a multiple of 64).
-template <uint32_t K_DIM, uint32_t K_CHUNK, uint32_t RingDepth, typename Accessor>
+// 64 B aligned (data then is too: k_chunk * eb is a multiple of 64). DB: the record's value bytes (bfloat8_b: K_DIM).
+template <uint32_t K_DIM, uint32_t K_CHUNK, uint32_t RingDepth, uint32_t DB = K_DIM / 2, typename Accessor>
 FORCE_INLINE void gather_bfp4_rows(
     Noc& noc,
     const Accessor& kv,
@@ -115,7 +115,7 @@ FORCE_INLINE void gather_bfp4_rows(
     uint32_t hi,
     uint32_t page_offset) {
     constexpr uint32_t eb = row_bfp4_exp_bytes(K_DIM);
-    constexpr uint32_t db = K_DIM / 2;
+    constexpr uint32_t db = DB;
     static_assert(2 * eb == ROW_BFP4_ALIGN, "the two exponent copies cover both 32 B phases of a 64 B line");
     constexpr uint32_t D = RingDepth;
     const UnicastEndpoint local_l1;
@@ -137,6 +137,81 @@ FORCE_INLINE void gather_bfp4_rows(
         experimental::async_read_barrier_with_trid(noc, ((cnt - to_drain + d) % D) + 1);
     }
     experimental::set_read_trid(noc, 0);
+}
+
+// gather_bfp4_rows with one DRAM read a row: each whole record (exponents twice, then the values) lands in the
+// record scratch rec_l1 (64 B aligned, ROW_BYTES apart), then two local NoC copies put its exponents (the copy in the
+// staging slot's 64 B phase) and its values in place. A 32 B DRAM read costs nearly as much as the row's values.
+template <uint32_t K_DIM, uint32_t K_CHUNK, uint32_t RingDepth, typename Accessor>
+FORCE_INLINE void gather_bfp4_rows_staged(
+    Noc& noc,
+    const Accessor& kv,
+    uint32_t block_l1,
+    uint32_t rec_l1,
+    volatile tt_l1_ptr uint32_t* idx_ptr,
+    uint32_t base,
+    uint32_t lo,
+    uint32_t hi,
+    uint32_t page_offset) {
+    constexpr uint32_t eb = row_bfp4_exp_bytes(K_DIM);
+    constexpr uint32_t db = K_DIM / 2;
+    constexpr uint32_t rb = row_bfp4_bytes(K_DIM);
+    static_assert(rb % ROW_BFP4_ALIGN == 0, "records stay 64 B aligned in the scratch");
+    constexpr uint32_t D = RingDepth;
+    const UnicastEndpoint local_l1;
+    const uint32_t data_l1 = block_l1 + K_CHUNK * eb;
+    const uint8_t nid = noc.get_noc_id();
+    auto split = [&](uint32_t p) {
+        const uint32_t rec = rec_l1 + p * rb;
+        noc_async_read(get_noc_addr(rec + (p & 1) * eb, nid), block_l1 + p * eb, eb, nid);
+        noc_async_read(get_noc_addr(rec + 2 * eb, nid), data_l1 + p * db, db, nid);
+    };
+    const uint32_t cnt = hi - lo;
+    for (uint32_t i = 0; i < cnt; ++i) {
+        const uint32_t p = lo + i;
+        const uint32_t trid = (i % D) + 1;
+        if (i >= D) {
+            experimental::async_read_barrier_with_trid(noc, trid);
+            split(p - D);
+        }
+        experimental::set_read_trid(noc, trid);
+        noc.async_read(kv, local_l1, rb, {.page_id = page_offset + idx_ptr[base + p]}, {.addr = rec_l1 + p * rb});
+    }
+    const uint32_t to_drain = (cnt < D) ? cnt : D;
+    for (uint32_t d = 0; d < to_drain; ++d) {
+        const uint32_t i = cnt - to_drain + d;
+        experimental::async_read_barrier_with_trid(noc, (i % D) + 1);
+        split(lo + i);
+    }
+    experimental::set_read_trid(noc, 0);
+    noc.async_read_barrier();
+}
+
+// The bfloat8_b window as blocks (WINDOW_BLOCK_ROWS consecutive rows a page, window_block_bytes): staging rows
+// [lo, hi) of the window chunk = rows r0 + lo.. (the window's ids are consecutive), two reads a block. A row's
+// exponents come from the copy whose 32 B phase in a 64 B line matches their staging slot.
+template <uint32_t K_DIM, uint32_t K_CHUNK, typename Accessor>
+FORCE_INLINE void gather_bfp8_window_blocks(
+    Noc& noc, const Accessor& kv, uint32_t block_l1, uint32_t r0, uint32_t lo, uint32_t hi) {
+    constexpr uint32_t eb = row_bfp4_exp_bytes(K_DIM);
+    constexpr uint32_t WB = WINDOW_BLOCK_ROWS;
+    const UnicastEndpoint local_l1;
+    const uint32_t data_l1 = block_l1 + K_CHUNK * eb;
+    for (uint32_t p = lo; p < hi;) {
+        const uint32_t r = r0 + p, page = r / WB, off = r % WB;
+        const uint32_t n = (WB - off) < (hi - p) ? (WB - off) : (hi - p);
+        const uint32_t exp_off = ((r ^ p) & 1) ? window_block_exp2(K_DIM) : 0;
+        noc.async_read(
+            kv, local_l1, n * eb, {.page_id = page, .offset_bytes = exp_off + off * eb}, {.addr = block_l1 + p * eb});
+        noc.async_read(
+            kv,
+            local_l1,
+            n * K_DIM,
+            {.page_id = page, .offset_bytes = window_block_data(K_DIM) + off * K_DIM},
+            {.addr = data_l1 + p * K_DIM});
+        p += n;
+    }
+    noc.async_read_barrier();
 }
 
 }  // namespace sparse_sdpa
