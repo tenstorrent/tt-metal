@@ -12,13 +12,17 @@ namespace tt::tt_metal {
 
 namespace {
 
-constexpr std::array<const char*, 8> kLabels = {
+constexpr std::array<const char*, 12> kLabels = {
     "buffer writes, fast dispatch",
     "buffer writes, slow dispatch",
     "buffer reads, fast dispatch",
     "buffer reads, slow dispatch",
     "core writes, fast dispatch",
     "core reads, fast dispatch",
+    "program binaries, fast dispatch",
+    "program binaries, slow dispatch",
+    "program config, fast dispatch",
+    "program config, slow dispatch",
     "H2D socket writes, host push",
     "H2D socket writes, device pull",
 };
@@ -104,7 +108,7 @@ std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows
         }
         const double seconds = std::chrono::duration<double>(t.busy).count();
         std::string value;
-        if (kind == HostTransfer::SocketPull) {
+        if (kind == HostTransfer::SocketPull || kind == HostTransfer::ProgramConfigFastDispatch) {
             value = fmt::format("{} staged, {} transfers", format_bytes(t.bytes), t.transfers);
         } else if (seconds > 0) {
             value = fmt::format(

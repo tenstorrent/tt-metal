@@ -746,6 +746,7 @@ HostTransfer FDMeshCommandQueue::fast_dispatch_transfer(TransferOp op) {
         case TransferOp::BufferRead: return HostTransfer::BufferReadFastDispatch;
         case TransferOp::CoreWrite: return HostTransfer::CoreWriteFastDispatch;
         case TransferOp::CoreRead: return HostTransfer::CoreReadFastDispatch;
+        case TransferOp::ProgramBinaries: return HostTransfer::ProgramBinariesFastDispatch;
     }
     TT_THROW("Unknown transfer op {}", static_cast<int>(op));
 }
@@ -1332,6 +1333,14 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program) {
+    if (host_transfer_stats_->enabled() && !devices.empty()) {
+        const auto target = this->get_target_device_type();
+        if (target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule) {
+            host_transfer_stats_->add_bytes(
+                HostTransfer::ProgramConfigFastDispatch,
+                devices.size() * program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true));
+        }
+    }
     if (devices.size() > 1) {
         const auto size = program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true);
         if (size <= program_cmd_seq.ctx->dispatch_mem_map().max_prefetch_command_size()) {

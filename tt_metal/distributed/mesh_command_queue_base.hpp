@@ -19,6 +19,7 @@
 #include <chrono>
 #include <mutex>
 #include <functional>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
@@ -68,7 +69,7 @@ protected:
     tt::TargetDevice get_target_device_type() const;
 
     // Host transfer stats (TT_METAL_HOST_TRANSFER_STATS). Each transfer API call is one transfer.
-    enum class TransferOp : uint8_t { BufferWrite, BufferRead, CoreWrite, CoreRead };
+    enum class TransferOp : uint8_t { BufferWrite, BufferRead, CoreWrite, CoreRead, ProgramBinaries };
     // Open and close the transfer of one API call while stats are on, for queues whose transfers finish after the
     // call returns. Called with lock_api_function_() held, so the transfers of one queue never overlap.
     // end_transfer_stats is called after the transfer's commands are issued and before a blocking call waits for
@@ -146,6 +147,23 @@ public:
         uint32_t id,
         std::shared_ptr<ThreadPool> dispatch_thread_pool,
         std::function<std::lock_guard<std::mutex>()> lock_api_function);
+
+    // While one is alive, buffer writes made on this thread count as kernel binary uploads in host transfer stats.
+    class ScopedProgramBinaryUpload {
+    public:
+        ScopedProgramBinaryUpload() : previous_(std::exchange(active_, true)) {}
+        ~ScopedProgramBinaryUpload() { active_ = previous_; }
+        static bool active() { return active_; }
+
+        ScopedProgramBinaryUpload(const ScopedProgramBinaryUpload&) = delete;
+        ScopedProgramBinaryUpload& operator=(const ScopedProgramBinaryUpload&) = delete;
+        ScopedProgramBinaryUpload(ScopedProgramBinaryUpload&&) = delete;
+        ScopedProgramBinaryUpload& operator=(ScopedProgramBinaryUpload&&) = delete;
+
+    private:
+        inline static thread_local bool active_ = false;
+        bool previous_;
+    };
 
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,

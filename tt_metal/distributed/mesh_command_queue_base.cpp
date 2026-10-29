@@ -39,7 +39,8 @@ MeshCommandQueueBase::MeshCommandQueueBase(
 
 MeshCommandQueueBase::ScopedTransferStats::ScopedTransferStats(
     MeshCommandQueueBase& cq, TransferOp op, uint64_t bytes) :
-    op_(op), bytes_(bytes) {
+    op_(op == TransferOp::BufferWrite && ScopedProgramBinaryUpload::active() ? TransferOp::ProgramBinaries : op),
+    bytes_(bytes) {
     if (!cq.host_transfer_stats_->enabled()) {
         return;
     }

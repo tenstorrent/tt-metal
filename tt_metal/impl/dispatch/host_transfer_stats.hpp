@@ -23,6 +23,11 @@ enum class HostTransfer : uint8_t {
     BufferReadSlowDispatch,
     CoreWriteFastDispatch,
     CoreReadFastDispatch,
+    ProgramBinariesFastDispatch,
+    ProgramBinariesSlowDispatch,
+    // Program commands copied into the issue queue, which the device reads later. Staged like SocketPull.
+    ProgramConfigFastDispatch,
+    ProgramConfigSlowDispatch,
     SocketPush,
     // Bytes copied into host memory that the device reads later, so they have bytes but no transfer time.
     SocketPull,
@@ -80,6 +85,8 @@ class ScopedHostTransfer {
 public:
     ScopedHostTransfer(HostTransferStats* stats, HostTransfer kind, uint64_t bytes);
     ~ScopedHostTransfer();
+    // For transfers made of several writes whose sizes are known as they happen.
+    void add_bytes(uint64_t bytes) { bytes_ += bytes; }
 
     ScopedHostTransfer(const ScopedHostTransfer&) = delete;
     ScopedHostTransfer& operator=(const ScopedHostTransfer&) = delete;
