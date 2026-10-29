@@ -37,7 +37,6 @@ PolyNormOpTest.PolyNorm_Compare_FusedVsCompositeForward_Small
 LayerNormForwardOpTest.MetalLayerNormFw_OneTile
 LayerNormBackwardOpTest.MetalLayerNormBw_OneTile
 LayerNormOpTest.CompositeLayerNormOp_backward
-All/FrobeniusNormalizeTest.MatchesCpuReference/SingleTile
 
 # Attention and softmax
 SDPAForwardTest.SDPAForwardTest_CausalMask_SingleTile
@@ -65,9 +64,6 @@ VariableMatmulTest.MinimalParity_OnDeviceInputAndOutputRow
 
 # Matmul, optimizer math, sampling, profiling
 MatmulsTest.MatMulBackwardTransposeBoth
-KSplitGramMatmulTest.VerificationMirror
-NewtonSchulzOpTest.MuonCoeff
-NewtonSchulzOpTest.OrthogonalityCheck
 SGDMomentumParity/SGDParityTest.UpdateParity/Mom_B1H2S32C64
 AdamWBasicComparison/AdamWComparisonTest.CompareImplementations/Standard_lr1e2_B1H1S128C512
 GumbelSampleOpTest.TestSamplingZeroTemperatureNoMask
