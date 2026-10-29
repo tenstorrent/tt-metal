@@ -83,14 +83,14 @@ def test_up_batch_full(mesh_device):
         for b in U:
             m.release_user(b)
 
-    def call(items, final):
+    def call(items, final, want=False):
         rec.clear()
         t0 = time.perf_counter()
         r = m.prefill_interleaved(
             items,
             CHUNK,
             s_pad_max=None,
-            want_logits=False,
+            want_logits=want,
             final={b: f for b, f in final.items()},
             totals={b: e for b, _, _, e in items},
         )
@@ -152,7 +152,19 @@ def test_up_batch_full(mesh_device):
             release()
             _, w0, _, _ = call([(b, ids[b], 0, 4 * CHUNK) for b in range(4)], {b: False for b in range(4)})
             items = [(b, ids[b], 4 * CHUNK, Es[b]) for b in range(4)] + [(b, ids[b], 0, Es[b]) for b in range(4, 8)]
-            res, wall, n, _ = call(items, {b: True for b in U})
+            res, wall, n, _ = call(items, {b: True for b in U}, want=True)
+            lgs = [res[b][1].float().clone() for b in U]
+            sd, rd = os.environ.get("UPF_SAVE"), os.environ.get("UPF_REF")
+            if sd:
+                os.makedirs(sd, exist_ok=True)
+                torch.save(lgs, f"{sd}/needle_{E}.pt")
+            if rd and os.path.exists(f"{rd}/needle_{E}.pt"):
+                ref = torch.load(f"{rd}/needle_{E}.pt")
+                for b in U:
+                    a_, r_ = lgs[b] - lgs[b].mean(), ref[b] - ref[b].mean()
+                    log(
+                        f"UPF needle logits user {b} vs ref: pcc {float(a_ @ r_ / (a_.norm() * r_.norm())):.6f} max|d| {float((lgs[b] - ref[b]).abs().max()):.3f} top {int(lgs[b].argmax())} vs {int(ref[b].argmax())}"
+                    )
             log(f"UPF needle E={E}: lengths {Es}, call wall {wall:.2f} s, replays {n}")
             tok = torch.tensor([int(res[b][0]) for b in U], dtype=torch.long)
             outs = [[int(t_)] for t_ in tok]
