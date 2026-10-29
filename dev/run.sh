@@ -5,6 +5,9 @@
 #
 #   ./dev/run.sh            # = all: the correctness steps (smoke, check, prod, dense)
 #   ./dev/run.sh a b c      # several steps in one call; presets: quick, night (see below)
+#   ./dev/run.sh bench      # THE timing to quote: MiniMax-H3 attention module, traced, dense vs sol at tau 1 and
+#                           # the gather alone, 5 / 10 / 15 s (bench5: 5 s only); log_val_bench.txt
+
 #   DEV_LOG_COPY=<dir> ./dev/run.sh night   # also copy each log to <dir> as soon as its step ends
 #   ./dev/run.sh smoke      # keep-all mask at r512k512 must match dense
 #   ./dev/run.sh check      # every non-production case of test_sparse_ring_sdpa.py
@@ -35,7 +38,7 @@ DENSE=$SD/test_ring_joint_sdpa.py
 #   night = smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15
 case "${1:-all}" in
     quick) set -- smoke perf profile5 ;;
-    night) set -- smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15 ;;
+    night) set -- bench smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15 ;;
 esac
 if [ $# -gt 1 ]; then
     worst=0
@@ -60,7 +63,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all bench bench5 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -114,6 +117,19 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 [ "$ONLY" = profile ] && ONLY=profile5  # one sparse call only: the summary treats the longest run as the op
 # profile5 / profile10 / profile15: one untraced sparse call at 5 / 10 / 15 s from dev/profile_case.py (inputs made on
 # device, setup in seconds), 256-key pieces, density 0.2; PROFILE_K overrides the -k filter (see profile_case.py ids).
+# bench: the MiniMax-H3 attention module, traced (capture once, 6 timed replays of the attention op), dense vs sol at
+# tau 1 (real routing pre-pass, prefix recompute off) and the ring all-gather alone, at 5 / 10 / 15 s, in one process
+# so all numbers come from the same machine state. These are the numbers to quote. bench5: 5 s only.
+BENCH=models/tt_dit/tests/models/minimax_h3/test_sol_bench_minimax_h3.py
+case "$ONLY" in
+    bench | bench5)
+        k="4x8"
+        [ "$ONLY" = bench5 ] && k="4x8 and 768p_5s"
+        run "$ONLY" 7200 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_TAU=1.0 SOL_BENCH_PREFIX=off \
+            SOL_BENCH_OUT="$PWD/bench_results" pytest "$BENCH" -s -k "$k"
+        keep "bench_results/results.jsonl" 2>/dev/null
+        ;;
+esac
 if [ "$ONLY" = profile5_nopairs ]; then  # the 5 s profile with D4 pair steps forced off (the pre-D4 baseline)
     run profile5_nopairs 1800 env TT_SPARSE_PAIR_STEPS=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
         pytest dev/profile_case.py -s -k "${PROFILE_K:-s05 and k256 and d020 and sparse_only}"
