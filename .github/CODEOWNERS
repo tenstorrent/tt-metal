@@ -289,9 +289,9 @@ tests/pipeline_reorg/llk_perf_tests.yaml @nstojicTT @ndivnicTT @sstanisicTT @mvl
 tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
 tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 tt_metal/tt-llk/tt_llk_blackhole/llk_lib/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
-tt_metal/tt-llk/tt_llk_quasar/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
-tt_metal/tt-llk/tt_llk_quasar/common/inc/experimental/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
-tt_metal/tt-llk/tt_llk_quasar/llk_lib/experimental/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
+tt_metal/tt-llk/tt_llk_quasar/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT
+tt_metal/tt-llk/tt_llk_quasar/common/inc/experimental/ @amahmudTT @amokanTT @atatuzunerTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT
+tt_metal/tt-llk/tt_llk_quasar/llk_lib/experimental/ @amahmudTT @amokanTT @atatuzunerTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT
 tt_metal/tt-llk/tt_llk_wormhole_b0/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01
 tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/sfpu/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT
 tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @atatuzunerTT

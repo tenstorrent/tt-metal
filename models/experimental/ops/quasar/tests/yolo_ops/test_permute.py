@@ -104,6 +104,9 @@ def test_permute_tile(ttnn_mesh_device, reset_seeds, name, shape, dims, model_li
 _PERMUTE_SITES = [
     # ttnn_yolov8l.py:646 / ttnn_yolov8s.py:509 — DFL (1,4,16,8400) -> (1,4,8400,16)
     ("dfl_transpose", (1, 4, 16, 8400), (0, 1, 3, 2)),
+    # emulator-sized DFL transpose: 400 anchors keep the row-major transpose path (not a multiple of 32)
+    # while the 8400 case above keeps its emulator readback skip
+    ("dfl_transpose_emu", (1, 4, 16, 400), (0, 1, 3, 2)),
     # ttnn_yolov8l.py:649 — DFL post-conv NHWC->NCHW (1,4,8400,1) -> (1,1,4,8400)
     ("dfl_nhwc_to_nchw", (1, 4, 8400, 1), (0, 3, 1, 2)),
     # ttnn_yolov8l.py:745 / ttnn_yolov8s.py:566 — detect x_cat (1,8400,144) -> (1,144,8400)
@@ -117,6 +120,10 @@ _PERMUTE_SITES = [
     [pytest.param(*s, id=s[0]) for s in _PERMUTE_SITES],
 )
 def test_permute_detect(ttnn_mesh_device, reset_seeds, name, shape, dims):
+    if name == "dfl_transpose":
+        # Device finishes (watcher: all RISCs idle), but reading back the (1,4,8400,16) ROW_MAJOR
+        # output is 33,600 sticks of 32 B = one UMD transaction each on the emulator (>15 min).
+        U.skip_on_emulator("host readback of 33,600 row-major 32 B sticks exceeds the job budget")
     mesh = ttnn_mesh_device
 
     x_torch = U.torch_rand(shape)
