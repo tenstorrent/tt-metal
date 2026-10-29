@@ -3,7 +3,10 @@
 This is a framework for giving ids to debug events in device-side code. Each event's id is hard-coded into a
 load-immediate instruction. When the instruction is executed, it puts the id into a CPU register without reading
 any memory. That lets the rest of the event-reporting code write the id from the register to the event's place in
-L1. Generating and placing that hard-coded instruction takes several steps, listed below.
+L1. The event's metadata never reaches the device. The linker script, `tt_metal/hw/toolchain/main.ld`, tags the
+tables that hold it, and the strings they point to, with `(INFO)`, so they are kept in the ELF but never allocated on
+the device. The host reads them, and the device only ever sees the id. Generating and placing that hard-coded
+instruction takes several steps, listed below.
 
 | step | stage | action | the id is |
 |---|---|---|---|
