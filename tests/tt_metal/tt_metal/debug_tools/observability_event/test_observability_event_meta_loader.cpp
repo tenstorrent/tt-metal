@@ -4,9 +4,9 @@
 //
 // Debug event metadata, layer 1b: the host loader's record walk (tt::llrt::parse_meta_records) on
 // .tt_observability_event_meta / .tt_observability_event_str bytes built here, with no ELF, no device and no device
-// compiler. Valid sections are written field by field the way emit_site() (hostdev/debug_event_meta.h) writes them;
-// damaged and stale ones are cut or hand-built from those. The walk must return exactly the records it can read, never
-// read outside the two sections, and stop at the first record it cannot size. The damage tests place every input
+// compiler. Valid sections are written field by field the way emit_site() (hostdev/observability_event_meta.h) writes
+// them; damaged and stale ones are cut or hand-built from those. The walk must return exactly the records it can read,
+// never read outside the two sections, and stop at the first record it cannot size. The damage tests place every input
 // against an unreadable guard page, so a read past the end of either section crashes the test rather than passing
 // unseen.
 
@@ -25,7 +25,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "hostdev/debug_event_meta.h"
+#include "hostdev/observability_event_meta.h"
 #include "llrt/observability_event_meta.hpp"
 
 namespace debug_event_loader_test {

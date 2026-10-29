@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Debug event metadata sites for tests/tt_metal/tt_metal/debug_tools/debug_event/test_debug_event_meta_compile.cpp,
-// one case per DEBUG_EVENT_META_CASE. Case 0 is valid in every profiler mode; every other case breaks exactly one
-// rule of hostdev/debug_event_meta.h and must fail to compile under the streaming profiler, with its own message.
-// The zone macros take only their fixed library types, so a case with a metadata type of its own places its site
-// through the metadata API, TT_DEBUG_SITE, directly.
+// Debug event metadata sites for
+// tests/tt_metal/tt_metal/debug_tools/observability_event/test_observability_event_meta_compile.cpp, one case per
+// DEBUG_EVENT_META_CASE. Case 0 is valid in every profiler mode; every other case breaks exactly one rule of
+// hostdev/observability_event_meta.h and must fail to compile under the streaming profiler, with its own message. The
+// zone macros take only their fixed library types, so a case with a metadata type of its own places its site through
+// the metadata API, TT_DEBUG_SITE, directly.
 
 #include <cstdint>
 
