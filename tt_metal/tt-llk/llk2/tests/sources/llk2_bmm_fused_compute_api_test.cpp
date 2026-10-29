@@ -69,7 +69,7 @@ constexpr ttnn::operations::matmul::KernelActivation activation_type_arg()
 }
 
 /// The 1.0 kernel's positional compile-time args, as the host sets them for one output subblock per block. The
-/// kernel reads 0, 1, 4, 7, 8, 9, 10, 11 and 13; the others stay 0.
+/// kernel reads 0, 1, 4, 7, 8, 9, 10, 11, 13 and 15; the others stay 0.
 constexpr std::uint32_t compile_time_args[] = {
     KB_DIM,     // 0  in0_block_w
     1,          // 1  in0_num_subblocks
@@ -85,6 +85,8 @@ constexpr std::uint32_t compile_time_args[] = {
     CT_DIM,     // 11 out_subblock_w
     0,          // 12 out_subblock_num_tiles (unread)
     1,          // 13 batch
+    0,          // 14 out_block_num_tiles (unread)
+    0,          // 15 untilize_out: off, the only mode the kernel takes
 };
 
 /// The named compile-time args the kernel reads.

@@ -92,8 +92,10 @@ constexpr std::uint32_t num_blocks_h_dim  = get_compile_time_arg_val(9);  // com
 constexpr std::uint32_t out_subblock_h    = get_compile_time_arg_val(10); // compile-time arg 10 of the 1.0 kernel
 constexpr std::uint32_t out_subblock_w    = get_compile_time_arg_val(11); // compile-time arg 11 of the 1.0 kernel
 constexpr std::uint32_t batch             = get_compile_time_arg_val(13); // compile-time arg 13 of the 1.0 kernel
+constexpr bool untilize_out               = get_compile_time_arg_val(15); // compile-time arg 15 of the 1.0 kernel
 
 static_assert(in0_num_subblocks == 1 && in1_num_subblocks == 1, "LLK 2.0: one output subblock per block (out_subblock = the per-core block)");
+static_assert(!untilize_out, "LLK 2.0: untilize_out is not ported (pack has no untilize yet); the output is tiled");
 
 constexpr std::uint32_t rt_dim     = out_subblock_h * in0_num_subblocks; // output block height in tiles
 constexpr std::uint32_t ct_dim     = out_subblock_w * in1_num_subblocks; // output block width in tiles
