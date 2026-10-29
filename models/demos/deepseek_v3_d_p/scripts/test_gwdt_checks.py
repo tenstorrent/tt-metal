@@ -340,3 +340,71 @@ def test_skip_and_unknown_keys():
     assert skipped_keys(["paths", "reset"], skip="reset", only="") == {"reset"}
     with pytest.raises(ValueError, match="unknown --only keys: nope"):
         skipped_keys(["paths"], skip="", only="nope")
+
+
+def test_missing_node_ids_matches_tree_names():
+    from gwdt_checks import missing_node_ids
+
+    wanted = ["a/t.py::test_x[p1]", "b/u.py::test_y[q]"]
+    assert missing_node_ids(wanted, ["test_x[p1]"]) == ["b/u.py::test_y[q]"]
+
+
+def _fake_collect(monkeypatch, steps):
+    import gwdt_steps
+
+    calls = []
+
+    def sh(ctx, cmd, log, env=None, timeout=None):
+        calls.append(cmd)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        names = [i.split("::")[-1] for s in steps if s.collect for i in s.collect(ctx)]
+        log.write_text("".join(f"  <Function {n}>\n" for n in names))
+        return 0
+
+    monkeypatch.setattr(gwdt_steps, "sh", sh)
+    return calls
+
+
+def test_collect_gate_is_one_pytest_call(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, build_steps
+
+    steps = build_steps(["kimi_k2_7", "glm53"])
+    calls = _fake_collect(monkeypatch, steps)
+    r = steps[1].run(Ctx(Path(__file__).resolve().parents[4], tmp_path, False), State())
+    assert r.status == Status.PASS
+    assert len(calls) == 1
+    assert "-p no:benchmark" in calls[0]
+
+
+def test_co_steps_reuse_gate_collection(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, build_steps
+
+    steps = build_steps(["glm53"])
+    calls = _fake_collect(monkeypatch, steps)
+    ctx = Ctx(Path(__file__).resolve().parents[4], tmp_path, True)
+    steps[1].run(ctx, State())
+    block = next(s for s in steps if s.key == "block:glm53")
+    assert block.run(ctx, State()).status == Status.PASS
+    assert len(calls) == 1
+
+
+def test_collect_gate_names_only_the_bad_step(tmp_path, monkeypatch):
+    import gwdt_steps
+    from gwdt_steps import Ctx, State, build_steps
+
+    steps = build_steps(["glm53"])
+    bad = next(s for s in steps if s.key == "block:glm53")
+
+    def sh(ctx, cmd, log, env=None, timeout=None):
+        log.parent.mkdir(parents=True, exist_ok=True)
+        if "test_glm_prefill_block" in cmd:
+            log.write_text("ERROR: not found: x.py::test_glm_prefill_block\n")
+        else:
+            names = [a.strip("'").split("::")[-1] for a in cmd.split() if "::" in a]
+            log.write_text("".join(f"  <Function {n}>\n" for n in names))
+        return 0
+
+    monkeypatch.setattr(gwdt_steps, "sh", sh)
+    r = steps[1].run(Ctx(Path(__file__).resolve().parents[4], tmp_path, False), State())
+    assert r.status == Status.FAIL
+    assert [d.split(":")[0] + ":" + d.split(":")[1] for d in r.details] == [bad.key]
