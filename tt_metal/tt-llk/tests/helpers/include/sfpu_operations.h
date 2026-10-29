@@ -1895,12 +1895,17 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // copy_dest_value_init is empty. The baseline addrmod setup is enough.
         SFPU_BINARY_INIT(add1);
     }
+    else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid_tile_init: baseline addrmod setup plus logsigmoid_init, which loads the
+        // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
+        SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK(_POSINF) and LOGSIGMOID land here: those
-        // kernels need no per-op init beyond the standard binary addrmod configuration
-        // (logsigmoid_init is a no-op).
+        // BITWISE_AND/OR/XOR, RSUB_INT32 and MASK(_POSINF) land here: those kernels need
+        // no per-op init beyond the standard binary addrmod configuration.
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -2359,7 +2364,7 @@ void call_binary_sfpu_operation(
     {
         // logsigmoid(x) = -softplus(-x), with x = in0 and exp(-x) = in1 (the compute
         // kernel is expected to supply exp(-x) as the second operand; the test bakes
-        // it into the paired stimuli). No dedicated init (baseline add1 addrmod).
+        // it into the paired stimuli). Init: baseline add1 addrmod + logsigmoid_init.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
