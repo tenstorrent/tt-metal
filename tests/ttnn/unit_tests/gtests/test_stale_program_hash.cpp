@@ -419,7 +419,9 @@ ttsl::hash::hash_t ring_joint_hash(
         .logical_n_tensor = logical_n_tensor,
         .logical_l_tensor = logical_l_tensor,
     };
-    return RingJointSDPADeviceOperation::compute_program_hash(make_ring_joint_params(strategy), inputs);
+    // The op declares dynamic_key, so the cache hash is the framework's, not a method on the op.
+    return ttnn::device_operation::detail::compute_program_hash<RingJointSDPADeviceOperation>(
+        make_ring_joint_params(strategy), inputs);
 }
 
 TEST_F(StaleProgramHashFixture, RingJointSdpaSameSpecSharesKey) {
