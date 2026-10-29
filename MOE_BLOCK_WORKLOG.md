@@ -2530,3 +2530,56 @@ run that built; no hang.
 - Open from this: the head plan does not size the exchange next to it (its kept L1, the combine at its pinned
   accumulators) - three configurations where the ops head builds and the fused one does not; and a crossover check
   against the ops head for L1-limited plans (K2.7 2048 rows).
+
+## GLM-5.3 head at the Galaxy's per-chip shape: 235.8 -> 200 us (2026-10-29, bh-lb-09, ring of 4, chunk 640)
+Goal: the fused head faster, leading with GLM-5.3 (H 6144, SE I 512 a chip at TP 4, E 256 top-8) on the 1x4 ring at
+640 rows a mesh row (= the Galaxy's TP ring at chunk 5120). Measured with the scratch harness (zz_scratch_head_gen,
+traced, the head program's device time = slowest chip, median of the replays; profiler on, snap 2^-14). Floors: x
+all-gather 62.5 us (1.5 shards of 1.97 MB a ring direction over 2 links x 23.6 GB/s), SE reduce-scatter 62.5, gate / up
+42 + down 21 at ~190 TFLOP/s HiFi2. Start: 235.8 us, PCC 0.98657, 0 of 20 same-x replays differing.
+
+### The router's x after the own x (kept: 235.8 -> 219.2)
+- Why: the gather's ports send the own shard from the matmul cores' x-own L1 once every core counted its own-x load
+  (SE-XLOAD); the row leads (cx 0) loaded theirs only after the router's x (SE-RTRX, ~20 us of DRAM reads + row
+  multicasts) - XLOAD ended at up to 24 us, the gather started there. SE_XFIRST (an old A/B switch: the row leads load
+  their own x first) had been tried on K3 (no gain, it is gate / up bound) and left off.
+- Measured: GLM-5.3 ring 640 235.8 -> 219.2 us; gather end (XROUNDS) 102-112 -> 85-91. K3 ring 640 394.7 -> 394.9
+  (neutral), DSv4.1 ring 640 212.5 -> 194.5. Made the order the code's (the switch removed). PCC unchanged.
+
+### Reduce-scatter halves by column band in the rows scatter (kept: 219.2 -> 201.5)
+- Why (RSSTAT probe): each chip's ports sent 82 / 84 packets one ring direction and 162-168 the other. ring_balanced's
+  two halves (core index < n / 2, half 1 the rest) split every block in two for the width scatter (every core holds a
+  slice of every block), but in the rows scatter (GLM, DSv4.1, K2.7, GLM-Flash) the first half of the core rows holds
+  whole blocks 0-1 and the second blocks 2-3: per chip 1 block went one way and 2 the other - the RS ran 2 blocks over
+  a direction's 2 links (83 us) instead of 1.5 (62.5).
+- Fix (se_rs.RsPlan.half): in the rows scatter on a balanced ring the halves are column bands (the first hcol columns
+  of every row), hcol picked so the bands' output tiles are as even as the columns allow (GLM 90 / 102 of 192). Every
+  user of the halves goes through RsPlan.half (port units, FINB / zone offsets, roles, the protocol model).
+- Measured (RSSTAT, ring 640): 117-129 packets on every port; RS from first packet (~115 us) to the last ~63 us = the
+  link floor. Head 219.2 -> 201.5 us (with the probe) / 200.3 (without). test_rs_protocol_model 212 pass. PCC
+  unchanged (0.98657; DSv4.1 0.99084), 0 of 20 replays differ.
+
+### Tried, not kept: the h exchange with all of a row's cores at once
+- Why: SE-HX 15.7 us flat - 11 kernel_lib rotating rounds (one column a round) of ~1.4 us handshake each, for ~8 KB a
+  round.
+- Built: every core, its h block ready, increments a "ready" count on its row (multicast increment), waits the whole
+  row ready, multicasts its block into every row core's h-all slot (write barrier), then a "landed" count. One
+  semaphore pair replaces the kernel_lib family.
+- Multicast: head 224 us (+24): HX 23.5 median - most cores' multicast + barrier ~3 us but some rows 17-35 us (eleven
+  concurrent row multicasts stall each other - the tail's lesson again). Unicast (each core writes its block to the
+  10 others): 208 us (+8), HX 20 us: own h ready ~4 us after the x rounds end, the row's slowest ~10, writes ~4, the
+  landed count ~4. The rotation overlaps the columns' gate / up ends (column c's round waits only for column c's h);
+  everything-at-once waits for the slowest first. Reverted (the rotation stays).
+
+### Tried, not kept (yet): the own shard from DRAM at the ports
+- Why: XGSTAT probe (the gather per port: first packet, entry ends, waits on the reader / a fabric slot): the gather
+  runs at link rate (~23.4 GB/s a port, WSLOT 37-40 us) from ~11 us - its start waits for every matmul core's own-x
+  load (the 4 owner columns load the 2 MB shard in 5-8 us beside the router's DRAM reads) - and ends at 70-75 us.
+- The ports' readers (BRISC, NOC1) reading the own shard tile by tile from DRAM: the reader starved the sender (WIN
+  28 us), head 213.5 vs 201.0. Reverted.
+
+### What bounds the GLM-5.3 head now (200 us)
+gather 11 -> 75 (link rate) | gate / up ends 85-95 (the matmul cores: router phase 0-21, then 16 K steps at ~3.8 us -
+probes: no W DRAM reads 198 us, no x waits 197.8, no math 183.2, handshakes only (no payloads, math, waits) gate / up
+20 -> 38: the x / W payload rounds are what is left) | h exchange 15.7 | first RS packet ~14 us after it (the down's
+passes of a start entry) | RS ~63 us (floor) | fins + y writes ~10-15 (the cores with dispatch prep end last).

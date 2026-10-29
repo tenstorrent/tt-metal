@@ -65,12 +65,23 @@ class RsPlan:
             self.npass = max(-(-p // pwmax) for p in self.pn)
             self.P = MT * max(self.pn)
         self.pwmax = pwmax
+        # (the halves: a balanced ring sends each half's share of a block one way. By core index (the first half of the
+        # cores) every core of the width scatter holds a slice of every block; in the rows scatter the first half of
+        # the core rows holds whole blocks (0, 1 of 4), so every chip sent 1 block one way and 2 the other (GLM-5.3
+        # ring of 4: 82 vs 165 packets a port, the RS 83 us vs 62.5). There the halves are column bands - every block
+        # split by its output columns, the bands' tiles as even as the columns allow)
+        self.hcol = None
+        if scatter == -2 and self.kind == "ring_balanced" and GX > 1:
+            pre = [sum(self.pn[:c]) for c in range(1, GX)]
+            self.hcol = 1 + min(range(GX - 1), key=lambda i: abs(2 * pre[i] - NTH))
 
     # ---- geometry (chip-independent) ----
     def k(self, cx, cy):
         return cy * self.GX + cx
 
     def half(self, k):
+        if getattr(self, "hcol", None):
+            return 0 if k % self.GX < self.hcol else 1
         return 0 if k < -(-self.ncores // 2) else 1
 
     def link(self, k):

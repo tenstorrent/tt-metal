@@ -23,10 +23,10 @@ row tiles a chunk: core row cy owns the chunk's row tiles cy MT .. cy MT + MT - 
 import os
 
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.combine_rf.lin2d import column_split, glu_weight  # noqa: F401
 
 import ttnn
-from ttnn.bringup.combine_rf import persist_l1
 
 NWS = int(__import__("os").environ.get("SE_NWS", "3"))  # (W slots; SE_NWS: A/B, <= 4 - the source words rotate over 4)
 XREADY, WV, WFREE = 0, 1, 1 + NWS  # (hand-written semaphores; the kernel_lib families' come after)
@@ -150,7 +150,8 @@ void kernel_main() {
         return xown + (((m % SE_XRING) * nown + slot) * MT) * KB * 2048;
     };
 #ifdef SE_RTR
-    auto rtrx = [&]() {  // (SE_XFIRST: after my own-shard x load - the gather's ports wait on every core's)
+    auto rtrx = [&]() {  // (called after my own-shard x load: the gather's ports wait on every matmul core's - a row
+        // lead's x load behind its ~20 us of router x held the gather back that long: GLM-5.3 ring 640 235.8 -> 219.2 us)
     if (cx == 0) {  // the router's x: the row's first core reads the row's x (MT row tiles, the chip's K slice) a K chunk
         // a round into RX and multicasts it along the row on NOC0 (the NCRISC's W_r^T goes down the columns on NOC1),
         // then sets the round on the row's RX-ready word (from my own source word RXS: the NCRISC re-arms the ready word)
@@ -179,9 +180,6 @@ void kernel_main() {
         }
     }
     };
-#ifndef SE_XFIRST
-    rtrx();
-#endif
 #endif
     const auto xg = TensorAccessor(x_args, x_addr, 2048);
     const uint32_t xports = se_ra(ord0 + g);  // (the gather's ports read my own shard from here)
@@ -251,8 +249,8 @@ void kernel_main() {
         noc_async_atomic_barrier();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(se_ra(np0 + 2 + 2 * nports))) = 1;
     }
-#if defined(SE_RTR) && defined(SE_XFIRST)
-    rtrx();
+#ifdef SE_RTR
+    rtrx();  // (the router's x after my own x)
 #endif
 #ifdef SE_BRW
     volatile tt_l1_ptr uint32_t* wsy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SE_WS);
@@ -2487,8 +2485,6 @@ class SeEngine3:
             nd += "#define GROW(m, lr) ((m) * CR + (lr))\n"
         if self.WRING:
             nd += f"#define SE_WRING {self.WRING}\n"
-        if os.environ.get("SE_XFIRST") == "1":  # (A/B: the row leads load their own x before the router's x)
-            nd += "#define SE_XFIRST\n"
         if os.environ.get("SE_XPIPE") == "1":  # (A/B: the x owners send a step as soon as its own load landed)
             nd += f"#define SE_XPIPE\n#define SE_XL {int(os.environ.get('SE_XL', '3'))}u\n"
         if os.environ.get("SE_HXINC") == "1":  # (A/B, no RS: the down starts on h columns as they land)
@@ -2688,7 +2684,9 @@ class SeEngine3:
         dst = [b for b in range(self.shards) if b != p and self.la_rows(cy, b)[1]]
         if "NOA2A" in _probes():  # (timing / hang probe: no all-to-all)
             dst = []
-        return [len(dst), la["word"] + persist_l1.handoff_bytes() * k] + [v for b in dst for v in port(self.la_dir(p, b), k % self.rs.nv)]
+        return [len(dst), la["word"] + persist_l1.handoff_bytes() * k] + [
+            v for b in dst for v in port(self.la_dir(p, b), k % self.rs.nv)
+        ]
 
     def _la_ncrisc(self, p, la, cx, cy):
         if not self.LT:
