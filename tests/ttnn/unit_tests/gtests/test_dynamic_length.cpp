@@ -160,6 +160,17 @@ TEST(DynamicKey, RejectsDimOutsideTensorArgs) {
     EXPECT_THROW(program_key(KeyAttributes{}, args, dynamic_key, "op"), std::exception);
 }
 
+TEST(DynamicKey, RejectsRowMajorLastDim) {
+    const auto row_major = ttnn::zeros(ttnn::Shape({1, 1, 32, 64}), DataType::BFLOAT16, ttnn::ROW_MAJOR_LAYOUT);
+    const KeyTensorArgs args{row_major, make_tensor(64, 32), std::nullopt};
+    DynamicKey dynamic_key;
+    dynamic_key.dim(args.input, -1);
+    EXPECT_THROW(program_key(KeyAttributes{}, args, dynamic_key, "op"), std::exception);
+    dynamic_key = {};
+    dynamic_key.dim(args.input, -2);
+    EXPECT_NO_THROW(program_key(KeyAttributes{}, args, dynamic_key, "op"));
+}
+
 TEST(DynamicKey, RejectsDimOutOfRange) {
     const KeyTensorArgs args{make_tensor(32, 64), make_tensor(64, 32), std::nullopt};
     DynamicKey dynamic_key;

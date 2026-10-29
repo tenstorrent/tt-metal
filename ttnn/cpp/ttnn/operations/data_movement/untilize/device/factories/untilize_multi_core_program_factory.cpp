@@ -158,11 +158,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     uint32_t input_dfb_num_tiles;
     bool double_buffer;
     if (runtime_rows) {
-        // The row count is not known at build time, and the cached program outlives the L1 state it
-        // was built in: double-buffer only while two rows take at most half the static CB space.
+        // The row count is not known at build time, and a later hit may place a taller L1 output beside these
+        // buffers. Admission checks one row against live L1, so an L1 output stays single-buffered. A DRAM output
+        // may double-buffer while two rows fit the static window.
         const uint64_t double_buffer_bytes =
             2ull * num_tiles_per_input_block * (input_single_tile_size + output_single_tile_size);
-        double_buffer = 2 * double_buffer_bytes <= ttnn::operations::data_movement::get_static_l1_space(a);
+        const bool output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM;
+        double_buffer =
+            output_is_dram && 2 * double_buffer_bytes <= ttnn::operations::data_movement::get_static_l1_space(a);
     } else {
         double_buffer = num_input_blocks_per_full_core != 1;
     }

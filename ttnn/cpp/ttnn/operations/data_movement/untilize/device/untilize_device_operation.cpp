@@ -298,6 +298,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_hit(
     uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
     TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
     TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+    TT_FATAL(input_tensor_a.is_allocated(), "Input tensor must be allocated");
 }
 
 ttnn::dynamic_length::DynamicKey UntilizeDeviceOperation::dynamic_key(

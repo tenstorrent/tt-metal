@@ -9,8 +9,15 @@
 #include <utility>
 
 // Per-core tile-row range of the interleaved multi-core untilize, derived on device from the common
-// row count; shared by reader, compute and writer. Cores past the end of a short input get an empty range.
+// row count; shared by reader, compute and writer. The first `rows % cores` cores take one extra row
+// so the work is balanced. Cores past the end of a short input get an empty range.
 inline std::pair<uint32_t, uint32_t> untilize_row_range(uint32_t core_idx, uint32_t num_tile_rows, uint32_t num_cores) {
-    const uint32_t per_core = (num_tile_rows + num_cores - 1) / num_cores;
-    return {std::min(core_idx * per_core, num_tile_rows), std::min((core_idx + 1) * per_core, num_tile_rows)};
+    if (num_cores == 0 || core_idx >= num_cores) {
+        return {0, 0};
+    }
+    const uint32_t base = num_tile_rows / num_cores;
+    const uint32_t extra = num_tile_rows % num_cores;
+    const uint32_t start = core_idx * base + std::min(core_idx, extra);
+    const uint32_t count = base + (core_idx < extra ? 1u : 0u);
+    return {start, start + count};
 }

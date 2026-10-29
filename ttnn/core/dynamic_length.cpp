@@ -113,6 +113,14 @@ void KeyEncoder::append_tensor(const Tensor& tensor) {
             "{}: dynamic dim {} is declared on a sharded tensor, whose shard spec still carries the extent",
             operation_name_,
             declared.dim);
+        // A row-major row is the page. Dropping that dim drops the page size, which legacy factories compile
+        // into TensorAccessor args and circular-buffer sizes.
+        TT_FATAL(
+            !(dim == rank - 1 && tensor.layout() == Layout::ROW_MAJOR),
+            "{}: dynamic dim {} is the last dimension of a row-major tensor, so it is the page size and stays in "
+            "the key",
+            operation_name_,
+            declared.dim);
         extents[dim] = std::nullopt;
         dim_matched_[i] = true;
     }
