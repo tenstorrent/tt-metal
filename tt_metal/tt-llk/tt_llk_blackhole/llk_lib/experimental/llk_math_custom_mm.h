@@ -101,13 +101,6 @@ inline void custom_mm_configure_addrmod()
         .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_5); // Move SrcB to 32 in preparation for finalization ELWADD
-
-    addr_mod_t {
-        .srca = {.incr = 16, .clr = 0, .cr = 0},
-        .srcb = {.incr = 16, .clr = 0, .cr = 0},
-        .dest = {.incr = 16, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_6); // Move to next face in all three regs, used for final accumulation
 }
 
 template <bool split_acc>
@@ -242,6 +235,13 @@ inline void _llk_math_custom_mm_(
 
     if constexpr (finalize)
     {
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 16, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_6); // Move to next face in all three regs, used for final accumulation
+
         // Run the full replay ct_dim - 1 times as it has the full finalization sequence for cases where SrcB is reused
         for (std::uint32_t i = 0; i < ct_dim - 1; i++)
         {
@@ -250,6 +250,9 @@ inline void _llk_math_custom_mm_(
         // Run the full replay - the last ELWADD as it differs on the last ct_dim iteration and is issued directly after
         lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len - 1);
         TTI_ELWADD(3, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
+
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
     else
     {
