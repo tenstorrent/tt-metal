@@ -4,9 +4,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from types import MappingProxyType
 
 import torch
 
@@ -17,7 +16,7 @@ from models.tt_dit.layers.linear import ColParallelLinear, RowParallelLinear, _a
 from models.tt_dit.layers.module import Module, ModuleList, Parameter
 from models.tt_dit.layers.normalization import DistributedGroupNorm, DistributedRMSNorm, GroupNorm, RMSNorm
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.utils import tensor
+from models.tt_dit.utils import sdpa_recipe, tensor
 from models.tt_dit.utils.conv3d import get_conv3d_config
 from models.tt_dit.utils.substate import rename_substate
 from models.tt_dit.utils.tensor import local_device_to_torch
@@ -446,17 +445,9 @@ class VaeResnetBlock(Module):
 
 
 class VaeAttention(Module):
-    # SDPA chunk sizes keyed by (is_blackhole, num_channels).
-    # Resolution priority: map > constructor args > default.
-    sdpa_chunk_size_map: Mapping[tuple[bool, int], tuple[int, int]] = MappingProxyType(
-        {
-            (False, 640): (64, 64),
-            (True, 640): (64, 64),
-            (False, 1024): (64, 64),
-            (True, 1024): (64, 64),
-        }
-    )
-    default_sdpa_chunk_size: tuple[int, int] = (128, 128)
+    # Named SDPA recipe of the single-head attention (head dim = num_channels, 512 in the FLUX/SD VAEs),
+    # as for the other VAEs: BALANCED (FP32 state).
+    sdpa_precision_default = ttnn.SDPAPrecision.BALANCED
 
     def __init__(
         self,
@@ -464,8 +455,6 @@ class VaeAttention(Module):
         num_channels: int,
         norm: VaeNormDesc,
         ctx: VaeContext,
-        q_chunk_size: int | None = None,
-        k_chunk_size: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -485,26 +474,7 @@ class VaeAttention(Module):
 
         tp_factor = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
         self._tp_factor = tp_factor
-        resolved_q_chunk, resolved_k_chunk = self.sdpa_chunk_size_map.get(
-            (is_blackhole(), num_channels),
-            (
-                q_chunk_size if q_chunk_size is not None else self.default_sdpa_chunk_size[0],
-                k_chunk_size if k_chunk_size is not None else self.default_sdpa_chunk_size[1],
-            ),
-        )
-
-        grid_size = ctx.device.compute_with_storage_grid_size()
-        self._sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            q_chunk_size=resolved_q_chunk,
-            k_chunk_size=resolved_k_chunk,
-        )
-        self._sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            ctx.device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
+        self._sdpa_program_config = sdpa_recipe.recipe_config(ctx.device.compute_with_storage_grid_size())
         self._mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             ctx.device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -598,7 +568,7 @@ class VaeAttention(Module):
             v,
             is_causal=False,
             program_config=self._sdpa_program_config,
-            compute_kernel_config=self._sdpa_compute_kernel_config,
+            precision=self.sdpa_precision_default,
         )
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)

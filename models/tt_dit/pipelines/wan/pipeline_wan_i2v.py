@@ -165,9 +165,19 @@ class WanPipelineI2V(WanPipeline):
         scheduler: SchedulerMixin | None = None,
         run_warmup: bool = True,
         lora_enabled: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         # initialize without warmup; we warm up below with a sample image_prompt.
-        super().__init__(device=device, config=config, scheduler=scheduler, run_warmup=False, lora_enabled=lora_enabled)
+        super().__init__(
+            device=device,
+            config=config,
+            scheduler=scheduler,
+            run_warmup=False,
+            lora_enabled=lora_enabled,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
+        )
 
         enc_height, enc_width, enc_t_chunk = self._vae_encoder_build_dims()
         self.tt_vae_encoder = WanEncoder(

@@ -5,25 +5,18 @@
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ...layers.linear import ColParallelLinear
 from ...layers.module import Module
 from ...layers.normalization import RMSNorm
 from ...utils.padding import pad_weight_tensor
+from ...utils.sdpa_recipe import prepare_recipe_inputs, recipe_config, resolve_recipe
 from ...utils.substate import pop_substate, rename_substate
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class SD35JointAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
-    sdpa_chunk_size_map = {
-        (False, 2, 2): (256, 512),
-        (False, 4, 4): (256, 512),
-        (True, 2, 2): (256, 512),
-        (True, 4, 4): (128, 512),
-    }
-    default_sdpa_chunk_size = (256, 512)
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
 
     def __init__(
         self,
@@ -39,8 +32,14 @@ class SD35JointAttention(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ):
         super().__init__()
+
+        self.sdpa_precision, self.sdpa_kv_dtype = resolve_recipe(
+            sdpa_precision, sdpa_kv_dtype, default=self.sdpa_precision_default, head_dim=head_dim, model="SD3.5"
+        )
 
         self.query_dim = query_dim
         self.head_dim = head_dim
@@ -112,25 +111,7 @@ class SD35JointAttention(Module):
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
-        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        self.sdpa_program_config = recipe_config(self.sdpa_worker_grid)
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
@@ -215,6 +196,13 @@ class SD35JointAttention(Module):
         add_q_BHLE = self.norm_added_q(add_q_BHLE)
         add_k_BHLE = self.norm_added_k(add_k_BHLE)
 
+        # FAST: prepare spatial and prompt inputs separately, after the QK norms and
+        # before the ring all-gather. The gather buffers must match the (recipe) KV dtype.
+        q_BHNE, k_BHNE, v_BHNE = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q_BHNE, k_BHNE, v_BHNE)
+        add_q_BHLE, add_k_BHLE, add_v_BHLE = prepare_recipe_inputs(
+            self.sdpa_precision, self.sdpa_kv_dtype, add_q_BHLE, add_k_BHLE, add_v_BHLE
+        )
+
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 q_BHNE,
@@ -224,15 +212,15 @@ class SD35JointAttention(Module):
                 add_k_BHLE,
                 add_v_BHLE,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
                 ),
                 joint_strategy="rear",
                 logical_n=N,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -254,7 +242,7 @@ class SD35JointAttention(Module):
                 add_v_BHLE,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)

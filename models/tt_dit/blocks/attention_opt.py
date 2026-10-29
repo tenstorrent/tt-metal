@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -18,6 +17,7 @@ from ..layers.normalization import DistributedRMSNorm
 from ..utils.matmul import get_matmul_config, get_matmul_core_grid
 from ..utils.mochi import get_rot_transformation_mat
 from ..utils.padding import PaddingConfig, pad_weight_tensor
+from ..utils.sdpa_recipe import prepare_recipe_inputs, recipe_config, resolve_recipe
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -43,32 +43,7 @@ _FLUX2_MATMUL_CORE_GRIDS: dict[tuple[int, int, int], tuple[int, int]] = {
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
-    # SDPA chunk sizes keyed by (is_blackhole, sp_factor, tp_factor). Resolution priority for
-    # non-ring: caller overrides > class map > constructor args > class default.
-    sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {}
-    default_sdpa_chunk_size: tuple[int, int] = (128, 512)
-
-    ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
-        # -1 is the default resolution.
-        (False, 2, 4): {-1: (256, 256)},
-        (False, 8, 4): {-1: (256, 256)},
-        (True, 2, 2): {-1: (128, 512)},
-        (True, 4, 8): {
-            -1: (256, 512),  # default
-            4096: (128, 256),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
-            4608: (128, 256),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
-            4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            (4096 + 128) * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            4096 * 16: (192, 512),  # 4096×4096  — 67.4% util (ring_sdpa_sweep_4096.md)
-        },
-        (True, 8, 4): {
-            -1: (256, 512),  # default
-            16384: (320, 384),  # 2048×2048  — 43.3% util (ring_sdpa_sweep_8x4_2048.md)
-            65536: (256, 512),  # 4096×4096  — 65.7% util (ring_sdpa_sweep_8x4_4096.md)
-        },
-    }
-    default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
+    sdpa_precision_default = ttnn.SDPAPrecision.STANDARD
 
     def __init__(
         self,
@@ -88,16 +63,18 @@ class Attention(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        k_chunk_size: int | None = None,
-        q_chunk_size: int | None = None,
-        sdpa_chunk_size_overrides: dict | None = None,
         per_head_norm: bool = False,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         super().__init__()
 
         self.head_dim = head_dim
+        self.sdpa_precision, self.sdpa_kv_dtype = resolve_recipe(
+            sdpa_precision, sdpa_kv_dtype, default=self.sdpa_precision_default, head_dim=head_dim, model="FLUX.2"
+        )
         self.pre_only = pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -125,34 +102,10 @@ class Attention(Module):
         # Reserve last row for CCL.
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
 
-        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
-        resolved_q_chunk, resolved_k_chunk = chunk_lookup.get(
-            (
-                is_blackhole(),
-                parallel_config.sequence_parallel.factor,
-                parallel_config.tensor_parallel.factor,
-            ),
-            (
-                q_chunk_size if q_chunk_size is not None else self.default_sdpa_chunk_size[0],
-                k_chunk_size if k_chunk_size is not None else self.default_sdpa_chunk_size[1],
-            ),
-        )
-
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=resolved_q_chunk,
-            k_chunk_size=resolved_k_chunk,
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
+        self.sdpa_program_config = recipe_config(self.sdpa_worker_grid)
 
         self.ring_sdpa_worker_grid = None  # (full_grid.x, full_grid.y - 5)
-        self.ring_sdpa_program_config = {}
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        self.ring_sdpa_program_config = None  # built with the ring grid on the first forward
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -257,30 +210,6 @@ class Attention(Module):
             return ttnn.CoreCoord(full_grid.x, full_grid.y - 2)
         else:
             return ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-
-    def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
-        if per_device_seq_len not in self.ring_sdpa_program_config:
-            device_parallel_key = (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            )
-            ring_chunk_size = self.ring_sdpa_chunk_size_map.get(device_parallel_key, self.default_ring_sdpa_chunk_size)
-            if per_device_seq_len in ring_chunk_size:
-                ring_chunk_size = ring_chunk_size[per_device_seq_len]
-            else:
-                logger.warning(
-                    f"No ring SDPA chunk size found for resolution {per_device_seq_len}, using default {ring_chunk_size[-1]}"
-                )
-                ring_chunk_size = ring_chunk_size[-1]
-
-            self.ring_sdpa_program_config[per_device_seq_len] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
-                q_chunk_size=ring_chunk_size[0],
-                k_chunk_size=ring_chunk_size[1],
-                exp_approx_mode=False,  # NOTE: False is more correct
-            )
-        return self.ring_sdpa_program_config[per_device_seq_len]
 
     def get_ring_sdpa_core_grid(self, resolved_seq_len: int) -> ttnn.CoreCoord:
         full_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -566,6 +495,8 @@ class Attention(Module):
         )
 
         v = _split_heads(v_flat_c)  # [1, H, M_s+M_p, D]
+        # FAST: prepare after norm/RoPE, before ring communication (no-op otherwise).
+        q, k, v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, q, k, v)
 
         # No joint stream — dummies handled in the post-processing block below.
         add_q = add_k = add_v = self.dummy_joint_input
@@ -605,12 +536,19 @@ class Attention(Module):
             if self.context_head_factors is not None:
                 add_q = add_q * self.context_head_factors.data
 
+            add_q, add_k, add_v = prepare_recipe_inputs(self.sdpa_precision, self.sdpa_kv_dtype, add_q, add_k, add_v)
+
             if shard_prompt:
-                persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
-                persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
+                persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(
+                    add_k.shape, 2, sp_axis, dtype=add_k.dtype
+                )
+                persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(
+                    add_v.shape, 2, sp_axis, dtype=add_v.dtype
+                )
 
         if self.ring_sdpa_worker_grid is None:
             self.ring_sdpa_worker_grid = self.get_ring_sdpa_core_grid(sequence_1_length)
+            self.ring_sdpa_program_config = recipe_config(self.ring_sdpa_worker_grid)
 
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -621,16 +559,16 @@ class Attention(Module):
                 add_k,
                 add_v,
                 persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    k.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k.dtype
                 ),
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                    v.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v.dtype
                 ),
                 joint_strategy="rear",
                 logical_n=sequence_1_length,
                 logical_l=sequence_2_length,
-                program_config=self.get_ring_sdpa_program_config(sequence_1_length),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self.ring_sdpa_program_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -646,7 +584,7 @@ class Attention(Module):
             )
         else:
             assert (
-                sequence_1_length == spatial.shape[1]
+                sequence_1_length == sequence_1.shape[1]
             ), "spatial sequence must not be padded without sequence parallelism"
 
             spatial, sequence_2 = ttnn.transformer.joint_scaled_dot_product_attention(
@@ -658,7 +596,7 @@ class Attention(Module):
                 add_v,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
 
         spatial = ttnn.transformer.concatenate_heads(spatial)

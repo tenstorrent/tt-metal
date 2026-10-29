@@ -521,8 +521,12 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "yuv420",
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
     ) -> None:
         self.mesh_device = mesh_device
+        self.sdpa_precision = sdpa_precision
+        self.sdpa_kv_dtype = sdpa_kv_dtype
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
         self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
@@ -775,6 +779,8 @@ class MiniMaxH3Pipeline:
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
         coresident: bool | None = None,
+        sdpa_precision: ttnn.SDPAPrecision | None = None,
+        sdpa_kv_dtype: ttnn.DataType | None = None,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -816,6 +822,8 @@ class MiniMaxH3Pipeline:
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
             coresident=coresident,
+            sdpa_precision=sdpa_precision,
+            sdpa_kv_dtype=sdpa_kv_dtype,
             **subclass_kwargs,
         )
 
@@ -1401,6 +1409,8 @@ class MiniMaxH3Pipeline:
             is_fsdp=self.dit_fsdp,
             # Bucketed rungs each pin their own K/V gather pair; size one at the top rung for all.
             kv_gather_capacity=self.bucket_ladder[-1] if self.bucket_denoise else None,
+            sdpa_precision=self.sdpa_precision,
+            sdpa_kv_dtype=self.sdpa_kv_dtype,
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:

@@ -811,7 +811,8 @@ def test_ltx_transformer_block(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
 
-        # Padding masks, same construction as the fast pipeline (audio padded, video aligned).
+        # Padding masks and the audio self-attn K/V length, as the pipelines pass them (audio padded,
+        # video aligned): SDPA slices the audio K/V to audio_N_real rather than applying the key mask.
         a_attn_mask, a_pad_sp, a_pad_full = build_audio_masks(
             audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
         )
@@ -850,6 +851,7 @@ def test_ltx_transformer_block(
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
             audio_attn_mask=a_attn_mask,
+            audio_attn_kv_len=audio_N_real,
             audio_padding_mask=a_pad_sp,
             audio_padding_mask_full=a_pad_full,
             video_padding_mask=v_pad_sp,
@@ -1970,7 +1972,8 @@ def _build_block_trace_setup(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
 
-        # Padding masks, same construction as the fast pipeline (audio padded, video aligned).
+        # Padding masks and the audio self-attn K/V length, as the pipelines pass them (audio padded,
+        # video aligned): SDPA slices the audio K/V to audio_N_real rather than applying the key mask.
         a_attn_mask, a_pad_sp, a_pad_full = build_audio_masks(
             audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
         )
@@ -2009,6 +2012,7 @@ def _build_block_trace_setup(
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
             audio_attn_mask=a_attn_mask,
+            audio_attn_kv_len=audio_N_real,
             audio_padding_mask=a_pad_sp,
             audio_padding_mask_full=a_pad_full,
             video_padding_mask=v_pad_sp,
