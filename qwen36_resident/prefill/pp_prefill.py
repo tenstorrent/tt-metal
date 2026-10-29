@@ -313,7 +313,12 @@ class PPPrefill:
         self.sin = dev(torch.zeros(n, 1, C, ROT), ttnn.bfloat16)
         self.fill_pt = dev(torch.zeros(n, C // self.block, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self.cstart = dev(torch.zeros(n, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self.tap_pt = dev(torch.zeros(n, C // self.block, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        # the tap ring's page table: only with taps (a prefill without a drafter does no tap work at all)
+        self.tap_pt = (
+            dev(torch.zeros(n, C // self.block, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            if self.tap_cache
+            else None
+        )
         self._conv_program()
         self.trace_id = None
         self.smm = self.smm_out = None
@@ -932,7 +937,8 @@ class PPPrefill:
         for p in range(n):
             c = t - p
             if 0 <= c < chunks:
-                taps[p] = torch.arange(c * C // blk, (c + 1) * C // blk) % self.tap_ring
+                if self.tap_cache:
+                    taps[p] = torch.arange(c * C // blk, (c + 1) * C // blk) % self.tap_ring
                 valid = min(C, n_tokens - c * C)
                 ctrl[p, 0, 0, :2] = torch.tensor([valid, 1])
                 cos[p, 0], sin[p, 0] = rope_cos_sin(torch.arange(c * C, (c + 1) * C))
@@ -944,15 +950,17 @@ class PPPrefill:
                 cos[p, 0] = 1.0
         shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
         host = lambda v, dt, layout=ttnn.TILE_LAYOUT: ttnn.from_torch(v, dtype=dt, layout=layout, mesh_mapper=shard)
-        return [
+        writes = [
             (host(ctrl, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT), self.ctrl),
             (host(cos, ttnn.bfloat16), self.cos),
             (host(sin, ttnn.bfloat16), self.sin),
             (host(fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.fill_pt),
             (host(read, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.read_pt),
             (host(cstart, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.cstart),
-            (host(taps, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.tap_pt),
         ]
+        if self.tap_cache:  # a drafter's taps: their ring positions this tick (run and run_span alike)
+            writes.append((host(taps, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), self.tap_pt))
+        return writes
 
     def capture(self):
         """compile the tick body of every chunk size, then record each into a trace (replayed by run())"""

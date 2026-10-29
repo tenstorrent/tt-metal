@@ -71,3 +71,29 @@ def test_the_checks_survive_python_O():
     )
     p = subprocess.run([sys.executable, "-O", "-c", code, WT, f"{WT}/ttnn"], capture_output=True, text=True)
     assert "RAISED" in p.stdout, p.stdout + p.stderr[-2000:]
+
+
+def test_a_tick_without_taps_does_no_tap_work():
+    """the DFlash2 drafter's taps (PPPrefill(taps=...)) cost a prefill without a drafter nothing: no tap ring and no
+    tap page table (both only with taps: tap_cache, tap_pt), no per-tick tap write (here: _control, shared by run and
+    run_span), no device tap fill (_body: `if j in self.tap_cache`)"""
+    from unittest.mock import patch
+
+    from qwen36_resident.prefill import pp_prefill as PP
+
+    def pp(taps):
+        return SimpleNamespace(
+            n=4, C=128, block=64, blocks=32, scratch0=32, tap_ring=34, mesh=None, tap_cache={0: "ring"} if taps else {},
+            ctrl="ctrl", cos="cos", sin="sin", fill_pt="fill", read_pt="read", cstart="cstart",
+            tap_pt="tap_pt" if taps else None,
+        )  # fmt: skip
+
+    with patch.object(PP.ttnn, "ShardTensorToMesh", lambda mesh, dim: None), patch.object(
+        PP.ttnn, "from_torch", lambda t, **kw: t
+    ):
+        plain = PP.PPPrefill._control(pp(False), 1, 300)
+        drafted = PP.PPPrefill._control(pp(True), 1, 300)
+    assert [dst for _, dst in plain] == ["ctrl", "cos", "sin", "fill", "read", "cstart"]
+    assert [dst for _, dst in drafted] == ["ctrl", "cos", "sin", "fill", "read", "cstart", "tap_pt"]
+    # chip 1 runs chunk 0 at tick 1: its tap ring blocks 0, 1
+    assert drafted[-1][0][1].tolist() == [0, 1]
