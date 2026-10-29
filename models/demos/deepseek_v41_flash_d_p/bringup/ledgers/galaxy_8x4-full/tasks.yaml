@@ -1053,6 +1053,51 @@ tasks:
       if something breaks at 8x4 sizes, fix it in the forks behind the same behaviour. Do not touch tt/engram*.py.'
     gate_tasks:
     - P.10
+- id: FIX.14
+  title: 'Integrate the 2x2''s lowbit phase 2 at full size: window KV bfloat8_b blocks, index K / Q bfloat4_b (merged 1f45dcccf1c)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.10
+  gate:
+    cmd: BRINGUP_TASK=P.10 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.10 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+      && BRINGUP_TASK=P.10 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER DECISION 2026-10-29 13:00; the 2x2 marked READY FOR GALAXY (df92663a019, merged in 1f45dcccf1c, no host
+      C++ change so no ttnn rebuild). Defaults now on: WINDOW_KV_FORMAT=bfp8_blocks, INDEX_K_FORMAT=bfp4, INDEX_Q_FORMAT=bfp4
+      (bf16 = the path before); the served caches stay bf16 (contract unchanged; they must hold the rounded values attention
+      reads). Do: run the gate (P.10''s units) on the 8x4; anything that breaks at 8x4 sizes (SP=32 / 160 rows a chip, 40
+      layers, the window carry, the per-chip index slabs) is fixed in the forks / tt behind the same behaviour, keeping the
+      2x2 working (derive from shapes, no box literals). Measure on vs off (env WINDOW_KV_FORMAT=bf16 INDEX_K_FORMAT=bf16
+      INDEX_Q_FORMAT=bf16 = off): per-chip DRAM of the window and index tables at 1,044,480 tokens (plan numbers), window
+      / index ring or gather bytes, sparse_sdpa and indexer score per call, the new writes (ckv_bfp4 blocks, bfp_round) per
+      call, attention / indexer / device / wall per chunk from the plain profile (rung last). Accuracy: every ladder metric
+      against its limit. KNOWN, OWNER-ACCEPTED on the 2x2 at 16:50 (2x2 spec tests.waivers indexer and state.topk_idx, F226):
+      the reference''s own fp4 selection error moves the top-k state (2x2: L14 0.185 vs 0.165) and the indexer step; if the
+      8x4 misses exactly those (err_state_topk_idx_* or the indexer step) and nothing else, STOP and report the numbers per
+      layer - the overseer adds the owner''s waivers to this spec; never loosen a limit, never raise precision above the reference.
+      Any other miss is a bug to find. DS41-141''s unit waiver (L20 window_kv last-window PCC >= 0.985) may stop matching
+      once the window is bfloat8_b: report the new value, do not touch the waiver.'
+    gate_tasks:
+    - P.10
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1061,6 +1106,7 @@ tasks:
   deps:
   - K.1
   - P.10
+  - FIX.14
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py

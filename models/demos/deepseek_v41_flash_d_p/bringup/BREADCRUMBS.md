@@ -4078,3 +4078,60 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
 - Re-run: `FIX13_OUT=<dir> [FIX13_ENDS=2536] [DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off] scripts/tt-probe.sh --mesh
   fix13_dump < /scratch/dnijemcevic/fix13/probe_dump.py`, then `python3 /scratch/dnijemcevic/fix13/ana3.py` and
   `ana4.py`.
+
+## FIX.14 (overseer fix, attempt 1): the 2x2's lowbit phase 2 at full size. Gate PASS, no code change
+
+- Request (OWNER 2026-10-29 13:00): the merged defaults (df92663a019 via 1f45dcccf1c) are WINDOW_KV_FORMAT=bfp8_blocks,
+  INDEX_K_FORMAT=bfp4 and INDEX_Q_FORMAT=bfp4. Run P.10's units on the 8x4, fix anything that breaks at 8x4 sizes,
+  and measure on vs off.
+- Nothing broke. The full gate passed on the merged code, with nothing changed in tt/ or the forks: ladder last,
+  ladder s56320, contract, kv_layout, adapter_acks, runner_contract, runner_smoke, profile. SP 32 / 160 rows a chip,
+  40 layers, the window carry (the contract's partial chunks 2536 / 6072 and follow-up starts) and the per-chip index
+  slabs (3520 / 7040 rows) all run on the merged code.
+- Accuracy (s56320, on vs off = FIX.12's metrics, the same path with the formats off): every metric is within its
+  limit, worst ratio 0.76 (err_layer_L30 0.154 / 0.202, off 0.152). Top-k state per layer, on / off / limit:
+  L02 0.137 / 0.025 / 0.284, L08 0.130 / 0.055 / 0.237, L14 0.130 / 0.086 / 0.240, L20 0.193 / 0.118 / 0.354,
+  L24 0.281 / 0.131 / 0.548, L28 0.199 / 0.121 / 0.364, L32 0.188 / 0.119 / 0.346, L36 0.177 / 0.115 / 0.319.
+  Candidates L20: 0.078 / 0.038 / 0.151. The 8x4 limits are wider than the 2x2's (their official drift is larger),
+  so none of the waivers the 2x2 needed (indexer, state.topk_idx) is needed here. Rung last: the worst was topk L08
+  0.155 / 0.172. Final hidden 0.196 / 0.259 (off 0.192). top5 1.0.
+- DS41-141: test_adapter_acks and test_runner_contract now pass with 0 failures, so the L20 last-window check is
+  >= 0.98957 and the unit waiver no longer matches. The exact PCC is not printed on a pass. The waiver was left as
+  it is.
+- Device per call (plain profile, chunk [51200, 56320); off = the same code with DS41_WINDOW_KV_FORMAT=bf16
+  DS41_INDEX_K_FORMAT=bf16 DS41_INDEX_Q_FORMAT=bf16, the profile run by hand into /scratch/dnijemcevic/fix14/off):
+  - sparse_sdpa: compressed layers 308.9 -> 306.5 us (-0.8 %; 2x2 -4 %); window-only (ROW_BFP8 vs stock bf16)
+    136.1 -> 134.1 us.
+  - ring_indexer_score_dsa: r2 (28160 keys) 272.5 -> 249.4 us (-8.5 %); r1 (56320) 494.9 -> 457.8 us (-7.5 %).
+  - New writes: ckv_bfp4 window blocks 5120 rows 47.5 us + carry 128 rows 23.5 us a layer (80 calls, 2.84 ms a
+    chunk); bfp_round query 10.8 us x 8, keys 8.8 / 15.3 us x 4 (0.13 ms); +40 carry to_layout (0.19 ms). Gone: the
+    bf16 table's slice_writes (25.4 + 1.8 us x 38, 1.04 ms).
+  - Sections: attention 67.22 -> 68.68 ms, indexer 8.66 -> 8.52, device total 203.80 -> 205.36 ms (+1.56; 2x2
+    +0.09). Programs 71584 -> 73312.
+  - Wall (clean, median of 10): 367.4 off (spread 274) vs 386.7 on (spread 59), loadavg about 26 for both;
+    host_overhead_ms 163.6 -> 181.3. The new ops' host time is ~0.21 ms a ckv_bfp4 call (prepared) and 0.5 ms a
+    bfp_round call; that adds ~14 ms a chunk, less the slice_writes' 10.8. DS41-142.
+- Per-chip DRAM at 1,044,480 tokens (computed from the shapes the code allocates; the window does not depend on seq):
+  - Window: off = AttnTable.win per KV source with a table (2, 8, 14, 20), 4 x [5248, 512] bf16 = 20.5 MiB (plus a
+    transient 5.1 MiB table per window-only layer call); on = one shared block buffer 164 x 18496 B = 2.9 MiB.
+  - Index ring key buffers (TtIndexer._kbuf, one per indexer: 3 at r2 = 522240 rows, 5 at r1 = 1044480 rows, x 128):
+    bf16 127.5 / 255 MiB each, 1657.5 MiB in total; bfp4 35.9 / 71.7 MiB, 466.2 MiB. That saves 1.16 GiB a chip.
+    The served index-key slabs stay bf16 (contract).
+  - Ring traffic received per chip per call (7/8 of kv_len x 128): at 1M, r2 111.6 -> 31.4 MiB and r1 223.1 -> 62.8
+    MiB; at 56320, r2 6.0 -> 1.7 and r1 12.0 -> 3.4 MiB (3.56x). Window gathers are unchanged: the window rows are
+    still gathered in bf16 over TP and SP (4 all_gathers a layer); only the sdpa read is narrower (578 vs 1024 B a
+    row).
+- Served caches: the brief says "they must hold the rounded values attention reads". That holds for compressed KV
+  only (ckv_bfp4 rounded=True, FIX.8). The window-KV and index-key served caches hold the unrounded bf16 rows. Within
+  prefill this changes nothing: the bfp groups are 16 values of one row, so the carry and the key slab re-round to
+  the same values. A decode reading the served bf16 would see values above the reference. DS41-143. I did not change
+  it: that is a change to the contract's numbers, outside "anything that breaks".
+- Perf ideas (not done): (1) a per-chip window region. Each chip's 160 queries read ~288 window rows, so this would
+  remove the replicated 5248-row rounding and the window all_gathers. (2) One _kbuf per capacity shared by the
+  indexers (they rewrite it every call). That would save 4 x 71.7 + 2 x 35.9 = 358 MiB a chip at bfp4.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.14 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; off profile:
+  `BRINGUP_RESULTS_DIR=<dir> BRINGUP_RECORD_TASK=FIX14off DS41_WINDOW_KV_FORMAT=bf16 DS41_INDEX_K_FORMAT=bf16
+  DS41_INDEX_Q_FORMAT=bf16 DS41_ENGRAM_TABLE=resident BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all
+  --no-precompile models/demos/common/bringup/tests/test_profile.py`, then the same with BRINGUP_WALL_CLEAN=1;
+  per-op compare: `python3 /scratch/dnijemcevic/fix14/ops_sum.py <on _ops.json.gz> <off _ops.json.gz>`.
