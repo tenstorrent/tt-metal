@@ -16,6 +16,20 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention 
 )
 
 
+def _sdpa_program_config(device, B, H, S):
+    """Shared SDPA config, but 128-wide q/k chunks for S < 8192 (S % 128 == 0) when B * H * S/128 fills the grid."""
+    cfg = _get_sdpa_program_config(device, S, q_seq_len=S)
+    grid = device.compute_with_storage_grid_size()
+    if S < 8192 and S % 128 == 0 and B * H * (S // 128) >= grid.x * grid.y:
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+    return cfg
+
+
 def _fused_weight(attn):
     """[dim, (Hq + 2 Hkv + Hq) * D] = q heads | k heads | v heads | gate heads, bf8, built once per layer.
 
@@ -103,7 +117,7 @@ def stateless_attention_prefill(attn, x, cos, sin):
         attn_mask=None,
         is_causal=True,
         scale=D**-0.5,
-        program_config=_get_sdpa_program_config(attn.device, S, q_seq_len=S),
+        program_config=_sdpa_program_config(attn.device, B, Hq, S),
         compute_kernel_config=_get_sdpa_compute_kernel_config(),
     )
     for t in (q, k, v):
