@@ -65,8 +65,8 @@ inline void weighted_reduce_init_short(
 
 // Configure the weighted-reduce ADDR_MODs. These are constant across chunks, so
 // call once outside the per-chunk loop (the QK matmul and regular pack init leave
-// ADDR_MOD_6 (math) and ADDR_MOD_3 (pack) untouched).
-//   MATH ADDR_MOD_6 : after MVMUL #1, advance SrcA by one 16-row face (-> qk
+// ADDR_MOD_5 (math) and ADDR_MOD_3 (pack) untouched).
+//   MATH ADDR_MOD_5 : after MVMUL #1, advance SrcA by one 16-row face (-> qk
 //                     face1) and DEST by 8 rows.
 //   PACK ADDR_MOD_3 : between the two pack PACR, step the DEST read to face1.
 // (MVMUL #2 uses ADDR_MOD_3 from sdpa_custom_mm_init; PACR #2 uses ADDR_MOD_1 from
@@ -77,7 +77,7 @@ inline void weighted_reduce_addrmod_init() {
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
         .dest = {.incr = 8, .clr = 0, .cr = 0},
     }
-              .set(ADDR_MOD_6)));
+              .set(ADDR_MOD_5)));
     PACK((addr_mod_pack_t{
         .y_src = {.incr = 0, .clr = 0, .cr = 0},
         .z_src = {.incr = 1, .clr = 0},
@@ -97,7 +97,7 @@ inline void weighted_reduce_math_impl(const std::uint32_t dst_slot = 0) {
     // single-slot layout.
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, get_dest_buffer_base() + dst_slot * weighted_dest_slot_rows);
     // MVMUL #1: qk face0 -> Dst row 0 (out[0:16]); then advance SrcA+16, Dst+16.
-    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_6, 0);
+    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
     // MVMUL #2: qk face1 -> Dst row 16 (out[16:32]); clear SrcA/SrcB.
     // ADDR_MOD_3 is set in sdpa_custom_mm_init
     TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
