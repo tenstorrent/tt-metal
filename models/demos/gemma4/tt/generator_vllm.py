@@ -6657,6 +6657,52 @@ class MTPRetainedRow:
     verified: int = 0
 
 
+class MTPRowNeedsLogits:
+    """Which rows of a decode step must be verified in logits mode, evaluated per row on first use.
+
+    The eager dict cost every decode step a sampling-parameter walk per live row (32 rows: ~0.7 ms) that
+    only a replay's readback ever read; an all-declined step now evaluates nothing."""
+
+    __slots__ = ("_can_use", "_sampling", "_bitmask", "_rows", "_cache")
+
+    def __init__(self, can_use, sampling, bitmask, rows):
+        self._can_use = can_use
+        self._sampling = sampling
+        self._bitmask = bitmask
+        self._rows = tuple(int(r) for r in rows)
+        self._cache = {}
+
+    def get(self, row, default=True):
+        row = int(row)
+        if row not in self._rows:
+            return default
+        value = self._cache.get(row)
+        if value is None:
+            value = self._sampling is None or not self._can_use(self._sampling, row, self._bitmask)
+            self._cache[row] = value
+        return value
+
+    def __getitem__(self, row):
+        return self.get(row)
+
+    def any(self):
+        return any(self.get(r) for r in self._rows)
+
+    def values(self):
+        return [self.get(r) for r in self._rows]
+
+    def items(self):
+        return [(r, self.get(r)) for r in self._rows]
+
+    def __eq__(self, other):
+        try:
+            return dict(self.items()) == dict(other.items() if hasattr(other, "items") else other)
+        except (TypeError, ValueError):
+            return NotImplemented
+
+    __hash__ = None
+
+
 @dataclasses.dataclass
 class MTPSession:
     """The drafter state of one state slot: its owner, its retained proposal, its counters (``dropped``:
@@ -7149,10 +7195,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         # that follows this step must read the verify logits back for it.
         sampling = kwargs.get("sampling_params")
         bitmask = kwargs.get("grammar_bitmask")
-        self._mtp_row_needs_logits = {
-            r: sampling is None or not self._spec_row_can_use_argmax(sampling, r, bitmask) for r in live
-        }
-        if sampling is None or any(self._mtp_row_needs_logits.values()):
+        self._mtp_row_needs_logits = MTPRowNeedsLogits(self._spec_row_can_use_argmax, sampling, bitmask, live)
+        if self._mtp_unread_replay_pending() and (sampling is None or self._mtp_row_needs_logits.any()):
             # A request that needs logits reaches a decode step before its own
             # proposal replays, so this is where every greedy-only replay still
             # in the buffer gets its host copy, ahead of that replay.
@@ -7164,6 +7208,19 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         return self._mtp_verify_step(
             args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live, num_valid, spec_mode
         )
+
+    def _mtp_any_retained(self):
+        """Whether any session holds a retained proposal (the only state an ordinary step has to walk)."""
+        return any(session.retained is not None for session in self._mtp_sessions.values())
+
+    def _mtp_unread_replay_pending(self):
+        """Whether the latest replay left a retained proposal without its host logits (``_mtp_read_back_live_replay``)."""
+        serial = self._mtp_replay_serial
+        for session in self._mtp_sessions.values():
+            retained = session.retained
+            if retained is not None and not retained.consumed and retained.logits is None and retained.serial == serial:
+                return True
+        return False
 
     def _mtp_retained_for(self, session, anchor, position):
         """The unconsumed retained row that continues ``(anchor, position)``, or None."""
@@ -7189,6 +7246,9 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         retained proposal, if any, is dropped because the plain decode moved
         the row past it.
         """
+        if not self._mtp_any_retained():
+            # Every row declined (or never proposed): the plain decode, with no per-row walk.
+            return self._spec_plain_decode(args, kwargs, page_tables_per_layer)
         sampling = kwargs.get("sampling_params")
         resident = self._spec_resident_decode_declared()
         answered = {}
@@ -7632,25 +7692,35 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if not live:
             return self._spec_decline(rows, k)
         width = int(committed.shape[1]) if committed.dim() > 1 else 1
-        tokens = sum(max(1, min(int(counts.reshape(-1)[r]), width)) if counts is not None else 1 for r in live)
+        # The blocks are read to the host once per step; per-row tensor reads cost ~8 us each, three a row
+        # (the 32-row all-declined step paid ~1 ms in them).
+        counts_rows = counts.reshape(-1).tolist() if counts is not None else None
+        pos_rows = positions.reshape(int(rows), -1).tolist()
+        tokens = sum(max(1, min(int(counts_rows[r]), width)) if counts_rows is not None else 1 for r in live)
         t_begin = self._spec_interval_begin(len(live), tokens)
         self._spec_mode_now = ("plain", self._spec_plain_bucket(len(live)))
-        top = max(int(self._spec_row(positions, rows, r)[0]) for r in live)
+        top = max(int(pos_rows[r][0]) for r in live)
         self._spec_table_now = self._spec_plain_table_ms(len(live), top)
         try:
-            return self._mtp_propose(k, rows, live, committed, positions, counts)
+            return self._mtp_propose(k, rows, live, committed, positions, counts, counts_rows, pos_rows)
         finally:
             self._spec_interval_end("Gemma4MTP", t_begin, self._spec_mode_now, len(live))
 
-    def _mtp_propose(self, k, rows, live, committed, positions, counts):
-        """``propose_draft_tokens`` proper; ``_spec_mode_now`` ends as the mode the step serves."""
+    def _mtp_propose(self, k, rows, live, committed, positions, counts, counts_rows=None, pos_rows=None):
+        """``propose_draft_tokens`` proper; ``_spec_mode_now`` ends as the mode the step serves. ``counts_rows``
+        and ``pos_rows`` are the host lists of ``counts`` and ``positions`` (read once by the caller)."""
+        if counts_rows is None:
+            counts_rows = counts.reshape(-1).tolist() if counts is not None else None
+        if pos_rows is None:
+            pos_rows = positions.reshape(int(rows), -1).tolist()
+        committed_rows = committed.reshape(int(rows), -1).tolist()
         targets = []  # (row, session, anchor, position)
         for r in live:
-            block = self._spec_row(committed, rows, r)
-            n = int(counts.reshape(-1)[r]) if counts is not None else 1
+            block = [int(x) for x in committed_rows[r]]
+            n = int(counts_rows[r]) if counts_rows is not None else 1
             n = max(1, min(n, len(block)))
             anchor = block[n - 1]
-            position = self._spec_row(positions, rows, r)[n - 1]
+            position = int(pos_rows[r][n - 1])
             if position < 0:
                 raise ValueError(
                     f"Gemma4MTP speculative contract: row {r} committed {n} tokens but column {n - 1} has position -1"

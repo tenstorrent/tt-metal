@@ -733,6 +733,23 @@ def test_after_a_decline_the_next_ordinary_step_is_plain(model, mtp, adapter, mo
     rows = 17
     mh._prefill(mtp, rows=rows)
     keys = [10 + 2 * r for r in range(rows)]
+    # the all-declined step's per-row python budget: the blocks are read to the host once per step and the
+    # ordinary step walks no session, so no row is read tensor by tensor and no row's sampling is inspected
+    # (a replay's readback is the only reader of that); the c128 Galaxy point paid ~2 ms a step in both
+    budget = {"row_reads": 0, "sampling_checks": 0}
+    base = adapter.Gemma4SpecContractBase
+    orig_row, orig_can = base._spec_row, base._spec_row_can_use_argmax
+
+    def counted_row(values, rows_, row):
+        budget["row_reads"] += 1
+        return orig_row(values, rows_, row)
+
+    def counted_can(cls, sampling_params, row, grammar_bitmask=None):
+        budget["sampling_checks"] += 1
+        return orig_can.__func__(cls, sampling_params, row, grammar_bitmask)
+
+    monkeypatch.setattr(base, "_spec_row", staticmethod(counted_row))
+    monkeypatch.setattr(base, "_spec_row_can_use_argmax", classmethod(counted_can))
     mh._ordinary(mtp, [3] * rows, [2] * rows, keys, result=_tensor([30] * rows))
     for _ in range(2):
         proposal = mh._propose(mtp, [[30] + [-1] * 5] * rows, [[3] + [-1] * 5] * rows)
@@ -744,6 +761,13 @@ def test_after_a_decline_the_next_ordinary_step_is_plain(model, mtp, adapter, mo
     ]
     out = mh._ordinary(mtp, [30] * rows, [3] * rows, keys, result="device")
     assert out == "device", "the ordinary step after a decline is the plain decode"
+    assert budget == {"row_reads": 0, "sampling_checks": 0}, budget
+    assert mtp._mtp_row_needs_logits.get(0) is False and budget["sampling_checks"] == 1, "evaluated on first use"
+    assert mtp._mtp_row_needs_logits.get(0) is False and budget["sampling_checks"] == 1, "and cached"
+    assert not mtp._mtp_row_needs_logits.any() and budget["sampling_checks"] == rows, "a greedy batch walks all"
+    assert mtp._mtp_row_needs_logits.get(99, "off") == "off" and mtp._mtp_row_needs_logits.values() == [False] * rows
+    monkeypatch.setattr(base, "_spec_row", staticmethod(orig_row))
+    monkeypatch.setattr(base, "_spec_row_can_use_argmax", orig_can)
     # Fewer rows: the next proposal reseeds the survivors and drafts again.
     live = 4
     proposal = mh._propose(mtp, [[31] + [-1] * 5] * live, [[4] + [-1] * 5] * live)
