@@ -38,7 +38,7 @@
 //                                 by its uninit — armed only when the sweep runs dest_acc=Yes.)
 //   2 = sdpa_sub_bcast_col       (the paired SDPA fused sub+bcast-col op, exercising BOTH empty uninits:
 //                                 UNPACK unpack_AB_sub_bcast_col_custom (RMW THCON_SEC0_REG2_Haloize_mode
-//                                 + SETADCXX x_end) and MATH eltwise_binary_custom (ADDR_MOD_7 +
+//                                 + SETADCXX x_end) and MATH eltwise_binary_custom (WH addr mods +
 //                                 CLR_DVALID_SrcA disable). These two ops only run correctly as a pair.)
 
 #include <cstdint>
@@ -217,7 +217,7 @@ static inline void math_experimental_(RUNTIME_PARAMETERS params, [[maybe_unused]
     else if constexpr (POLLUTER == 2)
     {
         // eltwise_binary_custom paired with the sub_bcast_col unpacker (the SDPA fused SUB op).
-        // init sets ADDR_MOD_7 + CLR_DVALID_SrcA disable; empty uninit. The SUB bcast-col reuse
+        // init sets CLR_DVALID_SrcA disable (and addr mods on WH); empty uninit. The SUB bcast-col reuse
         // scaffold is the only eltwise_binary_custom entry point common to BH and WH.
         _llk_math_eltwise_binary_init_custom_<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(NUM_FACES /* num_faces */);
         _llk_math_wait_for_dest_available_<DST_SYNC>();
