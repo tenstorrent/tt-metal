@@ -51,8 +51,6 @@
 // are never written). Published mode only; the writes go out after the round's multicast.
 //
 // Runtime arg after the taps' (before the fabric's): an optional L1 timeline (0 = off), kHubTs words per round.
-// Compile-time arg 29 x_chunks: x is multicast in that many pieces, each as soon as the compute has summed it
-// (hub_compute.cpp), the slots flag after the last.
 //
 // Compile-time arg 21 sample (feed kind 0): the records are the streamers' top-k lists and the candidate slots
 // the chips' (sampling::kListBytes each); the token is drawn from them with the sampling parameters (DRAM, 16 words,
@@ -125,9 +123,6 @@ constexpr uint32_t tap_rounds[5] = {
     get_compile_time_arg_val(27)};
 constexpr uint32_t hidden_tiles = get_compile_time_arg_val(28);
 constexpr uint32_t kHubTs = 8;                               // timeline words per round
-// x goes to the streamers in this many pieces, each multicast as soon as the compute has summed it
-constexpr uint32_t x_chunks = get_compile_time_arg_val(29);
-static_assert(x_chunks == 1 || published, "pieces of x come from the hub's compute");
 constexpr uint32_t kTapTile = 2048;                          // a bf16 32x32 tile of a tap tensor
 constexpr uint32_t kRowsTile = vector_bytes / hidden_tiles;  // a batch x 32 bf16 tile of x
 constexpr uint32_t kTapTiles = hidden_tiles / num_chips;     // this chip's hidden tiles
@@ -423,41 +418,26 @@ void kernel_main() {
             noc_semaphore_wait_min(ccl_sem[par], expected[par]);
         }
         mark(l, 2);
-        // published: the compute sums the slots into x, in x_chunks pieces
-        uint32_t src = base, bytes = num_chips * vector_bytes, dst = streamer_slots;
-        const bool mcast = l + 1 < layers || mcast_last;
+        // published: the compute sums the slots into x
+        uint32_t src = base, bytes = num_chips * vector_bytes;
         if constexpr (published) {
             constexpr uint32_t views = vector_bytes / 2048;
-            constexpr uint32_t piece = vector_bytes / x_chunks;
             cb_reserve_back(0, num_chips * views);
             cb_push_back(0, num_chips * views);
-            for (uint32_t k = 0; k + 1 < x_chunks; k++) {
-                // the pieces before the last go out while the compute sums the next
-                cb_wait_front(2, (k + 1) * (views / x_chunks));
-                for (uint32_t r = 0; mcast && r < rects; r++) {
-                    noc_async_write_multicast(
-                        get_read_ptr(2) + k * piece,
-                        get_noc_multicast_addr(
-                            rect(r, 0), rect(r, 1), rect(r, 2), rect(r, 3), streamer_slots + k * piece),
-                        piece,
-                        rect(r, 4));
-                }
-            }
             cb_wait_front(2, views);
             mark(l, 3);
-            src = get_read_ptr(2) + (x_chunks - 1) * piece;
-            bytes = piece;
-            dst = streamer_slots + (x_chunks - 1) * piece;
+            src = get_read_ptr(2);
+            bytes = vector_bytes;
             if (l + 1 == layers && arg0 != 0) {
                 const InterleavedAddrGen<true> dump{.bank_base_address = arg0, .page_size = vector_bytes};
-                noc_async_write(get_read_ptr(2), dump.get_noc_addr(0), vector_bytes);
+                noc_async_write(src, dump.get_noc_addr(0), vector_bytes);
             }
         }
-        if (mcast) {
+        if (l + 1 < layers || mcast_last) {
             for (uint32_t r = 0; r < rects; r++) {
                 noc_async_write_multicast(
                     src,
-                    get_noc_multicast_addr(rect(r, 0), rect(r, 1), rect(r, 2), rect(r, 3), dst),
+                    get_noc_multicast_addr(rect(r, 0), rect(r, 1), rect(r, 2), rect(r, 3), streamer_slots),
                     bytes,
                     rect(r, 4));
             }
@@ -475,7 +455,7 @@ void kernel_main() {
         if constexpr (published) {
             for (uint32_t i = 0; i < n_taps; i++) {
                 if (l == tap_rounds[i]) {
-                    write_tap(get_read_ptr(2), tap_addr[i]);
+                    write_tap(src, tap_addr[i]);
                 }
             }
             noc_async_write_barrier();
