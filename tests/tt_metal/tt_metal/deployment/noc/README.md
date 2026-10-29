@@ -116,7 +116,11 @@ Failures on every chip are reported in one run.
 
 ## Wedged chips
 A chip is marked wedged when one of its sources stops making progress, or a
-host read of the chip fails or does not return. Each chip is polled
+host read of the chip fails or does not return. It is also marked wedged when a
+source aborted on a NOC timeout and the core's firmware does not finish within
+`NOC_TEST_TIMEOUT_MS`: with transactions still outstanding, the firmware's
+NOC-idle checks can trap the core, and waiting on it would block every other
+chip. Each chip is polled
 separately, so a wedged chip does not block the others:
 ```
 chip 31 (0000:c8:00.0, ubb: 3, chip: 8) wedged in noc 0 batch 1/3: 1 source(s) stopped making progress; skipping it for the rest of the test

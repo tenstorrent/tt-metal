@@ -453,6 +453,37 @@ struct wedged_chip {
     string reason;
 };
 
+// After kernel_main the firmware asserts the NOC is idle, so a kernel that aborted with transactions
+// outstanding can trap there instead of completing. Polls each core's go message, with a bound.
+static bool firmware_completed(const vector<const source*>& srcs, int64_t timeout_ms) {
+    const auto& hal = MetalContext::instance().hal();
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto deadline = chrono::steady_clock::now() + chrono::milliseconds(timeout_ms);
+    vector<const source*> pending = srcs;
+    for (;;) {
+        try {
+            erase_if(pending, [&](const source* s) {
+                const auto type = !s->is_eth  ? HalProgrammableCoreType::TENSIX
+                                  : s->active ? HalProgrammableCoreType::ACTIVE_ETH
+                                              : HalProgrammableCoreType::IDLE_ETH;
+                auto go = hal.get_dev_msgs_factory(type).create<dev_msgs::go_msg_t>();
+                const uint64_t addr = hal.get_dev_noc_addr(type, HalL1MemAddrType::GO_MSG) & ~0x3ull;
+                cluster.read_core(go.data(), go.size(), tt_cxy_pair(s->device->id(), s->virt), addr);
+                return go.view().signal() == dev_msgs::RUN_MSG_DONE;
+            });
+        } catch (const std::exception&) {
+            return false;
+        }
+        if (pending.empty()) {
+            return true;
+        }
+        if (chrono::steady_clock::now() > deadline) {
+            return false;
+        }
+        this_thread::sleep_for(chrono::milliseconds(10));
+    }
+}
+
 struct poll_result {
     vector<vector<uint32_t>> last_prog;  // per run; empty if the chip could not be read
     vector<bool> stalled;                // per run: kernel stopped making progress
@@ -776,19 +807,9 @@ static vector<failure> run_phase(
 
         poll_result poll = wait_for_sources(runs, p);
 
-        for (auto& [mesh, _] : workloads) {
-            if (!poll.wedged.contains(mesh->get_device_ids()[0])) {
-                watchdog::get().step(fmt::format(
-                    "noc {} batch {}/{}: waiting for kernels to finish on {}",
-                    noc,
-                    batch + 1,
-                    num_batches,
-                    chip_str(mesh->impl().get_devices()[0])));
-                fixture->FinishCommands(mesh);
-            }
-        }
-
+        // Results are final once a kernel is done, aborted or stalled, so read them before anything that can block.
         size_t batch_failures = 0;
+        set<ChipId> aborted;
         for (size_t i = 0; i < runs.size(); i++) {
             const auto& r = runs[i];
             if (poll.unreadable.contains(r.src->device->id())) {
@@ -803,6 +824,9 @@ static vector<failure> run_phase(
                 chip_str(r.src->device)));
             auto results = read_words(*r.src, r.layout.results, r.dests.size() * NOC_RESULT_WORDS);
             const auto& prog = poll.last_prog[i];
+            if (prog[NOC_PROGRESS_STATE] == NOC_STATE_ABORTED) {
+                aborted.insert(r.src->device->id());
+            }
             for (size_t d = 0; d < r.dests.size(); d++) {
                 vector<uint32_t> rec(
                     results.begin() + d * NOC_RESULT_WORDS, results.begin() + (d + 1) * NOC_RESULT_WORDS);
@@ -816,6 +840,41 @@ static vector<failure> run_phase(
                 }
                 failures.push_back({noc, *r.src, *r.dests[d], r.addrs[d], std::move(rec)});
                 batch_failures++;
+            }
+        }
+
+        for (const ChipId chip : aborted) {
+            if (poll.wedged.contains(chip)) {
+                continue;
+            }
+            vector<const source*> srcs;
+            for (const auto& r : runs) {
+                if (r.src->device->id() == chip) {
+                    srcs.push_back(r.src);
+                }
+            }
+            watchdog::get().step(fmt::format(
+                "noc {} batch {}/{}: checking firmware completion on {}",
+                noc,
+                batch + 1,
+                num_batches,
+                chip_str(srcs[0]->device)));
+            if (!firmware_completed(srcs, p.timeout_ms)) {
+                poll.wedged[chip] =
+                    "a source aborted on a NOC timeout and its firmware did not complete (NOC transactions "
+                    "still outstanding)";
+            }
+        }
+
+        for (auto& [mesh, _] : workloads) {
+            if (!poll.wedged.contains(mesh->get_device_ids()[0])) {
+                watchdog::get().step(fmt::format(
+                    "noc {} batch {}/{}: waiting for kernels to finish on {}",
+                    noc,
+                    batch + 1,
+                    num_batches,
+                    chip_str(mesh->impl().get_devices()[0])));
+                fixture->FinishCommands(mesh);
             }
         }
 
