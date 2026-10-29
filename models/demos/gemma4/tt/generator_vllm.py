@@ -7928,6 +7928,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 # the anchor the runner committed.
                 self._mtp_dropped_proposals += 1
                 session.dropped += 1
+                if self._mtp_dropped_proposals <= 200:
+                    logger.debug(
+                        f"Gemma4MTP speculative contract: proposal dropped unverified for row {r} (anchor "
+                        f"{retained.anchor_token} at {retained.anchor_position}, the runner committed {n} to "
+                        f"{position}); {self._mtp_dropped_proposals} so far"
+                    )
                 session.retained = retained = None
             if retained is not None:
                 expected = retained.anchor_position + n
