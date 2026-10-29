@@ -172,8 +172,7 @@ std::optional<std::string> BinaryBackwardDeviceOperation::soft_fallback_reason(
     const std::optional<Tensor>& preallocated_other_grad) {
     const auto op_name = op_name_of(op_type);
 
-    // MUL_BW's first-cut contract: both grads must be requested. Partial-mask callers
-    // fall back to the composite path in binary_backward.cpp.
+    // All 5 ops: both grads must be requested; partial-mask callers fall to composite in binary_backward.cpp.
     if (!(are_required_outputs[0] && are_required_outputs[1])) {
         return fmt::format(
             "{} operation currently requires both grads; got are_required_outputs=[{}, {}]",
