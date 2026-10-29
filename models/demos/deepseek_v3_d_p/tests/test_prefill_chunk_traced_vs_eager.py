@@ -26,6 +26,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
+from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference, rms_norm
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
@@ -342,6 +344,35 @@ def _glm_natural_slot_rows(rows: torch.Tensor, stripes: int, chunk: int) -> torc
     return out
 
 
+def _glm_cpu_layer_caches(config, state_dict, token_ids, end):
+    """CPU truth for one chunk [0, end): the KVPE and indexer-K that layers 0 and 1 write, each [end, D]."""
+    emb = state_dict["embed_weight"][torch.tensor(token_ids[:end])].unsqueeze(0)  # [1, end, hidden]
+    l0, l1 = state_dict["layers"][0], state_dict["layers"][1]
+    ref0 = SparseMLAReference(config, l0["mla_weights"], seq_len=CHUNK)
+    out0, _ = glm_decoder_layer_reference(
+        config,
+        l0["mla_weights"],
+        l0["attn_norm_weight"],
+        l0["ffn_norm_weight"],
+        emb,
+        CHUNK,
+        ffn_weights=l0["ffn_weights"],
+        mla_ref=ref0,
+        actual_start=0,
+        actual_end=end,
+    )
+    ref1 = SparseMLAReference(config, l1["mla_weights"], seq_len=CHUNK)
+    ref1.forward(rms_norm(out0, l1["attn_norm_weight"], config.rms_norm_eps), actual_start=0, actual_end=end)
+    kvpe = [r.kvpe_cache[0, 0, :end].float() for r in (ref0, ref1)]
+    index = [r.index_cache[0, :end].float() for r in (ref0, ref1)]
+    return {"kvpe": kvpe, "indexer_k": index}
+
+
+def _rel_err(dev: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+    """Per-token relative L2 error [tokens]."""
+    return (dev - ref).norm(dim=-1) / ref.norm(dim=-1).clamp_min(1e-6)
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
@@ -392,6 +423,13 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
     )
     mesh_device.enable_program_cache()
     state_dict = glm_random_transformer_state_dict(config, GLM53Config, GLM_LAYERS)
+    # The CPU reference's view of the weights, taken before the runtime consumes the state dict.
+    cpu_weights = {
+        "embed_weight": state_dict["embed_weight"],
+        "layers": [
+            {k: dict(v) if isinstance(v, dict) else v for k, v in layer.items()} for layer in state_dict["layers"]
+        ],
+    }
     runtime = TtPrefillRuntime(mesh_device, config, state_dict, rt_config)
     del state_dict
     index_layers = full_indexer_rank(config, GLM_LAYERS)
@@ -457,6 +495,9 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
         del runtime
         gc.collect()
 
+    # Which side is wrong: wherever traced and eager differ, compare each with the CPU reference. The noise bar is
+    # the largest device-vs-CPU error on the tokens where the two paths are identical.
+    cpu = {}
     failures = []
     for name, rows, layers in (("kvpe", kvpe_rows, GLM_LAYERS), ("indexer_k", index_rows, index_layers)):
         for case, end in enumerate(GLM_CHUNK_ENDS):
@@ -472,6 +513,21 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
                     + (f" (first {differ[0].item()}, last {differ[-1].item()})" if len(differ) else "")
                 )
                 if len(differ):
+                    if end not in cpu:
+                        cpu[end] = _glm_cpu_layer_caches(config, cpu_weights, ids, end)
+                    ref = cpu[end][name][layer]
+                    err_t, err_e = _rel_err(t, ref), _rel_err(e, ref)
+                    same = torch.ones(end, dtype=torch.bool)
+                    same[differ] = False
+                    bar = err_e[same].max().item()
+                    logger.info(
+                        f"[0, {end}) {name}[{layer}] vs CPU: on the {len(differ)} differing tokens, within device noise "
+                        f"(rel err <= {bar:.3e}, the max over the {int(same.sum())} identical tokens): "
+                        f"eager {int((err_e[differ] <= bar).sum())}/{len(differ)}, "
+                        f"traced {int((err_t[differ] <= bar).sum())}/{len(differ)}; median rel err eager "
+                        f"{err_e[differ].median().item():.3e}, traced {err_t[differ].median().item():.3e} "
+                        f"(identical tokens {err_e[same].median().item():.3e})"
+                    )
                     failures.append(
                         f"[0, {end}) {name} layer {layer}: {len(differ)} real tokens differ, first {differ[0].item()}, "
                         f"PCC {float(pcc):.6f}"
