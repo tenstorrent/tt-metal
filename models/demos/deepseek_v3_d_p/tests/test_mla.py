@@ -517,7 +517,6 @@ ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial
 # Determinism gate, same contract as test_prefill_block / test_prefill_transformer: repeats must be
 # bit-identical, so the threshold is exactly 1.0. Rep 0 is the baseline, hence >= 2.
 DETERMINISM_PCC_THRESHOLD = 1.0
-DETERMINISM_REPS = 3
 
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
@@ -850,7 +849,7 @@ def _run_chunked_prefill(
             # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
             # with the same data -- idempotent, like the repeated block() in test_prefill_block.
             det_baseline = None
-            for rep in range(DETERMINISM_REPS if determinism_check else 1):
+            for rep in range(request.config.getoption("--mla-determinism-reps") if determinism_check else 1):
 
                 def _forward():
                     return mla_tt.forward(
@@ -920,8 +919,8 @@ def _run_chunked_prefill(
             msg = "; ".join(f"user {u} iter {i} rep {rep}: {pcc:.6f}" for u, i, rep, pcc in det_failures)
             pytest.fail(f"Determinism PCC below {DETERMINISM_PCC_THRESHOLD}: {msg}")
         logger.success(
-            f"✓ Chunked prefill determinism: {DETERMINISM_REPS} reps of every forward bit-identical "
-            f"({n_iters} iter(s) x {num_users} user(s))"
+            f"✓ Chunked prefill determinism: {request.config.getoption('--mla-determinism-reps')} reps of every "
+            f"forward bit-identical ({n_iters} iter(s) x {num_users} user(s))"
         )
         return
 
