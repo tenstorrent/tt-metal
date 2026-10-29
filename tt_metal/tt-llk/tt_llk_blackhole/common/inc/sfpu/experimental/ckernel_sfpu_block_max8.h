@@ -45,6 +45,18 @@ inline sfpi::vFloat rotate_right(sfpi::vFloat value)
 }
 
 /**
+ * @brief Rotate one vector right, then merge it with another by bitwise OR.
+ *
+ * The callers keep the set instances of the two inputs disjoint, so the OR only moves bits.
+ * @tparam STEPS Number of one-instance rotations applied to rotated.
+ */
+template <int STEPS>
+inline sfpi::vFloat rotate_or(sfpi::vFloat rotated, sfpi::vFloat other)
+{
+    return sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<STEPS>(rotated)) | sfpi::as<sfpi::vUInt>(other));
+}
+
+/**
  * @brief Load one parity of a four-row face band and replace invalid scores with negative infinity.
  *
  * For BF16, vector element = 8 * physical_lane + instance, and vConstTileId
@@ -144,12 +156,12 @@ __attribute__((noinline)) inline void reduce_eight_rows(std::uint32_t address)
 }
 
 /**
- * @brief Gather one block maximum from each face into instances 0 and 1.
+ * @brief Gather one block maximum from each face into instances 3 and 4 (BLOCK 0) or 7 and 0 (BLOCK 1).
  *
  * The first/second block resides in instance 3/7, corresponding to even face
  * column 6/14. The two gathered values form one parity of the final four-score
- * row; other instances are zeroed for the later bitwise merge. Selecting
- * before the shared rotation needs fewer shuffles than rotating each face.
+ * row; other instances are zeroed for the later bitwise merge. The caller
+ * rotates them into place, after the transpose.
  * @tparam BLOCK Select the first or second eight-score block within each face.
  * @param src_address Left-face physical DST row address for four logical rows.
  */
@@ -157,7 +169,8 @@ template <std::uint32_t BLOCK>
 inline sfpi::vFloat gather_face_blocks(std::uint32_t src_address)
 {
     constexpr int instance = 3 + 4 * BLOCK;
-    sfpi::vFloat right     = rotate_right<1>(sfpi::dst_reg[(src_address + FACE_R_DIM) / 2]);
+    // Pre-rotate the right face so its block sits at instance + 1, which wraps to 0 for BLOCK 1.
+    sfpi::vFloat right     = rotate_right<1 /*STEPS*/>(sfpi::dst_reg[(src_address + FACE_R_DIM) / 2]);
     sfpi::vFloat blocks    = 0.0f;
     v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == 2 * instance)
     {
@@ -169,7 +182,7 @@ inline sfpi::vFloat gather_face_blocks(std::uint32_t src_address)
         blocks = right;
     }
     v_endif;
-    return rotate_right<8 - instance>(blocks);
+    return blocks;
 }
 
 /**
@@ -193,10 +206,25 @@ __attribute__((noinline)) inline void compact_row_band(std::uint32_t src_address
     sfpi::vFloat row0 = gather_face_blocks<BLOCK>(src_address);
     sfpi::vFloat row1 = row0, row2 = row0, row3 = row0;
     sfpi::subvec_transp(row0, row1, row2, row3);
-    // row0 | rot2(row1) | rot4(row2) | rot6(row3), nested so it takes 6 shuffles instead of 12.
-    sfpi::vFloat packed = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<2>(row3)) | sfpi::as<sfpi::vUInt>(row2));
-    packed              = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<2>(packed)) | sfpi::as<sfpi::vUInt>(row1));
-    packed              = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<2>(packed)) | sfpi::as<sfpi::vUInt>(row0));
+    // Transpose and rotation commute, so each row k takes one net rotation of (2k - 3 - 4 * BLOCK) mod 8,
+    // which moves its two blocks to instances 2k and 2k + 1. Order the rows by descending net
+    // rotation: three rotate-by-2 steps and one rotate-by-1, 7 shuffles total.
+    sfpi::vFloat packed;
+    if constexpr (BLOCK == 0)
+    {
+        // Net rotations 5, 7, 1, 3 for rows 0..3.
+        packed = rotate_or<2 /*STEPS*/>(row1, row0);
+        packed = rotate_or<2 /*STEPS*/>(packed, row3);
+        packed = rotate_or<2 /*STEPS*/>(packed, row2);
+    }
+    else
+    {
+        // Net rotations 1, 3, 5, 7 for rows 0..3.
+        packed = rotate_or<2 /*STEPS*/>(row3, row2);
+        packed = rotate_or<2 /*STEPS*/>(packed, row1);
+        packed = rotate_or<2 /*STEPS*/>(packed, row0);
+    }
+    packed = rotate_right<1 /*STEPS*/>(packed);
     v_if ((sfpi::vConstTileId >> __builtin_ctz(FACE_C_DIM)) == static_cast<int>(output_row))
     {
         sfpi::dst_reg[dst_address / 2] = packed;
