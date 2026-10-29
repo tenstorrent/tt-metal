@@ -25,7 +25,7 @@ constexpr int cache_head_dim = 3;
 
 void validate_device_tensor(const Tensor& tensor, const char* name) {
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
-    TT_FATAL(tensor.buffer() != nullptr, "{} must have a device buffer", name);
+    TT_FATAL(tensor.is_allocated(), "{} must have a device buffer", name);
 }
 
 void validate_mesh_topologies(const IndexedFusedUpdateCacheInputs& args) {

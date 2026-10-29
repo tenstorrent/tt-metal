@@ -60,11 +60,16 @@ from helpers.utils import passed_test
         else [DestAccumulation.No, DestAccumulation.Yes]
     ),
     dest_sync=[DestSync.Full, DestSync.Half],
+    # Unpack-to-dest only: with no sections, only the semaphore setup runs, and every thread must still finish.
+    zero_tiles=lambda formats: (
+        [False, True] if formats.input_format.is_32_bit() else [False]
+    ),
 )
 def test_semaphore_sync_quasar(
     formats,
     dest_acc,
     dest_sync,
+    zero_tiles,
 ):
 
     pool_type = ReducePool.Sum
@@ -120,7 +125,7 @@ def test_semaphore_sync_quasar(
             DEST_SYNC(dest_sync),
         ],
         runtimes=[
-            TILE_COUNT(tile_cnt),
+            TILE_COUNT(0 if zero_tiles else tile_cnt),
             TEST_FACE_DIMS(),
             NUM_FACES(),
         ],
@@ -139,6 +144,8 @@ def test_semaphore_sync_quasar(
     )
 
     res_from_L1 = configuration.run().result
+    if zero_tiles:
+        return
 
     assert len(res_from_L1) == len(
         golden_tensor

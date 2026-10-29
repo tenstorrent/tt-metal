@@ -6,18 +6,15 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import (
-    IMAGE_HEIGHT,
-    IMAGE_WIDTH,
-    NUM_CAMS,
+from models.experimental.bevformer.model_config import IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS
+from models.experimental.bevformer.tests.common import (
     assert_pcc,
     build_reference_backbone,
     from_conv_layout,
     to_conv_layout,
-    tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.model_preprocessing_backbone import create_resnet_parameters
-from models.experimental.bevformer.tt.tt_resnet import TtBottleneck, TtResLayer, TtResNet
+from models.experimental.bevformer.tt.model_preprocessing import create_resnet_parameters
+from models.experimental.bevformer.tt.tt_resnet import TTBottleneck, TTResLayer, TTResNet
 
 
 # Every block test reads the same preprocessed backbone. Preprocessing traces a full
@@ -33,11 +30,11 @@ def reference_and_parameters():
     return reference_model, parameters
 
 
-def _layer_kwargs(i):
-    """The per-layer arguments TtResNet gives layer ``i`` in this configuration."""
-    stage_config = tt_resnet_kwargs()
-    stage_config.pop("out_indices")
-    return TtResNet.layer_kwargs(i, **stage_config)
+def _layer_kwargs(parameters, i):
+    """The per-layer arguments TTResNet gives layer ``i`` for ``parameters``."""
+    config = dict(parameters.tt_kwargs)
+    del config["stem_act_block_h"]
+    return TTResNet.layer_kwargs(i, **config)
 
 
 def _check(torch_output, ttnn_model, ttnn_output):
@@ -54,11 +51,11 @@ def test_bottleneck_layer1(device, reset_seeds, reference_and_parameters):
     torch_output = reference_model.layer1[0].eval()(torch_input)
 
     # layer1 reads the max pool's bfloat16 ROW_MAJOR output.
-    ttnn_model = TtBottleneck(
+    ttnn_model = TTBottleneck(
         parameters.conv_args.layer1[0],
         parameters["res_model"]["layer1"][0],
         device,
-        **_layer_kwargs(0),
+        **_layer_kwargs(parameters, 0),
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT))
@@ -71,11 +68,11 @@ def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 512, IMAGE_HEIGHT // 8, IMAGE_WIDTH // 8)
     torch_output = reference_model.layer3[0].eval()(torch_input)
 
-    ttnn_model = TtBottleneck(
+    ttnn_model = TTBottleneck(
         parameters.conv_args.layer3[0],
         parameters["res_model"]["layer3"][0],
         device,
-        **_layer_kwargs(2),
+        **_layer_kwargs(parameters, 2),
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
     _check(torch_output, ttnn_model, ttnn_output)
@@ -88,11 +85,11 @@ def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 1024, IMAGE_HEIGHT // 16, IMAGE_WIDTH // 16)
     torch_output = reference_model.layer4[0].eval()(torch_input)
 
-    ttnn_model = TtBottleneck(
+    ttnn_model = TTBottleneck(
         parameters.conv_args.layer4[0],
         parameters["res_model"]["layer4"][0],
         device,
-        **_layer_kwargs(3),
+        **_layer_kwargs(parameters, 3),
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
     _check(torch_output, ttnn_model, ttnn_output)
@@ -104,12 +101,12 @@ def test_reslayer1(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 64, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer1.eval()(torch_input)
 
-    # As in TtResNet: layer1 reads the max pool's ROW_MAJOR output.
-    ttnn_model = TtResLayer(
+    # As in TTResNet: layer1 reads the max pool's ROW_MAJOR output.
+    ttnn_model = TTResLayer(
         parameters.conv_args.layer1,
         parameters["res_model"]["layer1"],
         device,
-        **_layer_kwargs(0),
+        **_layer_kwargs(parameters, 0),
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT))
@@ -122,11 +119,11 @@ def test_reslayer2(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 256, IMAGE_HEIGHT // 4, IMAGE_WIDTH // 4)
     torch_output = reference_model.layer2.eval()(torch_input)
 
-    ttnn_model = TtResLayer(
+    ttnn_model = TTResLayer(
         parameters.conv_args.layer2,
         parameters["res_model"]["layer2"],
         device,
-        **_layer_kwargs(1),
+        **_layer_kwargs(parameters, 1),
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
     _check(torch_output, ttnn_model, ttnn_output)
