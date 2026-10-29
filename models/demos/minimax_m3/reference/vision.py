@@ -22,7 +22,9 @@ One forward takes all patches of a request as one sequence of L patches:
       -> vision tokens       (L / 4, 6144)
 
 There is no attention mask: with several images in one call, every patch attends to the patches of
-all of them, as in Hugging Face.
+all of them. That is Hugging Face 5.12.1's behaviour, kept here for parity with it only: vLLM and
+SGLang keep attention inside each image, and the TT model (M3VLVisionModel) and encode() take one
+image per forward.
 
 The module names are the ones the TT ``from_torch`` builders read (``patch_embed``, ``pre_layrnorm``,
 ``layers``, ``projector``). ``load_hf_state_dict`` takes the Hugging Face key layout

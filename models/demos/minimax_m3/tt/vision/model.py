@@ -32,6 +32,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
 from models.demos.minimax_m3.tt.vision.common import mesh_mapper
+from models.demos.minimax_m3.tt.vision.image_input import check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
@@ -39,7 +40,11 @@ from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
 
 
 class M3VLVisionModel(LightweightModule):
-    """Full M3-VL vision tower + optional multimodal projector."""
+    """Full M3-VL vision tower + optional multimodal projector.
+
+    from_torch's dtype is the dtype of the weights. The pixel values go to the device as bf16 whatever it is, so the
+    activations are bf16, the only dtype the RoPE op (rotary_embedding_llama) takes.
+    """
 
     def __init__(
         self,
@@ -49,12 +54,10 @@ class M3VLVisionModel(LightweightModule):
         pre_layrnorm: M3VLLayerNorm,
         blocks: List[M3VLBlock],
         projector: Optional[M3VLProjector] = None,
-        dtype=ttnn.bfloat16,
     ):
         super().__init__()
         self.device = mesh_device
         self.args = model_args
-        self.dtype = dtype
         self.patch_embed = patch_embed
         self.pre_layrnorm = pre_layrnorm
         self.blocks = blocks
@@ -96,17 +99,16 @@ class M3VLVisionModel(LightweightModule):
             pre_layrnorm=pre_layrnorm,
             blocks=blocks,
             projector=projector,
-            dtype=dtype,
         )
 
     # ------------------------------------------------------------------
     def _push_pixel_values(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
-        """Push flattened pixel_values (L, 1176) to device as (1, 1, L, 1176)."""
+        """Push flattened pixel_values (L, 1176) to device as bf16 (1, 1, L, 1176), whatever the weights' dtype."""
         L, D = pixel_values.shape
         return ttnn.from_torch(
             pixel_values.to(torch.bfloat16).view(1, 1, L, D).contiguous(),
             device=self.device,
-            dtype=self.dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper(self.device),
@@ -124,7 +126,15 @@ class M3VLVisionModel(LightweightModule):
 
     # ------------------------------------------------------------------
     def forward_tower(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Run patch_embed -> pre_layrnorm -> the blocks. Returns (1, 1, L, 1280)."""
+        """Run patch_embed -> pre_layrnorm -> the blocks. Returns (1, 1, L, 1280).
+
+        Takes one image, pixel_values (L, 1176) and image_grid_thw (1, 3) as the image processor gives them, and raises
+        ValueError (check_image_input) for anything else before any device work. On the device, rows past the grid's
+        patches would get zero q and k from the RoPE op (rotary_embedding_llama) without an error, one NaN or Inf
+        value would reach every patch through attention, and the patches of several images would attend to each other,
+        as in Hugging Face 5.12.1; vLLM and SGLang keep attention inside each image.
+        """
+        check_image_input(pixel_values, image_grid_thw)
         x_tt = self._push_pixel_values(pixel_values)
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)
@@ -136,7 +146,8 @@ class M3VLVisionModel(LightweightModule):
         return x_tt
 
     def forward(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Full forward. With projector: (1, 1, L//4, 6144); else the tower out (1, 1, L, 1280)."""
+        """Full forward of one image (see forward_tower). With projector: (1, 1, L//4, 6144); else the tower out
+        (1, 1, L, 1280)."""
         x_tt = self.forward_tower(pixel_values, image_grid_thw)
         if self.projector is None:
             return x_tt
