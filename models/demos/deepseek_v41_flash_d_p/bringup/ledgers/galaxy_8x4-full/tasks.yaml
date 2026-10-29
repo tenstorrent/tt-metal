@@ -1292,6 +1292,7 @@ tasks:
   - P.7
   - P.10
   - FIX.12
+  - P.12
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:
@@ -1399,7 +1400,7 @@ tasks:
   role: perf
   device: true
   deps:
-  - P.11
+  - FIX.14
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
