@@ -659,7 +659,9 @@ class WavePlanner:
     done). ``wave_affinity="user"``: one group per slot index (the rows are distinct by construction: one request
     per ``(row, user)``); ``"row"``: one group, every row serving its pending requests one after the other (the
     k-th wave takes the head of every row's queue). A wave whose members all start at 0 and fit a captured
-    per-row traced length is marked for the traced replay.
+    per-row traced length is marked for the traced replay. An SP-eligible fresh prompt within a captured wave length
+    whose SP trace does not exist takes the traced wave (the served adapter captures no SP traces under per-row
+    ownership); a longer lone prompt keeps the eager SP chunks (the rows share that work).
     """
 
     def __init__(
@@ -693,7 +695,16 @@ class WavePlanner:
         steps: list = []
         wave_items = []
         for logical, s, start, end in items:
-            if self.slots.sp_eligible(logical):
+            sp = self.slots.sp_eligible(logical)
+            if (
+                sp
+                and enable_trace
+                and start == 0
+                and self.pp.captured_length(end - start) is None
+                and self.captured_wave_length(end - start) is not None
+            ):
+                sp = False  # a short fresh prompt alone on its slot index: the traced wave beats an eager SP chunk
+            if sp:
                 steps.append(SPStep(logical, self.pp.plan(start, end, enable_trace=enable_trace)))
             else:
                 wave_items.append((logical, s, start, end))

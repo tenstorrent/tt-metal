@@ -221,6 +221,18 @@ def test_wave_planner_groups_walks_and_traces():
     assert [(m.logical, m.start, m.end) for m in w3.members] == [(0, 4096, 5000)] and w3.t_pad == 928
     # a wave of fresh prompts within a captured per-row length is traced at that length
     assert WavePlanner(g, t, pp, wave_captured=lambda T: False).plan([(0, 0, 200)])[0].call.traced_length is None
+    # an SP-eligible short fresh prompt without an SP trace takes the traced wave; a long one the eager SP chunks
+    g_nosp = dataclasses.replace(g, traced_prefill_lengths=())
+    t3 = SlotTable(g_nosp)
+    p3 = WavePlanner(g_nosp, t3, PrefillPlanner(g_nosp))
+    for i in range(4):
+        t3.allocate(i)
+    t3.allocate(6)  # (0, 1): alone on its index
+    assert t3.sp_eligible(6)
+    alone = p3.plan([(6, 0, 200)])
+    assert type(alone[0]).__name__ == "WaveStep" and alone[0].call.traced_length == 256 and alone[0].call.user == 1
+    assert type(p3.plan([(6, 0, 3000)])[0]).__name__ == "SPStep"  # beyond the wave traces: the 4 rows share the chunks
+    assert type(p3.plan([(6, 0, 200)], enable_trace=False)[0]).__name__ == "SPStep"
     tr = wp.plan([(0, 0, 300), (1, 0, 100)])
     assert len(tr) == 1 and tr[0].call.traced_length == 2048 and tr[0].call.t_pad == 320
     assert wp.plan([(0, 0, 300), (1, 0, 100)], enable_trace=False)[0].call.traced_length is None
@@ -394,9 +406,9 @@ class _FakeMeshModel:
     def has_prefill_trace(self, T):
         return T in self._captured
 
-    def capture_prefill(self):
+    def capture_prefill(self, lengths=None):
         self.calls.append(("capture_prefill",))
-        new = [T for T in self._traced if T not in self._captured]
+        new = [T for T in (lengths or self._traced) if T not in self._captured]
         self._captured += new
         return new
 
@@ -929,12 +941,21 @@ def test_rows_independent_needs_the_wave_prefill():
     assert all(c[4][0][3] - c[4][0][2] == c[2] for c in waves)  # full chunks (the kernels clip to the valid rows)
     # the traced phase: the wave inputs + compiles before ANY capture, the waves captured after the prefill traces
     order = [c[0] for c in m.calls if c[0] in ("prepare_waves", "capture_prefill", "capture_waves", "capture")]
-    assert order == ["prepare_waves", "capture_prefill", "capture_waves", "capture"]
+    assert order == ["prepare_waves", "capture_waves", "capture"]  # no SP prefill traces under per-row ownership
+    assert a.geometry.traced_prefill_lengths == () and m._captured == []
     assert m._captured_waves == [256, 512] and not m._ready_waves  # the default 128,256,512 within the model's lengths
     os.environ["GLM53_VLLM_WAVE_TRACE_LENGTHS"] = "all"
+    os.environ["GLM53_VLLM_SP_TRACES"] = "1"
     try:
-        _, m_all = _adapter(independent=True)
+        a_all, m_all = _adapter(independent=True)
         assert m_all._captured_waves == [256, 512, 1024, 2048]
+        assert a_all.geometry.traced_prefill_lengths == (256, 512, 1024, 2048) and m_all._captured == [
+            256,
+            512,
+            1024,
+            2048,
+        ]
+        os.environ.pop("GLM53_VLLM_SP_TRACES")
         os.environ["GLM53_VLLM_WAVE_TRACE_LENGTHS"] = "0"
         _, m_none = _adapter(independent=True)
         assert m_none._captured_waves == [] and not any(c[0] == "prepare_waves" for c in m_none.calls)
@@ -943,6 +964,7 @@ def test_rows_independent_needs_the_wave_prefill():
             _adapter(independent=True)
     finally:
         os.environ.pop("GLM53_VLLM_WAVE_TRACE_LENGTHS", None)
+        os.environ.pop("GLM53_VLLM_SP_TRACES", None)
     # the wave width must be a prefill bucket: a wave's chunk pads to the next bucket
     with expect_error(ValueError, "not a prefill bucket"):
         _adapter(independent=True, warm=False, wave_rows=2304)
@@ -950,7 +972,8 @@ def test_rows_independent_needs_the_wave_prefill():
 
 def test_wave_prefill_routes_rows_and_decodes_per_row():
     """2 rows x 4 users per row (one per column): the first two arrivals share slot index 0 (one per row) and form
-    one traced wave; the third sits alone on index 1 and takes the sequence-parallel path; decode feeds each
+    one traced wave; the third sits alone on index 1 (SP-eligible) and, being short and fresh, takes a traced wave of
+    its own (no SP prefill traces under per-row ownership); decode feeds each
     request's token to its own (row, user) only."""
     a, m = _adapter(independent=True)
     toks = torch.zeros(3, 300, dtype=torch.int32)
@@ -964,12 +987,14 @@ def test_wave_prefill_routes_rows_and_decodes_per_row():
     placed = {i: (a.slots.physical(i).row, a.slots.physical(i).user) for i in range(3)}
     assert placed == {0: (0, 0), 1: (1, 0), 2: (0, 1)}
     waves = [c for c in m.calls if c[0] == "prefill_traced_wave"]
-    assert waves[-1][1:] == (0, 320, 512, [(0, 0, 0, 300), (1, 0, 0, 100)])
-    assert [c for c in m.calls if c[0] == "prefill_traced"][-1] == ("prefill_traced", 1, 40, 256)
+    assert waves[0][1:] == (0, 320, 512, [(0, 0, 0, 300), (1, 0, 0, 100)])
+    # the third request is alone on index 1 (SP-eligible) but short and fresh: the traced wave, not an eager SP chunk
+    assert waves[1][1:] == (1, 64, 256, [(0, 1, 0, 40)])
+    assert not [c for c in m.calls if c[0] == "prefill_traced"]
     assert int(logits[0, 0].argmax()) == _first_token(0, toks[0, :300].long())
     assert int(logits[1, 0].argmax()) == _first_token(0, toks[1, :100].long())
     assert int(logits[2, 0].argmax()) == _first_token(1, toks[2, :40].long())
-    assert not a.slots.physical(0).sp_only and not a.slots.physical(1).sp_only and a.slots.physical(2).sp_only
+    assert not any(a.slots.physical(i).sp_only for i in range(3))  # every prefix exists on its own row only (waves)
     assert [a.slots.physical(i).prefilled_to for i in range(3)] == [300, 100, 40]
     # decode: every request's token at its own (row, user) flat index, nothing replicated
     out = a.decode_forward(

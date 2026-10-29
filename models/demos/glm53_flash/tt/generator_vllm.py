@@ -253,6 +253,7 @@ COMPILE_CHECK_ENV = "GLM53_VLLM_COMPILE_CHECK"  # "1" (default): seal the progra
 MEM_LOG_ENV = "GLM53_VLLM_MEM_LOG"  # "1": log the DRAM allocator's state after every eager prefill device chunk
 WAVE_TRACE_LENGTHS_ENV = "GLM53_VLLM_WAVE_TRACE_LENGTHS"  # the per-row wave lengths captured at boot (rows_independent)
 DEFAULT_WAVE_TRACE_LENGTHS = "128,256,512"
+SP_TRACES_ENV = "GLM53_VLLM_SP_TRACES"  # "1": keep the sequence-parallel prefill traces under per-row ownership
 
 
 def _dram_line(device) -> str:
@@ -624,6 +625,12 @@ class GLM53FlashForCausalLM:
             lengths = getattr(model, "wave_trace_lengths", None)
             if not geometry.traced_wave_lengths and callable(lengths):
                 geometry = dataclasses.replace(geometry, traced_wave_lengths=tuple(int(T) for T in lengths()))
+            if geometry.traced_prefill_lengths and not _env_flag(SP_TRACES_ENV, "0"):
+                # the traced path of a fresh prompt is the wave (WavePlanner: a short prompt alone on its slot index
+                # takes the traced wave too); the four SP prefill traces (~480 MB at 45 layers) left no room for any
+                # wave trace in the 512 MB region (the 2026-10-29 8x4 runs). The SP path stays eager for the long lone
+                # prompts (the 8 rows share that work).
+                geometry = dataclasses.replace(geometry, traced_prefill_lengths=())
             padded = eager_pad_length(geometry.wave_rows, TILE)
             if padded != geometry.wave_rows:
                 raise ValueError(
@@ -1175,9 +1182,15 @@ class GLM53FlashForCausalLM:
             logger.info(
                 f"GLM53 vLLM: wave traces {prepared} (per-row lengths) prepared in {time.perf_counter() - t0:.0f} s"
             )
-        t0 = time.perf_counter()
-        captured = self.model.capture_prefill()
-        logger.info(f"GLM53 vLLM: prefill traces {captured} captured in {time.perf_counter() - t0:.0f} s")
+        if self.geometry.traced_prefill_lengths:
+            t0 = time.perf_counter()
+            captured = self.model.capture_prefill(list(self.geometry.traced_prefill_lengths))
+            logger.info(f"GLM53 vLLM: prefill traces {captured} captured in {time.perf_counter() - t0:.0f} s")
+        else:
+            logger.info(
+                "GLM53 vLLM: no sequence-parallel prefill traces (per-row ownership: the wave traces are the traced "
+                f"path; {SP_TRACES_ENV}=1 keeps them)"
+            )
         if waves:
             t0 = time.perf_counter()
             captured = self.model.capture_waves(wave_lengths)
