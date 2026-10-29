@@ -3936,7 +3936,9 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         "gap_vp_v",
     }, phases
     assert lines[1].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 4 steps, 24 tokens, 4 clean")
-    assert "| reseeds 0 | total 4 steps, " in lines[1] and "| phases ms/call: tables" in lines[1]
+    assert "| reseeds 0 | total 4 steps, " in lines[1]
+    # the window opens on the previous verify's boundary gap, so its phases list does not start with "tables"
+    assert "tables" in lines[1].split("| phases ms/call: ")[1].split(" | prefills")[0]
     assert "| prefills 0 | calibrated: none" in lines[1] and "dirty" not in lines[1]
 
 
