@@ -490,7 +490,9 @@ TEST_F(PinnedUploadMultiDeviceFixture, OneHostShardReplicatedToEveryDevice) {
 
     const size_t chunk_pins_before = pinned_upload::num_chunk_pins_created();
     auto& cq = mesh_device_->mesh_command_queue();
-    MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
+    // The uniform MeshCommandQueue::enqueue_write_tensor rejects a 1x1 host tensor on a larger mesh; replicating it is
+    // the non-uniform API's job.
+    MeshTensor device_tensor = non_uniform_data_movement::enqueue_write_tensor(cq, host_tensor, *mesh_device_).first;
     // One pin per chunk covers every device: the replicated shard is a single host range.
     EXPECT_EQ(
         pinned_upload::num_chunk_pins_created() - chunk_pins_before, chunks_in_shard(rows * k_row_bytes, k_row_bytes));
