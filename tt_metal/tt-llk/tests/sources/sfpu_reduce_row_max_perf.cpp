@@ -43,10 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            4 /* num_faces */,
-            4 /* num_faces */);
+            ckernel::DEFAULT_TENSOR_SHAPE,
+            ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();

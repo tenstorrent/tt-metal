@@ -31,10 +31,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        params.TEST_FACE_R_DIM,
-        params.TEST_FACE_R_DIM,
-        params.num_faces,
-        params.num_faces);
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces),
+        ckernel::make_tensor_shape_from_legacy(params.TEST_FACE_R_DIM, params.num_faces));
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);

@@ -55,10 +55,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            num_faces_A,
-            num_faces_B,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces_A),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces_B),
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
         _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);

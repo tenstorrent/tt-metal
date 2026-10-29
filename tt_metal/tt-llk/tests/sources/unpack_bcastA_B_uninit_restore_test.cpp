@@ -65,10 +65,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats_array[0].unpack_B_src,
         formats_array[0].unpack_A_dst,
         formats_array[0].unpack_B_dst,
-        FACE_R_DIM,
-        FACE_R_DIM,
-        num_faces,
-        num_faces);
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
     _llk_unpack_bcastA_B_init_();
     _llk_unpack_bcastA_B_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), params.SRCA_REUSE_COUNT);
 
@@ -83,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // SrcA Y-stride (and Z-stride / Tile_x_dim / Z-dim). This is the only place
         // the new Y-stride write is exercised; the matmul tilize test uses IGNORE.
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, false>(
-            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, tile_size_datums, FACE_R_DIM, num_faces);
+            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, tile_size_datums, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces));
     }
     else
     {

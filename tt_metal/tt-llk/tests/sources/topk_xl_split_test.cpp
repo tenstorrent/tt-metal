@@ -62,7 +62,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t src_format = formats.unpack_A_src;
     const std::uint32_t dst_format = formats.unpack_A_dst;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format, dst_format, dst_format, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        src_format, src_format, dst_format, dst_format, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
     ckernel::_llk_unpack_topk_xl_copy_init_(src_format, dst_format);
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {

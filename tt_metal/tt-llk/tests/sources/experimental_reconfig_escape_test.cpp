@@ -142,10 +142,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        FACE_R_DIM /* unpA_face_r_dim */,
-        FACE_R_DIM /* unpB_face_r_dim */,
-        NUM_FACES /* unpA_num_faces */,
-        NUM_FACES /* unpB_num_faces */);
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, NUM_FACES),
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, NUM_FACES));
 
     // ---- Run 0 (discarded) ----
     if constexpr (SEQUENCE == SEQ_REVERSE)

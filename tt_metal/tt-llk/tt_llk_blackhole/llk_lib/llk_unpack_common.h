@@ -12,6 +12,8 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_memory_checks.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -55,13 +57,41 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
  * @param unpB_src_format: Source data format of operand B in L1.
  * @param unpA_dst_format: Destination data format operand A is converted to.
  * @param unpB_dst_format: Destination data format operand B is converted to.
- * @param unpA_face_r_dim: Rows per face for operand A.
- * @param unpB_face_r_dim: Rows per face for operand B.
- * @param unpA_num_faces: Number of faces for operand A, valid values = <1, 2, 4>.
- * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
+ * @param unpA_tensor_shape: Tile shape of operand A. Only face_r_dim and total_num_faces() are programmed;
+ *                           total_num_faces() must be 1, 2 or 4.
+ * @param unpB_tensor_shape: Tile shape of operand B, same rules as unpA_tensor_shape.
  * @param unpA_tile_size: Tile size of operand A stored to the tile-size GPR.
  * @param unpB_tile_size: Tile size of operand B stored to the tile-size GPR.
  */
+template <bool is_fp32_dest_acc_en>
+inline void _llk_unpack_hw_configure_(
+    const std::uint32_t unpA_src_format,
+    const std::uint32_t unpB_src_format,
+    const std::uint32_t unpA_dst_format,
+    const std::uint32_t unpB_dst_format,
+    const ckernel::TensorShape unpA_tensor_shape,
+    const ckernel::TensorShape unpB_tensor_shape,
+    const std::uint32_t unpA_tile_size = 0,
+    const std::uint32_t unpB_tile_size = 0)
+{
+    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK here: this only programs face_r_dim and the face count, which works for
+    // any face_r_dim with 1, 2 or 4 faces on main (test_unpack_canonical_baseline sweeps face_r_dim x num_faces,
+    // including grids that are not tiles, such as 4 faces of 4 rows). The unpack op inits validate the tile shape.
+    const std::uint32_t unpA_num_faces = unpA_tensor_shape.total_num_faces();
+    const std::uint32_t unpB_num_faces = unpB_tensor_shape.total_num_faces();
+    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
+    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
+
+    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
+        unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_tensor_shape, unpB_tensor_shape, false /*transpose_xy_srca_en*/);
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+    TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
+}
+
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
+// same registers as passing num_faces.
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_src_format,
@@ -75,14 +105,15 @@ inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_tile_size = 0,
     const std::uint32_t unpB_tile_size = 0)
 {
-    LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
-    LLK_ASSERT(unpB_num_faces == 1 || unpB_num_faces == 2 || unpB_num_faces == 4, "unpB_num_faces must be 1, 2, or 4");
-
-    configure_unpack_AB<is_fp32_dest_acc_en, false, false, false>(
-        unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format, unpA_face_r_dim, unpB_face_r_dim, 0, unpA_num_faces, unpB_num_faces);
-
-    TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
-    TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        unpA_src_format,
+        unpB_src_format,
+        unpA_dst_format,
+        unpB_dst_format,
+        ckernel::tensor_shape_from_num_faces(unpA_face_r_dim, unpA_num_faces),
+        ckernel::tensor_shape_from_num_faces(unpB_face_r_dim, unpB_num_faces),
+        unpA_tile_size,
+        unpB_tile_size);
 }
 
 /**
@@ -120,15 +151,17 @@ inline void _llk_unpack_configure_stoch_rnd_()
  *                      callers; @ref _llk_unpack_reconfig_data_format_srca_impl_ passes false because it has
  *                      already stalled for its format writes.
  * @param tile_size: New tile size (bytes) of operand A, stored to the tile-size GPR (tracks the shape).
- * @param unpack_face_r_dim: Rows per face.
- * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @param tensor_shape: New tile shape. Only face_r_dim (X-dim) and total_num_faces() (Z-dim, 1, 2 or 4) are
+ *                      programmed.
  * @note A face_r_dim change also needs the op init re-run: the unpacker ADC X-end is programmed by the op
  *       init (config_unpacker_x_end / SETADCXX), not here. A num_faces-only change is fully handled here.
  */
 template <bool issue_stall = true>
-inline void _llk_unpack_reconfig_tile_shape_srca_(
-    const std::uint32_t tile_size, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
+inline void _llk_unpack_reconfig_tile_shape_srca_(const std::uint32_t tile_size, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_reconfig_tile_shape_srca_", tensor_shape);
+    const std::uint32_t unpack_face_r_dim = tensor_shape.face_r_dim;
+    const std::uint32_t unpack_num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
     if constexpr (issue_stall)
@@ -160,14 +193,16 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
  *                      callers; @ref _llk_unpack_reconfig_data_format_srcb_impl_ passes false because it has
  *                      already stalled for its format writes.
  * @param tile_size: New tile size (bytes) of operand B, stored to the tile-size GPR (tracks the shape).
- * @param unpack_face_r_dim: Rows per face.
- * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @param tensor_shape: New tile shape. Only face_r_dim (X-dim) and total_num_faces() (Z-dim, 1, 2 or 4) are
+ *                      programmed.
  * @note See @ref _llk_unpack_reconfig_tile_shape_srca_: a face_r_dim change also needs the op init re-run.
  */
 template <bool issue_stall = true>
-inline void _llk_unpack_reconfig_tile_shape_srcb_(
-    const std::uint32_t tile_size, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
+inline void _llk_unpack_reconfig_tile_shape_srcb_(const std::uint32_t tile_size, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_reconfig_tile_shape_srcb_", tensor_shape);
+    const std::uint32_t unpack_face_r_dim = tensor_shape.face_r_dim;
+    const std::uint32_t unpack_num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
     if constexpr (issue_stall)
@@ -199,8 +234,7 @@ inline void _llk_unpack_reconfig_tile_shape_srcb_(
  * @param unpack_src_format: New source data format of operand A in L1.
  * @param unpack_dst_format: New destination data format operand A is converted to.
  * @param tile_size: New tile size of operand A stored to the tile-size GPR.
- * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
- * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @param tensor_shape: New tile shape, used only when reprogramming dim/stride (FACE_ROW_MAJOR).
  * @note The SrcA-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcAUnsigned), and the math-side INT8 math-enable in
  *       @ref _llk_math_reconfig_data_format_srca_, are re-derived from the new format by default, so a reconfig
  *       that transitions to OR from an 8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float) is handled
@@ -212,9 +246,10 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpack_num_faces  = 4)
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    // tensor_shape is used (and validated) only by _llk_unpack_reconfig_tile_shape_srca_ under FACE_ROW_MAJOR.
+    const std::uint32_t unpack_num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
     LLK_ASSERT(
@@ -256,7 +291,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     {
         // Reprogram tile size + face geometry. issue_stall=false: the STALL_CFG/UNPACK0 above already drained.
         // (tile_size is re-written here; it is the same value stored just above -- a harmless duplicate.)
-        _llk_unpack_reconfig_tile_shape_srca_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
+        _llk_unpack_reconfig_tile_shape_srca_<false /*issue_stall*/>(tile_size, tensor_shape);
     }
 }
 
@@ -274,8 +309,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  * @param unpack_src_format: New source data format of operand B in L1.
  * @param unpack_dst_format: New destination data format operand B is converted to.
  * @param tile_size: New tile size of operand B stored to the tile-size GPR.
- * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
- * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @param tensor_shape: New tile shape, used only when reprogramming dim/stride (FACE_ROW_MAJOR).
  * @note The SrcB-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcBUnsigned), and the math-side INT8 math-enable in
  *       @ref _llk_math_reconfig_data_format_srcb_, are re-derived from the new format by default, so a reconfig
  *       that transitions to OR from an 8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float) is handled
@@ -287,9 +321,10 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
-    const std::uint32_t unpack_num_faces  = 4)
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    // tensor_shape is used (and validated) only by _llk_unpack_reconfig_tile_shape_srcb_ under FACE_ROW_MAJOR.
+    const std::uint32_t unpack_num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
     LLK_ASSERT(
@@ -324,8 +359,39 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
         // Reprogram tile size + face geometry. issue_stall=false: the STALL_CFG/UNPACK1 above already drained.
-        _llk_unpack_reconfig_tile_shape_srcb_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
+        _llk_unpack_reconfig_tile_shape_srcb_<false /*issue_stall*/>(tile_size, tensor_shape);
     }
+}
+
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// Also used by the metal llk_unpack_reconfig_data_format_src{a,b} wrappers: the experimental hybrid_llk_shims.hpp
+// (deepseek_prefill) renames _llk_unpack_reconfig_data_format_srca_impl_ by macro to a shim with this signature.
+// Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
+// same registers as passing num_faces.
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
+inline void _llk_unpack_reconfig_data_format_srca_impl_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t unpack_face_r_dim,
+    const std::uint32_t unpack_num_faces)
+{
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
+        unpack_src_format, unpack_dst_format, tile_size, ckernel::tensor_shape_from_num_faces(unpack_face_r_dim, unpack_num_faces));
+}
+
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// See the srca overload above; also used by the metal llk_unpack_reconfig_data_format_srcb wrapper.
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
+inline void _llk_unpack_reconfig_data_format_srcb_impl_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t unpack_face_r_dim,
+    const std::uint32_t unpack_num_faces)
+{
+    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
+        unpack_src_format, unpack_dst_format, tile_size, ckernel::tensor_shape_from_num_faces(unpack_face_r_dim, unpack_num_faces));
 }
 
 /**
