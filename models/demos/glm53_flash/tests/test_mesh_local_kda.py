@@ -32,12 +32,16 @@ T = int(os.environ.get("GLM53_LOCAL_T", "1024"))  # rows per row (one chunk per 
 
 
 def _ttnn_has_sequence_parallel_size() -> bool:
+    """The registered op is a ``FastOperation`` whose signature is ``(*args, **kwargs)``; the nanobind call
+    method underneath carries the real signature in its docstring."""
+    op = ttnn.experimental.kda.prepare_chunk_recurrence
+    inner = getattr(op, "function", op)
+    texts = [getattr(o, "__doc__", "") or "" for o in (op, inner, getattr(type(inner), "__call__", None))]
     try:
-        sig = inspect.signature(ttnn.experimental.kda.prepare_chunk_recurrence)
-    except (TypeError, ValueError, AttributeError):
-        doc = getattr(ttnn.experimental.kda.prepare_chunk_recurrence, "__doc__", "") or ""
-        return "sequence_parallel_size" in doc
-    return "sequence_parallel_size" in sig.parameters
+        texts.append(str(inspect.signature(inner)))
+    except (TypeError, ValueError):
+        pass
+    return any("sequence_parallel_size" in t for t in texts)
 
 
 def _hf_run(hf, text, x):
