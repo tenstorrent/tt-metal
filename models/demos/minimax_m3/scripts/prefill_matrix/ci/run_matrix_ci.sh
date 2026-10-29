@@ -2,32 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
-# MiniMax-M3 pipeline-prefill PERF MATRIX, CI flavour (Blaze prefill pipeline, bh_sc4 = 4 galaxies, 16 stages of [2,4]).
-# Same measurement as run_matrix.sh (matrix_producer.py, unchanged), but launched the way the other SC4 runner legs are
-# (models/demos/common/prefill/runners/ci/run_multirank_pcc.sh): hosts from /etc/ttop/hostfile, ranks through tt-run,
-# no Slurm, no galaxy reset (the job's setup step already reset and validated the cluster). Perf only: the numbers are
-# reported, not gated; the script fails only when the run itself breaks.
+# MiniMax-M3 pipeline-prefill perf matrix in CI (bh_sc4: 4 galaxies, 16 stages of [2,4]). Same measurement as
+# run_matrix.sh, launched through tt-run with hosts from /etc/ttop (no Slurm, no reset). One runner with a
+# KV_CAPACITY-token cache (default 1M, the model's max context) serves every row; each row is one producer session.
+# Perf is reported, not gated.
 #
-# Unlike run_matrix.sh (one launch per cached row, KV capacity cached + MAX_NEW), ONE runner launch serves every row,
-# with the KV capacity at the model's max context (KV_CAPACITY, default 1048576), as a production server allocates it.
-# This loads the weights once. Capacity barely costs time on current main: in run 39751806622 the single-dense-layer
-# stages took 9-12 ms per chunk at the same KV length with capacity 194560 and 604160. Each row is one producer session
-# against the live runner; the runner is stopped once, after the last row.
-#
-# Env (all optional): CACHED=0  NEW=5120,32768  ITERS=2  USERS=2  TARGET_CHUNKS=64  REQS  SKIP_IDLE=1
-#   CHUNK=5120  LAYER_COUNTS=<per-stage comma list>  MAX_NEW=51200  KV_CAPACITY=1048576 (rounded down to a CHUNK
-#   multiple)  EXPERT_DTYPE=bf4
-#   HF_MODEL / TT_CACHE_PATH / PREFILL_TRACE_DIR (weka defaults)  MATRIX_CI_LAUNCH=discovery|binding
-#   TABLE_WAIT_SECS=2400 (bring-up bound)  PRODUCER_TIMEOUT_SECS=900 (per cached row; a hung row fails before the job timeout)
-#   SHUTDOWN_WAIT_SECS=240 (how long a runner gets to exit after the SHUTDOWN sentinel before it is killed)
-#   MATRIX_CI_DRY_RUN=1: print the launch commands and exit (no MPI, no devices; TTRUN_DIR may point at a fake
-#   hostfile/rankfile).
-#
-# MATRIX_CI_LAUNCH:
-#   discovery (default): tt-run new mode on the 16-stage z-chain mesh graph; generate_rank_bindings places the 16
-#     meshes on whatever quad the job got (trays, TT_VISIBLE_DEVICES and host order included; MPI rank == mesh_id).
-#   binding: the hand-written exabox "straight chain" binding (binding_16stage_quad.yaml.in), hosts in the ring order of
-#     ${TTRUN_DIR}/rankfile. Fallback for a quad on which the discovery mapping does not fit.
+# Env (optional, defaults below): CACHED NEW ITERS USERS TARGET_CHUNKS REQS SKIP_IDLE CHUNK LAYER_COUNTS MAX_NEW
+#   KV_CAPACITY EXPERT_DTYPE HF_MODEL TT_CACHE_PATH PREFILL_TRACE_DIR TABLE_WAIT_SECS PRODUCER_TIMEOUT_SECS
+#   SHUTDOWN_WAIT_SECS, MATRIX_CI_DRY_RUN=1 (print the commands only), MATRIX_CI_LAUNCH=discovery (tt-run places the
+#   z-chain mesh graph) | binding (binding_16stage_quad.yaml.in, hosts in rankfile order).
 set -euo pipefail
 
 PKG_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -45,7 +28,7 @@ ITERS=${ITERS:-2}
 USERS=${USERS:-2}
 TARGET_CHUNKS=${TARGET_CHUNKS:-64}
 MAX_NEW=${MAX_NEW:-$MATRIX_MAX_NEW}
-KV_CAPACITY=${KV_CAPACITY:-$((1048576 / MATRIX_CHUNK * MATRIX_CHUNK))}   # MiniMax-M3 max_position_embeddings, in whole chunks
+KV_CAPACITY=${KV_CAPACITY:-$((1048576 / MATRIX_CHUNK * MATRIX_CHUNK))}   # model max context, whole chunks
 LAUNCH=${MATRIX_CI_LAUNCH:-discovery}
 DRY_RUN=${MATRIX_CI_DRY_RUN:-0}
 TABLE_WAIT_SECS=${TABLE_WAIT_SECS:-2400}
@@ -84,19 +67,18 @@ RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfil
 NUM_HOSTS=$(tr ',' '\n' <<< "${RESOLVED_HOSTS}" | grep -c . || true)
 [ "${NUM_HOSTS}" -eq 4 ] || { echo "expected 4 hosts in ${TTRUN_DIR}/hostfile for 16 stages, got ${NUM_HOSTS}: ${RESOLVED_HOSTS}" >&2; exit 2; }
 if [ "${LAUNCH}" = binding ]; then
-  # Ring order from the CI rankfile (first occurrence of each host), as the SC4 DC-validation leg derives it.
+  # Ring order from the rankfile.
   RING_HOSTS=$(sed -n 's/^rank[[:space:]]*[0-9]*=\([^[:space:]]*\).*/\1/p' "${TTRUN_DIR}/rankfile" 2>/dev/null | awk '!seen[$0]++' | paste -sd, -)
   [ "$(tr ',' '\n' <<< "${RING_HOSTS}" | grep -c . || true)" -eq 4 ] || {
     echo "MATRIX_CI_LAUNCH=binding: ${TTRUN_DIR}/rankfile does not name 4 hosts (got '${RING_HOSTS}')" >&2; exit 2;
   }
 fi
 
-# ---- work dir on the shared /ci volume: every host writes its rank's timing CSV, the producer reads rank 0 and 15 ---
-# The launch: ${WORK}/{runner.log, ranklogs/, timing/, shutdown.log[, binding.yaml]}; per row: ${WORK}/c<cached>/producer.log.
+# ---- work dir on the shared /ci volume: runner.log, ranklogs/, timing/, c<cached>/producer.log ----------------------
 OUT_DIR="${PREFILL_SUMMARIES}/m3_prefill_matrix"
 WORK="${OUT_DIR}/work"
-TTRUN_CWD="${WORK}/ttrun-cwd"   # tt-run keeps its discovered placement here
-TIMING="${WORK}/timing"          # one CSV per rank for the whole launch; each producer session continues the chunk index
+TTRUN_CWD="${WORK}/ttrun-cwd"
+TIMING="${WORK}/timing"          # one CSV per rank; producer sessions continue the chunk index
 RANKLOGS="${WORK}/ranklogs"
 RUNNER_LOG="${WORK}/runner.log"
 OUT="${OUT_DIR}/results_${STAGES}stage.jsonl"
@@ -112,9 +94,7 @@ echo "[matrix-ci] work=${WORK} out=${OUT}"
 printf -v CHILD_PYTHONPATH '%q' "${PYTHONPATH}"
 MPI_COMMON="--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} -x PATH -x LD_LIBRARY_PATH"
 
-# ---- the runner command (one launch for all rows) -----------------------------------------------------------------
-# Runner env: what the Slurm flow splits across binding global_env + manifest, exported on EVERY rank (the bash -lc
-# below runs on each rank, so these reach all 16; see the config-fingerprint check in prefill_runner.py).
+# ---- the runner (one launch for all rows); bash -lc below exports RUNNER_ENV on every rank ------------------------
 RUNNER_ENV="export PREFILL_MODEL=minimax_m3; export PREFILL_NUM_LAYERS=${MATRIX_NUM_LAYERS};"
 RUNNER_ENV+=" export PREFILL_FABRIC_MODE=2d; export PREFILL_SP=2; export PREFILL_TP=4;"
 RUNNER_ENV+=" export PREFILL_MAX_SEQ_LEN=${KV_CAPACITY}; export PREFILL_NUM_USERS=${RUNNER_USERS};"
@@ -155,7 +135,7 @@ set_row() {   # set_row <cached>
   [ "${DRY_RUN}" != 0 ] || mkdir -p "${ROW_DIR}"
 }
 
-# Run one command string on rank 0's host (the producer and the shutdown sentinel attach to rank 0's H2D service).
+# Run a command on rank 0's host (the producer and the shutdown sentinel use its H2D service).
 on_rank0() {
   "${MPIRUN}" -np 1 --host "${R0_HOST}:1" --bind-to none --allow-run-as-root -x PATH -x LD_LIBRARY_PATH \
     bash -lc "cd '${TT_METAL_HOME}'; export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; export PYTHONUNBUFFERED=1; $1"
@@ -167,7 +147,7 @@ producer_cmd() {   # for the current row
     --label ci_${STAGES}stage_c${MATRIX_CHUNK}${MATRIX_LAYER_COUNTS:+_split} --users ${USERS} \
     ${REQS:+--reqs ${REQS}} --target-chunks ${TARGET_CHUNKS} ${SKIP_IDLE:+--skip-idle}"
 }
-# Per-rank files of --output-filename: OpenMPI 5 writes <prefix>.<job>@<n>.<rank>.out/.err, OpenMPI 4 <prefix>/.../stdout.
+# --output-filename files: OpenMPI 5 <prefix>.<job>@<n>.<rank>.out/.err, OpenMPI 4 <prefix>/.../stdout.
 rank_log_files() { find "$1" -type f \( -name '*.out' -o -name '*.err' -o -name 'std*' \) 2>/dev/null | sort; }
 all_runner_logs() {   # tt-run's own stdout plus the per-rank files
   { cat "${RUNNER_LOG}"; rank_log_files "${RANKLOGS}" | xargs -r cat; } 2>/dev/null || true
@@ -219,11 +199,11 @@ start_runner() {   # launch the runner, wait until all 16 ranks serve, set R0_HO
   echo "[matrix-ci] rank 0 host: ${R0_HOST}"
 }
 
-stop_runner() {   # SHUTDOWN sentinel -> wait SHUTDOWN_WAIT_SECS -> kill the launcher's process group. 0 = clean exit, 1 = killed.
+stop_runner() {   # SHUTDOWN sentinel, kill after SHUTDOWN_WAIT_SECS; returns 1 if killed
   [ -n "${RUNNER_PID}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null || { RUNNER_PID=""; return 0; }
   local clean=0 slog="${WORK}/shutdown.log"
   if [ -n "${R0_HOST}" ]; then
-    # The helper opens the devices, so it prints ~100 lines of UMD bring-up chatter: keep that in a file, not the job log.
+    # The helper's UMD bring-up chatter goes to a file, not the job log.
     if on_rank0 "timeout 300 env $(matrix_producer_env "${KV_CAPACITY}") python3 $(printf '%q' "${PKG_DIR}/matrix_shutdown.py")" \
       > "${slog}" 2>&1; then
       echo "[matrix-ci] SHUTDOWN sent to the runner (log: ${slog})"
@@ -248,7 +228,7 @@ cleanup() {
   local rc=$?
   stop_runner || true
   if [ -s "${OUT}" ]; then
-    # Markdown in the layout of the tt-metal#57827 comments, so a run can be pasted there as is.
+    # Markdown in the #57827 table layout.
     python3 "${PKG_DIR}/matrix_table.py" "${OUT}" --markdown --csv "${OUT_DIR}/results_${STAGES}stage.csv" \
       > "${OUT_DIR}/tables.md" 2>&1 || true
     {
