@@ -44,6 +44,9 @@ void kernel_main() {
     const uint32_t landing_l1 = CircularBuffer(metadata_cb_id).get_write_ptr();
     const ChipShardGeometry geometry =
         read_chip_shard_geometry<kValidPrefixFromMetadata, kGeometryCommonArgs>(noc, landing_l1, valid_prefix_args);
+    if (!geometry.active) {  // every chip reads the same chunk start, so every kernel of the op skips together
+        return;
+    }
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(1), page_bytes);
     const uint32_t first_owned_chunk = get_arg_val<uint32_t>(0);
     const uint32_t owned_chunk_stride = get_arg_val<uint32_t>(1);

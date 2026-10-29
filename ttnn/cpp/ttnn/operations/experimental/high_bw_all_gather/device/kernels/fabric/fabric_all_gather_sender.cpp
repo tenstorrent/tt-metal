@@ -52,6 +52,9 @@ void kernel_main() {
     constexpr uint32_t kGeometryCommonArgs = 3;
     const ChipShardGeometry geometry = read_chip_shard_geometry<kValidPrefixFromMetadata, kGeometryCommonArgs>(
         noc, CircularBuffer(metadata_cb_id).get_write_ptr(), valid_prefix_args);
+    if (!geometry.active) {  // every chip reads the same chunk start, so every kernel of the op skips together
+        return;
+    }
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0), page_bytes);
     const uint32_t shards_arrived_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t downstream_started_addr = get_common_arg_val<uint32_t>(2);

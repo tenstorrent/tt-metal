@@ -22,6 +22,13 @@ using ::sparse_push_plan::kChunkRows;
 
 uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
 
+// A chip's slot in dense mode, as high_bw_all_gather with gathered_active_below lays it out: the largest extent the
+// gather copies (a chunk starting just below dense_below, plus that chunk, in whole slabs), per chip.
+uint32_t dense_slot_rows(const SparsePushPlanParams& attrs) {
+    const uint64_t slab = uint64_t{attrs.stripe_chunk} * attrs.num_devices;
+    return static_cast<uint32_t>((attrs.dense_below - 1 + slab + slab - 1) / slab * attrs.stripe_chunk);
+}
+
 tt::tt_metal::KernelDescriptor plan_kernel(
     const char* source,
     const CoreRangeSet& cores,
@@ -73,6 +80,15 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
         cores,
         ::sparse_push_plan::kMaxChunksPerCore);
     packet_shape(idx.device(), attrs.page_bytes);  // checks page_bytes against the fabric payload
+    if (attrs.dense_below > 0) {
+        TT_FATAL(args.chunk_start.has_value(), "sparse push plan dense_below needs chunk_start");
+        TT_FATAL(
+            dense_slot_rows(attrs) * attrs.num_devices <= attrs.max_rows,
+            "sparse push plan: dense_below {} needs {} rows per chip, more than the cache's {}",
+            attrs.dense_below,
+            dense_slot_rows(attrs),
+            attrs.max_rows / attrs.num_devices);
+    }
     if (args.chunk_start.has_value()) {
         const auto& start = *args.chunk_start;
         TT_FATAL(
@@ -180,6 +196,8 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
         bucket_cap,
         range_blocks,
         topk,
+        attrs.dense_below,
+        attrs.dense_below > 0 ? dense_slot_rows(attrs) : 0u,
     };
     std::vector<uint32_t> compute_ct = ct;
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
@@ -255,11 +273,16 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t page_bytes,
-    const std::optional<Tensor>& chunk_start) {
+    const std::optional<Tensor>& chunk_start,
+    uint32_t dense_below) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
-            .num_devices = num_devices, .stripe_chunk = stripe_chunk, .max_rows = max_rows, .page_bytes = page_bytes},
+            .num_devices = num_devices,
+            .stripe_chunk = stripe_chunk,
+            .max_rows = max_rows,
+            .page_bytes = page_bytes,
+            .dense_below = dense_below},
         Op::tensor_args_t{.indices = indices, .chunk_start = chunk_start});
 }
 

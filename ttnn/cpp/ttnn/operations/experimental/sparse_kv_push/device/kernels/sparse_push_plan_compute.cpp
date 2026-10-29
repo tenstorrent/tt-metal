@@ -31,6 +31,8 @@ void kernel_main() {
     constexpr uint32_t total_chunks = get_compile_time_arg_val(5);
     constexpr uint32_t bucket_cap = get_compile_time_arg_val(8);
     constexpr uint32_t range_blocks = get_compile_time_arg_val(9);
+    constexpr uint32_t dense_below = get_compile_time_arg_val(11);
+    constexpr uint32_t dense_slot_rows = get_compile_time_arg_val(12);
     constexpr uint32_t bitmap_off = sparse_push::plan_table::kBitmapOff;
     constexpr uint32_t words_per_block = stripe_chunk / sparse_push::plan_table::kRowsPerWord;
     constexpr uint32_t array_words = dirty_array_words(cores);
@@ -108,6 +110,6 @@ void kernel_main() {
 
     // 4. Bases and 5. rewrite.
     wait_for_step(kStepBases);
-    bases_and_rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks>(
+    bases_and_rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks, dense_below, dense_slot_rows>(
         idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
 }

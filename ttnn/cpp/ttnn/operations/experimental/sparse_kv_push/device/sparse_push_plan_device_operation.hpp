@@ -39,6 +39,7 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t page_bytes,
-    const std::optional<Tensor>& chunk_start = std::nullopt);
+    const std::optional<Tensor>& chunk_start = std::nullopt,
+    uint32_t dense_below = 0);
 
 }  // namespace ttnn::prim
