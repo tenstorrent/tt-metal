@@ -195,3 +195,116 @@ def test_sliding_map_policy_13x10_unchanged(monkeypatch):
         assert A.sliding_map_policy(*P150, BLOCK_MAP_MIN_SEQ) == (BLOCK_MAP_MIN_SEQ, False)
     monkeypatch.setattr(A, "SDPA_TUNED_ON", False)
     assert A.sliding_map_policy(*GALAXY, BLOCK_MAP_MIN_SEQ) == (BLOCK_MAP_MIN_SEQ, False)
+
+
+# ------------------------------------------------------------------------------- tower attention
+# E10.2 (doc/prefill_towers/02-attention/): the vision SDPA table (tt/vision/attention.py `VISION_SDPA_TUNED`,
+# switch `VISION_SDPA_TUNED_ON`) and the audio rel-shift choice (tt/audio/attention.py `REL_SHIFT_MM_TUNED`,
+# switch `AUDIO_ATTN_TUNED_ON`): the same on / off identity per grid, batch-1 contract shapes plus the batched
+# shapes of the tower test suites.
+VISION_SDPA_SHAPES = [(1, 2560), (1, 1280), (4, 2560), (8, 1280)]
+AUDIO_ATTN_SHAPES = [(1, 256), (1, 768), (4, 256), (1, 1536)]
+
+
+def vision_sdpa_configs(monkeypatch, grid, tuned_on: bool) -> dict[str, tuple]:
+    from models.demos.embedding_gemma2.tt.vision import attention as VA
+
+    monkeypatch.setattr(VA, "VISION_SDPA_TUNED_ON", tuned_on)
+    out = {}
+    for b, s in VISION_SDPA_SHAPES:
+        pc = VA.vision_sdpa_program_config(s, b, ttnn.CoreCoord(*grid))
+        g = pc.compute_with_storage_grid_size
+        out[f"b{b}_s{s}"] = (g.x, g.y, pc.q_chunk_size, pc.k_chunk_size, pc.max_cores_per_head_batch)
+    return out
+
+
+def vision_sdpa_differing(monkeypatch, grid) -> set[str]:
+    on, off = vision_sdpa_configs(monkeypatch, grid, True), vision_sdpa_configs(monkeypatch, grid, False)
+    return {k for k in on if on[k] != off[k]}
+
+
+def test_vision_sdpa_13x10_identical_to_tuned_off(monkeypatch):
+    from models.demos.embedding_gemma2.tt.vision import attention as VA
+
+    assert not VA.VISION_SDPA_OVERRIDES and not VA.WINDOWED_OVERRIDES, "search overrides must be empty"
+    diff = vision_sdpa_differing(monkeypatch, P150)
+    assert not diff, f"13 x 10 vision SDPA configs change with the tuned table on: {sorted(diff)}"
+
+
+def test_vision_sdpa_12x10_differs_only_in_listed_entries(monkeypatch):
+    from models.demos.embedding_gemma2.tt.vision import attention as VA
+
+    diff = vision_sdpa_differing(monkeypatch, GALAXY)
+    want = {f"b1_s{s}" for s in VA.VISION_SDPA_TUNED.get(GALAXY, {})}
+    assert diff == want, f"unlisted entries differ: {sorted(diff - want)}; listed but identical: {sorted(want - diff)}"
+
+
+def test_vision_sdpa_identity_check_detects_a_planted_13x10_entry(monkeypatch):
+    from models.demos.embedding_gemma2.tt.vision import attention as VA
+
+    planted = {**VA.VISION_SDPA_TUNED, P150: {2560: VA.VisionSdpaSpec(256, 512)}}
+    monkeypatch.setattr(VA, "VISION_SDPA_TUNED", planted)
+    assert vision_sdpa_differing(monkeypatch, P150) == {"b1_s2560"}
+
+
+def audio_attn_choices(monkeypatch, grid, tuned_on: bool) -> dict[str, bool]:
+    from models.demos.embedding_gemma2.tt.audio import attention as AA
+
+    monkeypatch.setattr(AA, "AUDIO_ATTN_TUNED_ON", tuned_on)
+    dev = _Dev(grid)
+    return {
+        f"b{b}_s{s}_{dt}": AA.rel_shift_by_matmul(dev, s, b, dtype)
+        for b, s in AUDIO_ATTN_SHAPES
+        for dt, dtype in (("bf16", ttnn.bfloat16), ("fp32", ttnn.float32))
+    }
+
+
+def audio_attn_differing(monkeypatch, grid) -> set[str]:
+    on, off = audio_attn_choices(monkeypatch, grid, True), audio_attn_choices(monkeypatch, grid, False)
+    return {k for k in on if on[k] != off[k]}
+
+
+def test_audio_attn_13x10_identical_to_tuned_off(monkeypatch):
+    from models.demos.embedding_gemma2.tt.audio import attention as AA
+
+    assert not AA.REL_SHIFT_MM_OVERRIDES, "REL_SHIFT_MM_OVERRIDES must be empty outside the in-model search"
+    diff = audio_attn_differing(monkeypatch, P150)
+    assert not diff, f"13 x 10 audio rel-shift choice changes with the tuned table on: {sorted(diff)}"
+
+
+def test_audio_attn_12x10_differs_only_in_listed_entries(monkeypatch):
+    from models.demos.embedding_gemma2.tt.audio import attention as AA
+
+    diff = audio_attn_differing(monkeypatch, GALAXY)
+    want = {f"b1_s{s}_bf16" for s in AA.REL_SHIFT_MM_TUNED.get(GALAXY, set())}
+    assert diff == want, f"unlisted entries differ: {sorted(diff - want)}; listed but identical: {sorted(want - diff)}"
+
+
+def test_audio_attn_identity_check_detects_a_planted_13x10_entry(monkeypatch):
+    from models.demos.embedding_gemma2.tt.audio import attention as AA
+
+    monkeypatch.setattr(AA, "REL_SHIFT_MM_TUNED", {**AA.REL_SHIFT_MM_TUNED, P150: {768}})
+    assert audio_attn_differing(monkeypatch, P150) == {"b1_s768_bf16"}
+
+
+def test_audio_rel_shift_select_matches_the_gather_index():
+    """P[0, i] (rel_shift_select) picks exactly column rel_shift_index[i, j] for every output column j."""
+    import torch
+
+    from models.demos.embedding_gemma2.tt.audio import attention as AA
+    from models.demos.embedding_gemma2.tt.audio.config import AudioAttentionConfig
+
+    cfg = AudioAttentionConfig(
+        hidden_size=1024,
+        num_heads=8,
+        head_dim=128,
+        chunk_size=12,
+        max_past_horizon=12,
+        logit_cap=50.0,
+        invalid_logit=-1e9,
+    )
+    X = torch.randn(5, AA.ATTN_BLOCK, AA.REL_WIDTH)
+    idx = AA.rel_shift_index(cfg).reshape(1, AA.ATTN_BLOCK, AA.CTX).expand(5, -1, -1).long()
+    want = torch.gather(X, -1, idx)
+    got = torch.einsum("mic,icj->mij", X, AA.rel_shift_select(cfg)[0])
+    assert torch.equal(got, want)

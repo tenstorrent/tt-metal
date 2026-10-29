@@ -29,7 +29,9 @@ Contract
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import NamedTuple
 
 import torch
 
@@ -52,6 +54,38 @@ _SDPA_TABLE = {
 }
 
 
+class VisionSdpaSpec(NamedTuple):
+    """A tuned / searched SDPA config: chunk sizes, the op grid (None: the device grid) and the op's
+    `max_cores_per_head_batch` (16 is the op default)."""
+
+    q_chunk: int
+    k_chunk: int
+    grid: tuple[int, int] | None = None
+    max_cores_per_head_batch: int = 16
+
+
+# Tuned SDPA configs per compute grid (E10.2, doc/prefill_towers/02-attention/): VISION_SDPA_TUNED[grid][seq_len]
+# replaces `_SDPA_TABLE` for that bucket on that grid only, at batch 1. Grids without an entry (the P150a's
+# 13 x 10) keep the table. EG2_VISION_SDPA_TUNED=0 disables it (same-session control); VISION_SDPA_OVERRIDES
+# [seq_len] (in-process, empty by default) takes precedence on every grid (the in-model search sets it).
+# 12 x 10, 1 x 2560: q 256 / k 512 = 12 heads x 10 q chunks = 120 work units, one per core (q 128: 240 units,
+# two waves); same k chunk, so bit-identical to the table entry; -3.0 % per forward (tt-ops e10/02-attention
+# search vision_vs1 / vs3).
+VISION_SDPA_TUNED: dict[tuple[int, int], dict[int, VisionSdpaSpec]] = {(12, 10): {2560: VisionSdpaSpec(256, 512)}}
+VISION_SDPA_TUNED_ON = os.environ.get("EG2_VISION_SDPA_TUNED", "1") == "1"
+VISION_SDPA_OVERRIDES: dict[int, VisionSdpaSpec] = {}
+
+
+def vision_sdpa_spec(seq_len: int, batch: int, gx: int, gy: int) -> VisionSdpaSpec | None:
+    """Tuned / searched SDPA spec for `seq_len` on grid (gx, gy), batch 1 only."""
+    if batch != 1:
+        return None
+    spec = VISION_SDPA_OVERRIDES.get(seq_len)
+    if spec is None and VISION_SDPA_TUNED_ON:
+        spec = VISION_SDPA_TUNED.get((gx, gy), {}).get(seq_len)
+    return spec
+
+
 def vision_sdpa_program_config(
     seq_len: int, batch: int = 1, device_grid=None, exp_approx: bool = False
 ) -> ttnn.SDPAProgramConfig:
@@ -59,10 +93,20 @@ def vision_sdpa_program_config(
     `exp_approx`: SDPA exp_approx_mode (precision policy `vision.sdpa.exp_approx`)."""
     gx, gy = (device_grid.x, device_grid.y) if device_grid is not None else (13, 10)
     q_chunk, k_chunk, grid = 128, 256, (gx, gy)
-    for min_batch, cfg in _SDPA_TABLE.get(seq_len, ()):
-        if batch >= min_batch:
-            q_chunk, k_chunk, grid = cfg
-            break
+    max_cores = 16
+    spec = vision_sdpa_spec(seq_len, batch, gx, gy)
+    if spec is not None:
+        q_chunk, k_chunk, grid, max_cores = (
+            spec.q_chunk,
+            spec.k_chunk,
+            spec.grid or (gx, gy),
+            spec.max_cores_per_head_batch,
+        )
+    else:
+        for min_batch, cfg in _SDPA_TABLE.get(seq_len, ()):
+            if batch >= min_batch:
+                q_chunk, k_chunk, grid = cfg
+                break
     grid = (min(grid[0], gx), min(grid[1], gy))
     while seq_len % k_chunk:
         k_chunk //= 2
@@ -75,6 +119,7 @@ def vision_sdpa_program_config(
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
         exp_approx_mode=exp_approx,
+        max_cores_per_head_batch=max_cores,
     )
 
 
@@ -89,7 +134,14 @@ WINDOWED_SEQ_LENS = (1280,)
 WINDOWED_MIN_BATCH = 8
 
 
+# (batch, seq_len) shapes forced onto the windowed path (in-process, empty by default; the in-model search
+# compares it against the dense mask at batch 1).
+WINDOWED_OVERRIDES: set[tuple[int, int]] = set()
+
+
 def use_windowed_attention(batch: int, seq_len: int) -> bool:
+    if (batch, seq_len) in WINDOWED_OVERRIDES:
+        return True
     return seq_len in WINDOWED_SEQ_LENS and batch >= WINDOWED_MIN_BATCH
 
 

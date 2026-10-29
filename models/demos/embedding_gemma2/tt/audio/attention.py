@@ -41,6 +41,7 @@ Contract
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -69,6 +70,29 @@ REL_WIDTH = ATTN_BLOCK  # columns of Q E^T before the shift (column c = max_past
 # gated with the audio matmul table: EG2_AUDIO_MM_TUNED); REL_PM_OVERRIDES[S] (in-process, config search).
 REL_PM_TUNED: dict[tuple[int, int], dict[int, int]] = {(12, 10): {256: 2}}  # -0.19 % at 1 x 256, bit-identical
 REL_PM_OVERRIDES: dict[int, int] = {}
+
+# Rel-shift as stock ops (E10.2, doc/prefill_towers/02-attention/): instead of the tile-layout gather (49 / 99 us
+# per layer at 1 x 256 / 1 x 768 on 12 x 10), group query row i of every block into batch i, multiply batch i by
+# its one-hot selection matrix P[i] [32, 64] (P[i, c, j] = 1 iff c = rel_shift_index[i, j]) and ungroup:
+#     bd = transpose_12( transpose_12(X) @ P )          X [B, M, 32, 32] -> [B, 32, M, 32] -> [B, 32, M, 64] -> [B, M, 32, 64]
+# Every output is one bf16 input value times 1.0 plus zeros, so with a bf16 X at HiFi4 it equals the gather bit for
+# bit (also off band: P selects the gather's clamped column). Used where REL_SHIFT_MM_TUNED lists (grid, bucket), at
+# batch 1, for a bf16 X (the selected precision policy; an fp32 X keeps the gather). EG2_AUDIO_ATTN_TUNED=0 disables
+# the table (same-session control); REL_SHIFT_MM_OVERRIDES[S] (in-process, True / False) takes precedence on every
+# grid (the in-model search).
+REL_SHIFT_MM_TUNED: dict[tuple[int, int], set[int]] = {(12, 10): {256, 768}}
+AUDIO_ATTN_TUNED_ON = os.environ.get("EG2_AUDIO_ATTN_TUNED", "1") == "1"
+REL_SHIFT_MM_OVERRIDES: dict[int, bool] = {}
+
+
+def rel_shift_by_matmul(device, S: int, batch: int, dtype) -> bool:
+    """True when the rel-shift of a [batch, 1, S, *] input runs as transpose / matmul / transpose."""
+    if batch != 1 or dtype != ttnn.bfloat16:
+        return False
+    if S in REL_SHIFT_MM_OVERRIDES:
+        return REL_SHIFT_MM_OVERRIDES[S]
+    g = device.compute_with_storage_grid_size()
+    return AUDIO_ATTN_TUNED_ON and S in REL_SHIFT_MM_TUNED.get((g.x, g.y), set())
 
 
 def rel_per_core_m(device, nb: int, S: int, batch: int) -> int:
@@ -117,6 +141,17 @@ def rel_shift_index(cfg: AudioAttentionConfig) -> torch.Tensor:
     j = torch.arange(CTX)[None, :]
     idx = (j - i - ATTN_BLOCK + cfg.max_past_horizon).clamp(0, REL_WIDTH - 1)
     return idx.to(torch.int32).reshape(1, 1, ATTN_BLOCK, CTX)
+
+
+def rel_shift_select(cfg: AudioAttentionConfig) -> torch.Tensor:
+    """One-hot selection matrices P [1, 32, 32, 64]: P[0, i, c, j] = 1 iff c = rel_shift_index[i, j], so
+    (row i of X) @ P[0, i] = row i of the gather (rel_shift_by_matmul)."""
+    idx = rel_shift_index(cfg).reshape(ATTN_BLOCK, CTX).long()
+    P = torch.zeros(1, ATTN_BLOCK, REL_WIDTH, CTX)
+    cols = torch.arange(CTX)
+    for i in range(ATTN_BLOCK):
+        P[0, i, idx[i], cols] = 1.0
+    return P
 
 
 def attention_mask(num_valid: list[int], seq_len: int, cfg: AudioAttentionConfig) -> torch.Tensor:
@@ -170,6 +205,7 @@ class AudioAttention(LightweightModule):
         qscale: ttnn.Tensor,
         rel_keys_t: ttnn.Tensor,
         shift_index: ttnn.Tensor,
+        shift_select: ttnn.Tensor | None = None,
         *,
         layer_idx: int = 0,
         precision: AudioPrecision | None = None,
@@ -183,6 +219,7 @@ class AudioAttention(LightweightModule):
         self.qscale = qscale
         self.rel_keys_t = rel_keys_t
         self.shift_index = shift_index
+        self.shift_select = shift_select  # rel_shift_select (None: always the gather)
         # band-attention block matmuls + softmax sum: `audio.attention` (E5c: HiFi4 + fp32 acc)
         self.compute_kernel_config = precision.attention.compute_kernel_config
         self.qkv_policy = precision.matmul("attn_qkv", layer_idx)
@@ -259,7 +296,25 @@ class AudioAttention(LightweightModule):
             name=f"audio.rel_shift_index_h{config.max_past_horizon}",
             dtype=ttnn.uint16,
         )
-        return cls(config, wqkv, bounds, post, qscale, rel_t, shift_index, layer_idx=layer_idx, precision=precision)
+        shift_select = as_weight(
+            rel_shift_select(config),
+            device,
+            cache_dir=cache_dir,
+            name=f"audio.rel_shift_select_h{config.max_past_horizon}",
+            dtype=ttnn.bfloat16,
+        )
+        return cls(
+            config,
+            wqkv,
+            bounds,
+            post,
+            qscale,
+            rel_t,
+            shift_index,
+            shift_select,
+            layer_idx=layer_idx,
+            precision=precision,
+        )
 
     # ------------------------------------------------------------------ helpers
     def _qkv_heads(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -319,6 +374,9 @@ class AudioAttention(LightweightModule):
         index from `shift_index_for` (None: built here and freed)."""
         B, M = X.shape[0], X.shape[1]
         dev = X.device()
+        S = M // self.config.num_heads * ATTN_BLOCK
+        if self.shift_select is not None and rel_shift_by_matmul(dev, S, B, X.dtype):
+            return self._rel_shift_mm(X)
         own = idx is None
         if own:
             idx = self.shift_index_for(B, M // self.config.num_heads * ATTN_BLOCK)
@@ -327,6 +385,28 @@ class AudioAttention(LightweightModule):
         )
         if own:
             ttnn.deallocate(idx)
+        return out
+
+    def needs_shift_index(self, B: int, S: int, dtype) -> bool:
+        """False when the rel-shift of a [B, 1, S, *] input runs as matmuls (rel_shift_by_matmul): no gather index."""
+        return self.shift_select is None or not rel_shift_by_matmul(self.shift_index.device(), S, B, dtype)
+
+    def _rel_shift_mm(self, X: ttnn.Tensor) -> ttnn.Tensor:
+        """The gather of `_rel_shift` as transpose / batched one-hot matmul / transpose (REL_SHIFT_MM_TUNED)."""
+        B, M = X.shape[0], X.shape[1]
+        dev = X.device()
+        Xt = ttnn.transpose(
+            X, 1, 2, memory_config=audio_act_memory_config(dev, (B, ATTN_BLOCK, M, REL_WIDTH), X.dtype)
+        )  # [B, 32, M, 32]: query row i of every block in batch i
+        Y = ttnn.matmul(
+            Xt,
+            self.shift_select,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=audio_act_memory_config(dev, (B, ATTN_BLOCK, M, CTX), X.dtype),
+        )  # [B, 32, M, 64]
+        ttnn.deallocate(Xt)
+        out = ttnn.transpose(Y, 1, 2, memory_config=audio_act_memory_config(dev, (B, M, ATTN_BLOCK, CTX), ttnn.float32))
+        ttnn.deallocate(Y)
         return out
 
     def _softmax(self, s: ttnn.Tensor) -> ttnn.Tensor:

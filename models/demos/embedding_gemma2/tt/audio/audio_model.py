@@ -137,9 +137,12 @@ class AudioModel(LightweightModule):
         h = self.subsample(x)
         # the rel-shift gather index is the same in every layer: one repeat per forward instead of one per
         # layer (E10.1 topology; EG2_AUDIO_SHIFT_IDX_ONCE=0 restores the per-layer build for A/B)
+        # (no index when the rel-shift runs as matmuls: attention.REL_SHIFT_MM_TUNED, E10.2)
         idx = None
         if SHIFT_IDX_ONCE and self.layers:
-            idx = self.layers[0].attn.shift_index_for(h.shape[0], h.shape[2])
+            attn = self.layers[0].attn
+            if attn.needs_shift_index(h.shape[0], h.shape[2], attn.qkv_policy.out_ttnn_dtype):
+                idx = attn.shift_index_for(h.shape[0], h.shape[2])
         for layer in self.layers:
             h_next = layer(h, x.attn_mask, idx)
             ttnn.deallocate(h)
