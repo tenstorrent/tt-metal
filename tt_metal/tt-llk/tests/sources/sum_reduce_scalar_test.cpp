@@ -149,12 +149,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_once_();
 
     // Poison op (see the file header).
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE.total_num_faces(), formats.math);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE, formats.math);
     _llk_math_wait_for_dest_available_<DST_SYNC>();
     for (std::uint32_t i = 0; i < POISON_TILES; ++i)
     {
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            i, formats.math, formats.math, DEFAULT_TENSOR_SHAPE.total_num_faces());
+            i, formats.math, formats.math, DEFAULT_TENSOR_SHAPE);
     }
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
