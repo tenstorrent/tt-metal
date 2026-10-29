@@ -126,6 +126,23 @@ void py_module(nb::module_& m) {
         nb::arg("error_if_nonfinite") = false,
         "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
 
+    m.def(
+        "clip_grad_norm_tp",
+        [](const ttml::serialization::NamedParameters& sharded,
+           const ttml::serialization::NamedParameters& replicated,
+           float max_norm,
+           uint32_t cluster_axis,
+           float p_norm_type) -> ttml::autograd::TensorPtr {
+            return ttml::core::clip_grad_norm_tp(sharded, replicated, max_norm, cluster_axis, p_norm_type);
+        },
+        nb::arg("sharded"),
+        nb::arg("replicated"),
+        nb::arg("max_norm"),
+        nb::arg("cluster_axis"),
+        nb::arg("p_norm_type") = 2.0f,
+        "Tensor-parallel gradient clipping. `sharded` gradients are split along mesh axis `cluster_axis`, "
+        "`replicated` ones are identical on it. Clips in place; returns the pre-clip norm on device.");
+
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def("enable_fabric", &ttnn_fixed::distributed::enable_fabric);
