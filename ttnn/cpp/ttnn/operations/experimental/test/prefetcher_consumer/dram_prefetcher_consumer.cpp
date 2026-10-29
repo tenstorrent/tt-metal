@@ -78,6 +78,11 @@ ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
         attrs.num_iters,
         attrs.page_size_bytes,
         attrs.hold_cycles,
+        // The receiver cores and CB size come from the GCB's structure, and the remote CB bakes both of its
+        // addresses, so a GCB reallocated at the same config address with another shape must still miss.
+        attrs.global_cb.has_value() ? std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}(*attrs.global_cb)
+                                    : std::size_t{0},
+        attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->buffer_address()) : 0ull,
         attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull,
         attrs.prefetcher_pipes);
 }

@@ -119,8 +119,8 @@ void run_kernel(RUNTIME_PARAMETERS)
     // under test strictly tighter than the shipped three-thread form.
     for (std::uint32_t i = 0; i < REAL_TRIALS; i++)
     {
-        _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>();
-        _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>();
+        _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>(true /*enable*/);
+        _llk_set_fp32_dest_acc_<ThreadId::UnpackThreadId>(false /*enable*/);
     }
 }
 
@@ -289,12 +289,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t real_disabled_seen = 0;
     for (std::uint32_t i = 0; i < REAL_TRIALS; i++)
     {
-        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(true /*enable*/);
         if (dest_acc_field_set(g_cfg))
         {
             real_enabled_seen++;
         }
-        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+        _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(false /*enable*/);
         if (!dest_acc_field_set(g_cfg))
         {
             real_disabled_seen++;

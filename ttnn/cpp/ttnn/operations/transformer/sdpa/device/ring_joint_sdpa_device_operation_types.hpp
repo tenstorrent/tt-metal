@@ -249,12 +249,16 @@ struct RingJointSDPAInputs {
     }
     // Streaming modes keep the K/V chains and the reader's dense chunk loop (chunk and compact).
     bool sol_streams_chunks(const std::string& mode) const { return sol_chunk_mode(mode) || sol_compact_mode(mode); }
+    // Global real-token count (metadata path only); attention stops at the tile holding the last real token.
+    std::optional<Tensor> kv_valid_end;
 
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 
     bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 
     bool has_logical_l_tensor() const { return logical_l_tensor.has_value(); }
+
+    bool has_kv_valid_end() const { return kv_valid_end.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

@@ -15,11 +15,15 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
 namespace {
 
+// The largest top-k the op is validated at. The routing index has no top-k limit of its own: its scratch grows
+// with top-k, and compute_l1_layout refuses a layout that no longer fits L1.
+constexpr uint32_t MAX_EXPERTS_PER_TOK = 16;
+
 // A page index computed on one chip addresses the same page on another chip. That holds only while every
 // chip's copy of a buffer starts at the same address, which interleaved DRAM allocation on a uniform mesh
 // gives.
 void validate_dram_interleaved(const ttnn::Tensor& t, const char* name) {
-    TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
+    TT_FATAL(t.is_allocated(), "dispatch_fabric2d: {} has no device buffer", name);
     TT_FATAL(
         t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
             t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -77,6 +81,12 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_links must be between 1 and 4 (got {})",
         args.num_links);
     TT_FATAL(args.seq_len_per_chip > 0, "dispatch_fabric2d: seq_len_per_chip must be positive");
+    TT_FATAL(
+        args.fwd_vc_pages >= dspf2d::MIN_VC_PAGES,
+        "dispatch_fabric2d: fwd_vc_pages must be at least {} (got {}); the credit threshold is a quarter of a "
+        "channel and has to stay >= 1, and a channel shallower than a read batch spends all its time announcing",
+        dspf2d::MIN_VC_PAGES,
+        args.fwd_vc_pages);
     TT_FATAL(
         args.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
             args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -203,6 +213,11 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_experts_per_tok {} must be in 1..num_routed_experts {}",
         args.num_experts_per_tok,
         args.num_routed_experts);
+    TT_FATAL(
+        args.num_experts_per_tok <= MAX_EXPERTS_PER_TOK,
+        "dispatch_fabric2d: num_experts_per_tok {} is above {}, the largest top-k this op is validated at",
+        args.num_experts_per_tok,
+        MAX_EXPERTS_PER_TOK);
 }
 
 void DispatchFabric2dDeviceOperation::validate_on_program_cache_hit(
@@ -269,6 +284,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    uint32_t fwd_vc_pages,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set) {
@@ -285,6 +301,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
+            .fwd_vc_pages = fwd_vc_pages,
             .has_padding_config = padding_config.has_value(),
             .topology = topology,
             .output_mem_config = memory_config,

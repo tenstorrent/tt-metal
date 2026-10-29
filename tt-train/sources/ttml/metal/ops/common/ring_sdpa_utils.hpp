@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include <enchantum/enchantum.hpp>
-
 #include <cstdint>
 #include <string_view>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt_stl/assert.hpp>
 #include <utility>
 
 #include "metal/common/const_utils.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::metal::ops {
@@ -95,34 +94,13 @@ inline void validate_sdpa_tensor(
     std::string_view name,
     const ttnn::Tensor& query,
     ttnn::DataType required_dtype = ttnn::DataType::BFLOAT16) {
-    TT_FATAL(
-        tensor.storage_type() == ttnn::StorageType::DEVICE,
-        "Ring SDPA requires '{}' to be on DEVICE, got storage type '{}'",
-        name,
-        enchantum::to_string(tensor.storage_type()));
-    TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null)", name);
+    check_device_tensor(tensor, "RingSDPA", name, {.dtypes = {required_dtype}});
     TT_FATAL(tensor.device() == query.device(), "Tensor '{}' must be on the same mesh device as the query", name);
     TT_FATAL(
         tensor.logical_shape().rank() == 4U,
         "Tensor '{}' must have rank 4, got rank {}",
         name,
         tensor.logical_shape().rank());
-    TT_FATAL(
-        tensor.layout() == ttnn::Layout::TILE,
-        "Tensor '{}' must have TILE layout, got '{}'",
-        name,
-        enchantum::to_string(tensor.layout()));
-    TT_FATAL(
-        tensor.dtype() == required_dtype,
-        "Tensor '{}' must have data type '{}', got '{}'",
-        name,
-        enchantum::to_string(required_dtype),
-        enchantum::to_string(tensor.dtype()));
-    TT_FATAL(
-        tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "Tensor '{}' must use INTERLEAVED memory layout, got '{}'",
-        name,
-        enchantum::to_string(tensor.memory_config().memory_layout()));
 }
 
 // Q/K/V contract shared by the ring forward and backward operations: the per-tensor

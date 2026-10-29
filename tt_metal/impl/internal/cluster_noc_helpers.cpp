@@ -5,7 +5,7 @@
 #include "internal/cluster_noc_helpers.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <umd/device/cluster_descriptor.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
 
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"

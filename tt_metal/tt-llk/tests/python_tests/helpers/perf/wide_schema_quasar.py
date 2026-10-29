@@ -6,9 +6,8 @@
 
 Separate published table from the WH/BH schema in ``wide_schema.py``. A Quasar
 run is aligned to this schema; a WH/BH run is aligned to that one. The two must
-not be mixed: Quasar-only columns (face dims, unpacker engine, implied math
-format, ...) stay out of the WH/BH table, and WH/BH-only columns stay out of
-this one.
+not be mixed: Quasar-only columns (face dims, unpacker engine, ...) stay out of
+the WH/BH table, and WH/BH-only columns stay out of this one.
 
 Same conventions as ``wide_schema``: one row per test config per run; every
 column except ``marker`` and the mandatory provenance keys is nullable; Column
@@ -85,7 +84,7 @@ DB_SCHEMA = [
     Column("face_r_dim", "int64", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
-    Column("implied_math_format", "string", True, "configuration"),
+    Column("group_kt_dim", "int64", True, "configuration"),
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),
@@ -94,6 +93,7 @@ DB_SCHEMA = [
     Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
     Column("input_tile_cnt", "int64", True, "configuration"),
+    Column("is_reduce_to_one", "bool", True, "configuration"),
     Column("k_dimm", "int64", True, "configuration"),
     Column("math_fidelity", "string", True, "configuration"),
     Column("math_transpose_faces", "string", True, "configuration"),
@@ -116,7 +116,7 @@ DB_SCHEMA = [
     Column("r_dimm", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
-    Column("sfpu_srcs_impl", "string", True, "configuration"),
+    Column("sfpu_impl", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("src0_tile_idx", "int64", True, "configuration"),
     Column("src1_tile_idx", "int64", True, "configuration"),

@@ -38,6 +38,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const float dropout_probability = 0.0F,
     const bool return_intermediates = false,
     const std::optional<ttnn::Tensor>& preallocated_intermediate = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& gate = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <string_view>
 #include <type_traits>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <unordered_set>
 #include <variant>
 #include <vector>
@@ -114,6 +114,11 @@ inline bool is_gen2_arch(const Hal& hal) { return is_gen2_arch(hal.get_arch()); 
 inline bool is_gen1_arch(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE; }
 
 inline bool is_gen1_arch(const Hal& hal) { return is_gen1_arch(hal.get_arch()); }
+
+// Archs with a compute semaphore implementation (the Tensix hardware semaphore, UNPACK <-> PACK).
+inline bool has_compute_semaphore(tt::ARCH arch) { return arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR; }
+
+inline bool has_compute_semaphore(const Hal& hal) { return has_compute_semaphore(hal.get_arch()); }
 
 inline bool nodes_intersect(const Nodes& a, const Nodes& b) {
     NodeRangeSet a_set = to_node_range_set(a);

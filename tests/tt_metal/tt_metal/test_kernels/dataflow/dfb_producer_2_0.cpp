@@ -28,20 +28,37 @@ void kernel_main() {
     const uint32_t num_producers = get_num_threads();
     const uint32_t entry_size = dfb.get_entry_size();
 
-    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
-        const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
-        if (page_id >= chunk_offset + entries_per_core) {
-            break;
-        }
-        if constexpr (implicit_sync) {
+    if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
+        // Implicit sync: one call per page; the DFB does the reserve/push itself.
+        for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
+            const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
+            if (page_id >= chunk_offset + entries_per_core) {
+                break;
+            }
             noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
+        }
 #endif
-        } else {
-            dfb.reserve_back(1);
-            noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});
+    } else {
+        // Explicit sync: one reserve/push covers share entries, spaced stride_bytes apart in the ring.
+        const uint32_t share = dfb.get_producer_share();
+        const uint32_t stride_bytes = entry_size * dfb.get_producer_stride_tiles();
+        for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id += share) {
+            const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
+            if (page_id >= chunk_offset + entries_per_core) {
+                break;
+            }
+            dfb.reserve_back(share);
+            for (uint32_t i = 0; i < share; ++i) {
+                noc.async_read(
+                    tensor_accessor,
+                    dfb,
+                    entry_size,
+                    {.page_id = page_id + i * num_producers},
+                    {.offset_bytes = i * stride_bytes});
+            }
             noc.async_read_barrier();
-            dfb.push_back(1);
+            dfb.push_back(share);
         }
     }
     dfb.finish();

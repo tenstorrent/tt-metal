@@ -180,7 +180,9 @@ jobs:
       llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
+      llk-hardware-free-changed: ${{ steps.find-changes.outputs.llk-hardware-free-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -505,6 +507,29 @@ jobs:
       post-pr-suggestions: ${{ github.event_name == 'pull_request' }}
       check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
+  # Shadow run: times a clang-tidy 23 full scan (check set matched to v20, see
+  # cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml) against real PR
+  # traffic. Informational only — left out of workflow-status's `needs:`
+  # below so it can't affect PR Gate Status.
+  code-analysis-shadow-clang-tidy-23:
+    needs: [build-docker-images, find-changed-files]
+    if: >-
+      ${{
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
+        (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+      }}
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 24.04"
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      force-scan: true
+      post-pr-suggestions: false
+      publish-annotations: false
+      clang-tidy-version: "23"
+      check-harbor-runs-on: tt-ubuntu-light
+
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
     needs: find-changed-files
@@ -520,6 +545,7 @@ jobs:
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
          needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
          needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
          needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true')
@@ -537,6 +563,7 @@ jobs:
             if ("${{ needs.find-changed-files.outputs.llk-common-changed }}" === "true") expectedLabels.add("llk:common");
             if ("${{ needs.find-changed-files.outputs.llk-sfpi-changed }}" === "true") expectedLabels.add("sfpi");
             if ("${{ needs.find-changed-files.outputs.llk-tests-changed }}" === "true") expectedLabels.add("llk:test-infra");
+            if ("${{ needs.find-changed-files.outputs.llk-hardware-free-changed }}" === "true") expectedLabels.add("llk:test-infra");
             if ("${{ needs.find-changed-files.outputs.llk-ci-changed }}" === "true") expectedLabels.add("llk:ci");
             if ("${{ needs.find-changed-files.outputs.llk-perf-changed }}" === "true") expectedLabels.add("llk:performance");
             if ("${{ needs.find-changed-files.outputs.llk-quasar-changed }}" === "true") expectedLabels.add("llk:quasar");
@@ -626,28 +653,56 @@ jobs:
           || '' }}
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
-  # LLK Quasar Build Check (compile-only, no hardware needed)
-  llk-build-quasar:
+  # Quasar LLK tests on ttsim, two shards (llk_pr_gate_tests.yaml, sim_quasar_xl).
+  # Sanity runs the same shards. The skip list is the script default.
+  # Disabled on merge_group: it was holding up the merge queue for too long.
+  # Still runs on PR gate and push-to-main.
+  llk-quasar-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
          needs.find-changed-files.outputs.llk-common-changed == 'true' ||
          needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
-         needs.find-changed-files.outputs.llk-ci-changed == 'true')
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.ttsim-ci-changed == 'true')
       }}
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    timeout-minutes: 20
-    container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-      - uses: ./.github/actions/llk-compile-quasar
-        with:
-          pytest-markers: "quasar and not perf"
+    uses: ./.github/workflows/llk-ttsim-pr-gate-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+
+  # Host-only LLK tests (tests/pipeline_reorg/llk_hardware_free_tests.yaml, cpu_xlarge).
+  # Same change set as llk-smoke-tests, plus a hardware-free-only change and a
+  # Quasar change: the stall-wrapper probe used to run inside the Quasar compile
+  # job because it lived under python_tests/quasar.
+  # Disabled on merge_group: cpu_xlarge (tt-ubuntu-2204-xlarge-stable) has no
+  # merge-queue prio pool, same contended-runner issue as llk-quasar-tests. Still
+  # runs on PR gate and push-to-main.
+  llk-hardware-free-tests:
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-wormhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-blackhole-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-common-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-sfpi-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-hardware-free-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-hardware-free-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -672,7 +727,8 @@ jobs:
       - model-charts-sync
       - build-docs
       - llk-smoke-tests
-      - llk-build-quasar
+      - llk-quasar-tests
+      - llk-hardware-free-tests
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
@@ -690,6 +746,6 @@ jobs:
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
-            llk-smoke-tests, llk-build-quasar
+            llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"

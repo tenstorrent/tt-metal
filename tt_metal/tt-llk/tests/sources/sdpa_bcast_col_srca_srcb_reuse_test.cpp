@@ -39,9 +39,6 @@
 //      then _llk_math_sdpa_bcast_col_srca_srcb_reuse_ runs the SRCB_BCAST_COL MOP over DEST[DST_ROW]. The execute
 //      clears SrcA+SrcB (SETRWC CLR_AB) at the end — this variant has NO separate postamble.
 //
-// The math thread posts semaphore::FPU_SFPU with no SFPU consumer; a bare post does not block (mirrors the sibling
-// srcb_reuse test), so no fake SFPU handshake is needed and there is no MATH-waits-on-SFPU deadlock.
-//
 // Signalling-only divergence vs the demo fork this test was first written against: the promoted execute drops
 // `bool fused_signalling` (template position 8), making the output_granularity loop unconditional, and the promoted
 // init gains a trailing defaulted `bool skip_addrmod=false`. Neither touches numerics; the call below is already on
@@ -194,6 +191,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The promoted execute runs the output_granularity loop unconditionally; the demo copy gated it behind a
     // `fused_signalling` template arg in position 8, which is gone here. OUTPUT_GRANULARITY == 1 keeps the per-tile
     // FPU_SFPU cadence either way, and the golden ignores signalling cadence.
+    // Nothing consumes FPU_SFPU; ttsim rejects a SEMPOST at value >= max.
+    t6_semaphore_init(semaphore::FPU_SFPU, 0 /* min_value */, NUM_TILES / OUTPUT_GRANULARITY /* max_value */);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_<

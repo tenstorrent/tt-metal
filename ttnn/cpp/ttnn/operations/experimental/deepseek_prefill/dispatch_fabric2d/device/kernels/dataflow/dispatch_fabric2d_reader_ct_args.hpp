@@ -55,7 +55,13 @@ struct ReaderCtArgs {
         kScratchAddr,
         kFilledAddr,
         kFreedAddr,
-        kFwdSemAddr,
+        kNumVcs,
+        kVcPages,
+        kCreditDoneAddr,
+        // The opposite-direction stream core on THIS chip. Its sender points at the chip that wrote our
+        // pages, so our credits are queued there for it to carry.
+        kCreditOutboxNocX,
+        kCreditOutboxNocY,
         kFwdPagesPerStream,
         kNumOwn,
         kNumForward,
@@ -72,6 +78,14 @@ struct ReaderCtArgs {
         // and order, so a writer can place a descriptor's chunks from its own list alone.
         kInDescriptorsBase,
         kOutDescriptorsBase,
+        // One word per channel: the arrival, credit and outbox counters, then the channel a page moves
+        // into one hop on (VC_NONE when it is delivered instead). Last, one word per own assignment with
+        // the channel that assignment's tokens land in downstream.
+        kVcArrivedBase,
+        kVcFreedBase,
+        kVcOutboxBase,
+        kVcNextBase,
+        kOwnVcBase,
         kCount,
     };
 
@@ -98,7 +112,11 @@ struct ReaderCtArgs {
     uint32_t scratch_addr;
     uint32_t filled_addr;
     uint32_t freed_addr;
-    uint32_t fwd_sem_addr;
+    uint32_t num_vcs;
+    uint32_t vc_pages;
+    uint32_t credit_done_addr;
+    uint32_t credit_outbox_noc_x;
+    uint32_t credit_outbox_noc_y;
     uint32_t fwd_pages_per_stream;
     uint32_t num_own;
     uint32_t num_forward;
@@ -112,6 +130,11 @@ struct ReaderCtArgs {
     uint32_t assignment_base;
     uint32_t in_descriptors_base;
     uint32_t out_descriptors_base;
+    uint32_t vc_arrived_base;
+    uint32_t vc_freed_base;
+    uint32_t vc_outbox_base;
+    uint32_t vc_next_base;
+    uint32_t own_vc_base;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -123,7 +146,8 @@ struct ReaderCtArgs {
         const op::L1Layout& l1,
         const op::KernelPlan& plan,
         uint32_t own_count,
-        uint32_t forward_count) :
+        uint32_t forward_count,
+        const op::StreamPlacement& opposite) :
         queue_depth(QUEUE_DEPTH),
         batch(BATCH),
         token_size_bytes(token_bytes),
@@ -144,7 +168,11 @@ struct ReaderCtArgs {
         scratch_addr(l1.scratch),
         filled_addr(plan.queue_filled_addr),
         freed_addr(plan.queue_freed_addr),
-        fwd_sem_addr(plan.fwd_arrived_addr),
+        num_vcs(static_cast<uint32_t>(plan.vc_arrived_addr.size())),
+        vc_pages(plan.vc_pages),
+        credit_done_addr(plan.credit_done_addr),
+        credit_outbox_noc_x(opposite.worker_virtual.x),
+        credit_outbox_noc_y(opposite.worker_virtual.y),
         fwd_pages_per_stream(plan.fwd_pages_per_stream),
         num_own(own_count),
         num_forward(forward_count),
@@ -153,7 +181,12 @@ struct ReaderCtArgs {
         has_padding_config(args.has_padding_config ? 1u : 0u),
         assignment_base(kCount + args.device->shape()[args.axis]),
         in_descriptors_base(assignment_base + own_count * ASSIGNMENT_WORDS),
-        out_descriptors_base(in_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS) {}
+        out_descriptors_base(in_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS),
+        vc_arrived_base(out_descriptors_base + forward_count * CHUNK_DESCRIPTOR_WORDS),
+        vc_freed_base(vc_arrived_base + num_vcs),
+        vc_outbox_base(vc_freed_base + num_vcs),
+        vc_next_base(vc_outbox_base + num_vcs),
+        own_vc_base(vc_next_base + num_vcs) {}
 
     // Scalars, then ring_chip_ids, the assignments and the two descriptor blocks, at the base
     // indices set in the constructor.
@@ -161,7 +194,12 @@ struct ReaderCtArgs {
         const std::vector<uint32_t>& ring_chip_ids,
         const std::vector<uint32_t>& assignment_words,
         const std::vector<uint32_t>& in_descriptors,
-        const std::vector<uint32_t>& out_descriptors) const {
+        const std::vector<uint32_t>& out_descriptors,
+        const std::vector<uint32_t>& vc_arrived,
+        const std::vector<uint32_t>& vc_freed,
+        const std::vector<uint32_t>& vc_outbox,
+        const std::vector<uint32_t>& vc_next,
+        const std::vector<uint32_t>& own_vc) const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
         std::vector<uint32_t> w(kCount, kUnset);
         w[kQueueDepth] = queue_depth;
@@ -184,7 +222,11 @@ struct ReaderCtArgs {
         w[kScratchAddr] = scratch_addr;
         w[kFilledAddr] = filled_addr;
         w[kFreedAddr] = freed_addr;
-        w[kFwdSemAddr] = fwd_sem_addr;
+        w[kNumVcs] = num_vcs;
+        w[kVcPages] = vc_pages;
+        w[kCreditDoneAddr] = credit_done_addr;
+        w[kCreditOutboxNocX] = credit_outbox_noc_x;
+        w[kCreditOutboxNocY] = credit_outbox_noc_y;
         w[kFwdPagesPerStream] = fwd_pages_per_stream;
         w[kNumOwn] = num_own;
         w[kNumForward] = num_forward;
@@ -195,6 +237,11 @@ struct ReaderCtArgs {
         w[kAssignmentBase] = assignment_base;
         w[kInDescriptorsBase] = in_descriptors_base;
         w[kOutDescriptorsBase] = out_descriptors_base;
+        w[kVcArrivedBase] = vc_arrived_base;
+        w[kVcFreedBase] = vc_freed_base;
+        w[kVcOutboxBase] = vc_outbox_base;
+        w[kVcNextBase] = vc_next_base;
+        w[kOwnVcBase] = own_vc_base;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: reader compile-time arg {} was never assigned", i);
         }
@@ -214,8 +261,25 @@ struct ReaderCtArgs {
             num_forward * CHUNK_DESCRIPTOR_WORDS);
         w.insert(w.end(), ring_chip_ids.begin(), ring_chip_ids.end());
         w.insert(w.end(), assignment_words.begin(), assignment_words.end());
+        TT_FATAL(
+            vc_arrived.size() == num_vcs && vc_freed.size() == num_vcs && vc_outbox.size() == num_vcs &&
+                vc_next.size() == num_vcs && own_vc.size() == num_own,
+            "dispatch_fabric2d: channel blocks are {}/{}/{}/{} words and own_vc {} but the kernel indexes "
+            "{} channels and {} own assignments",
+            vc_arrived.size(),
+            vc_freed.size(),
+            vc_outbox.size(),
+            vc_next.size(),
+            own_vc.size(),
+            num_vcs,
+            num_own);
         w.insert(w.end(), in_descriptors.begin(), in_descriptors.end());
         w.insert(w.end(), out_descriptors.begin(), out_descriptors.end());
+        w.insert(w.end(), vc_arrived.begin(), vc_arrived.end());
+        w.insert(w.end(), vc_freed.begin(), vc_freed.end());
+        w.insert(w.end(), vc_outbox.begin(), vc_outbox.end());
+        w.insert(w.end(), vc_next.begin(), vc_next.end());
+        w.insert(w.end(), own_vc.begin(), own_vc.end());
         return w;
     }
 #else
@@ -240,7 +304,11 @@ struct ReaderCtArgs {
         scratch_addr(get_compile_time_arg_val(kScratchAddr)),
         filled_addr(get_compile_time_arg_val(kFilledAddr)),
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
-        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
+        num_vcs(get_compile_time_arg_val(kNumVcs)),
+        vc_pages(get_compile_time_arg_val(kVcPages)),
+        credit_done_addr(get_compile_time_arg_val(kCreditDoneAddr)),
+        credit_outbox_noc_x(get_compile_time_arg_val(kCreditOutboxNocX)),
+        credit_outbox_noc_y(get_compile_time_arg_val(kCreditOutboxNocY)),
         fwd_pages_per_stream(get_compile_time_arg_val(kFwdPagesPerStream)),
         num_own(get_compile_time_arg_val(kNumOwn)),
         num_forward(get_compile_time_arg_val(kNumForward)),
@@ -250,16 +318,32 @@ struct ReaderCtArgs {
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
         in_descriptors_base(get_compile_time_arg_val(kInDescriptorsBase)),
-        out_descriptors_base(get_compile_time_arg_val(kOutDescriptorsBase)) {}
+        out_descriptors_base(get_compile_time_arg_val(kOutDescriptorsBase)),
+        vc_arrived_base(get_compile_time_arg_val(kVcArrivedBase)),
+        vc_freed_base(get_compile_time_arg_val(kVcFreedBase)),
+        vc_outbox_base(get_compile_time_arg_val(kVcOutboxBase)),
+        vc_next_base(get_compile_time_arg_val(kVcNextBase)),
+        own_vc_base(get_compile_time_arg_val(kOwnVcBase)) {}
 #endif
 
     constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }
 
 #ifdef KERNEL_BUILD
+    // Counters and topology of one channel. Each is a word of an appended block, so these are plain
+    // indexed loads of compile-time args rather than anything the kernel has to carry.
+    uint32_t vc_arrived_addr(uint32_t vc) const { return kernel_compile_time_args[vc_arrived_base + vc]; }
+    uint32_t vc_freed_addr(uint32_t vc) const { return kernel_compile_time_args[vc_freed_base + vc]; }
+    uint32_t vc_outbox_addr(uint32_t vc) const { return kernel_compile_time_args[vc_outbox_base + vc]; }
+    // The channel a page of `vc` lands in one hop on, or VC_NONE when that hop delivers it.
+    uint32_t vc_next(uint32_t vc) const { return kernel_compile_time_args[vc_next_base + vc]; }
+    // The channel own assignment `a`'s tokens land in downstream, or VC_NONE for the direct neighbour.
+    uint32_t own_vc(uint32_t a) const { return kernel_compile_time_args[own_vc_base + a]; }
+#endif
+
+#ifdef KERNEL_BUILD
     // The program factory appends the TensorAccessorArgs after the blocks above, in ReaderRtArg order.
     // Their base is derived from the block bases, so adding a scalar or widening a block keeps it right.
-    static constexpr uint32_t accessor_base =
-        get_compile_time_arg_val(kOutDescriptorsBase) + get_compile_time_arg_val(kNumForward) * CHUNK_DESCRIPTOR_WORDS;
+    static constexpr uint32_t accessor_base = get_compile_time_arg_val(kOwnVcBase) + get_compile_time_arg_val(kNumOwn);
     static constexpr auto in_args = TensorAccessorArgs<accessor_base>();
     static constexpr auto indices_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     static constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();

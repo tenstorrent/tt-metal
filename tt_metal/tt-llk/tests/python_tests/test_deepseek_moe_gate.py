@@ -311,7 +311,7 @@ def test_deepseek_moe_gate(seed, approx):
     _assert_gate_output(regions, _golden(keys, payload), **_weight_tolerance(approx))
 
 
-# The op's enable_sigmoid front-end, which the plain path never reaches: transpose_wh_tile, then
+# The op's enable_sigmoid front-end, which the plain path never reaches: transpose_tile, then
 # sigmoid_tile, then a RELOAD binary that takes SrcA back out of DEST through MOVD2A while the unpacker
 # feeds only SrcB under DEST_TO_SRCA reuse. This is also the only cover of RELOAD as production drives
 # it.
@@ -328,7 +328,7 @@ def test_deepseek_moe_gate_sigmoid(seed):
                 dmg_eps=_fp32_bits(EPS),
                 dmg_scale=_fp32_bits(SCALE),
             ),
-            # Not _gate_tiles: this front-end does its transpose in transpose_wh_tile on the raw L1
+            # Not _gate_tiles: this front-end does its transpose in transpose_tile on the raw L1
             # tile, so the payload goes up as-is and the golden transposes.
             [
                 payload,

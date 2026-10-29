@@ -19,9 +19,9 @@
 #include "experimental/kernel_args.h"
 // #include "api/debug/dprint.h"
 
-template <typename DSpec>
+template <typename DSpec, typename DFB>
 inline void write_tiles_in_block(
-    DataflowBuffer& dfb_out0,
+    DFB& dfb_out0,
     const Noc& noc,
     uint32_t block_height_ntiles,
     uint32_t block_width_ntiles,

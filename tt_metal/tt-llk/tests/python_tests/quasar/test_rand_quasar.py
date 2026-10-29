@@ -13,7 +13,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -33,7 +32,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -65,7 +63,7 @@ class RandCase:
         return self.name
 
 
-_RAND_FLOAT_FORMATS = (DataFormat.Float16, DataFormat.Float32, DataFormat.Float16_b)
+_RAND_FLOAT_FORMATS = (DataFormat.Float32, DataFormat.Float16_b)
 
 # Exponent <= 31 cannot absorb the 2^-31 normalization, forcing the per-row SFPMULI body.
 _RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96
@@ -73,12 +71,8 @@ _RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96
 RAND_CASES = (
     RandCase("unit", 1.0, 2.0, _RAND_FLOAT_FORMATS),
     RandCase("signed", -4.0, 8.0, _RAND_FLOAT_FORMATS),
-    # Float16 cannot represent 2^-96.
     RandCase(
-        "per_row_normalize",
-        0.0,
-        _RAND_PER_ROW_NORMALIZE_SCALE,
-        (DataFormat.Float32, DataFormat.Float16_b),
+        "per_row_normalize", 0.0, _RAND_PER_ROW_NORMALIZE_SCALE, _RAND_FLOAT_FORMATS
     ),
     RandCase("zero_scale", 1.5, 0.0, _RAND_FLOAT_FORMATS),
 )
@@ -262,7 +256,6 @@ def _rand_config(
             "templates": [
                 MATH_OP(mathop=MathOperation.Rand),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest

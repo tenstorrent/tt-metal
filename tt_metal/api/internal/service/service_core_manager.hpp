@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 class IDevice;

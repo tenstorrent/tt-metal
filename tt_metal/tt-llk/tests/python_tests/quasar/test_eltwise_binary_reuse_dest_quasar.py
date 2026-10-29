@@ -16,7 +16,6 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     EltwiseBinaryReuseDestType,
-    ImpliedMathFormat,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -36,7 +35,6 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -47,6 +45,7 @@ from helpers.test_variant_parameters import (
     OUTPUT_TILE_CNT,
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
+    TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
@@ -87,13 +86,6 @@ def reuse_dest_mathops(formats, *, is_perf=False):
             if mathop in supported_mathops
         ]
     return supported_mathops
-
-
-def reuse_dest_implied_math_format(formats, *, is_perf=False):
-    use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-    if is_perf or use_mx:
-        return ImpliedMathFormat.Yes
-    return ImpliedMathFormat.No
 
 
 def _reuse_dest_tile_count(dimensions) -> int:
@@ -167,9 +159,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     perf_report=None,
 ):
 
-    implied_math_format = reuse_dest_implied_math_format(formats, is_perf=is_perf)
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-    disable_format_inference = use_mx
 
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
@@ -235,8 +225,8 @@ def test_eltwise_binary_reuse_dest_quasar(
         )
 
     if not is_perf:
-        # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
-        # storage is implied from the SrcA tag: Float16 input → FP16A (S1E5M10);
+        # On Quasar the HW dest accumulator's physical storage follows the SrcA
+        # format: Float16 input → FP16A (S1E5M10);
         # Float16_b and plain MX inputs → BF16 (S1E8M7). Match that here so the
         # golden's multi-tile accumulation rounds the same way as HW. The pack
         # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
@@ -347,12 +337,12 @@ def test_eltwise_binary_reuse_dest_quasar(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             REUSE_DEST_TYPE(reuse_dest_type),
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_input),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
             NUM_TILES_IN_BLOCK(
@@ -385,7 +375,6 @@ def test_eltwise_binary_reuse_dest_quasar(
         ),
         "unpack_to_dest": False,
         "dest_acc": DestAccumulation.No,
-        "disable_format_inference": disable_format_inference,
     }
 
     configuration = create_test_or_perf_config(

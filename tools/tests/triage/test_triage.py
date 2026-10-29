@@ -6,10 +6,11 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import fields
 from datetime import timedelta
 import os
+import re
 import signal
 import struct
 import subprocess
@@ -35,6 +36,7 @@ from triage_hw_utils import device_has_firmware
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.tt_exalens_lib import parse_elf
 
 
 triage.progress_disabled = True  # Disable progress bars for tests
@@ -121,19 +123,34 @@ HANG_APP_EXPECTED_RESULTS = {
 class AppOutput:
     RETAINED_LINES = 20000
 
-    def __init__(self, proc: subprocess.Popen):
+    def __init__(self, proc: subprocess.Popen, ready_line: str | None = None):
         self._lock = threading.Lock()
         self._chunks: deque[str] = deque(maxlen=self.RETAINED_LINES)
-        for stream in (proc.stdout, proc.stderr):
+        self._ready_line = ready_line
+        self.ready_line_seen = False
+        # Set when ready_line arrives or both streams close (the app exited), so the fixture can sleep on it.
+        self.stop_waiting = threading.Event()
+        streams = (proc.stdout, proc.stderr)
+        self._open_streams = len(streams)
+        for stream in streams:
             threading.Thread(target=self._drain, args=(stream,), daemon=True).start()
 
     def _drain(self, stream) -> None:
         try:
             for line in iter(stream.readline, b""):
+                text = line.decode("utf-8", errors="replace")
                 with self._lock:
-                    self._chunks.append(line.decode("utf-8", errors="replace"))
+                    self._chunks.append(text)
+                if self._ready_line is not None and self._ready_line in text:
+                    self.ready_line_seen = True
+                    self.stop_waiting.set()
         except (ValueError, OSError):
             pass  # the pipe was closed under us while the app was being torn down
+        finally:
+            with self._lock:
+                self._open_streams -= 1
+                if self._open_streams == 0:
+                    self.stop_waiting.set()
 
     def text(self) -> str:
         with self._lock:
@@ -201,6 +218,10 @@ def wait_for_simulated_hang(proc: subprocess.Popen, output: AppOutput, app: str,
 
 @pytest.fixture(scope="class")
 def cause_hang_with_app(request):
+    # Reset the device state after the hang if set in environment
+    if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
+        subprocess.run(["tt-smi", "-r"], check=True)
+
     global metal_home
 
     app, args, app_configuration, timeout = request.param
@@ -231,16 +252,25 @@ def cause_hang_with_app(request):
         env={**os.environ, **app_configuration.get("env", {})},
     )
 
-    output = AppOutput(proc)
+    output = AppOutput(proc, "Device timeout detected as expected.")
     try:
         expected_results = app_configuration.get("expected_results", {})
         if on_simulator:
             request.cls.exalens_context = wait_for_simulated_hang(proc, output, app, expected_results)
         else:
             auto_timeout = app_configuration.get("auto_timeout", False)
-            # auto_timeout apps exit 0 once they detect their own hang; expect_running ones stay wedged.
+            # auto_timeout apps print a line once they detect their own hang and then stay alive; expect_running ones
+            # stay wedged.
             expect_running = app_configuration.get("expect_running", False)
-            if auto_timeout or expect_running:
+            if auto_timeout:
+                # Sleep until the application reports its own hang, exits, or the timeout runs out
+                output.stop_waiting.wait(timeout)
+                if not output.ready_line_seen:
+                    # Print process output for debugging
+                    print("The application did not hang as expected.")
+                    output.print()
+                    raise RuntimeError("The application did not hang as expected.")
+            elif expect_running:
                 # Wait for the application to hang itself
                 try:
                     proc.wait(timeout=timeout)
@@ -248,7 +278,7 @@ def cause_hang_with_app(request):
                     pass
 
                 # Check if the process has exited
-                if proc.returncode != (None if expect_running else 0):
+                if proc.returncode is not None:
                     # Print process output for debugging
                     print("The application did not hang as expected.")
                     output.print()
@@ -258,9 +288,6 @@ def cause_hang_with_app(request):
 
         request.cls.app_configuration = app_configuration
         request.cls.expected_results = expected_results
-        if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
-            metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
-            os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
 
         yield
     finally:
@@ -273,46 +300,33 @@ def cause_hang_with_app(request):
             proc.wait()
         output.print()
 
-        # Reset the device state after the hang if set in environment
-        if os.environ.get("TT_METAL_RESET_DEVICE_AFTER_HANG", "0") == "1":
-            subprocess.run(["tt-smi", "-r"], check=True)
-
 
 @pytest.mark.parametrize(
     "cause_hang_with_app",
     [
         (
-            # Manual hang detection with timeout from outside
-            HANG_APP_ADD_2_INTEGERS,
-            [],
-            {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
-            },
-            10,
-        ),
-        (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
+            # Automatic hang detection with timeout inside the app, fast dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
             60,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, slow dispatch
+            # Automatic hang detection with timeout inside the app, slow dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
@@ -327,7 +341,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
             },
@@ -341,7 +355,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
@@ -485,7 +499,31 @@ class TestTriage:
         self.assert_no_errors_or_none_in_result(result)
 
     def test_check_binary_integrity(self):
-        self.run_triage_script("check_binary_integrity.py")
+        self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"])
+
+    def test_check_binary_integrity_reports_mismatch(self):
+        # Corrupt 4 bytes of the first RISC's firmware in L1 and check that the report shows them
+        location = OnChipCoordinate.create("0,0", self.exalens_context.devices[0])
+        risc_location = location.noc_block.all_riscs[0].risc_location
+        dispatcher_data = self.run_triage_script("dispatcher_data.py", assert_failure_checks=False)
+        core_data = dispatcher_data.get_cached_core_data(risc_location)
+        text = parse_elf(core_data.firmware_path, self.exalens_context).get_section_by_name(".text")
+        address = text.address + 16
+        expected = bytes(text.data[16:20])
+        corrupted = bytes(b ^ 0xFF for b in expected)
+        l1 = dispatcher_data.l1_memory_access(location)
+        try:
+            l1.write(address, corrupted)
+            self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"], assert_failure_checks=False)
+        finally:
+            l1.write(address, expected)
+
+        errors = [check for check in triage.CHECKS if check.type is CheckType.ERROR]
+        assert len(errors) == 1, logged_errors()
+        assert errors[0].location == location and errors[0].risc_name == risc_location.risc_name
+        message = "".join(errors[0].message.split())
+        for info in (f"4/{len(text.data)}", f"{address:08x}", f"expected:{expected.hex()}", f"found:{corrupted.hex()}"):
+            assert info in message, errors[0].message
 
     def test_check_cb_inactive(self):
         self.run_triage_script("check_cb_inactive.py")
@@ -524,7 +562,7 @@ class TestTriage:
         assert counts == {0: (1, 0), 1: (1, 0), 2: (0, 0)}, f"Unexpected CB state on (0,0): {counts}"
 
     def test_dump_circular_buffers_content(self):
-        result = self.run_triage_script("dump_circular_buffers.py", argv=["--dump-cb-content"])
+        result = self.run_triage_script("dump_circular_buffers.py", argv=["--include-cb-content"])
         self.skip_unless_circular_buffers(result)
         assert result is not None, "Expected CB rows for the hung core"
         location = OnChipCoordinate.create("0,0", result[0].device_description.device)
@@ -736,6 +774,7 @@ class TestTriage:
 
             check = results_by_risc[risc_name]
             assert check.result is not None, f"Expected non-None result for {risc_name}"
+            assert hasattr(check.result, "frame_locals"), f"{risc_name}: Expected a Locals column with --full-callstack"
 
             # Verify core is halted (stuck on ebreak)
             risc_debug = check.location.noc_block.get_risc_debug(risc_name, check.neo_id)
@@ -745,6 +784,17 @@ class TestTriage:
             callstack_with_message = check.result.kernel_callstack_with_message
             callstack = callstack_with_message.callstack
             assert len(callstack) > 0, f"{risc_name}: Callstack is empty"
+
+            # Every local the debugger returned a value for must appear in the Locals column, once per frame it is in
+            frame_locals = check.result.frame_locals or ""
+            expected_locals = Counter(
+                var.name for frame in callstack for var in frame.locals if var.value is not None and var.name
+            )
+            for name, count in expected_locals.items():
+                shown = len(re.findall(rf"\b{re.escape(name)}\b", frame_locals))
+                assert (
+                    shown >= count
+                ), f"{risc_name}: local '{name}' has a value in {count} frame(s) but is shown {shown} time(s)"
 
             # Verify callstack contains expected file and line
             expected_file = expected_data.get("file")

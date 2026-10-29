@@ -25,10 +25,10 @@
 #include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_descriptor.hpp"
@@ -299,10 +299,8 @@ string get_l1_target_str(
     return out;
 }
 
-// Quasar: each global semaphore is a 0x40-byte alias window where a read at +4*(inc+8) posts `inc`
-// and returns the pre-increment value (see api/debug/ring_buffer.h, which posts 1 from the device).
-// Reading the base is therefore a GET of 8, not a peek: it decrements the MPSC head and raises
-// GLOBAL_SEMAPHORES (GET_UNDERFLOW / GET_ON_UNINITIALIZED). inc == 0 is the non-mutating read.
+// Quasar's MPSC head (api/debug/ring_buffer.h). A read at +4*(inc+8) posts `inc` and returns the
+// pre-increment value, so inc == 0 reads the head without changing it.
 constexpr uint64_t watcher_ring_buf_sem_peek_addr =
     TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR + 4 * (0 + 8);
 
@@ -380,7 +378,7 @@ private:
     void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}) const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
-    const std::string& GetKernelName(uint32_t processor_index) const;
+    std::string GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
     void SetEnableFlags(uint32_t enables) const;
 
@@ -417,9 +415,15 @@ WatcherDeviceReader::WatcherDeviceReader(
     FILE* f,
     ChipId device_id,
     const std::vector<string>& kernel_names,
+    std::mutex& kernel_names_mutex,
     tt::tt_metal::MetalEnvImpl& env,
     WatcherServer& watcher_server) :
-    f(f), device_id(device_id), env(env), watcher_server(watcher_server), kernel_names(kernel_names) {
+    f(f),
+    device_id(device_id),
+    env(env),
+    watcher_server(watcher_server),
+    kernel_names(kernel_names),
+    kernel_names_mutex(kernel_names_mutex) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (env.get_cluster().arch() == ARCH::WORMHOLE_B0 && env.get_rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
@@ -527,15 +531,15 @@ void WatcherDeviceReader::Dump(FILE* file) {
         const auto& hal = env.get_hal();
         if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
             const auto& soc_d = env.get_cluster().get_soc_desc(device_id);
-            for (const auto& logical_dispatch_core : tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(
-                     soc_d)) {
+            for (const auto& logical_dispatch_core :
+                 tt::tt_metal::detail::get_quasar_soc_dispatch_engine_logical_cores(soc_d)) {
                 Core::Create(logical_dispatch_core, HalProgrammableCoreType::DISPATCH, *this, dump_data).Dump();
             }
         }
     }
 
     for (auto k_id : dump_data.used_kernel_names) {
-        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
+        fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_name(k_id.first).c_str());
     }
 
     const auto& hal = env.get_hal();
@@ -555,7 +559,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                 processor_name,
                 info.stack_free,
                 info.virtual_coord.str().c_str(),
-                kernel_names[info.kernel_id].c_str());
+                kernel_name(info.kernel_id).c_str());
             if (info.stack_free == 0) {
                 // We had no free stack, this probably means we
                 // overflowed, but it could be a remarkable coincidence.
@@ -567,7 +571,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     device_id,
                     info.virtual_coord.str(),
                     processor_name,
-                    kernel_names[info.kernel_id].c_str());
+                    kernel_name(info.kernel_id).c_str());
             } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
                 log_warning(
@@ -578,7 +582,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     device_id,
                     info.virtual_coord.str(),
                     processor_name,
-                    kernel_names[info.kernel_id].c_str(),
+                    kernel_name(info.kernel_id).c_str(),
                     info.stack_free);
             }
         }
@@ -921,6 +925,25 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
                 san.l1_addr(),
                 san.len());
             break;
+        case dev_msgs::DebugSanitizeNocSharedCmdBuf: {
+            // Only the two data movement RISCs of a Tensix core share a NOC; which_risc is 0 or 1.
+            const uint32_t other_risc = san.which_risc() == 0 ? 1 : 0;
+            error_msg = fmt::format(
+                "{} issued a NoC command on noc{} command buffer {}, which {} has also used on it (its command "
+                "buffers: {:#x}). Two dedicated-NOC data movement kernels sharing a NOC "
+                "(DataMovement1XXConfig::dedicated_noc_sharing) must program disjoint command buffers.",
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
+                noc,
+                san.l1_addr(),
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, other_risc),
+                san.len());
+        } break;
+        case dev_msgs::DebugSanitizeNocReadToRegAddr:
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
+            error_msg +=
+                " (NOC read lands in a local register; on Quasar the NIU can strand the response and stall L1 "
+                "writes, reads must land in L1).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -1108,8 +1131,7 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     // Quasar keeps head in a semaphore register, snapshotted alongside the mailbox.
     uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? sem_head_ : rb->head;
 
-    // Scan every slot rather than min(head, capacity): the semaphore is 16-bit, so head wraps and
-    // cannot bound the live entries.
+    // Check every slot: head restarts at 0 after a rewind, so a small head doesn't mean few entries.
     std::vector<uint32_t> data, thread_indices;  // newest first
     data.reserve(capacity);
     thread_indices.reserve(capacity);
@@ -1241,7 +1263,9 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
             launch_msg_.kernel_config().brisc_noc_id());
     }
     if (mbox_data_.go_message_index() < dev_msgs::go_message_num_entries) {
-        DumpRunState(mbox_data_.go_messages()[mbox_data_.go_message_index()].signal());
+        // The go message for the launch message slot the core is on.
+        auto go_ring = mbox_data_.go_messages()[mbox_data_.go_message_index()].slot();
+        DumpRunState(go_ring[mbox_data_.launch_msg_rd_ptr() % go_ring.size()].signal());
     } else {
         LogRunningKernels();
         TT_THROW(
@@ -1538,14 +1562,14 @@ void WatcherDeviceReader::Core::ValidateKernelIDs() const {
     auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     for (size_t i = 0; i < num_processors; i++) {
         uint16_t watcher_kernel_id = launch_msg_.kernel_config().watcher_kernel_ids()[i];
-        if (watcher_kernel_id >= reader_.kernel_names.size()) {
+        if (watcher_kernel_id >= reader_.num_kernel_names()) {
             TT_THROW(
                 "Watcher data corruption, unexpected {} kernel id on Device {} core {}: {} (last valid {})",
                 get_riscv_name(hal, programmable_core_type_, i),
                 reader_.device_id,
                 virtual_coord_.str(),
                 watcher_kernel_id,
-                reader_.kernel_names.size());
+                reader_.num_kernel_names());
         }
         dump_data_.used_kernel_names[watcher_kernel_id] = true;
     }
@@ -1560,9 +1584,22 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
     }
 }
 
-const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
+std::string WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
     TT_FATAL(processor_index < launch_msg_.kernel_config().watcher_kernel_ids().size(), "processor_index out of range");
-    return reader_.kernel_names[launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]];
+    return reader_.kernel_name(launch_msg_.kernel_config().watcher_kernel_ids()[processor_index]);
+}
+
+std::string WatcherDeviceReader::kernel_name(size_t kernel_id) const {
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex);
+    if (kernel_id >= kernel_names.size()) {
+        return fmt::format("<unregistered kernel id {}>", kernel_id);
+    }
+    return kernel_names[kernel_id];
+}
+
+size_t WatcherDeviceReader::num_kernel_names() const {
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex);
+    return kernel_names.size();
 }
 
 }  // namespace tt::tt_metal

@@ -79,7 +79,7 @@ def _offset_scale(extent: int, align_corners: bool) -> float:
 def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, reference_mode, align_corners=False):
     """The V2 frontend, in PyTorch. (B, Q, R, 2) + (B, Q, H, L, P, 2) -> (B, Q, H, L, P, 2).
 
-    Offsets are feature-map pixels; align_corners selects the same spacing as the reader.
+    Offsets are feature-map pixels; align_corners selects the same spacing the SFPU applies.
     """
     B, Q, H, L, P, _ = sampling_offsets.shape
     R = reference_points.shape[2]
@@ -100,6 +100,12 @@ def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# Row at which the Blackhole split gather hands a block's rows from the reader
+# to the writer, keyed by the value tensor's buffer type. Must equal
+# fused_msda_gather::SPLIT_ROW_L1 / SPLIT_ROW_DRAM in msda_gather_rows.hpp.
+SPLIT_ROW = {"l1": 16, "dram": 15}
+
+
 def _pack_locations(loc: torch.Tensor) -> torch.Tensor:
     """(B, Q, H, L, P, 2) -> (B, Q, H, L*P*2), the layout the reader indexes as (l*P+p)*2."""
     B, Q, H = loc.shape[:3]
@@ -135,8 +141,91 @@ def _per_head_stride_supported(num_heads: int, head_dim: int) -> bool:
     return (head_dim * 2) % ttnn.device.get_dram_alignment() == 0
 
 
+def _num_valid_queries_case(B, Q, H, seed):
+    spatial_shapes = [(12, 20), (6, 10)]
+    L, P, D, Z = 2, 4, 32, 2
+    S = sum(h * w for h, w in spatial_shapes)
+    torch.manual_seed(seed)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = _bf16(torch.rand(B, Q, Z, 2))
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2))
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+    reference = _msda_reference(
+        value, _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar"), attn, spatial_shapes
+    )
+    return (_pack_value(value), ref_pts, _pack_locations(offsets), _pack_weights(attn)), spatial_shapes, reference
+
+
+@pytest.mark.parametrize(
+    "B,Q,H,counts",
+    [
+        # 18 tiles: fewer than any grid has cores, one slot per core.
+        (3, 70, 2, ([70, 33, 1], [5, 64, 69])),
+        # 160 tiles: more than any grid has cores and not a multiple of them, so the
+        # cores split into two work groups and the slots are padded per core.
+        (2, 300, 8, ([300, 129], [17, 288])),
+    ],
+)
+def test_fused_msda_v2_num_valid_queries_matches_reference_and_reuses_program(device, B, Q, H, counts):
+    """Rows below each batch's count match the reference, and changing the counts is a cache hit.
+
+    The counts cut blocks mid-way, at a block boundary and down to one row; Q itself leaves a
+    partial trailing block. Calls alternate between no counts and two different count lists, so
+    the tile lists in the cached runtime args change on every hit, and each call gets fresh
+    tensors, so the buffer addresses change too. A stale list or a stale address computes the
+    previous call's rows and misses this call's reference. Rows at or past a count are undefined
+    by contract and are not compared.
+    """
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    device.cache_entries_counter.reset()
+
+    first, second = counts
+    calls = []
+    for seed, num_valid_queries in enumerate((None, first, None, second)):
+        tensors, spatial_shapes, reference = _num_valid_queries_case(B, Q, H, seed=seed)
+        # Kept alive until the end so the allocator cannot hand a later call the same addresses.
+        calls.append(([_to_device(t, device) for t in tensors], spatial_shapes, reference, num_valid_queries))
+
+    for (value_t, ref_t, off_t, attn_t), spatial_shapes, reference, num_valid_queries in calls:
+        with device.cache_entries_counter.measure():
+            out = ttnn.experimental.fused_msda_from_offsets(
+                value_t,
+                ref_t,
+                off_t,
+                attn_t,
+                spatial_shapes,
+                reference_mode="pillar",
+                num_valid_queries=num_valid_queries,
+            )
+        got = ttnn.to_torch(out).to(torch.float32)
+        if num_valid_queries is not None:
+            with device.cache_entries_counter.measure():
+                full_out = ttnn.experimental.fused_msda_from_offsets(
+                    value_t,
+                    ref_t,
+                    off_t,
+                    attn_t,
+                    spatial_shapes,
+                    reference_mode="pillar",
+                )
+            full_got = ttnn.to_torch(full_out).to(torch.float32)
+        for b, n in enumerate(num_valid_queries or [Q] * B):
+            _assert_close(reference[b, :n], got[b, :n])
+            if num_valid_queries is not None:
+                torch.testing.assert_close(full_got[b, :n], got[b, :n], rtol=0, atol=0)
+    assert device.cache_entries_counter.total == 1
+
+
 def _to_device(t: torch.Tensor, device) -> ttnn.Tensor:
     return ttnn.from_torch(t.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+def _to_device_in(t: torch.Tensor, device, memory: str) -> ttnn.Tensor:
+    memory_config = ttnn.L1_MEMORY_CONFIG if memory == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.from_torch(
+        t.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config
+    )
 
 
 def _bf16(t: torch.Tensor) -> torch.Tensor:
@@ -152,6 +241,23 @@ def _random_case(B, Q, H, L, P, D, spatial_shapes, seed=0, loc_range=(0.0, 1.0))
     loc = _bf16(torch.rand(B, Q, H, L, P, 2) * (hi - lo) + lo)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
     return value, loc, attn
+
+
+def _oob_corner_fraction(loc, spatial_shapes):
+    """Fraction of the 4 * L * P bilinear corners that fall outside their level."""
+    total = 0
+    outside = 0
+    for lvl, (h_, w_) in enumerate(spatial_shapes):
+        px = loc[:, :, :, lvl, :, 0] * w_ - 0.5
+        py = loc[:, :, :, lvl, :, 1] * h_ - 0.5
+        x0, y0 = torch.floor(px), torch.floor(py)
+        for dx in (0, 1):
+            for dy in (0, 1):
+                cx, cy = x0 + dx, y0 + dy
+                inside = (cx >= 0) & (cx < w_) & (cy >= 0) & (cy < h_)
+                outside += int((~inside).sum())
+                total += inside.numel()
+    return outside / total
 
 
 def _assert_close(ref: torch.Tensor, got: torch.Tensor, pcc=0.99, atol=None):
@@ -296,50 +402,75 @@ def test_fused_msda_v1_packed_equivalence(device, B, Q, H, L, P, D):
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), packed)
 
 
-@pytest.mark.parametrize("B,Q,H,L,P,D", [(1, 64, 2, 2, 4, 32)])
-def test_fused_msda_v1_packed_value_equivalence(device, B, Q, H, L, P, D):
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+@pytest.mark.parametrize(
+    "B,Q,H,L,P,D,spatial_shapes",
+    [
+        (1, 64, 2, 2, 4, 32, [(12, 9), (6, 5)]),
+        # More (batch, head, query-block) units than cores, so every core runs
+        # several blocks of the split gather back to back at D = 64.
+        (2, 900, 8, 4, 4, 64, [(16, 20), (8, 10), (4, 5), (2, 3)]),
+    ],
+    ids=["small_d32", "multiblock_d64"],
+)
+def test_fused_msda_v1_packed_value_equivalence(device, B, Q, H, L, P, D, spatial_shapes, memory):
     """Packed rank-3 value (B, S, H*D) must match canonical (B, S, H, D) exactly.
 
-    The two layouts are the same bytes; only the DRAM page size and the reader's
-    (page, offset) addressing differ. A mismatch is an addressing bug, not bf16
-    rounding.
+    The two layouts are the same bytes; only the page size and the (page,
+    offset) addressing of every gathering RISC differ. A mismatch is an
+    addressing bug, not bf16 rounding.
     """
-    spatial_shapes = [(12, 9), (6, 5)]
     value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
 
     loc_t = _to_device(_pack_locations(loc), device)
     attn_t = _to_device(_pack_weights(attn), device)
     canonical = ttnn.to_torch(
-        ttnn.experimental.fused_msda(_to_device(value, device), loc_t, attn_t, spatial_shapes)
+        ttnn.experimental.fused_msda(_to_device_in(value, device, memory), loc_t, attn_t, spatial_shapes)
     ).to(torch.float32)
     packed = ttnn.to_torch(
-        ttnn.experimental.fused_msda(_to_device(_pack_value(value), device), loc_t, attn_t, spatial_shapes)
+        ttnn.experimental.fused_msda(_to_device_in(_pack_value(value), device, memory), loc_t, attn_t, spatial_shapes)
     ).to(torch.float32)
 
     torch.testing.assert_close(canonical, packed, rtol=0, atol=0)
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), packed)
 
 
-def test_fused_msda_v1_grid_space(device):
-    """locations_in_grid_space=True on 2*loc-1 must equal the [0, 1] path on loc."""
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_fused_msda_v1_grid_space(device, align_corners):
+    """locations_in_grid_space=True on 2*loc-1 must equal the [0, 1] path on loc.
+
+    Both align_corners settings are exercised: the two grid-space rows of the
+    coordinate table are separate host-side constants, so one can be wrong
+    while the other is right.
+    """
     spatial_shapes = [(12, 9), (6, 5)]
     B, Q, H, L, P, D = 1, 40, 2, 2, 4, 32
     value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
     grid = _bf16(2.0 * loc - 1.0)
 
     value_t, attn_t = _to_device(value, device), _to_device(attn, device)
-    unit = ttnn.to_torch(ttnn.experimental.fused_msda(value_t, _to_device(loc, device), attn_t, spatial_shapes)).to(
-        torch.float32
-    )
+    unit = ttnn.to_torch(
+        ttnn.experimental.fused_msda(
+            value_t, _to_device(loc, device), attn_t, spatial_shapes, align_corners=align_corners
+        )
+    ).to(torch.float32)
     grid_space = ttnn.to_torch(
         ttnn.experimental.fused_msda(
-            value_t, _to_device(grid, device), attn_t, spatial_shapes, locations_in_grid_space=True
+            value_t,
+            _to_device(grid, device),
+            attn_t,
+            spatial_shapes,
+            align_corners=align_corners,
+            locations_in_grid_space=True,
         )
     ).to(torch.float32)
 
     # 2*loc-1 is not exact in bf16, so this is close-but-not-equal by construction.
     _assert_close(unit, grid_space, pcc=0.999)
-    _assert_close(_msda_reference(value, grid, attn, spatial_shapes, locations_in_grid_space=True), grid_space)
+    _assert_close(
+        _msda_reference(value, grid, attn, spatial_shapes, align_corners=align_corners, locations_in_grid_space=True),
+        grid_space,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +587,258 @@ def test_fused_msda_v1_partially_out_of_bounds(device):
     _assert_close(ref, out)
 
 
+@pytest.mark.parametrize("D", [32, 64])
+@pytest.mark.parametrize(
+    "memory, Q", [(m, q) for m, s in SPLIT_ROW.items() for q in (129, s, s + 1, 32 + s, 32 + s + 1)]
+)
+def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
+    """An out-of-bounds corner must contribute nothing, element by element.
+
+    Regression gate for the out-of-bounds mask. The gathers skip an
+    out-of-bounds corner and leave its input slot holding an earlier point's
+    value stick, so the zero weight compute gives that corner
+    (`msda_geometry.hpp::mask_corner_weights`) is the only thing standing
+    between a stale slot and the sum.
+
+    It asserts a per-element error ratio on top of `_assert_close` because a
+    stale row is itself a plausible sampled value: correlation degrades more
+    slowly than the individual elements do, so the ratio is what stays
+    meaningful as shapes shrink and the output magnitude falls.
+
+    The case is built so that both halves matter: enough corners are outside
+    the map to exercise the mask, and enough are inside that a slot the reader
+    skips has just been written with a real value stick by an earlier point.
+    Every Q leaves a partial trailing block, whose rows >= v_rows the gathers
+    skip as well. With the gather split between the two data-movement RISCs at
+    ``SPLIT_ROW[memory]``, v_rows = SPLIT_ROW[memory] and SPLIT_ROW[memory] + 1
+    sit on the split: the writer gathers nothing, or exactly one row.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, H, L, P = 1, 4, 4, 4
+    value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes, loc_range=(-0.25, 1.25))
+
+    oob = _oob_corner_fraction(loc, spatial_shapes)
+    assert 0.25 < oob < 0.75, f"test no longer exercises the mask: {oob:.2%} of corners are out of bounds"
+
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda(
+            _to_device_in(value, device, memory),
+            _to_device(_pack_locations(loc), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+        )
+    ).to(torch.float32)
+
+    _assert_close(ref, out)
+
+    abs_tol = max(2e-2, 6e-2 * ref.abs().max().item())
+    high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
+    assert high_error_ratio <= 0.01, (
+        f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
+        "An out-of-bounds corner kept a live weight and multiplied a stale input slot"
+    )
+
+
+@pytest.mark.parametrize("memory", ["l1", "dram"])
+@pytest.mark.parametrize("path", ["v1", "v2_tiled"])
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")], ids=["inf", "nan"])
+def test_fused_msda_nonfinite_value_does_not_leak_into_out_of_bounds_corners(device, bad, path, memory):
+    """A non-finite value stick gathered for one query must not reach a later one.
+
+    On Blackhole the gathers leave an out-of-bounds corner's input slot holding
+    whatever an earlier point gathered there, and only compute's zero weight
+    cancels it. The contiguous work split gives the first core several query
+    blocks, and its input CB holds two points' corners, so every later point on
+    that core reuses the slots query 0's points wrote. Query 0 samples a
+    non-finite pixel in bounds; every other query has all its corners out of
+    bounds and must come out exactly 0. "v2_tiled" (L * P = 16) is the tiled
+    geometry and, with D = 32, the split gather.
+    """
+    grid = device.compute_with_storage_grid_size()
+    spatial_shapes = [(8, 8)]
+    B, H, D = 1, 1, 32
+    L, P = (1, 16) if path == "v2_tiled" else (1, 4)
+    Q = 96 * grid.x * grid.y
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, 64, H, D))
+    value[0, 3 * 8 + 3] = bad
+    attn = torch.full((B, Q, H, L, P), 1.0 / P)
+    value_t = _to_device_in(_pack_value(value), device, memory)
+    attn_t = _to_device(_pack_weights(attn), device)
+
+    if path == "v1":
+        loc = torch.full((B, Q, H, L, P, 2), 5.0)
+        loc[0, 0] = 3.5 / 8
+        out = ttnn.experimental.fused_msda(value_t, _to_device(_pack_locations(loc), device), attn_t, spatial_shapes)
+    else:
+        R = 4
+        ref_pts = torch.full((B, Q, R, 2), 5.0)
+        ref_pts[0, 0] = 3.5 / 8
+        offsets = torch.zeros(B, Q, H, L, P, 2)
+        out = ttnn.experimental.fused_msda_from_offsets(
+            value_t,
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(offsets), device),
+            attn_t,
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    out = ttnn.to_torch(out).to(torch.float32)
+
+    assert not out[0, 0].isfinite().all(), "query 0 did not sample the non-finite pixel; the case no longer applies"
+    assert torch.count_nonzero(out[0, 1:]) == 0, (
+        f"{torch.count_nonzero(out[0, 1:])} nonzero outputs outside query 0: a skipped slot "
+        "kept an earlier non-finite stick and its zero weight did not cancel it"
+    )
+
+
+@pytest.mark.parametrize(
+    "memory, Q, D",
+    [(m, 32 + q, 32) for m, s in SPLIT_ROW.items() for q in (s, s + 1)] + [("dram", 32 + SPLIT_ROW["dram"], 16)],
+)
+def test_fused_msda_v2_tiled_masks_out_of_bounds_corners(device, memory, Q, D):
+    """An out-of-bounds corner must contribute nothing on the tiled geometry too.
+
+    V2 with L * P = 16, bf16 reference points and packed inputs takes the tiled
+    geometry on Blackhole, whose block solve and corner tile are separate code
+    from the per-point path. Each Q is a full query block followed by a tail
+    block with v_rows = SPLIT_ROW[memory] or SPLIT_ROW[memory] + 1 on the split,
+    where the writer gathers nothing or one row. D = 16 takes the tile-scatter gather.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, H, L, P, R = 1, 1, 4, 4, 4
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    ref_pts = _bf16(ref_pts * 1.5 - 0.25)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, "pillar")
+
+    oob = _oob_corner_fraction(loc, spatial_shapes)
+    assert 0.25 < oob < 0.75, f"test no longer exercises the mask: {oob:.2%} of corners are out of bounds"
+
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device_in(_pack_value(value), device, memory),
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(offsets), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    ).to(torch.float32)
+
+    _assert_close(ref, out)
+
+    abs_tol = max(2e-2, 6e-2 * ref.abs().max().item())
+    high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
+    assert high_error_ratio <= 0.01, (
+        f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
+        "An out-of-bounds corner kept a live weight and multiplied a stale input slot"
+    )
+
+
+# Raw bf16 bit patterns: converting a float32 NaN to bf16 drops its sign.
+@pytest.mark.parametrize("bad", [0x7FC0, 0xFFC0, 0x7F80, 0xFF80], ids=["nan", "neg_nan", "inf", "neg_inf"])
+@pytest.mark.parametrize("path", ["v1", "v2", "v2_tiled"])
+def test_fused_msda_nonfinite_sampling_location_contributes_nothing(device, path, bad):
+    """A sample whose x, y or both is NaN or infinite must add nothing.
+
+    `msda_geometry.hpp::corner_word` clamps the floored corner before its bounds
+    tests, so such a sample's corner word must have every flag clear: the
+    gathers issue no read for it and compute zeroes its weights, although the
+    attention weight handed to the op is live. The reference drops the poisoned
+    samples instead, and the other points of the same queries must be
+    untouched: on the tiled path a poisoned offset is one column of the block
+    matmul. "v2" (L * P = 8) takes the per-point geometry, "v2_tiled"
+    (L * P = 16) the tiled one on Blackhole.
+    """
+    B, Q, H, D = 1, 64, 2, 32
+    if path == "v2_tiled":
+        spatial_shapes, P, R = [(16, 20), (8, 10), (4, 5), (2, 3)], 4, 4
+    else:
+        spatial_shapes, P, R = [(16, 20), (8, 10)], 4, 2
+    L = len(spatial_shapes)
+
+    torch.manual_seed(0)
+    poisoned = torch.rand(B, Q, H, L, P) < 0.1
+    # 0: x only, 1: y only, 2: both
+    which = torch.randint(0, 3, (B, Q, H, L, P))
+    bad_x = poisoned & (which != 1)
+    bad_y = poisoned & (which != 0)
+
+    if path == "v1":
+        value, coords, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
+        loc = coords
+    else:
+        value, ref_pts, coords, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+        loc = _locations_from_offsets(ref_pts, coords, spatial_shapes, "pillar")
+    sent = coords.to(torch.bfloat16)
+    bits = sent.view(torch.int16)
+    bad_int16 = bad - 0x10000 if bad >= 0x8000 else bad
+    bits[..., 0][bad_x] = bad_int16
+    bits[..., 1][bad_y] = bad_int16
+
+    ref = _msda_reference(value, loc, attn.masked_fill(poisoned, 0.0), spatial_shapes)
+    if path == "v1":
+        out = ttnn.experimental.fused_msda(
+            _to_device(value, device),
+            _to_device(_pack_locations(sent), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+        )
+    else:
+        out = ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(sent), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    out = ttnn.to_torch(out).to(torch.float32)
+
+    assert out.isfinite().all(), f"{(~out.isfinite()).sum()} non-finite outputs: a poisoned sample kept a live weight"
+    _assert_close(ref, out)
+
+
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("memory", ["dram", "l1"])
+def test_fused_msda_v1_repeated_calls_hit_program_cache(device, memory):
+    """Repeated calls reuse one program and stay exact while value moves.
+
+    With the split gather (Blackhole, D % 32 == 0) the writer RISC also reads
+    value, through its own address argument. Alternating two value tensors, with
+    an allocation in between so the second lands elsewhere, catches a stale
+    address on either RISC after a cache hit, and identical calls must stay
+    bit-exact. The handshake semaphores are not under test here: dispatch writes
+    their initial values with every launch.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, Q, H, L, P, D = 2, 900, 8, 4, 4, 32
+    value_a, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes, seed=1, loc_range=(-0.25, 1.25))
+    value_b = _bf16(torch.randn_like(value_a))
+
+    loc_t = _to_device(_pack_locations(loc), device)
+    attn_t = _to_device(_pack_weights(attn), device)
+    value_a_t = _to_device_in(_pack_value(value_a), device, memory)
+    spacer = _to_device_in(torch.zeros(1, 4096), device, memory)
+    value_b_t = _to_device_in(_pack_value(value_b), device, memory)
+
+    def run(value_t):
+        return ttnn.to_torch(ttnn.experimental.fused_msda(value_t, loc_t, attn_t, spatial_shapes)).to(torch.float32)
+
+    entries_before = device.num_program_cache_entries()
+    first = {"a": run(value_a_t), "b": run(value_b_t)}
+    _assert_close(_msda_reference(value_a, loc, attn, spatial_shapes), first["a"])
+    _assert_close(_msda_reference(value_b, loc, attn, spatial_shapes), first["b"])
+    for i in range(10):
+        key = "a" if i % 2 == 0 else "b"
+        out = run(value_a_t if key == "a" else value_b_t)
+        torch.testing.assert_close(out, first[key], rtol=0, atol=0)
+    assert device.num_program_cache_entries() - entries_before == 1
+    ttnn.deallocate(spacer)
+
+
 # ---------------------------------------------------------------------------
 # Realistic shapes
 # ---------------------------------------------------------------------------
@@ -490,7 +873,8 @@ def test_fused_msda_v1_realistic_shapes(device, name, B, Q, H, L, P, D, spatial_
 @pytest.mark.parametrize("reference_mode,R", [("level", 4), ("pillar", 4), ("pillar", 2), ("pillar", 1)])
 @pytest.mark.parametrize("Q", [32, 33])
 @pytest.mark.parametrize("packed", [False, True])
-def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed):
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed, align_corners):
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
     B, H, L, P, D = 2, 4, 4, 4, 32
     S = sum(h * w for h, w in spatial_shapes)
@@ -502,14 +886,26 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed):
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
 
-    loc = _bf16(_locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode))
+    loc = _bf16(
+        _locations_from_offsets(
+            ref_pts,
+            offsets,
+            spatial_shapes,
+            reference_mode,
+            align_corners=align_corners,
+        )
+    )
 
     value_t = _to_device(value, device)
     attn_t = _to_device(_pack_weights(attn) if packed else attn, device)
 
     v1 = ttnn.to_torch(
         ttnn.experimental.fused_msda(
-            value_t, _to_device(_pack_locations(loc) if packed else loc, device), attn_t, spatial_shapes
+            value_t,
+            _to_device(_pack_locations(loc) if packed else loc, device),
+            attn_t,
+            spatial_shapes,
+            align_corners=align_corners,
         )
     ).to(torch.float32)
     v2 = ttnn.to_torch(
@@ -520,13 +916,15 @@ def test_fused_msda_v1_v2_equivalence(device, reference_mode, R, Q, packed):
             attn_t,
             spatial_shapes,
             reference_mode=reference_mode,
+            align_corners=align_corners,
         )
     ).to(torch.float32)
 
-    # V1 sees locations already rounded to bf16; V2 forms them in fp32 inside the
-    # reader, so the two differ by the rounding of the intermediate location only.
+    # V1 sees locations already rounded to bf16; V2 forms the position on the
+    # SFPU from the unrounded reference point and offset, so the two differ by
+    # the rounding of the intermediate location only.
     _assert_close(v1, v2, pcc=0.999)
-    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), v2, pcc=0.99)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes, align_corners=align_corners), v2, pcc=0.99)
 
 
 def test_fused_msda_v2_bevformer_pillar_shape(device):
@@ -540,8 +938,8 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
     ref_pts = _bf16(torch.rand(B, Q, Z, 2))
     offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
     attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
-    # NOT _bf16(): the V2 reader reads bf16 reference points and offsets but forms
-    # the location in fp32 and samples at that unrounded position, so rounding it
+    # NOT _bf16(): the V2 op reads bf16 reference points and offsets but forms the
+    # location on the SFPU without rounding it and samples at that position, so rounding it
     # here would compare the kernel against a coarser sampler than it is. The
     # difference is not cosmetic at these shapes -- bf16 quantization of a
     # reference point near 0.5 is ~0.002, and W=50 turns that into ~0.1 px of
@@ -560,6 +958,59 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
         )
     ).to(torch.float32)
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+
+
+@pytest.mark.parametrize(
+    "reference_mode, spatial_shapes, Q, P, R",
+    [
+        # BEVFormer's decoder: L = R = 1, where level and pillar mode coincide.
+        ("level", [(200, 200)], 256, 4, 1),
+        # The encoder's spatial cross-attention: four z-anchors, a partial query tile.
+        ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 8, 4),
+        # L * P = 16: the bf16 run takes the tiled geometry, the float32 run must not.
+        ("pillar", [(29, 50), (15, 25), (8, 13), (4, 7)], 33, 4, 4),
+    ],
+    ids=["decoder-200x200", "pillar-R4", "pillar-R4-tiled"],
+)
+def test_fused_msda_v2_float32_reference_points(device, reference_mode, spatial_shapes, Q, P, R):
+    """float32 reference points, forwarded to the SFPU unrounded, next to the same points in
+    bf16. Each run is checked against a reference sampling at its own points, so a program built
+    for one reference dtype and reused for the other fails."""
+    B, H, D = 1, 8, 32
+    L = len(spatial_shapes)
+    S = sum(h * w for h, w in spatial_shapes)
+
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = torch.rand(B, Q, R, 2)
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+
+    def expected(points):
+        return _msda_reference(
+            value, _locations_from_offsets(points, offsets, spatial_shapes, reference_mode), attn, spatial_shapes
+        )
+
+    def run(ref_dtype):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                _to_device(_pack_value(value), device),
+                ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                _to_device(_pack_locations(offsets), device),
+                _to_device(_pack_weights(attn), device),
+                spatial_shapes,
+                reference_mode=reference_mode,
+            )
+        ).to(torch.float32)
+
+    fp32_out = run(ttnn.float32)
+    bf16_out = run(ttnn.bfloat16)
+    _assert_close(expected(ref_pts), fp32_out, pcc=0.9999)
+    _assert_close(expected(_bf16(ref_pts)), bf16_out, pcc=0.9999)
+    # Against the unrounded points, the bf16 run carries the points' rounding as well.
+    fp32_error = (fp32_out - expected(ref_pts)).abs().mean()
+    bf16_error = (bf16_out - expected(ref_pts)).abs().mean()
+    assert fp32_error < 0.5 * bf16_error, f"float32 points {fp32_error:.5f}, bf16 points {bf16_error:.5f}"
 
 
 def test_fused_msda_v2_one_pixel_offset(device):
@@ -605,10 +1056,9 @@ def test_fused_msda_v2_one_pixel_offset(device):
 def test_fused_msda_program_cache_hit_readdresses(device):
     """Same-spec calls share one cached program, so the second call's buffers are not the ones compiled in.
 
-    The factory pushes Buffer* runtime args and has no override_runtime_arguments. A hit replays that
-    program; only the framework's buffer bindings rewrite the addresses. Both allocations stay live and
-    carry different data: a stale address still points at the first call and cannot match the second
-    reference.
+    A hit replays that program; only override_runtime_arguments rewrites the addresses. Both
+    allocations stay live and carry different data: a stale address still points at the first call
+    and cannot match the second reference.
     """
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
@@ -645,68 +1095,109 @@ def test_fused_msda_program_cache_hit_readdresses(device):
     assert out1.buffer_address() != out2.buffer_address()
 
 
-def test_compute_kernel_zero_scalar_annihilates_nonfinite_input(device):
-    """Skipped input-tile rows hold stale bytes and rely on a 0 scalar to cancel them.
+def _v2_case(B, Q, H, L, P, D, R, spatial_shapes, seed=0):
+    torch.manual_seed(seed)
+    S = sum(h * w for h, w in spatial_shapes)
+    value = _bf16(torch.randn(B, S, H, D))
+    ref_pts = _bf16(torch.rand(B, Q, R, 2))
+    offsets = _bf16(torch.randn(B, Q, H, L, P, 2) * 2.0)
+    attn = _bf16(torch.softmax(torch.randn(B, Q, H, L * P), dim=-1).reshape(B, Q, H, L, P))
+    return value, ref_pts, offsets, attn
 
-    Drives compute_msda.cpp with the op's compute config and a hand-built NaN/+Inf/-Inf
-    input tile, so the result does not depend on whatever a CB slot happens to hold.
+
+def _check_reference_points_reused(device, Q, reference_mode, R, D, ref_dtype, L, P, spatial_shapes):
+    H = 3
+    grid = device.compute_with_storage_grid_size()
+    B = 2 * grid.x * grid.y + 1
+
+    value, ref_pts, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes)
+    loc = _locations_from_offsets(ref_pts, offsets, spatial_shapes, reference_mode)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(_pack_value(value), device),
+            ttnn.from_torch(ref_pts, dtype=ref_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
+            _to_device(_pack_locations(offsets), device),
+            _to_device(_pack_weights(attn), device),
+            spatial_shapes,
+            reference_mode=reference_mode,
+        )
+    ).to(torch.float32)
+    _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+
+
+@pytest.mark.parametrize("ref_dtype", [ttnn.bfloat16, ttnn.float32], ids=["ref_bf16", "ref_fp32"])
+@pytest.mark.parametrize("D", [32, 64])
+@pytest.mark.parametrize("reference_mode,R", [("level", 2), ("pillar", 2)])
+@pytest.mark.parametrize("Q", [17, 33])
+def test_fused_msda_v2_reference_points_reused_across_heads(device, Q, reference_mode, R, D, ref_dtype):
+    """reference_points staged once per query block must be re-staged whenever the block changes.
+
+    Tiles are ordered batch, query block, head, and each core takes a contiguous
+    run, so the V2 reader keeps the head-invariant reference points of the
+    previous tile when (b, q_start) repeats. B = 2 * cores + 1 gives every core
+    at least two batches' worth of tiles, and the first tiles_per_batch cores
+    one more, so their runs start part-way through a batch (for Q = 33 also
+    part-way through a query block) and every run reuses the points across
+    heads and re-stages them inside the run:
+      * Q = 17, one query block per batch: consecutive tiles across a batch
+        boundary share q_start = 0, so a cache that ignores the batch reuses
+        the wrong batch's points.
+      * Q = 33: the run crosses a query-block boundary, and goes from a full
+        block into a v_rows = 1 tail block.
+    float32 reference points use a 4-byte-per-coordinate arena, reused the same way.
     """
-    nonfinite = torch.tensor([0x7FC0, 0x7F80, 0xFF80]).to(torch.int16)  # NaN, +Inf, -Inf
-    input_bits = nonfinite[torch.arange(32 * 32) % 3].reshape(32, 32)
-    input_host = input_bits.view(torch.bfloat16)
-    input_t = ttnn.from_torch(input_host, layout=ttnn.TILE_LAYOUT, device=device)
-    # Host tilization must keep the NaN/Inf bit patterns, or the kernel never sees them.
-    assert torch.equal(ttnn.to_torch(input_t).view(torch.int16), input_bits)
-    scalar_t = ttnn.from_torch(torch.zeros(32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    out_t = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
+    _check_reference_points_reused(device, Q, reference_mode, R, D, ref_dtype, 2, 4, [(8, 10), (4, 5)])
 
-    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    in_cb, scalar_cb, out_cb = 0, 1, 16  # reader_binary_interleaved_start_id hardcodes c_0 / c_1
 
-    def cb(index):
-        fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=2048)
-        return ttnn.CBDescriptor(total_size=2 * 2048, core_ranges=core, format_descriptors=[fmt])
+@pytest.mark.parametrize("Q", [17, 33])
+def test_fused_msda_v2_tiled_reference_points_reused_across_heads(device, Q):
+    """The same reuse and re-staging, on the tiled geometry (L * P = 16, bf16 points).
 
-    def rt(args):
-        r = ttnn.RuntimeArgs()
-        r[0][0] = args
-        return r
+    There the reference tile is rewritten only when the query block changes and
+    re-pushed unchanged otherwise, and block t+1's points are staged while block
+    t is still being gathered.
+    """
+    _check_reference_points_reused(device, Q, "pillar", 2, 32, ttnn.bfloat16, 4, 4, [(8, 10), (4, 5), (2, 3), (1, 2)])
 
-    def accessor(t):
-        return ttnn.TensorAccessorArgs(t).get_compile_time_args()
 
-    reader = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
-        core_ranges=core,
-        compile_time_args=[0, *accessor(input_t), *accessor(scalar_t)],
-        runtime_args=rt([input_t.buffer_address(), scalar_t.buffer_address(), 1, 0, 0, 0, 0]),
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        core_ranges=core,
-        compile_time_args=[out_cb, *accessor(out_t)],
-        runtime_args=rt([out_t.buffer_address(), 1, 0]),
-        config=ttnn.WriterConfigDescriptor(),
-    )
-    compute = ttnn.KernelDescriptor(
-        kernel_source="ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/compute/compute_msda.cpp",
-        core_ranges=core,
-        # input_cb, scalar_cb, output_cb, reduction_size, n_d_tiles
-        compile_time_args=[in_cb, scalar_cb, out_cb, 1, 1],
-        runtime_args=rt([1]),
-        # The program factory's config: HiFi4, fp32_dest_acc_en=False.
-        config=ttnn.ComputeConfigDescriptor(),
-    )
-    program = ttnn.ProgramDescriptor(
-        kernels=[reader, writer, compute], semaphores=[], cbs=[cb(in_cb), cb(scalar_cb), cb(out_cb)]
-    )
-    out_bits = ttnn.to_torch(ttnn.generic_op([input_t, scalar_t, out_t], program)).view(torch.int16)
+@pytest.mark.timeout(300)
+def test_fused_msda_v2_repeated_calls_hit_program_cache(device):
+    """A cached V2 program re-reads reference_points on every launch.
 
-    # The sign of zero is not part of the contract.
-    assert torch.all((out_bits & 0x7FFF) == 0), "0 * NaN/Inf is nonzero; skipped input rows must be zero-filled"
+    The reader skips re-staging reference points for consecutive tiles of one
+    query block; that state must not survive into the next launch. Alternating
+    two reference_points tensors on a shape where cores run several tiles
+    catches both a stale buffer binding and a cache that outlives the launch.
+    """
+    spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
+    B, Q, H, L, P, D, R = 2, 900, 8, 4, 4, 32, 4
+    value, ref_a, offsets, attn = _v2_case(B, Q, H, L, P, D, R, spatial_shapes, seed=1)
+    ref_b = _bf16(torch.rand_like(ref_a))
+
+    value_t = _to_device(_pack_value(value), device)
+    off_t = _to_device(_pack_locations(offsets), device)
+    attn_t = _to_device(_pack_weights(attn), device)
+    ref_a_t = _to_device(ref_a, device)
+    ref_b_t = _to_device(ref_b, device)
+
+    def run(ref_t):
+        return ttnn.to_torch(
+            ttnn.experimental.fused_msda_from_offsets(
+                value_t, ref_t, off_t, attn_t, spatial_shapes, reference_mode="level"
+            )
+        ).to(torch.float32)
+
+    entries_before = device.num_program_cache_entries()
+    first = {"a": run(ref_a_t), "b": run(ref_b_t)}
+    for key, ref in (("a", ref_a), ("b", ref_b)):
+        loc = _locations_from_offsets(ref, offsets, spatial_shapes, "level")
+        _assert_close(_msda_reference(value, loc, attn, spatial_shapes), first[key])
+    for i in range(10):
+        key = "a" if i % 2 == 0 else "b"
+        out = run(ref_a_t if key == "a" else ref_b_t)
+        torch.testing.assert_close(out, first[key], rtol=0, atol=0)
+    assert device.num_program_cache_entries() - entries_before == 1
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +1243,40 @@ def test_fused_msda_rejects_too_many_levels(device, expect_error):
     value_t, loc_t, attn_t, _ = _valid_inputs(device, L=9, spatial_shapes=shapes)
     with expect_error(RuntimeError, "feature levels"):
         ttnn.experimental.fused_msda(value_t, loc_t, attn_t, shapes)
+
+
+@pytest.mark.parametrize("shapes", [[(257, 4)], [(4, 257)]], ids=["h", "w"])
+def test_fused_msda_rejects_spatial_shape_beyond_extent_limit(device, expect_error, shapes):
+    """A feature map past the tested extent must be refused, not run.
+
+    256 per axis is the largest extent the op is tested at; past it nothing pins
+    the corner word or the geometry, so the op rejects the shape.
+
+    Both axes are parametrized because one `TT_FATAL` tests both, so a refactor
+    that drops the `w` half would otherwise go unnoticed.
+    """
+    value_t, loc_t, attn_t, _ = _valid_inputs(device, L=1, spatial_shapes=shapes)
+    with expect_error(RuntimeError, "per-axis limit"):
+        ttnn.experimental.fused_msda(value_t, loc_t, attn_t, shapes)
+
+
+def test_fused_msda_accepts_spatial_shape_at_extent_limit(device):
+    """A 256-pixel axis, the largest the op accepts, must sample correctly.
+
+    The companion to the rejection test above: it pins the boundary itself, so a
+    `<` where the code means `<=` fails here rather than silently narrowing the op.
+    """
+    spatial_shapes = [(256, 4)]
+    B, Q, H, L, P, D = 1, 8, 1, 1, 4, 32
+    value, loc, attn = _random_case(B, Q, H, L, P, D, spatial_shapes)
+    ref = _msda_reference(value, loc, attn, spatial_shapes)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda(
+            _to_device(value, device), _to_device(loc, device), _to_device(attn, device), spatial_shapes
+        )
+    ).to(torch.float32)
+    _assert_close(ref, out)
 
 
 def test_fused_msda_rejects_level_count_mismatch(device, expect_error):
@@ -803,6 +1328,45 @@ def test_fused_msda_from_offsets_rejects_pillar_mode_indivisible_points(device, 
     ref_t = _to_device(torch.rand(1, 8, 3, 2), device)  # P=4 is not divisible by R=3
     with expect_error(RuntimeError, "divisible"):
         ttnn.experimental.fused_msda_from_offsets(value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar")
+
+
+@pytest.mark.parametrize("tensor", ["value", "sampling_offsets", "attention_weights"])
+def test_fused_msda_from_offsets_rejects_float32_inputs(device, expect_error, tensor):
+    """Only reference_points may be float32; the readers read value, sampling_offsets and
+    attention_weights as bf16."""
+    value_t, off_t, attn_t, shapes = _valid_inputs(device)
+    ref_t = _to_device(torch.rand(1, 8, 2, 2), device)
+    inputs = {"value": value_t, "sampling_offsets": off_t, "attention_weights": attn_t}
+    inputs[tensor] = ttnn.from_torch(
+        ttnn.to_torch(inputs[tensor]).float(), dtype=ttnn.float32, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    with expect_error(RuntimeError, "must be BFLOAT16,"):
+        ttnn.experimental.fused_msda_from_offsets(
+            inputs["value"],
+            ref_t,
+            inputs["sampling_offsets"],
+            inputs["attention_weights"],
+            shapes,
+            reference_mode="level",
+        )
+
+
+@pytest.mark.parametrize(
+    "num_valid_queries,message",
+    [
+        ([], "empty list"),
+        ([8], "one count per batch"),
+        ([8, 9], "exceeds num_queries"),
+        ([0, 0], "no query"),
+    ],
+)
+def test_fused_msda_from_offsets_rejects_bad_num_valid_queries(device, expect_error, num_valid_queries, message):
+    value_t, off_t, attn_t, shapes = _valid_inputs(device, B=2)
+    ref_t = _to_device(torch.rand(2, 8, 2, 2), device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.fused_msda_from_offsets(
+            value_t, ref_t, off_t, attn_t, shapes, reference_mode="pillar", num_valid_queries=num_valid_queries
+        )
 
 
 def test_fused_msda_from_offsets_rejects_unknown_reference_mode(device, expect_error):
