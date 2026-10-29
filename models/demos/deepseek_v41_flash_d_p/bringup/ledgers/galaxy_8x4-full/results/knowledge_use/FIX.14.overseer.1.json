@@ -1,0 +1,56 @@
+{
+ "used": [
+  {
+   "id": "DS41-141",
+   "how": "looked for the L20 last-window window-KV check in acks / runner_contract: both pass now (>= 0.98957), the waiver no longer matches; left untouched and reported",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-135",
+   "how": "read the new writes' host cost on the 8x4 as the prepared-program cost (~0.21 ms ckv_bfp4, ~0.5 ms bfp_round a call) when explaining host_overhead +17.7 ms",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the contract tests (test_adapter_acks, test_runner_contract) print a window-KV PCC only when it fails, so a waived check's new value cannot be read from a passing run",
+  "which served caches hold rounded values: compressed KV yes (ckv_bfp4 rounded=True), window KV and index keys no (DS41-143)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.14",
+   "answer": "done",
+   "evidence": "gate FIX.14 --check PASS on the merged code with no code change: ladder last + s56320 (every metric within its limit, worst ratio 0.76; top-k state on/off/limit L24 0.281/0.131/0.548, the closest L08 at rung last 0.155/0.172; no indexer or top-k miss, so no waiver needed on the 8x4), contract, kv_layout, adapter_acks and runner_contract (0 failures; the DS41-141 waiver no longer matches), runner_smoke, profile (device 205.36 <= 230, wall 386.7 < 434). On vs off measured: device +1.56 ms (window block writes 2.84 ms vs the slice_writes' 1.04; sparse_sdpa -0.8 %, indexer score -8 %), host_overhead +17.7 ms (DS41-142); DRAM at 1M: index ring buffers 1657.5 -> 466.2 MiB a chip, window 20.5 -> 2.9 MiB. One note: the brief says the served caches hold the rounded values attention reads; that is true only for compressed KV. Window KV and index keys serve unrounded bf16 (no effect within prefill, DS41-143), and I did not change it (the contract's numbers would change). Details in BREADCRUMBS FIX.14."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no code change, no padding added; FIX.14 needed no kernel or fork change"
+  }
+ ],
+ "cited_only": [
+  "DS41-142",
+  "DS41-143"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.14",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T18:28:24",
+  "head": "1f45dcccf1c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.14.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.14_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.14_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.14_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.14.overseer.1.json"
+  ]
+ }
+}
