@@ -1,1 +1,2 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-10-29T22:13:52+00:00"}
+{"event":"test_run","status":"pass","tests":"acceptance 54/54, golden 210 pass / 0 fail / 6603 xfail, regression 15/15","fixes":["L1 budget from allocator memory view","memory_config kwarg","gamma logical volume","removed gamma taggers (harness does not iterate tagged axes)"],"ts":"2026-10-29T22:26:35+00:00"}

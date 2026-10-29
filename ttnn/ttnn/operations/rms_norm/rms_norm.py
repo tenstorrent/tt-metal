@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import math
+
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
@@ -32,23 +34,11 @@ def tag_rank(inputs, axes):
     return len(inputs[0])
 
 
-def tag_gamma_dtype(inputs, axes):
-    if axes.get("gamma_mode") != "gamma":
-        return "none"
-    return axes.get("gamma_dtype", "none")
-
-
-def tag_gamma_layout(inputs, axes):
-    if axes.get("gamma_mode") != "gamma":
-        return "none"
-    return axes.get("gamma_layout", "none")
-
-
+# gamma_dtype / gamma_layout are not taggers: the golden harness does not iterate tagged axes, so a
+# tagger would collapse every gamma cell. validate() reads them off the gamma tensor ("none" if absent).
 INPUT_TAGGERS = {
     "alignment": tag_alignment,
     "rank": tag_rank,
-    "gamma_dtype": tag_gamma_dtype,
-    "gamma_layout": tag_gamma_layout,
 }
 
 
@@ -98,13 +88,13 @@ def default_compute_kernel_config():
 # ---------------------------------------------------------------------------
 
 
-def validate(input_tensor, *, gamma=None, compute_kernel_config):
+def validate(input_tensor, *, gamma=None, compute_kernel_config, memory_config=None):
     shape = list(input_tensor.shape)
     if len(shape) < 2:
         raise ValueError(f"rms_norm: input rank must be >= 2, got shape {shape}")
     if gamma is not None:
         gamma_shape = list(gamma.shape)
-        if gamma_shape[-1] != shape[-1] or gamma.volume() != shape[-1]:
+        if gamma_shape[-1] != shape[-1] or math.prod(gamma_shape) != shape[-1]:
             raise ValueError(f"rms_norm: gamma shape {gamma_shape} does not match input width {shape[-1]}")
 
     has_gamma = gamma is not None
@@ -130,6 +120,11 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config):
 
     if has_gamma and gamma.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         raise UnsupportedAxisValue("rms_norm: gamma must be interleaved")
+    if memory_config is not None and memory_config.memory_layout not in SUPPORTED["memory_layout"]:
+        raise UnsupportedAxisValue(
+            f"rms_norm: output memory_layout={memory_config.memory_layout!r} not in SUPPORTED "
+            f"{SUPPORTED['memory_layout']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +138,11 @@ def rms_norm(
     gamma: ttnn.Tensor = None,
     epsilon: float = 1e-6,
     compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
+    memory_config: ttnn.MemoryConfig = None,
 ) -> ttnn.Tensor:
     if compute_kernel_config is None:
         compute_kernel_config = default_compute_kernel_config()
-    validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config)
+    validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config, memory_config=memory_config)
 
     blocking = select_blocking(input_tensor, gamma)
     if blocking is None:
@@ -157,7 +153,7 @@ def rms_norm(
         input_tensor.dtype,
         input_tensor.layout,
         input_tensor.device(),
-        input_tensor.memory_config(),
+        memory_config if memory_config is not None else input_tensor.memory_config(),
     )
 
     program_descriptor = create_program_descriptor(

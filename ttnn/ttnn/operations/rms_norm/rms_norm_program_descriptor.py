@@ -109,7 +109,9 @@ def select_blocking(input_tensor, gamma):
         gt=ttnn.tile_size(gamma.dtype) if has_gamma else 0,
         has_gamma=has_gamma,
     )
-    budget = ttnn.get_max_worker_l1_unreserved_size() - L1_HEADROOM_BYTES
+    # Allocator-managed L1 per core (CBs start at the allocator base, not at the HAL unreserved base).
+    l1_bytes = ttnn.get_memory_view(input_tensor.device(), ttnn.BufferType.L1).total_bytes_per_bank
+    budget = l1_bytes - L1_HEADROOM_BYTES
 
     def depth(R):
         return 2 if _div_up(core_row_tiles_max, R) >= 2 else 1
