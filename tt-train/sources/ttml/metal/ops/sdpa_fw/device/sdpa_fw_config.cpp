@@ -623,11 +623,17 @@ SDPAForwardChunks resolve_chunks(
     uint32_t grid_cores) {
     check_chunks(config, shape, l1_budget_bytes, grid_cores);
     const uint32_t num_available_cores = effective_num_cores(config, grid_cores);
-    const bool with_partials = may_split(config, shape);
     const SDPAForwardChunks user = user_chunks(config, shape);
     if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U && user.heads_per_item != 0U) {
         return user;
     }
+    // The partials' CBs are created only when the schedule cuts, so they count against the budget only
+    // then: a pinned-free causal run that cuts nothing keeps the full L1 for its chunks (at D=256 with the
+    // gate, and from D=384, reserving them would halve a chunk).
+    const bool may_cut = may_split(config, shape);
+    const auto cuts = [&](const SDPAForwardChunks& candidate) {
+        return may_cut && schedule_for(config, shape, candidate, grid_cores).num_slots > 0U;
+    };
 
     // Shape rule for the unset knobs, from the chunk sweep on Blackhole (S=2048/4096, D=64/128, every mask
     // mode): four query tile-rows per item and eight K/V tiles per step win or tie everywhere they fit;
@@ -655,7 +661,7 @@ SDPAForwardChunks resolve_chunks(
         while (chunks.Sq_chunk_t > 1U && shape.St % chunks.Sq_chunk_t != 0U) {
             chunks.Sq_chunk_t /= 2U;
         }
-        if (with_partials) {
+        if (may_cut) {
             // Every candidate is scheduled on the same core count, the model's DRAM share being per core
             // count. The model over-predicts a cut schedule against an uncut one by about a tenth (p150b
             // calibration), so a smaller chunk, whose schedule cuts less, must win by that much; the
@@ -666,7 +672,7 @@ SDPAForwardChunks resolve_chunks(
             double best_us = std::numeric_limits<double>::infinity();
             for (SDPAForwardChunks candidate = chunks; candidate.Sq_chunk_t >= 1U; candidate.Sq_chunk_t /= 2U) {
                 if (shape.St % candidate.Sq_chunk_t != 0U ||
-                    l1_bytes(cb_tiles(shape, candidate, with_partials)) > l1_budget_bytes) {
+                    l1_bytes(cb_tiles(shape, candidate, cuts(candidate))) > l1_budget_bytes) {
                     continue;  // the L1 shrink below only makes chunks smaller: one that does not fit is out
                 }
                 const double us = make_schedule(shape, candidate, num_available_cores, max_pieces).predicted_us;
@@ -683,7 +689,7 @@ SDPAForwardChunks resolve_chunks(
         }
     }
     // Shrink the picked (not the pinned) chunks until the circular buffers fit.
-    while (l1_bytes(cb_tiles(shape, chunks, with_partials)) > l1_budget_bytes) {
+    while (l1_bytes(cb_tiles(shape, chunks, cuts(chunks))) > l1_budget_bytes) {
         if (user.Sk_chunk_t == 0U && chunks.Sk_chunk_t > 1U) {
             chunks.Sk_chunk_t /= 2U;
         } else if (user.Sq_chunk_t == 0U && chunks.Sq_chunk_t > 1U) {
@@ -692,7 +698,7 @@ SDPAForwardChunks resolve_chunks(
             break;
         }
     }
-    check_l1(shape, chunks, l1_budget_bytes, with_partials);
+    check_l1(shape, chunks, l1_budget_bytes, cuts(chunks));
     return chunks;
 }
 

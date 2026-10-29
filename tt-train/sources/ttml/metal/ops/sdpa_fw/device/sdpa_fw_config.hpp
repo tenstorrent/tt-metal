@@ -151,7 +151,7 @@ void check_chunks(
     uint32_t grid_cores);
 
 // check_chunks, then picks the unset knobs by a shape rule, shrinking them until they fit l1_budget_bytes
-// (with the split units' CBs when the config may split) and keep the config's cores busy. Throws when even
+// (with the split units' CBs when the schedule cuts) and keep the config's cores busy. Throws when even
 // the smallest chunks do not fit.
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
