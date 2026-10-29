@@ -9,7 +9,7 @@ dense layers (0-2 by default) or, with GLM53_MODEL_LAYERS=0-3 and the partitione
       differently);
 (ii)  two different prompts in one wave vs each alone in a wave: bit-identical per row (the wave must not mix);
 (iii) an idle row's slot is untouched by a wave (its KDA carry before == after, bit for bit);
-(iv)  per-row starts: row 0 continues its prompt at 64 while row 1 starts another at 0, then row 1 continues at 96
+(iv)  per-row starts: both rows continue their prompts at 128 (wave chunks start at multiples of 128), then a wave with row 0 at 128 and row 1 restarting at 0
       with row 0 idle; against the unchunked wave and the SP chunked prefill; a non-contiguous start raises.
 
     GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-2 pytest models/demos/glm53_flash/tests/test_mesh_wave_prefill.py -s
@@ -176,19 +176,19 @@ def test_wave_prefill_vs_sequence_parallel(mesh_device, expect_error):
     )
 
     # (iv) per-row starts: chunked continuation on each row, against the unchunked wave and the SP chunked prefill
-    model.prefill_wave(_wave(model, {0: (ids_a[:64], 0), 1: (ids_b[:96], 0)}, user=0))
+    model.prefill_wave(_wave(model, {0: (ids_a[:128], 0), 1: (ids_b[:128], 0)}, user=0))
     res2 = _timed(
-        "wave a[64:] on row 0 (start 64), row 1 idle",
-        lambda: model.prefill_wave(_wave(model, {0: (ids_a[64:], 64)}, user=0)),
+        "wave a[128:] on row 0 (start 128), row 1 idle",
+        lambda: model.prefill_wave(_wave(model, {0: (ids_a[128:], 128)}, user=0)),
     )
-    res3 = model.prefill_wave(_wave(model, {1: (ids_b[96:], 96)}, user=0))
-    _sp(model, ids_a[:64], user=1)
-    first_sp_c, logits_sp_c = _sp(model, ids_a[64:], user=1, start=64)
+    res3 = model.prefill_wave(_wave(model, {1: (ids_b[128:], 128)}, user=0))
+    _sp(model, ids_a[:128], user=1)
+    first_sp_c, logits_sp_c = _sp(model, ids_a[128:], user=1, start=128)
     p2, p2s = pcc(res0[0][1], res2[0][1]), pcc(logits_sp_c, res2[0][1])
     p3 = pcc(res_ab[1][1], res3[1][1])
     logger.info(
-        f"(iv) row 0 continued at 64: first {res2[0][0]} (unchunked wave {res0[0][0]}, SP chunked {first_sp_c}), pcc vs "
-        f"unchunked wave {p2:.6f}, vs SP chunked {p2s:.6f}; row 1 continued at 96: first {res3[1][0]} vs {res_ab[1][0]}, pcc {p3:.6f}"
+        f"(iv) row 0 continued at 128: first {res2[0][0]} (unchunked wave {res0[0][0]}, SP chunked {first_sp_c}), pcc vs "
+        f"unchunked wave {p2:.6f}, vs SP chunked {p2s:.6f}; row 1 continued at 128: first {res3[1][0]} vs {res_ab[1][0]}, pcc {p3:.6f}"
     )
     assert (
         res2[0][0] == res0[0][0]
@@ -197,8 +197,15 @@ def test_wave_prefill_vs_sequence_parallel(mesh_device, expect_error):
         and p2s > PCC_BAR_SP
     )
     assert res3[1][0] == res_ab[1][0] and p3 > PCC_BAR
+    model.prefill_wave(_wave(model, {0: (ids_a[:128], 0), 1: (ids_b[:128], 0)}, user=0))
+    res4 = model.prefill_wave(_wave(model, {0: (ids_a[128:], 128), 1: (ids_b, 0)}, user=0))  # mixed starts in one wave
+    p4a, p4b = pcc(res0[0][1], res4[0][1]), pcc(res_ab[1][1], res4[1][1])
+    logger.info(
+        f"(iv) mixed starts: row 0 at 128 pcc {p4a:.6f} (first {res4[0][0]}), row 1 at 0 pcc {p4b:.6f} (first {res4[1][0]})"
+    )
+    assert res4[0][0] == res0[0][0] and p4a > PCC_BAR and res4[1][0] == res_ab[1][0] and p4b > PCC_BAR
     with expect_error(ValueError, "not contiguous"):
-        model.prefill_wave(_wave(model, {0: (ids_a[64:], 32)}, user=0))
+        model.prefill_wave(_wave(model, {0: (ids_a[128:], 256)}, user=0))
     logger.info("waves: (i)-(iv) PASS")
 
     # (v) the traced waves (every member at start 0): the captured per-row lengths that hold the prompts; a|b in slot 0

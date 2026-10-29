@@ -138,7 +138,8 @@ def prefill_user(attn, cache, mesh, rows_t, user, chunks, start0, qblock, env, r
     Returns (output [n, 4096] fp32, OwnerIndexRecorder, per-chunk wall seconds)."""
     env.setenv("GLM53_PREFILL_QBLOCK", str(qblock))
     owner = cache.owner_of(user)
-    rec = OwnerIndexRecorder(mesh, start0 + sum(chunks), 0 if owner is None else owner)
+    total = sum(c[0] if isinstance(c, tuple) else c for c in chunks)
+    rec = OwnerIndexRecorder(mesh, start0 + total, 0 if owner is None else owner)
     attn.on_indices = rec if record else None
     outs, walls, start = [], [], start0
     for c in chunks:
