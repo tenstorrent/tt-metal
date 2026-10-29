@@ -26,7 +26,9 @@
 //   cross-device fold: reduce<AccumulateViaAdd> adds through SrcA/SrcB (tf32) — the exchanged partials must be summed
 //     in fp32; a chain cannot express a G-way fold of G pages of one CB into one accumulator. copy_tile (with
 //     UnpackToDestFp32 on cb_stats) + add_binary_tile (SFPU) keeps fp32 in DEST with 2 live slots for any G.
-//   finalize: the base op's finalize_col0_body (one fused SFPU pass over column 0, base Refinement 6 / lamp L7).
+//   finalize: the base op's finalize_col0_body (one fused SFPU pass), applied to row 0 (Refinement 3: the compact
+//     record wire — records land in row 0 of their cb_stats pages and the finalized row 0 is the 2 x 64 B inv record
+//     the owner's reader all-gathers; each member's reader puts it in column 0 of its own cb_inv_rms page).
 
 #include <stdint.h>
 
@@ -70,6 +72,21 @@ sfpi_inline void finalize_col0_body(const uint32_t inv_w_bits, const uint32_t ep
         }
         sfpi::dst_reg[0] = t;
         sfpi::dst_reg += 2;
+    }
+}
+
+// The same pass over row 0 (VectorMode::R: faces 0 and 1): vectors 0 / 1 of a face are rows 0-3, even / odd columns.
+sfpi_inline void finalize_row0_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
+#pragma GCC unroll 0
+    for (int v = 0; v < 2; v++) {
+        const sfpi::vFloat mean_sq = sfpi::dst_reg[0] * ckernel::sfpu::Converter::as_float(inv_w_bits) +
+                                     ckernel::sfpu::Converter::as_float(eps_bits);
+        sfpi::vFloat t = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(mean_sq);
+        if constexpr (!DST_ACCUM_MODE) {
+            t = sfpi::convert<sfpi::vFloat16b>(t, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = t;
+        sfpi::dst_reg++;
     }
 }
 #endif
@@ -128,6 +145,8 @@ void kernel_main() {
     constexpr uint32_t WP = NCH * C;
     // waves between a wave's square and its chip sum (the reader's service lag, the same CT value): 1 / 0
     constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(20);
+    // waves an owner's cross-device fold may run ahead of its own scaling pass (>= NW: every owned fold first)
+    constexpr uint32_t FOLD_AHEAD = get_compile_time_arg_val(21);
 
     const uint32_t rows = get_arg_val<uint32_t>(0);
     const uint32_t V = get_arg_val<uint32_t>(1);
@@ -369,7 +388,7 @@ void kernel_main() {
                 add_binary_tile(0, 1, 0);
             }
             MATH((_llk_math_eltwise_unary_sfpu_params_(
-                finalize_col0_body, 0, ckernel::VectorMode::C, inv_w_bits, eps_bits)));
+                finalize_row0_body, 0, ckernel::VectorMode::R, inv_w_bits, eps_bits)));
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(0, cb_rms_root);
@@ -457,18 +476,25 @@ void kernel_main() {
         }
 
         // ================= Phase B =================
-        // cross_device_finalize of every owned wave first (in wave order): an owner's fold of wave w+1 never waits
-        // behind its scaling of wave w, which waits for another owner's all-gather.
-        for (uint32_t w = w_begin; w < w_end; ++w) {
-            const uint32_t k = my_k(w);
-            if (k < OWNERS) {
-                const uint32_t no = n_own(w, k);
-                if (no > 0) {
-                    fold_finalize(no);
+        // cross_device_finalize of the owned waves up to FOLD_AHEAD waves ahead of the scaling (in wave order). Large
+        // FOLD_AHEAD: an owner's fold of wave w+1 never waits behind its scaling of wave w (another owner's
+        // all-gather), but its own earlier waves are scaled / stored only after its last owned records landed. 0: the
+        // owner stores its earlier waves as their inv arrives. Deadlock-free for any value: an owner folds wave w
+        // before it scales wave w, and scale(w) only waits on folds of waves <= w.
+        uint32_t wf = w_begin;  // next wave whose (owned) fold is due
+        auto fold_upto = [&](uint32_t lim) {
+            for (; wf < w_end && wf <= lim; ++wf) {
+                const uint32_t k = my_k(wf);
+                if (k < OWNERS) {
+                    const uint32_t no = n_own(wf, k);
+                    if (no > 0) {
+                        fold_finalize(no);
+                    }
                 }
             }
-        }
+        };
         for (uint32_t w = w_begin; w < w_end; ++w) {
+            fold_upto(w + FOLD_AHEAD);
             const uint32_t n = n_wave(w);
             const uint32_t r0 = w * Q_W;
             const uint32_t xr0 = xrow(r0);

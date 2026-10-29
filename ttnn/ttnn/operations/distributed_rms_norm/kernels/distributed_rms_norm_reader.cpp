@@ -7,8 +7,8 @@
 // sure every member's compute is done with the previous pass; SEM_GATHER fields are cleared at that barrier.
 //
 // Prologue (ahead of the x reads: on Blackhole the NoC zero fill's barrier waits for every read in flight): reduce
-// scaler (1.0; [full, partial] on the sharded W-pad mask path); cb_stats pages zeroed once after Phase A (only column 0
-// is ever rewritten).
+// scaler (1.0; [full, partial] on the sharded W-pad mask path); cb_stats pages zeroed once after Phase A (only row 0 of
+// faces 0 / 1 is ever rewritten).
 // Phase A, per wave w (COMBINE_LAG 0: wave w is serviced right after it landed; 1 (Phase 0): after wave w+1 landed):
 //   load                 interleaved: wave-ordered reads, 1 + LOOKAHEAD waves in flight (transaction id w + 1; x is
 //                        resident), each wave pushed once its own reads landed; pad tiles [V, WS) and the W-pad columns
@@ -20,9 +20,11 @@
 //                        into the own slot of both ports of the publisher's link; own_stats[w] increment on each
 // Phase B, a non-blocking poll over three in-order queues (no wave waits behind another wave's exchange):
 //   collect_wave (owner) once the link ports' landed notifies cover the wave: read the G records of each owned row
-//                        from the ports, scatter them into column 0 of cb_stats pages (group-position order)
-//   allgather_inv_wave   (owner) the finalized inv tiles -> every member's cb_inv_rms rows; SEM_INV increment each
-//   (every member)       once SEM_INV covers the wave's owners, push the wave's Q_W cb_inv_rms pages
+//                        from the ports straight into row 0 of cb_stats pages (group-position order; no CPU scatter)
+//   allgather_inv_wave   (owner) the finalized inv rows (compact: row 0, 2 x 64 B fp32) -> face 1 of every member's
+//                        cb_inv_rms rows; SEM_INV increment each
+//   (every member)       once SEM_INV covers the wave's owners, move each record into column 0 and push the wave's
+//                        Q_W cb_inv_rms pages
 //
 // All NoC atomics are issued from this RISC-V (NCRISC); the kernel ends with noc_async_atomic_barrier().
 
@@ -64,6 +66,8 @@ constexpr uint32_t cb_record_scratch = 17;
 
 constexpr uint32_t FACE_DIM = 16;
 constexpr uint32_t RECORD_BYTES = 128;
+constexpr uint32_t STATS_TILE_BYTES = 4096;  // cb_stats pages are fp32 tiles (STATS_FORMAT)
+constexpr uint32_t STATS_FACE_BYTES = 1024;  // record values 16..31 -> row 0 of face 1
 constexpr uint32_t FWD = 0, BWD = 1, OWN = 2;
 
 // word / element index of column-0 row r (0..31) of a tile: face 0 rows 0-15, face 2 rows 16-31
@@ -186,6 +190,9 @@ void kernel_main() {
     // waves between a wave's landing and its service (contribute / gather / publish): 1 = Phase 0, 0 = none
     constexpr uint32_t COMBINE_LAG = get_compile_time_arg_val(27);
     constexpr auto input_args = TensorAccessorArgs<28>();
+    // compact inv record in an intermediate tile (T_I: fp32 4096 B / bf16 2048 B): face bytes, half-record bytes
+    constexpr uint32_t INV_FACE = T_I / 4;
+    constexpr uint32_t INV_HALF = 16 * (T_I / 1024);
 
     size_t a = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(a++);
@@ -259,7 +266,7 @@ void kernel_main() {
     if constexpr (G_W > 1) {
         gather_base = get_write_ptr(cb_gather);
     }
-    const uint32_t scratch = get_write_ptr(cb_record_scratch);  // [0, Q) publish staging, [Q, Q + G*Q) collect
+    const uint32_t scratch = get_write_ptr(cb_record_scratch);  // Q records: publish staging
 
     // ---------------- load: wave-ordered reads with a bounded look-ahead (x resident per pass block) ----------------
     // Wave w's reads carry transaction id w + 1 (mod 15: ids 1..15). At most 1 + LOOKAHEAD waves are in flight per
@@ -531,6 +538,8 @@ void kernel_main() {
         }
         return true;
     };
+    // Records land straight in row 0 of their cb_stats page (faces 0 / 1: two 64 B NoC reads per record), so the
+    // owner's RISC-V never touches the values; compute transposes each page into the column-0 layout of the inv tile.
     auto collect = [&](uint32_t w) {
         DRMS_ZONE("rd_collect");
         const uint32_t k = my_k(w);
@@ -538,37 +547,29 @@ void kernel_main() {
         const uint32_t kp = group * OWNERS + k;
         const uint32_t l = kp % L;
         const uint32_t kl = kp / L;
-        const uint32_t col = scratch + Q * RECORD_BYTES;
+        cb_reserve_back(cb_stats, G * Q);
+        const uint32_t st = get_write_ptr(cb_stats);
         for (uint32_t pos = 0; pos < G; ++pos) {
             uint32_t d = get_arg_val<uint32_t>(srcdir_idx + pos);
             if (d == OWN) {
                 d = sends_own_fwd ? FWD : BWD;
             }
             const uint32_t off = landing + (w * G + pos) * SEG_STRIDE + kl * Q * RECORD_BYTES;
-            noc_async_read(port_noc(l, d, off), col + pos * Q * RECORD_BYTES, no * RECORD_BYTES);
+            for (uint32_t r = 0; r < no; ++r) {
+                const uint32_t page = st + (pos * Q + r) * STATS_TILE_BYTES;
+                noc_async_read(port_noc(l, d, off + r * RECORD_BYTES), page, RECORD_BYTES / 2);
+                noc_async_read(
+                    port_noc(l, d, off + r * RECORD_BYTES + RECORD_BYTES / 2),
+                    page + STATS_FACE_BYTES,
+                    RECORD_BYTES / 2);
+            }
         }
         noc_async_read_barrier();
-        invalidate_l1_cache();
-        cb_reserve_back(cb_stats, G * Q);
-        // column-0 scatter: record (pos, r) element i -> page (pos * Q + r), row i of column 0
-        uint32_t* st = reinterpret_cast<uint32_t*>(get_write_ptr(cb_stats));
-        const uint32_t* recs = reinterpret_cast<const uint32_t*>(col);
-        for (uint32_t pr = 0; pr < G * Q; ++pr) {
-            const uint32_t r = pr % Q;
-            if (r >= no) {
-                continue;
-            }
-            uint32_t* page = st + pr * 1024;
-            const uint32_t* rec = recs + pr * 32;
-#pragma GCC unroll 16
-            for (uint32_t i = 0; i < 16; ++i) {
-                page[i * 16] = rec[i];
-                page[512 + i * 16] = rec[16 + i];
-            }
-        }
-        asm volatile("" ::: "memory");  // the scatter stores are issued before the push
         cb_push_back(cb_stats, G * Q);
     };
+    // Compact inv wire: the owner's finalized row 0 (two half-records: row 0 of faces 0 / 1 of a cb_rms_root page)
+    // goes to face 1 of the member's cb_inv_rms page (never read by the Col-broadcast scaling); the member's reader
+    // moves it into column 0 before it pushes the page. 2 x H bytes per row per member instead of faces 0 / 2.
     auto allgather = [&](uint32_t w) {
         DRMS_ZONE("rd_allgather");
         const uint32_t k = my_k(w);
@@ -578,10 +579,36 @@ void kernel_main() {
             const uint32_t dst = inv_base + ((w % PW) * Q_W + k * Q) * T_I;
             for (uint32_t i = 0; i < G_W; ++i) {
                 const uint32_t m = rotated(i, my_j, G_W);
-                combine_write_tiles<T_I>(src, member_x(m), member_y(m), dst, no);
+                noc_async_write_one_packet_set_state(get_noc_addr(member_x(m), member_y(m), dst), INV_HALF);
+                for (uint32_t r = 0; r < no; ++r) {
+                    noc_async_write_one_packet_with_state(src + r * T_I, dst + r * T_I + INV_FACE);
+                    noc_async_write_one_packet_with_state(
+                        src + r * T_I + INV_FACE, dst + r * T_I + INV_FACE + INV_HALF);
+                }
             }
             noc_async_write_barrier();
             cb_pop_front(cb_rms_root, no);
+        }
+    };
+    // member side: the n inv records of wave w (face 1 of each page) -> column 0 of the same pages
+    auto unpack_inv = [&](uint32_t w) {
+        DRMS_ZONE("rd_inv_col0");
+        const uint32_t n = n_wave(w);
+        for (uint32_t r = 0; r < n; ++r) {
+            const uint32_t page = inv_base + ((w % PW) * Q_W + r) * T_I;
+            if constexpr (INTERM_FP32) {
+                volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page);
+#pragma GCC unroll 8
+                for (uint32_t i = 0; i < 32; ++i) {
+                    p[col0_index(i)] = p[INV_FACE / 4 + i];
+                }
+            } else {
+                volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page);
+#pragma GCC unroll 8
+                for (uint32_t i = 0; i < 32; ++i) {
+                    p[col0_index(i)] = p[INV_FACE / 2 + i];
+                }
+            }
         }
     };
     // SEM_INV counts owner increments cumulatively over waves, so they must reach every member in wave order: the
@@ -675,6 +702,7 @@ void kernel_main() {
                 continue;
             }
             if (wi < w_end && *my_inv >= (wi + 1) * OWNERS) {
+                unpack_inv(wi);
                 cb_push_back(cb_inv_rms, Q_W);
                 ++wi;
                 continue;

@@ -27,6 +27,7 @@ Knobs (single source of truth; every CB size / trip count derives from them):
     WAVES_MAX          cap on row waves per core (exchange pipelining depth)
     READ_LOOKAHEAD_WAVES  x-read waves in flight per core beyond the oldest unlanded one (0: wave-ordered DRAM reads)
     COMBINE_LAG        waves between a wave's landing / square and its on-chip combine + publish (0 since Refinement 2)
+    FOLD_AHEAD         waves an owner's cross-device fold may run ahead of its own scaling (Refinement 3)
     NOC_SWAP_COLUMNS   westmost logical worker columns whose x reads run on NoC1 and output writes on NoC0
 """
 
@@ -70,6 +71,10 @@ NOC_SWAP_COLUMNS = 3  # westmost logical worker columns (next to DRAM column 0) 
 #                       columns: 19.1 / 18.3 / 17.8 / 18.7
 COMBINE_LAG = 0  # waves between a wave's landing / square and its on-chip combine + publish (1: Phase 0 order — the
 #                  contribution of wave w waited for wave w+1's reads)
+FOLD_AHEAD_ALL = 1 << 16  # "every owned fold first" (any value >= num_waves)
+FOLD_AHEAD = 1  # waves an owner's fold (cross-device finalize) may run ahead of its own scaling
+#                  pass: >= num_waves = every owned fold before any scaling (Phase 0 order); 0 = fold of wave w right
+#                  before the scaling of wave w (the owner's earlier waves are stored before its last records land)
 
 # ---- Exchange constants ----
 RECORD_BYTES = 32 * 4  # one fp32 per row of a tile-row
@@ -310,7 +315,7 @@ def cb_table(plan: LocalPlan, sz: Sizes):
         (CB_CHIP_PARTIAL, sz.T_i, 2 * p.q),
         (CB_RMS_ROOT, sz.T_i, p.q),
         (CB_STATS, T_s, sz.G * p.q),
-        (CB_RECORD_SCRATCH, RECORD_BYTES, (sz.G + 1) * p.q),
+        (CB_RECORD_SCRATCH, RECORD_BYTES, p.q),  # publish staging (collect reads straight into cb_stats)
     ]
     if p.reread:
         t.append((CB_X_TILES, sz.T_in, p.x_depth * p.SQ * p.WS))
@@ -871,6 +876,14 @@ def combine_lag() -> int:
     return int(v) if v else COMBINE_LAG
 
 
+def fold_ahead() -> int:
+    """FOLD_AHEAD clamped to 16 bits, overridable for measurement only (DRMS_FOLD_AHEAD; unset in production)."""
+    import os
+
+    v = os.environ.get("DRMS_FOLD_AHEAD", "")
+    return min(int(v) if v else FOLD_AHEAD, FOLD_AHEAD_ALL)
+
+
 def read_lookahead_waves() -> int:
     """READ_LOOKAHEAD_WAVES, overridable for measurement only (DRMS_LOOKAHEAD; unset in production)."""
     import os
@@ -1218,6 +1231,7 @@ def create_mesh_program_descriptor(
         plan.SQ,  # 18 tile-rows per square -> collapse round
         int(plan.reread),  # 19 x re-read
         combine_lag(),  # 20 service / chip-sum lag in waves (= the reader's)
+        fold_ahead(),  # 21 waves an owner's fold runs ahead of its scaling
     ]
     gamma_is_tile = gamma is not None and gamma.layout == ttnn.TILE_LAYOUT
     writer_ct = [
@@ -1455,6 +1469,7 @@ def create_mesh_program_descriptor(
                     read_lookahead_waves(),
                     combine_lag(),
                     noc_swap_columns(),
+                    fold_ahead(),
                 )
             )
             program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
