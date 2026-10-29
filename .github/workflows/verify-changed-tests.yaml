@@ -70,12 +70,10 @@ env:
   #                                  which installs SFPI and runs the cmd from
   #                                  tt_metal/tt-llk in the LLK CI image. From /work
   #                                  the relative ./tests/run_hardware_free.sh misses.
-  #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-ulp-sweep.yaml, which
-  #                                  supplies the LLK CI image, SFPI and the tt-llk
-  #                                  working directory its cmd is relative to. It runs
-  #                                  nightly; dispatch it to run this file on a branch.
-  #
-  # This is not an exemption: the legs still block the PR until an owner approves.
+  #   llk_sfpu_accuracy_tests.yaml   runs only through llk-sfpu-ulp-sweep.yaml: each
+  #                                  leg holds a WH or BH card for ~10 minutes, too
+  #                                  long for a PR. It runs nightly; dispatch it to
+  #                                  run this file on a branch.
   UNSUPPORTED_YAMLS: >-
     vllm_model_tests.yaml
     ttnn_sweep_tests.yaml

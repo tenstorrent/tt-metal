@@ -707,8 +707,10 @@ jobs:
   # LLK SFPU ULP budget guard (llk-sfpu-ulp-budget-guard.yaml): it fails a change to
   # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_{wh,bh}.yaml that
   # loosens a gate, unless the change touches only those tables and carries the
-  # `ulp-budget-raise-approved` label. Host-only, in the LLK image, and seconds long;
-  # it ends at once when the tables are untouched. Skips drafts like the rest: a job
+  # `ulp-budget-raise-approved` label. Host-only: an ubuntu-slim job lists the tables
+  # the change touches (deletions included, which find-changed-files ignores), and
+  # the comparison in the LLK image runs, on a medium runner, only when there is one.
+  # Not gated on find-changed-files for that reason. Skips drafts like the rest: a job
   # that ran there would wake workflow-status, which then fails on the skipped
   # verify-time-budgets. The sweep that holds the hardware to the tables runs nightly
   # (llk-e2e.yaml).

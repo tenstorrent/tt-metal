@@ -28,9 +28,11 @@ jobs:
 
   # The exhaustive SFPU ULP sweep against helpers/sfpu_accuracy_budget_{wh,bh}.yaml, on
   # a Wormhole and a Blackhole card. Named by path in its own matrix: it is marked
-  # `accuracy`, which the markers above deselect.
+  # `accuracy`, which the markers above deselect. Nightly only: a dispatch for another
+  # marker subset did not ask for it, and the sweep has a workflow_dispatch of its own.
   llk-sfpu-ulp-sweep:
     name: "LLK SFPU ULP sweep"
+    if: ${{ github.event_name == 'schedule' }}
     uses: ./.github/workflows/llk-sfpu-ulp-sweep.yaml
     secrets: inherit
 
@@ -45,6 +47,7 @@ jobs:
       - name: Check e2e test results
         uses: re-actors/alls-green@release/v1
         with:
+          allowed-skips: llk-sfpu-ulp-sweep
           jobs: ${{ toJSON(needs) }}
 
   report-status:
