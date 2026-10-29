@@ -46,6 +46,12 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
                    bf16 -> nlp_create_q_heads_split -> ONE stock rotary_embedding_indexed with the nope prepended;
                    output: ONE stock rotary op with the transposed trans-mat on the bf16 tail in place; wo_a in
                    checkpoint order (tt/rope.rope_stock)
+    ATTN_SP32_PROJ=on (P.9, default; with ROPE_IMPL=on) every projection on the chip's own S/(SP TP) query rows (the
+                   rows sparse_sdpa reads, query_offsets) with full, replicated weights: q_resid mesh_partition over
+                   axis 1 -> wq_b (all heads) -> [1, H, S/(SP TP), 512] directly (no head -> seq all_to_all); RoPE /
+                   inverse RoPE with the chip's cos / sin rows (RopeTable.rows(tp_split=True)); wo_a all groups, wo_b
+                   full -> [S/(SP TP), H] bf16 -> ONE all_to_all over axis 1 (split H, concat rows) -> [S/SP, H/TP]
+                   (no seq -> head all_to_all, no TP reduce-scatter of a wo_b partial)
 
 The served cache (TtWindowCache): position g on mesh row (g / W) % SP, column ((g mod W) / (W / TP)), local row
 (g / S) (W / TP) + g mod (W / TP) (W = S / SP; update_padded_kv_cache's sp x tp linearized block-cyclic order),
@@ -66,6 +72,7 @@ from .common import (
     DRAM,
     SP_AXIS,
     TP_AXIS,
+    act_dtype,
     attn_compute_config,
     bf16_activations,
     cast,
@@ -398,6 +405,15 @@ class TtWindowAttention:
         assert cfg.window == WINDOW and self.d == TtWindowCache.WIDTH, (cfg.window, self.d)
         assert self.heads % g.tp == 0 and self.groups % g.tp == 0, (self.heads, self.groups, g.tp)
         self.h_l, self.g_l = self.heads // g.tp, self.groups // g.tp
+        # ATTN_SP32_PROJ=on (P.9): the projections on the chip's own query rows with every head / group (module
+        # docstring); built on ROPE_IMPL=on's stock rope path (off there: the path before P.9)
+        self.sp32 = settings.get("ATTN_SP32_PROJ") == "on" and rope.stock
+        if self.sp32:
+            self.h_l, self.g_l = self.heads, self.groups
+
+        def wdim(d):  # sp32: every weight replicated
+            return None if self.sp32 else d
+
         self.hpg = self.heads // self.groups  # heads per wo_a group
         self.ckc = attn_compute_config(mesh)  # wq_b, sparse_sdpa, wo_a, wo_b: ATTN_FIDELITY (P.7)
         self.scale = self.d**-0.5
@@ -423,7 +439,7 @@ class TtWindowAttention:
         assert torch.equal(wq_b.bfloat16().float(), wq_b), "wq_b must be bf16-exact"
         wq_b_t = wq_b.t().reshape(1, 1, -1, self.heads * self.d).contiguous()
         # DENSE_WEIGHTS (P.13): bf16 (exact fp8 values) or bfloat8_b (the checkpoint's 8-bit width)
-        self.wq_b = _upload(mesh, wq_b_t, dense_dtype(wq_b_t, "attn.wq_b"), ttnn.TILE_LAYOUT, (None, 3))
+        self.wq_b = _upload(mesh, wq_b_t, dense_dtype(wq_b_t, "attn.wq_b"), ttnn.TILE_LAYOUT, wdim((None, 3)))
         # wo_a [groups * rank, hpg * 512] -> [1, groups, hpg * 512, rank], groups split over TP; bf16-exact
         wo_a = w["wo_a"].float().view(self.groups, self.rank, -1)
         assert torch.equal(wo_a.bfloat16().float(), wo_a), "wo_a must be bf16-exact"
@@ -432,12 +448,12 @@ class TtWindowAttention:
         ):  # each head's input columns in the order the bf16 output writes: [nope | re | ro]
             wo_a = wo_a.view(self.groups, self.rank, self.hpg, self.d)[..., perm].reshape(self.groups, self.rank, -1)
         wo_a_t = wo_a.transpose(1, 2).unsqueeze(0).contiguous()
-        self.wo_a = _upload(mesh, wo_a_t, dense_dtype(wo_a_t, "attn.wo_a"), ttnn.TILE_LAYOUT, (None, 1))
+        self.wo_a = _upload(mesh, wo_a_t, dense_dtype(wo_a_t, "attn.wo_a"), ttnn.TILE_LAYOUT, wdim((None, 1)))
         # wo_b [H, groups * rank] -> [groups * rank, H], K (the chip's groups) split over TP
         wo_b = w["wo_b"].float()
         assert torch.equal(wo_b.bfloat16().float(), wo_b), "wo_b must be bf16-exact"
         wo_b_t = wo_b.t().reshape(1, 1, -1, wo_b.shape[0]).contiguous()
-        self.wo_b = _upload(mesh, wo_b_t, dense_dtype(wo_b_t, "attn.wo_b"), ttnn.TILE_LAYOUT, (None, 2))
+        self.wo_b = _upload(mesh, wo_b_t, dense_dtype(wo_b_t, "attn.wo_b"), ttnn.TILE_LAYOUT, wdim((None, 2)))
         self.hidden = wo_b.shape[0]
         # the sink in sparse_sdpa's units (it multiplies by the op's scale, 1 here): every head on every chip
         sink = w["attn_sink"].float().reshape(1, 1, 1, self.heads)
@@ -450,6 +466,11 @@ class TtWindowAttention:
         return ttnn.experimental.all_to_all_async_generic(
             t, in_dim=in_dim, out_dim=out_dim, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
         )
+
+    def _rope_rows(self, start: int, length: int):
+        """cos / sin of the chunk's positions as the projections read them: the chip row's S/SP rows, or the chip's
+        own S/(SP TP) query rows under ATTN_SP32_PROJ=on (P.9). Release with ``self.rope.free``."""
+        return self.rope.rows(start, length, tp_split=self.sp32 and self.geo.tp > 1)
 
     def _window_rows(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache):
         """Writes the chunk's rows into the cache; returns (carry [1, 1, 128, 512], kv_rm [1, 1, S, 512]) bf16
@@ -568,6 +589,16 @@ class TtWindowAttention:
 
     def _q(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid -> scaled, roped q heads [1, H, S/(SP TP), 512] bf16 ROW_MAJOR (after the reshard)."""
+        if self.sp32:  # ATTN_SP32_PROJ=on (P.9): the chip's own rows, every head: no reshard
+            xr = q_resid
+            if self.geo.tp > 1:
+                xr = ttnn.mesh_partition(q_resid, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+            qb = self._q_stock(xr, cos, sin)
+            if xr is not q_resid:
+                dealloc(xr)
+            q_rm = ttnn.to_layout(qb, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+            dealloc(qb)
+            return q_rm
         if self.glue:
             qb = self._q_stock(q_resid, cos, sin) if self.stock else self._q_glue(q_resid, cos, sin)
             qa = self._reshard(qb, in_dim=1, out_dim=2)
@@ -616,6 +647,10 @@ class TtWindowAttention:
         """sparse_sdpa output [1, H, S/(SP TP), 512] bf16 ROW_MAJOR -> attn_out [1, 1, S/SP, H/TP] (fp32; bf16 under
         ATTN_GLUE=on with CCL_IMPL=fabric_bf16)."""
         ot = ttnn.to_layout(o_rm, ttnn.TILE_LAYOUT, memory_config=DRAM)
+        if self.sp32:  # ATTN_SP32_PROJ=on (P.9): every head of the chip's rows stays here
+            oq = rope_stock(ot, cos, sin, self.rope.trans_inv)
+            dealloc(ot)
+            return self._out_proj(oq, oq.shape[2])
         oh = self._reshard(ot, in_dim=2, out_dim=1)  # [1, H/TP, S/SP, 512]
         if oh is not ot:
             dealloc(ot)
@@ -702,6 +737,17 @@ class TtWindowAttention:
             yq = gemm_input(yt)
             if yq is not yt:
                 dealloc(yt)
+        if self.sp32:
+            # ATTN_SP32_PROJ=on (P.9): the whole sum over K here: wo_b writes the GPU code's bf16 output of the chip's
+            # rows [1, 1, S/(SP TP), H]; ONE all_to_all over TP (split H, concat rows) -> [1, 1, S/SP, H/TP]
+            z = mm.linear(
+                yq, self.wo_b, site="attn.wo_b", dtype=act_dtype(), compute_kernel_config=self.ckc, memory_config=DRAM
+            )
+            dealloc(yq)
+            out = self._reshard(z, in_dim=2, out_dim=3)  # concat rows (in_dim), split H (out_dim)
+            if out is not z:
+                dealloc(z)
+            return out
         # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32
         z = mm.linear(yq, self.wo_b, site="attn.wo_b", dtype=zdt, compute_kernel_config=self.ckc, memory_config=DRAM)
@@ -721,7 +767,7 @@ class TtWindowAttention:
         s = q_resid.shape[-2] * g.sp
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
-        cos, sin = self.rope.rows(start, s)
+        cos, sin = self._rope_rows(start, s)
         table = self._table(kv, start, end, cache)
         q_rm = self._q(q_resid, cos, sin)
         o = self._sdpa(q_rm, table, self.tables.index[g.start_class(start)])

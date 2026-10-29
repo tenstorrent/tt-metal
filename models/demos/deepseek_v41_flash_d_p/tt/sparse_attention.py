@@ -275,7 +275,7 @@ class TtSparseAttention(TtWindowAttention):
         table = ckv_cache.table
         assert self.INTERLEAVED, "the table holds the rows as stored (interleaved rope tail)"
         assert table is not None, "STATIC_TABLES=on: the KV source's compressed cache was built without its table"
-        cos, sin = self.rope.rows(start, g.chunk)
+        cos, sin = self._rope_rows(start, g.chunk)
         carry, kv_rm = self._window_rows(kv, start, end, cache)
         table.put_window(carry, kv_rm)
         self._release_window(carry, kv_rm, cache, start, end)
@@ -317,7 +317,7 @@ class TtSparseAttention(TtWindowAttention):
         end = start + s if end is None else int(end)
         if self.static:
             return self._static(q_resid, kv, start, end, cache, ckv_cache, topk, memo, sources)
-        cos, sin = self.rope.rows(start, s)
+        cos, sin = self._rope_rows(start, s)
         window = self._table(kv, start, end, cache)  # [1, 1, 128 + S, 512], interleaved tail (INTERLEAVED)
         shared = memo is not None and sources is not None
         ckey = (start, id(ckv_cache), ckv_cache.version)
