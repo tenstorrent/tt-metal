@@ -245,14 +245,14 @@ def test_spec_decision_table():
     d = vs.resolve_spec_decision(env, max_num_seqs=4, requested_k=3, rows=8, cols=4)
     assert d.admitted and (d.effective_k, d.k_cap, d.users_per_row, d.commit_mode) == (3, 3, 4, "fused")
     assert d.supported_k == (1, 2, 3)
-    # the batch's measured best K (the k_by_rows table: 3 up to 4 users per row, 2 at 8, plain at 16) under the catalog's
+    # the batch's measured best K (the k_by_rows table: 3 up to 4 users per row, 1 at 8, plain at 16) under the catalog's
     # K=7 and the cap of spec_draft_len BELOW the full tile (B (K + 1) <= 31: 1 -> 7 allowed, 4 -> 6, 8 -> 2, 16 -> plain;
     # the full tile B (K + 1) = 32 diverges on mesh row 5, the 2026-10-29 sweep)
     env7 = dict(env, GLM53_VLLM_SPEC_K="7")
     assert [
         vs.resolve_spec_decision(env7, max_num_seqs=b, requested_k=7, rows=8, cols=4).effective_k
         for b in (1, 3, 4, 8, 16)
-    ] == [3, 3, 3, 2, 0]
+    ] == [3, 3, 3, 1, 0]
     env_off = dict(env7, GLM53_SPEC_K_BY_ROWS="off")  # the catalog's K under the cap alone
     assert [
         vs.resolve_spec_decision(env_off, max_num_seqs=b, requested_k=7, rows=8, cols=4).effective_k
@@ -313,8 +313,8 @@ def test_spec_plan_classmethod(monkeypatch):
     assert plan.extra_bytes_per_token == 0 and plan.extra_bytes_per_seq > 0  # the MTP's resident bytes, per request
     assert GLM53FlashForCausalLM.spec_plan(cfg, 4, 2).effective_k == 2
     assert (
-        GLM53FlashForCausalLM.spec_plan(object(), 8, 5).effective_k == 2
-    )  # an opaque config: the bytes are skipped; 8 per row -> 2
+        GLM53FlashForCausalLM.spec_plan(object(), 8, 5).effective_k == 1
+    )  # an opaque config: the bytes are skipped; 8 per row -> 1
     monkeypatch.setenv("GLM53_PARTITION_USERS", "1")
     assert "GLM53_PARTITION_USERS=0" in GLM53FlashForCausalLM.spec_plan(cfg, 4, 3).reason
 
