@@ -24,7 +24,8 @@
 // argmax record address on the hub (0 = off), this core's valid logit columns and the vocab index of
 // its first column, this core's index, then the GDN row runs: count, then per run (first tile of this
 // core's projection block, tiles, first head core, head cores) — each head core gets only the tiles it
-// reads (its key head's q | k, its value head's v | z, every head's a | b).
+// reads (its key head's q | k, its value head's v | z, every head's a | b); then the streamers' rectangle
+// cover for the act slice multicast (count, then per rectangle noc x0, y0, x1, y1, cores; count 0: unicasts).
 //
 // The hub's slots address arrives in sem_addr before the first partial (the slots are a hub CB).
 //
@@ -142,6 +143,13 @@ void kernel_main() {
 
     constexpr uint32_t runs_base = peers_base + 2 * num_streamers + 5;
     const uint32_t n_runs = get_arg_val<uint32_t>(runs_base);
+    // the streamers' rectangle cover (as the hub's) for the act slice multicast; 0 rectangles: unicasts
+    const uint32_t n_rects = get_arg_val<uint32_t>(runs_base + 1 + 4 * n_runs);
+    const uint32_t rects_base = runs_base + 2 + 4 * n_runs;
+    constexpr uint8_t kMcNoc = 0;
+    if (n_rects > 0) {
+        noc_local_state_init(kMcNoc);
+    }
     auto send_runs = [&](uint32_t q_off) {
         const uint32_t row = get_read_ptr(cb_qkvz_out);
         for (uint32_t r = 0; r < n_runs; r++) {
@@ -262,10 +270,29 @@ void kernel_main() {
         cb_wait_front(cb_aslice, kBlk);
         mark(l, 5);
         const uint32_t slice = get_read_ptr(cb_aslice);
-        for (uint32_t s = 0; s < num_streamers; s++) {
-            const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
-            const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
-            noc_async_write(slice, get_noc_addr(px, py, act_addr + act_off * kTileBytes), ng * kTileBytes);
+        if (n_rects > 0) {
+            // one multicast per rectangle of the streamers' cover (loopback where this core is in it), on NOC 0:
+            // this core's reader and writer otherwise use NOC 1 only (the rectangles are NOC 0's, as the hub's)
+            for (uint32_t r = 0; r < n_rects; r++) {
+                const uint32_t x0 = get_arg_val<uint32_t>(rects_base + 5 * r);
+                const uint32_t y0 = get_arg_val<uint32_t>(rects_base + 5 * r + 1);
+                const uint32_t x1 = get_arg_val<uint32_t>(rects_base + 5 * r + 2);
+                const uint32_t y1 = get_arg_val<uint32_t>(rects_base + 5 * r + 3);
+                const uint32_t cores = get_arg_val<uint32_t>(rects_base + 5 * r + 4);
+                const uint64_t dst = get_noc_multicast_addr(x0, y0, x1, y1, act_addr + act_off * kTileBytes, kMcNoc);
+                if (my_x[kMcNoc] >= x0 && my_x[kMcNoc] <= x1 && my_y[kMcNoc] >= y0 && my_y[kMcNoc] <= y1) {
+                    noc_async_write_multicast_loopback_src(slice, dst, ng * kTileBytes, cores, false, kMcNoc);
+                } else {
+                    noc_async_write_multicast(slice, dst, ng * kTileBytes, cores, false, kMcNoc);
+                }
+            }
+            noc_async_write_barrier(kMcNoc);
+        } else {
+            for (uint32_t s = 0; s < num_streamers; s++) {
+                const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
+                const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
+                noc_async_write(slice, get_noc_addr(px, py, act_addr + act_off * kTileBytes), ng * kTileBytes);
+            }
         }
         noc_async_write_barrier();
         for (uint32_t s = 0; s < num_streamers; s++) {

@@ -93,6 +93,8 @@ CHUNK_FP32_CBS = (5, 6, 11, 16, 25, 28)
 GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
 # (attention of a verify of R > 2 rows in packed passes of several rows, attn_common.hpp; 0: a pass per row)
 ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
+ACT_MCAST = os.environ.get("RESIDENT_ACT_MCAST", "1") == "1"  # streamer_writer.cpp: the act slices by multicast
+HUB_CHUNKS = int(os.environ.get("RESIDENT_HUB_CHUNKS", "0"))  # pieces of x per hub round (0: by batch, see x_views)
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
@@ -1009,6 +1011,10 @@ class ResidentModel:
             # packets x 2 directions) and a word
             hub_headers = 4 * -(-HIDDEN * 2 * B // packet_bytes)
             x_views = HIDDEN * B // (TILE * TILE)
+            # x leaves the hub in pieces (summed, then multicast while the next is summed): RESIDENT_HUB_CHUNKS, default
+            # 4 for x of 20 views or more (batch >= 4; batch 1 and 2 keep one piece)
+            x_chunks = HUB_CHUNKS if HUB_CHUNKS else (4 if x_views >= 20 and x_views % 4 == 0 else 1)
+            assert x_views % x_chunks == 0, (x_views, x_chunks)
             cbs.append(cb(0, hub_grid, 2 * n * x_views))
             cbs.append(cb(2, hub_grid, x_views))
             cbs.append(cb(1, hub_grid, 1, page=(hub_headers + 2 * self.feed) * 160 + 16))
@@ -1266,6 +1272,8 @@ class ResidentModel:
                     int(self.sample),
                 ]
                 rr, wr, cr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+                # the act slice exchange as multicasts over the streamers' cover (RESIDENT_ACT_MCAST=0: unicasts)
+                act_rects = rect_cover(mesh, cores) if ACT_MCAST else [0]
                 peers = [v for p in sphys for v in (p.x, p.y)]
                 head_xy = [v for p in head_p for v in (p.x, p.y)]
                 for i, c in enumerate(cores):
@@ -1307,6 +1315,7 @@ class ResidentModel:
                         + [max(0, min(nvv * TILE, d.vocab_chip - v0)), chip * d.vocab_chip + v0, i]
                         + [len(runs[i])]
                         + [v for r in runs[i] for v in r]
+                        + act_rects
                     )
                     cr[c.x][c.y] = [ng, nd, bank * ht_bank + dfirst, nqg, nqa, n_conv, nvv, ts_addr]
 
@@ -1324,6 +1333,7 @@ class ResidentModel:
                 # taps: the hub round holding x after the tap's decoder layer
                 rounds_of = [2 * l + 1 + int(self.fc) for l, _ in self.taps]
                 hub_ct += [len(self.taps)] + (rounds_of + [0xFFFFFFFF] * 5)[:5] + [d.Ht]
+                hub_ct += [x_chunks]
                 if self.feed:
                     hub_args += [
                         sub["argmax"].buffer_address(),
@@ -1431,7 +1441,13 @@ class ResidentModel:
                     kernel("streamer_writer.cpp", grid, ct, wr, dm(BRISC, NOC1)),
                     kernel("streamer_compute.cpp", grid, ct, cr, streamer_compute),
                     kernel("mlp_hub.cpp", hub_grid, hub_ct, hub_rt, dm(BRISC, NOC0)),
-                    kernel("hub_compute.cpp", hub_grid, [n, x_views, rounds], ttnn.RuntimeArgs(), streamer_compute),
+                    kernel(
+                        "hub_compute.cpp",
+                        hub_grid,
+                        [n, x_views, rounds, x_chunks],
+                        ttnn.RuntimeArgs(),
+                        streamer_compute,
+                    ),
                 ]
                 if self.n_gdn:
                     kernels += [
