@@ -53,6 +53,22 @@ def test_override_thresholds_apply_by_pattern():
     assert statuses(result) == {"Read/page_size:32/x": "PASS", "Read/page_size:64/x": "REGRESSION"}
 
 
+def test_environment_thresholds_replace_suite_defaults_only_there():
+    policy = cmp.Policy(
+        5,
+        5,
+        overrides=(("strict", {"regression_pct": 2}),),
+        environments=(("noisy_env", {"regression_pct": 15, "improvement_pct": 15}),),
+    )
+    golden_cases = {"loose": {"t": 1.0}, "strict": {"t": 1.0}}
+    measured = {"loose": {"t": 1.1}, "strict": {"t": 1.03}}
+    noisy_golden = Golden("s", {"noisy_env": Environment(metrics=dict(LOWER), repetitions=2, cases=golden_cases)})
+    noisy = cmp.compare(measured, noisy_golden, "noisy_env", LOWER, policy)
+    other = cmp.compare(measured, golden_of(golden_cases), ENV, LOWER, policy)
+    assert statuses(noisy) == {"loose": "PASS", "strict": "REGRESSION"}
+    assert statuses(other) == {"loose": "REGRESSION", "strict": "REGRESSION"}
+
+
 def test_retry_must_agree_for_a_case_to_fail():
     golden = golden_of({"flaky": {"t": 1.0}, "real": {"t": 1.0}})
     result = cmp.compare(
