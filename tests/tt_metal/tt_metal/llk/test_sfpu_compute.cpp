@@ -1218,7 +1218,16 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         // x >= 1; clear of x ~ 1, where the result's slope is unbounded.
         return uniform(1.1f, 10.0f);
     }
-    if (op_name == "lgamma_stirling" || op_name == "digamma" || op_name == "polygamma") {
+    if (op_name == "lgamma_stirling") {
+        auto packed = uniform(0.5f, 8.0f);
+        auto values = unpack_vector<bfloat16, uint32_t>(packed);
+        const std::vector<float> boundaries = {0.5f, 1.0f, 1.5f, 2.0f, 2.2f};
+        for (size_t i = 0; i < boundaries.size() && i < values.size(); ++i) {
+            values[i] = bfloat16(boundaries[i]);
+        }
+        return pack_vector<uint32_t, bfloat16>(values);
+    }
+    if (op_name == "digamma" || op_name == "polygamma") {
         return uniform(0.5f, 8.0f);
     }
     if (op_name == "log_with_base") {
@@ -1367,6 +1376,12 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
     }
     if (op_name == "lgamma_stirling_float") {
         auto lhs = uniform(0.5f, 8.0f, seed);
+        auto values = unpack_vector<bfloat16, uint32_t>(lhs);
+        const std::vector<float> boundaries = {0.5f, 1.0f, 1.5f, 2.0f, 2.2f};
+        for (size_t i = 0; i < boundaries.size() && i < values.size(); ++i) {
+            values[i] = bfloat16(boundaries[i]);
+        }
+        lhs = pack_vector<uint32_t, bfloat16>(values);
         return {lhs, map_lhs(lhs, [](float f) { return std::log(f); })};
     }
     if (op_name == "add_top_row") {
@@ -1434,11 +1449,7 @@ std::tuple<vector<uint32_t>, vector<uint32_t>, vector<uint32_t>> generate_packed
 // is_close()'s own defaults for the "everything else" bucket.
 std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_dest = false) {
     if (op_name == "lgamma_stirling_float") {
-        // The kernel's Stirling series (four Bernoulli terms) is up to ~0.053 off for z just above 0.5,
-        // outside its z ~ 1 and z ~ 2 Taylor windows. The tt-llk test gates it with torch.isclose at
-        // rtol = atol = 0.05, i.e. atol + rtol * |golden| ~ 0.08 there; is_close takes the larger of
-        // the two bounds instead, so atol carries that whole margin.
-        return {0.05f, 0.08f};
+        return {0.005f, 0.005f};
     }
     if (op_name == "erfinv" || op_name == "lgamma_stirling" || op_name == "digamma" || op_name == "polygamma" ||
         op_name == "softcap" || op_name == "i0" || op_name == "i1" || op_name == "log_with_base") {
