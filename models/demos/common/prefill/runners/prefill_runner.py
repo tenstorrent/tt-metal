@@ -1014,9 +1014,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 sp=GLOBAL_MESH_SHAPE[0],
                 chunk_local=CHUNK_SIZE // GLOBAL_MESH_SHAPE[0],
             )
-            logger.info(
-                f"[pp rank {rank}] [media] ring {media_ring.name}; encoder cache {media.cache.capacity_bytes >> 20} MiB"
-            )
+            logger.info(f"[pp rank {rank}] [media] ring {media_ring.name}")
 
     d2d_in = d2d_out = idx_in = idx_out = None
     if num_ranks > 1:

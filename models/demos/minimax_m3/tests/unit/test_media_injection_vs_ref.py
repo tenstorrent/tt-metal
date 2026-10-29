@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.demos.common.prefill.media import MediaItem, build_injection, stub_embeddings
+from models.demos.common.prefill.media import MediaItem, build_injection, media_rows_for_chunk, stub_embeddings
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
@@ -84,7 +84,8 @@ def test_post_injection_embeddings(mesh_device, device_params, emb_tp_sharded, s
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
 
-        media_rows = build_injection(embs, items, start, end, sp=1, chunk_local=CHUNK)
+        slices = media_rows_for_chunk(items, start, end, lambda m, lo, hi: embs[m.hash][lo:hi])
+        media_rows = build_injection(slices, start, end, sp=1, chunk_local=CHUNK)
         if media_rows is not None:
             injected_any = True
             x = inject_media_embeddings(

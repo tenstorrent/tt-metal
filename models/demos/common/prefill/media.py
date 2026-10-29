@@ -1,14 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side media handling for prefill: which image rows a chunk injects, the encoder cache, stub embeddings.
+"""Which image embedding rows a prefill chunk injects at its image positions, laid out like the chunk's tokens."""
 
-The adapter expands each image into num_tokens placeholder tokens starting at start_position. On stage 0 the
-runner overwrites the token embeddings at those positions with the image's embedding rows. A chunk injects only
-the rows whose positions fall inside it, laid out in the same rotated block-cyclic order as the chunk's tokens.
-"""
-
-from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -34,6 +28,29 @@ class MediaItem:
         return self.start_position + self.num_tokens
 
 
+@dataclass(frozen=True)
+class MediaRows:
+    """Rows [row_start, row_start + len(rows)) of an item's [num_tokens, hidden] embeddings."""
+
+    item: MediaItem
+    row_start: int
+    rows: torch.Tensor
+
+    def __post_init__(self):
+        assert self.rows.dim() == 2, f"rows {tuple(self.rows.shape)} for {self.item}, want [n, hidden]"
+        assert (
+            0 <= self.row_start and self.row_end <= self.item.num_tokens
+        ), f"rows [{self.row_start},{self.row_end}) for {self.item}"
+
+    @property
+    def row_end(self) -> int:
+        return self.row_start + self.rows.shape[0]
+
+
+# Rows [lo, hi) of an item's embeddings, as a [hi - lo, hidden] tensor.
+RowSource = Callable[[MediaItem, int, int], torch.Tensor]
+
+
 def items_overlapping(items: list[MediaItem], start: int, end: int) -> list[MediaItem]:
     """Items with at least one position in [start, end), in prompt order."""
     return sorted(
@@ -41,87 +58,64 @@ def items_overlapping(items: list[MediaItem], start: int, end: int) -> list[Medi
     )
 
 
+def chunk_row_range(item: MediaItem, chunk_start: int, actual_end: int) -> tuple[int, int]:
+    """The item's rows [lo, hi) whose positions fall inside [chunk_start, actual_end)."""
+    lo = max(item.start_position, chunk_start) - item.start_position
+    hi = min(item.end_position, actual_end) - item.start_position
+    assert lo < hi, f"{item} does not overlap [{chunk_start},{actual_end})"
+    return lo, hi
+
+
+def media_rows_for_chunk(
+    items: list[MediaItem], chunk_start: int, actual_end: int, source: RowSource
+) -> list[MediaRows]:
+    out = []
+    for item in items_overlapping(items, chunk_start, actual_end):
+        lo, hi = chunk_row_range(item, chunk_start, actual_end)
+        out.append(MediaRows(item, lo, source(item, lo, hi)))
+    return out
+
+
 def build_injection(
-    embeddings: dict[bytes, torch.Tensor],
-    items: list[MediaItem],
+    slices: list[MediaRows],
     chunk_start: int,
     actual_end: int,
     sp: int,
     chunk_local: int,
 ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
-    """Dense rows and mask for one chunk, in the chunk's rotated per-chip order.
-
-    Returns (rows [sp, chunk_local, hidden], mask [sp, chunk_local] bool), or None when no image overlaps
-    [chunk_start, actual_end). embeddings maps each overlapping item's hash to its full [num_tokens, hidden]
-    embedding; only the rows inside the chunk are used. Masked-off rows are zero.
-    """
-    hits = items_overlapping(items, chunk_start, actual_end)
+    """(rows [sp, chunk_local, hidden], mask [sp, chunk_local]) in the chunk's rotated per-chip order, or None
+    when no slice overlaps the chunk. Each overlapping slice must cover its chunk_row_range."""
+    hits = sorted(
+        (s for s in slices if s.item.start_position < actual_end and s.item.end_position > chunk_start),
+        key=lambda s: s.item.start_position,
+    )
     if not hits:
         return None
-    first = embeddings[hits[0].hash]
-    hidden, dtype = first.shape[-1], first.dtype
+    hidden, dtype = hits[0].rows.shape[-1], hits[0].rows.dtype
     positions = torch.tensor(rotated_chunk_positions(chunk_start, sp, chunk_local), dtype=torch.long)
     rows = torch.zeros(sp, chunk_local, hidden, dtype=dtype)
     mask = torch.zeros(sp, chunk_local, dtype=torch.bool)
-    for item in hits:
-        emb = embeddings[item.hash]
-        assert emb.shape == (item.num_tokens, hidden), f"embedding {tuple(emb.shape)} for {item}"
-        lo, hi = max(item.start_position, chunk_start), min(item.end_position, actual_end)
-        sel = (positions >= lo) & (positions < hi)
+    for s in hits:
+        item = s.item
+        assert (
+            s.rows.shape[-1] == hidden and s.rows.dtype == dtype
+        ), f"rows {tuple(s.rows.shape)} {s.rows.dtype} for {item}"
+        lo, hi = chunk_row_range(item, chunk_start, actual_end)
+        assert (
+            s.row_start <= lo and hi <= s.row_end
+        ), f"rows [{s.row_start},{s.row_end}) for {item}, chunk needs [{lo},{hi})"
+        sel = (positions >= item.start_position + lo) & (positions < item.start_position + hi)
         assert not (mask & sel).any(), f"media items overlap at {item}"
-        rows[sel] = emb[positions[sel] - item.start_position]
+        rows[sel] = s.rows[positions[sel] - item.start_position - s.row_start]
         mask |= sel
     return rows, mask
 
 
 def stub_embeddings(media_hash: bytes, num_tokens: int, hidden: int, dtype=torch.bfloat16) -> torch.Tensor:
-    """Deterministic placeholder embeddings seeded from the media hash, until the vision encoder is wired in."""
+    """Deterministic placeholder embeddings seeded from the media hash, until a real embedding source exists."""
     gen = torch.Generator().manual_seed(int.from_bytes(media_hash[:8], "little"))
     return (torch.randn(num_tokens, hidden, generator=gen) * 0.02).to(dtype)
 
 
-class EncoderCache:
-    """Per-worker LRU of image embeddings keyed by media hash, bounded by bytes. Lost on worker restart."""
-
-    def __init__(self, capacity_bytes: int):
-        assert capacity_bytes >= 0
-        self.capacity_bytes = capacity_bytes
-        self._entries: OrderedDict[bytes, torch.Tensor] = OrderedDict()
-        self.bytes = 0
-        self.hits = 0
-        self.misses = 0
-        self.evictions = 0
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-    def __contains__(self, media_hash: bytes) -> bool:
-        return media_hash in self._entries
-
-    def get_or_compute(self, media_hash: bytes, compute: Callable[[], torch.Tensor]) -> torch.Tensor:
-        emb = self._entries.get(media_hash)
-        if emb is not None:
-            self._entries.move_to_end(media_hash)
-            self.hits += 1
-            return emb
-        self.misses += 1
-        emb = compute()
-        self._insert(media_hash, emb)
-        return emb
-
-    def _insert(self, media_hash: bytes, emb: torch.Tensor) -> None:
-        size = emb.numel() * emb.element_size()
-        if size > self.capacity_bytes:
-            return
-        while self.bytes + size > self.capacity_bytes:
-            _, old = self._entries.popitem(last=False)
-            self.bytes -= old.numel() * old.element_size()
-            self.evictions += 1
-        self._entries[media_hash] = emb
-        self.bytes += size
-
-    def stats_line(self) -> str:
-        return (
-            f"ENCODER_CACHE hits={self.hits} misses={self.misses} evictions={self.evictions} "
-            f"entries={len(self)} bytes={self.bytes} capacity_bytes={self.capacity_bytes}"
-        )
+def stub_row_source(hidden: int, dtype=torch.bfloat16) -> RowSource:
+    return lambda item, lo, hi: stub_embeddings(item.hash, item.num_tokens, hidden, dtype)[lo:hi]

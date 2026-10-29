@@ -1,18 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Media row injection layout and the encoder cache (host-only, no ttnn)."""
+"""Media row injection layout from row ranges (host-only, no ttnn)."""
+
+import re
 
 import pytest
 import torch
 
 from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.common.prefill.media import (
-    EncoderCache,
     MediaItem,
+    MediaRows,
     build_injection,
+    chunk_row_range,
     items_overlapping,
+    media_rows_for_chunk,
     stub_embeddings,
+    stub_row_source,
 )
 
 HIDDEN = 16
@@ -26,8 +31,16 @@ def embeddings_for(items):
     return {m.hash: stub_embeddings(m.hash, m.num_tokens, HIDDEN) for m in items}
 
 
+def slices(items, embs, start, end):
+    return media_rows_for_chunk(items, start, end, lambda m, lo, hi: embs[m.hash][lo:hi])
+
+
+def whole(items, embs):
+    return [MediaRows(m, 0, embs[m.hash]) for m in items]
+
+
 def scatter_back(rows, mask, chunk_start, sp, chunk_local, seq_len):
-    """Undo the rotation: global position -> injected row, plus which positions were injected."""
+    """Global position -> injected row, and which positions were injected."""
     out = torch.zeros(seq_len, HIDDEN, dtype=rows.dtype)
     hit = torch.zeros(seq_len, dtype=torch.bool)
     positions = torch.tensor(rotated_chunk_positions(chunk_start, sp, chunk_local))
@@ -37,19 +50,18 @@ def scatter_back(rows, mask, chunk_start, sp, chunk_local, seq_len):
     return out, hit
 
 
+LAYOUTS = [
+    pytest.param([(10, 40)], id="one_image_inside_one_chunk"),
+    pytest.param([(3, 20), (40, 30), (100, 12)], id="several_images_one_chunk"),
+    pytest.param([(200, 300)], id="image_spans_chunks"),
+    pytest.param([(256, 64)], id="image_starts_on_boundary"),
+    pytest.param([(5, 10), (120, 400), (600, 8)], id="mixed"),
+]
+
+
 @pytest.mark.parametrize("sp,chunk_local", [(1, 64), (4, 32), (8, 32)])
-@pytest.mark.parametrize(
-    "layout",
-    [
-        pytest.param([(10, 40)], id="one_image_inside_one_chunk"),
-        pytest.param([(3, 20), (40, 30), (100, 12)], id="several_images_one_chunk"),
-        pytest.param([(200, 300)], id="image_spans_chunks"),
-        pytest.param([(256, 64)], id="image_starts_on_boundary"),
-        pytest.param([(5, 10), (120, 400), (600, 8)], id="mixed"),
-    ],
-)
+@pytest.mark.parametrize("layout", LAYOUTS)
 def test_chunks_inject_each_image_row_exactly_once(sp, chunk_local, layout):
-    """Every image position is written once, by the chunk that holds it, with its own row; text positions never."""
     items = [item(s, n, i + 1) for i, (s, n) in enumerate(layout)]
     embs = embeddings_for(items)
     chunk = sp * chunk_local
@@ -64,7 +76,7 @@ def test_chunks_inject_each_image_row_exactly_once(sp, chunk_local, layout):
     hit_count = torch.zeros(seq_len, dtype=torch.int)
     for start in range(0, seq_len, chunk):
         end = min(start + chunk, seq_len)
-        res = build_injection(embs, items, start, end, sp, chunk_local)
+        res = build_injection(slices(items, embs, start, end), start, end, sp, chunk_local)
         if res is None:
             assert not expected_hit[start:end].any()
             continue
@@ -79,30 +91,100 @@ def test_chunks_inject_each_image_row_exactly_once(sp, chunk_local, layout):
     assert torch.equal(got, expected)
 
 
+@pytest.mark.parametrize("sp,chunk_local", [(1, 64), (4, 32), (8, 32)])
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_exact_slices_match_whole_embeddings(sp, chunk_local, layout):
+    items = [item(s, n, i + 1) for i, (s, n) in enumerate(layout)]
+    embs = embeddings_for(items)
+    chunk = sp * chunk_local
+    for start in range(0, max(m.end_position for m in items) + chunk, chunk):
+        end = start + chunk
+        exact = build_injection(slices(items, embs, start, end), start, end, sp, chunk_local)
+        full = build_injection(whole(items, embs), start, end, sp, chunk_local)
+        assert (exact is None) == (full is None)
+        if exact is not None:
+            assert torch.equal(exact[0], full[0]) and torch.equal(exact[1], full[1])
+
+
+def test_chunk_row_range():
+    m = item(100, 50, 1)
+    assert chunk_row_range(m, 0, 128) == (0, 28)
+    assert chunk_row_range(m, 128, 256) == (28, 50)
+    assert chunk_row_range(m, 96, 224) == (0, 50)
+    assert chunk_row_range(m, 120, 130) == (20, 30)
+
+
+def test_chunk_row_range_rejects_no_overlap(expect_error):
+    with expect_error(AssertionError, "does not overlap"):
+        chunk_row_range(item(100, 50, 1), 150, 256)
+
+
+def test_source_is_asked_only_for_the_chunks_rows():
+    items = [item(40, 50, 1)]
+    asked = []
+    source = stub_row_source(HIDDEN)
+
+    def recording(m, lo, hi):
+        asked.append((lo, hi))
+        return source(m, lo, hi)
+
+    for start in (0, 64):
+        media_rows_for_chunk(items, start, start + 64, recording)
+    assert asked == [(0, 24), (24, 50)]
+
+
+def test_stub_rows_do_not_depend_on_the_range():
+    m = item(0, 30, 9)
+    source = stub_row_source(HIDDEN)
+    assert torch.equal(torch.cat([source(m, 0, 12), source(m, 12, 30)]), stub_embeddings(m.hash, 30, HIDDEN))
+
+
+def test_missing_row_names_the_item(expect_error):
+    items = [item(10, 40, 3)]
+    short = MediaRows(items[0], 0, embeddings_for(items)[items[0].hash][:39])
+    with expect_error(AssertionError, re.escape("rows [0,39) for MediaItem(start_position=10")):
+        build_injection([short], 0, 64, 1, 64)
+
+
+def test_media_rows_rejects_rows_past_the_item(expect_error):
+    with expect_error(AssertionError, re.escape("rows [5,15)")):
+        MediaRows(item(0, 10, 1), 5, torch.zeros(10, HIDDEN))
+
+
 def test_rotated_resume_start():
-    """A chunk that starts mid-slab (multi-turn resume) still lands each row at its true position."""
     sp, chunk_local = 4, 32
     start = 96  # tile-aligned, not chunk-aligned
     items = [item(100, 50, 7)]
     embs = embeddings_for(items)
-    rows, mask = build_injection(embs, items, start, start + sp * chunk_local, sp, chunk_local)
+    rows, mask = build_injection(
+        slices(items, embs, start, start + sp * chunk_local), start, start + sp * chunk_local, sp, chunk_local
+    )
     out, hit = scatter_back(rows, mask, start, sp, chunk_local, 400)
     assert torch.equal(hit.nonzero().flatten(), torch.arange(100, 150))
     assert torch.equal(out[100:150], embs[items[0].hash])
 
 
+def test_resume_mid_image_needs_only_the_tail():
+    items = [item(50, 100, 5)]
+    embs = embeddings_for(items)
+    tail = MediaRows(items[0], 30, embs[items[0].hash][30:])
+    rows, mask = build_injection([tail], 80, 208, 1, 128)
+    assert mask[0, :70].all() and not mask[0, 70:].any()
+    assert torch.equal(rows[0, :70], embs[items[0].hash][30:])
+
+
 def test_rows_past_actual_end_are_not_injected():
-    """The last chunk's padding rows stay text even if an image would extend there."""
     items = [item(50, 100, 3)]
     embs = embeddings_for(items)
-    rows, mask = build_injection(embs, items, 0, 80, 1, 128)
+    rows, mask = build_injection(slices(items, embs, 0, 80), 0, 80, 1, 128)
     assert mask[0, 50:80].all() and not mask[0, 80:].any() and not mask[0, :50].any()
 
 
 def test_text_only_chunk_returns_none():
-    assert build_injection({}, [], 0, 128, 1, 128) is None
+    assert build_injection([], 0, 128, 1, 128) is None
     items = [item(500, 10, 1)]
-    assert build_injection(embeddings_for(items), items, 0, 128, 1, 128) is None
+    assert build_injection(whole(items, embeddings_for(items)), 0, 128, 1, 128) is None
+    assert media_rows_for_chunk(items, 0, 128, stub_row_source(HIDDEN)) == []
 
 
 def test_items_overlapping_is_half_open():
@@ -121,72 +203,3 @@ def test_stub_is_deterministic_per_hash():
     h1, h2 = b"\x01" * 32, b"\x02" * 32
     assert torch.equal(stub_embeddings(h1, 8, HIDDEN), stub_embeddings(h1, 8, HIDDEN))
     assert not torch.equal(stub_embeddings(h1, 8, HIDDEN), stub_embeddings(h2, 8, HIDDEN))
-
-
-def _bytes_of(n_tokens):
-    return n_tokens * HIDDEN * 2  # bf16
-
-
-class CountingEncoder:
-    def __init__(self, n_tokens=8):
-        self.calls = 0
-        self.n_tokens = n_tokens
-
-    def __call__(self, media_hash):
-        def run():
-            self.calls += 1
-            return stub_embeddings(media_hash, self.n_tokens, HIDDEN)
-
-        return run
-
-
-def test_cache_hit_skips_encoder_and_is_bit_identical():
-    """(a) a re-prefill after partial KV eviction hits and skips the encoder; (e) hit and miss give the same rows."""
-    cache, enc, h = EncoderCache(_bytes_of(8) * 4), CountingEncoder(), b"\x0a" * 32
-    miss = cache.get_or_compute(h, enc(h))
-    hit = cache.get_or_compute(h, enc(h))
-    assert enc.calls == 1
-    assert torch.equal(miss, hit)
-    assert (cache.hits, cache.misses) == (1, 1)
-
-
-def test_cache_is_keyed_by_media_hash_only():
-    """(b) the same image in another session, with other text and cache_salt, hits: the key carries neither.
-    (c) a different image with the same text misses."""
-    cache, enc = EncoderCache(_bytes_of(8) * 4), CountingEncoder()
-    img_a, img_b = b"\xaa" * 32, b"\xbb" * 32
-    cache.get_or_compute(img_a, enc(img_a))
-    cache.get_or_compute(img_a, enc(img_a))
-    assert enc.calls == 1
-    cache.get_or_compute(img_b, enc(img_b))
-    assert enc.calls == 2
-    assert (cache.hits, cache.misses) == (1, 2)
-
-
-def test_cache_evicts_lru_at_capacity():
-    """(d) eviction happens at the configured byte capacity, oldest-used first."""
-    cache, enc = EncoderCache(_bytes_of(8) * 2), CountingEncoder()
-    a, b, c = b"\x01" * 32, b"\x02" * 32, b"\x03" * 32
-    cache.get_or_compute(a, enc(a))
-    cache.get_or_compute(b, enc(b))
-    cache.get_or_compute(a, enc(a))  # a is now most recent
-    cache.get_or_compute(c, enc(c))
-    assert cache.evictions == 1
-    assert a in cache and c in cache and b not in cache
-    assert cache.bytes == _bytes_of(8) * 2 <= cache.capacity_bytes
-
-
-def test_cache_skips_items_larger_than_capacity():
-    cache, enc = EncoderCache(_bytes_of(8) - 1), CountingEncoder()
-    h = b"\x05" * 32
-    cache.get_or_compute(h, enc(h))
-    cache.get_or_compute(h, enc(h))
-    assert enc.calls == 2 and len(cache) == 0 and cache.evictions == 0
-
-
-def test_stats_line_is_parseable():
-    cache = EncoderCache(1024)
-    line = cache.stats_line()
-    assert line.startswith("ENCODER_CACHE ")
-    fields = dict(kv.split("=") for kv in line.split()[1:])
-    assert set(fields) == {"hits", "misses", "evictions", "entries", "bytes", "capacity_bytes"}

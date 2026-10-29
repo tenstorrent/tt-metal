@@ -131,8 +131,7 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 | Variable | Default | Effect |
 |---|---|---|
 | `PREFILL_MEDIA` | `0` | `1` = image deployment: 16-byte H2D chunk metadata carrying `media_pending_count`, and the media ring `/tt_prefill_media_<service_id>` the d-gen engine writes images into. Runner and producer must agree. |
-| `M3_MEDIA_STUB_EMBEDDINGS` | `0` | `1` = embed images with deterministic stubs seeded from the media hash. Required with `PREFILL_MEDIA=1` until the vision encoder (tt-metal#62156) is wired in. |
-| `PREFILL_ENCODER_CACHE_MB` | `2048` | Per-worker LRU of image embeddings keyed by media hash (about 7 MB per 576-token image). Hit, miss and eviction counts are logged on each `MEDIA_CHUNK` line. |
+| `M3_MEDIA_STUB_EMBEDDINGS` | `0` | `1` = image rows are deterministic stubs seeded from the media hash. Required with `PREFILL_MEDIA=1` until a real embedding source is wired in. Each chunk asks only for the rows it injects; the count is on each `MEDIA_CHUNK` line. |
 | `PREFILL_MEDIA_TIMEOUT_S` | `30` | How long stage 0 waits for a chunk's images on the media ring before failing. |
 
 **Zone profiler** (`tests/perf/profile_prefill.py`, driven by `scripts/run_prefill_profile.sh`): `PROFILE_CHUNK`,
