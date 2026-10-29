@@ -470,4 +470,26 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch):
     logger.info(
         f"(c) chunked 1500 + fresh 200: first tokens {int(first[4].argmax())} / {int(first[5].argmax())}, pcc {pcc(first[4], ref4[0]):.5f} / {pcc(first[5], ref5[0]):.5f}"
     )
-    logger.info("served waves: PASS (a) traced wave, (b) traced + eager continuation wave, (c) chunked member at 1024")
+    logger.info("served waves: (a) traced wave, (b) traced + eager continuation wave, (c) chunked member at 1024: PASS")
+
+    # (d) two long prompts whose waves carry DIFFERENT sparse starts per row (the 2026-10-29 served needle stage: rows
+    # at 54016 / 37760 in one wave, 3 of 4 answers degenerate): A on row 0 walked in 2048-row waves from step 1, B on
+    # row 1 arriving a step later, so every shared wave pairs A's start with B's start - 2048; both beyond the dense
+    # range from step 3 on; then both decode jointly, each against its own SP path from scratch
+    p6, p7 = _served_ids(6000, 7, vocab), _served_ids(4500, 8, vocab)
+    step_prefill([(6, p6[:2048], 0)])  # A alone: a traced wave of one
+    step_prefill([(6, p6[:4096], 2048), (7, p7[:2048], 0)])  # A's sparse continuation beside B's fresh chunk
+    first_a = step_prefill([(6, p6, 4096), (7, p7[:4096], 2048)])  # A's tail at 4096 beside B at 2048: both sparse
+    first_b = step_prefill([(7, p7, 4096)])  # B's tail alone
+    outs = decode_jointly({6: first_a[6], 7: first_b[7]}, {6: 6000, 7: 4500})
+    got6, got7 = [first_a[6]] + outs[6], [first_b[7]] + outs[7]
+    a.release_request(6)
+    a.release_request(7)
+    ref6, ref7 = reference(p6), reference(p7)
+    _assert_agree("(d) A (row 0, 2048 + 2048 + 1904 in waves) vs SP", got6, ref6, pcc_min=PCC_BAR_SP)
+    _assert_agree("(d) B (row 1, its sparse starts paired with A's) vs SP", got7, ref7, pcc_min=PCC_BAR_SP)
+    logger.info(
+        f"(d) mixed sparse starts: first tokens {int(first_a[6].argmax())} / {int(first_b[7].argmax())} "
+        f"(SP {int(ref6[0].argmax())} / {int(ref7[0].argmax())}), pcc {pcc(first_a[6], ref6[0]):.5f} / {pcc(first_b[7], ref7[0]):.5f}"
+    )
+    logger.info("served waves: PASS (a)-(d)")
