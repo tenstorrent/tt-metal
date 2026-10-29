@@ -10,7 +10,13 @@ from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
-def generate_reference_outputs(total_length, output_file, model_name):
+def generate_reference_outputs(total_length, output_file, model_name, chunk_size=1024):
+    """Top-5 reference predictions for the first ``total_length`` tokens of the book, for ci-token-matching.
+
+    The text is run through the HF model in chunks to bound the activation memory, and the KV cache is
+    carried from chunk to chunk, so every position is predicted with the full preceding context, exactly as
+    the device model sees it (the demo prefills the first half as the prompt and compares the rest).
+    """
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
@@ -47,7 +53,7 @@ def generate_reference_outputs(total_length, output_file, model_name):
     all_top5_correct = []
     all_top5_tokens = []
     segment_accuracies = []
-    chunk_size = 1024
+    past_key_values = None  # KV cache of the chunks processed so far: each chunk sees the full context
 
     with torch.no_grad():
         for chunk_start in range(0, total_length - 1, chunk_size):
@@ -60,8 +66,9 @@ def generate_reference_outputs(total_length, output_file, model_name):
             # Trim input chunk if needed
             chunk_tokens = chunk_tokens[:, :actual_chunk_size]
 
-            # Process chunk using HuggingFace model
-            outputs = model(chunk_tokens.to(device))
+            # Process chunk using HuggingFace model, continuing from the previous chunks' KV cache
+            outputs = model(chunk_tokens.to(device), past_key_values=past_key_values, use_cache=True)
+            past_key_values = outputs.past_key_values
             logits = outputs.logits
 
             # Compute top-5 predictions
@@ -140,9 +147,14 @@ def main():
     parser.add_argument(
         "--model", type=str, required=True, help="HuggingFace model name (e.g., 'meta-llama/Llama-3.1-8B-Instruct')"
     )
+    parser.add_argument(
+        "--chunk_size", type=int, default=1024, help="Tokens per forward pass (the KV cache carries the context)"
+    )
     args = parser.parse_args()
 
-    generate_reference_outputs(total_length=args.total_length, output_file=args.output_file, model_name=args.model)
+    generate_reference_outputs(
+        total_length=args.total_length, output_file=args.output_file, model_name=args.model, chunk_size=args.chunk_size
+    )
 
 
 if __name__ == "__main__":
