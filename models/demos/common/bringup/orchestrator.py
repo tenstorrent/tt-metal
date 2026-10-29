@@ -2136,6 +2136,21 @@ def _live_orchestrator(pid_file: Path) -> int | None:
     return pid
 
 
+def _first_open(orch: Orchestrator) -> str | None:
+    """The first unpassed task a fix may go before. F213: never a perf pick whose A/B is measured (waiting for the
+    decision or decided): the tree holds its uncommitted change, and a fix placed first would work on it and sweep it
+    into its own commit (DeepSeek-V4.1 FIX.9 before the accepted P.6). Such a pick keeps its place."""
+    state = orch.led.state()
+    for t in orch.led.topo_order():
+        e = state.get(t, {})
+        if satisfied(e.get("status")):
+            continue
+        if orch.led.task(t).get("step") == "perf" and (e.get("waiting") or e.get("ab")):
+            continue
+        return t
+    return None
+
+
 def _place_fixes(orch: Orchestrator) -> bool:
     """F77: every queued overseer fix becomes a ledger task placed just before the first unpassed task."""
     jobs = OV.take_fixes(orch.spec.ledger_dir)
@@ -2144,7 +2159,7 @@ def _place_fixes(orch: Orchestrator) -> bool:
     spec = yaml.safe_load(orch.led.tasks_path.read_text())
     tasks = {t["id"]: t for t in spec["tasks"]}
     for job in jobs:
-        first = orch.led.first_unpassed()
+        first = _first_open(orch)
         ids = [t["id"] for t in spec["tasks"]]
         at = ids.index(first) if first in ids else len(ids)
         fix = OV.fix_task(job, tasks)

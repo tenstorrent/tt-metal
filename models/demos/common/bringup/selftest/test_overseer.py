@@ -390,3 +390,20 @@ def test_until_runs_the_task_and_what_it_needs_then_stops(orch):  # noqa: F811
     assert "C.4" not in st or st["C.4"].get("status") in (None, "TODO")
     assert any("reached C.2" in ln for ln in orch.lines)
     assert o.run(until="C.2") == DONE and not [c for c in orch.calls() if c.startswith(("C.3", "C.4"))]
+
+
+def test_a_fix_is_not_placed_before_a_perf_pick_whose_ab_is_measured(orch):  # noqa: F811
+    """F213: a perf pick waiting for (or holding) its A/B decision has its change in the tree; a fix released then was
+    placed before it, worked on that tree and would sweep the pick into its own commit (DeepSeek-V4.1 FIX.9 before the
+    accepted P.6). The fix now goes after the pick, before the next open task."""
+    from models.demos.common.bringup.orchestrator import _place_fixes
+
+    o = orch([impl_task(), dict(impl_task(id="P.1", deps=["C.1"]), step="perf"), impl_task(id="C.2", deps=["P.1"])], {})
+    o.led.update("C.1", status="PASS")
+    o.led.update("P.1", status="TODO", waiting="apply P.1 or not?")
+    led = {t: o.led.task(t) for t in o.led.tasks()}
+    OV.queue_fix(o.spec.bringup_dir, "Change the default.", ["C.1"], tasks=led)
+    assert _place_fixes(o)
+    ids = list(o.led.tasks())
+    assert ids.index("P.1") < ids.index("FIX.1") < ids.index("C.2"), ids
+    assert "FIX.1" not in (o.led.task("P.1").get("deps") or []) and "FIX.1" in o.led.task("C.2")["deps"]
