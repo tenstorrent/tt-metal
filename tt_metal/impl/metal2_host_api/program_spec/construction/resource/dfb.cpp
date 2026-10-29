@@ -214,13 +214,14 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
+        .unpack_on_trisc3 = consumer_binding->use_trisc3,
+        .pack_on_trisc3 = producer_binding->use_trisc3,
         // DFB externally placed storage is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
         // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the
         // PrefetcherPipe ring the relay aliases.
         .borrows_memory = dfb_spec->borrowed_from.has_value() ||
-                          dfb_spec->advanced_options.allocation_override.has_value() ||
-                          is_relay,
+                          dfb_spec->advanced_options.allocation_override.has_value() || is_relay,
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
         .is_relay = is_relay};
 }
