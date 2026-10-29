@@ -176,8 +176,8 @@ def test_a_partial_nan_block_survives_only_where_the_element_can_hold_it(fmt):
     from ``all(isnan(block))`` -- so a block that is NaN in one datum and finite
     elsewhere gets an ordinary exponent and the scale carries nothing. Whether
     the NaN then round-trips is entirely down to the element encoding, and the
-    two families differ. The loss is the format's, not the model's: the RTL
-    excludes NaN from the max-exponent tree the same way.
+    two families differ. The loss is the format's, not the model's. The
+    hardware excludes NaN from the max-exponent tree the same way.
     """
     unpacker, element_holds_nan = UNPACKERS[fmt]
     values = [float("nan")] + [1.0] * (BLOCK_SIZE - 1)
