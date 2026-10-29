@@ -28,8 +28,8 @@ EXAMPLES_PATH = TESTS_DIR / "examples.json"
 
 BATCH = 32
 MIN_HIDDEN_PCC = 0.9995  # min over all rows of all questions; measured >= 0.9998
-MAX_PROB_DIFF = 0.06  # per question; measured max 0.047
-MEAN_PROB_DIFF = 0.025  # over all questions; measured 0.014
+MAX_PROB_DIFF = 0.06  # per question; measured max 0.041
+MEAN_PROB_DIFF = 0.025  # over all questions; measured 0.011
 TIE_MARGIN = (
     0.02  # top-1 may differ when the reference top1-top2 probability margin is below this (order_json/priority: 0.001)
 )
