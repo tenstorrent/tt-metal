@@ -5,18 +5,83 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+
+namespace tt::tt_metal {
+class DistributedHostBuffer;
+class HostBuffer;
+namespace distributed {
+class MeshBuffer;
+class MeshCommandQueue;
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt::tt_metal
 
 // Pinned upload is the host-to-device write path for large tensors. The default path has the host CPU copy the
 // tensor into the command queue's issue ring, a chunk at a time, for the prefetcher to forward to the device. The
 // pinned path instead pins the tensor's own host pages through the kernel driver and maps them into the device's NOC
 // address space (`experimental::PinnedMemory`), so the prefetcher reads the data straight out of the host buffer over
-// PCIe and the CPU copies nothing. `experimental::PinnedMemoryCache` keeps each pin, keyed by host address, so later
-// uploads from the same buffer reuse it. The path needs a system where pinned memory can be mapped to the NOC
+// PCIe and the CPU copies nothing. Large uploads on Blackhole with IOMMU pin in chunks (see write_shards); other
+// uploads pin each shard whole through `experimental::PinnedMemoryCache`, which keeps the pin, keyed by host address,
+// so later uploads from the same buffer reuse it. The path needs a system where pinned memory can be mapped to the NOC
 // (`experimental::GetMemoryPinningParameters`); elsewhere, or when a pin fails, uploads take the copy path.
 namespace tt::tt_metal::pinned_upload {
 
 // Pinning a buffer locks every page of it and sets up a device-visible mapping for it, which costs more than copying a
 // small tensor through the issue ring. Uploads at or below this size take the copy path.
 inline constexpr size_t k_pin_write_threshold_bytes = 32 * 1024 * 1024;  // 32 MB
+
+// Upper bound on one chunk pin of a chunked upload. Pins of this size keep a chunk's pin time well under the transfer
+// time of the chunk before it, so pinning hides behind the transfer, while the pipeline still ramps up within the
+// first few MiB.
+inline constexpr size_t k_max_chunk_bytes = 8 * 1024 * 1024;
+
+// Chunk size a chunked upload uses for one shard of `shard_bytes` written in pages of `page_bytes`: the shard splits
+// into the fewest near-equal chunks of at most k_max_chunk_bytes, each a multiple of lcm(page_bytes, OS page size),
+// with a shorter last chunk. Chunks are page multiples because the device writes whole pages of a buffer region, and
+// OS-page multiples so chunks that start page-aligned pin disjoint pages. Returns 0 when that granule exceeds
+// k_max_chunk_bytes.
+size_t chunk_bytes_for(size_t shard_bytes, size_t page_bytes);
+
+// True when large uploads to `mesh_device` may pin in chunks: Blackhole with IOMMU and read-only page pinning, under
+// fast dispatch, with neither TT_METAL_PINNED_UPLOAD_THREADS nor TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES set to 0.
+// Whether a given upload does also depends on its buffer layout and host memory.
+bool chunked_uploads_supported(distributed::MeshDevice& mesh_device);
+
+// Writes this host's shards of `host_buffer` into `mesh_buffer` with the device reading pinned host memory.
+//
+// Returns false, having written nothing, when no shard could be pinned; the caller then writes through the copy
+// path. On true, every shard has been written. The call returns once the device has read all of the host memory,
+// except when every shard's storage is device-immutable (experimental::MemoryPinMarkDeviceImmutable): then it returns
+// as soon as the writes are enqueued, and keeps the storage alive until they complete.
+//
+// Large uploads on Blackhole with IOMMU are pinned in chunks by a worker pool (TT_METAL_PINNED_UPLOAD_THREADS) while
+// earlier chunks transfer; others pin each shard whole through experimental::PinnedMemoryCache.
+bool write_shards(
+    distributed::MeshCommandQueue& cq,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const DistributedHostBuffer& host_buffer);
+
+// write_shards for one host buffer written whole to every device of the mesh that this host owns.
+bool write_replicated(
+    distributed::MeshCommandQueue& cq,
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
+    const HostBuffer& host_buffer);
+
+// Waits for the writes of device-immutable uploads that returned early and releases their pins. Their storage (for a
+// file mapping, the munmap) is released on a background thread; see wait_for_storage_release.
+// `cq_id` limits this to uploads through that command queue; nullopt covers every command queue of `mesh_device`.
+void drain(const distributed::MeshDevice& mesh_device, std::optional<uint32_t> cq_id = std::nullopt);
+
+// Number of device-immutable uploads to `mesh_device` whose pins are still held after returning early.
+size_t num_pending(const distributed::MeshDevice& mesh_device);
+
+// Waits until the storage of every drained upload has been released.
+void wait_for_storage_release();
+
+// Chunk pins that chunked uploads in this process have created, so tests can tell pinned chunks from copied ones.
+size_t num_chunk_pins_created();
 
 }  // namespace tt::tt_metal::pinned_upload

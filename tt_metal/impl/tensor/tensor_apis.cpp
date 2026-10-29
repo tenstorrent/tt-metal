@@ -37,21 +37,6 @@
 
 namespace tt::tt_metal {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-
-bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
-    if (size_bytes <= pinned_upload::k_pin_write_threshold_bytes) {
-        return false;
-    }
-    const auto params = experimental::GetMemoryPinningParameters(mesh_device);
-    return params.max_pins > 0 && params.can_map_to_noc;
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-
-}  // namespace
-
 // ======================================================================================
 //                                Uniform Data movement APIs
 // ======================================================================================
@@ -167,42 +152,7 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
 
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& distributed_host_buffer = host_tensor.buffer();
-
-    auto* mesh_device = mesh_buffer->device();
-    auto local_shards = tensor_impl::select_local_host_shards(distributed_host_buffer, *mesh_device);
-
-    const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*device(), local_shards.size_bytes);
-
-    if (use_pinned) {
-        std::vector<distributed::ShardDataTransfer> transfers;
-        transfers.reserve(local_shards.shards.size());
-        bool any_pinned = false;
-
-        for (auto& [coord, buf] : local_shards.shards) {
-            auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
-            HostBuffer pinned_buf(buf);
-            auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-                *mesh_device,
-                coord_range,
-                pinned_buf,
-                /*map_to_noc=*/true,
-                experimental::PinnedMemoryDeviceAccess::ReadOnly);
-
-            auto xfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(coord)}
-                            .host_data(buf.view_bytes().data())
-                            .region(BufferRegion(0, buf.view_bytes().size()));
-            if (pinned_memory) {
-                experimental::ShardDataTransferSetPinnedMemory(xfer, std::move(pinned_memory));
-                any_pinned = true;
-            }
-            transfers.push_back(std::move(xfer));
-        }
-        if (any_pinned) {
-            enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
-        } else {
-            enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
-        }
-    } else {
+    if (!pinned_upload::write_shards(*this, mesh_buffer, distributed_host_buffer)) {
         enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 

@@ -303,6 +303,11 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     }
 }
 
+bool PinnedMemoryCache::contains(const void* host_address) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return address_map_.contains(host_address);
+}
+
 void PinnedMemoryCache::release(const void* host_address) {
     std::lock_guard<std::mutex> lock(mutex_);
     release_locked(host_address);
