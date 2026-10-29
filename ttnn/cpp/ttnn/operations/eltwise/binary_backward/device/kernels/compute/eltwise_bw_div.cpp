@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused d(a/b)/d? backward: input_grad = grad/other, other_grad = -grad*input/other².
-// Both chains reuse grad_out and other; input is only needed for chain 2.
+// Fused d(a/b)/d? backward: input_grad = grad*(1/other), other_grad = -grad*(input/other)/other.
+// cb_other is held across both chains (chain 1 NoPop); other² is avoided (over/underflow at edges).
 
 #include <cstdint>
 
@@ -59,7 +59,8 @@ void kernel_main() {
                 ckl::PushPolicy::PerTile,
                 ckl::DataFormatReconfig::Enabled)>{cb_input_grad_obj});
 
-        // Chain 2: other_grad = -grad * input * (1/other²). Pops grad, input, other.
+        // Chain 2: other_grad = -grad * (input/other) / other. Pops grad, input, other.
+        // D2 = 1/other applied twice replaces Square(other) that underflows at |other|<1e-19 (#56601 review).
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::CopyTile<
@@ -78,8 +79,6 @@ void kernel_main() {
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
                 ckl::Dst::D1>{cb_input_obj},
-            ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // D0 = grad * input
-            ckl::Negative<ckl::Dst::D0>{},                               // D0 = -grad * input
             ckl::CopyTile<
                 ckl::input(
                     cb_other,
@@ -88,9 +87,11 @@ void kernel_main() {
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
                 ckl::Dst::D2>{cb_other_obj},
-            ckl::Square<ckl::Dst::D2>{},                                 // D2 = other²
-            ckl::Recip<ckl::Dst::D2>{},                                  // D2 = 1/other²
-            ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},  // D0 = -grad*input / other²
+            ckl::Recip<ckl::Dst::D2>{},                                  // D2 = 1/other
+            ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},  // D1 = input/other
+            ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},  // D1 = (input/other)/other
+            ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // D0 = grad*(input/other²)
+            ckl::Negative<ckl::Dst::D0>{},                               // D0 = -grad*input/other²
             ckl::PackTile<ckl::output(
                 cb_other_grad,
                 ckl::ReservePolicy::PerTile,
