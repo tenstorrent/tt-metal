@@ -67,8 +67,15 @@ def stateless_prefill_forward(gdn, x):
     mega = prefill_linear(x, w.mega_fused_weight, gdn.compute_kernel_config)
     a_off, b_off, g_off = w.mega_qkv_dim, w.mega_qkv_dim + w.mega_a_dim, w.mega_qkv_dim + w.mega_a_dim + w.mega_b_dim
     qkv = ttnn.to_layout(mega[:, :, :a_off], ttnn.TILE_LAYOUT)
-    a = ttnn.to_layout(mega[:, :, a_off:b_off], ttnn.TILE_LAYOUT)
-    b = ttnn.to_layout(mega[:, :, b_off:g_off], ttnn.TILE_LAYOUT)
+    if a_off % 32 == 0 and g_off % 32 == 0:
+        # Cut the a|b block on tile edges first; the unaligned a/b split then runs on [B, S, 32], not on mega.
+        ab = ttnn.to_layout(mega[:, :, a_off:g_off], ttnn.TILE_LAYOUT)
+        a = ttnn.to_layout(ab[:, :, : w.mega_a_dim], ttnn.TILE_LAYOUT)
+        b = ttnn.to_layout(ab[:, :, w.mega_a_dim :], ttnn.TILE_LAYOUT)
+        ttnn.deallocate(ab)
+    else:
+        a = ttnn.to_layout(mega[:, :, a_off:b_off], ttnn.TILE_LAYOUT)
+        b = ttnn.to_layout(mega[:, :, b_off:g_off], ttnn.TILE_LAYOUT)
     z = ttnn.to_layout(mega[:, :, g_off:], ttnn.TILE_LAYOUT)
     ttnn.deallocate(mega)
 
