@@ -325,3 +325,18 @@ def test_screen_columns(tmp_path, monkeypatch, tty):
     assert [k2[i - 1] for i in starts[1:]] == [" "] * 3
     assert [k2.index(t) for t in ("PASS", "FAIL")] == starts[:2]
     assert glm.index("-") == starts[1]
+
+
+def test_only_runs_exact_keys():
+    from galaxy_workload_deployment_test import skipped_keys
+
+    assert skipped_keys(["paths", "reset", "block:kimi_k2_7"], skip="", only="block:kimi_k2_7") == {"paths", "reset"}
+
+
+def test_skip_and_unknown_keys():
+    import pytest
+    from galaxy_workload_deployment_test import skipped_keys
+
+    assert skipped_keys(["paths", "reset"], skip="reset", only="") == {"reset"}
+    with pytest.raises(ValueError, match="unknown --only keys: nope"):
+        skipped_keys(["paths"], skip="", only="nope")
