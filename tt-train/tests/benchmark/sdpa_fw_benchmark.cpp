@@ -64,6 +64,10 @@ const std::vector<Scenario> kScenarios = {
     {"llama8b_tp8_s8192_causal", 1U, 4U, 1U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_tp8_s4096_causal", 1U, 4U, 1U, 4096U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"fewhead_2h_s2048_causal", 1U, 2U, 2U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal},
+    // 192 four-row items on 120 to 130 cores: one to two items per core, where cutting the heavy ones
+    // puts the mergers on cores the whole items already fill and the scheduler must keep the uncut
+    // schedule (it did not, once).
+    {"gpt2s_h12d64_s2k", 1U, 12U, 12U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal},
     // One chip's attention of the models tt-train trains or is asked about, at S=2k, 8k and 16k; the
     // table in the program factory's PR is this list. None of these cuts an item: with 32 heads there are
     // more items than cores at every length, and the 6 to 8-head shapes only at S=16k.
