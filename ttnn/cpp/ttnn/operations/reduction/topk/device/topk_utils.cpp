@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <limits>
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
@@ -368,7 +369,12 @@ std::vector<std::pair<std::string, std::string>> topk_width_padding_defines(cons
         return {};
     }
     const bool fp32 = input.dtype() == tt::tt_metal::DataType::FLOAT32;
-    const uint32_t pad_bits = fp32 ? (largest ? 0xFF800000u : 0x7F800000u) : (largest ? 0xFF80u : 0x7F80u);
+    // Rows are padded with -inf for largest and +inf for smallest. A bf16 value is the upper 16 bits of its fp32.
+    constexpr uint32_t fp32_neg_inf_bits = std::bit_cast<uint32_t>(-std::numeric_limits<float>::infinity());
+    constexpr uint32_t fp32_pos_inf_bits = std::bit_cast<uint32_t>(std::numeric_limits<float>::infinity());
+    static_assert(fp32_neg_inf_bits == 0xFF800000u && fp32_pos_inf_bits == 0x7F800000u);
+    const uint32_t fp32_pad_bits = largest ? fp32_neg_inf_bits : fp32_pos_inf_bits;
+    const uint32_t pad_bits = fp32 ? fp32_pad_bits : fp32_pad_bits >> 16;
     std::vector<std::pair<std::string, std::string>> defines = {
         {"TOPK_PAD_VALUE", std::to_string(pad_bits) + "u"}, {"TOPK_PAD_FP32", fp32 ? "1" : "0"}};
     if (last_tile_width != 0) {

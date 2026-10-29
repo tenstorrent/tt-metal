@@ -372,7 +372,8 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(can_run, "Not enough cores or cache size available to run TopK operation");
 }
 
-// Every miss check depends only on hashed attributes, tensor specs or device constants.
+// Nothing to check: the default program hash covers TopkParams and every TopkInputs tensor spec, optional ones too.
+// A custom compute_program_hash must re-check here whatever it leaves out.
 void TopKDeviceOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&) {}
 
 TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_specs(
