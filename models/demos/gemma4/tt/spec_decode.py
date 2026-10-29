@@ -482,10 +482,21 @@ def serving_mask_plan(positions, P, ring=None):
     return plan
 
 
-def serving_masks_from_plan(plan, S_k, window, ring=None):
+def serving_mask_rows(positions, P, h):
+    """The packed-row verify positions the in-trace mask builder compares the key iota against (uploaded as
+    ``v_pos_rows``): ``[1, B*h*P]`` int64, row ``b*h*P + h'*P + p = c_b + p`` for every local head ``h'`` (the
+    packed verify's row order, ``serving_masks_host`` row p of batch b repeated per head)."""
+    P, h = int(P), int(h)
+    if P < 1 or h < 1:
+        raise ValueError(f"mask rows need P, h >= 1, got {P}, {h}")
+    return torch.tensor([[int(c) + p for c in positions for _ in range(h) for p in range(P)]], dtype=torch.int64)
+
+
+def serving_masks_from_plan(plan, S_k, window, ring=None, h=1):
     """Torch emulation of ``_srv_masks_device``, comparison for comparison (fp32 key - query, gtz/gez/ltz
-    indicators cast to bf16, scaled by ``SPEC_MASK_NEG``); must equal ``serving_masks_host``."""
-    q = plan["q"].to(torch.float32)[:, None, :, None]  # [B, 1, P, 1]
+    indicators cast to bf16, scaled by ``SPEC_MASK_NEG``) at the packed height ``h * P`` (row ``h' * P + p``
+    reads row p); must equal ``serving_masks_host`` repeated ``h`` times along the rows."""
+    q = plan["q"].to(torch.float32).repeat(1, int(h))[:, None, :, None]  # [B, 1, h*P, 1]
     B, P = int(q.shape[0]), int(q.shape[2])
     j = torch.arange(int(S_k), dtype=torch.float32)[None, None, None, :]
     diff = j - q  # key - query
@@ -2849,6 +2860,7 @@ class SpeculativeDecoder:
                 "d_pi",
                 "d_ptl_slots",
                 "v_pos",
+                "v_pos_rows",
                 "write_idxs",
                 "ring_base",
                 "ring_tm",
@@ -2903,6 +2915,9 @@ class SpeculativeDecoder:
             "d_ptl_slots": d_ptl_slots,  # one [B, blocks] int32 table per KV group slot
             "d_ptl_list": [d_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
             "v_pos": self._from_b(torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32),  # row b*P+p = c_b + p
+            # the same positions per PACKED query row (b*H*P + h*P + p = c_b + p): the in-trace masks come out at
+            # the packed height from these, with no row repeat of a key-wide tensor (_srv_masks_device)
+            "v_pos_rows": self._from_b(torch.zeros(1, B * self._packed_H() * P, dtype=torch.int64), ttnn.uint32),
             "write_idxs": [self._from_b(torch.zeros(B, dtype=torch.int32), ttnn.int32) for _ in range(P)],
         }
 
@@ -3029,8 +3044,8 @@ class SpeculativeDecoder:
         h.deallocate(True)
         # 3. user-major verify input [1, B*P] (row b*P+p) from the P columns [1, B]
         verify_x = self._srv_assemble_verify_x(S, draft_cols)
-        # 4. masks built in-trace at [B, 1, P, S], then ONE packed verify; the
-        # H x repeat tiles the P block per head (row h*P+p, the packed layout).
+        # 4. masks built in-trace at the packed height [B, 1, H*P, S] (row h*P+p
+        # reads position p), then ONE packed verify.
         mask_full, mask_slide = self._srv_masks_device(S, rec)
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
@@ -3141,21 +3156,33 @@ class SpeculativeDecoder:
     def _srv_masks_device(self, S, rec):
         """In-trace additive masks [B, 1, H*P, S_k] (full) and [B, 1, H*P, S_r] (sliding) for the record.
 
-        Per key chunk, ``diff = iota - q`` (fp32, [B, 1, P, n] by the binary
-        broadcast of [1, 1, 1, n] against the [B, 1, P, 1] query positions);
-        full = gtz(diff); sliding (unbounded) adds gez(-(diff + W)); under a
-        ring the keys are ring slots whose position is ``base + j - ring *
-        gtz(j - tm)`` (the uploaded per-row ring scalars) and ltz(position)
-        masks the untouched tail. Indicators are cast to bf16 before the NEG
-        scale so each chunk holds at most two fp32 intermediates.
-        ``serving_masks_from_plan`` is this sequence in torch.
+        Per key chunk, ``diff = iota - q`` (fp32, [B, 1, H*P, n] by the binary
+        broadcast of [1, 1, 1, n] against the [B, 1, H*P, 1] packed-row query
+        positions, row h*P+p = c_b + p, uploaded as ``v_pos_rows``); full =
+        gtz(diff); sliding (unbounded) adds gez(-(diff + W)); under a ring the
+        keys are ring slots whose position is ``base + j - ring * gtz(j - tm)``
+        (the uploaded per-row ring scalars) and ltz(position) masks the
+        untouched tail. Indicators are cast to bf16 before the NEG scale so each
+        chunk holds at most two fp32 intermediates, and the chunks concatenate
+        along the keys into the mask. Every wide tensor of the build is
+        tile-aligned (rows pad to a tile, widths are multiples of 32): the
+        earlier build made the mask at [B, 1, P, S_k] and repeated it H times
+        along the padded row dim, which ttnn.repeat runs as untilize -> row-major
+        repeat -> tilize over the full key width (526 KB rows at S_k 263168, two
+        row tiles once H*P > 32); the 31B at TP4 (8 local heads x 6 rows) was the
+        one served geometry on that path at the top rung, and the one whose 256K
+        verify went wrong. ``serving_masks_from_plan(..., h=H)`` is this
+        sequence in torch.
         """
         B, P = S["B"], S["P"]
+        H = self._packed_H()
         W = float(self._pv_window)
         ring = self._pv_ring.get("sliding_attention")
         neg = float(SPEC_MASK_NEG)
-        # query positions [B, 1, P, 1] fp32 from the uploaded [1, B*P] verify positions
-        q = ttnn.typecast(ttnn.to_layout(ttnn.reshape(S["v_pos"], (B, 1, P, 1)), ttnn.TILE_LAYOUT), ttnn.float32)
+        # query positions per packed row [B, 1, H*P, 1] fp32 from the uploaded [1, B*H*P] row positions
+        q = ttnn.typecast(
+            ttnn.to_layout(ttnn.reshape(S["v_pos_rows"], (B, 1, H * P, 1)), ttnn.TILE_LAYOUT), ttnn.float32
+        )
         full_parts, slide_parts = [], []
         for j0, n in self._srv_mask_chunks(rec["S_k"]):
             iota = self._srv_iota_for(n)
@@ -3223,18 +3250,13 @@ class SpeculativeDecoder:
                 slide_parts.append(ttnn.multiply(ind, neg))
                 ind.deallocate(True)
         q.deallocate(True)
-        _H = self._packed_H()
         outs = []
         for parts in (full_parts, slide_parts):
-            mask = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=3)
+            mask = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=3)  # [B, 1, H*P, S] tile-aligned
             if len(parts) > 1:
                 for part in parts:
                     part.deallocate(True)
-            repeated = ttnn.repeat(mask, ttnn.Shape([1, 1, _H, 1]))
-            if not _same_device_buffer(repeated, mask):
-                # a one-head repeat may hand back its input under a new wrapper
-                mask.deallocate(True)
-            outs.append(repeated)
+            outs.append(mask)
         return outs[0], outs[1]
 
     def _srv_copy_if_changed(self, key, host, dev, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
@@ -3319,6 +3341,8 @@ class SpeculativeDecoder:
         hpi.deallocate(True)
         vpos = torch.tensor([[c + p for c in pos for p in range(P)]], dtype=torch.int64)
         self._srv_copy_if_changed(("vpos", shape), vpos, S["v_pos"], ttnn.uint32)
+        vrows = serving_mask_rows(pos, P, self._packed_H())
+        self._srv_copy_if_changed(("vrows", shape), vrows, S["v_pos_rows"], ttnn.uint32)
         for p in range(P):
             wi = torch.tensor([c + p for c in pos], dtype=torch.int32)
             self._srv_copy_if_changed(("widx", shape, p), wi, S["write_idxs"][p], ttnn.int32)

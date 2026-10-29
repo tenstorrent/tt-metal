@@ -38,6 +38,7 @@ from models.demos.gemma4.tt.spec_decode import (
     parse_k_by_rows,
     serving_mask_padded_bytes,
     serving_mask_plan,
+    serving_mask_rows,
     serving_masks_from_plan,
     serving_masks_host,
     serving_pad_rows,
@@ -1464,6 +1465,16 @@ def test_device_mask_plan_equals_the_host_masks_unbounded():
         assert got_f.dtype == torch.bfloat16 and got_s.dtype == torch.bfloat16
         assert torch.equal(got_f, ref_f), (positions, P, S_k)
         assert torch.equal(got_s, ref_s), (positions, P, S_k)
+        # the in-trace build works at the packed height from the uploaded packed-row positions (row h*P+p of
+        # batch b = c_b + p): the twin at h local heads is the host mask repeated per head, no wide row repeat
+        for h in (4, 8):
+            rows = serving_mask_rows(positions, P, h)
+            assert rows.shape == (1, len(positions) * h * P) and rows.dtype == torch.int64
+            assert rows.tolist()[0] == [c + p for c in positions for _ in range(h) for p in range(P)]
+            assert rows.reshape(len(positions), h, P)[:, 0, :].tolist() == plan["q"].tolist()
+            hf, hs = serving_masks_from_plan(plan, S_k, _W, h=h)
+            assert hf.shape == (len(positions), 1, h * P, S_k) and hs.shape == hf.shape
+            assert torch.equal(hf, ref_f.repeat(1, 1, h, 1)) and torch.equal(hs, ref_s.repeat(1, 1, h, 1))
 
 
 def test_device_mask_plan_equals_the_host_masks_under_a_ring():
@@ -1484,6 +1495,8 @@ def test_device_mask_plan_equals_the_host_masks_under_a_ring():
         assert got_s.shape == (len(positions), 1, P, ring)
         assert torch.equal(got_f, ref_f), (positions, P, S_k, ring)
         assert torch.equal(got_s, ref_s), (positions, P, S_k, ring)
+        hf, hs = serving_masks_from_plan(plan, S_k, _W, ring=ring, h=8)  # the packed height under a ring
+        assert torch.equal(hf, ref_f.repeat(1, 1, 8, 1)) and torch.equal(hs, ref_s.repeat(1, 1, 8, 1))
     # The ring-slot position rule matches the modulo form: base + j - ring * [j > tm] is
     # top - ((top - j) mod ring) for every slot, so the device form needs no modulo.
     ring, P = 2048, 6
@@ -1663,6 +1676,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._pv_ring = {"sliding_attention": None, "full_attention": None}
     spec._pv_bs_t = {"sliding_attention": 128, "full_attention": 64}
     spec._pv_ring_rep = {"sliding_attention": 3, "full_attention": 4}
+    spec._packed_H = lambda: 4  # local query heads: the packed-row positions are B x 4 x P per shape
     spec._srv_blocks = ladder[-1] // 64
     spec._srv_slots, spec._srv_n_slots = serving_kv_group_slots(layer_types)
     spec._srv_flat_type = "full_attention"
@@ -1698,6 +1712,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     for shape in shapes:
         B, K = shape
         S = spec._srv_alloc_shape(shape)
+        assert S["v_pos"].shape == (1, B * (K + 1)) and S["v_pos_rows"].shape == (1, B * 4 * (K + 1))
         spec._srv_shape_bufs[shape] = S
         spec._srv_seed_rows(shape, [0] * B, [0] * B)
         for w in ladder:
@@ -1786,7 +1801,8 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     # the release frees the reseed inputs with everything else and lifts the freeze
     bufs, recs = list(spec._srv_shape_bufs.values()), list(spec._srv_records.values())
     spec.serving_release()
-    assert all(S[key].freed for S in bufs for key in ("seed_tok", "seed_pu", "seed_pi")) and not spec._srv_frozen
+    assert all(S[key].freed for S in bufs for key in ("seed_tok", "seed_pu", "seed_pi", "v_pos", "v_pos_rows"))
+    assert not spec._srv_frozen
     assert all(rec[key].freed for rec in recs for key in ("verify_x", "vidx"))
 
 
