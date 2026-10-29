@@ -1018,9 +1018,12 @@ def test_wave_prefill_walks_chunks_and_switches_sp_to_waves_one_way():
     a, m = _adapter(independent=True, max_seq_len=65536)
     L = 2048 * 2 + 100
     ids = (torch.arange(L) % 60).to(torch.int32).reshape(1, L)
-    # a lone prompt: SP (today's eager device chunks of 16 K) while slot index 0 is free on row 1
+    # a lone prompt beyond the captured wave lengths (256 / 512 by default): the eager SP chunks (no SP prefill
+    # traces under per-row ownership) while slot index 0 is free on row 1
+    n0 = len(m.calls)
     a.prefill_forward(ids, prompt_lens=[2048], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
-    assert [c for c in m.calls if c[0] == "prefill_traced"][-1] == ("prefill_traced", 0, 2048, 2048)
+    kinds = [c[0] for c in m.calls[n0:] if c[0].startswith("prefill")]
+    assert kinds == ["prefill"] and m.calls[n0:][0][1:3] == (0, 0), kinds  # one eager SP chunk into user 0 at start 0
     assert a.slots.physical(0).sp_only and a.slots.physical(0).prefilled_to == 2048
     # a second prompt lands on (1, 0): slot index 0 is no longer free on the other row, so request 0's next chunk
     # and the new prompt go through waves; the 2148-token continuation is walked in 2048-row device chunks
