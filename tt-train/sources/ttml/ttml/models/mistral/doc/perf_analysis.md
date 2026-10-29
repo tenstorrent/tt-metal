@@ -173,3 +173,60 @@ The tail write is now the largest removable overhead of the fusion: `fill_cache`
 **Against the plan target.** Cycle-time 1339 ms per 40-layer step against the plan's 1620 ms (1562 ms of kernels + 58 ms of planned dispatch): **17 % below the target, 14 % below the kernel budget**; at the delivered 1.13-1.16 GHz that is 1559-1600 ms wall against the target's 1885 ms at that clock. The stretch figure (1259 ms, a memory-bound LoRA path) is 6 % away. The TP=4 full-model report stands at 556.5 ms / 29.15 % MFU of 594 TFLOP/s.
 
 Remaining items (40 layers, cycle-time): math 1235 ms, of which the four big base matmuls 771 (gate_up forward at 63 % of the delivered peak, the rest 67-85 %), SDPA 124 (fwd 35.3 vs 4.6 roofline, bwd 89 vs 9.2), LoRA skinny matmuls ~110 (w2's `[1024,32768] x [32768,32]^T` on 33 cores 19.5, its `dx` 16.8, the four A forwards 4 x 2-6, `dB`s 23 + 7 + ...), SwiGLU bwd 40.9 vs 26 roofline, RMSNorm bwd 29.7 on 32 cores vs 4.9, LM head 29; glue 36.4 (the residual-stream adds and the LoRA `dx` accumulations, 360 `BinaryNg`, 32.6; loss-grad scale 1.4); tail writes 31.6; layout 30.5 (heads 11.5, dX transposes 3.8, fusion concats/slices 7.5, transposes of the tail blocks); host/dispatch ~3.
+
+## Loop exit (2026-10-29, after iteration 3)
+
+**Exit condition.** The plan's target is 1620 ms of cycle-time per 40-layer step at 1350 MHz (1562 ms of kernels + 58 ms of planned dispatch), ±10 %; at the delivered clock, 1885 ms wall. The measured path projects to **1339 ms of cycle-time** (1/2/4/8-layer fit, residuals ≤ 0.6 %), 17 % under the target and 14 % under its kernel budget, and 1559-1600 ms wall at 1130-1160 MHz. The target is met with margin; the loop stops here. The stretch figure (1259 ms, a memory-bound LoRA path) is 6 % away and the next items are listed below with their costs.
+
+**Full-model report (TP=4 over the box, user-authorised).** Random init, cool chips: **556.5 ms/step, 29.15 % MFU** of 594 TFLOP/s (baseline 598.7 / 27.10 %); real weights, 10 steps on Shakespeare (`optimization/evidence/final_full_tp4_real.log`): 574.8 ms/step (chips warm after the preceding runs), loss 0.4453 -> 0.1406 -> 0.4531 on the same windows as the baseline run (0.4453 -> 0.1436 -> 0.4551), i.e. the same trajectory within bf16 noise.
+
+**Final verification of the path.** PCC harness 14 passed at the final code (`optimization/evidence/iter3_fused_harness.log`): every module and layer kind, forward and every gradient, with the transposed and fused variants. Loss trajectory, 8 of 40 layers, real weights, host fp32 loss against the torch fp64 reference with bf16-rounded parameters (`optimization/evidence/final_loss_comparison.txt`): **max |diff| 0.026** (bar 0.10), mean +0.006, every step within 0.03; tighter than the composite path's 0.075 because the fused matmul accumulates the LoRA update in fp32 inside the base matmul. The device bf16 loss printed by `train.py` is still quantised to 0.0625.
+
+**Gap decomposition** (cycle-time, 40 layers; roofline from `doc/plan.md` §3):
+
+| term | ms | note |
+|---|---|---|
+| roofline (useful math at peak / bandwidth) | 757 | 96.37 TFLOP at 148.5 TFLOP/s plus the memory-bound ops at 512 GB/s |
+| math inefficiency | 478 | measured math 1235 ms: big base matmuls 771 vs 517 roofline (gate_up forward 63 %, others 67-85 %), SDPA 124 vs 14, SwiGLU 57 vs 42, RMSNorm 42 vs 8, LoRA skinny matmuls ~110 vs 41, LM head 29 vs 18.5, CE 11 vs 1.6 |
+| overhead: glue | 36 | residual adds and LoRA `dx` accumulations (32.6), loss-gradient scale and mean chain (1.4) |
+| overhead: layout | 31 | heads create/concat 11.5, dX-route transposes 3.8, fusion concats/slices 7.5, tail transposes |
+| overhead: tail writes | 32 | `fill_cache` 0.79 ms per gate_up layer (one core); a tiled block copy would be ~0.5 ms per step |
+| wasted | 0 | no frozen-weight gradient, no per-step untilize of the frozen table |
+| host / dispatch | ~3 | device busy 99.8 % of the step, 0.9-2 ms between steps (`iter3_fused_clock_analysis.txt`) |
+| **step (cycle-time)** | **1339** | |
+| delivered clock | x 1.16-1.20 | 1130-1160 MHz single chip under load: **1559-1600 ms wall** |
+
+**Memory peak** (allocator after the forward, `optimization/evidence/final_mem_probe_8layers.log`): 13.79 GiB at 8 of 40 layers on one chip (weights + LoRA state 11.61 GiB), i.e. **279 MiB of retained activations per layer**, down from 778 MiB in the composite baseline: the fused path keeps `x`, `h` and the weight per adapter instead of base, update, scaled update and sum. TP=4, 40 layers: the real-weight run holds ~11 GiB of weights + ~2.3 GiB of activations per chip (not probed; the composite calibration scaled).
+
+**Final ranked cost table** (projected to 40 layers, cycle-time; `optimization/evidence/iter3_fused_tracy_analysis.txt`, op numbers from the iteration-1 sequence where unchanged):
+
+| ms/step | ops | class | item | roofline | state |
+|---|---|---|---|---|---|
+| 296.3 | 40 | math | gate_up forward `[1024,5184] x [5184,65536]` (fused, 8x11 grid) | 190 | 64 % of delivered peak; the dX of the same weight runs at 85 %; program-config work (the only remaining item above 100 ms) |
+| 215.5 | 40 | math | gate_up dX^T `[5184,65536] x [65536,1024]^T` | 190 | 88 % |
+| 137.7 | 40 | math | w2 forward (untransposed, 88 cores) | 93 | 67 % |
+| 121.6 | 40 | math | w2 dX | 93 | 76 % |
+| 124.2 | 120 | math | SDPA fwd 35.3 / bwd Q 34.6 / bwd KV 54.4 | 14 | fwd 3.9x, bwd 9.7x its roofline: kernel work (ttml `sdpa_fw`/`sdpa_bw`) |
+| 57.1 | 80 | math | SwiGLU fwd 16.2 / bwd 40.9 | 42 | bwd 1.6x |
+| 48.2 | 80 | math | qkv fwd 26.5 / dX^T 21.8 | 35 | |
+| 42.1 | 162 | math | RMSNorm fwd 12.4 / bwd 29.7, 32 cores | 8 | bwd 6x: two-phase reduction on all cores (`umales/qwen38` has a `rmsnorm_bw` on all cores) |
+| 34.8 | 80 | math | out fwd 20.6 / dX^T 14.3 | 23 | |
+| 32.6 | 360 | glue | residual adds, LoRA `dx` accumulations, grad accumulations | 0 | fuse into matmul epilogues |
+| 31.6 | 40 | layout | tail writes (`fill_cache`) | ~0.5 | one-core kernel; extend |
+| ~110 | ~440 | math | LoRA skinny matmuls: w2 A fwd 19.5 (33 cores), w2 `dx` 16.8, `dB`s 22.8 + 7.4 + 7.3, A fwds 6.2 + 3.9 + ..., qkv/out/gate_up `dx`/`dA` 3-7 each | 41 | K- or N-split configs for 32-wide shapes; B stored transposed halves `dB` |
+| 29.0 | 2 | math | LM head fwd 18.1 / dX^T 10.9 | 18.5 | fwd 51 % |
+| 11.1 | 2 | math | cross-entropy fwd 3.9 / bwd 7.2 (32 cores) | 1.6 | 32-core kernels |
+| 11.5 | 240 | layout | heads create / concat and their backward | 0 | |
+| 7.5 | 160 | layout | fusion concats and slices | 0 | |
+| 5.8 | 80 | math | RoPE q, k fwd + bwd | 4.1 | |
+| 5.2 | 160 | math | AdamW on the adapters | 2.3 | |
+| 3.8 | 81 | layout | dX-route transposes | 0 | the price of the 17 % faster dX |
+
+**Rejected or deferred candidates, with evidence.**
+- HiFi2 math fidelity for the base matmuls: 15-25 % on the big matmuls in the microbenchmark (`iter2_matmul_bench_n*.log`), relative error 4.7e-3 against HiFi4; a numerics policy change outside this loop's correctness bar, deferred with its number.
+- dX^T route for w2 (`32768 -> 5120`): 3.72 -> 5.29 ms (`iter2_matmul_bench3.log`), the `[32768,1024]` transpose costs more than it saves; w2 left untransposed and on `LoraApply`.
+- 8x11 grid for the LM head forward: 58.97 vs 21.48 ms (`iter2_matmul_bench3.log`), L1 overflow into a slow path; full grid kept.
+- One-tile weight tail (K = 161 tiles): +5 % on the gate_up forward; two tiles used (`iter3` measurement).
+- `ttnn.experimental.slice_write` (row-major only) and `paged_fill_cache` (page-table layout rejected the view) for the tail write; `fill_cache` used at 0.79 ms per gate_up layer.
+- Host/dispatch: the plan's 58 ms item does not exist (device busy 99.8 %); nothing to do.
+- The 320 tiny per-adapter scale ops (3-23 µs each, 31 ms as a stale-shape row): absorbed into the fused path for qkv/out/gate_up; w2's remain (~8 ms).
