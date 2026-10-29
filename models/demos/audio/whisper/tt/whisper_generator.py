@@ -358,6 +358,13 @@ class WhisperGenerator:
         self.input_mesh_mapper = input_mesh_mapper
         self.output_mesh_composer = output_mesh_composer
         self.weights_mesh_mapper = weights_mesh_mapper
+        # large-v2 / large-v3-turbo on p150: DRAM-sharded decoder matmuls and a full-grid LM head in decode.
+        self._lm_head_core_grid = None
+        if ttnn_optimized_functional_whisper.use_p150_decode_optimizations(config, mesh_device):
+            ttnn_optimized_functional_whisper.attach_decode_dram_sharded_weights(self.parameters.decoder)
+            grid = mesh_device.compute_with_storage_grid_size()
+            self._lm_head_core_grid = ttnn.CoreGrid(x=grid.x, y=grid.y)
+            logger.info("Whisper p150 decode optimizations enabled")
         self.kv_cache_per_batch_size = kv_cache_per_batch_size
         self.cross_attn_cache_per_batch_size = cross_attn_cache_per_batch_size
         self.max_batch_size = max_batch_size
@@ -541,6 +548,17 @@ class WhisperGenerator:
         self.token_id_device.clear()
         self.decode_pos_embed.clear()
 
+    def _lm_head(self, x):
+        if self._lm_head_core_grid is None:
+            return x @ self.ttnn_linear_weight
+        return ttnn.matmul(
+            x,
+            self.ttnn_linear_weight,
+            core_grid=self._lm_head_core_grid,
+            compute_kernel_config=ttnn_optimized_functional_whisper.WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def _capture_decode_trace(self, trace_key, decode_pos, batch_size):
         """
         Capture enlarged decoder trace with on-device argmax feedback loop.
@@ -591,7 +609,7 @@ class WhisperGenerator:
 
             # LM head projection
             decoder_output = ttnn.squeeze(decoder_output, 1)
-            logits = decoder_output @ self.ttnn_linear_weight
+            logits = self._lm_head(decoder_output)
 
             # Apply suppress tokens mask (sets suppressed logits to -inf)
             if self.tt_suppress_mask is not None:

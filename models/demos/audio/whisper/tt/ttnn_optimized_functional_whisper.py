@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections import defaultdict
 from typing import Optional
 
@@ -28,6 +29,25 @@ WHISPER_BATCH_SIZE = 2
 # ~1.5 KiB allocations;
 WHISPER_L1_SMALL_SIZE = 1600
 WHISPER_TRACE_REGION_SIZE = 100000000
+
+# Decode-path optimizations for whisper-large-v2 and whisper-large-v3-turbo on a single Blackhole p150 only.
+# WHISPER_P150_DECODE_OPT=0 falls back to the original path.
+P150_DRAM_BANKS = 8
+DECODE_DRAM_SHARDED_GRID = ttnn.CoreGrid(y=5, x=8)
+DECODE_DRAM_SHARDED_MAX_M = 32
+
+
+def use_p150_decode_optimizations(config, mesh_device):
+    if os.environ.get("WHISPER_P150_DECODE_OPT") == "0":
+        return False
+    # large-v2: 32 decoder layers, 80 mel bins; large-v3-turbo: 4 decoder layers, 128 mel bins.
+    is_target_variant = config.d_model == 1280 and (config.decoder_layers, config.num_mel_bins) in ((32, 80), (4, 128))
+    return (
+        is_target_variant
+        and mesh_device.arch() == ttnn.device.Arch.BLACKHOLE
+        and mesh_device.get_num_devices() == 1
+        and mesh_device.dram_grid_size().x == P150_DRAM_BANKS
+    )
 
 
 def dropout(hidden_states, p, training):
@@ -192,6 +212,101 @@ def ffn_forward(
     h = ttnn.linear(h, fc2_weight, bias=fc2_bias, **linear_kw)
 
     return ttnn.to_memory_config(h, WHISPER_MEMORY_CONFIG)
+
+
+class DecodeDramShardedWeight:
+    """DRAM-width-sharded copy of a [K, N] decoder weight with the matching decode matmul configs.
+
+    Decode is weight-read bound; sharding the weight across all DRAM banks lets each core group stream its slice
+    from its own bank. K and N tiles must divide evenly over the 40-core grid and N over the DRAM banks.
+    """
+
+    def __init__(self, weight):
+        k, n = int(weight.shape[-2]), int(weight.shape[-1])
+        k_tiles, n_tiles = k // ttnn.TILE_SIZE, n // ttnn.TILE_SIZE
+        num_cores = DECODE_DRAM_SHARDED_GRID.num_cores
+        assert k_tiles % num_cores == 0 and n_tiles % num_cores == 0 and n_tiles % P150_DRAM_BANKS == 0, (k, n)
+        self.n = n
+        dram_banks = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(P150_DRAM_BANKS - 1, 0))})
+        self.weight = ttnn.to_memory_config(
+            weight,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.DRAM,
+                ttnn.ShardSpec(dram_banks, (k, n // P150_DRAM_BANKS), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+        self.act_memcfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, k // num_cores),
+            core_grid=DECODE_DRAM_SHARDED_GRID,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=max(d for d in range(1, 17) if k_tiles % d == 0),
+            per_core_M=1,
+            per_core_N=n_tiles // num_cores,
+            fused_activation=None,
+        )
+
+
+def attach_decode_dram_sharded_weights(decoder_parameters):
+    for layer in decoder_parameters.layers:
+        for p in (
+            layer.self_attn.query_key_value,
+            layer.self_attn.out_proj,
+            layer.encoder_attn.q_proj,
+            layer.encoder_attn.out_proj,
+            layer.fc1,
+            layer.fc2,
+        ):
+            p["dram_sharded"] = DecodeDramShardedWeight(p.weight)
+
+
+def _decode_dram_sharded(parameters, x):
+    """The DRAM-sharded weight for ``parameters`` if ``x`` [B, 1, S, K] is small enough for the decode kernel."""
+    ds = parameters.get("dram_sharded")
+    if ds is None or int(x.shape[0]) * int(x.shape[-2]) > DECODE_DRAM_SHARDED_MAX_M:
+        return None
+    return ds
+
+
+def _dram_sharded_matmul(x_packed, ds):
+    h = ttnn.to_memory_config(x_packed, ds.act_memcfg)
+    out = ttnn.linear(
+        h,
+        ds.weight,
+        program_config=ds.program_config,
+        compute_kernel_config=WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+    )
+    ttnn.deallocate(h)
+    return out
+
+
+# Users are packed into one tile ([B, 1, S, K] -> [1, 1, B*S, K]). Bias and GELU run as separate ops: the
+# DRAM-sharded kernel's fused bias is slower and less accurate.
+def decode_dram_sharded_linear(x, ds, bias):
+    bsz, _, seq_len, k = (int(d) for d in x.shape)
+    h = _dram_sharded_matmul(ttnn.reshape(x, (1, 1, bsz * seq_len, k)), ds)
+    out = ttnn.to_memory_config(h, WHISPER_MEMORY_CONFIG)
+    ttnn.deallocate(h)
+    out = ttnn.add(out, bias, memory_config=WHISPER_MEMORY_CONFIG)
+    return ttnn.reshape(out, (bsz, 1, seq_len, ds.n))
+
+
+def decode_dram_sharded_ffn(x, fc1_ds, fc1_bias, fc2_ds, fc2_bias):
+    bsz, _, seq_len, k = (int(d) for d in x.shape)
+    h = _dram_sharded_matmul(ttnn.reshape(x, (1, 1, bsz * seq_len, k)), fc1_ds)
+    h = ttnn.add(h, fc1_bias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+    h = ttnn.gelu(h, fast_and_approximate_mode=False, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+    out = _dram_sharded_matmul(h, fc2_ds)
+    ttnn.deallocate(h)
+    h = ttnn.to_memory_config(out, WHISPER_MEMORY_CONFIG)
+    ttnn.deallocate(out)
+    h = ttnn.add(h, fc2_bias, memory_config=WHISPER_MEMORY_CONFIG)
+    return ttnn.reshape(h, (bsz, 1, seq_len, fc2_ds.n))
 
 
 def _linear_lofi_l1_roundtrip(x, weight, bias):
@@ -431,7 +546,11 @@ def whisper_attention(
         transpose_k_heads = True
 
     if is_cross_attention:
-        query_states = _linear_lofi_l1_roundtrip(hidden_states, parameters.q_proj.weight, parameters.q_proj.bias)
+        q_ds = _decode_dram_sharded(parameters.q_proj, hidden_states)
+        if q_ds is not None:
+            query_states = decode_dram_sharded_linear(hidden_states, q_ds, parameters.q_proj.bias)
+        else:
+            query_states = _linear_lofi_l1_roundtrip(hidden_states, parameters.q_proj.weight, parameters.q_proj.bias)
         query_states = ttnn.transpose(query_states, 1, 2)  # B, S, 1, Hxd
         query_states = ttnn.reshape(
             query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size)
@@ -474,11 +593,15 @@ def whisper_attention(
         }
         if is_decode:
             fused_qkv_linear_kw["compute_kernel_config"] = WHISPER_FFN_MATMUL_COMPUTE_KERNEL_CONFIG
-        fused_qkv = ttnn.linear(
-            hidden_states,
-            parameters.query_key_value.weight,
-            **fused_qkv_linear_kw,
-        )
+        qkv_ds = _decode_dram_sharded(parameters.query_key_value, hidden_states) if is_decode else None
+        if qkv_ds is not None:
+            fused_qkv = decode_dram_sharded_linear(hidden_states, qkv_ds, parameters.query_key_value.bias)
+        else:
+            fused_qkv = ttnn.linear(
+                hidden_states,
+                parameters.query_key_value.weight,
+                **fused_qkv_linear_kw,
+            )
         ttnn.deallocate(hidden_states)
         fused_qkv = ttnn.to_memory_config(fused_qkv, WHISPER_MEMORY_CONFIG)
 
@@ -574,7 +697,11 @@ def whisper_attention(
             ttnn.deallocate(value_states)
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
-    attn_output = _linear_lofi_l1_roundtrip(attn_output, parameters.out_proj.weight, parameters.out_proj.bias)
+    out_ds = _decode_dram_sharded(parameters.out_proj, attn_output)
+    if out_ds is not None:
+        attn_output = decode_dram_sharded_linear(attn_output, out_ds, parameters.out_proj.bias)
+    else:
+        attn_output = _linear_lofi_l1_roundtrip(attn_output, parameters.out_proj.weight, parameters.out_proj.bias)
     return attn_output
 
 
@@ -722,13 +849,19 @@ def decoder_layer(
         bias=parameters.final_layer_norm.bias,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
-    hidden_states = ffn_forward(
-        hidden_states,
-        parameters.fc1.weight,
-        parameters.fc1.bias,
-        parameters.fc2.weight,
-        parameters.fc2.bias,
-    )
+    fc1_ds = _decode_dram_sharded(parameters.fc1, hidden_states)
+    if fc1_ds is not None:
+        hidden_states = decode_dram_sharded_ffn(
+            hidden_states, fc1_ds, parameters.fc1.bias, parameters.fc2.dram_sharded, parameters.fc2.bias
+        )
+    else:
+        hidden_states = ffn_forward(
+            hidden_states,
+            parameters.fc1.weight,
+            parameters.fc1.bias,
+            parameters.fc2.weight,
+            parameters.fc2.bias,
+        )
     hidden_states = dropout(hidden_states, p=0, training=False)
     hidden_states = residual + hidden_states
 
