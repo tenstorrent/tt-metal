@@ -800,8 +800,6 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 
     detail::ProgramImpl& program_impl = program.impl();
 
-    BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
-
     // Build a tensor_parameter_name -> MeshTensor lookup from the user's TensorArgument entries.
     // Used below to fill each kernel's TensorBinding CRTA section: at minimum, the binding's
     // base address (always present); additionally, any runtime accessor field words the
@@ -1088,6 +1086,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Bind PrefetcherPipe objects to their parameters' slots (per node; a relay DFB over them is
     // pointed at the pipe ring here). Sticky across calls.
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
+
+    // Install arena addresses after DFB, tensor, and pipe checks succeed.
+    BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
     for (const auto& [param_name, tensor] : tensor_by_param) {
         program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
     }
@@ -1375,8 +1376,6 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         ValidateUpdateProgramRunArgs(program, params);
     }
 
-    BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
-
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
     // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
     // vararg section refreshes that section wholesale.
@@ -1531,6 +1530,9 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound
     //      (no-op when it is the already-bound object) ----
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
+
+    // Install arena addresses after DFB, tensor, and pipe checks succeed.
+    BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
