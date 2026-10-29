@@ -23,10 +23,10 @@ rework of the topology mapper landed; the Tier C plan (2.3, 4, 5) follows that c
 
 ### Scope: STRICT first; RELAXED and the policy plan's candidate table later
 
-> **Decision (fixed for the first version):** C1 reads inter-mesh cables straight from the
-> PSD (`inter_mesh_cables`, P5, 3.3). It does not wait for the inter-mesh policy plan's
-> candidate table (part 9). Switching C1 to that table is a next step (P16, M5), together
-> with RELAXED below.
+> **Decision (fixed for the first version):** C1 reads inter-mesh cables from the seating's
+> physical graph, and `R` reads exact channels straight from the PSD (`inter_mesh_cables`, P6,
+> 3.3). Neither waits for the inter-mesh policy plan's candidate table (part 9). Switching both
+> to that table is a next step (P16, M5), together with RELAXED below.
 
 > **Decision (fixed for the first version):** every pipeline edge is **STRICT**. The first
 > version accepts an edge `policy` only when it is omitted or `STRICT`, so a pipeline edge always rides a fabric link. RELAXED
@@ -3121,7 +3121,7 @@ exactly the pinned ones. If the pins give A0–B0 and A3–B3, Tier C rejects `m
 
 #### Binding gaps
 
-- **Live link state.** Until P16, C1 reads the PSD on rank 0, which has no link state, so `R`
+- **Live link state.** Until P16, C1 and `R` read rank 0's PSD (C1 through the physical graph built from it), which has no link state, so `R`
   can name a down channel; the check after the broadcast then fails on every rank (question
   20). With the policy plan's candidate table (P16) down links are left out at runtime. Offline (`generate_rank_bindings` on a factory PSD), every
   cable looks up, so the offline answer can be optimistic; the runtime mapper, which runs
@@ -3761,7 +3761,7 @@ at runtime as today.
 9. **Spread fill for the binding** (4.3). Dropped: spare links after phase 0 keep today's
    order, because the pipeline only needs `R`.
 10. **Ordering against the inter-mesh policy plan** (3.3). Decided: do not wait for part 9;
-    C1 reads the PSD (P5) and P16 switches to the candidate table later. Must P16 land before
+    C1 reads the physical graph and `R` the PSD, and P16 switches both to the candidate table later. Must P16 land before
     the first pipeline model ships?
 11. **Phase 0 failure before part 11** (4.3). Fail at control-plane init on every rank, through the check after the broadcast (proposed), or add a
     cheap mapper-side check first (an exit chip in `R` toward two meshes needs two free
