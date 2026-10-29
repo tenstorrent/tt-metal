@@ -22,6 +22,7 @@ file(
     GLOB_RECURSE kernels
     device/kernels/*.cpp
     device/kernels/*.hpp
+    device/kernels/*.h
 )
 
 target_sources(
