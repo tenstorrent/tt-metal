@@ -16,12 +16,11 @@ namespace ckernel {
 namespace sfpu {
 
 // Dest holds the int32 tiles as two's complement (the unpacker copies the L1 words into a
-// 32-bit Dest unchanged), which is what SFPIADD wants. Every access is therefore a raw
-// DataLayout::I32 load / store: the default vInt layout on Wormhole (SM32, hardware mode 12)
-// would convert sign-magnitude <-> two's complement on the way in and out, and the previous
-// software helpers only existed to undo that conversion again. The raw path drops both
-// conversions, and is the only one that keeps INT32_MIN (0x80000000), which the converting
-// path reads and stores as 0.
+// 32-bit Dest unchanged), which is what SFPIADD wants, so every access is a raw
+// DataLayout::I32 load / store. The default vInt layout on Wormhole (SM32, hardware mode 12)
+// would convert sign-magnitude <-> two's complement on the way in and out, and INT32_MIN
+// (0x80000000) has no sign-magnitude form; llk.rst leaves its conversion unspecified. The raw
+// path keeps it, so an INT32_MIN input or an exact INT32_MIN sum stays exact.
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_col() {
@@ -64,10 +63,13 @@ inline void sum_int_init() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void add_int([[maybe_unused]] const uint dst_offset) {
+    // dst_reg rows per Dest tile with a 32-bit Dest: the second operand is always the tile
+    // right after the first (sfpu_add_int(idst, idst + 1)); dst_offset is not consulted.
+    constexpr uint dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt a = dst_reg[0].mode<sfpi::DataLayout::I32>();
-        vInt b = dst_reg[32].mode<sfpi::DataLayout::I32>();
+        vInt b = dst_reg[dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
         dst_reg[0].mode<sfpi::DataLayout::I32>() = a + b;
         dst_reg++;
