@@ -45,6 +45,13 @@ on:
         required: false
         default: "false"
         type: string
+      stage2_baseline_artifact:
+        description: >-
+          Merge gate: the artifact in which llk-perf-impl's stage-2 baseline job saved the merge
+          baseline, so the gate and stage 2 compare against the same read. Missing: the warehouse.
+        required: false
+        default: ""
+        type: string
       baseline_artifact_pattern:
         description: >-
           Take the baseline from THIS run's artifacts matching this pattern
@@ -198,8 +205,28 @@ jobs:
             echo "::error::${REASON} The gate compares nothing."
           fi
 
+      - name: Download the baseline stage 2 read
+        if: inputs.stage2_baseline_artifact != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ inputs.stage2_baseline_artifact }}
+          path: stage2_baseline
+
+      - name: Take the baseline stage 2 read
+        if: ${{ hashFiles(format('stage2_baseline/{0}/baseline.csv', inputs.arch)) != '' }}
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          mkdir -p baseline_perf
+          cp "stage2_baseline/${ARCH}/baseline.csv" baseline_perf/baseline.csv
+          cp "stage2_baseline/${ARCH}/baseline_metadata.json" baseline_metadata.json
+          echo "true" > have_baseline.txt
+
       - name: Read the baseline from the warehouse
-        if: inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
+        if: >-
+          ${{ inputs.baseline_run_id == '' && inputs.baseline_artifact_pattern == ''
+          && hashFiles(format('stage2_baseline/{0}/baseline.csv', inputs.arch)) == '' }}
         env:
           SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
           SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
@@ -407,9 +434,10 @@ jobs:
             --results 'stage2/**/stage2.json' --arch "$ARCH" --report stage2.md || BLOCKS=true
           # Every leg writes a stage-2 result, empty when it had nothing to re-measure. A leg without one
           # (stage 2 failed, crashed or could not measure the base) leaves the stage-1 verdict.
+          # --jq runs once per page, so count lines rather than taking a length per page.
           LEGS=$(gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
-            --jq "[.jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\"))] | length") || LEGS=0
+            --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
           RESULTS=$(find stage2 -name stage2.json | wc -l)
           if [ "$RESULTS" -lt "$LEGS" ] || [ "$LEGS" -eq 0 ]; then
             BLOCKS=true

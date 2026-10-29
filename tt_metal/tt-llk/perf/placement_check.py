@@ -3,19 +3,17 @@
 
 """Stage 2 of the LLK perf gate: re-measure stage-1 regressions at other code positions.
 
-Each stage-1 regression gets one outcome; none is dropped from the report:
+Each stage-1 regression, on any marker, gets one outcome; none is dropped from the report:
 
-- regression: slower at every code position, and the code of its measured TILE_LOOP window changed.
-- review: slower at every code position, but the loop code did not change (a change outside the loop, or a
-  placement effect that every position shares).
-- partial: the loop code changed, but it is slower at some code positions only.
-- placement: the loop code did not change and it is slower at some code positions only, so the move follows
-  where the code sits (a hardware effect).
+- regression: slower at every code position.
+- review: a TILE_LOOP regression whose loop code did not change (a change outside the loop, e.g. in init).
+- placement: slower at some code positions only, so the move follows where the code sits (a hardware effect).
+- partial: a placement-like TILE_LOOP row whose loop code changed.
 - not-reproduced: slower at no code position when measured again.
-- unmeasured: over the test limit, not measured at every position on both sides, no window fingerprint, or
-  not a TILE_LOOP point.
+- unmeasured: over the test limit, or not measured at every position on both sides.
 
-A blocking gate fails on regression, review and unmeasured: slower at every position, or not cleared.
+The positions decide; the loop fingerprint only names which thread's loop code changed. A blocking gate fails on
+regression, review and unmeasured.
 
     placement_check.py nodes  --candidates R.regressions.csv --map 'current/**/*.windowhash' --out nodes.txt
     placement_check.py decide --candidates R.regressions.csv --baseline DIR --current DIR --report stage2.md
@@ -93,14 +91,12 @@ def read_window_map(paths):
     return out
 
 
-def read_candidates(path, tile_loop=True):
-    """The stage-1 regressions stage 2 re-measures (TILE_LOOP), or with tile_loop=False the others."""
+def read_candidates(path):
+    """The stage-1 regressions, every marker: stage 2 re-runs the whole test, so it measures them all."""
     with open(path, newline="") as fh:
         rows = list(csv.DictReader(fh))
     out = []
     for row in rows:
-        if (row["marker"] == "TILE_LOOP") != tile_loop:
-            continue
         config = [
             (c, _value(v))
             for c, v in row.items()
@@ -152,11 +148,7 @@ def _side(root):
         ]
         medians = _medians(_read_frames(files)) if files else {}
         values.append(
-            {
-                (k[0][1], _run_type_of(k[1])): v
-                for k, v in medians.items()
-                if k[0][0] == "TILE_LOOP"
-            }
+            {(k[0][0], k[0][1], _run_type_of(k[1])): v for k, v in medians.items()}
         )
         if pos == "p0":
             windows = read_window_map(
@@ -173,25 +165,29 @@ def decide(
     min_cycles,
     module_thresholds,
     over_cap=(),
-    others=(),
 ):
-    """others: stage-1 regressions on other markers; stage 2 cannot re-measure them, so they are unmeasured."""
     over_cap = set(over_cap)
     base, base_windows = _side(baseline_root)
     cur, cur_windows = _side(current_root)
     results = []
     index = {}
     for key in base[0]:
-        cfg, run_type = key
+        marker, cfg, run_type = key
         config = dict(cfg)
         module = config.pop(MODULE_COL, None)
         index[
-            (module, run_type, frozenset((k, _value(v)) for k, v in config.items()))
+            (
+                marker,
+                module,
+                run_type,
+                frozenset((k, _value(v)) for k, v in config.items()),
+            )
         ] = key
     for i, c in enumerate(candidates):
         limit = module_thresholds.get(c["module"], threshold)
         lookup = index.get(
             (
+                c["marker"],
                 c["module"],
                 c["run_type"],
                 frozenset((k, _value(v)) for k, v in c["config"]),
@@ -218,36 +214,25 @@ def decide(
         threads = []
         if bw and cw:
             threads = sorted(t for t in bw if t != "nodeid" and bw.get(t) != cw.get(t))
-        missing = (
-            not bw
-            or not cw
-            or any(
+        # The loop fingerprint only labels TILE_LOOP rows; the positions decide.
+        labelled = (
+            c["marker"] == "TILE_LOOP"
+            and bw
+            and cw
+            and not any(
                 str(v).startswith("no-") for v in list(bw.values()) + list(cw.values())
             )
         )
         why = ""
         if not any(slower):
             outcome = "not-reproduced"
-        elif missing:
-            outcome, why = "unmeasured", "no window fingerprint"
         elif all(slower):
-            outcome = "regression" if threads else "review"
+            outcome = "regression" if threads or not labelled else "review"
         else:
             outcome = "partial" if threads else "placement"
         row["slower"] = sum(slower)
         row.update(outcome=outcome, why=why, deltas=deltas, threads=threads)
         results.append(row)
-    for c in others:
-        results.append(
-            dict(
-                c,
-                deltas=[],
-                threads=[],
-                slower=0,
-                outcome="unmeasured",
-                why="not a TILE_LOOP point",
-            )
-        )
     return results
 
 
@@ -437,7 +422,6 @@ def main(argv=None):
         a.min_cycles,
         _module_thresholds(a.module_threshold),
         over_cap,
-        read_candidates(a.candidates, tile_loop=False),
     )
     Path(a.report).write_text(render(results, a.arch, a.limit_note) + "\n")
     Path(a.report).with_suffix(".json").write_text(json.dumps(results, default=str))

@@ -27,7 +27,7 @@ export LLK_OBJ_CACHE="$TEMP_ROOT/placement-objects"
 mkdir -p "$LLK_OBJ_CACHE"
 # Collect only the files of the listed tests: collecting the whole suite is most of a session's time.
 mapfile -t FILES < <(cut -d: -f1 "$NODE_LIST" | sort -u)
-PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=60 --node-list "$NODE_LIST")
+PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=60 --node-list="$NODE_LIST")
 STATUS=0
 
 for SHIFT in 0 4 20 36 52; do
