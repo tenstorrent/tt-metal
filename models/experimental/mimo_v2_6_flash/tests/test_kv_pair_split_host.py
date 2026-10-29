@@ -601,6 +601,9 @@ class WindowReplica:
         self.mesh_device = SimpleNamespace(num_program_cache_entries=lambda: 0)
         self.chunks = []
 
+    def chunk_traced(self, slot, start_pos, num_tokens, chunk_size=None):
+        return False  # no later-chunk traces: every chunk runs eagerly
+
     def set_vllm_page_tables(self, rows):
         for slot, tables in rows.items():
             for g, row in tables.items():

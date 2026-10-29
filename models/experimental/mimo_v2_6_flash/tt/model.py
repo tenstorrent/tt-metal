@@ -51,10 +51,14 @@ from .verify_sampler import GreedyVerify, VerifySampler
 # verify or draft chained on device, a few positions ahead) still reads a row of the table, not another buffer.
 ROPE_TABLE_MARGIN = 32  # one tile
 
-# MIMO_PREFILL_CHUNK_TRACE=1: a later prefill chunk (start > 0) of a padded length set up with
+# MIMO_PREFILL_CHUNK_TRACE (default 1; 0 opts out): a later prefill chunk (start > 0) of a padded length set up with
 # ``setup_prefill_chunk_traces`` replays a trace of the whole chunk instead of dispatching its ~2,500 ops (about 0.4 s of
-# host time per chunk, which several rows or vLLM lanes on one host thread pay one after another).
-PREFILL_CHUNK_TRACE = os.environ.get("MIMO_PREFILL_CHUNK_TRACE", "0") == "1"
+# host time per chunk, which several rows or vLLM lanes on one host thread pay one after another). A setup or capture
+# that fails (the trace region too small, say) drops the traces with a warning and later chunks run eagerly.
+PREFILL_CHUNK_TRACE = os.environ.get("MIMO_PREFILL_CHUNK_TRACE", "1") == "1"
+# The slack a later-chunk capture needs in the trace region over the largest one captured before it (the traces of a
+# replica differ only in their SDPA programs).
+CHUNK_TRACE_HEADROOM = 1.1
 
 
 def prefill_padded_len(seq_len, start_pos=0, pair_split=False):
@@ -1127,7 +1131,7 @@ class TtMiMoModel:
             raise RuntimeError(
                 "traced later prefill chunks need chunked_flash_mla_prefill's chunk_start_idx_tensor (this ttnn build "
                 "keys the global layers' later chunks on a scalar start, which a replay at another start cannot "
-                "change); rebuild ttnn or run without MIMO_PREFILL_CHUNK_TRACE"
+                "change); rebuild ttnn or set MIMO_PREFILL_CHUNK_TRACE=0"
             )
         if self.chunk_logits is None:
             self.chunk_logits = [self._logits_row() for _ in range(self.max_batch)]
@@ -1235,16 +1239,74 @@ class TtMiMoModel:
 
     def capture_prefill_chunk_traces(self):
         """Capture every traced later chunk not yet captured (after ``warm_prefill_chunk_traces``). Every buffer a
-        capture makes is freed by its end."""
+        capture makes is freed by its end. The traces are optional: when the trace region has no room for the next one
+        (the largest captured so far plus CHUNK_TRACE_HEADROOM) or a capture fails, every later-chunk trace is dropped
+        (``drop_prefill_chunk_traces``, with a warning) and later chunks run eagerly. Capture them after every trace the
+        replica needs. Returns whether they are all captured."""
+        largest = 0
         for trace in self.chunk_traces.values():
             if trace["id"] is not None:
                 continue
-            ttnn.synchronize_device(self.mesh_device)
-            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-            self._chunk_trace_body(trace)
-            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-            ttnn.synchronize_device(self.mesh_device)
+            used, total = self.trace_region_bytes()
+            if total and largest and total - used < largest * CHUNK_TRACE_HEADROOM:
+                self.drop_prefill_chunk_traces(
+                    f"the trace region has {(total - used) / 2**20:.0f} MB of {total / 2**20:.0f} MB free per device "
+                    f"and a later-chunk trace takes {largest / 2**20:.0f} MB"
+                )
+                return False
+            trace_id = None
+            try:
+                ttnn.synchronize_device(self.mesh_device)
+                trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                try:
+                    self._chunk_trace_body(trace)
+                finally:
+                    ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+                ttnn.synchronize_device(self.mesh_device)
+            except (
+                Exception
+            ) as e:  # e.g. "Creating trace buffers of size ... but only ... is allocated for trace region"
+                if trace_id is not None:
+                    try:
+                        ttnn.release_trace(self.mesh_device, trace_id)
+                    except Exception:
+                        pass
+                self.drop_prefill_chunk_traces(f"capturing a later-chunk trace failed: {e}")
+                return False
             trace["id"] = trace_id
+            largest = max(largest, self.trace_region_bytes()[0] - used)
+        used, total = self.trace_region_bytes()
+        if total and self.chunk_traces:
+            logger.info(
+                f"MiMo: {len(self.chunk_traces)} later-chunk prefill traces captured (up to {largest / 2**20:.1f} MB "
+                f"each); trace region {used / 2**20:.0f} MB of {total / 2**20:.0f} MB used per device"
+            )
+        return True
+
+    def trace_region_bytes(self):
+        """(allocated, total) bytes of the trace region per device; (0, 0) when traces live in DRAM
+        (trace_region_size 0) or the allocator cannot say."""
+        try:
+            view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
+        except Exception:
+            return 0, 0
+        return view.total_bytes_allocated_per_bank * view.num_banks, view.total_bytes_per_bank * view.num_banks
+
+    def drop_prefill_chunk_traces(self, reason):
+        """Give up the traced later chunks (a setup or capture that failed): release every captured one, free their
+        buffers (dropping the last reference frees a device tensor), warn. Later chunks then run eagerly
+        (``_chunk_trace`` finds no trace)."""
+        logger.warning(
+            f"MiMo: traced later prefill chunks disabled, later chunks run eagerly ({reason}). Raise trace_region_size "
+            "or set MIMO_PREFILL_CHUNK_TRACE=0 to silence this."
+        )
+        for trace in self.chunk_traces.values():
+            if trace["id"] is not None:
+                try:
+                    ttnn.release_trace(self.mesh_device, trace["id"])
+                except Exception:
+                    pass
+        self.chunk_traces, self.chunk_inputs, self.chunk_logits = {}, {}, None
 
     def release_prefill_chunk_traces(self):
         """Release the captured later-chunk traces (their buffers stay, for a later capture)."""

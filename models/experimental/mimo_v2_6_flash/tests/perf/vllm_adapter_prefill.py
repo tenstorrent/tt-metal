@@ -6,7 +6,9 @@ without vLLM: the steps a busy lane gets under the plugin's lane-DP scheduler, o
 ``--max-num-batched-tokens`` (``--budget``) tokens per step, every busy lane in each step (one host thread, as the
 plugin's worker). Runs the plugin's warmup order (warmup_model_prefill, the eager then the traced
 warmup_model_decode), then for 1 and for 4 busy lanes one ``--context``-token prompt per lane, eager and with the
-traced later chunks (MIMO_PREFILL_CHUNK_TRACE=1; the eager runs hide the traces), and compares the last logits.
+traced later chunks (MIMO_PREFILL_CHUNK_TRACE, default on; the eager runs hide the traces), and compares the last
+logits. After the warmup it reports each replica's traces and how much of the trace region they use
+(``MIMO_PREFILL_BATCH=1`` adds the prefill-batch traces, as in serving).
 
 ``--users``: requests per busy lane (each its own slot, blocks and prompt). ``--offset``: each lane's first request
 takes ``--budget - offset`` tokens in its first step, so its later steps start off the chunk alignment; prefill_forward
@@ -127,6 +129,15 @@ def main():
             f"warmed up in {time.time() - t0:.0f} s; chunk traces per lane: "
             f"{[list(m.chunk_traces) for m in model.models][0]}"
         )
+        for lane, m in enumerate(model.models):
+            used, total = m.trace_region_bytes()
+            say(
+                f"TRACES replica {lane}: decode {m.decode_trace is not None}, verify {m.verify_trace is not None}, "
+                f"{sum(t['id'] is not None for t in m.prefill_traces.values())} prefill-batch, "
+                f"{sum(t['id'] is not None for t in m.chunk_traces.values())} later-chunk; trace region "
+                f"{used / 2**20:.1f} MB of {total / 2**20:.1f} MB used per device "
+                f"({(total - used) / 2**20:.1f} MB free)"
+            )
         prompts = [
             torch.randint(
                 0, cfg.vocab_size, (n,), generator=torch.Generator().manual_seed(100 + lane), dtype=torch.int32
