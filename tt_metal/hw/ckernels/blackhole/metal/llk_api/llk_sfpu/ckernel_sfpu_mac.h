@@ -10,7 +10,6 @@
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
-
 // Replay slot and length shared by mac_init() (which records) and calculate_mac()
 // (which replays).  lltt::record() captures exactly `length` instructions, so the two
 // must agree: an under-count leaves the tail of the body out of the buffer, an
@@ -32,17 +31,6 @@ inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 5 : 6;
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
-    // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_6 (dest.incr=2)
-    // for SfpuType::where.  mac's replay sequence uses ADDR_MOD_6 on SFPSTORE
-    // (physical slot 6, direct on Blackhole since there is no addr_mod_base
-    // offset), so we must configure it explicitly here.
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 2},
-    }
-        .set(ADDR_MOD_6);
-
     // Record the replay sequence once at init time with fixed dest offsets.
     // All callers use tile indices (0, 1, 2, 0), i.e. dst_reg[0], dst_reg[32], dst_reg[64]
     // (sfpi indexes dst_reg in rows; the row stride is 2, so tile n starts at row n * 32).

@@ -15,7 +15,6 @@
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
-
 // Replay-buffer slots for the per-iteration register-only compute bodies of
 // the quant / requant / dequant kernels. The body is recorded once by each
 // op's {quant,requant,dequant}_init and then replayed by every
@@ -70,21 +69,6 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 // sibling value INT32_2S_COMP_TO_INT_SIGN_MAGN has a known HW bug
 // (sign-mag -0 -> mostneg int32) and is not used in any tt-llk kernel.
 constexpr auto INT_REPR_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
-
-// Configure ADDR_MOD_6 with dest auto-increment of one SFPU dst row
-// (sfpi::SFP_DESTREG_STRIDE == 2 dst-address units) so the per-iteration
-// SFPSTORE walks dst_reg through the face's 4-row x 8-col blocks. Replaces
-// sfpi::dst_reg++ in the kernel bodies and lets each loop be purely TTI-issued.
-// Called once by each {quant,requant,dequant}_init since quant_int32
-// isn't in the LLK init's "configure ADDR_MOD_6 with dest+=2" allow-list.
-inline void _quant_kernels_configure_dest_incr_addrmod_() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = sfpi::SFP_DESTREG_STRIDE},
-    }
-        .set(ADDR_MOD_6);
-}
 
 // Int8 L1 pack path:
 // Int8 output is packed through the UInt8 packer, which saturates the dest word to [0, 255].
@@ -184,15 +168,13 @@ void quant_init(const uint zero_point) {
         "quant_init SIGN_MAGNITUDE_FORMAT is not supported with Int32 or UInt8 output");
     // One-time setup for calculate_quant_int32:
     //   1. load the fp32 zero-point constant into LREG2 and the RNE constants;
-    //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
-    //   3. record the register-only compute body into the SFPU replay buffer
+    //   2. record the register-only compute body into the SFPU replay buffer
     //      under QUANT_REPLAY_SLOT (NoExec - we don't want to issue the body
     //      against undefined LREG0/LREG1 contents at record time).
     // Subsequent calculate_quant_int32 calls replay the recorded body, shrinking the
     // unrolled binary from ~ITERATIONS*REPLAY_LEN body instructions down to
     // one replay invocation per iteration.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
-    _quant_kernels_configure_dest_incr_addrmod_();
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG2>();
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
@@ -230,8 +212,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         "requant_init SIGN_MAGNITUDE_FORMAT is supported only with Int32 input and Int8 output");
     // One-time setup for requant_int32; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2 and the RNE
-    // constants, programs ADDR_MOD_6 with dest+=2, then records
-    // the register-only compute into REQUANT_REPLAY_SLOT (NoExec).
+    // constants, then records the register-only compute into REQUANT_REPLAY_SLOT (NoExec).
     //
     // The body rounds v = q * (s_in / s_out) + zp to nearest even and then adds out_zp.
     // zp is the host-folded -z_in * (s_in / s_out).
@@ -242,7 +223,6 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
     if constexpr (INT8_INPUT || OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
     _sfpu_load_imm32_(p_sfpu::LREG6, out_zero_point);
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG6>();
     // Int8 input is unbiased (byte ^ 0x80) inline by the kernel before the replay. Int32
@@ -284,7 +264,6 @@ void dequant_init(const uint zero_point) {
     if constexpr (INT8_INPUT) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     constexpr std::uint32_t REPLAY_LEN =
         (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;
