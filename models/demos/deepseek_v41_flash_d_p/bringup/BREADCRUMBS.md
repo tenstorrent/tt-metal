@@ -3711,3 +3711,54 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.8 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; old path DS41_CKV_FORMAT=bf16;
   profile series `/scratch/dnijemcevic/fix8/series_ckv.sh`, host profile `/scratch/dnijemcevic/fix8/hostprof_ckv.sh`.
+
+## P.6 (perf, galaxy 8x4): ENGRAM_ASYNC, the engram host work overlapped with the layer dispatch
+- What: setting ENGRAM_ASYNC (tt/settings.py, default on; off = the old path, unchanged code). On: begin_chunk
+  (tt/model.py:_begin_engram_async) does only the new tails (TtEngramRows.next_tail: the 3 compressed ids, no hash) and
+  allocates each engram layer's device rows (TtEngramRows.allocate, the same order as off) on the main thread, then
+  submits one job a layer, layer 1 first, to a single worker thread (ThreadPoolExecutor(1)). The job
+  (TtEngramRows.fill) hashes, looks up + packs, and uploads with copy_host_to_device_tensor into the allocated tensor;
+  it also checks its hashed tail equals the one begin_chunk stored. take_engram_rows(i) waits for layer i's job only;
+  begin_chunk waits for any job left from the last chunk (a layer that did not run) before freeing its tensor.
+- Why no second CQ: the harness (spec device_params) and tt-d-gen (prefill/runners/runner_utils.open_mesh_device) open
+  one CQ, and MeshDevice has no Python CQ count. The worker's write goes into CQ 0 (the API is locked:
+  mesh_command_queue_base lock_api_function_); CQ 0 is in order, and layer i's ops are enqueued after the wait, so the
+  write lands first. Allocation stays on the main thread so device addresses do not depend on thread timing.
+- DS41-136: the off path's wrap (`.numpy().tobytes()` + tensor_from_bfp8_bytes, ~35 ms a layer at 5120) and
+  ttnn.to_device hold the GIL, which would stall the dispatching main thread. On: one staging host tensor a layer
+  (TtEngramRows._staging: 8 mesh-row bfp8 tensors, the mesh tensor's 32 shards share them), tile_rows(out=) writes the
+  bytes in place through torch.from_dlpack(host_buffer().get_shard(c)); the copy (GIL released) reads an unpinned
+  buffer synchronously (fd_mesh_command_queue.cpp:write_shard_to_device, pinned_memory null), so the reuse is safe.
+- DS41-133: the worker's numba launches go through engram_bfp8._run (torch's thread count kept); perf_engram_host passes.
+- host_transfers_per_layer: testing/host_transfers.py wraps the ttnn attributes for the whole process, so a
+  begin_chunk upload issued by the worker while the main thread is inside a layer call would count against that layer.
+  The worker calls copy_host_to_device_tensor / from_torch through references bound at import (tt/engram.py
+  _COPY_TO_DEVICE / _FROM_TORCH, commented). The layers' own transfers are counted as before.
+- Rows: tt/perf_engram_async.py::test_async_rows_bit_identical: fill() on a thread == the off path's upload on every
+  chip, layers 1 and 14, bfp8 and bf16, full / padded / 2 / 0 real ids, next_tail == the hashed tail (staging reused
+  across the 4 chunks). tests/test_engram_table_modes.py, test_engram_bfp8.py, tt/perf_engram_host.py: 8 passed, 1 skipped.
+- Measured (tt/perf_engram_async.py::test_engram_async_chunk, DS41_ENGRAM_TABLE=resident, chunk
+  51200-56320 (rung last), 40 layers, one process, on / off alternating, 8 warm-up + 6 timed runs each):
+  - off: begin_chunk 48.9 ms (median; both layers' hash, gather + tile, wrap, to_device, all on the main thread).
+  - on: begin_chunk 0.60 ms. Worker, median ms: layer 1 hash 6.8, lookup + pack (one numba pass, resident bfp8 rows)
+    16.8, upload 2.75 (32 chips, 4.2 MB a chip), total 26.3, main thread waited 6.1 (embed + layer 0 dispatch hides
+    the other ~20); layer 14 hash 3.0, lookup + pack 12.8, upload 2.7, total 18.5, waited 0.01 (all hidden).
+  - Hidden: ~42 of ~49 ms a chunk (layer 1's 6.1 ms wait is what is left).
+  - Chunk wall (begin_chunk to sync) median off 490.0 ms [443-552], on 449.1 ms [422-517]; run-to-run spread is
+    larger than the gain, the medians differ by -41 ms (= -48.9 + 6.1 + 0.6). Last-layer output on == off bit for bit.
+  - Device time is unchanged by construction (the same programs on the same bytes; the write is the same size).
+- Gate P.6 `--check` (code final, 954 s): every accuracy metric ok (err_final_hidden 0.1914 / 0.2422, top5 1.0, err_layer
+  L01 0.0367 / 0.0667, L14 and every state within limits), chunk_wall_ms 424.8 < 434 (measure --task P.6: 421.0,
+  spread 26), host_transfers_per_layer 0. It still prints FAIL: `MISSING device_ms_total`. The task's gate command
+  carries BRINGUP_PROFILE_WALL=1 on test_profile.py, so core/gate.py:with_clean_wall adds no profiled run and no unit
+  can record device_ms_total (a tasks.yaml / framework issue; not editable in this step). The plain profiled run
+  (`DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/common/bringup/tests/test_profile.py`, metrics in generated/bringup_adhoc/P.6.json): device_ms_total
+  220.83 ms (<= 230; chunk 51200-56320), profiled_new_programs 0, host_transfers_per_layer 0.
+- Next-chunk prefetch: the serving contract does not give the next chunk's ids: prefill_chunk(input_tensor, kv,
+  slot_id, actual_start, actual_end) carries only this chunk (tt/runners/adapter.py:_run reads them from the engine's
+  device input), so the first wait (layer 1, ~6 ms) cannot be hidden by prefetching without an engine change.
+- Re-run: `DS41_ENGRAM_TABLE=resident PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  "models/demos/deepseek_v41_flash_d_p/tt/perf_engram_async.py"`; gate `PYTHONPATH=$PWD python -m
+  models.demos.common.bringup gate P.6 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml
+  --check`; old path DS41_ENGRAM_ASYNC=off.

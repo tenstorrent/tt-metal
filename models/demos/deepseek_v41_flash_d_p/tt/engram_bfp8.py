@@ -184,15 +184,18 @@ def _tile_kernel():
 _TILE = None
 
 
-def tile_rows(packed, ids: torch.Tensor, n: int, threads: int | None = None) -> torch.Tensor:
+def tile_rows(packed, ids: torch.Tensor, n: int, threads: int | None = None, out=None) -> torch.Tensor:
     """packed table rows [N, 272] (numpy), ids [valid, slots] (valid <= n) -> the bfloat8_b TILE bytes of the chunk
-    rows [n, slots * 256] (rows past ``valid`` 0): tile_bytes of those rows' exponents and magnitudes, in one pass."""
+    rows [n, slots * 256] (rows past ``valid`` 0): tile_bytes of those rows' exponents and magnitudes, in one pass.
+    ``out``: a uint8 tensor of that size to write into (ENGRAM_ASYNC's staging bytes; every byte is written)."""
     global _TILE
 
     if _TILE is None:
         _TILE = _tile_kernel()
     w = ids.shape[1] * (packed.shape[1] // 17) * 16
-    out = torch.empty(n * w * 17 // 16, dtype=torch.uint8)
+    if out is None:
+        out = torch.empty(n * w * 17 // 16, dtype=torch.uint8)
+    assert out.dtype == torch.uint8 and out.numel() == n * w * 17 // 16, (out.dtype, out.numel(), n, w)
     _run(threads, _TILE, packed, ids.contiguous().numpy(), ids.shape[0], out.numpy(), n)
     return out
 
