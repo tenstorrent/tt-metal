@@ -38,43 +38,41 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_unary/relu.h"
 
-constexpr uint32_t corner_block_cb_index = get_compile_time_arg_val(0);
-constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
-constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
-constexpr uint32_t channel_tiles = get_compile_time_arg_val(3);  // input channels per pass / 32
-constexpr uint32_t kernel_positions = get_compile_time_arg_val(4);
-constexpr uint32_t tiled_cb_index = get_compile_time_arg_val(5);
-constexpr uint32_t geom_in_cb_index = get_compile_time_arg_val(6);
-constexpr uint32_t geom_index_cb_index = get_compile_time_arg_val(7);
-constexpr uint32_t geom_weight_cb_index = get_compile_time_arg_val(8);
-constexpr uint32_t geom_kernel_cb_index = get_compile_time_arg_val(9);
-// fp32 bits of the input height and width, and of each less one.
-constexpr uint32_t IN_H_FP32 = get_compile_time_arg_val(10);
-constexpr uint32_t IN_H_LESS_ONE_FP32 = get_compile_time_arg_val(11);
-constexpr uint32_t IN_W_FP32 = get_compile_time_arg_val(12);
-constexpr uint32_t IN_W_LESS_ONE_FP32 = get_compile_time_arg_val(13);
+constexpr uint32_t corner_block_cb_index = get_named_compile_time_arg_val("corner_block_cb");
+constexpr uint32_t scalar_cb_index = get_named_compile_time_arg_val("scalar_tile_cb");
+constexpr uint32_t geom_in_cb_index = get_named_compile_time_arg_val("geom_in_cb");
+constexpr uint32_t geom_index_cb_index = get_named_compile_time_arg_val("geom_index_cb");
+constexpr uint32_t geom_weight_cb_index = get_named_compile_time_arg_val("geom_weight_cb");
+constexpr uint32_t output_cb_index = get_named_compile_time_arg_val("output_cb");
 // The second reader's buffers, for the odd blocks; the ones above serve the even ones.
-constexpr uint32_t odd_corner_block_cb_index = get_compile_time_arg_val(14);
-constexpr uint32_t odd_scalar_cb_index = get_compile_time_arg_val(15);
-constexpr uint32_t odd_geom_index_cb_index = get_compile_time_arg_val(16);
-constexpr uint32_t odd_geom_weight_cb_index = get_compile_time_arg_val(17);
-constexpr uint32_t odd_output_cb_index = get_compile_time_arg_val(18);
-// The block's columns of one kernel position, the weight slices, the output accumulators and the
-// bias.
-constexpr uint32_t column_cb_index = get_compile_time_arg_val(19);
-constexpr uint32_t conv_weight_cb_index = get_compile_time_arg_val(20);
-constexpr uint32_t acc_cb_index = get_compile_time_arg_val(21);
-constexpr uint32_t bias_cb_index = get_compile_time_arg_val(22);
-constexpr uint32_t OUT_TILES = get_compile_time_arg_val(23);  // C_out / 32
-constexpr bool HAS_BIAS = get_compile_time_arg_val(24);
-constexpr bool RELU = get_compile_time_arg_val(25);
-constexpr uint32_t CHUNKS = get_compile_time_arg_val(26);  // passes per kernel position
-// The odd blocks' geometry inputs, staged by their reader; geom_in_cb holds the even ones'.
-constexpr uint32_t odd_geom_in_cb_index = get_compile_time_arg_val(27);
-constexpr uint32_t geom_scratch_cb_index = get_compile_time_arg_val(28);
+constexpr uint32_t odd_corner_block_cb_index = get_named_compile_time_arg_val("odd_corner_block_cb");
+constexpr uint32_t odd_scalar_cb_index = get_named_compile_time_arg_val("odd_scalar_tile_cb");
+constexpr uint32_t odd_geom_in_cb_index = get_named_compile_time_arg_val("odd_geom_in_cb");
+constexpr uint32_t odd_geom_index_cb_index = get_named_compile_time_arg_val("odd_geom_index_cb");
+constexpr uint32_t odd_geom_weight_cb_index = get_named_compile_time_arg_val("odd_geom_weight_cb");
+constexpr uint32_t odd_output_cb_index = get_named_compile_time_arg_val("odd_output_cb");
+constexpr uint32_t geom_kernel_cb_index = get_named_compile_time_arg_val("geom_kernel_cb");
+constexpr uint32_t geom_scratch_cb_index = get_named_compile_time_arg_val("geom_scratch_cb");
+constexpr uint32_t tiled_cb_index = get_named_compile_time_arg_val("tiled_block_cb");
+// A block's columns of one pass, the weight slices, the output accumulators and the bias.
+constexpr uint32_t column_cb_index = get_named_compile_time_arg_val("column_cb");
+constexpr uint32_t conv_weight_cb_index = get_named_compile_time_arg_val("conv_weight_cb");
+constexpr uint32_t acc_cb_index = get_named_compile_time_arg_val("acc_cb");
+constexpr uint32_t bias_cb_index = get_named_compile_time_arg_val("bias_cb");
+constexpr uint32_t CHUNK_TILES = get_named_compile_time_arg_val("chunk_tiles");  // input channels per pass / 32
+constexpr uint32_t CHUNKS = get_named_compile_time_arg_val("chunks");            // passes per kernel position
+constexpr uint32_t kernel_positions = get_named_compile_time_arg_val("kernel_positions");
+constexpr uint32_t OUT_TILES = get_named_compile_time_arg_val("out_tiles");  // C_out / 32
+constexpr bool HAS_BIAS = get_named_compile_time_arg_val("has_bias");
+constexpr bool RELU = get_named_compile_time_arg_val("relu");
+// fp32 bits of the input height and width, and of each less one.
+constexpr uint32_t IN_H_FP32 = get_named_compile_time_arg_val("in_h_fp32");
+constexpr uint32_t IN_H_LESS_ONE_FP32 = get_named_compile_time_arg_val("in_h_less_one_fp32");
+constexpr uint32_t IN_W_FP32 = get_named_compile_time_arg_val("in_w_fp32");
+constexpr uint32_t IN_W_LESS_ONE_FP32 = get_named_compile_time_arg_val("in_w_less_one_fp32");
 constexpr uint32_t CORNERS = 4;
-constexpr uint32_t BLOCK_TILES = CORNERS * channel_tiles;
-constexpr uint32_t WEIGHT_SLICE_TILES = channel_tiles * OUT_TILES;
+constexpr uint32_t BLOCK_TILES = CORNERS * CHUNK_TILES;
+constexpr uint32_t WEIGHT_SLICE_TILES = CHUNK_TILES * OUT_TILES;
 // Tiles per dest acquire: a half of half-sync dest holds four fp32 tiles.
 constexpr uint32_t DEST_TILES = 4;
 
@@ -406,14 +404,14 @@ void kernel_main() {
             bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(tiled_cb_index, scalar_index);
             tiled_cb.wait_front(BLOCK_TILES);
             scalar_cb.wait_front(CORNERS);
-            column_cb.reserve_back(channel_tiles);
-            for (uint32_t t0 = 0; t0 < channel_tiles; t0 += DEST_TILES) {
-                const uint32_t tiles = channel_tiles - t0 < DEST_TILES ? channel_tiles - t0 : DEST_TILES;
+            column_cb.reserve_back(CHUNK_TILES);
+            for (uint32_t t0 = 0; t0 < CHUNK_TILES; t0 += DEST_TILES) {
+                const uint32_t tiles = CHUNK_TILES - t0 < DEST_TILES ? CHUNK_TILES - t0 : DEST_TILES;
                 tile_regs_acquire();
                 for (uint32_t corner = 0; corner < CORNERS; ++corner) {
                     for (uint32_t t = 0; t < tiles; ++t) {
                         mul_tiles_bcast<BroadcastType::COL>(
-                            tiled_cb_index, scalar_index, corner * channel_tiles + t0 + t, corner, t);
+                            tiled_cb_index, scalar_index, corner * CHUNK_TILES + t0 + t, corner, t);
                     }
                 }
                 tile_regs_commit();
@@ -423,23 +421,23 @@ void kernel_main() {
                 }
                 tile_regs_release();
             }
-            column_cb.push_back(channel_tiles);
+            column_cb.push_back(CHUNK_TILES);
             scalar_cb.pop_front(CORNERS);
             tiled_cb.pop_front(BLOCK_TILES);
 
             // The block's output += its columns times the pass's weight slice: fp32 in dest over the
             // slice's rows, and in L1 across passes; the first pass overwrites. In the last pass
             // the blocks before this one have left acc_cb, so this one's tiles are at its front.
-            column_cb.wait_front(channel_tiles);
+            column_cb.wait_front(CHUNK_TILES);
             reconfig_data_format(conv_weight_cb_index, column_cb_index);
             pack_reconfig_data_format(acc_cb_index);
             for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += DEST_TILES) {
                 const uint32_t chunk = OUT_TILES - n0 < DEST_TILES ? OUT_TILES - n0 : DEST_TILES;
-                matmul_block_init(column_cb_index, conv_weight_cb_index, 0, chunk, 1, channel_tiles);
+                matmul_block_init(column_cb_index, conv_weight_cb_index, 0, chunk, 1, CHUNK_TILES);
                 tile_regs_acquire();
-                for (uint32_t k = 0; k < channel_tiles; ++k) {
+                for (uint32_t k = 0; k < CHUNK_TILES; ++k) {
                     matmul_block(
-                        column_cb_index, conv_weight_cb_index, k, k * OUT_TILES + n0, 0, 0, chunk, 1, channel_tiles);
+                        column_cb_index, conv_weight_cb_index, k, k * OUT_TILES + n0, 0, 0, chunk, 1, CHUNK_TILES);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -450,7 +448,7 @@ void kernel_main() {
                 tile_regs_release();
             }
             pack_reconfig_l1_acc(0);
-            column_cb.pop_front(channel_tiles);
+            column_cb.pop_front(CHUNK_TILES);
             if (last_pass) {
                 acc_cb.push_back(OUT_TILES);
                 finish_block(block);
