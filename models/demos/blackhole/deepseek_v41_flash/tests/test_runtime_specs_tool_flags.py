@@ -52,8 +52,12 @@ def _val(v):
 
 
 def test_specs_found():
-    assert len(SPECS) == 11, [os.path.basename(s) for s in SPECS]
-    assert any("_b16_" in s for s in SPECS) and any("_b4_" in s for s in SPECS)
+    # every spec in assets/ is checked below (parametrized over the glob), so a new batch class (B=8) is covered automatically
+    assert SPECS, "no assets/runtime_spec_*.json found"
+    assert any("_b4_" in s for s in SPECS)
+    # set REQUIRE_BATCHES=4,8 (comma list) for a release that ships those batch classes: each must have at least one spec
+    for b in [x for x in os.environ.get("REQUIRE_BATCHES", "").split(",") if x]:
+        assert any("_b%s_" % b in os.path.basename(s) for s in SPECS), "no runtime spec for B=%s in assets/" % b
 
 
 @pytest.mark.parametrize("path", SPECS, ids=[os.path.basename(s) for s in SPECS])
@@ -78,6 +82,23 @@ def _catalog_entries(ttis):
                     for d in e["device_model_specs"]:
                         out.append((e["impl"], d))
     return out
+
+
+def test_every_catalog_entry_has_renderer_flags():
+    """The catalog (no runtime spec mounted) is the path we recommend to customers: EVERY DeepSeek-V4.1 entry (B=4, B=8, B=16, ...) must carry the flags and no chat_template."""
+    ttis = os.environ.get("TTIS_DIR")
+    if not ttis or not os.path.isdir(ttis):
+        pytest.skip("set TTIS_DIR to a tt-inference-server checkout")
+    pytest.importorskip("yaml")
+    entries = _catalog_entries(ttis)
+    assert entries, "no deepseek_v41 entries in the catalog"
+    for impl, d in entries:
+        cv = {_norm(k): v for k, v in d["vllm_args"].items()}
+        assert "chat-template" not in cv, (impl, d.get("max_concurrency"), d.get("max_context"))
+        for k, want in REQUIRED.items():
+            assert k in cv and _val(cv[k]) == want, (impl, d.get("max_concurrency"), d.get("max_context"), k)
+    for b in [x for x in os.environ.get("REQUIRE_BATCHES", "").split(",") if x]:
+        assert any(str(d["max_concurrency"]) == b for _, d in entries), "no catalog entry for B=%s" % b
 
 
 @pytest.mark.parametrize("path", SPECS, ids=[os.path.basename(s) for s in SPECS])
