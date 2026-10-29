@@ -116,8 +116,6 @@ PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
 TRACE_PCC_THRESHOLD_HOST = 0.96
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
-# Determinism: every iteration is expected to match the iter-0 baseline near-bit-exactly.
-DETERMINISM_PCC_THRESHOLD = 1.0
 
 # Only the subset that is still a parametrized input_source; downloaded on first use.
 INFINITEBENCH_SUBSET_NAMES = {"longbook_qa_eng"}
@@ -504,8 +502,7 @@ def run_model(
             pytest.skip("determinism_check and pcc_validation are mutually exclusive — pick one")
         if num_iterations < 2:
             pytest.skip("determinism_check requires num_iterations >= 2 (iter 0 is the baseline)")
-        threshold = DETERMINISM_PCC_THRESHOLD
-        logger.info(f"Determinism check (threshold={threshold}, baseline=iter0)")
+        logger.info("Determinism check (torch.equal, baseline=iter0)")
         profiler.start("tt_forward")
         baseline_items = None
         det_failures = []
@@ -526,22 +523,18 @@ def run_model(
                 ]
                 logger.info(f"Determinism: captured iter0 baseline ({len(baseline_items)} tensors)")
                 continue
-            iter_pcc = _compare_intermediate_pcc(
-                baseline_items, tt_intermediates, number_of_non_padded_tokens, padding_side
-            )
-            logger.info(f"\n--- Determinism iter {i} vs iter0 ---")
-            # Determinism compares TT against TT, so raw PCC is the right score: the two tensors are
-            # in the same units and normalising would hide a scale-only divergence.
-            for label, pcc, _ in iter_pcc:
-                status = "PASS" if pcc >= threshold else ("FAIL" if pcc >= 0 else "ERROR")
-                logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-                if pcc < threshold:
-                    det_failures.append((i, label, pcc))
+            for label, base in baseline_items:
+                if label not in tt_intermediates:
+                    det_failures.append(f"iter {i} {label}: missing")
+                    continue
+                base_slice = slice_non_padded(base, number_of_non_padded_tokens, padding_side)
+                cur_slice = slice_non_padded(tt_intermediates[label], number_of_non_padded_tokens, padding_side)
+                if not torch.equal(base_slice, cur_slice):
+                    det_failures.append(f"iter {i} {label}: {int((base_slice != cur_slice).sum())} elements differ")
         profiler.end("tt_forward")
         profiler.end("total_test_time")
         if det_failures:
-            msg = "; ".join(f"iter {it} {label}: {pcc:.6f}" for it, label, pcc in det_failures)
-            pytest.fail(f"Determinism PCC below {threshold}: {msg}")
+            pytest.fail("determinism (baseline=iter0) failed: " + "; ".join(det_failures))
         logger.success(
             f"TtPrefillTransformer determinism test passed across {num_iterations} iteration(s) "
             f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, gate_fallback_mode={gate_fallback_mode})"
