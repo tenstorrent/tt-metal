@@ -370,6 +370,8 @@ class SpecRunner:
 
     def _round(self, X, base, force=None):
         hostopt.round_hook(self)
+        if hostopt.ACTIVE["WARM"]:
+            hostopt.warm_start()  # (first call: pins the calling thread, starts the idle-priority spinner; the server's round thread gets it too)
         self._ensure(base)
         self._use(base)
         self.dec.set_force(-1 if force is None else force)
