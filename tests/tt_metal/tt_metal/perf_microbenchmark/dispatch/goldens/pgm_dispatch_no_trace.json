@@ -74,7 +74,7 @@
     "wh_n300_perf": {
       "metrics": {"IterationTime": {"aggregate": "min", "better": "lower", "unit": "s"}},
       "repetitions": 2,
-      "provenance": {"commit": "2060de2dd19b98bca21c7794650313b08ec5ef75", "date": "2026-10-28", "source": "CI run 40787186036"},
+      "provenance": {"commit": "dd315c993d8836910528a1ce9c8aeac3b24f1126", "date": "2026-10-29", "source": "CI run 40796944027"},
       "context": {"aiclk_mhz": "1000"},
       "cases": {
         "BM_pgm_dispatch/all_processors_all_cores_128_rta_no_trace/kernel_size:1024/manual_time": {"IterationTime": 6.496e-06},
@@ -131,10 +131,10 @@
         "BM_pgm_dispatch/maxed_config_params_no_trace/kernel_size:4096/manual_time": {"IterationTime": 7.352e-06},
         "BM_pgm_dispatch/maxed_config_params_no_trace/kernel_size:512/manual_time": {"IterationTime": 7.099e-06},
         "BM_pgm_dispatch/maxed_config_params_no_trace/kernel_size:8192/manual_time": {"IterationTime": 1.021e-05},
-        "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:0/manual_time": {"IterationTime": 2.721e-06},
-        "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:1000/manual_time": {"IterationTime": 2.72e-06},
+        "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:0/manual_time": {"IterationTime": 2.398e-06},
+        "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:1000/manual_time": {"IterationTime": 2.399e-06},
         "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:10000/manual_time": {"IterationTime": 1.114e-05},
-        "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:2000/manual_time": {"IterationTime": 2.72e-06},
+        "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:2000/manual_time": {"IterationTime": 2.93e-06},
         "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:3000/manual_time": {"IterationTime": 3.749e-06},
         "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:4000/manual_time": {"IterationTime": 4.799e-06},
         "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_left_processors_subdevices_no_trace/slow_kernel_cycles:5000/manual_time": {"IterationTime": 5.842e-06}
