@@ -44,10 +44,10 @@ bool is_split_by_a_mesh_axis(const ttnn::Tensor& tensor, int dim) {
 }
 
 // The innermost dim that a reduce-scatter can split into `num_devices` whole-tile slices, if any. A dim another mesh
-// axis already splits is skipped: scattering it again leaves no topology label that describes the result. On a
-// single-axis mesh this is the dim all_reduce scatters on internally, so both routes add the same values in the same
-// order and give the same bits (checked on 8 devices); all_reduce picks its dim from the total device count, so on a
-// multi-axis mesh the last bit can differ.
+// axis already splits is skipped: scattering it again leaves no topology label that describes the result. ttnn's
+// all_reduce over a cluster axis scatters the innermost dim that splits evenly by that axis's size, the same dim, so
+// both routes add the same values in the same order and give the same bits (checked on 8 devices). Only for a dim
+// another mesh axis splits do they differ: all_reduce still scatters it, so the last bit can differ.
 std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t num_devices) {
     const auto& shape = tensor.logical_shape();
     const int rank = static_cast<int>(shape.rank());
@@ -95,10 +95,14 @@ ttnn::Tensor synchronize_tensor(
     }
     const auto dtype = tensor.dtype();
     const float inv_scaler = 1.0F / static_cast<float>(scaler);
-    // FLOAT32 sums a narrower tensor in fp32. The x1/N writes the tensor's dtype directly, which gives the same bits as
-    // a multiply and then a typecast. Each reassignment of `result` frees the previous intermediate.
+    // FLOAT32 sums a narrower tensor in fp32. Dividing by the device count writes the tensor's dtype directly, which
+    // gives the same bits as a multiply and then a typecast. Each reassignment of `result` frees the previous
+    // intermediate.
     const bool sum_in_fp32 = reduce_dtype == ttnn::DataType::FLOAT32 && dtype != ttnn::DataType::FLOAT32;
     ttnn::Tensor result = sum_in_fp32 ? ttnn::typecast(tensor, ttnn::DataType::FLOAT32) : tensor;
+    // The reduce-scatter route pays off only for a sum in fp32 of a narrower tensor, whose all-gather then carries the
+    // narrower dtype. It is taken for a sum over one axis, the DDP case it was measured for; a sum over several axes
+    // (DDP with CP) keeps one all-reduce per axis.
     const auto scatter_dim =
         sum_in_fp32 && cluster_axes.size() == 1U && tensor.logical_volume() >= kFp32ReduceScatterMinElements
             ? whole_tile_scatter_dim(tensor, scaler)

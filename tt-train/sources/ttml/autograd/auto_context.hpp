@@ -133,6 +133,7 @@ public:
 
     [[nodiscard]] bool is_parallelism_context_initialized() const;
 
+    // Describes the open mesh's axes; close_device drops it, so each mesh initializes its own.
     void initialize_parallelism_context(const DistributedConfig& config);
 
     // The dtype the gradient syncs (core::distributed::synchronize_gradients, ttml.sync_gradients) sum in when a call

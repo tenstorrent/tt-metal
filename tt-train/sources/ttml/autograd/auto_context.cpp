@@ -83,6 +83,8 @@ void AutoContext::close_device() {
     m_ccl_resources.reset();
     m_device_constants.clear();
     m_gradient_reduce_dtype = std::nullopt;
+    // The parallelism context describes this mesh's axes; the next mesh initializes its own.
+    m_parallelism_context.reset();
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for

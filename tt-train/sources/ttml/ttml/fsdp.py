@@ -221,14 +221,15 @@ class FSDPState:
             if not param_tensor.is_grad_initialized():
                 continue
             # Pull a Python-side handle to the gathered grad before we reduce
-            # it; we'll explicitly deallocate it after set_grad to release the
-            # full-size buffer on device immediately.
+            # it, so its full-size buffer can be freed explicitly: right after
+            # the cast when the sum runs in fp32, otherwise after set_grad.
             gathered_grad = param_tensor.get_grad()
             grad_dtype = gathered_grad.dtype
             to_reduce = gathered_grad
             if self.reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
-                # Sum in fp32. Nothing reads the gathered grad after the cast, so free it before the reduce-scatter,
-                # the peak of this hook.
+                # The scatter half of core::distributed::synchronize_tensor's fp32 route, written here because FSDP
+                # keeps the shard. Nothing reads the gathered grad after the cast, so it is freed before the
+                # reduce-scatter, the peak of this hook.
                 to_reduce = ttnn.typecast(gathered_grad, ttnn.DataType.FLOAT32)
                 ttnn.deallocate(gathered_grad)
             summed = ttml.core.distributed.reduce_scatter(to_reduce, shard_dim, self.axis_index)
@@ -252,7 +253,9 @@ class FSDPState:
             param_tensor.set_grad(reduced)
 
             # Explicit deallocate of the now-unreferenced full-size buffers.
-            # Without this, Python GC may keep them around for too long
+            # Without this, Python GC may keep them around for too long. After
+            # an fp32 sum the gathered grad is already freed, and freeing it
+            # again does nothing.
             ttnn.deallocate(gathered_value)
             ttnn.deallocate(gathered_grad)
 

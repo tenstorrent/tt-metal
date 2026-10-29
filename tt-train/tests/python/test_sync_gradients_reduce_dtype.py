@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""``ttml.sync_gradients(..., reduce_dtype=...)``: unset or bf16 sums as before, fp32 sums in fp32; without the
-argument, the training config's ``precision.reduce_dtype`` decides.
+"""``ttml.sync_gradients(..., reduce_dtype=...)``: unset or bf16 sums in each gradient's own dtype, fp32 sums in fp32;
+without the argument, the training config's ``precision.reduce_dtype`` decides.
 
 The two devices of a ``[1, 2]`` mesh hold different bf16 gradients, as data-parallel ranks do. The C++ tests in
 ``tests/core/synchronize_tensor_test.cpp`` cover the fp32 sum itself; these check the Python entry point.
@@ -14,7 +14,7 @@ import pytest
 import ttnn
 import ttml
 
-from two_device_gradients import make_gradients, per_device, per_device_tensor
+from two_device_gradients import make_gradients, one_parameter, per_device, per_device_tensor
 
 _TWO_DEVICES = (1, 2)
 _DP_AXIS = 1
@@ -22,11 +22,7 @@ _DP_AXIS = 1
 
 def _parameters_with_gradients(values: np.ndarray):
     """One parameter whose gradient on device i is ``values[i]``."""
-    parameter = per_device_tensor(values)
-    parameter.set_grad(per_device_tensor(values).get_value())
-    parameters = ttml.NamedParameters()
-    parameters["parameter"] = parameter
-    return parameters, parameter
+    return one_parameter(per_device_tensor(values).get_value())
 
 
 @pytest.fixture(scope="module")
