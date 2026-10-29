@@ -34,7 +34,9 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/device.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
 
@@ -157,6 +159,49 @@ TEST(MeshDeviceInitTest, DestroyAfterCloseDoesNotTerminateOnPersistentL1Seals) {
     // Tracker/arena are already gone; dropping the MeshDevice destroys the cache and
     // ~Seal must no-op instead of TT_FATAL from a noexcept ProgramImpl destructor.
     EXPECT_NO_THROW(mesh.reset());
+}
+
+// A submesh shares its parent's devices, so closing the parent closes the submeshes that are still open. One left
+// open would keep the devices open past the parent's close and close them when it is freed, under whichever mesh was
+// opened on them since.
+TEST(MeshDeviceInitTest, CloseClosesOpenSubmeshes) {
+    auto mesh = create_unit_mesh_for_close_tests();
+    auto submesh = mesh->create_submesh(MeshShape(1, 1));
+    auto nested_submesh = submesh->create_submesh(MeshShape(1, 1));
+
+    mesh->close();
+    EXPECT_FALSE(submesh->is_initialized());
+    EXPECT_FALSE(nested_submesh->is_initialized());
+}
+
+// The submesh holds the only reference to its parent here. Closing the parent closes the submesh, which drops that
+// reference, so close() must keep the parent alive until it returns.
+TEST(MeshDeviceInitTest, CloseThroughTheReferenceASubmeshHolds) {
+    auto submesh = create_unit_mesh_for_close_tests()->create_submesh(MeshShape(1, 1));
+
+    submesh->get_parent_mesh()->close();
+    EXPECT_FALSE(submesh->is_initialized());
+    EXPECT_EQ(submesh->get_parent_mesh(), nullptr);
+}
+
+// On a mock two-chip mesh, so it needs no two-chip machine: the submeshes cover one chip each, and the parent closes
+// both before it destroys the MetalContext that its MetalEnv opened for it. One left open would close its chip after
+// that.
+TEST(MeshDeviceInitTest, CPU_CloseClosesOpenSubmeshesOnEveryChip) {
+    MetalEnv env(
+        {.mock_cluster_desc_path = tt::tt_metal::experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
+    auto mesh = MeshDevice::open_mesh_device(env, MeshDeviceConfig(MeshShape(1, 2)));
+    const auto context_id = mesh->impl().get_context_id();
+    auto submeshes = mesh->create_submeshes(MeshShape(1, 1));
+    ASSERT_EQ(submeshes.size(), 2u);
+
+    mesh->close();
+    for (const auto& submesh : submeshes) {
+        // Checked before is_initialized(): on a submesh left open, that reads chips the destroyed context has freed.
+        ASSERT_EQ(submesh->get_parent_mesh(), nullptr);
+        EXPECT_FALSE(submesh->is_initialized());
+    }
+    EXPECT_FALSE(MetalContext::instance_exists(context_id));
 }
 
 using MeshDevice2x4Test = MeshDevice2x4Fixture;
