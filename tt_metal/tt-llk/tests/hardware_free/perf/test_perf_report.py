@@ -1130,3 +1130,45 @@ def test_quasar_schema_drops_every_l1_client_metric_column():
         for base in (key, stat_column(key, MEAN), stat_column(key, STD)):
             assert metric_column("SFPU_ISOLATE", base) in QSR_DROPPED
     assert metric_column("L1_TO_L1", "l1_client_invalid_0_pct") not in QSR_DROPPED
+
+
+def _chunk_report(xs, *extra_columns):
+    """One chunk of a module: INIT rows with a sweep column x and, optionally, extra sweep columns."""
+    frame = pd.DataFrame(
+        {
+            "x": xs,
+            **{column: [0] * len(xs) for column in extra_columns},
+            MARKER: ["INIT"] * len(xs),
+            "cycles": [100] * len(xs),
+        }
+    )
+    report = PerfReport()
+    report.append(frame, label="chunk")
+    return report
+
+
+def test_worker_csv_keeps_every_chunk_of_a_module(tmp_path, monkeypatch):
+    # worksteal can run a module in several chunks on one worker: its CSVs must keep the rows of all of them
+    from helpers import llk_pytest_plugin as plugin
+
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", tmp_path)
+    monkeypatch.setattr(plugin, "_MODULE_REPORTS", {})
+    plugin._dump_perf_report("perf_mod", "gw0", _chunk_report([1, 2]))
+    plugin._dump_perf_report("perf_mod", "gw0", _chunk_report([3]))
+
+    for name in ("perf_mod.gw0.csv", "perf_mod.gw0.post.csv"):
+        assert pd.read_csv(tmp_path / name)["x"].tolist() == [1, 2, 3]
+
+
+def test_worker_csv_rejects_chunks_with_different_columns(tmp_path, monkeypatch):
+    # the schema check covers every chunk of the module and fails before the CSV is rewritten
+    from helpers import llk_pytest_plugin as plugin
+
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", tmp_path)
+    monkeypatch.setattr(plugin, "_MODULE_REPORTS", {})
+    plugin._dump_perf_report("perf_mod", "gw0", _chunk_report([1]))
+    with pytest.raises(PerfSchemaError):
+        plugin._dump_perf_report("perf_mod", "gw0", _chunk_report([2], "y"))
+
+    assert pd.read_csv(tmp_path / "perf_mod.gw0.csv")["x"].tolist() == [1]
+
