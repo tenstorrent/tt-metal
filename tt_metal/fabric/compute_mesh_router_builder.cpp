@@ -884,9 +884,10 @@ void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& 
     }
 }
 
-std::map<std::string, std::string> ComputeMeshRouterBuilder::kernel_defines(bool is_2D_routing) const {
+void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) {
+    // Build defines
     std::map<std::string, std::string> defines = {};
-    if (is_2D_routing) {
+    if (ctx.is_2D_routing) {
         defines["FABRIC_2D"] = "";
 
         // FABRIC_2D_VC1_ACTIVE: Set when router actually has VC1 channels
@@ -927,11 +928,6 @@ std::map<std::string, std::string> ComputeMeshRouterBuilder::kernel_defines(bool
         // FabricContext::get_fabric_kernel_defines), so it is not added here. The router reads it
         // through Fabric2DRoutingConfig: a Z-facing router decodes the axis its chord runs along.
     }
-    return defines;
-}
-
-void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) {
-    const auto defines = kernel_defines(ctx.is_2D_routing);
 
     // Get SOC descriptor for eth core lookup
     const auto& control_plane = fabric_context_.get_control_plane();
