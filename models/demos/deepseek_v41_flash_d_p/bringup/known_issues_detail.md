@@ -303,3 +303,43 @@ positions carry the largest relative error. That is the accumulated hidden-state
 layout error is visible: layers 0-3 and 14 and every compressed / index cache pass. No CPU diagnosis at device
 formats was possible 20 layers deep. The limit was not changed (OV-15: no rule, threshold or check). The owner's options:
 a waiver, or a per-position drift for the contract's window-KV limit (golden generation).
+
+## The galaxy goldens have no official_floor.json, so component limits are one bf16 rounding of the output
+
+The frozen component tests limit each step to calib (2) x the larger of the official arithmetic (official_floor.json
+next to the component goldens, noise_floor.arith), the input nudge, and one rounding of the output to its official
+dtype. `/data/$USER/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/` has no official_floor.json
+(only `golden_scaled/quietbox_2x2/s4096_c2048/` has one). So on the 8x4 the L00 attention limit is 2 x 0.00166, the
+output's bf16 rounding, and the input nudge is only 0.00029. The test's describe line has no "+ official arithmetic".
+
+The reference at its own precision, measured on the CPU on the galaxy golden input (chunk 1 of s10240,
+`ref.with_numerics("official", dtype)` vs the native golden):
+
+| step | official fp32 | official bf16 (GPU) | nudge | device (8x4, shipped) |
+|---|---|---|---|---|
+| L00 attention | 0.0323 | 0.0327 | 0.00029 | 0.0171 |
+| L02 attention | 0.0367 | 0.0371 (its fp4 KV is not counted: the compressed input is given) | 0.0249 (fp4/16) | 0.0604 |
+
+2x2 official_floor.json (official taps over the official chain), vs the golden: L00 0.045, L02 0.074, L14-L24 0.22-0.25.
+
+L00, the native step with the device's formats added one at a time (CPU emulation, rel vs the golden, bias = median row
+ratio - 1):
+
+| item | alone | all but this one |
+|---|---|---|
+| bfp8 GEMM inputs (wq_b x with the scale folded in, wo_a x, wo_b x; ties away) | 0.0117 | 0.0064 |
+| the same, packer double rounding (DS41-137) | 0.0139, bias +0.65 % | (all: 0.0149, +0.67 %) |
+| sparse_sdpa HiFi2: in0 (q, P) 6 explicit mantissa bits (K-30) | 0.0074, bias -0.56 % | 0.0129 (no change) |
+| bf16 activations (q, kv, sdpa out, inverse rope, wq_b / wo_b out) | 0.0037 | 0.0137 |
+| dense weights bfp8 (DENSE_WEIGHTS) | 0.0030 | 0.0126 |
+| RoPE cos / sin bf16 | 0.0012 | 0.0129 |
+| P bf16 before P @ V | 0.0006 | 0.0131 |
+| attention sink bf16 | 0.00005 | 0.0129 |
+| all (single rounding) | 0.0129 | |
+
+On the device, ATTN_FIDELITY=HiFi4 (diagnostic run only): L00 0.0171 -> 0.0162, bias -0.03 % -> +0.48 %. That is the
+packer's positive bias showing once HiFi2's negative bias is gone. The CPU model explains 0.013-0.015 of the device's 0.017.
+Only bfp8 GEMM inputs are large, and they are the device's 8-bit form of the reference's fp8 e4m3 quantization (F208;
+the reference's own rounding costs 0.032 on the same input). Raising them would go above the reference. L02's excess
+over its nudge limit comes from the 4-bit compressed KV (CKV_FORMAT=bfp4_rows, owner F208): bf16 KV 0.018, bfp4 0.060.
+Even then the device stays below the reference's own 0.074.
