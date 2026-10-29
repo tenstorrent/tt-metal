@@ -9173,7 +9173,9 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
 
     Call 1 runs on set A. A sentinel then goes into A on every checked core; the reader waits with
     >=, so a stale use of A cannot hang on it. Call 2 runs on set B and must not touch A.
-    The sliding case covers the neighbor-halo exchange, which signals on semaphore 2.
+    The sliding case runs the cache hit through the neighbor-halo exchange (semaphore 2). The sentinel
+    check cannot see a stale halo semaphore there, since the halo reader subtracts its own credits
+    and leaves the slot as it found it; that case only checks the halo patch runs without a hang.
     """
     sentinel = 0x5E5E
     mesh_config = gpt_oss_chunked_mesh_config() if sliding else MESH_CONFIG
