@@ -4766,6 +4766,7 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
     def _spec_init_state(self):
         self._spec_slot_gen = {}
         self._spec_resident_inputs_stale = False
+        self._spec_last_boundary = None  # (point, perf_counter, verify) of the runner's last call boundary
         self._spec_ring = self._spec_ring_geometry()
         # The acceptance-adaptive speculation policy (``tt/spec_policy.py``): its knobs (read once here, a
         # bad value raises at construction), the batch prior and the exploration counters. ``_SPEC_N`` is
@@ -4866,6 +4867,24 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         self._spec_call_phases[phase] = self._spec_call_phases.get(phase, 0.0) + ms
         self._spec_policy.calibration.note_phase(phase, ms)
         return out
+
+    def _spec_boundary(self, point, verify=False):
+        """The runner's call timeline around the rail, as phases of the stats line: the wall from the end of a
+        proposal to the start of the decode step that answers it (``gap_pv_v`` when that step is a verify,
+        ``gap_pv_p`` for a plain step) and from the end of a decode step to the next proposal (``gap_vp_v`` /
+        ``gap_vp_p`` by the step that ended). None of it is the rail's own work: it is the runner's iteration
+        between its calls (the scheduler, the model input, the output processing, the drain), the serialized
+        host cost of a speculative round that the device replay and the rail's phases do not account for."""
+        now = time.perf_counter()
+        last = self._spec_last_boundary
+        policy = getattr(self, "_spec_policy", None)
+        if last is not None and policy is not None:
+            kind, t, was_verify = last
+            if kind == "propose_end" and point == "decode_start":
+                policy.calibration.note_phase("gap_pv_v" if verify else "gap_pv_p", (now - t) * 1e3)
+            elif kind == "decode_end" and point == "propose_start":
+                policy.calibration.note_phase("gap_vp_v" if was_verify else "gap_vp_p", (now - t) * 1e3)
+        self._spec_last_boundary = (point, now, bool(verify))
 
     def _spec_note_prefill(self, empty_slots=None):
         """A prefill ran; ``empty_slots`` (the dFlash rail, which keeps no per-row session) are rows that ended."""
@@ -6106,6 +6125,7 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             reset_sampling_state=reset_sampling_state,
         )
         spec_mode = kwargs.pop("spec_mode", None)
+        self._spec_boundary("decode_start", spec_mode is not None)
         num_valid = kwargs.pop("num_valid_drafts", None)
         kwargs.pop("accepted_counts", None)  # consumed by propose, where the commit is
         kwargs.pop("draft_token_ids", None)
@@ -6114,26 +6134,31 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         live = self._spec_live_rows(start_pos, rows)
         self._dflash_live_slots = {int(self._spec_slot_of(r, kwargs)) for r in live}
         self._dflash_prefilled_slots = set()
-        if spec_mode is None:
-            return self._dflash_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
-        sampling = kwargs.get("sampling_params")
-        if sampling is None:
-            raise ValueError(
-                "Gemma4 dFlash argmax verification cannot apply host sampling controls. "
-                "Route host-sampled requests through ordinary decode with a plugin that "
-                "supports sampled-step fallback, or disable speculative decoding."
+        try:
+            if spec_mode is None:
+                return self._dflash_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
+            sampling = kwargs.get("sampling_params")
+            if sampling is None:
+                raise ValueError(
+                    "Gemma4 dFlash argmax verification cannot apply host sampling controls. "
+                    "Route host-sampled requests through ordinary decode with a plugin that "
+                    "supports sampled-step fallback, or disable speculative decoding."
+                )
+            if kwargs.get("grammar_bitmask") is not None:
+                raise ValueError(
+                    "Gemma4 dFlash argmax verification cannot apply a grammar bitmask. "
+                    "Disable speculative decoding for structured-output requests."
+                )
+            if any(self._spec_row_requests_logprobs(sampling, row) for row in live):
+                raise ValueError(
+                    "Gemma4 dFlash argmax verification cannot return requested logprobs. "
+                    "Disable speculative decoding for requests that require logprobs."
+                )
+            return self._dflash_verify_step(
+                args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live, num_valid
             )
-        if kwargs.get("grammar_bitmask") is not None:
-            raise ValueError(
-                "Gemma4 dFlash argmax verification cannot apply a grammar bitmask. "
-                "Disable speculative decoding for structured-output requests."
-            )
-        if any(self._spec_row_requests_logprobs(sampling, row) for row in live):
-            raise ValueError(
-                "Gemma4 dFlash argmax verification cannot return requested logprobs. "
-                "Disable speculative decoding for requests that require logprobs."
-            )
-        return self._dflash_verify_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live, num_valid)
+        finally:
+            self._spec_boundary("decode_end", spec_mode is not None)
 
     def _dflash_ordinary_step(self, args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live):
         """An ordinary decode step: the runner asked for no verification.
@@ -6383,20 +6408,24 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         first proposal of a later request (the plain steps in between are
         counted here, ``note_plain_steps``).
         """
-        del hidden
-        k = int(num_drafts)
-        rows = int(committed.shape[0]) if committed is not None and committed.dim() > 1 else 1
-        live = self._spec_live_rows(positions, rows)
-        width = int(committed.shape[1]) if committed is not None and committed.dim() > 1 else 1
-        tokens = sum(max(1, min(int(counts.reshape(-1)[r]), width)) if counts is not None else 1 for r in live)
-        t_begin = self._spec_interval_begin(len(live), tokens)
-        self._spec_mode_now = ("plain", self._spec_plain_bucket(max(1, len(live))))
-        top = max((int(self._spec_row(positions, rows, r)[0]) for r in live), default=0)
-        self._spec_table_now = self._spec_plain_table_ms(max(1, len(live)), top)
+        self._spec_boundary("propose_start")
         try:
-            return self._dflash_propose(k, rows, live, committed, positions, counts)
+            del hidden
+            k = int(num_drafts)
+            rows = int(committed.shape[0]) if committed is not None and committed.dim() > 1 else 1
+            live = self._spec_live_rows(positions, rows)
+            width = int(committed.shape[1]) if committed is not None and committed.dim() > 1 else 1
+            tokens = sum(max(1, min(int(counts.reshape(-1)[r]), width)) if counts is not None else 1 for r in live)
+            t_begin = self._spec_interval_begin(len(live), tokens)
+            self._spec_mode_now = ("plain", self._spec_plain_bucket(max(1, len(live))))
+            top = max((int(self._spec_row(positions, rows, r)[0]) for r in live), default=0)
+            self._spec_table_now = self._spec_plain_table_ms(max(1, len(live)), top)
+            try:
+                return self._dflash_propose(k, rows, live, committed, positions, counts)
+            finally:
+                self._spec_interval_end("Gemma4DFlash", t_begin, self._spec_mode_now, len(live))
         finally:
-            self._spec_interval_end("Gemma4DFlash", t_begin, self._spec_mode_now, len(live))
+            self._spec_boundary("propose_end")
 
     def _dflash_propose(self, k, rows, live, committed, positions, counts):
         """``propose_draft_tokens`` proper; ``_spec_mode_now`` ends as the mode the step serves."""
@@ -7179,6 +7208,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             reset_sampling_state=reset_sampling_state,
         )
         spec_mode = kwargs.pop("spec_mode", None)
+        self._spec_boundary("decode_start", spec_mode is not None)
         num_valid = kwargs.pop("num_valid_drafts", None)
         # The commit it describes reaches propose_draft_tokens; the KV holds
         # every candidate position already, so no per-candidate state is selected.
@@ -7203,25 +7233,28 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             # proposal replays, so this is where every greedy-only replay still
             # in the buffer gets its host copy, ahead of that replay.
             self._mtp_read_back_live_replay()
-        if spec_mode is None:
-            return self._mtp_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
-        if spec_mode not in ("argmax_ids", "logits"):
-            raise ValueError(f"Gemma4MTP speculative contract: unsupported spec_mode {spec_mode!r}")
-        # Timed as its own phase: a verify answered from the retained replay runs no device work, so its wall is
-        # the host assembly of the answer and the sampling state (the stats line's "verify" ms/call).
-        return self._spec_timed(
-            "verify",
-            self._mtp_verify_step,
-            args,
-            kwargs,
-            page_tables_per_layer,
-            tokens,
-            start_pos,
-            rows,
-            live,
-            num_valid,
-            spec_mode,
-        )
+        try:
+            if spec_mode is None:
+                return self._mtp_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
+            if spec_mode not in ("argmax_ids", "logits"):
+                raise ValueError(f"Gemma4MTP speculative contract: unsupported spec_mode {spec_mode!r}")
+            # Timed as its own phase: a verify answered from the retained replay runs no device work, so its wall is
+            # the host assembly of the answer and the sampling state (the stats line's "verify" ms/call).
+            return self._spec_timed(
+                "verify",
+                self._mtp_verify_step,
+                args,
+                kwargs,
+                page_tables_per_layer,
+                tokens,
+                start_pos,
+                rows,
+                live,
+                num_valid,
+                spec_mode,
+            )
+        finally:
+            self._spec_boundary("decode_end", spec_mode is not None)
 
     def _mtp_any_retained(self):
         """Whether any session holds a retained proposal (the only state an ordinary step has to walk)."""
@@ -7737,31 +7770,35 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         decline; a step above ``GEMMA4_SPEC_MAX_ROWS`` or without a covering
         record declines every row.
         """
-        del hidden
-        k = int(num_drafts)
-        if k < 1 or k > self._SPEC_DRAFT_LEN:
-            raise ValueError(
-                f"Gemma4MTP speculative contract: num_drafts {k} outside [1, {self._SPEC_DRAFT_LEN}] "
-                f"({SPEC_DRAFT_LEN_ENV})"
-            )
-        rows = int(committed.shape[0]) if committed.dim() > 1 else 1
-        live = self._spec_live_rows(positions, rows)
-        if not live:
-            return self._spec_decline(rows, k)
-        width = int(committed.shape[1]) if committed.dim() > 1 else 1
-        # The blocks are read to the host once per step; per-row tensor reads cost ~8 us each, three a row
-        # (the 32-row all-declined step paid ~1 ms in them).
-        counts_rows = counts.reshape(-1).tolist() if counts is not None else None
-        pos_rows = positions.reshape(int(rows), -1).tolist()
-        tokens = sum(max(1, min(int(counts_rows[r]), width)) if counts_rows is not None else 1 for r in live)
-        t_begin = self._spec_interval_begin(len(live), tokens)
-        self._spec_mode_now = ("plain", self._spec_plain_bucket(len(live)))
-        top = max(int(pos_rows[r][0]) for r in live)
-        self._spec_table_now = self._spec_plain_table_ms(len(live), top)
+        self._spec_boundary("propose_start")
         try:
-            return self._mtp_propose(k, rows, live, committed, positions, counts, counts_rows, pos_rows)
+            del hidden
+            k = int(num_drafts)
+            if k < 1 or k > self._SPEC_DRAFT_LEN:
+                raise ValueError(
+                    f"Gemma4MTP speculative contract: num_drafts {k} outside [1, {self._SPEC_DRAFT_LEN}] "
+                    f"({SPEC_DRAFT_LEN_ENV})"
+                )
+            rows = int(committed.shape[0]) if committed.dim() > 1 else 1
+            live = self._spec_live_rows(positions, rows)
+            if not live:
+                return self._spec_decline(rows, k)
+            width = int(committed.shape[1]) if committed.dim() > 1 else 1
+            # The blocks are read to the host once per step; per-row tensor reads cost ~8 us each, three a row
+            # (the 32-row all-declined step paid ~1 ms in them).
+            counts_rows = counts.reshape(-1).tolist() if counts is not None else None
+            pos_rows = positions.reshape(int(rows), -1).tolist()
+            tokens = sum(max(1, min(int(counts_rows[r]), width)) if counts_rows is not None else 1 for r in live)
+            t_begin = self._spec_interval_begin(len(live), tokens)
+            self._spec_mode_now = ("plain", self._spec_plain_bucket(len(live)))
+            top = max(int(pos_rows[r][0]) for r in live)
+            self._spec_table_now = self._spec_plain_table_ms(len(live), top)
+            try:
+                return self._mtp_propose(k, rows, live, committed, positions, counts, counts_rows, pos_rows)
+            finally:
+                self._spec_interval_end("Gemma4MTP", t_begin, self._spec_mode_now, len(live))
         finally:
-            self._spec_interval_end("Gemma4MTP", t_begin, self._spec_mode_now, len(live))
+            self._spec_boundary("propose_end")
 
     def _mtp_propose(self, k, rows, live, committed, positions, counts, counts_rows=None, pos_rows=None):
         """``propose_draft_tokens`` proper; ``_spec_mode_now`` ends as the mode the step serves. ``counts_rows``
