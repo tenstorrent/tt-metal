@@ -539,6 +539,18 @@ def test_glm_prefill_chunk_traced_matches_eager_partial(variant, config_only, me
             meta = _glm_natural_slot_rows(rows[meta_slot * layers : (meta_slot + 1) * layers], sp * tp, CHUNK)
             for layer in range(layers):
                 t, e, m = traced[layer, :end], eager[layer, :end], meta[layer, :end]
+                # Oracle: every case uses the same token prefix, and layer 0 is causal attention plus row-wise
+                # ops, so a token's KV must not depend on where its chunk ends. The full chunk (case 0, on which
+                # all paths agree) is the reference for the partial chunks' real rows.
+                if case > 0:
+                    f_slot = _glm_slots(0)[1]
+                    full = _glm_natural_slot_rows(rows[f_slot * layers : (f_slot + 1) * layers], sp * tp, CHUNK)
+                    ref_rows = full[layer, :end]
+                    for label, got in (("eager", e), ("traced", t), ("eager-metadata", m)):
+                        n_diff = int(((got - ref_rows).abs().amax(dim=-1) > 0).sum())
+                        logger.info(
+                            f"[0, {end}) {name}[{layer}] {label} vs full-chunk rows: {n_diff} of {end} real tokens differ"
+                        )
                 for label, other in (("eager", e), ("traced", t)):
                     n_diff = int(((m - other).abs().amax(dim=-1) > 0).sum())
                     logger.info(
