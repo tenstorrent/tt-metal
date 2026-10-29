@@ -1344,11 +1344,14 @@ def run_eltwise_unary_sfpu_quasar(
     ), "Assert against golden failed"
 
     if mathop == MathOperation.Softplus:
-        # Default beta is 1. atol 0.05 lets a flush to 0 through, so require t < -5 > 0.
+        # atol 0.05 lets a flush to 0 through. Require t < -5 to stay positive
+        # where the output format's golden is still positive (Float16 underflows below ~-16).
         tail = src_A.to(torch.float32) < -5.0
         assert bool(tail.any()), "softplus stimulus never reaches t < -5"
+        kept = golden_tensor.to(torch.float32)[tail] > 0
+        assert bool(kept.any()), "softplus golden is 0 across the whole negative tail"
         assert torch.all(
-            res_tensor.to(torch.float32)[tail] > 0
+            res_tensor.to(torch.float32)[tail][kept] > 0
         ), "softplus flushed the negative tail to 0"
 
 
