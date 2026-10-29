@@ -375,3 +375,66 @@ def test_ks_export(mesh_device):
             rep = cs = None
             gc.collect()
     os.environ.pop("DSV41_IDX_CS_EXPORT_LOCAL", None)
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", DEV, indirect=True)
+@pytest.mark.timeout(3600)
+@torch.no_grad()
+def test_ks_append_time(mesh_device):
+    """traced us of the key append of ONE owner layer (fresh step state: the derived update indices are computed) and of a SECOND owner layer of the same step (cached), replicated vs sharded + head slab."""
+    md = mesh_device
+    rows, cols = tuple(md.shape)
+    cfg_m, ccl = mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+    w, _ = load_weights()
+    g = torch.Generator().manual_seed(3)
+    wk = (torch.randn(128, 512, generator=g) * 0.05).to(torch.bfloat16)
+    knorm = torch.ones(128).to(torch.bfloat16)
+    N = 140000
+    for ratio in (1, 2):
+        for U, n in ((2, 1), (2, 6), (4, 6)):
+            R = U * n
+            kind = "spec" if n > 1 else "plain"
+            n_alloc = -(-(N + 32) // 32) * 32
+            freqs = rope_freqs(LAYER, ratio * N + 64)
+            kw = dict(users_per_row=U, ratio=ratio, key_dtype=ttnn.bfloat8_b, fp4_q=True, backend="matmul")
+            cls = SpecIndexer if kind == "spec" else DSV41DecodeIndexer
+            extra = dict(n=n) if kind == "spec" else {}
+            rep = cls(md, w, freqs, n_alloc=n_alloc, **kw, **extra)
+            cs = cls(md, w, freqs, n_alloc=n_alloc, colshard=True, mesh_config=cfg_m, ccl=ccl, **kw, **extra)
+            for ix in (rep, cs):
+                ix.set_key_weights(wk, knorm)
+                ix.load_keys(torch.zeros(rows * U, 0, 128))
+            lat = shard_rows(md, torch.randn(rows, 1, R, 512, generator=g).to(torch.bfloat16))
+            posb = torch.tensor([ratio * 60000 + (i % n) + (1 if ratio == 2 else 0) for i in range(rows * R)])
+            C, S = rope_rows(freqs, posb.clamp(max=freqs.shape[0] - 1))
+            base = {
+                "iCg": shard_rows(md, C.reshape(rows, 1, R, 128).to(torch.bfloat16)),
+                "iSg": shard_rows(md, S.reshape(rows, 1, R, 128).to(torch.bfloat16)),
+                "pos": shard_rows(md, posb.reshape(rows * R).to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+                "ent": shard_rows(
+                    md,
+                    (torch.arange(rows * U) % 7 + 60000).reshape(rows * U).to(torch.int32),
+                    ttnn.int32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ),
+            }
+
+            def app(ix, k):
+                st = dict(base)
+                for _ in range(k):
+                    (ix.append_key_block if kind == "spec" else ix.append_key)(lat, st)
+
+            res = {}
+            for nm, ix in (("replicated", rep), ("sharded", cs)):
+                res[nm] = (
+                    traced_us(md, lambda: app(ix, 1), inner=5, reps=3),
+                    traced_us(md, lambda: app(ix, 2), inner=5, reps=3),
+                )
+            print(
+                f"IKSAT ratio={ratio} U={U} n={n}: append of 1 owner layer: replicated {res['replicated'][0]:.0f} us, sharded+head {res['sharded'][0]:.0f} us; 2nd owner layer of the step: "
+                f"replicated {res['replicated'][1] - res['replicated'][0]:.0f} us, sharded+head {res['sharded'][1] - res['sharded'][0]:.0f} us",
+                flush=True,
+            )
+            rep = cs = None
+            gc.collect()

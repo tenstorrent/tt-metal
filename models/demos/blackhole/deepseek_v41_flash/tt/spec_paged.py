@@ -162,22 +162,56 @@ class SpecIndexer(DSV41DecodeIndexer):
         s = ttnn.matmul(w, s, compute_kernel_config=self.ckc)  # [R,1,1(32),T]
         return ttnn.to_layout(ttnn.slice(s, [0, 0, 0, 0], [R, 1, 1, self.n_score]), ttnn.ROW_MAJOR_LAYOUT)
 
-    def _ent_per_j(self, st):
-        """int32 [U] row-major per block index j: key slab entry written by row j (pos // ratio) when the row completes a group, else -1 (skip)."""
+    def _ent_matrix(self, st):
+        """float32 TILE [U, n]: entry written by block row j of user u (pos // ratio) + 1 when the row completes a group, else 0 (skip)."""
         U, n, R, r = self.T, self.n, self.R, self.ratio
         posf = ttnn.typecast(ttnn.to_layout(ttnn.reshape(st["pos"], [1, 1, 1, R]), ttnn.TILE_LAYOUT), ttnn.float32)
         p1 = ttnn.add(posf, 1.0)
         comp = ttnn.eq(ttnn.multiply(ttnn.floor(ttnn.multiply(p1, 1.0 / r)), float(r)), p1)  # (pos + 1) % r == 0
         ent1 = ttnn.multiply(ttnn.add(ttnn.floor(ttnn.multiply(posf, 1.0 / r)), 1.0), comp)  # entry + 1, 0 = skip
-        m = ttnn.to_layout(
+        return ttnn.to_layout(
             ttnn.reshape(ttnn.to_layout(ent1, ttnn.ROW_MAJOR_LAYOUT), [U, n]), ttnn.TILE_LAYOUT
         )  # [U, n]
+
+    def _ent_per_j(self, st):
+        """int32 [U] row-major per block index j: key slab entry written by row j (pos // ratio) when the row completes a group, else -1 (skip)."""
+        U, n = self.T, self.n
+        m = self._ent_matrix(st)
         out = []
         for j in range(n):
             col = ttnn.slice(m, [0, j], [U, j + 1])  # [U,1]
             v = ttnn.subtract(col, 1.0)
             out.append(ttnn.reshape(ttnn.to_layout(ttnn.typecast(v, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [U]))
         return out
+
+    def _cs_ent_lists(self, st):
+        """column-sharded slab: (local slots, head entries), each a list over the block index j of int32 [U] row-major (-1 = skip): the update indices of the sharded slab (slot e // cols on the owner column
+        e % cols, -1 on the others) and of the replicated head slab (entries < n_head). Computed ONCE per step for all the owner layers of the ratio (``st`` is the step state of the ratio, built per step).
+        """
+        key = ("ent_cs_lists", self.R)
+        if key not in st:
+            U, n, cols = self.T, self.n, self.cols
+            e = ttnn.reshape(ttnn.subtract(self._ent_matrix(st), 1.0), [1, 1, U, n])  # entry, -1 = skip
+            cc = _cs_consts(self.md, self.n_alloc)["col_id"]
+            loc = ttnn.floor(ttnn.multiply(e, 1.0 / cols))
+            own = ttnn.eq(ttnn.subtract(e, ttnn.multiply(loc, float(cols))), cc)
+            vloc = ttnn.where(own, loc, -1.0)
+            vhead = ttnn.where(ttnn.lt(e, float(self.n_head)), e, -1.0)
+
+            def per_j(mat):
+                return [
+                    ttnn.reshape(
+                        ttnn.to_layout(
+                            ttnn.typecast(ttnn.slice(mat, [0, 0, 0, j], [1, 1, U, j + 1]), ttnn.int32),
+                            ttnn.ROW_MAJOR_LAYOUT,
+                        ),
+                        [U],
+                    )
+                    for j in range(n)
+                ]
+
+            st[key] = (per_j(vloc), per_j(vhead))
+        return st[key]
 
     def append_key_block(self, lat_pre, st):
         """lat_pre [1,1,R,512] bf16 tile: the block's pooled latents BEFORE RoPE; writes the keys of the group-completing rows."""
@@ -192,10 +226,12 @@ class SpecIndexer(DSV41DecodeIndexer):
                 self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, R * 4, 32))), ttnn.bfloat16
             )
         k_rm = ttnn.reshape(ttnn.to_layout(ttnn.reshape(k, (1, 1, R, DIM)), ttnn.ROW_MAJOR_LAYOUT), (U, n, DIM))
-        ents_g = self._ent_per_j(st)  # global entries
-        ents = (
-            [self._cs_ent(e) for e in ents_g] if self.cs else ents_g
-        )  # column-sharded slab: the local slot on the owner column, -1 (skip) elsewhere
+        if (
+            self.cs
+        ):  # column-sharded slab: the local slot on the owner column, -1 (skip) elsewhere; head slab: the entries < n_head (both computed once per step and ratio)
+            ents, ents_head = self._cs_ent_lists(st)
+        else:
+            ents = self._ent_per_j(st)
         for j in range(n):
             kj = ttnn.slice(k_rm, [0, j, 0], [U, j + 1, DIM])  # [U,1,128] row-major
             Us = getattr(self, "U_slab", None)
@@ -212,10 +248,8 @@ class SpecIndexer(DSV41DecodeIndexer):
             if (
                 self.cs
             ):  # the replicated head slab holds the entries < n_head too (ent_j is already the LOCAL slot: the head takes the global entry)
-                ent_g = ents_g[j] if Us is None or Us == U else ttnn.concat([ents_g[j], self._pad_idx], dim=0)
-                ttnn.experimental.paged_update_cache(
-                    self.k_head, kj, update_idxs_tensor=self._head_ent(ent_g), page_table=None
-                )
+                ent_h = ents_head[j] if Us is None or Us == U else ttnn.concat([ents_head[j], self._pad_idx], dim=0)
+                ttnn.experimental.paged_update_cache(self.k_head, kj, update_idxs_tensor=ent_h, page_table=None)
             ttnn.deallocate(kj)
         Us = getattr(self, "U_slab", None)
         if Us is not None and Us != U:

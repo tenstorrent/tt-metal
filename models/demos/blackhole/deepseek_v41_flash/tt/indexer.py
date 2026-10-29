@@ -584,8 +584,14 @@ class DSV41DecodeIndexer:
                 self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, T * 4, 32))), ttnn.bfloat16
             )
         k = ttnn.reshape(k, (1, 1, T, DIM))
-        ent = self._cs_ent(st["ent"]) if self.cs else st["ent"]
-        ent_h = self._head_ent(st["ent"]) if self.cs else None
+        if (
+            self.cs
+        ):  # derived update indices, computed once per step and ratio (``st`` is the step state of the ratio): shared by every owner layer of the ratio
+            if "_ent_cs" not in st:
+                st["_ent_cs"], st["_ent_head"] = self._cs_ent(st["ent"]), self._head_ent(st["ent"])
+            ent, ent_h = st["_ent_cs"], st["_ent_head"]
+        else:
+            ent, ent_h = st["ent"], None
         Us = getattr(self, "U_slab", None)
         if Us is not None and Us != T:
             # decode bucket (tt/decode_buckets.py): the key slab keeps its [U,..] shape and the op takes one row per slab user: the users outside the bucket get a zero key at entry 0
