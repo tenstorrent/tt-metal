@@ -155,11 +155,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet02BandwidthBidir) {
                 }
 
                 log_info(
-                    tt::LogTest,
-                    "  sender core: {}, receiver core: {} ({})",
-                    sender_core,
-                    receiver_core,
-                    get_connector(sender_device, sender_core));
+                    tt::LogTest, "  {}", format_link_info(sender_device, sender_core, receiver_device, receiver_core));
 
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);

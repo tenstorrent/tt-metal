@@ -241,11 +241,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet04DataIntegrityDramBidir) {
                 }
 
                 log_info(
-                    tt::LogTest,
-                    "  sender core: {}, receiver core: {} ({})",
-                    sender_core,
-                    receiver_core,
-                    get_connector(sender_device, sender_core));
+                    tt::LogTest, "  {}", format_link_info(sender_device, sender_core, receiver_device, receiver_core));
 
                 bool passed = run_test_integrity_dram_bidir(
                     this, sender_mesh_device, receiver_mesh_device, sender_core, receiver_core);

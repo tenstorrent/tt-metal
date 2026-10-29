@@ -177,11 +177,7 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet05StressTest) {
                 }
 
                 log_info(
-                    tt::LogTest,
-                    "  sender core: {}, receiver core: {} ({})",
-                    sender_core,
-                    receiver_core,
-                    get_connector(sender_device, sender_core));
+                    tt::LogTest, "  {}", format_link_info(sender_device, sender_core, receiver_device, receiver_core));
 
                 const auto processor = static_cast<DataMovementProcessor>(0);
 

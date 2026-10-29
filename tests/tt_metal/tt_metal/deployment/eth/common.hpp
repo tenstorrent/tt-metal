@@ -779,25 +779,6 @@ static std::string get_ubb(IDevice* device) {
     return fmt::format("ubb: {}, chip: {}", ubb.tray_id, ubb.asic_id);
 }
 
-[[maybe_unused]]
-static std::string get_locinfo(
-    IDevice* sdev, CoreCoord score, IDevice* rdev, CoreCoord rcore, DataMovementProcessor proc) {
-    return fmt::format(
-        "sdev: [{} ({}), {}], rdev: [{} ({}), {}]"
-        ", score: [{}], rcore: [{}]"
-        ", processor: [{}], link: [{}]",
-        sdev->id(),
-        pci_bdf_for_device_id(sdev->id()),
-        get_ubb(sdev),
-        rdev->id(),
-        pci_bdf_for_device_id(rdev->id()),
-        get_ubb(rdev),
-        score,
-        rcore,
-        proc,
-        get_connector(sdev, score));
-}
-
 static bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> devices) {
     bool pass = true;
 
@@ -879,6 +860,38 @@ static std::string get_eth_unique_id(IDevice* const device, const CoreCoord& cor
     int ethn = get_eth_phys_id(device, core);
 
     return fmt::format("{}/eth{:02}", sn, ethn);
+}
+
+[[maybe_unused]]
+static std::string format_link_info(IDevice* const sd, const CoreCoord& sc, IDevice* const rd, const CoreCoord& rc) {
+    return fmt::format(
+        "sender core: {} ({}), receiver core: {} ({}) ({})",
+        sc,
+        get_eth_unique_id(sd, sc),
+        rc,
+        get_eth_unique_id(rd, rc),
+        get_connector(sd, sc));
+}
+
+[[maybe_unused]]
+static std::string get_locinfo(
+    IDevice* sdev, CoreCoord score, IDevice* rdev, CoreCoord rcore, DataMovementProcessor proc) {
+    return fmt::format(
+        "sdev: [{} ({}), {}], rdev: [{} ({}), {}]"
+        ", score: [{} ({})], rcore: [{} ({})]"
+        ", processor: [{}], link: [{}]",
+        sdev->id(),
+        pci_bdf_for_device_id(sdev->id()),
+        get_ubb(sdev),
+        rdev->id(),
+        pci_bdf_for_device_id(rdev->id()),
+        get_ubb(rdev),
+        score,
+        get_eth_unique_id(sdev, score),
+        rcore,
+        get_eth_unique_id(rdev, rcore),
+        proc,
+        get_connector(sdev, score));
 }
 
 }  // namespace tt::tt_metal

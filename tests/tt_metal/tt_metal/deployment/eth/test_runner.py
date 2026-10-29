@@ -36,7 +36,9 @@ testend = re.compile("\[\s+([^ ]*)\s+\] (.*) \(.*\)")
 testdevices = re.compile(
     f"({timeregex}).*Test \| sender device id: (.*) \((.*), ubb: (.*), chip: (.*)\), receiver device id: (.*) \((.*), ubb: (.*), chip: (.*)\) .*"
 )
-testcores = re.compile(f"({timeregex}).*Test \|   sender core: (\S*), receiver core: (\S*) \((\S*)\).*")
+testcores = re.compile(
+    f"({timeregex}).*Test \|   sender core: (\S*) \((\S*)\), receiver core: (\S*) \((\S*)\) \((\S*)\).*"
+)
 testprocs = re.compile(f"({timeregex}).*Test \|     running on (.*) .*")
 testruns = re.compile(f"({timeregex}).*Test \| Ran (\d+) tests .*")
 testbw = re.compile(f"({timeregex}).*Test \|       Bandwidth (.*) Gbps, (.*) ms .*")
@@ -55,12 +57,13 @@ testmissinglinks = re.compile(
     f"({timeregex}).*Test \| missing links: chip\[(.*) \((.*)\), ubb: (.*), chip: (.*)\]: expected (\d*) links, got (\d*) .*"
 )
 testtimeout = re.compile(f"({timeregex}).*Test \| Timed out! You probably need to reset the device .*")
-locinfo = "sdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], rdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\], link: \[(.*)\]"
+locinfo = "sdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], rdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], score: \[(.*) \((.*)\)\], rcore: \[(.*) \((.*)\)\], processor: \[(.*)\], link: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
 testasic = re.compile(f"({timeregex}).*Test \|   UBB: (.*), Chip: (.*), BDF: (.*), SN: (.*) .*")
 
 print_logs = True
 missing_links: dict[str, dict] = {}
+
 
 class TestCase(str, Enum):
     LINK_UP = "LinkUp"
@@ -76,12 +79,14 @@ class TestedLink:
     src_dev: str
     src_devbdf: str
     src_core: str
+    src_core_uid: str
     src_ubb: str
     src_chip: str
 
     dst_dev: str
     dst_devbdf: str
     dst_core: str
+    dst_core_uid: str
     dst_ubb: str
     dst_chip: str
 
@@ -195,8 +200,10 @@ def parse_cores(l: str) -> Optional[Event]:
 
     extra = {
         "score": m.group(2),
-        "rcore": m.group(3),
-        "type": m.group(4),
+        "score_uid": m.group(3),
+        "rcore": m.group(4),
+        "rcore_uid": m.group(5),
+        "type": m.group(6),
     }
     # print(f"\tCORES {extra}")
     return Event(EventType.CORES, extra)
@@ -315,9 +322,11 @@ def parse_check(l: str) -> Optional[Event]:
         "rdevubb": m.group(8),
         "rdevchip": m.group(9),
         "score": m.group(10),
-        "rcore": m.group(11),
-        "proc": m.group(12),
-        "link": m.group(13),
+        "score_uid": m.group(11),
+        "rcore": m.group(12),
+        "rcore_uid": m.group(13),
+        "proc": m.group(14),
+        "link": m.group(15),
     }
     # print(f"\tTESTCHECK {extra}")
     return Event(EventType.TESTCHECK, extra)
@@ -432,6 +441,8 @@ async def parse_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]) -> list[
 
 
 failed_requests = 0
+
+
 def batch_worker(q: Queue, s: requests.Session, http_post_url: Optional[str]):
     done = False
     while not done:
@@ -459,8 +470,10 @@ def publish_link(test, link: TestedLink, srcsn, dstsn, q: Queue):
         "test": test,
         "src_chip": srcsn,
         "src_core": link.src_core,
+        "src_core_uid": link.src_core_uid,
         "dst_chip": dstsn,
         "dst_core": link.dst_core,
+        "dst_core_uid": link.dst_core_uid,
         "proc": link.proc,
         "bw": link.bw,
         "errors": link.errors,
@@ -476,11 +489,13 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
     sdevubb: str = ""
     sdevchip: str = ""
     score: str = ""
+    score_uid: str = ""
     rdev: str = ""
     rdevbdf: str = ""
     rdevubb: str = ""
     rdevchip: str = ""
     rcore: str = ""
+    rcore_uid: str = ""
     ltype: str = ""
     proc: str = ""
     bw: dict = {}
@@ -490,7 +505,6 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
     links: list[TestedLink] = []
     errors: list = []
 
-    stresstest = "MeshDispatchFixture.TensixDeploymentEthernet05StressTest"
     drambidir = "MeshDispatchFixture.TensixDeploymentEthernet04DataIntegrityDramBidir"
     noprocs = [drambidir]
 
@@ -498,14 +512,16 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
     async for e in evs:
         if e.typ == EventType.TESTSTART:
             test = e.extra["name"]
-            sdev = sdevbdf = rdev = rdevbdf = score = rcore = ltype = proc = ""
+            sdev = sdevbdf = rdev = rdevbdf = ltype = proc = ""
+            score = score_uid = rcore = rcore_uid = ""
             sdevubb = sdevchip = rdevubb = rdevchip = ""
             links = []
             errors = []
             bw = {}
         elif e.typ == EventType.TESTEND:
             runs.append(TestRun(test, links, e.extra["status"]))
-            test = sdev = rdev = score = rcore = ltype = proc = ""
+            test = sdev = rdev = ltype = proc = ""
+            score = score_uid = rcore = rcore_uid = ""
             sdevubb = sdevchip = rdevubb = rdevchip = ""
             links = []
             errors = []
@@ -519,12 +535,14 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
             rdevbdf = e.extra["rdevbdf"]
             rdevubb = e.extra["rubb"]
             rdevchip = e.extra["rchip"]
-            score = rcore = ltype = proc = ""
+            score = score_uid = rcore = rcore_uid = ltype = proc = ""
             errors = []
             bw = {}
         elif e.typ == EventType.CORES:
             score = e.extra["score"]
+            score_uid = e.extra["score_uid"]
             rcore = e.extra["rcore"]
+            rcore_uid = e.extra["rcore_uid"]
             ltype = e.extra["type"]
             proc = ""
             errors = []
@@ -544,7 +562,8 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
         elif e.typ == EventType.L1DATACMP:
             errors.append({"data": e.extra})
         elif e.typ == EventType.TESTSETUP:
-            sdev = sdevbdf = rdev = rdevbdf = score = rcore = ltype = proc = ""
+            sdev = sdevbdf = rdev = rdevbdf = ltype = proc = ""
+            score = score_uid = rcore = rcore_uid = ""
             sdevubb = sdevchip = rdevubb = rdevchip = ""
             links = []
             errors = []
@@ -559,7 +578,9 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
             rdevubb = e.extra["rdevubb"]
             rdevchip = e.extra["rdevchip"]
             score = e.extra["score"]
+            score_uid = e.extra["score_uid"]
             rcore = e.extra["rcore"]
+            rcore_uid = e.extra["rcore_uid"]
             ltype = e.extra["link"]
             proc = e.extra["proc"]
             errors = []
@@ -569,11 +590,13 @@ async def parse_evs(evs: AsyncIterator[Event], q: Queue) -> AsyncIterator[TestRu
                 sdev,
                 sdevbdf,
                 score,
+                score_uid,
                 sdevubb,
                 sdevchip,
                 rdev,
                 rdevbdf,
                 rcore,
+                rcore_uid,
                 rdevubb,
                 rdevchip,
                 ltype,
@@ -914,7 +937,8 @@ async def main() -> None:
         args = [f"--gtest_filter={filters}"]
 
         env = os.environ.copy()
-        env["ETH_TEST_EXPECTED_LINKS"] = os.environ.get("ETH_TEST_EXPECTED_LINKS", str(10))
+        env["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
+        # env["ETH_TEST_EXPECTED_LINKS"] = os.environ.get("ETH_TEST_EXPECTED_LINKS", str(10))
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 
@@ -924,7 +948,7 @@ async def main() -> None:
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
         if not proc.stdout:
-            print("Couldn't get the test's stdout") # TODO better logging
+            print("Couldn't get the test's stdout")  # TODO better logging
             exit(1)
 
         q: Queue = Queue()
