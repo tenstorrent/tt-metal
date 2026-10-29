@@ -175,8 +175,10 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
     uint8_t counter = 0;
     for (uint32_t h = issuer_mask; h != 0; h &= h - 1) {
         const uint32_t hart = static_cast<uint32_t>(__builtin_ctz(h));
-        const uint32_t rec = *dfb_l1_uncached_u32_ptr(
+        volatile uint32_t* const rec_slot = dfb_l1_uncached_u32_ptr(
             reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hart - dfb::FIRST_KERNEL_DM_HART][record_slot]));
+        const uint32_t rec = *rec_slot;
+        *rec_slot = DFB_EXIT_RECORD_NONE;
         const uint32_t loop = rec & 0xFFFFu;
         const uint32_t pos = (rec >> 16) & 0xFFu;
         const uint32_t share = rec >> 24;
@@ -240,10 +242,25 @@ inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
     enable_dfb_tile_isr();
 }
 
+// DM0: whether every DM in `issuers` has written its exit record for the side whose lowest txn id is `first_trid`.
+inline bool dfb_dm0_records_written(uint8_t issuers, uint32_t first_trid) {
+    for (uint32_t h = issuers; h != 0; h &= h - 1) {
+        const uint32_t hart = static_cast<uint32_t>(__builtin_ctz(h));
+        if (*dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(
+                &g_dfb_exit_record[hart - dfb::FIRST_KERNEL_DM_HART][first_trid - DFB_TXN_ID_BASE])) ==
+            DFB_EXIT_RECORD_NONE) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // DM0: flushes every DFB side in `pending` (txn ids not yet flushed, of one role) whose issuers are all
 // draining, given `ready` (bit per DM hart), and drops those txn ids from `pending`. A side's txn ids are one
-// ascending block, so its lowest pending txn id and its descriptor's count give the whole side.
-inline void __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pending, uint8_t ready, bool is_producer) {
+// ascending block, so its lowest pending txn id and its descriptor's count give the whole side. Returns
+// whether a side had all its issuers ready but not yet all their records, so the caller checks again.
+inline bool __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pending, uint8_t ready, bool is_producer) {
+    bool records_missing = false;
     for (uint32_t unvisited = pending; unvisited != 0;) {
         const uint32_t first_trid = static_cast<uint32_t>(__builtin_ctz(unvisited));
         const volatile dfb_dm0_finish_info_t& finish = g_txn_dfb_descriptor[first_trid].finish;
@@ -252,11 +269,17 @@ inline void __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pendin
         ASSERT(num_txn_ids != 0);
         const uint32_t side_trids = ((1u << num_txn_ids) - 1u) << first_trid;
         unvisited &= ~side_trids;
-        if ((ready & issuers) == issuers) {
-            dfb_dm0_flush_side(side_trids, is_producer);
-            pending &= ~side_trids;
+        if ((ready & issuers) != issuers) {
+            continue;
         }
+        if (!dfb_dm0_records_written(issuers, first_trid)) {
+            records_missing = true;
+            continue;
+        }
+        dfb_dm0_flush_side(side_trids, is_producer);
+        pending &= ~side_trids;
     }
+    return records_missing;
 }
 
 #endif  // !COMPILE_FOR_TRISC
