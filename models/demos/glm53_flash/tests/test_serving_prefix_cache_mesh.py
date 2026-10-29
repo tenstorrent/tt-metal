@@ -153,6 +153,59 @@ def _assert_agree(name: str, got: list[torch.Tensor], ref: list[torch.Tensor], p
         ), f"{name} step {k}: token {tg} != {tr} and the reference gap {gap:.3f} is no near-tie"
 
 
+def _slot_state(a, logical: int, n_rows: int) -> dict[str, torch.Tensor]:
+    """Every layer's device state of the request in logical slot ``logical`` after its prefill, on the host: per KDA
+    layer the recurrent state and the conv history of its user, per DSA layer the latent rows [0, n_rows) of its user
+    (the owner column's pages), the pooled-key index of those rows and the raw ring; read before any decode step."""
+    model = a.model
+    s = a.slots.physical(logical)
+    row, user = int(s.row), int(s.user)
+    out: dict[str, torch.Tensor] = {}
+    cols = model.mesh.cols
+    for i, dec in enumerate(model.layers):
+        if dec.is_kda:
+            chip = row * cols
+            rec = ttnn.to_torch(model.mesh.device_tensors(dec.kda_batched.recurrent)[chip])[user]
+            conv = ttnn.to_torch(model.mesh.device_tensors(dec.kda_batched.convolution)[chip])[:, user]
+            out[f"L{i} kda.recurrent"] = rec.float().clone()
+            out[f"L{i} kda.conv"] = conv.float().clone()
+            continue
+        cache = dec.state.cache if hasattr(dec, "state") else dec.cache
+        owner = cache.owner_of(user) if cache.partition else 0
+        chip = row * cols + (owner or 0)
+        local = cache.prefill_slot(user)
+        n_blocks = -(-int(n_rows) // cache.block_size)
+        ids = cache.page_table_host[local, :n_blocks].tolist()
+        pages = ttnn.to_torch(model.mesh.device_tensors(cache.cache)[chip])  # [blocks, 1, 32, L]
+        out[f"L{i} dsa.latent"] = pages[ids].reshape(-1, pages.shape[-1])[: int(n_rows)].float().clone()
+        idx = cache.index
+        n_pools = -(-int(n_rows) // 4)
+        pools = ttnn.to_torch(model.mesh.device_tensors(idx.pool_cache)[chip])  # [max_batch * pool_blocks, 1, 32, D]
+        pools = pools.reshape(-1, idx.pool_blocks * 32, pools.shape[-1])[local, :n_pools]
+        out[f"L{i} index.pools"] = pools.float().clone()
+        out[f"L{i} index.ring_k"] = ttnn.to_torch(model.mesh.device_tensors(idx.ring_k)[chip])[local].float().clone()
+    return out
+
+
+def _diff_states(name: str, got: dict[str, torch.Tensor], ref: dict[str, torch.Tensor]) -> None:
+    """Log, per component, the largest absolute difference and the first differing row (bit-identical = none)."""
+    for key in ref:
+        g, r = got[key], ref[key]
+        if g.shape != r.shape:
+            logger.info(f"{name}: {key}: shape {tuple(g.shape)} vs {tuple(r.shape)}")
+            continue
+        d = (g - r).abs()
+        if not bool((d > 0).any()):
+            logger.info(f"{name}: {key}: identical")
+            continue
+        flat = d.reshape(d.shape[0], -1) if d.dim() > 1 else d.reshape(-1, 1)
+        rows = torch.nonzero(flat.max(dim=1).values > 0).reshape(-1)
+        logger.info(
+            f"{name}: {key}: max |diff| {float(d.max()):.4g} (ref |max| {float(r.abs().max()):.4g}); "
+            f"{int(rows.numel())} of {flat.shape[0]} rows differ, first {int(rows[0])}, last {int(rows[-1])}"
+        )
+
+
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
@@ -376,6 +429,7 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
     srv.prefill(2, Bp[: 2 * CHUNK], CHUNK)
     srv.prefill(2, Bp[:split_end], 2 * CHUNK)
     lb2 = srv.prefill(2, Bp, split_end)
+    state_b2 = _slot_state(a, 2, n)  # before any decode step: what the chunk plan left for the decode
     toks_b2, outs_b2 = srv.generate(2, lb2, n, N_CHECK)
     a.release_request(2)
     for key in a.apc.retained_slots():
@@ -387,6 +441,8 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
     a.release_request(0)
     rb = srv.prefill(1, Bp, 0)
     same_b = (a.slots.physical(1).row, a.slots.physical(1).user) == (sb.row, sb.user)
+    state_rb = _slot_state(a, 1, n)
+    _diff_states("B2's plan (1024+1024+128+172) vs from scratch (1024+1024+300)", state_b2, state_rb)
     rtoks_b, routs_b = srv.generate(1, rb, n, N_CHECK)
     a.release_request(1)
     logger.info(
