@@ -7,6 +7,7 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
+from models.demos.blackhole.qwen36.tt.attention.stateless_prefill import stateless_attention_prefill
 from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.strands_agent.tt.answers import build_answer
@@ -112,9 +113,9 @@ class StrandsDecider:
             attn_in = layer.attention_norm(x, mode=Mode.PREFILL, norm_config=None)
             attn_in = ttnn.reshape(attn_in, [B, S, dim])
             if layer.is_full_attention:
-                # No chunk page table: plain causal SDPA over [B, H, S, D]; no KV cache write.
-                attn_out = layer.attention.forward(attn_in, cos, sin)
-                layer.attention.reset_cache()
+                # Stateless: one fused q|k|v|gate projection, heads built straight to [B, H, S, D], plain causal
+                # SDPA; no KV cache is written, so there is nothing to reset.
+                attn_out = stateless_attention_prefill(layer.attention, attn_in, cos, sin)
             else:
                 attn_out = recurrent_forward(
                     layer.attention,
