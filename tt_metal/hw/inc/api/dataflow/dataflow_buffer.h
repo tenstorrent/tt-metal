@@ -253,6 +253,12 @@ public:
     friend void preload_posted_counter(DataflowBuffer<P, C>&, uint16_t);
     template <dfb::AccessPattern P, dfb::AccessPattern C>
     friend void preload_acked_counter(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_posted_cursor(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_acked_cursor(DataflowBuffer<P, C>&, uint16_t);
+    template <dfb::AccessPattern P, dfb::AccessPattern C>
+    friend void preload_counters_lockstep(DataflowBuffer<P, C>&, uint16_t);
 #endif
 
 #ifndef COMPILE_FOR_TRISC

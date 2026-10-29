@@ -11,21 +11,44 @@
 set -euo pipefail
 
 TESTS=tt_metal/tt-llk/tests
+
+# Read from this script's own location, not the caller's directory, so the answer does
+# not depend on where it was run from.
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+
+# A perf_*.py may import from a functional test, and then editing that test does move a
+# perf number. Ask the tree which ones, rather than keeping a list that goes stale: it
+# already had, with eight of the eleven imported tests classified as harmless.
+imported_by_a_perf_test() {
+    local module
+    module=$(basename "$1" .py)
+    grep -qsE "^[[:space:]]*(from|import)[[:space:]]+${module}\b" "$ROOT/$TESTS"/python_tests/perf_*.py
+}
+
 CHANGED=false
 while IFS= read -r FILE; do
     case "$FILE" in
-        # Functional tests, except the ones a perf_*.py imports from.
-        $TESTS/python_tests/test_pack.py|$TESTS/python_tests/test_eltwise_unary_datacopy.py)
-            CHANGED=true
+        # Functional tests: only the ones a perf_*.py imports from can move a number.
+        $TESTS/python_tests/test_*.py)
+            if imported_by_a_perf_test "$FILE"; then CHANGED=true; fi
             ;;
-        # Functional tests, Quasar, ttsim, accuracy sweeps (deselected by "not accuracy"),
-        # host-only tests, and docs. None of these move a Wormhole or Blackhole perf number.
-        $TESTS/python_tests/test_*.py|\
-        tt_metal/tt-llk/tt_llk_quasar/**|$TESTS/sources/quasar/**|$TESTS/python_tests/quasar/**|tt_metal/hw/ckernels/quasar/**|\
+        # Quasar, ttsim, accuracy sweeps (deselected by "not accuracy"), host-only tests,
+        # and docs. None of these move a Wormhole or Blackhole perf number.
+        tt_metal/tt-llk/tt_llk_quasar/**|tt_metal/hw/ckernels/quasar/**|\
         $TESTS/python_tests/accuracy/**|\
         $TESTS/hardware_free/**|$TESTS/run_hardware_free.sh|\
         $TESTS/run_quasar_regression.sh|$TESTS/run_ttsim_regression.sh|$TESTS/render_ttsim_report.py|\
         *.md)
+            ;;
+        # A "quasar" directory anywhere under tests/: sources/quasar, python_tests/quasar,
+        # python_tests/fuser/quasar and python_tests/fuser/tests/quasar. A case pattern's "*"
+        # matches "/" as well, so this one covers every depth.
+        $TESTS/*/quasar/**)
+            ;;
+        # Quasar-only helpers, which only Quasar sources compile: sfpu_operations_quasar.h,
+        # quasar_test_common.h, memory.quasar.ld. The shared helpers under python_tests/helpers
+        # name them only in comments, so no Wormhole or Blackhole ELF changes with them.
+        $TESTS/helpers/*/*quasar*)
             ;;
         tt_metal/sfpi-info.sh|tt_metal/sfpi-version|\
         tt_metal/tt-llk/tests/requirements.txt|\

@@ -239,11 +239,15 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             [](models::gpt2::Transformer& self,
                const ttml::autograd::TensorPtr& tensor,
                const ttml::autograd::TensorPtr& mask) {
-                return self(tensor, std::optional<ttml::autograd::TensorPtr>(mask));
+                std::optional<ttml::autograd::TensorPtr> mask_opt;
+                if (mask) {
+                    mask_opt = mask;
+                }
+                return self(tensor, mask_opt);
             },
             nb::arg("tensor"),
-            nb::arg("mask"),
-            "Model forward pass with causal mask.");
+            nb::arg("mask").none(),
+            "Model forward pass. With mask=None the fused SDPA applies the causal mask itself.");
     }
 
     {
@@ -331,10 +335,16 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             "__call__",
             [](models::llama::Llama& self,
                const ttml::autograd::TensorPtr& tensor,
-               const ttml::autograd::TensorPtr& mask) { return self(tensor, mask); },
+               const ttml::autograd::TensorPtr& mask) {
+                std::optional<ttml::autograd::TensorPtr> mask_opt;
+                if (mask) {
+                    mask_opt = mask;
+                }
+                return self(tensor, mask_opt);
+            },
             nb::arg("tensor"),
-            nb::arg("mask"),
-            "Model forward pass without KV cache.");
+            nb::arg("mask").none(),
+            "Model forward pass without KV cache. With mask=None the fused SDPA applies the causal mask itself.");
 
         // Overload 2: With KV cache and new_tokens
         py_llama.def(

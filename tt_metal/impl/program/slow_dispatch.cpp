@@ -190,7 +190,6 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                 }
 
                 if (!dfbs_on_core.empty()) {
-                    log_info(tt::LogMetal, "DFB size: {}", program.impl().get_program_config(index).dfb_size);
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
 
@@ -198,15 +197,6 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         logical_core, dfbs_on_core, dfb_config_vec);
 
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
-                    log_info(
-                        tt::LogMetal,
-                        "Writing DFB config to core {} at addr 0x{:x} (kernel_config_base=0x{:x}, dfb_offset=0x{:x}) "
-                        "size: {}",
-                        physical_core.str(),
-                        addr,
-                        kernel_config_base,
-                        program.impl().get_program_config(index).dfb_offset,
-                        bytes_written);
                     metal_ctx.get_cluster().write_core(
                         device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
                 }

@@ -443,8 +443,7 @@ class TtPrefillRuntime:
             kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); the chunks'
                 KV is written into it. The same object is passed on every call.
             chunks: the forward's PrefillChunk list, in pack order (validate_chunks).
-            request_id: the runner's chunk counter at the forward's first chunk, part of the runner's call
-                contract; unused here.
+            request_id: the runner's forward index, part of the runner's call contract; unused here.
             d2h_service: the device-side per-layer ack transport. When None, acks go through the host sink
                 (set_layer_completion_sink).
             record_dev: the forward's metadata tensor, unused here.
@@ -613,7 +612,8 @@ class TtPrefillRuntime:
 
     def msa_layer_ids(self) -> set[int]:
         """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
-        M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
+        M3, every layer when sparse_attention_freq is all 1). Read through the same helper as ``Layer``, so the table can't disagree with the model.
+        """
         ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
         if not ids:
             logger.warning(

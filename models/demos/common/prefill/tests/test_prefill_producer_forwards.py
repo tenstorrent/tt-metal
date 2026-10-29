@@ -291,6 +291,28 @@ def test_round_robin_rotates_first_slot(env):
     assert [[p.slot_id for p in f] for f in forwards[:3]] == [[0, 0], [1, 1], [2, 2]]
 
 
+@pytest.mark.parametrize("interleave", ["round_robin", "random"])
+def test_packed_respects_max_requests(env, interleave):
+    env(forward_chunks=4)
+    cfg = make_cfg(num_users=3, chunks_max=1, max_requests=1, interleave=interleave, forward_chunks=4)
+    forwards, stats = run(cfg)
+    assert stats.completed == 1
+    assert [[p.slot_id for p in f] for f in forwards] == [[0]]
+
+
+def test_import_config_defers_budget_check(monkeypatch, expect_error):
+    for name in ("GLOBAL_MESH_SHAPE", "CHUNK_SIZE", "MAX_SEQ_LEN", "FORWARD_CHUNKS", "CHUNK_METADATA_SIZE_BYTES"):
+        monkeypatch.setattr(producer, name, getattr(producer, name))  # restored after the reloads below
+    monkeypatch.delenv("PREFILL_CHUNK_SIZE", raising=False)
+    monkeypatch.setenv("PREFILL_FORWARD_TOKENS_BUDGET", str(8 * C))
+    producer._load_env_config(check_budget=False)  # the import-time call, before a manifest sets the chunk size
+    with expect_error(AssertionError, "PREFILL_FORWARD_TOKENS_BUDGET"):
+        producer._load_env_config()
+    monkeypatch.setenv("PREFILL_CHUNK_SIZE", str(2 * C))
+    producer._load_env_config()
+    assert producer.FORWARD_CHUNKS == 4
+
+
 def test_packed_rejects_burst(env, expect_error):
     env(forward_chunks=2)
     with expect_error(AssertionError, "p_burst"):

@@ -9,8 +9,7 @@ This module implements the image backbone of BEVFormer-base: a caffe-style ResNe
 modulated deformable convolution (DCNv2) in layer3 and layer4, run on every camera image.
 It returns the C3, C4 and C5 feature maps (512, 1024 and 2048 channels at strides 8, 16
 and 32) that the FPN neck consumes, and is the reference the TTNN backbone in
-``tt/tt_resnet.py`` is checked against. The ``img_backbone`` weights of the BEVFormer-base
-checkpoint load into it with no key changes.
+``tt/tt_resnet.py`` is checked against. Parameter names follow upstream's ``img_backbone``.
 
 Only what BEVFormer-base uses is kept: Bottleneck blocks, BatchNorm, and DCNv2 as the only
 conv besides Conv2d. The deformable convolution runs through ``torchvision.ops.deform_conv2d``
@@ -25,7 +24,6 @@ BEVFormer-base backbone configuration:
 https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_base.py
 """
 
-import warnings
 
 import torch
 import torch.nn as nn
@@ -73,8 +71,7 @@ class ModulatedDeformConv2dPack(nn.Module):
     ``conv_offset`` shares the deformable conv's geometry and emits
     ``3 * deform_groups * K * K`` channels from the input: the first two thirds are the
     per-position offsets in pixels, in ``(y, x)`` order, and the last third the mask logits,
-    which go through a sigmoid. Parameter names follow mmcv's module, so mmcv checkpoints
-    load unchanged.
+    which go through a sigmoid. Parameter names follow mmcv's module.
     """
 
     _version = 2
@@ -153,7 +150,7 @@ def build_conv_layer(cfg: Optional[Dict], *args, **kwargs) -> nn.Module:
 
 def build_norm_layer(cfg: Dict, num_features: int, postfix: Union[int, str] = "") -> Tuple[str, nn.Module]:
     """mmcv's ``build_norm_layer`` reduced to BatchNorm2d. The layer is named ``bn<postfix>``,
-    as mmcv names BatchNorm layers, so checkpoint keys match."""
+    as mmcv names BatchNorm layers."""
     return "bn" + str(postfix), nn.BatchNorm2d(num_features)
 
 
@@ -398,10 +395,9 @@ class ResNet(nn.Module):
         dcn (dict, optional): DCNv2 config for the 3x3 convs of the stages flagged in
             ``stage_with_dcn``.
 
-    The training-only arguments (``frozen_stages``, ``norm_eval``, ``pretrained``,
-    ``init_cfg``, ``zero_init_residual``, ``with_cp``) are accepted so mmdetection configs
-    apply unchanged, but have no effect: weights come from a checkpoint or from the tests'
-    initializers.
+    The training-only arguments (``frozen_stages``, ``norm_eval``, ``init_cfg``,
+    ``zero_init_residual``, ``with_cp``) are accepted so mmdetection configs apply unchanged,
+    but have no effect: weights come from the tests' initializers.
 
     Returns:
         tuple[torch.Tensor]: One (N, C, H, W) tensor per stage in ``out_indices``.
@@ -435,7 +431,6 @@ class ResNet(nn.Module):
         plugins=None,
         with_cp=False,
         zero_init_residual=True,
-        pretrained=None,
         init_cfg=None,
     ):
         super(ResNet, self).__init__()
@@ -444,22 +439,15 @@ class ResNet(nn.Module):
             raise KeyError(f"invalid depth {depth} for resnet")
 
         block_init_cfg = None
-        assert not (init_cfg and pretrained), "init_cfg and pretrained cannot be specified at the same time"
-        if isinstance(pretrained, str):
-            warnings.warn("DeprecationWarning: pretrained is deprecated, " 'please use "init_cfg" instead')
-            self.init_cfg = dict(type="Pretrained", checkpoint=pretrained)
-        elif pretrained is None:
-            if init_cfg is None:
-                self.init_cfg = [
-                    dict(type="Kaiming", layer="Conv2d"),
-                    dict(type="Constant", val=1, layer=["_BatchNorm", "GroupNorm"]),
-                ]
-                block = self.arch_settings[depth][0]
-                if self.zero_init_residual:
-                    if block is Bottleneck:
-                        block_init_cfg = dict(type="Constant", val=0, override=dict(name="norm3"))
-        else:
-            raise TypeError("pretrained must be a str or None")
+        if init_cfg is None:
+            self.init_cfg = [
+                dict(type="Kaiming", layer="Conv2d"),
+                dict(type="Constant", val=1, layer=["_BatchNorm", "GroupNorm"]),
+            ]
+            block = self.arch_settings[depth][0]
+            if self.zero_init_residual:
+                if block is Bottleneck:
+                    block_init_cfg = dict(type="Constant", val=0, override=dict(name="norm3"))
 
         self.depth = depth
         if stem_channels is None:

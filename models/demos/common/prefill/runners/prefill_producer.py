@@ -104,7 +104,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
     return manifest
 
 
-def _load_env_config() -> None:
+def _load_env_config(check_budget: bool = True) -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
     global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
@@ -113,15 +113,15 @@ def _load_env_config() -> None:
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     # Tokens per forward, a multiple of the chunk size; must match the runner's.
     forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
-    assert (
+    assert not check_budget or (
         forward_tokens_budget >= CHUNK_SIZE and forward_tokens_budget % CHUNK_SIZE == 0
     ), f"PREFILL_FORWARD_TOKENS_BUDGET={forward_tokens_budget} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
-    FORWARD_CHUNKS = forward_tokens_budget // CHUNK_SIZE
+    FORWARD_CHUNKS = max(forward_tokens_budget // CHUNK_SIZE, 1)
     CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
     MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
@@ -130,7 +130,8 @@ def _load_env_config() -> None:
     NUM_ACK_LAYERS = NUM_LAYERS
 
 
-_load_env_config()
+# At import the manifest may still set the chunk size; the entry points reload and check after applying it.
+_load_env_config(check_budget=False)
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
@@ -638,6 +639,8 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
         else:
             order = list(active_slots)
             rng.shuffle(order)
+        # A forward can finish several requests; past max_requests the slots' initial requests stay unsent.
+        order = [s for s in order if s.req_id < cfg.max_requests]
         runs = []
         filled = 0
         for slot in order:
@@ -692,7 +695,9 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     )
 
 
-def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
@@ -705,7 +710,7 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     if ADAPTER.name == "llama_3p1_8b":
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir, num_ranks)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -870,12 +875,15 @@ def _check_mtp_kv_slots(
     return min_pcc
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_gpt_oss(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     from pathlib import Path
 
     from safetensors import safe_open
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
     from tests.ttnn.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
@@ -919,6 +927,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
             g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
             g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
 
+        validate_kv_for_pcc(g_k, dev_k)
+        validate_kv_for_pcc(g_v, dev_v)
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
         pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
         mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
@@ -931,6 +941,9 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    # A single rank holds every layer, so a layer missing from its device map is a broken map, not another rank's.
+    if num_ranks == 1 and checked != NUM_LAYERS:
+        raise RuntimeError(f"slot {slot_id}: only {checked}/{NUM_LAYERS} layers resolved against the device map")
     return mins
 
 
@@ -1474,7 +1487,9 @@ def _verify_resident_slots(
         real_len = res.real_len
         if real_len <= 0:
             continue
-        slot_mins = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
+        slot_mins = _read_slot_kv_and_check_pcc(
+            kv_table, device_map, slot_id, real_len, slot_traces[slot_id], num_ranks=num_ranks
+        )
         for cache, value in slot_mins.items():
             per_cache[cache] = value if cache not in per_cache else min(per_cache[cache], value)
         pcc = min(slot_mins.values())
@@ -1495,7 +1510,7 @@ def _verify_resident_slots(
                 read_config_slice=read_dflash_slice,
                 golden_dir=os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR") or ADAPTER.dflash_golden_default,
                 threshold=dflash_threshold,
-                rope_convention="interleaved",
+                rope_convention=ADAPTER.dflash_rope_convention,
             )
             if dflash_pcc is not None:
                 min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)
@@ -1758,7 +1773,8 @@ def main() -> None:
         service.barrier()
         # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
         # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
-        wait_for_layer_completions(drain, chunk_layers * (max(warmup_chunks, 0) + stats.total_chunks))
+        expected_completions = chunk_layers * (max(warmup_chunks, 0) + stats.total_chunks)
+        received_completions = wait_for_layer_completions(drain, expected_completions)
     finally:
         if drain is not None:
             drain.stop()
@@ -1790,6 +1806,9 @@ def main() -> None:
             verify_ok = False
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
+        verify_ok = False
+    if cfg.verify and ADAPTER.verify_layer_completions and received_completions != expected_completions:
+        logger.error(f"[producer] layer completions: received {received_completions}/{expected_completions}")
         verify_ok = False
 
     if world_size > 1:

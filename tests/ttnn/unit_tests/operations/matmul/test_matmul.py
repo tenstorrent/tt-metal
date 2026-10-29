@@ -18,7 +18,6 @@ from tt_py_test_utils_common.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
 from ttnn.operations.activations import get_golden_function_for_activation
 
-
 # for setting up multi-device stress tests
 NUM_DEVICES_ENV_KEY = "USE_NUM_DEVICES"
 NUM_DEVICES = ttnn.distributed.get_num_pcie_devices() if os.environ.get(NUM_DEVICES_ENV_KEY, None) is not None else 1
@@ -4738,12 +4737,12 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
         ttnn.matmul(in0, in1, program_config=program_config)
 
 
-def _mcast_in1_tail_config(grid, per_core_m, per_core_n, out_block_h, out_block_w):
+def _mcast_in1_tail_config(grid, per_core_m, per_core_n, out_block_h, out_block_w, out_subblock_w=2):
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=1,
         out_subblock_h=1,
-        out_subblock_w=2,
+        out_subblock_w=out_subblock_w,
         out_block_h=out_block_h,
         out_block_w=out_block_w,
         per_core_M=per_core_m,
@@ -5179,6 +5178,98 @@ def test_matmul_bcast_in0_reuse_outer_blocks(device, per_core_M, out_block_h, pe
 
 
 # Pins compute_output_specs 1D mcast anchor against MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts.
+# Rejects a mis-shaped sharded in0 grid: same core count as the factory strip but wrong shape (4x2 vs 8x1).
+def test_matmul_mcast_in1_rejects_misshaped_sharded_in0_grid(device, expect_error):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 4 or grid.y < 2:
+        pytest.skip("Needs at least a 4x2 compute grid")
+    per_core_m, per_core_n = 1, 1
+    m_tiles, n_tiles, k_tiles = 8, 1, 1
+    m, k, n = m_tiles * 32, k_tiles * 32, n_tiles * 32
+    bad_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+    shard_spec = ttnn.ShardSpec(bad_shard_grid, (32, k), ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    a_t = ttnn.from_torch(
+        torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    b_t = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = _mcast_in1_tail_config(
+        grid=(8, 1),
+        per_core_m=per_core_m,
+        per_core_n=per_core_n,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        out_subblock_w=1,
+    )
+    with expect_error(RuntimeError, "sharded in0 .* (outside allowed_worker_cores|must match factory core set)"):
+        ttnn.matmul(a_t, b_t, program_config=program_config)
+
+
+# Pins core-wise compare: same 8 cores split as two ranges must still pass (CoreRangeSet::operator== is range-list-wise).
+def test_matmul_mcast_in1_accepts_multirange_sharded_in0_grid(device):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8:
+        pytest.skip("Needs an 8-wide compute grid")
+    per_core_m, per_core_n = 1, 1
+    m, k, n = 8 * 32, 32, 32
+    multirange_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
+        }
+    )
+    shard_spec = ttnn.ShardSpec(multirange_grid, (32, k), ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    a_torch = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    b_torch = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+    a_t = ttnn.from_torch(a_torch, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg)
+    b_t = ttnn.from_torch(b_torch, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = _mcast_in1_tail_config(
+        grid=(8, 1),
+        per_core_m=per_core_m,
+        per_core_n=per_core_n,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        out_subblock_w=1,
+    )
+    out = ttnn.to_torch(ttnn.matmul(a_t, b_t, program_config=program_config))
+    assert_with_pcc(a_torch.float() @ b_torch.float(), out.float(), pcc=0.99)
+
+
+# mcast_in0 variant of the mis-shaped reject: equality forces a row-major strip from `start_core`.
+def test_matmul_mcast_in0_rejects_misshaped_sharded_in0_grid(device, expect_error):
+    torch.manual_seed(0)
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 4 or grid.y < 2:
+        pytest.skip("Needs at least a 4x2 compute grid")
+    m, k, n = 32, 8 * 32, 32
+    bad_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+    shard_spec = ttnn.ShardSpec(bad_shard_grid, (m, k // 8), ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    a_t = ttnn.from_torch(
+        torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    b_t = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    with expect_error(RuntimeError, "sharded in0 .* (outside allowed_worker_cores|must match factory core set)"):
+        ttnn.matmul(a_t, b_t, program_config=program_config)
+
+
+# Pins compute_output_specs 1D mcast anchor against MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts.
 def test_matmul_1d_mcast_sharded_output_anchors_at_worker_bbox_start(device):
     torch.manual_seed(0)
     grid = device.compute_with_storage_grid_size()
@@ -5253,3 +5344,139 @@ def test_matmul_1d_mcast_sharded_output_anchors_at_subdevice_start(device, mcast
         device.reset_sub_device_stall_group()
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(mgr)
+
+
+@pytest.mark.parametrize("zero_field", ["per_core_M", "per_core_N"])
+@pytest.mark.parametrize("config_type", ["mcast_2d", "mcast_1d"])
+def test_matmul_sharded_output_rejects_zero_per_core_dims(device, expect_error, zero_field, config_type):
+    # A sharded output's spec divides M and N by per_core_M / per_core_N, and launch() computes
+    # output specs before validate_on_program_cache_miss.
+    a = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    per_core = dict(per_core_M=1, per_core_N=1)
+    per_core[zero_field] = 0
+    if config_type == "mcast_2d":
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            transpose_mcast=False,
+            fused_activation=None,
+            **per_core,
+        )
+        layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    else:
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(2, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+            **per_core,
+        )
+        layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    out_mem_config = ttnn.MemoryConfig(memory_layout=layout, buffer_type=ttnn.BufferType.L1)
+    with expect_error(RuntimeError, f"{zero_field} is 0, which is not valid"):
+        ttnn.matmul(a, b, program_config=program_config, memory_config=out_mem_config)
+
+
+@pytest.mark.parametrize("core_grid", [(0, 1), (1, 0)])
+def test_matmul_rejects_zero_core_grid(device, expect_error, core_grid):
+    # The auto-generated configs split the work by core_grid.x * core_grid.y.
+    a = ttnn.from_torch(torch.randn(1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "core_grid must be non-zero"):
+        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(x=core_grid[0], y=core_grid[1]))
+
+
+@pytest.mark.parametrize("grid", [(0, 1), (1, 0)])
+def test_attn_matmul_rejects_zero_grid(device, expect_error, grid):
+    # The factory splits q_heads over compute_with_storage_grid_size.x * .y cores.
+    a = ttnn.from_torch(torch.randn(1, 32, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(32, 1, 64, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "compute_with_storage_grid_size must be non-zero"):
+        ttnn.experimental.attn_matmul(a, b, compute_with_storage_grid_size=ttnn.CoreCoord(*grid))
+
+
+def test_group_attn_matmul_rejects_zero_kv_heads(device, expect_error):
+    # Validate takes q_heads % kv_heads.
+    a = ttnn.from_torch(torch.randn(1, 32, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(32, 0, 64, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Number of q_heads must be divisible by kv_heads"):
+        ttnn.experimental.group_attn_matmul(
+            a, b, compute_with_storage_grid_size=device.compute_with_storage_grid_size()
+        )
+
+
+def _bias_logical_h_program_config(config_kind, m, n, k):
+    if config_kind == "reuse":
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
+            in0_block_w=k // 32,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=m // 32,
+            per_core_N=n // 32,
+        )
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=k // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=m // 32,
+        out_block_w=n // 32,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
+# Rejects every logical bias h that the padded-h check lets silently read padding; reuse [1, N] with M>1 is also rejected but ttnn.linear's host router post-processes it before dispatch.
+@pytest.mark.parametrize(
+    "config_kind, m, bias_h",
+    [
+        ("mcast1d", 64, 16),  # Mt>1 non-reuse: requires h == 1
+        ("reuse", 32, 16),  # Mt==1 reuse: small-M bug (only new check catches)
+        ("mcast1d", 32, 16),  # Mt==1 non-reuse: small-M bug (h in (1, M))
+    ],
+    ids=["mcast1d-Mt2-h16", "reuse-Mt1-h16", "mcast1d-Mt1-h16"],
+)
+def test_matmul_rejects_bias_with_mismatched_logical_h(device, expect_error, config_kind, m, bias_h):
+    torch.manual_seed(0)
+    n, k = 32, 32
+    a_t = ttnn.from_torch(torch.randn(m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b_t = ttnn.from_torch(torch.randn(k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    bias_t = ttnn.from_torch(torch.randn(bias_h, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "logical bias h .* must be"):
+        ttnn.linear(a_t, b_t, bias=bias_t, program_config=_bias_logical_h_program_config(config_kind, m, n, k))
+
+
+# Supported bias shapes per factory: [1, N] broadcast on non-reuse; per-row [M, N] on reuse (any Mt) and non-reuse (Mt==1 only).
+@pytest.mark.parametrize(
+    "config_kind, m, bias_h",
+    [
+        ("mcast1d", 32, 1),  # Mt==1 non-reuse broadcast
+        ("mcast1d", 32, 32),  # Mt==1 non-reuse per-row
+        ("mcast1d", 64, 1),  # Mt>1 non-reuse broadcast
+        ("reuse", 32, 32),  # Mt==1 reuse
+        ("reuse", 64, 64),  # Mt>1 reuse
+    ],
+    ids=["mcast1d-Mt1-h1", "mcast1d-Mt1-hM", "mcast1d-Mt2-h1", "reuse-Mt1-hM", "reuse-Mt2-hM"],
+)
+def test_matmul_accepts_valid_biases(device, config_kind, m, bias_h):
+    torch.manual_seed(0)
+    n, k = 32, 32
+    a = torch.randn(m, k, dtype=torch.bfloat16)
+    b = torch.randn(k, n, dtype=torch.bfloat16)
+    bias = torch.randn(bias_h, n, dtype=torch.bfloat16)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
+    bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(
+        ttnn.linear(a_t, b_t, bias=bias_t, program_config=_bias_logical_h_program_config(config_kind, m, n, k))
+    )
+    assert_with_pcc(a.float() @ b.float() + bias.float(), out.float(), pcc=0.99)

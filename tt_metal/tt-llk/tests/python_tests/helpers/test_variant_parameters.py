@@ -34,7 +34,7 @@ from .llk_params import (
     ReducePool,
     SdpaFwOp,
     SdpaOp,
-    SfpuSrcsImpl,
+    SfpuImpl,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -537,11 +537,15 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
-class SFPU_SRCS_IMPL(TemplateParameter):
-    sfpu_srcs_impl: SfpuSrcsImpl
+class SFPU_IMPL(TemplateParameter):
+    """Emitted as a bool: ckernel::sfpu::SfpuImpl exists only in the Quasar tree, while this
+    header is generated for every architecture. The kernel maps it back to SfpuImpl."""
+
+    sfpu_impl: SfpuImpl
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool SFPU_SRCS_LOADMACRO = {self.sfpu_srcs_impl.cpp_enum_value};"
+        load_macro = str(self.sfpu_impl == SfpuImpl.LoadMacro).lower()
+        return f"constexpr bool SFPU_IMPL_LOADMACRO = {load_macro};"
 
 
 @dataclass
@@ -743,6 +747,24 @@ class PACK_NUM_TILES(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t PACK_NUM_TILES = {self.num_tiles}u;"
+
+
+@dataclass
+class SDPA_BCAST_NUM_TILES(TemplateParameter):
+    """Outer-loop tile count of the SDPA bcast-col SrcB-reuse MOP (``sdpa_bcast_col_srcb_reuse_test.cpp``).
+
+    A template argument on both the math and the unpack LLK (``num_tiles``), so it cannot be a
+    runtime parameter: one ``_llk_unpack_A_`` call walks this many tiles and the math MOP writes
+    them to consecutive DEST tiles. Emits ``constexpr std::uint32_t SDPA_BCAST_NUM_TILES``.
+
+    The field carries the ``sdpa_bcast_`` prefix so it stays globally unique
+    (``test_perf_header_gate.py``); bare ``num_tiles`` belongs to ``PACK_NUM_TILES``.
+    """
+
+    sdpa_bcast_num_tiles: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SDPA_BCAST_NUM_TILES = {self.sdpa_bcast_num_tiles}u;"
 
 
 @dataclass
@@ -1482,6 +1504,21 @@ class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
         return "\n".join(lines)
 
 
+@dataclass
+class GATHER_COMPRESS_PARAMS(TemplateParameter):
+    """Gather / compress mode and FPU vector size (32 elements for a 16-bit format, 64 for an 8-bit one)."""
+
+    compress: bool = False
+    elem_cnt: int = 32
+
+    def convert_to_cpp(self) -> str:
+        mode = "COMPRESS" if self.compress else "GATHER"
+        return (
+            f"constexpr auto GATHER_COMPRESS_MODE = ckernel::GatherCompressModeSelect::{mode};\n"
+            f"constexpr std::uint32_t GATHER_COMPRESS_ELEM_CNT = {self.elem_cnt};"
+        )
+
+
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
 
 
@@ -1502,6 +1539,23 @@ class BLOCK_MAX8_PARAMS(RuntimeParameter):
     def convert_to_struct_fields(self):
         """Serialize the valid prefix and probe flag as unsigned runtime arguments."""
         return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
+
+
+@dataclass
+class BLOCK_MAX8_FPU_PARAMS(RuntimeParameter):
+    """Number of FPU block-max calls per DST acquire and the optional DST denormal probe."""
+
+    calls: int
+    inject_denormal: int
+
+    def convert_to_cpp(self):
+        return (
+            f"constexpr unsigned FPU_CALLS = {self.calls};"
+            f"constexpr unsigned INJECT_DENORMAL = {self.inject_denormal};"
+        )
+
+    def convert_to_struct_fields(self):
+        return "unsigned FPU_CALLS; unsigned INJECT_DENORMAL;", "II"
 
 
 def generate_input_dim(
@@ -1561,6 +1615,19 @@ class LOOP_FACTOR(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t LOOP_FACTOR;", "I"
+
+
+@dataclass
+class GROUP_KT_DIM(RuntimeParameter):
+    """K tiles per quantization group (group-wise dequant matmul)."""
+
+    group_kt_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t GROUP_KT_DIM = {self.group_kt_dim};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return f"std::uint32_t GROUP_KT_DIM;", "I"
 
 
 @dataclass
@@ -2333,10 +2400,9 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
 class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
     """Compile-time dims for the experimental sdpa_custom_mm_reuse_dest_srcb OV matmul.
 
-    kt_dim: number of K tiles (softmax-score / V K tiles). The unpack MOP requires an
-            even kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in
-            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h); kt_dim < 2 underflows the
-            MOP iteration count and hangs the unpacker.
+    kt_dim: number of K tiles (softmax-score / V K tiles), 1 to 256. The unpack MOP
+            covers them in pairs and replays an odd last one directly (see
+            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h).
     nt_dim: number of V head-dim output tiles per K iteration (1..16).
     """
 

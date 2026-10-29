@@ -22,19 +22,19 @@ void DeepseekMoEFastReduceNCFusedDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must have a buffer");
 
     const ttnn::Tensor& scores_tensor = tensor_args.scores_tensor;
     TT_FATAL(scores_tensor.storage_type() == StorageType::DEVICE, "Scores tensor must be on device");
-    TT_FATAL(scores_tensor.buffer() != nullptr, "Scores tensor must have a buffer");
+    TT_FATAL(scores_tensor.is_allocated(), "Scores tensor must have a buffer");
 
     const ttnn::Tensor& expert_indices_tensor = tensor_args.expert_indices_tensor;
     TT_FATAL(expert_indices_tensor.storage_type() == StorageType::DEVICE, "Expert indices tensor must be on device");
-    TT_FATAL(expert_indices_tensor.buffer() != nullptr, "Expert indices tensor must have a buffer");
+    TT_FATAL(expert_indices_tensor.is_allocated(), "Expert indices tensor must have a buffer");
 
     const ttnn::Tensor& expert_mapping_tensor = tensor_args.expert_mapping_tensor;
     TT_FATAL(expert_mapping_tensor.storage_type() == StorageType::DEVICE, "Expert mapping tensor must be on device");
-    TT_FATAL(expert_mapping_tensor.buffer() != nullptr, "Expert mapping tensor must have a buffer");
+    TT_FATAL(expert_mapping_tensor.is_allocated(), "Expert mapping tensor must have a buffer");
 
     TT_FATAL(
         operation_attributes.cluster_axis <= 1,
