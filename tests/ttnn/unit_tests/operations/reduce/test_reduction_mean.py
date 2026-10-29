@@ -282,3 +282,27 @@ def test_mean_nc(device, shape, dim, dtype, keepdim, scalar):
         assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
     else:
         assert_allclose(torch_output, output_tensor.float(), rtol=3e-2 if dtype == ttnn.bfloat8_b else 1e-2, atol=0)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype, keepdim",
+    [
+        ((2, 1, 64, 64), [0, 1], ttnn.float32, True),
+        ((1, 3, 1, 64), [0, 2], ttnn.bfloat16, False),
+        ((4, 1, 32, 64), [1, 3], ttnn.float32, False),
+    ],
+)
+def test_mean_size_one_dims(device, shape, dim, dtype, keepdim):
+    torch.manual_seed(0)
+    scalar = 3.0
+    torch_input = torch.randn(shape) * 0.25 + 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_output = torch.mean(ttnn.to_torch(input_tensor).float(), dim=dim, keepdim=keepdim) * scalar
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=keepdim, scalar=scalar))
+
+    assert output_tensor.shape == torch_output.shape
+    if dtype == ttnn.float32:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
+    else:
+        assert_allclose(torch_output, output_tensor.float(), rtol=1e-2, atol=0)
