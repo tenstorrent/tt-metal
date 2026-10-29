@@ -241,7 +241,7 @@ static_assert(
 // a real producer cost over 16 -- and producer overhead outranks the knee here by policy.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 16;
 
-static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;      // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
+static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;  // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 
