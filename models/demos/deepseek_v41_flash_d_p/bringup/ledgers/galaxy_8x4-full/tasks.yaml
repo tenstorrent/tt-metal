@@ -1393,11 +1393,50 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: P.12
+  title: 'LOWBIT_HOST: cut the host time of the low-bit writes (ckv_bfp4 window blocks, bfp_round) added by FIX.14'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.11
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-29 19:00. FIX.14 (DS41-142) added ~+17.7 ms host overhead a chunk: ckv_bfp4 window blocks
+      80 calls a chunk at ~0.21 ms host each (chunk + 128-row carry, two calls a layer), bfp_round 12 calls at ~0.5 ms
+      each, both already prepared=True (P.7''s pattern). Do, in order, measuring host time per call and per chunk: (1)
+      check bfp_round really takes the prepared path at 8x4 (it costs 2.4x ckv_bfp4 a call: a fallback to generic_op,
+      a per-call output allocation, or the patching) and bring it to ckv_bfp4''s cost or below; (2) write each
+      layer''s carry and chunk window blocks in ONE ckv_bfp4 call (80 -> 40 calls), bit-identical blocks; (3) whatever
+      per-call host work remains in run_prepared / the output allocation that can move out of the per-call path
+      (reuse the output tensors, as the window block buffer already is). Bit-identical outputs. Behind the setting
+      LOWBIT_HOST (default on, ''off'' = FIX.14''s path). Report host_overhead_ms, per-call host time, device time and
+      warm wall per chunk (DS41_ENGRAM_TABLE=resident) before / after.'
+  ab:
+    env:
+      DS41_LOWBIT_HOST: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_LOWBIT_HOST: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
   - P.5
+  - P.12
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
