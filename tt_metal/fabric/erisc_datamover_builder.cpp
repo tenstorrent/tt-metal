@@ -477,9 +477,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->available_buffer_memory_regions);
 
     this->channel_allocator = static_allocator;
-    
     // The channel buffers are the last allocated item placed below max_l1_loading_size.
-    // NOTE: If another item is placed below the channel buffers, this will need to reflect that change.
+    // NOTE: If another item is placed after the channel buffers, this will need to reflect that change.
     this->allocated_l1_end_address = static_allocator->get_channel_buffers_end_address();
 
     // Create remote channels allocator from the static allocator

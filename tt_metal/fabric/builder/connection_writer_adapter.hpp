@@ -83,9 +83,6 @@ public:
     virtual const std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>& get_downstream_connections(
         uint32_t vc_idx) const = 0;
 
-    // The absolute sender channel id for the channel connected to a particular vc and slot.
-    virtual std::optional<size_t> get_downstream_sender_channel_id(uint32_t vc_idx, size_t slot) const = 0;
-
 protected:
     ~ChannelConnectionWriterAdapter() = default;
 
@@ -144,10 +141,6 @@ public:
     const std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>& get_downstream_connections(
         uint32_t vc_idx) const override {
         return downstream_edms_connected_by_vc.at(vc_idx);
-    }
-
-    std::optional<size_t> get_downstream_sender_channel_id(uint32_t vc_idx, size_t slot) const override {
-        return downstream_sender_channel_ids.at(vc_idx).at(slot);
     }
 
     // Get buffer index semaphore address for a specific VC and compact index
