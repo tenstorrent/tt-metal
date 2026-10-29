@@ -27,6 +27,7 @@ from models.tt_dit.utils.ltx import (
     STEADY_STATE_REPLAY_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
+    missing_checkpoints_fail,
     print_ltx_timing_table,
     traced_default,
 )
@@ -75,9 +76,9 @@ FAST_T2V_TIMING_LIMITS = {
 }
 
 
-# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one.
+# Default-off: full AV gen needs the real LTX checkpoint + Gemma, so it skips without one (outside CI).
 @pytest.mark.skipif(
-    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors") and not missing_checkpoints_fail(),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
@@ -453,7 +454,7 @@ def _temporal_seam_score(path):
 
 
 @pytest.mark.skipif(
-    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors") and not missing_checkpoints_fail(),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(
@@ -639,7 +640,7 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
 
 
 @pytest.mark.skipif(
-    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors") and not missing_checkpoints_fail(),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
 )
 @pytest.mark.parametrize(

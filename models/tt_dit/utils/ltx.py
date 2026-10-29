@@ -90,6 +90,21 @@ def default_ltx_gemma() -> str:
     return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
+def missing_checkpoints_fail() -> bool:
+    """True in CI, where a test must fail rather than skip when its checkpoint is missing: a skip
+    leaves the job green with nothing tested (e.g. a runner host without the weights)."""
+    return os.environ.get("CI") == "true"
+
+
+def skip_without_checkpoint(reason: str):
+    """Skip a test whose checkpoint is missing, or fail it in CI (see `missing_checkpoints_fail`)."""
+    import pytest
+
+    if missing_checkpoints_fail():
+        pytest.fail(f"{reason}; CI fails instead of skipping, so a missing checkpoint is not a silent pass")
+    pytest.skip(reason)
+
+
 def print_ltx_timing_table(
     pipeline,
     *,
