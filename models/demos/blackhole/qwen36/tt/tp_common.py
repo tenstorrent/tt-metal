@@ -340,8 +340,9 @@ def kv_cache_bf8_enabled():
 
 
 def attn_kv_split_mode():
-    """QWEN36_ATTN_KV_SPLIT (default "0" = off): KV-pair read split for the plain paged decode SDPA (tt-lab's KV-pair
-    split, design 'attention-kv' P0). At TP = 2 * n_kv_heads the two devices of a pair (2h, 2h+1) hold the same
+    """QWEN36_ATTN_KV_SPLIT (default "0" = off): KV-pair read split for the paged decode SDPA of the plain decode
+    and of the lean spec verify (QWEN36_VERIFY_ATTN_LEAN; a user's K+1 verify rows stay on one pair member) (tt-lab's
+    KV-pair split, design 'attention-kv' P0). At TP = 2 * n_kv_heads the two devices of a pair (2h, 2h+1) hold the same
     (replicated) KV head; "user" makes each device run the SDPA for all 6 query heads of the pair but only for its half
     of the users, so each device streams half the KV bytes, then a masked reduce-scatter hands every device its own
     3 heads for all users. "seq" (the sequence split, P1) needs the sdpa_decode kv_split / return_lse C++ change and is

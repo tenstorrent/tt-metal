@@ -20,6 +20,7 @@ Run:
 """
 import os
 
+import pytest
 import torch
 from loguru import logger
 
@@ -396,14 +397,17 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     out_t = decode_b(split)  # [1, 1, B, dim]
 
     if split:
-        # The split reads head group d of the partner's users from the PARTNER's copy of the replicated KV head. The
-        # two copies are not bit-identical: the fused all-gather+QKV prefill matmul accumulates the gathered K slices
-        # in a device-dependent order, so a few K/V entries differ by one bf8 step between the members of a pair
-        # (decode writes are pair-identical). The split is therefore close to, not bit-equal with, the unsplit decode.
+        # The split reads head group d of the partner's users from the PARTNER's copy of the replicated KV head. With
+        # the flag on, the prefill QKV is a plain all-gather + matmul (the fused AG+matmul accumulates the gathered K
+        # slices in a device-dependent order, which left a few K/V entries one bf8 step apart between the members of a
+        # pair), and decode writes are pair-identical, so the two copies match and the split is bit-exact here too.
         diff = (out_t.float() - out_unsplit.float()).abs()
         pcc_split = compute_pcc(out_unsplit.float(), out_t.float())
-        logger.info(f"KV split vs unsplit, real cache (B={B}): PCC {pcc_split:.6f}, max |diff| {diff.max().item():.3e}")
-        assert pcc_split > 0.9999, f"KV split vs unsplit PCC {pcc_split} (B={B})"
+        logger.info(
+            f"KV split vs unsplit, real cache (B={B}): equal={torch.equal(out_t, out_unsplit)}, PCC {pcc_split:.6f}, "
+            f"max |diff| {diff.max().item():.3e}"
+        )
+        assert torch.equal(out_t, out_unsplit), f"KV split vs unsplit differs on the real cache, PCC {pcc_split} (B={B})"
 
         # With the pair copies made identical (device 2h's copy written to 2h+1) the split must be bit-exact: this
         # isolates the merge (partner q, skip positions, head swap, masked reduce-scatter) from the replica rounding.
@@ -443,6 +447,168 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     bad = [(u, prompt_lens[u], p) for u, p in enumerate(pccs) if p < thr]
     assert not bad, f"users below PCC {thr}: {bad}"
     logger.info(f"PASSED: per-user paged decode (B={B}) worst PCC = {worst:.5f}")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("n_users", [pytest.param(8, id="U8"), pytest.param(3, id="U3")])
+def test_attention_tp_verify_kv_split(mesh_device, n_users, reset_seeds, ensure_gc, monkeypatch):
+    """QWEN36_ATTN_KV_SPLIT=user on the lean spec verify (TPAttention._forward_verify_lean).
+
+    ``n_users`` users (8 = the B-row verify, 3 = an odd row bucket: pair rank 0 owns users 0-1, rank 1 user 2) are
+    prefilled into their own blocks, then ONE verify step runs T = 4 candidate rows per user (row u*T + j at position
+    p_u + j, the fused spec SDPA with one candidate group per user) unsplit and split. On a pair-canonical cache (device
+    2h's K/V copied to 2h+1, as in test_attention_tp_paged_peruser) the split must be bit-exact; on the real cache it
+    must be bit-exact too, since the flag makes the prefill replicas pair-identical (checked first). Each step rewrites
+    the same K/V at the same slots."""
+    monkeypatch.setenv("QWEN36_ATTN_KV_SPLIT", "user")
+    monkeypatch.setenv("QWEN36_VERIFY_ATTN_LEAN", "1")
+    os.environ.setdefault("HF_MODEL", model_path())
+    T = 4
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=8, max_seq_len=256)
+    if not kv_split_supported(args):
+        pytest.skip(f"no KV pairs at TP={args.num_devices}, n_kv_heads={args.n_kv_heads}")
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
+    NKV, HD = args.n_local_kv_heads, args.head_dim
+    rd, theta, max_seq = args.rope_head_dim, args.rope_theta, args.max_seq_len
+    block_size, bpu = 64, 4
+    n, rows = n_users, n_users * T
+
+    sd = load_attn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device)
+    tw = load_attention_weights_tp(mesh_device, sd, args)
+    assert "wq_partner" in tw, "QWEN36_ATTN_KV_SPLIT=user must load the partner q weight"
+    comp = tp_composer(mesh_device)
+    cache_dtype = ttnn.bfloat8_b if tpc.kv_cache_bf8_enabled() else ttnn.bfloat16
+
+    def mk_cache(num_blocks):
+        return ttnn.from_torch(
+            torch.zeros(num_blocks, NKV, block_size, HD, dtype=torch.bfloat16),
+            dtype=cache_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def rm_pt(tbl):
+        return ttnn.from_torch(
+            torch.tensor(tbl, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+        )
+
+    def blocks(u):
+        return list(range(u * bpu, (u + 1) * bpu))
+
+    a = TPAttention(mesh_device, args, tw, tt_ccl)
+    a.set_paged_kv_cache(mk_cache(n * bpu), mk_cache(n * bpu))
+    prompt_lens = [64 + 32 * (u % 6) for u in range(n)]
+    for u in range(n):
+        L = prompt_lens[u]
+        cos_p, sin_p = rot_mats_prefill(mesh_device, rd, L, theta)
+        pt = rm_pt([blocks(u)])
+        a.forward_prefill_paged(
+            shard_to_device(mesh_device, torch.randn(1, 1, L, args.dim, dtype=torch.bfloat16), dim=-1),
+            cos_p,
+            sin_p,
+            pt,
+            chunk_page_table=pt,
+            chunk_start_idx=0,
+            user_id=0,
+        )
+
+    # With the flag on the prefill QKV is a plain all-gather + matmul (TPAttention._qkv), so the two replicas of each
+    # KV head (devices 2h, 2h+1) must be bit-identical: the split reads a user's KV from one of them only.
+    c0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    for name, cache in (("K", a.paged_k), ("V", a.paged_v)):
+        h = ttnn.to_torch(cache, mesh_composer=c0).reshape(nd, -1, NKV, block_size, HD)
+        bad = [i for i in range(nd // 2) if not torch.equal(h[2 * i], h[2 * i + 1])]
+        logger.info(f"prefill {name} cache: pairs with differing replicas {bad}")
+        assert not bad, f"prefill {name} replicas differ within KV pairs {bad}"
+
+    # Verify inputs: user-major rows, row u*T + j = user u's candidate j at p_u + j.
+    pos_rows = [prompt_lens[u] + j for u in range(n) for j in range(T)]
+    cur = ttnn.from_torch(
+        torch.tensor(pos_rows, dtype=torch.int32),
+        dtype=ttnn.int32,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    cos_v, sin_v = rot_mats_decode(mesh_device, rd, max_seq, theta, torch.tensor(pos_rows, dtype=torch.int32))
+    pt_rows = rm_pt([blocks(u) for u in range(n) for _ in range(T)])
+    pt_users = rm_pt([blocks(u) for u in range(n)])
+    G = a.spec_sdpa_groups(T, n)
+    pt_groups = rm_pt([blocks(g // (G // n)) for g in range(G)])
+    assert a._verify_lean_eligible(rows, True, n, pt_users, pt_groups), "the lean verify must be eligible here"
+    x_tt = replicate_to_device(mesh_device, torch.randn(1, 1, rows, args.dim, dtype=torch.bfloat16))
+
+    plan = KVSplitPlan(mesh_device, nd, args.n_local_heads, args.head_dim)
+    plan.prepare([n], T)
+    a.kv_split_plan = plan
+
+    def verify(split_on):
+        if split_on:
+            a._kv_split_pos = plan.cur_pos_sdpa(cur, T)
+            assert a._verify_kv_split_on(rows, n), "the verify split did not engage"
+        else:
+            assert not a._verify_kv_split_on(rows, n)
+        try:
+            out = a.forward_decode(
+                x_tt,
+                cur,
+                cos_v,
+                sin_v,
+                page_table=pt_rows,
+                alias_kv_write=True,
+                spec_verify_mode=True,
+                spec_page_table=pt_groups,
+                spec_n_users=n,
+                spec_user_page_table=pt_users,
+            )
+            return ttnn.to_torch(out, mesh_composer=comp)
+        finally:
+            if split_on:
+                ttnn.deallocate(a._kv_split_pos)
+                a._kv_split_pos = None
+
+    out_unsplit, out_split = verify(False), verify(True)
+    assert torch.isfinite(out_unsplit.float()).all() and torch.isfinite(out_split.float()).all()
+    pcc = compute_pcc(out_unsplit.float(), out_split.float())
+    logger.info(
+        f"verify KV split vs unsplit, real cache ({n} users x T={T}): equal={torch.equal(out_split, out_unsplit)}, "
+        f"PCC {pcc:.6f}, "
+        f"max |diff| {(out_split.float() - out_unsplit.float()).abs().max().item():.3e}"
+    )
+    assert torch.equal(out_split, out_unsplit), f"verify KV split vs unsplit differs on the real cache, PCC {pcc}"
+
+    def pair_canonical(cache):
+        c0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        h = ttnn.to_torch(cache, mesh_composer=c0).reshape(nd, -1, NKV, block_size, HD)
+        for i in range(nd // 2):
+            h[2 * i + 1] = h[2 * i]
+        return ttnn.from_torch(
+            h.reshape(-1, NKV, block_size, HD),
+            dtype=cache_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    old_k, old_v = a.paged_k, a.paged_v
+    a.set_paged_kv_cache(pair_canonical(old_k), pair_canonical(old_v))
+    ttnn.deallocate(old_k)
+    ttnn.deallocate(old_v)
+    eq_unsplit, eq_split = verify(False), verify(True)
+    # Rows per user: a user owned by either pair member must match, so report the worst row too.
+    row_diff = (eq_split.float() - eq_unsplit.float()).abs().amax(dim=-1).reshape(-1)[:rows]
+    logger.info(
+        f"verify KV split vs unsplit, pair-identical cache ({n} users x T={T}): "
+        f"equal={torch.equal(eq_split, eq_unsplit)}, max |diff| per row {row_diff.tolist()}"
+    )
+    assert torch.equal(eq_split, eq_unsplit), f"verify KV split is not bit-exact on a pair-identical cache ({n}x{T})"
 
 
 @torch.no_grad()

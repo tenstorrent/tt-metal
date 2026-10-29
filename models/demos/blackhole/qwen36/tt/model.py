@@ -319,8 +319,9 @@ class Qwen36Model:
             layer = Qwen36DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
 
-        # QWEN36_ATTN_KV_SPLIT (default off): KV-pair user split of the plain decode SDPA. Constants for every decode width
-        # are built here, never inside a trace capture. None (flag off / unsupported layout) -> nothing differs.
+        # QWEN36_ATTN_KV_SPLIT (default off): KV-pair user split of the plain decode and lean spec-verify SDPA. Constants for
+        # every decode width are built here (the verify's in prepare_verify_trace), never inside a trace capture. None
+        # (flag off / unsupported layout) -> nothing differs.
         self._kv_split_plan = self._build_kv_split_plan()
 
         # Framework RMSNorm (add_unit_offset=True). Single device: is_distributed=None.
@@ -2405,6 +2406,23 @@ class Qwen36Model:
             # The multi-row KV write (QWEN36_KV_WRITE_MULTIROW) reads kvpos whole: no per-candidate slices.
             if KV_GROUP_WRITE_OK and T > 1 and not kv_multirow_write_ok():
                 _pos_groups = [ttnn.slice(kvpos, (j,), (rows,), (T,)) for j in range(T)]
+        # QWEN36_ATTN_KV_SPLIT (default off): the KV-pair user split of the lean verify SDPA. One per-device position
+        # tensor per replay (each user's T rows keep their positions on the pair member that owns the user, -1 on the
+        # other), derived in the trace from this body's kvpos and shared by every full-attention layer; the (n_users, T)
+        # constants were built by prepare_verify_trace. A layer whose verify is not lean ignores it.
+        _split = getattr(self, "_kv_split_plan", None)
+        _split_pos = None
+        if (
+            _split is not None
+            and verify_attn_lean_enabled()
+            and T >= 2
+            and kvpos.shape[-1] == rows
+            and _split.has(n_users, T)
+        ):
+            _split_pos = _split.cur_pos_sdpa(kvpos, T)
+        _split_attns = [l.attention for l in self.layers if l.is_full_attention] if _split_pos is not None else []
+        for _a in _split_attns:
+            _a._kv_split_pos = _split_pos
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -2447,6 +2465,10 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        for _a in _split_attns:
+            _a._kv_split_pos = None
+        if _split_pos is not None:
+            ttnn.deallocate(_split_pos)
         for _new, _old in _tmp:  # per-trace temporaries (a reshape that aliased its source is not freed twice)
             if _new is not _old and not _tpc_aliases(_new, _old):
                 ttnn.deallocate(_new)
@@ -2803,6 +2825,11 @@ class Qwen36Model:
         self._vfy_prepared_key = None
         self._vfy_T, self._vfy_B = T, B
         self._vfy_nb = nb
+        if getattr(self, "_kv_split_plan", None) is not None and T >= 2 and B >= 2:
+            # QWEN36_ATTN_KV_SPLIT: the verify split's constants for the B-row body and every row bucket (2..B users x
+            # T), built here, before any capture; _forward_verify_bucket_tp only reads them.
+            self._kv_split_plan.prepare(range(2, B + 1), T)
+            logger.info(f"QWEN36_ATTN_KV_SPLIT=user: lean spec verify split ready for 2..{B} users x T={T}")
         self._vfy_setup_sharded_argmax(rows)
         self._vfy_setup_device_topk()
         # QWEN36_SPEC_HOSTSET (+ _TRACE): packed aux inputs + in-trace RoPE lookup (see _vfy_inputs). Decided here, so
