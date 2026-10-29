@@ -176,21 +176,29 @@ def test_ring_model_shapes(mesh_device, case):
 
 
 # Operands in L1 interleaved (GLM-5.3 prefill feeds q_a_proj and the indexer projections from an L1 attention norm):
-# the q_a_proj shape, the narrow-N indexer wk, and a chunked plan.
-L1_INPUT_CASES = {
-    "glm5_q_a_proj": ((1, 1, 640, 1536), (1536, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
-    "glm5_indexer_wk_narrow_n": MODEL_CASES["glm5_indexer_wk_narrow_n"],
-    "chunked_n": MODEL_CASES["chunked_n"],
-}
+# the q_a_proj shape and the narrow-N indexer wk with A, W or both in L1, and a chunked plan with A in L1. The planner
+# budgets the whole L1 bank, so an L1 operand must leave room for the plan's buffers: chunked_n's W (32 MiB a chip)
+# does not, and tt-metal refuses that program at dispatch (its circular buffers would overlap the weight).
 L1 = ttnn.L1_MEMORY_CONFIG
 DRAM = ttnn.DRAM_MEMORY_CONFIG
+GLM5_Q_A_PROJ = ((1, 1, 640, 1536), (1536, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b)
+L1_OPERAND_CASES = [
+    *(
+        pytest.param(case, a_mem, w_mem, id=f"{name}-{placement}")
+        for name, case in [
+            ("glm5_q_a_proj", GLM5_Q_A_PROJ),
+            ("glm5_indexer_wk_narrow_n", MODEL_CASES["glm5_indexer_wk_narrow_n"]),
+        ]
+        for placement, a_mem, w_mem in [("l1_a", L1, DRAM), ("l1_w", DRAM, L1), ("l1_a_w", L1, L1)]
+    ),
+    pytest.param(MODEL_CASES["chunked_n"], L1, DRAM, id="chunked_n-l1_a"),
+]
 
 
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-@pytest.mark.parametrize("case", L1_INPUT_CASES.values(), ids=L1_INPUT_CASES.keys())
-@pytest.mark.parametrize("a_mem, w_mem", [(L1, DRAM), (DRAM, L1), (L1, L1)], ids=["l1_a", "l1_w", "l1_a_w"])
+@pytest.mark.parametrize("case, a_mem, w_mem", L1_OPERAND_CASES)
 def test_l1_operands(mesh_device, case, a_mem, w_mem):
     a_shape, w_shape, scatter_dim, dtype, weight_dtype = case
     run_case(
@@ -305,13 +313,12 @@ def test_refusals(mesh_device, expect_error, overrides, message):
     [
         ("tiny_tile", "default 32x32 tile"),
         ("device_shard", "stored on every device"),
-        ("weight_on_other_mesh", "weight must be on the input_tensor's mesh"),
-        ("output_on_other_mesh", "output_tensor must be on the input_tensor's mesh"),
     ],
 )
 def test_operand_placement_refusals(mesh_device, expect_error, kind, message):
-    """Operands the op cannot address: non-default tiles, one device's shard of a mesh tensor, and a weight or output
-    on another mesh of the same shape (a full-mesh submesh)."""
+    """Operands the op cannot address: non-default tiles and one device's shard of a mesh tensor. (Operands on another
+    mesh are refused too, but a second same-shape mesh on a 4-chip box is a full-mesh submesh, whose close aborts the
+    session once the parent has dispatched.)"""
     mesh_shape = tuple(mesh_device.shape)
     a = random_stacked(mesh_shape, (1, 1, 640, 2048), seed=0)
     w = random_stacked(mesh_shape, (2048, 7168), seed=1)
@@ -320,17 +327,6 @@ def test_operand_placement_refusals(mesh_device, expect_error, kind, message):
     kwargs = dict(cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring, num_links=2)
     if kind == "device_shard":
         ta = ttnn.get_device_tensors(ta)[0]
-    elif kind == "weight_on_other_mesh":
-        tw = to_mesh(w, mesh_device.create_submeshes(ttnn.MeshShape(*mesh_shape))[0], ttnn.bfloat8_b)
-    elif kind == "output_on_other_mesh":
-        other = mesh_device.create_submeshes(ttnn.MeshShape(*mesh_shape))[0]
-        kwargs["output_tensor"] = ttnn.zeros(
-            (1, 1, 640, 7168 // mesh_shape[1]),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=other,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
     with expect_error(RuntimeError, message):
         ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **kwargs)
 
@@ -347,7 +343,8 @@ def placement_names(tensor):
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize(
     "operands, expected",
-    [("sharded", ["Shard(0)", "Shard(3)"]), ("replicated", ["Replicate", "Shard(3)"])],
+    # ShardTensor2dMesh labels both mesh axes; ReplicateTensorToMesh gives the collapsed 1-D label over the 4 devices
+    [("sharded", ["Shard(0)", "Shard(3)"]), ("replicated", ["Shard(3)"])],
 )
 def test_output_topology(mesh_device, operands, expected):
     """The output is labelled as the reduce-scatter's: cluster_axis holds Shard(scatter_dim), whatever the operands'
