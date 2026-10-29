@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+name: Test cachew checkout
+
+on:
+  pull_request:
+    paths:
+      - '.github/actions/cachew-checkout/**'
+      - '.github/workflows/test-cachew-checkout.yaml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/actions/cachew-checkout/**'
+      - '.github/workflows/test-cachew-checkout.yaml'
+  workflow_dispatch:
+    inputs:
+      live-smoke:
+        description: Also check out tt-metal through a live cachew endpoint
+        type: boolean
+        default: false
+      cachew-url:
+        description: Cachew HTTPS origin for the optional live smoke test
+        type: choice
+        options:
+          - https://cachew.dev.tenstorrent.net
+          - https://cachew.ci.tenstorrent.net
+          - https://cachew.yyz2.ci.tenstorrent.net
+        default: https://cachew.dev.tenstorrent.net
+
+permissions:
+  contents: read
+
+jobs:
+  git-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/actions/cachew-checkout
+          persist-credentials: false
+      - name: Obtain the exact checkout implementation under test
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: actions/checkout
+          ref: de0fac2e4500dabe0009e67214ff5f5447ce83dd
+          path: checkout-action
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+      - name: Test cache reuse, immediate fallback and cleanup
+        env:
+          CHECKOUT_ACTION_JS: ${{ github.workspace }}/checkout-action/dist/index.js
+        run: python3 -m unittest discover -s .github/actions/cachew-checkout/tests -v
+
+  live-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.live-smoke
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 20
+    steps:
+      - name: Bootstrap the action definition
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/actions/cachew-checkout
+          persist-credentials: false
+      - name: Checkout through cachew with upstream fallback
+        id: checkout
+        uses: ./.github/actions/cachew-checkout
+        with:
+          cachew-url: ${{ inputs.cachew-url }}
+          ref: ${{ github.sha }}
+          path: cachew-smoke
+          submodules: recursive
+          persist-credentials: false
+      - name: Verify checkout
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          ACTUAL_SHA: ${{ steps.checkout.outputs.commit }}
+          CACHEW_PREFETCHED: ${{ steps.checkout.outputs.cachew-prefetched }}
+        run: |
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          git -C cachew-smoke submodule status --recursive
+          echo "cachew-prefetched=$CACHEW_PREFETCHED"
