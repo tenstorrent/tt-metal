@@ -25,12 +25,10 @@ extern thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS];
 extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
 #endif
 
-// Cached L1 byte address of the DFB config region; set once during setup_local_dfb_interfaces
-// so DataflowBuffer::DataflowBuffer() can call dfb_ensure_ready without a separate parameter.
+// Cached L1 byte address of the DFB config region, or 0 when the launch has no DFBs; set by
+// setup_local_dfb_interfaces so DataflowBuffer::DataflowBuffer() can call dfb_ensure_ready without a
+// separate parameter.
 extern thread_local uintptr_t g_dfb_config_base_addr;
-// Logical ids of the DFBs this hart is bound to this launch (bit per id); set by
-// setup_local_dfb_interfaces, read by the kernel-exit finish.
-extern thread_local uint32_t g_dfb_bound_mask;
 #ifndef COMPILE_FOR_TRISC
 extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
 extern overlay::RemapperAPI g_remapper_configurator;

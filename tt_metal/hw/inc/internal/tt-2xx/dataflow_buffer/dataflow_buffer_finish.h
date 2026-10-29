@@ -25,6 +25,23 @@
 #include "ckernel_trisc_common.h"
 #endif
 
+// The DFBs hart `hart_u8` is bound to this launch, bit per logical id. A Metal 2.0 kernel's come from its
+// bindings at compile time (kernel_bindings_generated.h). A legacy kernel reads its participation from the DFB
+// config, whose address is 0 when the launch has no DFBs.
+FORCE_INLINE uint32_t dfb_bound_mask([[maybe_unused]] uint8_t hart_u8) {
+#ifdef KERNEL_BOUND_DFB_MASK
+    // Every hart running a kernel participates in each DFB the kernel binds.
+    ASSERT(
+        KERNEL_BOUND_DFB_MASK == 0 ||
+        (g_dfb_config_base_addr != 0 &&
+         (KERNEL_BOUND_DFB_MASK & ~dfb_read_participation_mask(g_dfb_config_base_addr, hart_u8)) == 0));
+    return KERNEL_BOUND_DFB_MASK;
+#else
+    const uintptr_t config_base = g_dfb_config_base_addr;
+    return config_base == 0 ? 0 : dfb_read_participation_mask(config_base, hart_u8);
+#endif
+}
+
 #ifndef COMPILE_FOR_TRISC
 
 // Waits until every counter this DM uses for DFB `intf` has posted == acked.
@@ -47,7 +64,7 @@ inline void dfb_dm_drain(const LocalDFBInterface& intf) {
 // Kernel DM (DM2-7), from dmk.cc after the kernel returns and before it reports done. `run_state` is
 // this DM's subordinate_sync byte.
 FORCE_INLINE void dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_state) {
-    const uint32_t dfb_mask = g_dfb_bound_mask;
+    const uint32_t dfb_mask = dfb_bound_mask(static_cast<uint8_t>(hartid));
 
     // 1. For each implicit-sync DFB, wait until this DM's reads and writes on its txn ids have completed,
     // so tiles_to_process counts all of them, and gather what to hand to DM0.
@@ -250,7 +267,9 @@ inline void __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pendin
 // posted == 0. Unpack skips counters another TRISC of this Neo owns.
 FORCE_INLINE void dfb_trisc_kernel_exit() {
     WAYPOINT("AAW");
-    for (uint32_t m = g_dfb_bound_mask; m != 0; m &= m - 1) {
+    const uint32_t dfb_mask =
+        dfb_bound_mask(static_cast<uint8_t>(dfb::TENSIX_RISC_OFFSET + ckernel::csr_read<ckernel::CSR::NEO_ID>()));
+    for (uint32_t m = dfb_mask; m != 0; m &= m - 1) {
         const LocalDFBInterface& intf = get_local_dfb_interface(__builtin_ctz(m));
         bool drained = false;
         while (!drained) {
