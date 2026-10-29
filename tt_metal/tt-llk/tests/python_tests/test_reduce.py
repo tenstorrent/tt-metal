@@ -38,7 +38,11 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test, tolerances
+from helpers.utils import (
+    passed_test,
+    skip_ttsim_partial_face_bfp_zero_write,
+    tolerances,
+)
 
 # Helper dictionary to map reduce dimensions to math operations
 mathop_mapping = {
@@ -167,6 +171,9 @@ def _run_reduce_test(
     loop_factor=1,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
+    skip_ttsim_partial_face_bfp_zero_write(
+        tile_shape, formats.output_format, reduce_dim
+    )
     if input_dimensions is None:
         input_dimensions = _functional_input_dimensions(is_reduce_to_one)
 

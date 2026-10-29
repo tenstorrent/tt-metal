@@ -148,6 +148,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 (void)mailbox_read(ThreadId::MathThreadId);
                 wait_for_dest_available();
                 t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+#ifdef ARCH_BLACKHOLE
+                if constexpr (BROADCAST_TYPE != BroadcastType::NONE)
+                {
+                    if (ckernel::unpacker::is_32bit_input(formats.unpack_A_src, formats.unpack_A_dst))
+                    {
+                        // Blackhole's _llk_unpack_A_ also hands math one SrcB bank per such tile; the datacopy waits for it.
+                        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    }
+                }
+#endif
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -218,6 +228,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         math::math_unpack_to_dest_math_ready();
                         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(tile_in_block);
                         math::math_unpack_to_dest_tile_ready();
+#ifdef ARCH_BLACKHOLE
+                        if constexpr (BROADCAST_TYPE != BroadcastType::NONE)
+                        {
+                            if (math::is_32bit_input(formats.unpack_A_src, formats.unpack_A_dst))
+                            {
+                                // Blackhole's _llk_unpack_A_ hands math one SrcB bank per such tile; release it.
+                                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+                            }
+                        }
+#endif
                     }
                 }
             }

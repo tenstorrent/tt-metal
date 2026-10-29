@@ -25,10 +25,10 @@
 #include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_descriptor.hpp"
@@ -940,6 +940,12 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
                 get_riscv_name(reader_.env.get_hal(), programmable_core_type_, other_risc),
                 san.len());
         } break;
+        case dev_msgs::DebugSanitizeNocReadToRegAddr:
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
+            error_msg +=
+                " (NOC read lands in a local register; on Quasar the NIU can strand the response and stall L1 "
+                "writes, reads must land in L1).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",

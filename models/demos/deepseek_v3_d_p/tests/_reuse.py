@@ -7,9 +7,10 @@
 Enabled with ``DS_PREFILL_REUSE_MODEL=1``. The ``mesh_device`` fixture in this directory's conftest
 then hands every test the same open device while its parametrized ``device_params`` stay the same,
 and the chunked-transformer run functions fetch an already built model through
-``acquire_transformer`` instead of loading the weights again. Everything is released at session end,
-when ``device_params`` change, or after any failed test, so a test that leaves the device in an
-unknown state is followed by a fresh open and a fresh build.
+``acquire_transformer`` instead of loading the weights again; ``acquire_module`` does the same for any
+other device module. Everything is released at session end, when ``device_params`` change, or after
+any failed test, so a test that leaves the device in an unknown state is followed by a fresh open and
+a fresh build. Host weights from ``cached_host`` hold no device state and stay for the whole session.
 """
 
 import json
@@ -47,6 +48,8 @@ class _Registry:
         self.device_gen = None
         self.device_key = None
         self.models = {}
+        self.modules = {}
+        self.host = {}
         self.dirty = False
 
     def get_device(self, request, silicon_arch_name, device_params):
@@ -87,6 +90,24 @@ class _Registry:
         transformer.set_tp_shard_kv(tp_shard_kv)
         return transformer
 
+    def acquire_module(self, mesh_device, key, build, release):
+        key = (id(mesh_device), _freeze(key))
+        entry = self.modules.get(key)
+        if entry is not None:
+            logger.info(f"reusing {type(entry[0]).__name__}")
+            return entry[0]
+        module = build()
+        self.modules[key] = (module, release)
+        return module
+
+    def cached_host(self, key, build):
+        key = _freeze(key)
+        if key not in self.host:
+            self.host[key] = build()
+        else:
+            logger.info(f"reusing host weights {key}")
+        return self.host[key]
+
     def release_models(self):
         for transformer in self.models.values():
             try:
@@ -95,11 +116,19 @@ class _Registry:
             except Exception as e:
                 logger.warning(f"releasing a cached transformer failed: {e}")
         self.models.clear()
+        for module, release in self.modules.values():
+            try:
+                if release is not None:
+                    release(module)
+            except Exception as e:
+                logger.warning(f"releasing a cached {type(module).__name__} failed: {e}")
+        self.modules.clear()
 
     def close_all(self):
         self.dirty = False
         if self.device is None:
             self.models.clear()
+            self.modules.clear()
             return
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import clear_tt_ccl_cache
 
@@ -121,6 +150,27 @@ def acquire_transformer(transformer_cls, mesh_device, variant, config, **ctor_kw
     if not reuse_enabled():
         return transformer_cls(mesh_device=mesh_device, config=config, **ctor_kwargs)
     return _REGISTRY.acquire_transformer(transformer_cls, mesh_device, variant, config, **ctor_kwargs)
+
+
+def acquire_module(mesh_device, key, build, release=None):
+    """``build()``, or the module an earlier test built under the same ``key`` on this device.
+
+    ``key`` must name every argument ``build`` depends on. ``release(module)`` runs before the device
+    closes. A reused module must hold no per-call state: the next test sees it as the last one left it.
+    """
+    if not reuse_enabled():
+        return build()
+    return _REGISTRY.acquire_module(mesh_device, key, build, release)
+
+
+def cached_host(key, build):
+    """``build()``, or the host-only result an earlier test built under the same ``key``.
+
+    The result must not be mutated by its users, since every later test receives the same object.
+    """
+    if not reuse_enabled():
+        return build()
+    return _REGISTRY.cached_host(key, build)
 
 
 def finish_transformer(transformer):
