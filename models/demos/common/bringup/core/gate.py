@@ -607,6 +607,40 @@ def _kept(d: dict | None, under: str, cmd: str, uenv: dict, limits: dict, whole:
     )
 
 
+_E_LINE = re.compile(r"^E\s+(.*)$")
+
+
+def waived_failures(text: str, waivers: list[dict]) -> str | None:
+    """F225: the waiver's reason when EVERY failure in a unit's pytest output is an AssertionError whose every message
+    line matches one of the waivers' patterns, else None. Any other error, an unparsed failure, a hang or a box
+    error is never waived; nor is a run with no failure lines (a crash before pytest reported)."""
+    if not waivers:
+        return None
+    pats = [re.compile(m) for w in waivers for m in (w.get("match") or [])]
+    failed = len(re.findall(r"^FAILED ", text, re.M))
+    errors = len(re.findall(r"^ERROR ", text, re.M))
+    blocks, cur = [], None
+    for line in text.splitlines():
+        m = _E_LINE.match(line)
+        if not m:
+            cur = None
+            continue
+        body = m.group(1).strip()
+        if body.startswith("AssertionError:"):
+            cur = [body[len("AssertionError:") :].strip()]
+            blocks.append(cur)
+        elif cur is not None and not body.startswith("assert "):
+            cur.append(body)
+        else:
+            cur = None
+    if not pats or errors or not failed or len(blocks) != failed:
+        return None
+    for b in blocks:
+        if not all(any(p.search(x) for p in pats) for x in b if x):
+            return None
+    return "; ".join(str(w.get("why", "")) for w in waivers)
+
+
 def run_units(
     spec: Spec,
     task: dict,
@@ -691,6 +725,19 @@ def run_units(
                 kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
                 f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")
                 f.flush()
+            waived = None
+            if rc != 0 and not (rc == SAFE_HANG_RC and _uses_safe_runner(cmd)):
+                f.flush()
+                with open(log, errors="replace") as lf:
+                    lf.seek(start)
+                    seg = lf.read()
+                if not INFRA_STOP.search(seg):
+                    waived = waived_failures(seg, stamps.unit_waivers(spec, cmd))
+                if waived is not None:  # F225: the owner waived exactly these failures; reported, never silent
+                    f.write(
+                        f"\n# {u}: WAIVED (owner, tests.unit_waivers): every failure matches the waiver: {waived}\n"
+                    )
+                    rc = 0
             if store is not None:
                 got = {k: v for k, v in M.load(tid, results).items() if before.get(k) != v}
                 ok = unit_ok(limits, got, len(plan) == 1)
@@ -702,6 +749,8 @@ def run_units(
                 ]
                 verdict = "PASS" if rc == 0 and ok else ("HANG" if hang else "FAIL")
                 rec = {"stamp": st, "verdict": verdict, "rc": rc, "s": round(time.time() - t0, 1), "metrics": got}
+                if waived is not None:
+                    rec["waived"] = waived
                 store.put(u, sid, dict(rec, by=tid, t=time.strftime("%Y-%m-%dT%H:%M:%S")), outs, tid)
                 sids[u] = sid
                 if delta is not None:

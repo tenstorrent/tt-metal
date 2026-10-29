@@ -117,16 +117,26 @@ def spec_text(spec) -> str:
 
     d = copy.deepcopy(spec.data)
     (d.get("tests") or {}).pop("waivers", None)
+    (d.get("tests") or {}).pop("unit_waivers", None)  # F225: stamped per unit, like the step waivers
     if d.get("tests") == {}:  # a spec whose tests section held only waivers reads as one without it
         d.pop("tests")
     return yaml.safe_dump(d, sort_keys=True)
+
+
+def unit_waivers(spec, cmd: str) -> list[dict]:
+    """F225: the owner's waivers of named failures of a unit's test (spec ``tests.unit_waivers``: {<test file stem>:
+    {match: [regex, ...], why: "..."}}), for a frozen test with no limit of its own to waive (a contract test's
+    check). [] when none names this unit's test."""
+    w = (spec.get("tests.unit_waivers") or {}) if spec is not None else {}
+    return [dict(v, test=k) for k, v in w.items() if re.search(rf"(^|[/\s]){re.escape(str(k))}(\.py|::|\s|$)", cmd)]
 
 
 def waiver_key(spec, cmd: str) -> str:
     """F162: the owner waivers a unit's tests can read (testing/component.py only): a component test reads its step's
     waiver, a swap test or a whole test directory every waiver; other units none. '' when it reads none."""
     w = (spec.get("tests.waivers") or {}) if spec is not None else {}
-    if not w:
+    uw = unit_waivers(spec, cmd)  # F225: a unit waiver re-runs only its own unit
+    if not w and not uw:
         return ""
     if "test_swap_" in cmd or re.search(r"tests/bringup/?(\s|$|['\"])", cmd):
         keep = w
@@ -134,6 +144,8 @@ def waiver_key(spec, cmd: str) -> str:
         keep = {k: v for k, v in w.items() if str(k).split(".")[-1] in cmd}
     else:
         keep = {}
+    if uw:
+        keep = dict(keep, _unit_waivers=uw)
     return sha16(json.dumps(keep, sort_keys=True, default=str)) if keep else ""
 
 

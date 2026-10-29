@@ -1014,6 +1014,45 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: FIX.12
+  title: Verify the 2x2's bit-identical 4-bit speedups at full size (merged 7f55821f579)
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.10
+  gate:
+    cmd: BRINGUP_TASK=P.10 BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.10 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=P.10 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+      && BRINGUP_TASK=P.10 DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER 2026-10-29 (was ''P.12''). The 2x2''s lowbit phase 1 is merged (7f55821f579, branch dnijemcevic/model_bringup_lowbit
+      @ 2bf71707602) and ttnn rebuilt. Default-on and bit-identical: sparse_sdpa ROW_BFP4 reads each 320 B record in ONE DRAM
+      read into a scratch, then two local copies (2x2 single card: compressed-layer attention -17..-21 %); the SFPU round
+      to nearest even as |x| + 2^23 LSB - 2^23 LSB (~-30 % 4-bit write). Opt-in only (defaults off, NOT to be switched on
+      here): ckv_bfp4 dtype=bfloat8_b / blocks, ROW_BFP8, bfp_round, indexer_score bfp4 q / k. Job: confirm on the 8x4 that
+      outputs are unchanged (the gate) and measure sparse_sdpa kernel time and the attention section / device total / warm
+      wall per chunk vs P.10''s numbers (device 206.0, wall ~371-385, DS41_ENGRAM_TABLE=resident). No model change expected;
+      if something breaks at 8x4 sizes, fix it in the forks behind the same behaviour. Do not touch tt/engram*.py.'
+    gate_tasks:
+    - P.10
 - id: FIX.11
   title: 'Attention precision vs the reference: layer 0 attention 10x its noise floor; layer 2 over with 4-bit KV'
   step: overseer_fix
@@ -1027,6 +1066,7 @@ tasks:
   - L.s56320
   - L.smoke
   - K.1
+  - FIX.12
   gate:
     cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && BRINGUP_TASK=M.1 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
@@ -1150,6 +1190,7 @@ tasks:
   - P.6
   - P.7
   - P.10
+  - FIX.12
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:
@@ -1225,15 +1266,15 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/tt
   - ttnn/ttnn/bringup
   brief:
-    details: 'OWNER 2026-10-29 (supervision.md 13:35). Today every chip all-gathers the compressed KV rows as bf16 (1024
-      B a row; after P.10 over all 32 chips) and then every chip rounds and packs the same rows into the 320 B bfloat4_b
-      records (ttnn.bringup.ckv_bfp4). Instead: each chip rounds + packs ITS OWN rows right after the compressor''s RoPE
-      (fused into the compressor tail where it fits), writes its served bf16 rows locally from the rounded values (the
-      contract stays; the bf16 served copy is temporary, owner), and all-gathers the 320 B records (3.2x fewer bytes,
-      each row packed once); the attention table appends the gathered records directly. Table bytes identical to
-      today. The window KV the same way once it is bfloat8_b blocks (after the 2x2 low-bit integration). Behind the
-      setting CKV_PACK_BEFORE_GATHER (default on, ''off'' = today). Report gather bytes / time, op calls, device time
-      and warm wall per chunk (DS41_ENGRAM_TABLE=resident) before / after.'
+    details: 'OWNER 2026-10-29 (supervision.md 13:35). Today every chip all-gathers the compressed KV rows as bf16 (1024 B
+      a row; after P.10 over all 32 chips) and then every chip rounds and packs the same rows into the 320 B bfloat4_b records
+      (ttnn.bringup.ckv_bfp4). Instead: each chip rounds + packs ITS OWN rows right after the compressor''s RoPE (fused into
+      the compressor tail where it fits), writes its served bf16 rows locally from the rounded values (the contract stays;
+      the bf16 served copy is temporary, owner), and all-gathers the 320 B records (3.2x fewer bytes, each row packed once);
+      the attention table appends the gathered records directly. Table bytes identical to today. The window KV the same way
+      once it is bfloat8_b blocks (after the 2x2 low-bit integration). Behind the setting CKV_PACK_BEFORE_GATHER (default
+      on, ''off'' = today). Report gather bytes / time, op calls, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident)
+      before / after.'
   ab:
     env:
       DS41_CKV_PACK_BEFORE_GATHER: 'off'
