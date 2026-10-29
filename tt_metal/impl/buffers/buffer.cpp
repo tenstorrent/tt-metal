@@ -245,7 +245,9 @@ void validate_buffer_parameters(
                 }
                 return service_cores->contains(core);
             };
-            for (const auto& core : shard_cores) {
+            // (the common case - every core has a bank - answered from the allocator's validated grids)
+            const bool all_banked = bank_type != BufferType::DRAM && allocator.all_cores_have_bank(bank_type, shard_cores);
+            for (const auto& core : all_banked ? std::vector<CoreCoord>{} : shard_cores) {
                 // Checked separately from the bank lookup below because a DRAM core off row 0 is a
                 // real coordinate -- logical y indexes a DRAM view's subchannels -- it is just not a
                 // bank. The allocator keys DRAM banks as {bank_id, 0}, so such a core aliases onto
