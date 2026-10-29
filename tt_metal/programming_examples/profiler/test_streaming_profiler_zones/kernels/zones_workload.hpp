@@ -66,7 +66,7 @@ static constexpr int kWallClockLowIdx = 0;
 
 // The structs --bench 7 to 10 publish.
 struct Name {
-    tt::tt_metal::experimental::streaming_profiler::String name;
+    tt::tt_metal::experimental::device_observability::String name;
 };
 struct CoreXY {
     uint16_t x, y;

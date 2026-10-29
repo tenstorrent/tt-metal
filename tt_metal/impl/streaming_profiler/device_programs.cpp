@@ -130,7 +130,7 @@ void compile_resident(IDevice* device, Program& program) {
 }  // namespace
 
 bool can_capture(const Hal& hal, const llrt::RunTimeOptions& rtoptions) {
-    return rtoptions.get_streaming_profiler_enabled() && hal.get_arch() == tt::ARCH::BLACKHOLE &&
+    return rtoptions.get_device_observability_enabled() && hal.get_arch() == tt::ARCH::BLACKHOLE &&
            hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
@@ -216,7 +216,7 @@ void DevicePrograms::carve_l1() {
         eth_size,
         eth_base + eth_size - eth_l1_.sync_ring);
 
-    const uint32_t spool_mb = mc_->rtoptions().get_streaming_profiler_spool_mb();
+    const uint32_t spool_mb = mc_->rtoptions().get_device_observability_spool_mb();
     if (spool_mb != 0) {
         drisc_l1_.spool_addr = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
         drisc_l1_.spool_bytes = spool_mb << 20;
@@ -234,10 +234,10 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
         return false;
     }
     fabric_link_sync_ = mc_->get_fabric_config() != tt_fabric::FabricConfig::DISABLED;
-    capture_.sync_check = rtopts.get_streaming_profiler_sync_check_enabled();
+    capture_.sync_check = rtopts.get_device_observability_sync_check_enabled();
     control_vector_l1_ = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     carve_l1();
-    const uint32_t relay_fifo_bytes = rtopts.get_streaming_profiler_fifo_mb() << 20;
+    const uint32_t relay_fifo_bytes = rtopts.get_device_observability_fifo_mb() << 20;
     const uint32_t sync_fifo_bytes = std::max(relay_fifo_bytes, kSyncMinFifoBytes);
 
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
@@ -381,7 +381,7 @@ void DevicePrograms::start_resident(
 
 DevicePrograms::Producer& DevicePrograms::add_producer(
     DeviceCtx& ctx, const CoreCoords& core, CoreType type, uint64_t control_vector_l1) {
-    using experimental::streaming_profiler::Processor;
+    using experimental::device_observability::Processor;
     // An eth core has two RISCs, so its other lanes never carry a record.
     constexpr std::array<Processor, kLanesPerTile> kTensix = {
         Processor::BRISC, Processor::NCRISC, Processor::TRISC0, Processor::TRISC1, Processor::TRISC2};
@@ -391,7 +391,7 @@ DevicePrograms::Producer& DevicePrograms::add_producer(
     capture.core_of_xy[packed_xy(core.virt)] = static_cast<uint16_t>(capture.clock_offsets.size());
     capture.clock_offsets.push_back(0);
     for (const Processor processor : type == CoreType::ETH ? kEth : kTensix) {
-        capture.lanes.push_back(experimental::streaming_profiler::Core{
+        capture.lanes.push_back(experimental::device_observability::Core{
             .logical = core.logical,
             .physical = core.phys,
             .chip_id = static_cast<ChipId>(ctx.chip_id),
@@ -510,7 +510,7 @@ std::unique_ptr<Program> DevicePrograms::relay_program(const DeviceCtx& ctx, uin
         // Writes take about twice as long on NOC 1, so a relay there would cause nearly every producer stall.
         DramConfig{
             .noc = NOC::NOC_0,
-            .defines = {{"STREAMING_PROFILER_RELAY_KERNEL", "1"}},
+            .defines = {{"DEVICE_OBSERVABILITY_RELAY_KERNEL", "1"}},
             .named_compile_args = {
                 {"stage_base", drisc_l1_.stage_base},
                 {"n_stage", kStageSlots},

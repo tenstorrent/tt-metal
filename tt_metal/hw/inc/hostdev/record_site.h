@@ -10,14 +10,14 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "hostdevcommon/streaming_profiler_reflection.hpp"
+#include "hostdevcommon/device_observability_reflection.hpp"
 
 #ifndef TT_DEVICE_COMPILE
 #include <array>
 #include <cstring>
 #endif
 
-namespace tt::tt_metal::experimental::streaming_profiler::detail {
+namespace tt::tt_metal::experimental::device_observability::detail {
 
 // An address in a section the device never loads: in kernels, a pointer the linker fills in; on the host, the 32-bit
 // link address, which the loader resolves against the section's own address.
@@ -91,16 +91,9 @@ struct CallArgument {
 // value is how many time words its packets carry. A record takes the shortest form that fits. Times assume a 1.35 GHz
 // device clock.
 enum class TimestampWidth : uint32_t {
-    // 16-bit Timestamps: used for a record with payload Timestamps whose publish Timestamp is less than ~49 µs after
-    // the RISC's previous record and whose payload Timestamps are less than ~49 µs before its publish Timestamp.
-    Bits16,
-    // 32-bit Timestamps: used for a record whose publish Timestamp is any time after the RISC's previous record and
-    // whose payload Timestamps are less than ~3 s before its publish Timestamp.
-    Bits32,
-    // 64-bit Timestamps: used for a record whose publish Timestamp is any time after the RISC's previous record and
-    // whose payload Timestamps are any time before its publish Timestamp, and for every record sent to the external
-    // process.
-    Bits64,
+    Bits16,  // publish Timestamp within ~49 µs after the cursor, payload Timestamps within ~49 µs before it
+    Bits32,  // payload Timestamps within ~3 s before the publish Timestamp
+    Bits64,  // any Timestamps, and every record sent to the external process
 };
 
 // One form's packet: its length in words after word 0, and its slices, which say where each piece of each argument sits
@@ -200,4 +193,4 @@ inline uint64_t field_value(const std::byte* bytes, uint32_t bit, uint32_t width
 }
 #endif
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
+}  // namespace tt::tt_metal::experimental::device_observability::detail

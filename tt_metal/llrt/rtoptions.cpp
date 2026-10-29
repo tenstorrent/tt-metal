@@ -131,13 +131,14 @@ enum class EnvVarID {
     // PROFILING & PERFORMANCE
     // ========================================
     TT_METAL_DEVICE_PROFILER,                      // Enable device profiling
+    TT_METAL_DEVICE_OBSERVABILITY,                 // Enable device observability (excludes the DRAM profiler)
     TT_METAL_STREAMING_PROFILER,                   // Enable the streaming device profiler (excludes the DRAM one)
     TT_METAL_STREAMING_PROFILER_TRACY,             // Enable Tracy output for the streaming profiler
     TT_METAL_STREAMING_PROFILER_SYNC_EVENTS,       // Enable sync events profiling
-    TT_METAL_STREAMING_PROFILER_SYNC_CHECK,        // Measure the clock sync's chip-to-chip accuracy
-    TT_METAL_STREAMING_PROFILER_INLINE_ENABLED,    // Enable zone markers inlining
-    TT_METAL_STREAMING_PROFILER_DRAM_MB,           // Streaming profiler per-relay GDDR spool ring, MiB
-    TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
+    TT_METAL_DEVICE_OBSERVABILITY_SYNC_CHECK,      // Measure the clock sync's chip-to-chip accuracy
+    TT_METAL_DEVICE_OBSERVABILITY_INLINE_ENABLED,  // Inline DevicePublish's record writer
+    TT_METAL_DEVICE_OBSERVABILITY_DRAM_MB,         // Device observability per-relay GDDR spool ring, MiB
+    TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB,         // Device observability host FIFO per D2H socket, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
     TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
@@ -402,17 +403,17 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
-    // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
-    // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
-    // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
-    // device is opened or any kernel is compiled.
+    // The DRAM profiler (TT_METAL_DEVICE_PROFILER) and device observability (TT_METAL_DEVICE_OBSERVABILITY, which
+    // TT_METAL_STREAMING_PROFILER turns on) are mutually exclusive modes: their device producers overlay the same L1
+    // profiler region with different layouts, and their hosts would both drive it. Refuse here, at MetalContext
+    // construction, before any device is opened or any kernel is compiled.
     TT_FATAL(
-        !(get_profiler_enabled() && get_streaming_profiler_enabled()),
-        "TT_METAL_DEVICE_PROFILER and TT_METAL_STREAMING_PROFILER are mutually exclusive: set exactly one of "
-        "them (DRAM profiler vs streaming profiler).");
+        !(get_profiler_enabled() && get_device_observability_enabled()),
+        "TT_METAL_DEVICE_PROFILER is mutually exclusive with TT_METAL_DEVICE_OBSERVABILITY and "
+        "TT_METAL_STREAMING_PROFILER: set at most one of them (DRAM profiler vs streaming profiler).");
     TT_FATAL(
-        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
-        "Cannot enable both debug printing and the streaming profiler");
+        !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_device_observability_enabled()),
+        "Cannot enable both debug printing and device observability");
     // The NOC debug dump only reads the profiler's DRAM buffers, so data that trace-only or accumulate profiling keeps
     // in L1 would never reach the host.
     TT_FATAL(
@@ -1026,9 +1027,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 #endif
             break;
 
+        // TT_METAL_DEVICE_OBSERVABILITY
+        // Boots device observability at MeshDevice bring-up: the relays that carry kernels' DevicePublish records to
+        // the host, which delivers them to registered callbacks (RegisterCallback). TT_METAL_STREAMING_PROFILER turns
+        // it on too. Needs TT_METAL_DEVICE_PROFILER off.
+
+        // Default: false
+        // Usage: export TT_METAL_DEVICE_OBSERVABILITY=1
+        case EnvVarID::TT_METAL_DEVICE_OBSERVABILITY:
+            this->device_observability_enabled = is_env_enabled(value);
+            break;
+
         // TT_METAL_STREAMING_PROFILER
-        // Boots the streaming profiler at MeshDevice bring-up. Records go to registered callbacks
-        // (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
+        // Compiles in the streaming profiler's markers and boots device observability, which carries them. Records go
+        // to registered callbacks (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
         // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and
         // TT_METAL_DEVICE_PROFILER off.
 
@@ -1053,25 +1065,24 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->streaming_profiler_sync_events_enabled = is_env_enabled(value);
             break;
 
-        // TT_METAL_STREAMING_PROFILER_SYNC_CHECK
+        // TT_METAL_DEVICE_OBSERVABILITY_SYNC_CHECK
         // Measures the chip-to-chip accuracy of the clock sync, logs it each time a profiled mesh device closes and
-        // plots it in Tracy. Uses one more idle Ethernet core per chip on top of the two the streaming profiler always
-        // uses, and costs fabric bandwidth. Requires TT_METAL_STREAMING_PROFILER.
+        // plots it in Tracy. Uses one more idle Ethernet core per chip on top of the two device observability always
+        // uses, and costs fabric bandwidth. Requires TT_METAL_DEVICE_OBSERVABILITY.
         // Default: false
-        // Usage: export TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_SYNC_CHECK:
-            this->streaming_profiler_sync_check_enabled = is_env_enabled(value);
+        // Usage: export TT_METAL_DEVICE_OBSERVABILITY_SYNC_CHECK=1
+        case EnvVarID::TT_METAL_DEVICE_OBSERVABILITY_SYNC_CHECK:
+            this->device_observability_sync_check_enabled = is_env_enabled(value);
             break;
 
-        // TT_METAL_STREAMING_PROFILER_INLINE_ENABLED
-        // This is enabled by default. Disabling inlining of kernel zone-marker emit path to
-        // reduce kernel size overhead from profiler instrumentation. This is useful for
+        // TT_METAL_DEVICE_OBSERVABILITY_INLINE_ENABLED
+        // This is enabled by default. Disabling inlining of DevicePublish's record writer, which the streaming
+        // profiler's markers use too, reduces the kernel size overhead of its calls. This is useful for
         // kernels with many zones that would otherwise exceed the kernel-config ring and fail to launch at all.
-        // Only works on the streaming profiler.
         // Default: true
-        // Usage: export TT_METAL_STREAMING_PROFILER_INLINE_ENABLED=1
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_INLINE_ENABLED:
-            this->streaming_profiler_inline_enabled = is_env_enabled(value);
+        // Usage: export TT_METAL_DEVICE_OBSERVABILITY_INLINE_ENABLED=1
+        case EnvVarID::TT_METAL_DEVICE_OBSERVABILITY_INLINE_ENABLED:
+            this->device_observability_inline_enabled = is_env_enabled(value);
             break;
 
         // TT_METAL_STREAMING_PROFILER_TRACY
@@ -1082,26 +1093,27 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->streaming_profiler_tracy_enabled = is_env_enabled(value);
             break;
 
-        // TT_METAL_STREAMING_PROFILER_DRAM_MB
+        // TT_METAL_DEVICE_OBSERVABILITY_DRAM_MB
         // Per-relay device DRAM buffer, in MiB. Raise it to absorb more host-side backpressure on the device;
-        // 0 sends profiling data straight to the host. Capped at STREAMING_PROFILER_SPOOL_MB_MAX.
-        // Default: STREAMING_PROFILER_SPOOL_MB_DEFAULT
-        // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
-            this->streaming_profiler_spool_mb =
-                std::min<unsigned long>(std::stoul(value), STREAMING_PROFILER_SPOOL_MB_MAX);
+        // 0 sends records straight to the host. Capped at DEVICE_OBSERVABILITY_SPOOL_MB_MAX.
+        // Default: DEVICE_OBSERVABILITY_SPOOL_MB_DEFAULT
+        // Usage: export TT_METAL_DEVICE_OBSERVABILITY_DRAM_MB=256
+        case EnvVarID::TT_METAL_DEVICE_OBSERVABILITY_DRAM_MB:
+            this->device_observability_spool_mb =
+                std::min<unsigned long>(std::stoul(value), DEVICE_OBSERVABILITY_SPOOL_MB_MAX);
             break;
 
-        // TT_METAL_STREAMING_PROFILER_FIFO_MB
+        // TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB
         // Host FIFO per D2H socket, in MiB. Raise it to let a slow callback fall further behind before it loses
-        // profiling data; it costs this much pinned host memory per relay. A power of two, at most
-        // STREAMING_PROFILER_FIFO_MB_MAX.
-        // Default: STREAMING_PROFILER_FIFO_MB_DEFAULT
-        // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB: {
-            const unsigned long mb = std::clamp<unsigned long>(std::stoul(value), 1, STREAMING_PROFILER_FIFO_MB_MAX);
-            TT_FATAL(std::has_single_bit(mb), "TT_METAL_STREAMING_PROFILER_FIFO_MB='{}' is not a power of two", value);
-            this->streaming_profiler_fifo_mb = mb;
+        // records; it costs this much pinned host memory per relay. A power of two, at most
+        // DEVICE_OBSERVABILITY_FIFO_MB_MAX.
+        // Default: DEVICE_OBSERVABILITY_FIFO_MB_DEFAULT
+        // Usage: export TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB=1024
+        case EnvVarID::TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB: {
+            const unsigned long mb = std::clamp<unsigned long>(std::stoul(value), 1, DEVICE_OBSERVABILITY_FIFO_MB_MAX);
+            TT_FATAL(
+                std::has_single_bit(mb), "TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB='{}' is not a power of two", value);
+            this->device_observability_fifo_mb = mb;
             break;
         }
 

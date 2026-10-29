@@ -150,19 +150,24 @@ cores, or a chip with no chain of links to the root chip, is a `TT_FATAL` at bri
 cores at all (p100a) runs with degraded sync accuracy instead, and logs a warning (§2.5). A link that never solves is a
 `TT_FATAL` at capture end. It needs a Tracy-enabled build of tt-metal even when the Tracy sink itself is left off.
 
-### 1.1 Three device-profiler modes (mutually exclusive)
+### 1.1 Four device modes (mutually exclusive)
 
-| mode | `TT_METAL_DEVICE_PROFILER` | `TT_METAL_STREAMING_PROFILER` | device kernels | DRAM profiler (L1 → DRAM → per-op dump) | streaming (SPSC producer + DRISC relays + host receiver) | real-time profiler |
-|---|---|---|---|---|---|---|
-| 1 | unset | unset | no profiler code | off | off | on |
-| 2 | set | unset | legacy `kernel_profiler.hpp` (`-DPROFILE_KERNEL`) | on | off | on |
-| 3 | unset | set | streaming producer (`-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1`) | off | on | disabled |
+The streaming profiler runs on device observability, the pipeline that carries DevicePublish records from kernels to
+host callbacks: its markers are DevicePublish records, and `TT_METAL_STREAMING_PROFILER` turns the pipeline on too.
 
-Setting both variables is a `TT_FATAL` at `MetalContext` construction, before any device opens.
-Mode 3 is Blackhole only (it needs DRISC drainers); on Quasar it is a `TT_FATAL`.
+| mode | `TT_METAL_DEVICE_PROFILER` | `TT_METAL_DEVICE_OBSERVABILITY` | `TT_METAL_STREAMING_PROFILER` | device kernels | DRAM profiler (L1 → DRAM → per-op dump) | device observability (SPSC producer + DRISC relays + host receiver) | streaming profiler's markers | real-time profiler |
+|---|---|---|---|---|---|---|---|---|
+| 1 | unset | unset | unset | no profiler code | off | off | off | on |
+| 2 | set | unset | unset | legacy `kernel_profiler.hpp` (`-DPROFILE_KERNEL`) | on | off | off | on |
+| 3 | unset | set | unset | DevicePublish's producer (`-DPROFILE_KERNEL=1 -DDEVICE_OBSERVABILITY=1`) | off | on | off | disabled |
+| 4 | unset | either | set | the same, and the markers (`-DPROFILE_STREAMING=1`) | off | on | on | disabled |
+
+Setting `TT_METAL_DEVICE_PROFILER` with either of the others is a `TT_FATAL` at `MetalContext` construction, before
+any device opens. Modes 3 and 4 are Blackhole only (they need DRISC drainers); on Quasar they are a `TT_FATAL`.
 
 Device-side selection is one header: `tt_metal/hw/inc/api/debug/kernel_profiler.hpp` is main's DRAM producer
-verbatim, wrapped so that `-DPROFILE_STREAMING` swaps in `tt_metal/hw/inc/internal/profiler/kernel_profiler_streaming.hpp`.
+verbatim, wrapped so that `-DDEVICE_OBSERVABILITY` swaps in `tt_metal/hw/inc/internal/profiler/kernel_profiler_streaming.hpp`,
+whose markers compile in only under `-DPROFILE_STREAMING`.
 Shared streaming constants live in `hw/inc/hostdev/streaming_profiler_common.h`;
 `hw/inc/hostdev/profiler_common.h` is the DRAM profiler's own. Not supported on the streaming
 producer: sum zones (`DeviceZoneScopedSumN*`), which compile to nothing. `DeviceRecordEvent` is the same
@@ -171,21 +176,23 @@ because the streaming wire resolves every marker's name from the ELF.
 
 ### 1.2 Environment variables
 
-Nine variables are new in `tt_metal/llrt/rtoptions.cpp`, all read once at `MetalContext` construction.
-Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
+Ten variables are new in `tt_metal/llrt/rtoptions.cpp`, all read once at `MetalContext` construction.
+Everything except the two mode switches applies in modes 3 and 4 only, and `TT_METAL_STREAMING_PROFILER_*` in mode 4
+only.
 
 **Mode switches**
 
 | variable | default | effect |
 |---|---|---|
-| `TT_METAL_STREAMING_PROFILER` | off | Measures each chip's tile clocks at device open. At `MeshDevice` bring-up it boots the DRISC relays, the host receiver and the clock sync, which takes idle eth cores and eth links (§2.5). Compiles kernels with `-DPROFILE_STREAMING`. Does **not** set `profiler_enabled`, so nothing of the DRAM profiler is active, and the real-time profiler is disabled (it reads the same L1 rings). Fatal together with `TT_METAL_DEVICE_PROFILER`. |
+| `TT_METAL_DEVICE_OBSERVABILITY` | off | Measures each chip's tile clocks at device open. At `MeshDevice` bring-up it boots the DRISC relays, the host receiver and the clock sync, which takes idle eth cores and eth links (§2.5). Compiles kernels with `-DDEVICE_OBSERVABILITY`. Does **not** set `profiler_enabled`, so nothing of the DRAM profiler is active, and the real-time profiler is disabled (it reads the same L1 rings). Fatal together with `TT_METAL_DEVICE_PROFILER`. |
+| `TT_METAL_STREAMING_PROFILER` | off | Everything `TT_METAL_DEVICE_OBSERVABILITY` does, and compiles kernels with `-DPROFILE_STREAMING` too, which arms the markers (`DeviceZoneScopedN`, `DeviceTimestampedData`, `DeviceRecordEvent`). |
 
-**Streaming pipeline sizing**
+**Device observability sizing**
 
 | variable | default | effect |
 |---|---|---|
-| `TT_METAL_STREAMING_PROFILER_DRAM_MB` | 128 | Per-relay GDDR spool ring, MiB. Non-zero makes each relay DMA frames into a ring in its own DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep interval. **0 selects direct push.** Capped at 4095 (32-bit ring arithmetic). |
-| `TT_METAL_STREAMING_PROFILER_FIFO_MB` | 128 | Host FIFO per D2H socket, MiB: a power of two, at most 2048. The pipeline's only elasticity in a direct-push run, and how far a slow callback can fall behind before it loses data. Plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address: costs no TLB window and has no channel cap. The eth relay's sync socket gets at least 128 MiB whatever this is set to. |
+| `TT_METAL_DEVICE_OBSERVABILITY_DRAM_MB` | 128 | Per-relay GDDR spool ring, MiB. Non-zero makes each relay DMA frames into a ring in its own DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep interval. **0 selects direct push.** Capped at 4095 (32-bit ring arithmetic). |
+| `TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB` | 128 | Host FIFO per D2H socket, MiB: a power of two, at most 2048. The pipeline's only elasticity in a direct-push run, and how far a slow callback can fall behind before it loses data. Plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address: costs no TLB window and has no channel cap. The eth relay's sync socket gets at least 128 MiB whatever this is set to. |
 
 **What is captured**
 
@@ -197,8 +204,8 @@ Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 
 | variable | default | effect |
 |---|---|---|
-| `TT_METAL_STREAMING_PROFILER_SYNC_CHECK` | off | Measures the clock sync's chip-to-chip accuracy, logs it at each capture end and plots it in Tracy (§2.5). Takes a third idle eth core per chip and costs fabric bandwidth. |
-| `TT_METAL_STREAMING_PROFILER_INLINE_ENABLED` | on | Inlines the record emit path (`publish_with`). `0` calls it out of line instead, so a kernel with too many records to inline still fits the kernel-config ring. |
+| `TT_METAL_DEVICE_OBSERVABILITY_SYNC_CHECK` | off | Measures the clock sync's chip-to-chip accuracy, logs it at each capture end and plots it in Tracy (§2.5). Takes a third idle eth core per chip and costs fabric bandwidth. |
+| `TT_METAL_DEVICE_OBSERVABILITY_INLINE_ENABLED` | on | Inlines the record emit path (`publish_with`). `0` calls it out of line instead, so a kernel with too many records to inline still fits the kernel-config ring. |
 
 **Consumers, all off unless set**
 
@@ -223,12 +230,14 @@ the other legacy DRAM-profiler options ride on `profiler_enabled` and are unchan
 export TT_METAL_STREAMING_PROFILER=1
 ```
 
-One switch — it also arms the device-side markers. Leave `TT_METAL_DEVICE_PROFILER` unset.
+One switch: it turns on device observability and arms the device-side markers. `TT_METAL_DEVICE_OBSERVABILITY=1` alone
+carries DevicePublish records without the markers. Leave `TT_METAL_DEVICE_PROFILER` unset.
 
 ### 1.4 Register a callback
 
-From `<tt-metalium/experimental/streaming_profiler.hpp>` (namespace
-`tt::tt_metal::experimental::streaming_profiler`):
+From `<tt-metalium/experimental/device_observability.hpp>` (namespace
+`tt::tt_metal::experimental::device_observability`), with `Zone` and the profiler's other records from
+`<tt-metalium/experimental/streaming_profiler.hpp>` (namespace `tt::tt_metal::experimental::streaming_profiler`):
 
 ```cpp
 Callback zones = RegisterCallback([](const Batch<Zone>& batch) { /* ... */ }, "my-tool");
@@ -237,7 +246,7 @@ Callback zones = RegisterCallback([](const Batch<Zone>& batch) { /* ... */ }, "m
 
 You can register a callback at any time while the host process runs. It stays registered while its `Callback` lives, and
 it runs on its own thread. A callback that can't keep up with incoming data misses records, and `batch.dropped_bytes()`
-reports how many bytes it missed. Raising `TT_METAL_STREAMING_PROFILER_FIFO_MB` lets a callback fall further behind
+reports how many bytes it missed. Raising `TT_METAL_DEVICE_OBSERVABILITY_FIFO_MB` lets a callback fall further behind
 before it misses any. A batch's spans are valid only during the call. A copied record owns everything it holds, its
 payload included, so it stays valid after the call returns. Callbacks live on the process-wide
 `streaming_profiler::Service`, and each capture's receiver attaches to it, so one callback sees every MeshDevice.
@@ -417,8 +426,8 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   `tracy_consumer.{hpp,cpp}` (the Tracy sink: one context per core, every record already on the host timeline and
   placed against one process-wide anchor).
 - Device producer: DevicePublish (`internal/debug/device_publish_impl.h`, `device_publish_encoding.h` and
-  `device_publish_ring.h`) and the markers on it (`kernel_profiler_streaming.hpp`), under `-DPROFILE_STREAMING`
-  (ids: §4.2). Every RISC emits its own `STICKY_PROG` at launch so `runtime_id()` is exact on every lane (§N+60).
+  `device_publish_ring.h`), under `-DDEVICE_OBSERVABILITY`, and the markers on it (`kernel_profiler_streaming.hpp`),
+  under `-DPROFILE_STREAMING` too (ids: §4.2). Every RISC emits its own `STICKY_PROG` at launch so `runtime_id()` is exact on every lane (§N+60).
 
 ### 2.4 Sizing and where the numbers come from
 
@@ -485,7 +494,7 @@ batch until `ClockMap::is_final` says the batch's newest tick is final on both t
 so no later node can move a record once it is delivered. Ending each chip's series at capture end releases whatever is
 still held.
 
-**The sync check** (`sync/check.cpp`, `TT_METAL_STREAMING_PROFILER_SYNC_CHECK=1`) measures the sync's accuracy. The
+**The sync check** (`sync/check.cpp`, `TT_METAL_DEVICE_OBSERVABILITY_SYNC_CHECK=1`) measures the sync's accuracy. The
 check core is a third idle eth core on each chip (`kernels/eth_clock_check.cpp`), which reads the refclk and the wall
 clock together. The host places each reading on the root chip's refclk twice, first from its wall clock through the
 chip's series, the same path every record takes, and then from its refclk through an independent reference. For that
@@ -1136,7 +1145,7 @@ is why a zone's time is its end, never its start: a closing *parent* zone's star
 children's ends, so start deltas go negative; ends never do. The start is `end − duration`.
 
 - A full record leaves the cursor alone, so the next short record still decodes.
-- The producer drops its cursor (`hi = ~0`) at `init_profiler()` and on the idle-launch rewind, which makes the
+- The producer drops its cursor (`hi = ~0`) at `begin_launch()` and on the idle-launch rewind, which makes the
   short-form test fail arithmetically, so the first record after a launch is never short. The decoder has no cursor for
   a lane until its first medium record, and after a gap in a lossy FIFO it can't place the lane's short records until
   the next medium one.

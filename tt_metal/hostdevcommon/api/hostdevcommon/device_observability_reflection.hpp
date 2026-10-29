@@ -14,9 +14,9 @@
 #include <type_traits>
 #include <utility>
 
-#include "hostdevcommon/streaming_profiler_types.hpp"
+#include "hostdevcommon/device_observability_types.hpp"
 
-namespace tt::tt_metal::experimental::streaming_profiler {
+namespace tt::tt_metal::experimental::device_observability {
 
 namespace detail {
 // A type's full name as the compiler spells it: "... [with T = ns::Name; ...]" (GCC) or "... [T = ns::Name]" (clang)
@@ -165,25 +165,15 @@ constexpr T build(Reader& reader) {
     if constexpr (
         !std::is_class_v<T> || is_leaf_type<T> || (!std::is_aggregate_v<T> && !is_specialization<T, std::tuple>)) {
         return reader.template leaf<T>();
-    } else if constexpr (is_specialization<T, std::tuple>) {
+    } else if constexpr (is_specialization<T, std::tuple> || is_std_array<T>) {
         return build_elements<T>(reader, std::make_index_sequence<std::tuple_size_v<T>>{});
     } else {
-        // A std::array opens and closes like a struct of its elements, which its layout is.
-        reader.open();
-        T built = [&] {
-            if constexpr (is_std_array<T>) {
-                return build_elements<T>(reader, std::make_index_sequence<std::tuple_size_v<T>>{});
-            } else {
-                return build_fields<T>(reader, std::make_index_sequence<initializer_count<T>()>{});
-            }
-        }();
-        reader.close();
-        return built;
+        return build_fields<T>(reader, std::make_index_sequence<initializer_count<T>()>{});
     }
 }
 
 // The type code of each of T's leaves, in build<T>'s order: depth first, in declaration order. A call site lists them
-// for a T. A List derived from CodeList adds codes of its own where a struct opens and closes.
+// for a T.
 template <std::size_t N>
 struct CodeList {
     std::array<uint16_t, N> codes{};
@@ -194,23 +184,21 @@ struct CodeList {
         }
         ++count;
     }
-    constexpr void open() {}
-    constexpr void close() {}
     template <typename T>
     constexpr T leaf() {
         put(type_code<T>());
         return T{};
     }
 };
-template <typename T, template <std::size_t> class List = CodeList>
+template <typename T>
 inline constexpr auto leaf_type_codes = [] {
     if constexpr (std::is_aggregate_v<T> || is_leaf_type<T> || is_specialization<T, std::tuple>) {
         constexpr std::size_t kCount = [] {
-            List<0> counter;
+            CodeList<0> counter;
             build<T>(counter);
             return counter.count;
         }();
-        List<kCount> list;
+        CodeList<kCount> list;
         build<T>(list);
         return list.codes;
     } else {
@@ -241,12 +229,11 @@ constexpr bool has_plain_name() {
 // message.
 template <typename T>
 constexpr bool check_struct() {
-    static_assert(!std::is_union_v<T>, "unions are not supported; send the member it holds");
     static_assert(
         std::is_aggregate_v<T>,
         "only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported; this "
         "type has a constructor, private field or virtual function");
-    if constexpr (std::is_aggregate_v<T> && !std::is_union_v<T>) {
+    if constexpr (std::is_aggregate_v<T>) {
         static_assert(
             std::is_trivially_copyable_v<T>, "types with a custom copy, move or destructor are not supported");
         static_assert(std::is_copy_assignable_v<T>, "const and reference members are not supported");
@@ -280,7 +267,14 @@ constexpr bool check_argument() {
         static_assert(flat, "arrays of arrays are not supported; put the inner array in a struct");
         static_assert(std::tuple_size_v<V> != 0, "empty arrays are not supported");
         if constexpr (flat && std::tuple_size_v<V> != 0) {
-            return check_argument<E>();
+            constexpr bool element = check_argument<E>();
+            if constexpr (element) {
+                // The host counts an array's elements by its fields.
+                constexpr bool fields = leaf_type_codes<E>.size() != 0;
+                static_assert(fields, "arrays of empty structs are not supported");
+                return fields;
+            }
+            return element;
         } else {
             return false;
         }
@@ -293,4 +287,4 @@ constexpr bool check_argument() {
 
 }  // namespace detail
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler
+}  // namespace tt::tt_metal::experimental::device_observability

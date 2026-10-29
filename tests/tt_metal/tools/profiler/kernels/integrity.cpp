@@ -21,7 +21,7 @@ constexpr uint32_t kProcessor = 2 + COMPILE_FOR_TRISC;
 #endif
 
 namespace semantics_test {
-using tt::tt_metal::experimental::streaming_profiler::kNoInline;
+using tt::tt_metal::experimental::device_observability::kNoInline;
 
 // A struct alone, through the out-of-line writer, after another argument, and two of it as a list.
 template <typename S>
@@ -32,15 +32,19 @@ FORCE_INLINE void send(const S& s, const S& t, uint64_t seed) {
     DevicePublish<Send{"list"_s}>(s, t);
 }
 template <typename S>
-FORCE_INLINE void send_filled(uint32_t index, uint32_t processor, uint32_t i) {
-    const uint64_t seed = seed_of(index, processor, i);
+FORCE_INLINE void send_filled(uint32_t i) {
+    const uint64_t seed = seed_of(kCatalogIndex<S>, kProcessor, i);
     send(filled<S>(seed), filled<S>(mix(seed)), seed);
 }
 
-// Too large for the stack, so filled in place, word k as filled() fills field k.
+// Too large for the stack, so filled in place, word k as filled() fills field k. Each is only in the group that sends
+// it: together they would take most of a TRISC's 4 KiB of local memory.
+#if GROUP == 1
 Run runs[2];
 Largest largest;
+#elif GROUP == 3
 StatRows stat_rows[2]{};
+#endif
 template <typename S>
 void fill_words(S& s, uint64_t seed) {
     for (uint32_t k = 0; k < sizeof(s.words) / sizeof(s.words[0]); k++) {
@@ -55,10 +59,8 @@ Stamps stamps(uint64_t seed, uint32_t i) {
     return {at_ticks(now), uint8_t(seed), at_ticks(now - stamp_delta(i, 1)), at_ticks(now - stamp_delta(i, 2))};
 }
 StampedRun stamped_run(uint64_t seed, uint32_t i) {
-    StampedRun run{at_ticks(ticks_of(Timestamp::now()) - stamp_delta(i, 1)), {}};
-    for (uint32_t k = 0; k < 12; k++) {
-        run.words[k] = uint32_t(mix(seed + 1 + k));
-    }
+    StampedRun run = filled<StampedRun>(seed);
+    run.at = at_ticks(ticks_of(Timestamp::now()) - stamp_delta(i, 1));
     return run;
 }
 void fill_stat_rows(StatRows& rows, uint64_t seed, uint32_t i) {
@@ -69,54 +71,47 @@ void fill_stat_rows(StatRows& rows, uint64_t seed, uint32_t i) {
     }
 }
 
-// A program holds at most 70 KiB of kernels, so the catalog goes in groups; COMPUTE_GROUP is the set the compute
-// kernels send.
+// A program's kernels take at most 70656 B, so the catalog goes in groups of up to about 25 KB a RISC; StatRows' loops
+// take about 28 KB alone. COMPUTE_GROUP is the set the compute kernels send.
 void publish_group(uint32_t i) {
 #if GROUP == 0
-    send_filled<AllScalars>(0, kProcessor, i);
-    send_filled<Descending>(1, kProcessor, i);
-    send_filled<Ascending>(2, kProcessor, i);
-    send_filled<Bools>(3, kProcessor, i);
+    send_filled<AllScalars>(i);
+    send_filled<Descending>(i);
+    send_filled<Bools>(i);
+    send_filled<WithEnum>(i);
+    send_filled<LateField>(i);
 #elif GROUP == 1
-    send_filled<WordBits>(4, kProcessor, i);
-    send_filled<CrossingBits>(5, kProcessor, i);
-    send_filled<SignedBits>(6, kProcessor, i);
-    send_filled<Packed>(7, kProcessor, i);
-#elif GROUP == 2
-    send_filled<AlignedMember>(8, kProcessor, i);
-    send_filled<Nested>(9, kProcessor, i);
-    send_filled<Derived>(10, kProcessor, i);
-    send_filled<Tagged>(11, kProcessor, i);
-#elif GROUP == 3
-    send_filled<Pairs>(12, kProcessor, i);
-    send_filled<WithEnum>(13, kProcessor, i);
-    send_filled<Floats>(14, kProcessor, i);
-    send_filled<LateField>(19, kProcessor, i);
-#elif GROUP == 4
-    const uint64_t run_seed = seed_of(15, kProcessor, i);
+    send_filled<WordBits>(i);
+    send_filled<CrossingBits>(i);
+    send_filled<SignedBits>(i);
+    send_filled<Packed>(i);
+    const uint64_t run_seed = seed_of(kCatalogIndex<Run>, kProcessor, i);
     fill_words(runs[0], run_seed);
     fill_words(runs[1], mix(run_seed));
     send(runs[0], runs[1], run_seed);
     // A record holds one Largest at most.
-    fill_words(largest, seed_of(16, kProcessor, i));
+    fill_words(largest, seed_of(kCatalogIndex<Largest>, kProcessor, i));
     DevicePublish<Send{"alone"_s}>(largest);
     DevicePublish<Send{"no inline"_s}, kNoInline>(largest);
-#elif GROUP == 6
-    const uint64_t rows_seed = seed_of(20, kProcessor, i);
+#elif GROUP == 2
+    send_filled<AlignedMember>(i);
+    send_filled<Nested>(i);
+    send_filled<Derived>(i);
+    send_filled<Tagged>(i);
+    const uint64_t stamps_seed = seed_of(kCatalogIndex<Stamps>, kProcessor, i);
+    send(stamps(stamps_seed, i), stamps(mix(stamps_seed), i), stamps_seed);
+    const uint64_t stamped_seed = seed_of(kCatalogIndex<StampedRun>, kProcessor, i);
+    send(stamped_run(stamped_seed, i), stamped_run(mix(stamped_seed), i), stamped_seed);
+#elif GROUP == 3
+    const uint64_t rows_seed = seed_of(kCatalogIndex<StatRows>, kProcessor, i);
     fill_stat_rows(stat_rows[0], rows_seed, i);
     fill_stat_rows(stat_rows[1], mix(rows_seed), i);
     send(stat_rows[0], stat_rows[1], rows_seed);
-#elif GROUP == 5 || GROUP == COMPUTE_GROUP
-#if GROUP == COMPUTE_GROUP
-    send_filled<AllScalars>(0, kProcessor, i);
-    send_filled<SignedBits>(6, kProcessor, i);
-#endif
-    const uint64_t stamps_seed = seed_of(17, kProcessor, i);
+#elif GROUP == COMPUTE_GROUP
+    send_filled<AllScalars>(i);
+    send_filled<SignedBits>(i);
+    const uint64_t stamps_seed = seed_of(kCatalogIndex<Stamps>, kProcessor, i);
     send(stamps(stamps_seed, i), stamps(mix(stamps_seed), i), stamps_seed);
-#if GROUP == 5
-    const uint64_t stamped_seed = seed_of(18, kProcessor, i);
-    send(stamped_run(stamped_seed, i), stamped_run(mix(stamped_seed), i), stamped_seed);
-#endif
 #endif
 }
 

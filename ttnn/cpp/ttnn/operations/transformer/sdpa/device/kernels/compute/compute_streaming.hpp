@@ -117,7 +117,7 @@ constexpr bool sliding_local_first = false;
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
-#if defined(PROFILE_STREAMING)
+#if defined(DEVICE_OBSERVABILITY)
 // Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #elif defined(PROFILE_KERNEL)

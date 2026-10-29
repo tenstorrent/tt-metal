@@ -175,12 +175,12 @@ struct SanitizerSettings {
 // than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
 inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
 
-// Streaming profiler sizing defaults and bounds (TT_METAL_STREAMING_PROFILER_*). Sizes stay under 4 GiB
+// Device observability sizing defaults and bounds (TT_METAL_DEVICE_OBSERVABILITY_*). Sizes stay under 4 GiB
 // because the device addresses them with 32-bit offsets.
-inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_DEFAULT = 128;
-inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_MAX = 4095;
-inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_DEFAULT = 128;
-inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_MAX = 2048;  // FIFO size must be a power of two
+inline constexpr uint32_t DEVICE_OBSERVABILITY_SPOOL_MB_DEFAULT = 128;
+inline constexpr uint32_t DEVICE_OBSERVABILITY_SPOOL_MB_MAX = 4095;
+inline constexpr uint32_t DEVICE_OBSERVABILITY_FIFO_MB_DEFAULT = 128;
+inline constexpr uint32_t DEVICE_OBSERVABILITY_FIFO_MB_MAX = 2048;  // FIFO size must be a power of two
 
 class RunTimeOptions {
     std::string root_dir;
@@ -245,10 +245,12 @@ class RunTimeOptions {
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     bool streaming_profiler_sync_events_enabled = false;
-    bool streaming_profiler_sync_check_enabled = false;
-    bool streaming_profiler_inline_enabled = true;
-    // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
-    // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
+    bool device_observability_sync_check_enabled = false;
+    bool device_observability_inline_enabled = true;
+    // Device observability, and the streaming profiler's markers on it, which turn it on too. Mutually exclusive with
+    // profiler_enabled (the legacy profiler): the two device producers overlay the same L1 profiler region and the two
+    // hosts would both drive it.
+    bool device_observability_enabled = false;
     bool streaming_profiler_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
@@ -256,8 +258,8 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool streaming_profiler_tracy_enabled = false;
-    uint32_t streaming_profiler_spool_mb = STREAMING_PROFILER_SPOOL_MB_DEFAULT;
-    uint32_t streaming_profiler_fifo_mb = STREAMING_PROFILER_FIFO_MB_DEFAULT;
+    uint32_t device_observability_spool_mb = DEVICE_OBSERVABILITY_SPOOL_MB_DEFAULT;
+    uint32_t device_observability_fifo_mb = DEVICE_OBSERVABILITY_FIFO_MB_DEFAULT;
     std::string streaming_profiler_ops_csv_path;
     std::string streaming_profiler_zone_csv_path;
     bool experimental_noc_debug_dump_enabled = false;
@@ -736,16 +738,17 @@ public:
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     bool get_streaming_profiler_sync_events_enabled() const { return streaming_profiler_sync_events_enabled; }
-    bool get_streaming_profiler_sync_check_enabled() const { return streaming_profiler_sync_check_enabled; }
-    bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
+    bool get_device_observability_sync_check_enabled() const { return device_observability_sync_check_enabled; }
+    bool get_device_observability_inline_enabled() const { return device_observability_inline_enabled; }
+    bool get_device_observability_enabled() const { return device_observability_enabled || streaming_profiler_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     bool get_streaming_profiler_tracy_enabled() const { return streaming_profiler_tracy_enabled; }
-    uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
-    uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
+    uint32_t get_device_observability_spool_mb() const { return device_observability_spool_mb; }
+    uint32_t get_device_observability_fifo_mb() const { return device_observability_fifo_mb; }
     const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
     const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);

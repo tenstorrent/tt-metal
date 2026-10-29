@@ -1075,7 +1075,11 @@ def _run_shard_arm(shards, expect, timeout, knobs=None):
     them next to it. A build without Tracy skips the test.
     """
     profiling = (knobs or {}).get("TT_METAL_DEVICE_PROFILER") == "1"
-    stripped = ("TTNN_QSR_", "TT_METAL_DPRINT_", "TT_METAL_STREAMING_PROFILER") if profiling else ("TTNN_QSR_",)
+    stripped = (
+        ("TTNN_QSR_", "TT_METAL_DPRINT_", "TT_METAL_STREAMING_PROFILER", "TT_METAL_DEVICE_OBSERVABILITY")
+        if profiling
+        else ("TTNN_QSR_",)
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith(stripped)}
     env.update(
         {

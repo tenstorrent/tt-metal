@@ -8,26 +8,23 @@
 // tail = control[SPSC_RING_TAIL_0 + r] (producer), head = control[SPSC_RING_HEAD_0 + r] (relay); both are monotonic
 // word counts, index = count % capacity. The wire types (ppfmt) and SpscControlBuffer slots are its own, in
 // hostdev/streaming_profiler_common.h; ControlBuffer/PacketTypes belong to the DRAM backend, and sharing a control word
-// breaks both. Firmware wraps every kernel in its launch lifecycle (profileScopeLifecycle), which publishes the
+// breaks both. Firmware wraps every kernel in its launch lifecycle (LaunchScope), which publishes the
 // launch's packets.
 //
 // Quasar has no DRISC drainer, so a producer there would block forever on the first full ring. There is deliberately NO
-// fallback to the DRAM producer: the host refuses TT_METAL_STREAMING_PROFILER on Quasar (jit_build/build.cpp,
+// fallback to the DRAM producer: the host refuses TT_METAL_DEVICE_OBSERVABILITY on Quasar (jit_build/build.cpp,
 // distributed/mesh_device.cpp), and this guard is the device-side backstop.
 #pragma once
 
 #if defined(ARCH_QUASAR)
-#error "The streaming profiler has no Quasar producer; TT_METAL_STREAMING_PROFILER is not supported on Quasar."
+#error "Device observability has no Quasar producer; TT_METAL_DEVICE_OBSERVABILITY is not supported on Quasar."
 #endif
 
 #include <algorithm>
-#include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_DM)
 #include "risc_common.h"
-#include "internal/dataflow/dataflow_api_addrgen.h"
-#include "api/tensor/tensor_accessor.h"
 #else
 #include "ckernel.h"
 #endif
@@ -39,29 +36,33 @@
 
 #include "internal/ethernet/erisc.h"
 
-namespace kernel_profiler {
+namespace device_observability {
 
-extern uint32_t wIndex;  // producer tail: monotonic word count, lives in FW .bss across launches
+using namespace ::kernel_profiler;
 
-// publish_tail() advances the tail consumers see only while this is true. The RISCs that validate launches clear it in
-// init_profiler(), and DeviceValidateProfiler sets it once the launch is known to be real, so an idle launch's markers
-// are rewound instead of published.
+// The RISC's producer state is defined here for firmware builds rather than in each hw/firmware/src/*.cc, which only
+// reach this producer through the shared DeviceZone* and DeviceValidateProfiler macros. A kernel build takes it from
+// its firmware ELF (--just-symbols).
 //
-// It is defined here for firmware builds rather than in each hw/firmware/src/*.cc, which only reach this producer
-// through the shared DeviceZone* and DeviceValidateProfiler macros. A kernel build takes the symbol from its firmware
-// ELF (--just-symbols), as it does wIndex.
+// wIndex is the producer tail: a monotonic word count, kept across launches.
+//
+// publish_tail() advances the tail consumers see only while launchValid is true. The RISCs that validate launches clear
+// it in begin_launch(), and DeviceValidateProfiler sets it once the launch is known to be real, so an idle launch's
+// records are rewound instead of published.
 #if !defined(KERNEL_BUILD)
-[[gnu::used]] bool zoneValid = true;
+[[gnu::used]] uint32_t wIndex;
+[[gnu::used]] bool launchValid = true;
 #else
-extern bool zoneValid;
+extern uint32_t wIndex;
+extern bool launchValid;
 #endif
 
 // The RISCs whose firmware loop decides per-launch validity. Only these defer the first publish. On an active eth core
 // only ERISC0's firmware runs the launch loop.
 #if defined(COMPILE_FOR_BRISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || defined(COMPILE_FOR_DM)
-inline constexpr bool PROFILER_VALIDATES_ZONE = true;
+inline constexpr bool VALIDATES_LAUNCH = true;
 #else
-inline constexpr bool PROFILER_VALIDATES_ZONE = false;
+inline constexpr bool VALIDATES_LAUNCH = false;
 #endif
 
 constexpr int WALL_CLOCK_HIGH_INDEX = 2;  // WALL_CLOCK_H, the snapshot; 1 is the live half
@@ -133,8 +134,8 @@ FORCE_INLINE void read_wall_clock(uint32_t& hi, uint32_t& lo) {
 // Publishes `tail`, the write index past the records written so far: a writer passes the one it holds, so the store
 // after the fence doesn't wait on a load of wIndex.
 FORCE_INLINE void publish_tail(uint32_t tail) {
-    if constexpr (PROFILER_VALIDATES_ZONE) {
-        if (!zoneValid) {
+    if constexpr (VALIDATES_LAUNCH) {
+        if (!launchValid) {
             return;
         }
     }
@@ -147,8 +148,8 @@ FORCE_INLINE void publish_tail() { publish_tail(wIndex); }
 // A lane-state slot must never show a value the published tail does not cover, so the tail goes first and a fence
 // separates the two stores (see SPSC_STATE_TIMER_0).
 FORCE_INLINE void publish_state(uint32_t index, uint32_t value) {
-    if constexpr (PROFILER_VALIDATES_ZONE) {
-        if (!zoneValid) {
+    if constexpr (VALIDATES_LAUNCH) {
+        if (!launchValid) {
             return;
         }
     }
@@ -258,12 +259,12 @@ static_assert(RING_USABLE > STALL_RESERVE_WORDS, "the ring is too small to carry
 // distance), so the commonest check compares wIndex itself.
 constexpr uint32_t MIN_RESERVE_WORDS = 5;
 
-#if defined(PROFILE_INLINE_ENABLED)
-#define PROFILER_INLINE_ATTR [[gnu::always_inline]] inline
-constexpr bool kProfilerInlined = true;
+#if defined(DEVICE_OBSERVABILITY_INLINE_ENABLED)
+#define WRITER_INLINE_ATTR [[gnu::always_inline]] inline
+constexpr bool kWriterInlined = true;
 #else
-#define PROFILER_INLINE_ATTR [[gnu::noinline]]
-constexpr bool kProfilerInlined = false;
+#define WRITER_INLINE_ATTR [[gnu::noinline]]
+constexpr bool kWriterInlined = false;
 #endif
 
 // The pending stall, straight into the reserve its wait left room for, as ppfmt's stall record of the stall's call
@@ -381,14 +382,14 @@ template <typename Writer, bool kImmediately, typename... Inputs>
     write_record<Writer, kImmediately, false>(header, inputs...);
 }
 
-// write_record, inlined into the call site when the profiler is inlined, unless the call site asked for kNoInline,
-// which only an inlined profiler passes.
+// write_record, inlined into the call site when the writer is inlined, unless the call site asked for kNoInline, which
+// only an inlined writer passes.
 template <typename Writer, bool kImmediately = false, bool kNoInline = false, typename... Inputs>
-PROFILER_INLINE_ATTR void publish_with(uint32_t header, Inputs... inputs) {
+WRITER_INLINE_ATTR void publish_with(uint32_t header, Inputs... inputs) {
     if constexpr (kNoInline) {
         write_record_out_of_line<Writer, kImmediately>(header, inputs...);
     } else {
-        write_record<Writer, kImmediately, kProfilerInlined>(header, inputs...);
+        write_record<Writer, kImmediately, kWriterInlined>(header, inputs...);
     }
 }
 
@@ -404,14 +405,14 @@ FORCE_INLINE void set_host_counter(uint32_t counter_value) {
         ring_ensure_room(1);
         ring_write_words(ppfmt::w0(PacketType::RuntimeId, counter_value));
     }
-    if constexpr (PROFILER_VALIDATES_ZONE) {
+    if constexpr (VALIDATES_LAUNCH) {
         g_prog_pending = counter_value;
     }
     publish_state(STATE_PROG_INDEX, counter_value);
 }
 
-FORCE_INLINE void set_profiler_zone_valid(bool condition) {
-    zoneValid = condition;
+FORCE_INLINE void set_launch_valid(bool condition) {
+    launchValid = condition;
     if (condition) {
         publish_tail();
         asm volatile("fence" ::: "memory");
@@ -435,8 +436,7 @@ FORCE_INLINE void set_profiler_zone_valid(bool condition) {
     }
 }
 
-[[gnu::noinline]] void init_profiler(
-    uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
+[[gnu::noinline]] void begin_launch() {
     // Seeded from TAIL_INDEX once per FW session, then monotonic across launches: the relay tracks its own head,
     // so re-reading the per-program-reset TAIL would rewind below it and duplicate zones.
     static bool s_windex_seeded = false;
@@ -449,8 +449,8 @@ FORCE_INLINE void set_profiler_zone_valid(bool condition) {
     g_cursor_hi = kUnset;
 
     // Validators defer publishing until DeviceValidateProfiler resolves the launch.
-    if constexpr (PROFILER_VALIDATES_ZONE) {
-        zoneValid = false;
+    if constexpr (VALIDATES_LAUNCH) {
+        launchValid = false;
     }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
@@ -468,7 +468,7 @@ FORCE_INLINE void set_profiler_zone_valid(bool condition) {
 
 // A stall still pending at the launch's end has no later room check to write it, so the slow one runs, which writes it
 // and publishes the tail.
-[[gnu::noinline]] void finish_profiler() {
+[[gnu::noinline]] void end_launch() {
     if (__builtin_expect(g_stall.duration != 0, 0)) {
         ring_ensure_room_slow(0);
         return;
@@ -477,9 +477,9 @@ FORCE_INLINE void set_profiler_zone_valid(bool condition) {
 }
 
 // Lifecycle only, no markers. Every kernel must be wrapped or nothing it records is published.
-struct profileScopeLifecycle {
-    FORCE_INLINE profileScopeLifecycle() { init_profiler(); }
-    FORCE_INLINE ~profileScopeLifecycle() { finish_profiler(); }
+struct LaunchScope {
+    FORCE_INLINE LaunchScope() { begin_launch(); }
+    FORCE_INLINE ~LaunchScope() { end_launch(); }
 };
 
-}  // namespace kernel_profiler
+}  // namespace device_observability

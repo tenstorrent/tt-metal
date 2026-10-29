@@ -15,8 +15,8 @@ namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-using experimental::streaming_profiler::detail::code_bytes;
-using experimental::streaming_profiler::detail::TimestampWidth;
+using experimental::device_observability::detail::code_bytes;
+using experimental::device_observability::detail::TimestampWidth;
 static_assert(
     uint32_t(TimestampWidth::Bits16) == 0 && uint32_t(TimestampWidth::Bits32) == 1 &&
         uint32_t(TimestampWidth::Bits64) == 2,
@@ -24,7 +24,7 @@ static_assert(
 
 // The lane's constant words of a record's head: its address, which the record points at, and the tile's clock offset.
 profiler::SpscLaneConsts lane_consts(
-    const experimental::streaming_profiler::detail::RecordLane& lane, int64_t clock_offset) {
+    const experimental::device_observability::detail::RecordLane& lane, int64_t clock_offset) {
     const auto address = static_cast<long long>(reinterpret_cast<uintptr_t>(&lane));
     const auto offset = static_cast<long long>(clock_offset);
     profiler::SpscLaneConsts consts{};
@@ -42,7 +42,7 @@ constexpr uint64_t kTornLowWindow = 1ull << 16;
 
 StreamDecoder::StreamDecoder(
     const CaptureContext::Device& dev,
-    std::span<const experimental::streaming_profiler::detail::RecordLane> lanes,
+    std::span<const experimental::device_observability::detail::RecordLane> lanes,
     RecordRoutes& routes) :
     lanes_(dev.lanes.size()),
     copies_(dev.lanes.size()),
@@ -447,7 +447,7 @@ constexpr size_t kOrderBytes = kBatchWords / 2 * sizeof(uint32_t);
 }  // namespace
 
 ConsumerBatches::ConsumerBatches(
-    std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types) :
+    std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types) :
     types_(std::move(record_types)),
     records_(types_.type_count()),
     counts_(types_.type_count()),
@@ -471,7 +471,7 @@ DecodedFrames ConsumerBatches::decode(
     return decoded;
 }
 
-const experimental::streaming_profiler::detail::BatchData& ConsumerBatches::build_batch(
+const experimental::device_observability::detail::BatchData& ConsumerBatches::build_batch(
     DecodedFrames& frames,
     const RecordRoutes& routes,
     const ClockMap& map,

@@ -30,7 +30,7 @@ namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-thread_local experimental::streaming_profiler::detail::CallbackId t_consumer_id{};
+thread_local experimental::device_observability::detail::CallbackId t_consumer_id{};
 
 }  // namespace
 
@@ -66,9 +66,9 @@ struct Attached {
 
 struct Service::Consumer {
     std::string name;
-    std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types;
+    std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types;
     BatchCallback callback;
-    experimental::streaming_profiler::detail::CallbackId id;
+    experimental::device_observability::detail::CallbackId id;
     std::thread thread;
     std::atomic<bool> stop{false};
     std::atomic<bool> control_pending{false};
@@ -99,12 +99,12 @@ void Service::wait_acks(std::unique_lock<std::mutex>& lk) {
     ack_cv_.wait(lk, [&] { return pending_acks_ == 0; });
 }
 
-experimental::streaming_profiler::detail::CallbackId Service::add_consumer(
+experimental::device_observability::detail::CallbackId Service::add_consumer(
     std::string name,
-    std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types,
+    std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types,
     BatchCallback callback) {
     TT_FATAL(
-        t_consumer_id == experimental::streaming_profiler::detail::CallbackId{},
+        t_consumer_id == experimental::device_observability::detail::CallbackId{},
         "streaming profiler: add_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> topo(topology_mu_);
     auto owned = std::make_unique<Consumer>();
@@ -113,7 +113,7 @@ experimental::streaming_profiler::detail::CallbackId Service::add_consumer(
     owned->callback = std::move(callback);
     Consumer& consumer = *owned;
     std::unique_lock<std::mutex> lk(mu_);
-    consumer.id = experimental::streaming_profiler::detail::CallbackId{next_id_++};
+    consumer.id = experimental::device_observability::detail::CallbackId{next_id_++};
     for (Receiver* receiver : receivers_) {
         post_control(consumer, receiver, true);
     }
@@ -123,10 +123,10 @@ experimental::streaming_profiler::detail::CallbackId Service::add_consumer(
     return consumer.id;
 }
 
-void Service::remove_consumer(experimental::streaming_profiler::detail::CallbackId id) {
+void Service::remove_consumer(experimental::device_observability::detail::CallbackId id) {
     const bool self = id == t_consumer_id;
     TT_FATAL(
-        self || t_consumer_id == experimental::streaming_profiler::detail::CallbackId{},
+        self || t_consumer_id == experimental::device_observability::detail::CallbackId{},
         "streaming profiler: a consumer callback may unregister only itself");
     std::unique_lock<std::mutex> topo(topology_mu_, std::defer_lock);
     if (!self) {
@@ -185,7 +185,7 @@ bool Service::is_active() const {
 void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions) {
     std::call_once(builtins_once_, [&] {
         auto add_sink = [&]<typename Sink>(const char* name, const std::shared_ptr<Sink>& sink) {
-            builtin_callbacks_.push_back(experimental::streaming_profiler::RegisterCallback(
+            builtin_callbacks_.push_back(experimental::device_observability::RegisterCallback(
                 [sink](const typename Sink::Batch& batch) { (*sink)(batch); }, name));
         };
         auto add_file_sink = [&]<typename Sink>(const char* name, const std::shared_ptr<Sink>& sink) {

@@ -75,10 +75,15 @@ ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def run(args: list[str | Path], env_extra: dict[str, str], timeout: float) -> str:
-    """Run `args` with `env_extra` over the caller's environment minus its TT_METAL_STREAMING_PROFILER* variables, and
+    """Run `args` with `env_extra` over the caller's environment minus its TT_METAL_STREAMING_PROFILER* and
+    TT_METAL_DEVICE_OBSERVABILITY* variables, and
     return stdout then stderr. Skips the test if the profiler declined this system, and otherwise fails it on a timeout,
     a nonzero exit, or if the profiler was asked for but never started."""
-    env = {name: value for name, value in os.environ.items() if not name.startswith("TT_METAL_STREAMING_PROFILER")}
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(("TT_METAL_STREAMING_PROFILER", "TT_METAL_DEVICE_OBSERVABILITY"))
+    }
     env.update(env_extra)
     args = [str(arg) for arg in args]
     try:
@@ -200,7 +205,7 @@ SYNC_TIMEOUT_S = 300
 # The didt workload is there to make AICLK change through di/dt throttling. Over its run some chip's AICLK must range
 # over at least 100 MHz, compared with about 6 MHz of jitter on an idle chip.
 MIN_DVFS_SWING_MHZ = 100
-SYNC_CHECK_ENV = {"TT_METAL_STREAMING_PROFILER": "1", "TT_METAL_STREAMING_PROFILER_SYNC_CHECK": "1"}
+SYNC_CHECK_ENV = {"TT_METAL_STREAMING_PROFILER": "1", "TT_METAL_DEVICE_OBSERVABILITY_SYNC_CHECK": "1"}
 
 
 @pytest.mark.timeout(PROBE_TIMEOUT_S + SYNC_TIMEOUT_S + 60)

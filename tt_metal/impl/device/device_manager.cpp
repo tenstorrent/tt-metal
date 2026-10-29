@@ -468,7 +468,7 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     // These run before the fabric and dispatch firmware start. Measuring the tile clock offsets needs the Tensix, eth
     // and DRAM cores to itself, and a fabric router that runs the device-to-device sync must not read what an earlier
     // process left in its L1.
-    if (env_impl_.get_rtoptions().get_streaming_profiler_enabled()) {
+    if (env_impl_.get_rtoptions().get_device_observability_enabled()) {
         streaming_profiler::measure_tile_clock_offsets(active_devices, ctx_.get_context_id());
         streaming_profiler::link_sync::clear_port_state(active_devices, ctx_.get_context_id());
     }

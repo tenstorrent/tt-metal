@@ -137,7 +137,7 @@ RefclkBurst RootRefclkWindow::read_burst() {
 Receiver::Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> programs) :
     programs_(std::move(programs)),
     // The process's call sites outlive every capture, so the lanes hold no reference on them.
-    lanes_(&experimental::streaming_profiler::detail::CaptureLanes::create(
+    lanes_(&experimental::device_observability::detail::CaptureLanes::create(
         programs_->capture_context(),
         std::shared_ptr<const tt::llrt::CallSites>(std::shared_ptr<const void>(), &tt::llrt::process_call_sites()))),
     root_refclk_(cluster, programs_->capture_context().devices[CaptureContext::kRootDevice].chip_id),

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // DevicePublish's encoding (internal/debug/device_publish_impl.h): what a record's packet words are and, with the
-// streaming profiler on, the writer that stores a call's values as those words on its RISC's ring
+// device observability on, the writer that stores a call's values as those words on its RISC's ring
 // (internal/debug/device_publish_ring.h). A record's payload is laid out from its arguments' samples, the same ones the
 // host reads (llrt/call_sites.cpp), as slices of each argument, which each of its packet's forms places.
 #pragma once
@@ -18,11 +18,9 @@
 #include "hostdev/streaming_profiler_common.h"
 #include "internal/risc_attribs.h"
 
-namespace kernel_profiler {
-namespace streaming_profiler = tt::tt_metal::experimental::streaming_profiler;
-}  // namespace kernel_profiler
-
-namespace kernel_profiler::records {
+namespace device_observability {
+using namespace ::kernel_profiler;
+using namespace ::tt::tt_metal::experimental::device_observability;
 
 // The type a call site describes an argument as: its own, a std::array for a C array, or a String for a string
 // literal, which the payload check then rejects.
@@ -36,7 +34,7 @@ struct ArgumentValue<Element[N]> {
 };
 template <size_t N>
 struct ArgumentValue<const char[N]> {
-    using type = streaming_profiler::String;
+    using type = String;
 };
 template <typename Arg>
 using ValueOf = typename ArgumentValue<std::remove_reference_t<Arg>>::type;
@@ -51,8 +49,7 @@ template <typename Arg>
 struct RecordPayloadOf<Arg> {
     using Value = ValueOf<Arg>;
     using type = std::conditional_t<
-        std::is_class_v<Value> && !streaming_profiler::detail::is_leaf_type<Value> &&
-            !streaming_profiler::detail::is_std_array<Value>,
+        std::is_class_v<Value> && !detail::is_leaf_type<Value> && !detail::is_std_array<Value>,
         Value,
         std::tuple<Value>>;
 };
@@ -60,8 +57,7 @@ template <typename... Args>
 using RecordPayload = typename RecordPayloadOf<Args...>::type;
 
 template <typename Payload>
-using ArgumentList = std::
-    conditional_t<streaming_profiler::detail::is_specialization<Payload, std::tuple>, Payload, std::tuple<Payload>>;
+using ArgumentList = std::conditional_t<detail::is_specialization<Payload, std::tuple>, Payload, std::tuple<Payload>>;
 template <typename Payload, size_t I>
 using ArgumentAt = std::tuple_element_t<I, ArgumentList<Payload>>;
 template <typename Payload>
@@ -73,8 +69,6 @@ inline constexpr size_t kEveryField = ~size_t{0};
 struct SampleSource {
     size_t sample = 0;  // or kEveryField
     size_t fields_built = 0;
-    constexpr void open() {}
-    constexpr void close() {}
     // A float's or a double's smallest negative value sets its lowest and highest bits, a bool's true its only one.
     template <typename V>
     constexpr V leaf() {
@@ -82,8 +76,7 @@ struct SampleSource {
         if (sample != kEveryField && ((number_plus_one >> sample) & 1) == 0) {
             return V{};
         }
-        if constexpr (
-            std::is_same_v<V, streaming_profiler::String> || std::is_same_v<V, streaming_profiler::Timestamp>) {
+        if constexpr (std::is_same_v<V, String> || std::is_same_v<V, Timestamp>) {
             return __builtin_bit_cast(V, ~uint64_t{0});
         } else if constexpr (std::is_same_v<V, bool>) {
             return true;
@@ -99,7 +92,7 @@ struct SampleSource {
 template <typename T>
 constexpr T sample_of(size_t sample) {
     SampleSource source{sample};
-    return streaming_profiler::detail::build<T>(source);
+    return detail::build<T>(source);
 }
 
 // One byte as eight one-bit objects, so that each bit of a bit_cast is defined or not on its own.
@@ -184,7 +177,7 @@ constexpr uint32_t round_up(uint32_t bytes, uint32_t align) { return (bytes + al
 
 // The leaf of an argument of type V that a record doesn't send (PublishTimeIn), or none.
 template <typename V>
-inline constexpr size_t kUnsentLeaf = ~size_t{0};
+inline constexpr size_t kUnsentLeaf = detail::kNoPayloadPublishTimeField;
 
 // Where each of V's fields lies, as its first byte and the bytes up to its last: a struct's from its field bits, so
 // they are where the compiler put them whatever its bit-fields, packing or alignas, and an array's its element's,
@@ -193,15 +186,14 @@ template <size_t kLeaves>
 struct FieldLayout {
     std::array<uint16_t, kLeaves> offsets{};
     std::array<uint16_t, kLeaves> sizes{};
-    size_t unsent = ~size_t{0};
     uint32_t sent_bytes = 0;
 };
 template <typename V>
 constexpr auto lay_out_fields() {
-    FieldLayout<streaming_profiler::detail::leaf_type_codes<V>.size()> layout;
-    if constexpr (streaming_profiler::detail::is_leaf_type<V>) {
+    FieldLayout<detail::leaf_type_codes<V>.size()> layout;
+    if constexpr (detail::is_leaf_type<V>) {
         layout.sizes[0] = uint16_t(sizeof(V));
-    } else if constexpr (streaming_profiler::detail::is_std_array<V>) {
+    } else if constexpr (detail::is_std_array<V>) {
         using Element = typename V::value_type;
         constexpr auto element = lay_out_fields<Element>();
         constexpr size_t kElementLeaves = element.offsets.size();
@@ -218,9 +210,8 @@ constexpr auto lay_out_fields() {
             layout.sizes[field] = uint16_t((bits.bit + bits.width + 7) / 8 - bits.bit / 8);
         }
     }
-    layout.unsent = kUnsentLeaf<V>;
     for (size_t field = 0; field < layout.offsets.size(); ++field) {
-        if (field != layout.unsent) {
+        if (field != kUnsentLeaf<V>) {
             layout.sent_bytes = std::max<uint32_t>(layout.sent_bytes, layout.offsets[field] + layout.sizes[field]);
         }
     }
@@ -228,6 +219,21 @@ constexpr auto lay_out_fields() {
 }
 template <typename V>
 inline constexpr auto kFieldLayout = lay_out_fields<V>();
+
+// Takes bytes [from, from + bytes) of a byte map, and whether none of them is taken yet.
+constexpr void mark(bool* map, uint32_t from, uint32_t bytes) {
+    for (uint32_t byte = from; byte < from + bytes; ++byte) {
+        map[byte] = true;
+    }
+}
+constexpr bool all_clear(const bool* map, uint32_t from, uint32_t bytes) {
+    for (uint32_t byte = from; byte < from + bytes; ++byte) {
+        if (map[byte]) {
+            return false;
+        }
+    }
+    return true;
+}
 
 // A record's payload is made of slices of its arguments. Each slice is 1, 2, 4 or 8 bytes at a multiple of its size
 // within its argument, so it loads whole. Each field's slice is the aligned piece of its type's size that holds it: the
@@ -248,14 +254,14 @@ struct ArgumentSlices {
 template <typename V>
 constexpr auto slice_argument() {
     constexpr auto& layout = kFieldLayout<V>;
-    constexpr auto& codes = streaming_profiler::detail::leaf_type_codes<V>;
+    constexpr auto& codes = detail::leaf_type_codes<V>;
     ArgumentSlices<codes.size() + sizeof(V)> out;
     const uint32_t widest = uint32_t(std::min<size_t>(alignof(V), 8));
     std::array<uint32_t, codes.size()> piece_from{}, piece_bytes{};
     for (size_t field = 0; field < codes.size(); ++field) {
         const uint32_t from = layout.offsets[field], end = from + layout.sizes[field];
-        const uint32_t bytes = std::min<uint32_t>(streaming_profiler::detail::code_bytes(codes[field]), widest);
-        if (field == layout.unsent) {
+        const uint32_t bytes = std::min<uint32_t>(detail::code_bytes(codes[field]), widest);
+        if (field == kUnsentLeaf<V>) {
             continue;
         }
         if (end <= from / bytes * bytes + bytes) {
@@ -266,12 +272,8 @@ constexpr auto slice_argument() {
         }
     }
     bool covered[sizeof(V)] = {};
-    if (layout.unsent < codes.size()) {
-        for (uint32_t byte = layout.offsets[layout.unsent];
-             byte < layout.offsets[layout.unsent] + layout.sizes[layout.unsent];
-             ++byte) {
-            covered[byte] = true;
-        }
+    if (kUnsentLeaf<V> < codes.size()) {
+        mark(covered, layout.offsets[kUnsentLeaf<V>], layout.sizes[kUnsentLeaf<V>]);
     }
     // Each piece goes once, from the first field whose piece is the widest over the piece's first byte: aligned pieces
     // of 1, 2, 4 and 8 bytes either nest or don't meet, so a wider piece over that byte holds the whole piece.
@@ -289,27 +291,17 @@ constexpr auto slice_argument() {
         if (piece_bytes[field] == 0 || owner[piece_from[field]] != field) {
             continue;
         }
-        const bool timestamp = codes[field] == streaming_profiler::detail::kTimestampCode;
+        const bool timestamp = codes[field] == detail::kTimestampCode;
         out.slices[out.count++] = {timestamp, 0, uint16_t(piece_from[field]), uint16_t(piece_bytes[field])};
-        for (uint32_t byte = piece_from[field]; byte < piece_from[field] + piece_bytes[field]; ++byte) {
-            covered[byte] = true;
-        }
+        mark(covered, piece_from[field], piece_bytes[field]);
     }
-    const auto is_free = [&](uint32_t from, uint32_t bytes) {
-        for (uint32_t byte = from; byte < from + bytes; ++byte) {
-            if (covered[byte]) {
-                return false;
-            }
-        }
-        return true;
-    };
     for (uint32_t byte = 0; byte < layout.sent_bytes;) {
         if (covered[byte]) {
             ++byte;
             continue;
         }
         uint32_t bytes = widest;
-        while (byte % bytes != 0 || byte + bytes > layout.sent_bytes || !is_free(byte, bytes)) {
+        while (byte % bytes != 0 || byte + bytes > layout.sent_bytes || !all_clear(covered, byte, bytes)) {
             bytes /= 2;
         }
         out.slices[out.count++] = {false, 0, uint16_t(byte), uint16_t(bytes)};
@@ -323,7 +315,7 @@ inline constexpr auto kArgumentSlices = slice_argument<V>();
 // A Timestamp travels as a distance when each argument's fields lie in its slices; otherwise it goes whole.
 template <typename Payload, size_t... I>
 constexpr bool sends_deltas(std::index_sequence<I...>) {
-    return streaming_profiler::detail::holds<Payload>(streaming_profiler::detail::kTimestampCode) &&
+    return detail::holds<Payload>(detail::kTimestampCode) &&
            (kArgumentSlices<ArgumentAt<Payload, I>>.holds_every_field && ...);
 }
 template <typename Payload>
@@ -355,12 +347,10 @@ inline constexpr auto kSlices = record_slices<Payload>(ArgumentIndices<Payload>{
 // alignment, those whose bytes end on a multiple of it first, each at a multiple of its alignment up to 4, so none of
 // its slices straddles a word.
 template <typename Payload, size_t... I>
-constexpr std::array<streaming_profiler::detail::ArgumentSlice, sizeof...(I)> place_arguments(
-    std::index_sequence<I...>) {
+constexpr std::array<detail::ArgumentSlice, sizeof...(I)> place_arguments(std::index_sequence<I...>) {
     constexpr std::array<uint32_t, sizeof...(I)> alignments{uint32_t(alignof(ArgumentAt<Payload, I>))...};
-    std::array<streaming_profiler::detail::ArgumentSlice, sizeof...(I)> placements{
-        streaming_profiler::detail::ArgumentSlice{
-            uint16_t(I), 0, 0, uint16_t(kFieldLayout<ArgumentAt<Payload, I>>.sent_bytes)}...};
+    std::array<detail::ArgumentSlice, sizeof...(I)> placements{
+        detail::ArgumentSlice{uint16_t(I), 0, 0, uint16_t(kFieldLayout<ArgumentAt<Payload, I>>.sent_bytes)}...};
     uint32_t end = 0;
     for (uint32_t align = std::max({uint32_t{1}, alignments[I]...}); align != 0; align /= 2) {
         for (const bool ragged : {false, true}) {
@@ -380,15 +370,15 @@ inline constexpr auto kArgumentPlacement = place_arguments<Payload>(ArgumentIndi
 // The words the record's time takes after word 0, and the bytes each Timestamp takes, in each form: its distance back
 // from the record's time in the short and medium forms, and the Timestamp itself in the full form, where a distance
 // would take the same 8 bytes.
-constexpr uint32_t time_words(streaming_profiler::detail::TimestampWidth width) { return uint32_t(width); }
-constexpr uint32_t timestamp_bytes(streaming_profiler::detail::TimestampWidth width) { return 2u << uint32_t(width); }
+constexpr uint32_t time_words(detail::TimestampWidth width) { return uint32_t(width); }
+constexpr uint32_t timestamp_bytes(detail::TimestampWidth width) { return 2u << uint32_t(width); }
 
 template <size_t N>
 struct PlacedLayout {
     uint32_t packet_words;  // word 0 included
-    std::array<streaming_profiler::detail::ArgumentSlice, N> slices;
+    std::array<detail::ArgumentSlice, N> slices;
 };
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth>
+template <typename Payload, detail::TimestampWidth kWidth>
 inline constexpr auto kLayout = [] {
     constexpr auto& slices = kSlices<Payload>;
     PlacedLayout<slices.size()> placed{};
@@ -405,15 +395,7 @@ inline constexpr auto kLayout = [] {
         // starts where the last one for that size ended.
         bool taken[4 + 8 * slices.size()] = {};
         uint32_t search_from[9] = {};  // by size in bytes
-        const auto is_free = [&](uint32_t offset, uint32_t bytes) {
-            for (uint32_t byte = offset; byte < offset + bytes; ++byte) {
-                if (taken[byte]) {
-                    return false;
-                }
-            }
-            return true;
-        };
-        if (kWidth == streaming_profiler::detail::TimestampWidth::Bits16) {
+        if (kWidth == detail::TimestampWidth::Bits16) {
             // The short form's record time takes bytes 2 and 3 of every call site's payload, so the decoder finds it
             // before it knows the call site.
             taken[2] = taken[3] = true;
@@ -426,13 +408,11 @@ inline constexpr auto kLayout = [] {
                     continue;
                 }
                 uint32_t offset = search_from[bytes];
-                while (!is_free(offset, bytes)) {
+                while (!all_clear(taken, offset, bytes)) {
                     offset += align;
                 }
                 search_from[bytes] = offset;
-                for (uint32_t byte = offset; byte < offset + bytes; ++byte) {
-                    taken[byte] = true;
-                }
+                mark(taken, offset, bytes);
                 placed.slices[k] = {slices[k].argument, slices[k].from, uint16_t(offset), uint16_t(bytes)};
                 end = std::max(end, offset + bytes);
             }
@@ -450,16 +430,15 @@ inline constexpr bool kWritesShortRecords = true;
 inline constexpr bool kWritesShortRecords = false;
 #endif
 template <typename Payload>
-inline constexpr bool kHasBits16 =
-    kWritesShortRecords && kSendsDeltas<Payload> &&
-    kLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits16>.packet_words <
-        kLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits32>.packet_words;
+inline constexpr bool kHasBits16 = kWritesShortRecords && kSendsDeltas<Payload> &&
+                                   kLayout<Payload, detail::TimestampWidth::Bits16>.packet_words <
+                                       kLayout<Payload, detail::TimestampWidth::Bits32>.packet_words;
 // The body length in word 0 of a call site's packets: its first form's, shortest first.
 template <typename Payload>
 inline constexpr uint32_t kFirstPacketWords =
-    kHasBits16<Payload> ? kLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits16>.packet_words
-                        : kLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits32>.packet_words;
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth>
+    kHasBits16<Payload> ? kLayout<Payload, detail::TimestampWidth::Bits16>.packet_words
+                        : kLayout<Payload, detail::TimestampWidth::Bits32>.packet_words;
+template <typename Payload, detail::TimestampWidth kWidth>
 inline constexpr uint32_t kPayloadWords = kLayout<Payload, kWidth>.packet_words - 1 - time_words(kWidth);
 
 // A slice's bits in one payload word: the slice, the bit its bits start at in the word, and whether the word holds
@@ -475,7 +454,7 @@ struct WordPieces {
     std::array<WordPiece, 4> pieces{};
     uint32_t count = 0;
 };
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth>
+template <typename Payload, detail::TimestampWidth kWidth>
 inline constexpr auto kWordPieces = [] {
     constexpr auto& slices = kLayout<Payload, kWidth>.slices;
     std::array<WordPieces, kPayloadWords<Payload, kWidth>> words{};
@@ -489,7 +468,7 @@ inline constexpr auto kWordPieces = [] {
     }
     return words;
 }();
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth, size_t W>
+template <typename Payload, detail::TimestampWidth kWidth, size_t W>
 using WordPieceIndices = std::make_index_sequence<kWordPieces<Payload, kWidth>[W].count>;
 
 // Each slice's first word among the words its record's slices take, an 8-byte slice taking two, low word first.
@@ -539,7 +518,7 @@ struct RegisterWords {
     std::array<
         uint32_t,
         kSendsDeltas<Payload> ? kSliceFirstWord<Payload>.back()
-                              : kPayloadWords<Payload, streaming_profiler::detail::TimestampWidth::Bits32>>
+                              : kPayloadWords<Payload, detail::TimestampWidth::Bits32>>
         words;
 };
 
@@ -595,7 +574,7 @@ struct PayloadLayout {
 // Which argument and byte offset each payload word of form kWidth copies whole from, or argument -1 for a word that
 // must be built: one holding bytes of two arguments, a Timestamp's distance (short and medium forms), or the short
 // form's time.
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth, size_t... I>
+template <typename Payload, detail::TimestampWidth kWidth, size_t... I>
 constexpr std::array<PayloadPart, kPayloadWords<Payload, kWidth>> copyable_words(std::index_sequence<I...>) {
     constexpr auto& layout = kLayout<Payload, kWidth>;
     constexpr auto& slices = kSlices<Payload>;
@@ -605,13 +584,13 @@ constexpr std::array<PayloadPart, kPayloadWords<Payload, kWidth>> copyable_words
     for (uint32_t word = 0; word < words.size(); ++word) {
         // A copyable word's bytes all come from one argument, each at the same distance from its place in the payload.
         int32_t argument = -1, distance = 0;
-        bool copyable = !(kWidth == streaming_profiler::detail::TimestampWidth::Bits16 && word == 0);
+        bool copyable = !(kWidth == detail::TimestampWidth::Bits16 && word == 0);
         const WordPieces& pieces = kWordPieces<Payload, kWidth>[word];
         for (uint32_t piece = 0; piece < pieces.count; ++piece) {
             const uint16_t k = pieces.pieces[piece].slice;
-            const streaming_profiler::detail::ArgumentSlice placed = layout.slices[k];
+            const detail::ArgumentSlice placed = layout.slices[k];
             const int32_t slice_distance = int32_t(placed.from) - int32_t(placed.to);
-            copyable &= !(slices[k].is_delta && kWidth != streaming_profiler::detail::TimestampWidth::Bits64) &&
+            copyable &= !(slices[k].is_delta && kWidth != detail::TimestampWidth::Bits64) &&
                         (argument < 0 || (argument == placed.argument && distance == slice_distance));
             argument = placed.argument;
             distance = slice_distance;
@@ -628,18 +607,16 @@ constexpr std::array<PayloadPart, kPayloadWords<Payload, kWidth>> copyable_words
 }
 // How many pieces form kWidth's payload word `word` has for a loop to load: none in the short form's first word, which
 // holds the time's distance from the cursor.
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth>
+template <typename Payload, detail::TimestampWidth kWidth>
 constexpr uint32_t loop_piece_count(uint32_t word) {
-    return kWidth == streaming_profiler::detail::TimestampWidth::Bits16 && word == 0
-               ? 0
-               : kWordPieces<Payload, kWidth>[word].count;
+    return kWidth == detail::TimestampWidth::Bits16 && word == 0 ? 0 : kWordPieces<Payload, kWidth>[word].count;
 }
 // Piece `piece` of form kWidth's payload word `word` as a loop loads it, stride 0.
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth>
+template <typename Payload, detail::TimestampWidth kWidth>
 constexpr LoopPiece loop_piece_at(uint32_t word, uint32_t piece) {
     const WordPiece& at = kWordPieces<Payload, kWidth>[word].pieces[piece];
     const Slice& slice = kSlices<Payload>[at.slice];
-    const bool distance = slice.is_delta && kWidth != streaming_profiler::detail::TimestampWidth::Bits64;
+    const bool distance = slice.is_delta && kWidth != detail::TimestampWidth::Bits64;
     return {
         slice.argument,
         uint16_t(slice.from + (at.high_half ? 4 : 0)),
@@ -650,7 +627,7 @@ constexpr LoopPiece loop_piece_at(uint32_t word, uint32_t piece) {
 }
 // How many times the group of `period` payload words from `word` on repeats from there: the same pieces each time,
 // each a constant stride further on than the time before.
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth>
+template <typename Payload, detail::TimestampWidth kWidth>
 constexpr uint32_t loop_repeats(uint32_t word, uint32_t period) {
     uint32_t repeats = 1;
     for (; word + (repeats + 1) * period <= kPayloadWords<Payload, kWidth>; ++repeats) {
@@ -674,7 +651,7 @@ constexpr uint32_t loop_repeats(uint32_t word, uint32_t period) {
 }
 // The loop that builds the most payload words from `word` on, at the shortest period among those that build as many,
 // when it builds kLoopWords or more; otherwise none.
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth>
+template <typename Payload, detail::TimestampWidth kWidth>
 constexpr PayloadLoop loop_from(uint32_t word) {
     PayloadLoop loop;
     for (uint32_t period = 1; period <= kMaxLoopPeriod && word + kLoopWords <= kPayloadWords<Payload, kWidth>;
@@ -696,7 +673,7 @@ constexpr PayloadLoop loop_from(uint32_t word) {
     }
     return loop;
 }
-template <typename Payload, streaming_profiler::detail::TimestampWidth kWidth, bool kCopyRuns>
+template <typename Payload, detail::TimestampWidth kWidth, bool kCopyRuns>
 inline constexpr auto kPayloadLayout = [] {
     constexpr auto words = copyable_words<Payload, kWidth>(ArgumentIndices<Payload>{});
     PayloadLayout<words.size()> payload;
@@ -731,12 +708,10 @@ inline constexpr auto kPayloadLayout = [] {
 // its forms has one.
 template <typename Payload>
 inline constexpr bool kReadsArgumentsInPlace =
-    kPayloadLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits32, true>.has_run ||
-    kPayloadLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits32, true>.loop_count != 0 ||
-    (kSendsDeltas<Payload> &&
-     kPayloadLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits16, true>.loop_count != 0) ||
-    (kSendsDeltas<Payload> &&
-     kPayloadLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits64, true>.loop_count != 0);
+    kPayloadLayout<Payload, detail::TimestampWidth::Bits32, true>.has_run ||
+    kPayloadLayout<Payload, detail::TimestampWidth::Bits32, true>.loop_count != 0 ||
+    (kSendsDeltas<Payload> && kPayloadLayout<Payload, detail::TimestampWidth::Bits16, true>.loop_count != 0) ||
+    (kSendsDeltas<Payload> && kPayloadLayout<Payload, detail::TimestampWidth::Bits64, true>.loop_count != 0);
 
 template <typename>
 struct MemberOf;
@@ -766,23 +741,23 @@ constexpr size_t publish_time_leaf() {
 template <auto kField>
 inline constexpr size_t kUnsentLeaf<PublishTimePayload<kField>> = publish_time_leaf<kField>();
 
-}  // namespace kernel_profiler::records
+}  // namespace device_observability
 
-// The writer stores records on the streaming profiler's rings, which kernels and firmware built with it have. Dispatch
+// The writer stores records on device observability's rings, which kernels and firmware built with it have. Dispatch
 // kernels have none: PROFILE_KERNEL is a global JIT define, so they get it too, but no relay serves a dispatch core, so
 // a ring there would fill and wedge the next relay bring-up. Nor does its relay kernel: the ring's producer is ~1 KB
 // the relay has no code room for (its self-profiling is its own staging-slot markers, see
 // impl/streaming_profiler/kernels/drisc_relay.cpp).
-#if defined(PROFILE_STREAMING) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
-    !defined(STREAMING_PROFILER_RELAY_KERNEL)
+#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
+    !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
 
 #include "internal/debug/device_publish_ring.h"
 
-namespace kernel_profiler::records {
+namespace device_observability {
 
 template <size_t I, typename Source>
 FORCE_INLINE const auto& argument_at(const Source& source) {
-    if constexpr (streaming_profiler::detail::is_specialization<Source, std::tuple>) {
+    if constexpr (detail::is_specialization<Source, std::tuple>) {
         return std::get<I>(source);
     } else {
         return source;
@@ -793,7 +768,7 @@ FORCE_INLINE const auto& argument_at(const Source& source) {
 // arguments, so each payload word reads its argument where it lies rather than from a copy.
 template <typename... Args>
 FORCE_INLINE decltype(auto) record_source(const Args&... args) {
-    if constexpr (streaming_profiler::detail::is_specialization<RecordPayload<Args...>, std::tuple>) {
+    if constexpr (detail::is_specialization<RecordPayload<Args...>, std::tuple>) {
         return std::tuple<const Args&...>(args...);
     } else {
         return (args, ...);
@@ -838,27 +813,9 @@ struct SlotStore {
 
     FORCE_INLINE void write_word(uint32_t index, uint32_t value) const { slots[index] = value; }
 
-    // Each batch's loads go ahead of its stores, so they overlap instead of each waiting out the one before: a copy a
-    // word at a time runs slower than building the words in registers. Four words a batch copy a 32-word run in about
-    // half the cycles of one at a time, with no more code; eight are about 10% faster again but larger.
     template <uint32_t kWords>
     FORCE_INLINE void copy_run(uint32_t index, const AliasingWord* from) const {
-        constexpr uint32_t kBatch = 4;
-        constexpr uint32_t kBatched = kWords / kBatch * kBatch;
-        for (uint32_t done = 0; done < kBatched; done += kBatch) {
-            copy_batch(slots + index + done, from + done, std::make_index_sequence<kBatch>{});
-        }
-        if constexpr (kWords != kBatched) {
-            copy_batch(slots + index + kBatched, from + kBatched, std::make_index_sequence<kWords - kBatched>{});
-        }
-    }
-
-private:
-    template <size_t... B>
-    static FORCE_INLINE void copy_batch(
-        volatile tt_l1_ptr uint32_t* to, const AliasingWord* from, std::index_sequence<B...>) {
-        const uint32_t batch[] = {from[B]...};
-        ((to[B] = batch[B]), ...);
+        ring_copy_block(slots + index, from, kWords);
     }
 };
 
@@ -866,11 +823,10 @@ private:
 // RegisterWords. A payload with Timestamps writes the shortest form they fit; any other payload is always medium.
 template <typename Payload, typename Source>
 struct RecordWriter {
-    using Width = streaming_profiler::detail::TimestampWidth;
+    using Width = detail::TimestampWidth;
 
-    // The longest packet: a full one, or a medium one with the timer's high word ahead of it.
-    static constexpr uint32_t kMaxWords = kSendsDeltas<Payload> ? kLayout<Payload, Width::Bits64>.packet_words
-                                                                : 1 + kLayout<Payload, Width::Bits32>.packet_words;
+    // The longest packet: a full one, which is never shorter than a medium one with the timer packet ahead of it.
+    static constexpr uint32_t kMaxWords = kLayout<Payload, Width::Bits64>.packet_words;
 
     // `inputs` are the record's register words, or the address of its source. Returns the write index past the record.
     template <typename... Inputs>
@@ -919,43 +875,33 @@ private:
         }
     }
 
-    // Timestamp K's distance back from the record's time, its low word and its high word, which borrows when the
-    // Timestamp is later, as a torn read is.
-    template <size_t K, typename Record>
-    static FORCE_INLINE uint32_t delta_lo(const Record& record) {
-        return record.time_lo - uint32_t(record.stamps[K]);
-    }
-    template <size_t K, typename Record>
-    static FORCE_INLINE uint32_t delta_hi(const Record& record) {
-        const uint64_t stamp = record.stamps[K];
-        return record.time_hi - uint32_t(stamp >> 32) - (record.time_lo < uint32_t(stamp));
-    }
-    // Nonzero when Timestamp K's high half differs from the record time's.
-    template <size_t K, typename Record>
-    static FORCE_INLINE uint32_t other_high_half(const Record& record) {
-        return record.time_hi ^ uint32_t(record.stamps[K] >> 32);
-    }
-
     // Writes the record in the narrowest width it fits. Every record of a call site with a 16-bit width moves the
     // lane's cursor to its publish Timestamp, whichever width it took. A 16-bit record needs its publish Timestamp
     // within 16 bits after the cursor and every payload Timestamp within 16 bits before it, all in the cursor's high
     // half: the high halves are compared rather than the deltas' high halves computed, which sends the rare record that
     // straddles a low-half wrap at 32 bits but keeps the 64-bit subtraction off the commonest path. A 32-bit record
-    // needs every payload Timestamp within 32 bits before it. No cursor (high half kUnset) fails the 16-bit test.
+    // needs every payload Timestamp within 32 bits before it, its distance's high word borrowing when the Timestamp is
+    // later, as a torn read is. No cursor (high half kUnset) fails the 16-bit test.
     template <typename Record, size_t... D>
     static FORCE_INLINE uint32_t write_narrowest(uint32_t header, const Record& record, std::index_sequence<D...>) {
         if constexpr (kHasBits16<Payload>) {
             const uint32_t since_cursor = record.time_lo - g_cursor_lo;
-            const uint32_t beyond_16_bits = (since_cursor | ... | delta_lo<kDeltaSlices<Payload>[D]>(record)) >> 16;
+            const uint32_t beyond_16_bits =
+                (since_cursor | ... | (record.time_lo - uint32_t(record.stamps[kDeltaSlices<Payload>[D]]))) >> 16;
             const uint32_t other_high_halves =
-                ((record.time_hi ^ g_cursor_hi) | ... | other_high_half<kDeltaSlices<Payload>[D]>(record));
+                ((record.time_hi ^ g_cursor_hi) | ... |
+                 (record.time_hi ^ uint32_t(record.stamps[kDeltaSlices<Payload>[D]] >> 32)));
             if (__builtin_expect((beyond_16_bits | other_high_halves) == 0, 1)) {
                 const uint32_t end = write_at_width<Width::Bits16>(header, record);
                 move_cursor(record.time_hi, record.time_lo);
                 return end;
             }
         }
-        if (__builtin_expect((delta_hi<kDeltaSlices<Payload>[D]>(record) | ... | 0u) == 0, 1)) {
+        if (__builtin_expect(
+                ((record.time_hi - uint32_t(record.stamps[kDeltaSlices<Payload>[D]] >> 32) -
+                  (record.time_lo < uint32_t(record.stamps[kDeltaSlices<Payload>[D]]))) |
+                 ... | 0u) == 0,
+                1)) {
             const uint32_t end = write_at_width<Width::Bits32>(header, record);
             move_cursor(record.time_hi, record.time_lo);
             return end;
@@ -1030,11 +976,8 @@ private:
         return (kLayout<Payload, kWidth>.packet_words - kFirstPacketWords<Payload>) << ppfmt::PACKET_WORDS_SHIFT;
     }
 
-    // A record's words ahead of its payload: word 0, then the time's low word (medium and full) and high word (full).
     template <Width kWidth>
-    static constexpr uint32_t kHeadWords = kWidth == Width::Bits16 ? 1 : (kWidth == Width::Bits32 ? 2 : 3);
-    template <Width kWidth>
-    static constexpr uint32_t kWords = kHeadWords<kWidth> + kPayloadWords<Payload, kWidth>;
+    static constexpr uint32_t kWords = kLayout<Payload, kWidth>.packet_words;
 
     // A record stores as one block when it fits before the ring's end and is long enough for the check to pay for
     // itself: a medium record with payload, or one with a run. Otherwise, a short record of a word or two or one that
@@ -1084,7 +1027,8 @@ private:
     template <Width kWidth, size_t P, typename Store, typename Record>
     static FORCE_INLINE void store_part(Store store, uint32_t cursor_delta, const Record& record) {
         constexpr PayloadPart kPart = kPayload<kWidth>.parts[P];
-        constexpr uint32_t kWord = kHeadWords<kWidth> + kPart.first_word;
+        // Word 0, then the time's words, then the payload.
+        constexpr uint32_t kWord = 1 + time_words(kWidth) + kPart.first_word;
         if constexpr (kPart.loop >= 0) {
             store_loop<kWidth, kPart.loop>(store, kWord, record);
         } else if constexpr (kPart.argument < 0) {
@@ -1177,7 +1121,7 @@ private:
 // The medium form's payload word A, from its slices as their arguments store them.
 template <typename Payload, size_t A, typename Source, size_t... J>
 FORCE_INLINE uint32_t stored_word(const Source& source, std::index_sequence<J...>) {
-    constexpr const WordPieces& kWord = kWordPieces<Payload, streaming_profiler::detail::TimestampWidth::Bits32>[A];
+    constexpr const WordPieces& kWord = kWordPieces<Payload, detail::TimestampWidth::Bits32>[A];
     return (
         (uint32_t(uint64_t(slice_bits<Payload, kWord.pieces[J].slice>(source)) >> (kWord.pieces[J].high_half ? 32 : 0))
          << kWord.pieces[J].shift) |
@@ -1187,16 +1131,10 @@ FORCE_INLINE uint32_t stored_word(const Source& source, std::index_sequence<J...
 template <typename Payload, size_t A, typename Source>
 FORCE_INLINE uint32_t register_word(const Source& source) {
     if constexpr (!kSendsDeltas<Payload>) {
-        return stored_word<Payload, A>(
-            source, WordPieceIndices<Payload, streaming_profiler::detail::TimestampWidth::Bits32, A>{});
+        return stored_word<Payload, A>(source, WordPieceIndices<Payload, detail::TimestampWidth::Bits32, A>{});
     } else {
         constexpr size_t slice = kRegisterWordSlice<Payload>[A];
-        const auto bits = slice_bits<Payload, slice>(source);
-        if constexpr (A == kSliceFirstWord<Payload>[slice]) {
-            return uint32_t(bits);
-        } else {
-            return uint32_t(uint64_t(bits) >> 32);
-        }
+        return uint32_t(uint64_t(slice_bits<Payload, slice>(source)) >> 32 * (A - kSliceFirstWord<Payload>[slice]));
     }
 }
 
@@ -1212,27 +1150,22 @@ FORCE_INLINE void publish_record(uint32_t header, const Source& source, std::ind
     }
 }
 
-}  // namespace kernel_profiler::records
-
-namespace kernel_profiler {
-
 static_assert(
-    records::kLayout<records::PublishTimePayload<&streaming_profiler::Interval::end>, streaming_profiler::detail::TimestampWidth::Bits64>.packet_words == MIN_RESERVE_WORDS,
+    kLayout<PublishTimePayload<&Interval::end>, detail::TimestampWidth::Bits64>.packet_words == MIN_RESERVE_WORDS,
     "every room check reserves a zone record's longest packet");
 
 // Whether ppfmt's stall record, which write_pending_stall writes and the host describes stalls from, is the medium
 // record DevicePublish lays out for a zone, whose Interval's Timestamps lie back to back.
 constexpr bool stall_record_is_zone_medium_record() {
-    using Payload = records::PublishTimePayload<&streaming_profiler::Interval::end>;
-    constexpr auto layout = records::kLayout<Payload, streaming_profiler::detail::TimestampWidth::Bits32>;
+    using Payload = PublishTimePayload<&Interval::end>;
+    constexpr auto layout = kLayout<Payload, detail::TimestampWidth::Bits32>;
     return layout.packet_words == ppfmt::STALL_PACKET_WORDS && layout.slices.size() == 1 && layout.slices[0].to == 0 &&
            8u * layout.slices[0].bytes == ppfmt::STALL_START_DELTA_BITS &&
-           records::kUnsentLeaf<Payload> == ppfmt::STALL_PUBLISH_TIME_FIELD &&
-           offsetof(streaming_profiler::Interval, end) ==
-               streaming_profiler::detail::code_bytes(streaming_profiler::detail::kTimestampCode);
+           kUnsentLeaf<Payload> == ppfmt::STALL_PUBLISH_TIME_FIELD &&
+           offsetof(Interval, end) == detail::code_bytes(detail::kTimestampCode);
 }
 static_assert(stall_record_is_zone_medium_record(), "the host describes stalls by ppfmt's stall record");
 
-}  // namespace kernel_profiler
+}  // namespace device_observability
 
 #endif

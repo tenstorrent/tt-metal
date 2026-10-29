@@ -372,7 +372,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
 
     // Channel Allocations
     this->max_l1_loading_size = erisc_l1_unreserved_size + erisc_l1_unreserved_base;
-    if (rtoptions.get_streaming_profiler_enabled()) {
+    if (rtoptions.get_device_observability_enabled()) {
         this->max_l1_loading_size =
             tt::tt_metal::streaming_profiler::link_sync::router_l1_limit(fabric_context, this->max_l1_loading_size);
     }
@@ -1354,7 +1354,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- Telemetry ---
     get_telemetry_compile_time_args(risc_id, named_args);
 
-    if (this->fabric_context_.get_rtoptions().get_streaming_profiler_enabled()) {
+    if (this->fabric_context_.get_rtoptions().get_device_observability_enabled()) {
         tt::tt_metal::streaming_profiler::link_sync::add_router_compile_args(
             this->fabric_context_, risc_id, this->local_fabric_node_id, this->my_eth_core_logical, named_args);
     }

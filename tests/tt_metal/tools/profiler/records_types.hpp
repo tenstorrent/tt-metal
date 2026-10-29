@@ -6,16 +6,20 @@
 // per test. Compiled by the device compiler for the kernels and by the host compiler for the callbacks.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <type_traits>
 
-#include <hostdevcommon/streaming_profiler_reflection.hpp>
+#include <hostdevcommon/device_observability_reflection.hpp>
+#include <hostdevcommon/device_observability_types.hpp>
 #include <hostdevcommon/streaming_profiler_types.hpp>
 
+// The records kernel's types (kernels/records.cpp), which the callbacks test's kernel shares.
 namespace records_test {
-using tt::tt_metal::experimental::streaming_profiler::Interval;
-using tt::tt_metal::experimental::streaming_profiler::String;
-using tt::tt_metal::experimental::streaming_profiler::Timestamp;
+using tt::tt_metal::experimental::device_observability::Interval;
+using tt::tt_metal::experimental::device_observability::String;
+using tt::tt_metal::experimental::device_observability::Timestamp;
 using tt::tt_metal::experimental::streaming_profiler::TimestampedDataMetadata;
 
 // The ticks the data-movement kernels' long zone spins for, past a wrap of the clock's low word.
@@ -42,12 +46,6 @@ struct Format {
     String arguments;
 };
 
-enum class PlotFormat : uint8_t { Number, Memory };
-struct PlotStyle {
-    String name;
-    PlotFormat format;
-    uint32_t color;
-};
 struct Sample {
     int64_t value;
 };
@@ -59,19 +57,8 @@ struct From {
     String tag;
 };
 
-struct Burst {
-    uint32_t sizes[4];
-    char tag[4];
-};
-
 struct Bf16 {
     uint16_t bits;
-};
-
-// Fields that end short of a multiple of the struct's alignment.
-struct Ragged {
-    uint16_t a;
-    uint8_t b;
 };
 
 struct Stamped {
@@ -79,69 +66,31 @@ struct Stamped {
     uint32_t iteration;
 };
 
-// Bit-fields that share a halfword, after a char array.
+// Metadata with bit-fields that share a halfword, after a char array.
 struct Hole {
     uint64_t iteration;
     char name[4];
     uint16_t a : 3;
     uint16_t b : 5;
 };
-
-// A uint16_t bit-field in the byte right after a uint8_t.
-struct TightBits {
-    uint32_t iteration;
-    uint8_t a;
-    uint16_t b : 8;
+// Metadata with bit-fields in one word.
+struct LaneFlags {
+    uint32_t kind : 3;
+    uint32_t lane : 5;
+    uint32_t count : 24;
 };
 // A long is 32 bits on the device and 64 on the host, so the host refuses a kernel that sends one in a type it takes.
 struct LongField {
     long v;
 };
 
-// Structs whose field types alone don't predict their layout.
-struct LaneFlags {
-    uint32_t kind : 3;
-    uint32_t lane : 5;
-    uint32_t count : 24;
-};
-struct TaggedFlags {
-    char name[4];
-    uint32_t kind : 3;
-    int32_t delta : 5;
-};
-struct __attribute__((packed)) Packed {
-    uint8_t tag;
-    uint32_t value;
-};
-struct Wide {
-    alignas(16) uint32_t a;
-    uint32_t b;
-};
-struct Empty {};
-struct WithEmpty {
-    Empty empty;
-    uint32_t value;
-};
-// The largest payload, and the largest with a Timestamp, which the publish copies as word runs.
+// Large enough that the callbacks test's kernel fills the host's FIFO quickly.
 struct Big {
     uint32_t words[126];
-};
-struct BigStamped {
-    Timestamp at;
-    uint32_t words[123];
 };
 // The metadata of the call sites in templates.
 struct InTemplate {
     String name;
-};
-struct Base0 {
-    uint32_t x;
-};
-struct Base1 : Base0 {
-    uint16_t y;
-};
-struct Deep : Base1 {
-    uint16_t z;
 };
 // Laid out differently by kernels and the host.
 struct Skewed {
@@ -154,7 +103,40 @@ struct Skewed {
 
 }  // namespace records_test
 
-// test_streaming_profiler_semantics's types, and the values its kernels and callbacks both fill them with.
+// Types that each break a rule, which the kernel error cases (kernels/record_errors.cpp) and the host ones
+// (host_errors.cpp) both send.
+namespace errors_test {
+struct WithConstructor {
+    WithConstructor() = default;
+    WithConstructor(uint32_t v) : v(v) {}
+    uint32_t v = 0;
+};
+template <int N>
+struct Templated {
+    uint32_t v;
+};
+struct ConstMember {
+    const uint32_t v;
+};
+enum Unfixed { kUnfixed };
+struct UnfixedField {
+    Unfixed v;
+};
+struct CopiedByHand {
+    CopiedByHand() = default;
+    CopiedByHand(const CopiedByHand&) {}
+};
+struct HoldsCopiedByHand {
+    CopiedByHand c;
+};
+union Word {
+    uint32_t raw;
+    float f;
+};
+struct NoFields {};
+}  // namespace errors_test
+
+// The matching table's and the integrity sweep's types, and the values their kernels and callbacks both fill them with.
 // Memberwise == for the host to compare a struct with the one it expects; kernels are C++17, which has no default ==.
 #if defined(KERNEL_BUILD)
 #define SEMANTICS_EQ(T)
@@ -163,8 +145,8 @@ struct Skewed {
 #endif
 
 namespace semantics_test {
-using tt::tt_metal::experimental::streaming_profiler::String;
-using tt::tt_metal::experimental::streaming_profiler::Timestamp;
+using tt::tt_metal::experimental::device_observability::String;
+using tt::tt_metal::experimental::device_observability::Timestamp;
 
 // Every call's metadata names the call, and Other is a second metadata type with the same field.
 struct Call {
@@ -211,13 +193,6 @@ struct Descending {
     uint8_t d;
     SEMANTICS_EQ(Descending)
 };
-struct Ascending {
-    uint8_t a;
-    uint16_t b;
-    uint32_t c;
-    uint64_t d;
-    SEMANTICS_EQ(Ascending)
-};
 struct Bools {
     bool a, b, c;
     uint8_t d;
@@ -237,8 +212,9 @@ struct CrossingBits {
     uint32_t d : 20;
     SEMANTICS_EQ(CrossingBits)
 };
+// Unsigned and signed bit-fields in one word, and a narrower signed one after them.
 struct SignedBits {
-    int32_t a : 5;
+    uint32_t a : 5;
     int32_t b : 11;
     int16_t c : 7;
     SEMANTICS_EQ(SignedBits)
@@ -250,10 +226,12 @@ struct __attribute__((packed)) Packed {
     uint64_t d;
     SEMANTICS_EQ(Packed)
 };
+// A member alignas moves to 16 bytes, the most a type may take, and a bit-field in the byte after a uint8_t.
 struct AlignedMember {
     uint8_t a;
-    alignas(8) uint32_t b;
+    alignas(16) uint32_t b;
     uint8_t c;
+    uint16_t d : 8;
     SEMANTICS_EQ(AlignedMember)
 };
 struct Inner {
@@ -267,11 +245,16 @@ struct Nested {
     Inner more[2];
     SEMANTICS_EQ(Nested)
 };
+// Two levels of bases, the second's field in the tail padding of the first's.
 struct Base {
     uint32_t a;
     SEMANTICS_EQ(Base)
 };
-struct Derived : Base {
+struct Middle : Base {
+    uint16_t m;
+    SEMANTICS_EQ(Middle)
+};
+struct Derived : Middle {
     uint16_t b;
     uint8_t c;
     SEMANTICS_EQ(Derived)
@@ -281,29 +264,20 @@ struct Tagged {
     uint32_t v;
     SEMANTICS_EQ(Tagged)
 };
-struct Pairs {
-    PairA pairs[3];
-    SEMANTICS_EQ(Pairs)
-};
 struct WithEnum {
     Color color;
     uint16_t v;
     Color more[3];
     SEMANTICS_EQ(WithEnum)
 };
-struct Floats {
-    float a;
-    double b;
-    float c;
-    SEMANTICS_EQ(Floats)
-};
-// Long enough for word runs, and the longest a record can be.
+// Long enough for word runs.
 struct Run {
     uint32_t words[40];
     SEMANTICS_EQ(Run)
 };
+// The longest payload a record holds, 2004 bytes.
 struct Largest {
-    uint32_t words[126];
+    uint32_t words[501];
     SEMANTICS_EQ(Largest)
 };
 // Timestamps whose distances back from the record take each form's width, beside other fields.
@@ -322,6 +296,7 @@ struct StatRow {
     uint32_t a;
     uint32_t b;
     uint16_t c;
+    SEMANTICS_EQ(StatRow)
 };
 struct StatRows {
     Timestamp at;
@@ -336,9 +311,24 @@ struct LateField {
 };
 
 // The catalog's structs in seed order: a record's seed starts from its struct's index here.
-#define SEMANTICS_CATALOG                                                                                        \
-    AllScalars, Descending, Ascending, Bools, WordBits, CrossingBits, SignedBits, Packed, AlignedMember, Nested, \
-        Derived, Tagged, Pairs, WithEnum, Floats, Run, Largest, Stamps, StampedRun, LateField, StatRows
+#define SEMANTICS_CATALOG                                                                                              \
+    AllScalars, Descending, Bools, WordBits, CrossingBits, SignedBits, Packed, AlignedMember, Nested, Derived, Tagged, \
+        WithEnum, Run, Largest, Stamps, StampedRun, LateField, StatRows
+
+// T's index among Ts.
+template <typename T, typename... Ts>
+constexpr size_t index_of() {
+    size_t index = 0;
+    for (const bool same : {std::is_same_v<T, Ts>...}) {
+        if (same) {
+            break;
+        }
+        ++index;
+    }
+    return index;
+}
+template <typename S>
+inline constexpr uint32_t kCatalogIndex = index_of<S, SEMANTICS_CATALOG>();
 
 // splitmix64, so a field's value takes every bit pattern across records.
 constexpr uint64_t mix(uint64_t x) {
@@ -352,16 +342,16 @@ constexpr uint64_t seed_of(uint32_t call, uint32_t processor, uint32_t iteration
     return mix(uint64_t{call} << 40 | uint64_t{processor} << 32 | iteration);
 }
 // Fills a struct's fields in declaration order, each from the seed and its index. A float or double takes an exact,
-// finite value, so the host can compare it with ==.
+// finite value, so the host can compare it with ==. A Timestamp stays zero for the kernel to set from the clock.
 struct FillSource {
     uint64_t seed;
     uint32_t field = 0;
-    constexpr void open() {}
-    constexpr void close() {}
     template <typename V>
     constexpr V leaf() {
         const uint64_t bits = mix(seed + field++);
-        if constexpr (std::is_same_v<V, bool>) {
+        if constexpr (std::is_same_v<V, Timestamp>) {
+            return V{};
+        } else if constexpr (std::is_same_v<V, bool>) {
             return (bits & 1) != 0;
         } else if constexpr (std::is_same_v<V, float>) {
             return float(int32_t(bits >> 40) - (int32_t{1} << 23));
@@ -377,7 +367,7 @@ struct FillSource {
 template <typename T>
 constexpr T filled(uint64_t seed) {
     FillSource source{seed};
-    return tt::tt_metal::experimental::streaming_profiler::detail::build<T>(source);
+    return tt::tt_metal::experimental::device_observability::detail::build<T>(source);
 }
 
 // How far back from the record's first Timestamp its others lie in iteration i: within a short form's 16 bits, a medium

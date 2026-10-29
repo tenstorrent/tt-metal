@@ -74,13 +74,13 @@ int main(int argc, char** argv) {
     struct Totals {
         std::atomic<uint64_t> zones{0}, points{0}, stalls{0}, unordered_stalls{0}, mismatched_batches{0};
     } totals;
-    using experimental::streaming_profiler::Batch;
+    using experimental::device_observability::Batch;
+    using experimental::device_observability::Processor;
+    using experimental::device_observability::Stall;
     using experimental::streaming_profiler::Event;
-    using experimental::streaming_profiler::Processor;
-    using experimental::streaming_profiler::Stall;
     using experimental::streaming_profiler::TimestampedData;
     using experimental::streaming_profiler::Zone;
-    auto callback = experimental::streaming_profiler::RegisterCallback(
+    auto callback = experimental::device_observability::RegisterCallback(
         [&](const Batch<Zone, TimestampedData, Event, Stall>& batch) {
             // Counts only the Tensix grid's zones, which are the workload's. Whether an eth core's last firmware zone
             // ships depends on teardown timing.

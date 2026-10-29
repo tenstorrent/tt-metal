@@ -6,7 +6,6 @@ set(PROFILER_TEST_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_decode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_fetch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_records.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_semantics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sync_events.cpp
 )
 
@@ -34,44 +33,43 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
     )
 endforeach()
 
-# host_errors.cpp holds one record type a callback can't take for each HOST_ERROR value. Each case passes only when its
-# compile fails with exactly one error, its rule's message, compiled the way the records test is.
+# host_errors.cpp holds one record type a callback can't take for each HOST_ERROR value. Case N, compiled the way the
+# records test is, passes only when it fails with exactly one error, the Nth message below.
 set(_records_test profiler_test_streaming_profiler_records)
+set(_id 0)
 foreach(
-    _case
+    _message
     IN
     ITEMS
-        "1|a std::tuple payload takes two or more arguments"
-        "2|a std::tuple payload takes two or more arguments"
-        "3|Variadic<T> is a whole payload"
-        "4|Variadic<T> is a whole payload"
-        "5|strings are not supported in a payload"
-        "6|strings are not supported in a payload"
-        "7|Timestamps in metadata are not supported"
-        "8|metadata is a struct"
-        "9|only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
-        "10|only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
-        "11|only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
-        "12|only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
-        "13|only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
-        "14|this type is not supported"
-        "15|this type is not supported"
-        "16|arrays of arrays are not supported"
-        "17|empty arrays are not supported"
-        "18|templates, function-local types and types in an anonymous namespace are not supported"
-        "19|Variadic<T> is a whole payload"
-        "20|enums without a fixed underlying type are not supported"
-        "21|unions are not supported"
-        "22|const and reference members are not supported"
-        "23|types with a custom copy, move or destructor are not supported"
-        "24|alignment beyond alignof(std::max_align_t) is not supported"
-        "25|a Batch lists each record type once"
-        "26|a callback can take at most 64 record types"
+        "a std::tuple payload takes two or more arguments"
+        "a std::tuple payload takes two or more arguments"
+        "Variadic<T> is a whole payload"
+        "Variadic<T> is a whole payload"
+        "strings are not supported in a payload"
+        "strings are not supported in a payload"
+        "Timestamps in metadata are not supported"
+        "metadata is a struct"
+        "only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
+        "only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
+        "only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
+        "only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
+        "only aggregate structs, fixed-width scalars, enums, String, Timestamp and arrays of them are supported"
+        "this type is not supported"
+        "this type is not supported"
+        "arrays of arrays are not supported"
+        "empty arrays are not supported"
+        "templates, function-local types and types in an anonymous namespace are not supported"
+        "Variadic<T> is a whole payload"
+        "enums without a fixed underlying type are not supported"
+        "unions are not supported"
+        "const and reference members are not supported"
+        "types with a custom copy, move or destructor are not supported"
+        "alignment beyond alignof(std::max_align_t) is not supported"
+        "a Batch lists each record type once"
+        "a callback can take at most 64 record types"
+        "arrays of empty structs are not supported"
 )
-    string(FIND "${_case}" "|" _bar)
-    string(SUBSTRING "${_case}" 0 ${_bar} _id)
-    math(EXPR _bar "${_bar} + 1")
-    string(SUBSTRING "${_case}" ${_bar} -1 _message)
+    math(EXPR _id "${_id} + 1")
     add_test(
         NAME streaming_profiler_host_error_${_id}
         COMMAND

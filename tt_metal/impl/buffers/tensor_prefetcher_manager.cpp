@@ -1888,12 +1888,12 @@ namespace tt::tt_metal::experimental {
 
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
     const auto& metal = MetalContext::instance(mesh_device.impl().get_context_id());
-    // The streaming profiler owns the same DRISCs. A bank's senders are its free (non-endpoint)
-    // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a streaming-profiler
+    // Device observability owns the same DRISCs. A bank's senders are its free (non-endpoint)
+    // subchannel and its NOC1 worker endpoint (dram_sender_logical_cores), and a device observability
     // relay takes that same free subchannel with BOTH of its NIUs in stream mode
-    // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the profiler
+    // (set_drisc_niu_stream_mode). Two resident kernels cannot share one DRISC L1, so the relay
     // wins and the prefetcher reports unsupported rather than racing it for the core.
-    if (metal.rtoptions().get_streaming_profiler_enabled()) {
+    if (metal.rtoptions().get_device_observability_enabled()) {
         return false;
     }
     return metal.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
@@ -1903,9 +1903,9 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
     TT_FATAL(
         IsTensorPrefetcherSupported(mesh_device),
         "Tensor prefetcher is not supported on this mesh device. Either programmable DRAM cores are "
-        "unavailable (they auto-enable on Blackhole with firmware >= 19.12.0.0), or the streaming profiler "
-        "is enabled (TT_METAL_STREAMING_PROFILER=1) and holds the DRISCs the prefetcher needs. Unset "
-        "TT_METAL_STREAMING_PROFILER to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
+        "unavailable (they auto-enable on Blackhole with firmware >= 19.12.0.0), or device observability "
+        "is enabled (TT_METAL_DEVICE_OBSERVABILITY=1 or TT_METAL_STREAMING_PROFILER=1) and holds the DRISCs the "
+        "prefetcher needs. Unset both to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
         "skip the prefetcher path.");
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
     manager.start(config);

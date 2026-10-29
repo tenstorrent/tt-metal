@@ -61,6 +61,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 namespace streaming_profiler = tt::tt_metal::experimental::streaming_profiler;
+namespace device_observability = tt::tt_metal::experimental::device_observability;
 
 namespace {
 
@@ -157,8 +158,8 @@ double to_us(Clock::duration duration) { return std::chrono::duration<double, st
 int run() {
     std::map<ChipId, std::vector<Clock::time_point>> starts;
     uint64_t dropped_bytes = 0;
-    auto registration = streaming_profiler::RegisterCallback(
-        [&](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
+    auto registration = device_observability::RegisterCallback(
+        [&](const device_observability::Batch<streaming_profiler::Zone>& batch) {
             dropped_bytes += batch.dropped_bytes();
             for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
                 if (zone.metadata().name == "HOST_RX") {
@@ -168,9 +169,9 @@ int run() {
         },
         "host_sync");
     std::atomic<uint32_t> once_calls{0};
-    streaming_profiler::Callback once;
-    once = streaming_profiler::RegisterCallback(
-        [&](const streaming_profiler::Batch<streaming_profiler::Zone>&) {
+    device_observability::Callback once;
+    once = device_observability::RegisterCallback(
+        [&](const device_observability::Batch<streaming_profiler::Zone>&) {
             if (once_calls++ == 0) {
                 once.reset();
             }
@@ -785,12 +786,12 @@ void ff1_matmul(distributed::MeshDevice& mesh) {
 class Checks {
 public:
     Checks() :
-        callback_(streaming_profiler::RegisterCallback(
-            [this](const streaming_profiler::Batch<streaming_profiler::Zone>& batch) {
+        callback_(device_observability::RegisterCallback(
+            [this](const device_observability::Batch<streaming_profiler::Zone>& batch) {
                 dropped_bytes_ += batch.dropped_bytes();
                 for (const streaming_profiler::Zone& zone : batch.records<streaming_profiler::Zone>()) {
                     const std::string_view name = zone.metadata().name;
-                    const streaming_profiler::Core core = zone.core();
+                    const device_observability::Core core = zone.core();
                     if (name == "MC_RX") {
                         arrivals_[zone.runtime_id()].push_back(multicast::Arrival{
                             .host_ns = zone.payload().start.time().time_since_epoch().count(),
@@ -863,7 +864,7 @@ private:
     std::tuple<uint32_t, ChipId, CoreCoord> last_key_;
     pingpong::CoreZones* last_zones_ = nullptr;
     uint64_t dropped_bytes_ = 0;
-    streaming_profiler::Callback callback_;
+    device_observability::Callback callback_;
 };
 
 void sdpa(distributed::MeshDevice& mesh) {

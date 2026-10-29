@@ -4,7 +4,8 @@ set(HOSTDEVCOMMON_JIT_API_HEADERS
     api/hostdevcommon/dprint_common.h
     api/hostdevcommon/fabric_mux_v2_common.h
     api/hostdevcommon/kernel_structs.h
-    api/hostdevcommon/streaming_profiler_reflection.hpp
+    api/hostdevcommon/device_observability_reflection.hpp
+    api/hostdevcommon/device_observability_types.hpp
     api/hostdevcommon/streaming_profiler_types.hpp
     api/hostdevcommon/flags.hpp
     api/hostdevcommon/fabric_common.h

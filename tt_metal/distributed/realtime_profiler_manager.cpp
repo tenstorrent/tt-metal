@@ -136,10 +136,9 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
 
     // The two profilers have separate data paths (this one reads dispatch_s timestamps through a reserved tensix),
     // but running them together produced ~1800 "zone with end < start" real-time records per ResNet run; until that
-    // is understood the real-time profiler stands down in streaming mode.
-    if (metal.rtoptions().get_streaming_profiler_enabled()) {
-        log_info(
-            tt::LogMetal, "Real-time profiler disabled on device {}: TT_METAL_STREAMING_PROFILER is set.", device_id);
+    // is understood the real-time profiler stands down while device observability is on.
+    if (metal.rtoptions().get_device_observability_enabled()) {
+        log_info(tt::LogMetal, "Real-time profiler disabled on device {}: device observability is on.", device_id);
         return {};
     }
 

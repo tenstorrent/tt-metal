@@ -22,9 +22,9 @@ namespace tt::tt_metal::streaming_profiler {
 // It must be used from one thread only.
 class TracyConsumer {
 public:
-    using Batch = experimental::streaming_profiler::Batch<
+    using Batch = experimental::device_observability::Batch<
         experimental::streaming_profiler::Zone,
-        experimental::streaming_profiler::Stall,
+        experimental::device_observability::Stall,
         experimental::streaming_profiler::TimestampedData,
         experimental::streaming_profiler::Event>;
 
@@ -34,7 +34,7 @@ public:
     void operator()(const Batch& batch);
 
 private:
-    using Core = experimental::streaming_profiler::Core;
+    using Core = experimental::device_observability::Core;
     struct Lane {
         TracyTTCtx ctx = nullptr;
         uint32_t thread = 0;

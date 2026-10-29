@@ -19,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 
 #include "hostdev/record_site.h"
 
@@ -29,11 +29,12 @@ class ElfFile;
 
 namespace tt::llrt {
 
-using FieldBits = tt::tt_metal::experimental::streaming_profiler::detail::FieldBits;
+using FieldBits = tt::tt_metal::experimental::device_observability::detail::FieldBits;
 
 // A call site as its image describes it, every string in it lasting for the process.
 struct CallSite {
-    tt::tt_metal::experimental::streaming_profiler::SourceLocation location;
+    tt::tt_metal::experimental::device_observability::SourceLocation location;
+
     std::string_view metadata_type;
     std::vector<uint16_t> metadata_codes;
     std::vector<FieldBits> metadata_bits;  // each metadata field's bits in the metadata struct
@@ -53,11 +54,11 @@ struct CallSite {
     std::vector<uint32_t> argument_field_counts;  // each argument's payload field count, every element's for an array
     // The payload field that is the record's own time, which no form sends.
     uint32_t payload_publish_time_field =
-        tt::tt_metal::experimental::streaming_profiler::detail::kNoPayloadPublishTimeField;
+        tt::tt_metal::experimental::device_observability::detail::kNoPayloadPublishTimeField;
 
     // The packet layout of a form its records take, which their body length tells apart.
     struct PacketLayout {
-        tt::tt_metal::experimental::streaming_profiler::detail::TimestampWidth timestamp_width{};
+        tt::tt_metal::experimental::device_observability::detail::TimestampWidth timestamp_width{};
         uint32_t packet_words = 0;            // word 0 included
         std::vector<FieldBits> payload_bits;  // each payload field's bits in the packet's payload, width 0 if not sent
     };
@@ -67,7 +68,7 @@ struct CallSite {
 
 }  // namespace tt::llrt
 
-namespace tt::tt_metal::experimental::streaming_profiler::detail {
+namespace tt::tt_metal::experimental::device_observability::detail {
 
 // A Metal process's call sites, by the ids its images gave them: this process's own (tt::llrt::process_call_sites()),
 // which its images add as they load, or, in the external process, a Metal process's that it receives from, which that
@@ -103,11 +104,11 @@ private:
     std::unique_ptr<std::atomic<const void*>[]> metadata_;
 };
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
+}  // namespace tt::tt_metal::experimental::device_observability::detail
 
 namespace tt::llrt {
 
-using CallSites = tt::tt_metal::experimental::streaming_profiler::detail::CallSites;
+using CallSites = tt::tt_metal::experimental::device_observability::detail::CallSites;
 
 // This process's call sites: those of the images it loads.
 CallSites& process_call_sites();

@@ -13,47 +13,21 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
+
+#include "records_types.hpp"
 
 namespace host_errors {
 
-using namespace tt::tt_metal::experimental::streaming_profiler;
+using namespace tt::tt_metal::experimental::device_observability;
 
-struct Name {
-    String name;
-};
-struct Stamp {
-    Timestamp at;
-};
+using namespace errors_test;
+using records_test::Name;
+using records_test::Stamped;
+
 struct WithString {
     uint32_t v;
     String s;
-};
-struct WithConstructor {
-    WithConstructor(uint32_t v) : v(v) {}
-    uint32_t v;
-};
-template <int N>
-struct Templated {
-    uint32_t v;
-};
-enum Unfixed { kUnfixed };
-struct UnfixedField {
-    Unfixed v;
-};
-union Word {
-    uint32_t raw;
-    float f;
-};
-struct ConstMember {
-    const uint32_t v;
-};
-struct CopiedByHand {
-    CopiedByHand() = default;
-    CopiedByHand(const CopiedByHand&) {}
-};
-struct HoldsCopiedByHand {
-    CopiedByHand c;
 };
 struct alignas(64) OverAligned {
     uint32_t v;
@@ -75,7 +49,7 @@ void register_case() {
 #elif HOST_ERROR == 6
     using CaseBatch = Batch<Record<std::variant<uint32_t, String>, Name>>;
 #elif HOST_ERROR == 7
-    using CaseBatch = Batch<Record<uint32_t, Stamp>>;
+    using CaseBatch = Batch<Record<uint32_t, Stamped>>;
 #elif HOST_ERROR == 8
     using CaseBatch = Batch<Record<uint32_t, uint32_t>>;
 #elif HOST_ERROR == 9
@@ -114,6 +88,8 @@ void register_case() {
     using CaseBatch = Batch<Record<uint32_t, Name>, Record<uint32_t, Name>>;
 #elif HOST_ERROR == 26
     using CaseBatch = decltype(batch_of_arrays(std::make_index_sequence<65>()));
+#elif HOST_ERROR == 27
+    using CaseBatch = Batch<Record<std::span<const NoFields>, Name>>;
 #endif
     auto callback = RegisterCallback([](const CaseBatch&) {});
 }
