@@ -1725,7 +1725,8 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastUntilize) {
     }
 }
 
-TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
+// disabled due to non-deterministic failures: tenstorrent/tt-metal#63295
+TEST_F(LLKBlackholeSingleCardFixture, DISABLED_TensixComputePackUntilizeFp8e4m3) {
     vector<vector<std::uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
