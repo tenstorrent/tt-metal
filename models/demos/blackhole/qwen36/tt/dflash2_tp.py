@@ -255,6 +255,7 @@ class DFlash2DrafterTP:
         self._staging = {}  # R -> the R-row staging buffers shared by every layout of that R
         self._default_id = None
         self.last_hidden = None
+        self.keep_hidden = False  # (diagnostics) draft() also reads back the drafted rows' final hidden: last_hidden
         self.stats = {"draft_eager": 0, "draft_traced": 0, "extend_eager": 0, "extend_traced": 0}
 
     # ------------------------------------------------------------------ weights
@@ -314,8 +315,17 @@ class DFlash2DrafterTP:
             "qn": self._rep(s[f"{p}.self_attn.q_norm.weight"], f"l{i}.qn"),
             "kn": self._rep(s[f"{p}.self_attn.k_norm.weight"], f"l{i}.kn"),
         }
-        for k in ("q", "k", "v"):
-            lw[k] = self._w(s[f"{p}.self_attn.{k}_proj.weight"].T.contiguous(), f"l{i}.{k}", dim=-1)
+        # q | k | v (the draft's projections of one input) and k | v (the extend's) fused per chip: chip d holds
+        # its column slices of each side by side, so one matmul runs over 3x / 2x the cores of the narrow ones
+        wt = {k: s[f"{p}.self_attn.{k}_proj.weight"].T.contiguous() for k in ("q", "k", "v")}
+
+        def fused(names):
+            return torch.cat(
+                [torch.cat([wt[k].chunk(self.nd, dim=-1)[d] for k in names], -1) for d in range(self.nd)], -1
+            )
+
+        lw["qkv"] = self._w(fused("qkv"), f"l{i}.qkv", dim=-1)
+        lw["kv"] = self._w(fused("kv"), f"l{i}.kv", dim=-1)
         lw["o"] = self._w(s[f"{p}.self_attn.o_proj.weight"].T.contiguous(), f"l{i}.o", dim=0)
         lw["gate"] = self._w(s[f"{p}.mlp.gate_proj.weight"].T.contiguous(), f"l{i}.gate", dim=-1, dtype=self.mlp_dtype)
         lw["up"] = self._w(s[f"{p}.mlp.up_proj.weight"].T.contiguous(), f"l{i}.up", dim=-1, dtype=self.mlp_dtype)
@@ -427,8 +437,8 @@ class DFlash2DrafterTP:
         off = sel * 640
         d0 = ttnn.slice(kp, (0, 0, 0, off), (1, 1, L, off + 320))
         d1 = ttnn.slice(kp, (0, 0, 0, off + 320), (1, 1, L, off + 640))
-        c0 = ttnn.add(self._lin(d0, self.E), b0)
-        c1 = ttnn.add(self._lin(d1, self.E), b1)
+        c0 = self._lin(d0, self.E, bias=b0)  # (d @ E is exact: the bias add rounds once, as a separate add would)
+        c1 = self._lin(d1, self.E, bias=b1)
         shifted = ttnn.matmul(S, values, compute_kernel_config=CKC)  # [1,L,L] @ [1,1,L,H]
         out = ttnn.add(ttnn.mul(c0, values), ttnn.mul(c1, shifted))
         for t in (d0, d1, c0, c1, shifted):
@@ -456,10 +466,13 @@ class DFlash2DrafterTP:
         return out
 
     def _ctx_kv(self, hctx, lw, n):
-        k = ttnn.reshape(self._lin(hctx, lw["k"]), (1, n, self.NKVl, HD))
+        kv = self._lin(hctx, lw["kv"])  # [1, 1, n, 2 NKVl HD]
+        nk = self.NKVl * HD
+        k = ttnn.reshape(ttnn.slice(kv, (0, 0, 0, 0), (1, 1, n, nk)), (1, n, self.NKVl, HD))
         kn = self._rms(k, lw["kn"])
         ttnn.deallocate(k)
-        v = ttnn.reshape(self._lin(hctx, lw["v"]), (1, n, self.NKVl, HD))
+        v = ttnn.reshape(ttnn.slice(kv, (0, 0, 0, nk), (1, 1, n, 2 * nk)), (1, n, self.NKVl, HD))
+        ttnn.deallocate(kv)
         return kn, v
 
     def _kv_cfg(self, n):
@@ -976,13 +989,16 @@ class DFlash2DrafterTP:
     def _attn(self, hb, lw, li, cur_t, lay, idx):
         st = self._staging[lay.R]
         B = lay.R  # every draft row (U users x block) is a pseudo-user of the paged decode SDPA
-        q = ttnn.reshape(self._lin(hb, lw["q"]), (1, B, self.NHl, HD))
+        qkv = self._lin(hb, lw["qkv"])  # [1, 1, B, (NHl + 2 NKVl) HD]
+        nq, nk = self.NHl * HD, self.NKVl * HD
+        q = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, B, nq)), (1, B, self.NHl, HD))
         qn = self._rms(q, lw["qn"])
         ttnn.deallocate(q)
-        k = ttnn.reshape(self._lin(hb, lw["k"]), (1, B, self.NKVl, HD))
+        k = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, nq), (1, 1, B, nq + nk)), (1, B, self.NKVl, HD))
         kn = self._rms(k, lw["kn"])
         ttnn.deallocate(k)
-        v = ttnn.reshape(self._lin(hb, lw["v"]), (1, B, self.NKVl, HD))
+        v = ttnn.reshape(ttnn.slice(qkv, (0, 0, 0, nq + nk), (1, 1, B, nq + 2 * nk)), (1, B, self.NKVl, HD))
+        ttnn.deallocate(qkv)
         qr = apply_partial_rope_decode(qn, st["cos"], st["sin"], self.NHl, B, HD)
         ttnn.deallocate(qn)
         kr = apply_partial_rope_decode(kn, st["cos"], st["sin"], self.NKVl, B, HD)
@@ -1139,7 +1155,7 @@ class DFlash2DrafterTP:
             unary_all = ttnn.to_torch(ttnn.get_device_tensors(vals)[0]).float().reshape(R, self.topk)
             cand_all = ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).long().reshape(R, self.topk)
         hph_all = ttnn.to_torch(ttnn.get_device_tensors(hp)[0]).float().reshape(R, -1) if self.has_selector else None
-        hn_all = ttnn.to_torch(ttnn.get_device_tensors(hn)[0]).float().reshape(R, H)
+        hn_all = ttnn.to_torch(ttnn.get_device_tensors(hn)[0]).float().reshape(R, H) if self.keep_hidden else None
         outs, hiddens = [], []
         for u in range(U):
             r0 = u * Bk
@@ -1149,8 +1165,9 @@ class DFlash2DrafterTP:
                 outs.append(select_path(unary, cand, hph_all[r0 + 1 : r0 + Bk], anchors[u], self.pred_cb, self.succ_cb))
             else:
                 outs.append([int(c[int(w.argmax())]) for w, c in zip(unary, cand)])
-            hiddens.append(hn_all[r0 + 1 : r0 + Bk])
-        self.last_hidden = torch.stack(hiddens)  # [U, K, H]
+            if hn_all is not None:
+                hiddens.append(hn_all[r0 + 1 : r0 + Bk])
+        self.last_hidden = torch.stack(hiddens) if hiddens else None  # [U, K, H] (keep_hidden)
         if owned:
             for t in (vals, idx, hp, hn):
                 if t is not None:

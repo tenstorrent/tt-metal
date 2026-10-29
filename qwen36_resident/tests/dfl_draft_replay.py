@@ -32,6 +32,7 @@ mesh = open_mesh()
 try:
     ck = Q.Checkpoint(Q.checkpoint_dir())
     dr = build_drafter(mesh, ck)
+    dr.keep_hidden = True
     R, nt = dr.block, len(dr.taps)
     taps = tap_buffers(mesh, nt, R)
     dr.alloc(torch.arange(a.nb, dtype=torch.int32).reshape(1, a.nb), 64, taps)
