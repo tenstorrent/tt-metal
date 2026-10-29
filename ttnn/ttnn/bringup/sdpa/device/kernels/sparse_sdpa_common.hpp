@@ -54,6 +54,11 @@ constexpr uint32_t ROW_BFP4_ALIGN = 64;
 constexpr uint32_t row_bfp4_block_bytes(uint32_t k_dim, uint32_t k_chunk) {
     return k_chunk * (row_bfp4_exp_bytes(k_dim) + k_dim / 2) + ROW_BFP4_ALIGN;
 }
+// bfloat8_b row records (the window: kv_window uint8, or kv with ROW_BFP8): the same with one byte a value
+constexpr uint32_t row_bfp8_bytes(uint32_t k_dim) { return 2 * row_bfp4_exp_bytes(k_dim) + k_dim; }
+constexpr uint32_t row_bfp8_block_bytes(uint32_t k_dim, uint32_t k_chunk) {
+    return k_chunk * (row_bfp4_exp_bytes(k_dim) + k_dim) + ROW_BFP4_ALIGN;
+}
 
 // Reader -> writer dual-NoC gather request. SCALE_DST_L1 is used only by the scaled-cache path.
 namespace gather_request {
@@ -184,10 +189,14 @@ enum : uint32_t {
 
 // SPARSE_SDPA_ROW_BFP4 (fork option): extra compile-time args after the END of each block (reader / writer:
 // staging row CB, tile CB, staging row stride; compute: the tile CB), then the tensor accessors.
+// SPARSE_SDPA_WINDOW_BFP8 (with it): the window's bfloat8_b staging row CB and tile CB follow (COUNT_BFP8).
 namespace row_bfp4_ct_arg {
-enum : uint32_t { CB_K4_RM = 0, CB_K4, K_CHUNK, COUNT };
+enum : uint32_t { CB_K4_RM = 0, CB_K4, K_CHUNK, COUNT, CB_K8_RM = COUNT, CB_K8, COUNT_BFP8 };
 }
-#ifdef SPARSE_SDPA_ROW_BFP4
+#if defined(SPARSE_SDPA_ROW_BFP4) && defined(SPARSE_SDPA_WINDOW_BFP8)
+constexpr uint32_t ROW_BFP4_CT_COUNT = row_bfp4_ct_arg::COUNT_BFP8;
+constexpr uint32_t ROW_BFP4_COMMON_COUNT = 1;  // the window's address, after each kernel's fixed common args
+#elif defined(SPARSE_SDPA_ROW_BFP4)
 constexpr uint32_t ROW_BFP4_CT_COUNT = row_bfp4_ct_arg::COUNT;
 constexpr uint32_t ROW_BFP4_COMMON_COUNT = 1;  // the kv_window address, after each kernel's fixed common args
 #else

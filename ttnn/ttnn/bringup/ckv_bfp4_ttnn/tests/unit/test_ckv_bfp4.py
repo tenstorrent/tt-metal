@@ -99,3 +99,30 @@ def test_ckv_bfp4_prepared(device, n, rounded):
             assert outs[True] is None
     assert len(mod._PREPARED) == before + 1, "the program was not prepared exactly once"
     assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
+
+
+@pytest.mark.parametrize("n, row0, table_rows", [(32, 0, 32), (64, 96, 256), (2176, 0, 2176)])
+def test_ckv_bfp8_rows(device, n, row0, table_rows):
+    """dtype=bfloat8_b: 576 B records ([32 exponents | the same 32 | 512 sign-magnitude bytes]), host rule, RNE."""
+    x = _inputs(n, n + row0 + 11)
+    ckv = ttnn.from_torch(x.reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    rows = ttnn.from_torch(
+        torch.full((1, 1, table_rows, 576), FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device
+    )
+    rounded = ttnn.bringup.ckv_bfp4(ckv, rows, row0, rounded=True, dtype=ttnn.bfloat8_b)
+    got = ttnn.to_torch(rows).view(torch.uint8).reshape(table_rows, 576)
+    exp = ref.encode_rows(x, mbits=7)
+    bad = (got[row0 : row0 + n] != exp).any(-1).nonzero().flatten()
+    assert not len(bad), f"{len(bad)} rows differ, first {bad[:5].tolist()}"
+    assert (got[:row0] == FILL).all() and (got[row0 + n :] == FILL).all(), "rows outside [row0, row0 + n) written"
+    assert torch.equal(ttnn.to_torch(rounded).reshape(n, 512).float(), ref.decode_rows(exp))
+
+    other = ttnn.from_torch(
+        _inputs(n, n + 1).reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    def run(inp):
+        ttnn.bringup.ckv_bfp4(inp, rows, row0, dtype=ttnn.bfloat8_b)
+        return [rows]
+
+    determinism.assert_deterministic(lambda: run(ckv), lambda: run(other), first=[rows], label=f"bfp8 n{n}")

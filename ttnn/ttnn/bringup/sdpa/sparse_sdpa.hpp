@@ -19,6 +19,9 @@ enum class SparseKVFormat : uint8_t {
     // nibbles, value 2i in the low nibble of byte i: the bytes of a bfloat4_b tile row) in a uint8 ROW_MAJOR kv, plus a
     // bf16 kv_window for the first k_chunk of the index list (see sparse_sdpa below).
     ROW_BFP4,
+    // Bring-up fork option: bfloat8_b row records (K_DIM / 16 shared exponents twice, then K_DIM sign-magnitude bytes)
+    // in a uint8 ROW_MAJOR kv, every index a window row (TOPK == k_chunk; a window-only layer).
+    ROW_BFP8,
 };
 
 // Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip.
@@ -81,7 +84,11 @@ enum class SparseKVFormat : uint8_t {
 // none valid is allowed). A top-k chunk's rows are gathered by plain NoC reads into a row-major bfloat4_b block
 // (exponents | nibbles) that the unpacker turns into bfloat4_b K tiles (one UNPACR a face row, datacopy, pack): no
 // data-movement RISC byte work, no scale multiply; the window chunk is tilized in bf16 as with BF16. bf16 q only; K_DIM
-// 512; not with block_cyclic or high_precision.
+// 512; not with block_cyclic or high_precision. kv_window may instead be [1,1,Tw,576] uint8 bfloat8_b row records (the
+// 32 shared exponents twice, then 512 sign-magnitude bytes; ttnn.bringup.ckv_bfp4(dtype=bfloat8_b)): the window chunk
+// is then read like the top-k chunks into bfloat8_b K tiles.
+// kv_format ROW_BFP8 (bring-up fork option, a window-only layer): kv is [1,1,T,576] uint8 bfloat8_b row records, the
+// index list is the window only (TOPK == k_chunk); read as the bfloat8_b window above.
 //
 // attention_sink: optional [1,1,1,H] unpadded interleaved ROW_MAJOR BF16 tensor in DRAM.
 // Like classic SDPA, the sink is multiplied by scale and contributes only to the softmax denominator.
