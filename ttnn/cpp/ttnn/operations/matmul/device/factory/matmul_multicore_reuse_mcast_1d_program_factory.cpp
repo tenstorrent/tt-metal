@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -2204,6 +2205,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
 enum class CORE_TYPE : uint32_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
+// ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_gather_in0.cpp is the ProgramDescriptor
+// form of this builder (llama_reduce_scatter_matmul). A fix here (CB indices, formats, work split) belongs there too.
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& a,
@@ -2760,6 +2763,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     uint32_t first_col_max_x = device.arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
     uint32_t num_receiver_cores_per_dram = 2;  // default to 2 for wormhole b0 and blackhole
     if (in1_is_dram_sharded) {
+        // Blackhole derives each core's DRAM read offset modulo this count.
+        TT_FATAL(
+            device.arch() == tt::ARCH::WORMHOLE_B0 || ring_size >= in1_tensor.shard_spec()->grid.num_cores(),
+            "matmul gather_in0: the input A shard grid ({} cores) must have at least as many cores as B's DRAM "
+            "shard grid ({} cores)",
+            ring_size,
+            in1_tensor.shard_spec()->grid.num_cores());
         num_receiver_cores_per_dram = ring_size / in1_tensor.shard_spec()->grid.num_cores();
         if (device.arch() == tt::ARCH::WORMHOLE_B0) {
             worker_y_to_dram_bank_first_col[0] = 1;
@@ -3228,16 +3238,21 @@ void override_program_parameters(
 // set jointly by the pipes (the bank and bank-local shard each receiver is sent) and by the weight's
 // shard distribution (where shard i sits); pairing banks with the workers in any other order still
 // covers exactly the workers, and returns the output blocks permuted.
+//
+// A legacy K-row-major weight holds one shard per bank, fewer shards than workers: the prefetcher
+// slices each bank's shard across that bank's receivers in order, so bank-local slice r of bank b
+// holds the columns of output block b * R + r for R receivers per bank. That is the CONTIGUOUS_1D walk
+// with slices standing in for shards.
 static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const MeshTensor& in1_tensor,
     const std::vector<CoreCoord>& workers) {
     using tt::tt_metal::ShardDistributionStrategy;
-    const auto& bds = in1_tensor.mesh_buffer().get_reference_buffer()->buffer_distribution_spec();
+    const Buffer* weight_buffer = in1_tensor.mesh_buffer().get_reference_buffer();
+    const auto& bds = weight_buffer->buffer_distribution_spec();
     TT_FATAL(
         bds.has_value(),
-        "matmul over prefetcher_pipes needs a receiver-contiguous weight, which carries a buffer "
-        "distribution spec");
+        "matmul over prefetcher_pipes needs a DRAM-sharded weight, which carries a buffer distribution spec");
     const ShardDistributionStrategy strategy = bds->shard_distribution_strategy();
     TT_FATAL(
         strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
@@ -3252,9 +3267,13 @@ static void validate_prefetcher_pipes_deliver_each_worker_its_shard(
     }
 
     const std::vector<CoreCoord>& banks = bds->cores();
-    const bool contiguous = strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
-    // CONTIGUOUS_1D weights hold the same number of shards in every bank.
-    const size_t shards_per_bank = bds->num_shards() / banks.size();
+    const bool krow_major = weight_buffer->has_shard_spec() && bds->num_shards() < workers.size();
+    const bool contiguous = krow_major || strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    // A K-row-major weight's grid can name more banks than it has shards; only the first
+    // num_cores_with_data() hold one. Each bank holding data holds the same count: allocation requires
+    // CONTIGUOUS_1D shards to divide evenly over the grid, and tensor_prefetcher_block_count_for_matmul_1d
+    // gives every K-row-major bank the same number of receivers.
+    const size_t shards_per_bank = (krow_major ? workers.size() : bds->num_shards()) / bds->num_cores_with_data();
     for (size_t i = 0; i < workers.size(); ++i) {
         const size_t bank_index = contiguous ? i / shards_per_bank : i % banks.size();
         const auto bank_local_shard = static_cast<uint32_t>(contiguous ? i % shards_per_bank : i / banks.size());
@@ -3394,7 +3413,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
-    const ttnn::PrefetcherPipeList& prefetcher_pipes = {}) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
+    ttsl::optional_reference<const McastIn0Sparsity> sparsity = std::nullopt) {
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     // currently only support transpose of the full tile
@@ -3416,6 +3436,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             "matmul mcast_in0 over prefetcher_pipes does not support transpose_b: the pipes deliver the weight's "
             "K-blocks in its DRAM layout");
     }
+
+    // Mask-mode sparsity (the sparse matmul): the in0 sender and the in1 sender/writer read the mask
+    // page and skip the batches it zeroes, and the in0 receivers and compute loop num_batch_compute
+    // times. Their batch loops scan in0_B outer batches of batchB groups each.
+    const bool use_sparsity = sparsity.has_value();
+    if (use_sparsity) {
+        TT_FATAL(
+            !in0_is_sharded && !output_is_sharded,
+            "sparse matmul over prefetcher_pipes supports interleaved in0 and output only, got in0 {} and output {}",
+            in0_is_sharded ? "sharded" : "interleaved",
+            output_is_sharded ? "sharded" : "interleaved");
+    }
+    const uint32_t num_batches_scanned = use_sparsity ? in0_B * sparsity->batchB : in0_B;
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -3465,7 +3498,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_dfb_tiles = in0_block_tiles;
-    if (in0_B * num_blocks > 1) {
+    if (num_batches_scanned * num_blocks > 1) {
         in0_dfb_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_dfb_size = in0_dfb_tiles * in0_aligned_tile_size;
@@ -3483,7 +3516,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_dfb_tiles = in1_block_tiles;
-    if (in1_B * num_blocks > 1) {
+    if ((use_sparsity ? num_batches_scanned : in1_B) * num_blocks > 1) {
         in1_dfb_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
     if (in1_is_sharded) {
@@ -3670,11 +3703,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
+    const DFBSpecName SPARSITY_IN0_DFB{"sparsity_in0"};
+    const DFBSpecName SPARSITY_IN1_DFB{"sparsity_in1"};
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
     const TensorParamName OUTPUT{"output"};
     const TensorParamName BIAS{"bias"};
+    const TensorParamName SPARSITY{"sparsity"};
 
     const SemaphoreSpecName SENDER_SEM{"in0_mcast_sender"};
     const SemaphoreSpecName RECEIVER_SEM{"in0_mcast_receiver"};
@@ -3707,6 +3743,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     if (use_prefetcher_pipes) {
         mm_kernel_in1_sender_writer_defines["ENABLE_PREFETCHER_PIPE"] = "1";
+    }
+    if (use_sparsity) {
+        mm_kernel_in0_sender_writer_defines["SPARSITY"] = "1";
+        mm_kernel_in1_sender_writer_defines["SPARSITY"] = "1";
     }
     if (bias_tensor.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
@@ -3753,6 +3793,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     }
 
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
 
@@ -3970,6 +4017,23 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         });
     }
 
+    // The mask page, one copy per kernel that scans it. The in0 sender and the in1 sender/writer
+    // share a node, and a node hosts one producer and one consumer of a buffer, so each gets its own,
+    // which it fills and reads itself (a self-loop).
+    const uint32_t mask_aligned_page_size =
+        use_sparsity ? static_cast<uint32_t>(sparsity->mask.mesh_buffer().get_reference_buffer()->aligned_page_size())
+                     : 0u;
+    if (use_sparsity) {
+        for (const auto& name : {SPARSITY_IN0_DFB, SPARSITY_IN1_DFB}) {
+            dataflow_buffers.push_back(DataflowBufferSpec{
+                .unique_id = name,
+                .entry_size = mask_aligned_page_size,
+                .num_entries = 1,
+                .data_format_metadata = tt::DataFormat::Float16_b,
+            });
+        }
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Semaphores
     ////////////////////////////////////////////////////////////////////////////
@@ -3987,10 +4051,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     // ON adds an extra final-credit ACK on top of the explicit pops -> in0 tile-counter underflow (posted=64
     // acked=65). So opt every bound DFB out of implicit sync on Quasar, matching the sibling matmul factories
     // (matmul_multicore_program_factory / matmul_multicore_reuse_optimized_program_factory).
+    // A batch's validity reaches compute through the BRISC mailbox, which only BRISC writes; on the
+    // sparse path the in0 kernels broadcast it, so they take BRISC and the in1 sender/writer NCRISC.
+    const auto in0_processor =
+        use_sparsity ? tt_metal::DataMovementProcessor::RISCV_0 : tt_metal::DataMovementProcessor::RISCV_1;
+    const auto in1_processor =
+        use_sparsity ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0;
     const auto in0_sender_hw_config = DataMovementHardwareConfig{
         .config_1xx =
             DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .processor = in0_processor,
                 .noc = in0_noc,
             },
         .config_2xx =
@@ -4001,7 +4071,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     const auto in1_sender_hw_config = DataMovementHardwareConfig{
         .config_1xx =
             DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .processor = in1_processor,
                 .noc = in1_noc,
             },
         .config_2xx =
@@ -4011,6 +4081,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     };
 
     Group<KernelSpec> kernels;
+
+    // The kernel that scans the mask fills its own copy of the mask page and reads it back.
+    auto add_sparsity_bindings = [&](KernelSpec& k, const DFBSpecName& mask_dfb) {
+        if (!use_sparsity) {
+            return;
+        }
+        k.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = mask_dfb, .accessor_name = "sparsity", .endpoint_type = DFBEndpointType::PRODUCER});
+        k.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = mask_dfb, .accessor_name = "sparsity", .endpoint_type = DFBEndpointType::CONSUMER});
+        k.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = SPARSITY, .accessor_name = "sparsity"});
+    };
 
     // ---- in0 sender ------------------------------------------------------
     // Two different sources, selected by whether in0 is sharded; both fill the in0 buffer and
@@ -4121,11 +4203,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 {"in0_B", in0_B},
                 {"in1_B", in1_B},
                 {"in0_reuse_in_dfb", 0u},
-                {"batchB", 0u},
-                {"bcast_A", 1u},
-                {"get_batch_from_reader", 0u},
+                {"batchB", use_sparsity ? sparsity->batchB : 0u},
+                {"bcast_A", use_sparsity ? static_cast<uint32_t>(sparsity->bcast_A) : 1u},
+                {"get_batch_from_reader", use_sparsity ? static_cast<uint32_t>(sparsity->get_batch_from_reader) : 0u},
                 {"num_active", 0u},
             };
+            if (use_sparsity) {
+                cta.insert({"sparsity_pagesize", mask_aligned_page_size});
+                cta.insert({"num_batch_compute", sparsity->num_batch_compute});
+            }
         }
         return cta;
     };
@@ -4162,6 +4248,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 k.tensor_bindings = {
                     TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
                 };
+                add_sparsity_bindings(k, SPARSITY_IN0_DFB);
                 k.runtime_arg_schema = {
                     .runtime_arg_names =
                         {"in0_tensor_start_tile_id",
@@ -4207,8 +4294,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                     {"num_blocks_inner_dim", num_blocks},
                     {"num_blocks_w_dim", out_num_blocks_x},
                     {"num_blocks_h_dim", out_num_blocks_y},
-                    {"batch", in0_B},
-                    {"get_batch_from_reader", 0u},
+                    {"batch", use_sparsity ? sparsity->num_batch_compute : in0_B},
+                    {"get_batch_from_reader",
+                     use_sparsity ? static_cast<uint32_t>(sparsity->get_batch_from_reader) : 0u},
                 },
             .runtime_arg_schema =
                 {
@@ -4271,8 +4359,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                     {"in1_mcast_num_cores", 0u},
                     {"KtNt", K * N},
                     {"batch", in0_B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"bcast_B", static_cast<uint32_t>(bcast_batch)},
-                    {"batchB", 0u},
+                    {"batchB", use_sparsity ? sparsity->batchB : 0u},
                     {"out_tensor_stride_w", 1u},
                     {"out_tensor_stride_h", N},
                     {"out_tensor_next_subblock_stride_w", out_subblock_w},
@@ -4283,11 +4372,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                     {"out_subblock_h", out_subblock_h},
                     {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
                     {"MtNt", M * N},
-                    {"compact_output", 0u},
+                    {"compact_output", use_sparsity ? static_cast<uint32_t>(sparsity->compact_output) : 0u},
                     {"num_active", 0u},
                 },
             .hw_config = in1_sender_hw_config,
         };
+        if (use_sparsity) {
+            in1_sender.compile_time_args.insert({"sparsity_pagesize", mask_aligned_page_size});
+        }
+        add_sparsity_bindings(in1_sender, SPARSITY_IN1_DFB);
 
         Group<std::string> in1_sender_rta_names = {
             "in1_tensor_start_tile_id",
@@ -4456,10 +4549,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             {"out_subblock_h", out_subblock_h},
             {"out_subblock_w", out_subblock_w},
             {"out_subblock_num_tiles", out_subblock_num_tiles},
-            {"batch", in0_B},
+            {"batch", use_sparsity ? sparsity->num_batch_compute : in0_B},
             {"out_block_num_tiles", out_block_tiles},
             {"untilize_out", static_cast<uint32_t>(untilize_out)},
-            {"get_batch_from_reader", 0u},
+            {"get_batch_from_reader", use_sparsity ? static_cast<uint32_t>(sparsity->get_batch_from_reader) : 0u},
             {"bias_ntiles", in1_per_core_w},
         };
         if (bias_tensor.has_value()) {
@@ -4536,6 +4629,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     };
     if (bias_tensor.has_value()) {
         tensor_parameters.push_back(TensorParameter{.unique_id = BIAS, .spec = bias_tensor->tensor_spec()});
+    }
+    if (use_sparsity) {
+        tensor_parameters.push_back(TensorParameter{.unique_id = SPARSITY, .spec = sparsity->mask.tensor_spec()});
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -4689,6 +4785,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     };
     if (bias_tensor.has_value()) {
         run_args.tensor_args.emplace(BIAS, *bias_tensor);
+    }
+    if (use_sparsity) {
+        run_args.tensor_args.emplace(SPARSITY, sparsity->mask);
     }
     add_in1_prefetcher_pipe_run_args(run_args, in1_pipe_relay, prefetcher_pipes);
 
@@ -5501,6 +5600,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
         }
     }
     if (output_is_sharded) {
+        // The in1 writer pops batch * out_shard_tiles tiles in one wait_front/pop_front call, which takes a uint16_t.
+        TT_FATAL(
+            in0_B * out_shard_tiles <= std::numeric_limits<uint16_t>::max(),
+            "matmul_multicore_reuse_mcast_1d: a sharded output of {} tiles per core exceeds the maximum of {} "
+            "supported by this program factory",
+            in0_B * out_shard_tiles,
+            std::numeric_limits<uint16_t>::max());
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
     }
@@ -5824,6 +5930,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
                     {"in1_mcast_num_cores", in1_mcast_receiver_num_cores - 1},
                     {"KtNt", K * N},
                     {"batch", reuse_in0_in_dfb ? in1_B : in0_B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                     {"batchB", 0u},
                     {"out_tensor_stride_w", 1u},
@@ -5917,6 +6024,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
                     {"num_blocks_w_dim", out_num_blocks_x},
                     {"num_blocks_h_dim", out_num_blocks_y},
                     {"batch", reuse_in0_in_dfb ? in1_B : in0_B},
+                    {"out_block_num_tiles", out_block_tiles},
                     {"out_tensor_stride_w", 1u},
                     {"out_tensor_stride_h", N},
                     {"out_tensor_next_subblock_stride_w", out_subblock_w},
@@ -6305,6 +6413,88 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
+}
+
+ttnn::device_operation::ProgramArtifacts create_sparse_mcast_in0_artifacts(
+    const Tensor& a,
+    const Tensor& b,
+    const Tensor& output,
+    operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig program_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    uint32_t batchA,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const McastIn0Sparsity& sparsity) {
+    using namespace operations::matmul::utilities;
+    TT_FATAL(
+        program_config.mcast_in0 && !program_config.gather_in0,
+        "sparse matmul over prefetcher_pipes needs an mcast_in0 program config");
+    TT_FATAL(
+        program_config.allowed_worker_cores.has_value(),
+        "sparse matmul over prefetcher_pipes needs a normalized program config (allowed_worker_cores populated)");
+
+    const auto& a_shape_padded = get_matmul_tensor_padded_shape(a, /*transpose=*/false);
+    const auto& b_shape_padded = get_matmul_tensor_padded_shape(b, /*transpose=*/false);
+    const auto in0_tile = get_matmul_tile(a, /*transpose=*/false);
+    const auto in1_tile = get_matmul_tile(b, /*transpose=*/false);
+    // The output tensor's own tile may have been overridden by the caller, so derive it as the
+    // dense body does.
+    const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
+
+    const MeshTensor& in0_tensor = a.mesh_tensor();
+    const MeshTensor& in1_tensor = b.mesh_tensor();
+    const MeshTensor& out_tensor = output.mesh_tensor();
+    const tt_metal::distributed::MeshDevice& device = in0_tensor.device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
+
+    const auto worker_bbox = program_config.allowed_worker_cores->bounding_box();
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> no_fused_op;
+    return create_program_mcast_in0_artifacts(
+        a,
+        device,
+        fp32_dest_acc_en,
+        packer_l1_acc,
+        worker_bbox.grid_size(),
+        ttnn::get_throttle_level(compute_kernel_config),
+        compute_kernel_config,
+        /*in0_B=*/batchA,
+        /*in1_B=*/batchA,
+        get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false),
+        get_N_dim(b_shape_padded, in1_tile),
+        get_K_dim(a_shape_padded, in0_tile),
+        /*bcast_batch=*/true,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        program_config.in0_block_w,
+        program_config.out_subblock_h,
+        program_config.out_subblock_w,
+        program_config.out_block_h,
+        program_config.out_block_w,
+        program_config.per_core_M,
+        program_config.per_core_N,
+        program_config.fused_activation,
+        in0_tensor,
+        in1_tensor,
+        /*bias_tensor=*/std::nullopt,
+        out_tensor,
+        in0_tile,
+        in1_tile,
+        /*bias_tile=*/output_tile,
+        output_tile,
+        tt_metal::datatype_to_dataformat_converter(in0_tensor.dtype()),
+        tt_metal::datatype_to_dataformat_converter(in1_tensor.dtype()),
+        /*bias_data_format=*/tt::DataFormat::Bfp8_b,
+        tt_metal::datatype_to_dataformat_converter(out_tensor.dtype()),
+        in0_tensor.memory_config().is_sharded(),
+        in1_tensor.memory_config().is_sharded(),
+        /*bias_is_sharded=*/false,
+        out_tensor.memory_config().is_sharded(),
+        /*untilize_out=*/false,
+        no_fused_op,
+        /*row_broadcast_bias=*/true,
+        worker_bbox.start_coord,
+        prefetcher_pipes,
+        sparsity);
 }
 
 }  // namespace reuse_mcast_1d_optimized_helpers

@@ -23,6 +23,8 @@
 #include <sys/resource.h>
 #include <numa.h>
 #include <tt-metalium/device.hpp>
+#include "impl/device/device_impl.hpp"
+#include <tt_stl/small_vector.hpp>
 #include <tt_stl/tt_pause.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
@@ -343,9 +345,16 @@ public:
     // enters the kernel once per fan-out instead of once per worker.
     static constexpr size_t WAKE_FANOUT = 4;
 
-    ParallelJob(const std::function<void(size_t)>& fn, size_t num_calls) :
-        fn_(fn), claims_(num_calls), participant_of_call_(num_calls) {
-        remaining_.add(static_cast<int64_t>(num_calls));
+    using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
+    using ParticipantOfCall = ttsl::SmallVector<size_t, 32>;
+
+    ParallelJob(
+        const std::function<void(size_t)>& fn, Participants participants, ParticipantOfCall participant_of_call) :
+        fn_(fn),
+        claims_(participants.size()),
+        participant_of_call_(std::move(participant_of_call)),
+        participants_(std::move(participants)) {
+        remaining_.add(static_cast<int64_t>(participant_of_call_.size()));
     }
 
     ParallelJob(const ParallelJob&) = delete;
@@ -354,15 +363,7 @@ public:
     ParallelJob& operator=(ParallelJob&&) = delete;
     ~ParallelJob() = default;
 
-    void assign(size_t call, NumaAwareExecutor* executor) {
-        auto participant = std::find(participants_.begin(), participants_.end(), executor);
-        participant_of_call_[call] = participant - participants_.begin();
-        if (participant == participants_.end()) {
-            participants_.push_back(executor);
-        }
-    }
-
-    const std::vector<NumaAwareExecutor*>& participants() const { return participants_; }
+    const Participants& participants() const { return participants_; }
 
     void start() noexcept { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
 
@@ -437,11 +438,10 @@ private:
 
     // Valid until the caller returns, which happens only after every claimed call has finished.
     const std::function<void(size_t)>& fn_;
-    // Indexed by participant; sized for the worst case of one participant per call.
-    std::vector<Claim> claims_;
-    std::vector<size_t> participant_of_call_;
+    std::vector<Claim> claims_;  // Indexed by participant.
+    ParticipantOfCall participant_of_call_;
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
-    std::vector<NumaAwareExecutor*> participants_;
+    Participants participants_;
     Completion remaining_;
     std::atomic<size_t> refs_ = 0;
     std::mutex exception_mutex_;
@@ -504,6 +504,22 @@ using threading_primitives::Completion;
 using threading_primitives::NumaAwareExecutor;
 using threading_primitives::ParallelJob;
 
+void run_on_caller(size_t num_calls, const std::function<void(size_t)>& fn) {
+    std::exception_ptr exception;
+    for (size_t call = 0; call < num_calls; call++) {
+        try {
+            fn(call);
+        } catch (...) {
+            if (!exception) {
+                exception = std::current_exception();
+            }
+        }
+    }
+    if (exception) {
+        std::rethrow_exception(exception);
+    }
+}
+
 // Custom Thread-Pool using the threading::Executor class.
 // Allows enqueuing tasks tied to specific devices.
 class DeviceBoundThreadPool : public ThreadPool {
@@ -511,7 +527,7 @@ public:
     // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     // All physical devices must belong to the same context ID.
-    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) :
+    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) :
         num_workers_(physical_devices.size()) {
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
@@ -560,10 +576,21 @@ public:
         if (device_ids.empty()) {
             return;
         }
-        auto owned = std::make_unique<ParallelJob>(fn, device_ids.size());
+        ParallelJob::Participants executors;
+        ParallelJob::ParticipantOfCall participant_of_call(device_ids.size());
         for (size_t call = 0; call < device_ids.size(); call++) {
-            owned->assign(call, workers_[phys_device_to_thread_id_.at(device_ids[call])].get());
+            auto* executor = workers_[phys_device_to_thread_id_.at(device_ids[call])].get();
+            auto* participant = std::find(executors.begin(), executors.end(), executor);
+            participant_of_call[call] = participant - executors.begin();
+            if (participant == executors.end()) {
+                executors.push_back(executor);
+            }
         }
+        if (executors.size() == 1) {
+            run_on_caller(device_ids.size(), fn);
+            return;
+        }
+        auto owned = std::make_unique<ParallelJob>(fn, std::move(executors), std::move(participant_of_call));
         // Nothing below throws: once offered, workers hold the job and the job refers to fn.
         auto* job = owned.release();
         job->start();
@@ -626,19 +653,7 @@ public:
     void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
     void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) override {
-        std::exception_ptr exception;
-        for (size_t call = 0; call < device_ids.size(); call++) {
-            try {
-                fn(call);
-            } catch (...) {
-                if (!exception) {
-                    exception = std::current_exception();
-                }
-            }
-        }
-        if (exception) {
-            std::rethrow_exception(exception);
-        }
+        run_on_caller(device_ids.size(), fn);
     }
 };
 
@@ -649,7 +664,7 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
+    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
 }
 

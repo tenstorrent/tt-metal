@@ -8,7 +8,7 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 
 void kernel_main() {
     constexpr uint32_t num_tiles = get_arg(args::num_tiles);

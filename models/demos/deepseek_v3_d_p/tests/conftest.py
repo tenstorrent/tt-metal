@@ -193,14 +193,14 @@ def pytest_collection_modifyitems(config, items):
     CI_ALLOWED_FABRICS = {
         CT.P150: {(1, 1): [FC.DISABLED, FC.FABRIC_2D]},  # single chip
         CT.P300_X2: {  # 4-chip QuietBox
-            (4, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
+            (4, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's QuietBox SP4xTP1 and TP4 rings
             (2, 2): [FC.FABRIC_2D],
             (1, 4): [FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_X],  # KDA's QKV exchange rings SP4 on a 1D fabric
         },
         CT.P150_X8: {
-            (8, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's LoudBox SP8xTP1 rings SP8
             (4, 2): [FC.FABRIC_2D],
-            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP2xTP4 runs on a 1D fabric
+            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP4xTP2 and TP4 line run on a 1D fabric
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.T3K: {

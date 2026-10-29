@@ -50,6 +50,7 @@ jobs:
       sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
+      skip-args-quasar: ${{ steps.skip-list.outputs.skip-args-quasar }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_merge_gate_tests.yaml
       TTSIM_SKIP_LIST_YAML: ./tests/pipeline_reorg/ttsim-skip-list.yaml
@@ -88,8 +89,12 @@ jobs:
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, yaml
           skips = yaml.safe_load(open(os.environ["TTSIM_SKIP_LIST_YAML"])) or {}
-          for arch in ("wormhole_b0", "blackhole"):
-              args = " ".join("--deselect=" + p for p in (skips.get(arch) or []))
+          for arch in ("wormhole_b0", "blackhole", "quasar"):
+              ids = skips.get(arch) or []
+              bad = [p for p in ids if not isinstance(p, str)]
+              if bad:
+                  raise SystemExit(f"{arch} skip-list entries are not strings (quote ids that end in ':'): {bad}")
+              args = " ".join("--deselect=" + p for p in ids)
               print(f"skip-args-{arch}={args}")
           PY
 
@@ -227,7 +232,7 @@ jobs:
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
-          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
         run: |
           # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
           # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
@@ -239,7 +244,7 @@ jobs:
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          export PYTEST_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          export PYTEST_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
           eval "$cmd --lf --lfnf=all --tb=long -v" || true
           exit 1
 

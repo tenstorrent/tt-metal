@@ -16,7 +16,7 @@
 
 namespace tt::tt_metal {
 
-class IDevice;
+class Device;
 
 class ThreadPool {
 public:
@@ -41,7 +41,7 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 // NUMA aware manner (will be "closest" to the device it serves). Used for production data-paths.
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::IDevice*>& physical_devices);
+    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
 // Call before the pages are faulted.

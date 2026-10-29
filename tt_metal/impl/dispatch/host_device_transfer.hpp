@@ -20,7 +20,8 @@ class IDevice;
 // Host <-> device transfers for a single device that bypass the command queue.
 namespace tt::tt_metal::slow_dispatch {
 
-// Copies `host_buffer` into `buffer`.
+// Copies `host_buffer` into `buffer`. For L1 buffers the data has landed in L1 when this returns, so it is ordered
+// before any later write or launch.
 void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
 template <typename DType>
 void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {

@@ -158,7 +158,7 @@ void FabricConnectionManager::process(
 
             const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
             const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
-            const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+            const size_t buffer_size_bytes_full_size_channel = device_info_provider->get_channel_buffer_size_bytes();
             const size_t mux_base_l1_address = device_info_provider->get_l1_unreserved_base();
 
             // Create the mux config
@@ -878,7 +878,7 @@ void TestDevice::create_sync_kernel() {
     uint32_t num_muxes_to_terminate = sync_connection_manager.get_num_muxes_to_terminate();
 
     // If the test is using the NeighborExchange topology, synchronization must use unicast packets
-    const auto topology = tt::tt_fabric::get_fabric_topology();
+    const auto topology = this->device_info_provider_->get_fabric_topology();
     bool use_unicast_sync_packets = (topology == tt::tt_fabric::Topology::NeighborExchange);
 
     // Compile-time args

@@ -25,10 +25,10 @@
 #include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_descriptor.hpp"
@@ -926,6 +926,25 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
                 get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
                 san.l1_addr(),
                 san.len());
+            break;
+        case dev_msgs::DebugSanitizeNocSharedCmdBuf: {
+            // Only the two data movement RISCs of a Tensix core share a NOC; which_risc is 0 or 1.
+            const uint32_t other_risc = san.which_risc() == 0 ? 1 : 0;
+            error_msg = fmt::format(
+                "{} issued a NoC command on noc{} command buffer {}, which {} has also used on it (its command "
+                "buffers: {:#x}). Two dedicated-NOC data movement kernels sharing a NOC "
+                "(DataMovement1XXConfig::dedicated_noc_sharing) must program disjoint command buffers.",
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
+                noc,
+                san.l1_addr(),
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, other_risc),
+                san.len());
+        } break;
+        case dev_msgs::DebugSanitizeNocReadToRegAddr:
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
+            error_msg +=
+                " (NOC read lands in a local register; on Quasar the NIU can strand the response and stall L1 "
+                "writes, reads must land in L1).";
             break;
         default:
             error_msg = fmt::format(

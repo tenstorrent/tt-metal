@@ -65,6 +65,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
+    // Zero would divide the dense region by nothing. Any value >= 1 is legal -- the movement-class split
+    // means no size can deadlock the ring -- and the page floor catches a factor large enough to round a
+    // channel away, so this only rejects the one value that has no meaning.
+    TT_FATAL(args.fwd_reduction >= 1, "combine_fabric2d: fwd_reduction must be >= 1 (got {})", args.fwd_reduction);
     TT_FATAL(
         !args.output_mem_config.is_sharded(),
         "combine_fabric2d: output memory config must be interleaved, not sharded");
@@ -276,6 +280,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    uint32_t fwd_reduction,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
     using OperationType =
@@ -288,6 +293,7 @@ ttnn::Tensor combine_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
+            .fwd_reduction = fwd_reduction,
             .topology = topology,
             .output_mem_config = memory_config},
         OperationType::tensor_args_t{
