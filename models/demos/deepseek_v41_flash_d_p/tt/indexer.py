@@ -69,6 +69,22 @@ from .settings import settings
 Q_CHUNK, K_CHUNK = 64, 32  # score work unit: k 32 is the fork's fidelity-honouring head reduction (K-13 / K-14)
 
 
+def lowbit_host() -> bool:
+    """LOWBIT_HOST=on (P.12): the low-bit writes' host time cut (bfp_round compact into persistent buffers here; the
+    window blocks in one compact call in tt/attention.py)."""
+    return settings.get("LOWBIT_HOST") == "on"
+
+
+class Kept:
+    """A persistent tensor held by a ChunkMemo slot (tt/sparse_attention.py): the memo frees ttnn.Tensor values when
+    it drops a slot, not this wrapper's."""
+
+    __slots__ = ("t",)
+
+    def __init__(self, t: ttnn.Tensor):
+        self.t = t
+
+
 def topk_local() -> bool:
     """INDEXER_TOPK_LOCAL=on (P.8): the all-device model's indexers keep each chip's own top-k rows (no TP gather)."""
     return settings.get("INDEXER_TOPK_LOCAL") == "on"
@@ -158,6 +174,9 @@ class TtIndexer:
         self.k_dtype = ttnn.bfloat4_b if settings.get("INDEX_K_FORMAT") == "bfp4" else ttnn.bfloat16
         self.q_bfp4 = settings.get("INDEX_Q_FORMAT") == "bfp4"
         self.prepared = settings.get("CKV_BFP4_PREPARED") == "on"  # P.7: bfp_round built once, addresses patched
+        # LOWBIT_HOST=on (P.12): bfp_round compact (no per-core runtime args) into this layer's own output buffers
+        self.lowbit_host = lowbit_host()
+        self._rounded = {}  # (what, shape) -> the persistent bfp_round output (LOWBIT_HOST=on)
 
     def share(self, memo, kv_src: int | None) -> None:
         """INDEXER_GLUE=on (P.16): the chunk's ChunkMemo and this layer's KV source (the tiled index keys are made once
@@ -187,6 +206,21 @@ class TtIndexer:
         return cache.rows // self.ratio * self.sp
 
     # ------------------------------------------------------------------ per chunk (device only)
+    def _round(self, x: ttnn.Tensor, what: str) -> tuple[ttnn.Tensor, bool]:
+        """x bf16 TILE -> (x on the bfloat4_b grid, nearest even; whether that tensor is this layer's persistent
+        buffer, which the caller never frees). LOWBIT_HOST=on (P.12): bfp_round compact into the layer's buffer for
+        ``what`` (allocated at the first call; each call rewrites all of it, and the layer's next call of the same kind
+        comes after every reader of the last one on the queue); off: a new tensor each call (FIX.14's path)."""
+        dtype = self.k_dtype if what == "keys" else ttnn.bfloat4_b
+        if not self.lowbit_host:
+            return ttnn.bringup.bfp_round(x, dtype, memory_config=DRAM, prepared=self.prepared), False
+        key = (what, tuple(x.shape))
+        out = self._rounded.get(key)
+        if out is None:
+            out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)), dtype, ttnn.TILE_LAYOUT, self.mesh, DRAM)
+            self._rounded[key] = out
+        return ttnn.bringup.bfp_round(x, out=out, prepared=self.prepared, compact=True), True
+
     def _keys(self, cache) -> ttnn.Tensor:
         """The served index-key cache's slab [1, 1, rows / r, hd] bf16 ROW_MAJOR (ND-sharded) -> compressed rows
         [1, 1, rows / r, hd] bf16 TILE (INDEX_K_FORMAT=bfp4: rounded to bfloat4_b), interleaved: the ring's k_local
@@ -196,7 +230,7 @@ class TtIndexer:
         dealloc(rm)
         if self.k_dtype == ttnn.bfloat16:
             return kt
-        k4 = ttnn.bringup.bfp_round(kt, self.k_dtype, memory_config=DRAM, prepared=self.prepared)
+        k4, _ = self._round(kt, "keys")
         dealloc(kt)
         return k4
 
@@ -322,17 +356,23 @@ class TtIndexer:
         assert kv_len >= self.topk and start < kv_len * self.ratio, (start, kv_len, self.topk)
         w = self.gates(x)
         q = self.query(qr, start)
+        q_kept = False  # (LOWBIT_HOST=on: q is the layer's persistent bfp_round buffer, never freed)
         if self.q_bfp4:  # INDEX_Q_FORMAT=bfp4: the roped query on the bfloat4_b grid (nearest even)
-            q4 = ttnn.bringup.bfp_round(q, ttnn.bfloat4_b, memory_config=DRAM, prepared=self.prepared)
+            q4, q_kept = self._round(q, "query")
             dealloc(q)
             q = q4
         shared = self._memo is not None
         kkey = (start, id(cache), cache.version)
         k_local = self._memo[0].get(("keys", self._memo[1]), kkey) if shared else None
+        if isinstance(k_local, Kept):
+            k_local = k_local.t
+        # (LOWBIT_HOST=on with INDEX_K_FORMAT=bfp4: the keys are the layer's persistent buffer, never freed; a memo
+        # holds it as Kept, which its drop leaves alone)
+        k_kept = self.lowbit_host and self.k_dtype != ttnn.bfloat16
         if k_local is None:
             k_local = self._keys(cache)
             if shared:  # INDEXER_GLUE=on (P.16): the re-index layers score the same tiled keys (L24 = L20's)
-                self._memo[0].put(("keys", self._memo[1]), kkey, k_local)
+                self._memo[0].put(("keys", self._memo[1]), kkey, Kept(k_local) if k_kept else k_local)
         logits = ttnn.bringup.ring_indexer_score_dsa(
             q,
             kbuf,
@@ -353,7 +393,7 @@ class TtIndexer:
             natural_query_blocks=True,
             **epilogue,
         )  # [1, 1, Sq, T] bf16 ROW_MAJOR; future columns -inf, columns >= kv_len unwritten
-        for u in (q, w) + (() if shared else (k_local,)):
+        for u in (() if q_kept else (q,)) + (w,) + (() if shared or k_kept else (k_local,)):
             dealloc(u)
         return logits, kv_len
 

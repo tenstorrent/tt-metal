@@ -4135,3 +4135,40 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   DS41_INDEX_Q_FORMAT=bf16 DS41_ENGRAM_TABLE=resident BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all
   --no-precompile models/demos/common/bringup/tests/test_profile.py`, then the same with BRINGUP_WALL_CLEAN=1;
   per-op compare: `python3 /scratch/dnijemcevic/fix14/ops_sum.py <on _ops.json.gz> <off _ops.json.gz>`.
+
+## P.12 (perf, galaxy 8x4): LOWBIT_HOST, the host time of FIX.14's low-bit writes
+- What: setting LOWBIT_HOST (tt/settings.py, default on; off = FIX.14's path, code unchanged). On: (a) the window
+  blocks' carry and chunk in ONE ttnn.bringup.ckv_bfp4 call a layer (new fork option `prefix`: [carry | chunk] at row0
+  0; tt/attention._window_rows / _put_blocks; `masked` now freed after that call); (b) that call and bfp_round as the
+  fork's `compact` programs; (c) bfp_round into each indexer layer's persistent outputs (tt/indexer.TtIndexer._round,
+  one buffer per (query | keys, shape), allocated at the first call; memoized keys held as `Kept`, which ChunkMemo's
+  drop leaves alone).
+- (1) bfp_round did take the prepared path (patch count right, no generic_op fallback). Its extra cost over ckv_bfp4 was
+  the per-call output allocation (34 us isolated) and 120 cores of per-core args (the window carry call has 4 cores).
+- Root cause (DS41-145): a dispatched program's host cost on 32 chips is set by its per-core runtime args. Isolated
+  (tt/perf_lowbit_host.py, 8x4): run_prepared alone ~150 us at 120 cores; the same round program with every arg common
+  46 us flat at 1-120 cores; with one per-core value slot left 105 us; merged core ranges alone -40 us. So `compact` =
+  merged ranges + common args only (the kernels split bands / tiles by their logical core index, kernels/ckv_share.hpp,
+  the same split) + row0 / page0 frozen in the program (in the prepared key; every LOWBIT call site has one row0). I did
+  not extend prepared_program with common-arg value slots (C++ rebuild, its tests are 2x2-only) because no call site needs it.
+- Isolated host a call: window blocks 160 + 60 -> 58 us a layer; bfp_round query 207 -> 61 us, keys 213 -> 60 us
+  (compact into a reused output).
+- In the model (cProfile of 5 warm chunks at position 0, overseer hostprof plugin, /scratch/dnijemcevic/p12/hostprof.sh):
+  _put_blocks 0.207 ms x 80 -> 0.123 ms x 40 a chunk (16.6 -> 4.9 ms), bfp_round 0.419 -> 0.182 ms x 12 (5.0 -> 2.2 ms),
+  _window_rows 54.7 -> 37.5 ms a chunk; plain wall at position 0 (median of 10): off 373.6 (spread 74) -> on 328.5
+  (spread 46).
+- Profile rung (s56320 last chunk, DS41_ENGRAM_TABLE=resident, change on): device_ms_total 204.63 / 204.75 (two
+  runs; FIX.14 on = this task's off: 205.36), attention 68.09 / 67.96 (68.68), programs 73312 -> 72032 (the 40 carry
+  calls x 32 chips gone); clean wall median 377.4 ms (spread 68.8, loadavg 22.6; FIX.14 386.7), so host_overhead
+  ~172.7 vs 181.3 ms. The wall change is within the run spread; the orchestrator's A/B has both sides.
+- Bit-identical: tt/perf_lowbit_identity.py (one process, profile rung's last chunk, golden prefix reloaded each run):
+  final hidden on == off == on (max |diff| 0, PCC vs golden 0.608661 all three). Fork tests/unit 51 passed (35 before,
+  unchanged; 16 new: test_ckv_bfp8_prefix_compact, test_bfp_round_compact). Block pages' gap bytes are never written
+  (stale L1), so whole pages differ between programs; compare masked (DS41-144).
+- measure --task P.12 (the quick on side) did not finish: it needs ~10 min of device time (P.10's 600 s) and a
+  foreground call is capped at 10 min. My timeout killed it at 587 s and the safe runner marked the cards dirty. The
+  orchestrator's A/B runs it.
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_lowbit_host.py -s` (host a call + byte checks, 1 min);
+  `... tt/perf_lowbit_identity.py -s` (on / off / on, 6 min); `... ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit`;
+  old path DS41_LOWBIT_HOST=off.

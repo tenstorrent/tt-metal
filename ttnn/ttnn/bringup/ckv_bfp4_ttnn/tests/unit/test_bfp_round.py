@@ -105,3 +105,32 @@ def test_bfp_round_prepared(device, dt, n):
         assert torch.equal(b[row0 : row0 + n], ref.round_values(x, MBITS[dt]).reshape(n, 128)), f"call {i}: rows"
     assert len(mod._PREPARED) == before + 1, "the program was not prepared exactly once"
     assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
+
+
+@pytest.mark.parametrize("prepared", [False, True], ids=["generic", "prepared"])
+@pytest.mark.parametrize("dt", ["bfloat4_b", "bfloat8_b"])
+@pytest.mark.parametrize("n", [96, 13824])
+def test_bfp_round_compact(device, dt, n, prepared):
+    """Option compact (merged core ranges, no per-core runtime args, the kernels split the tiles, page0 frozen in the
+    program): new outputs and in-place writes (a reused output, as deepseek_v41_flash_d_p's LOWBIT_HOST) equal the
+    default path byte for byte and the host rule, rows outside each call's range untouched."""
+    mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
+    dtype = getattr(ttnn, dt)
+    rows = 3 * n
+    tables = {
+        c: ttnn.from_torch(torch.full((1, 1, rows, 128), 0.75), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        for c in (False, True)
+    }
+    for i, row0 in enumerate([0, n, 2 * n, 0]):
+        x = _inputs((1, 1, n, 128), 5 * n + i)
+        t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        new = {c: ttnn.bringup.bfp_round(t, dtype, prepared=prepared, compact=c) for c in (False, True)}
+        assert torch.equal(ttnn.to_torch(new[False]), ttnn.to_torch(new[True])), f"call {i}: new outputs differ"
+        assert torch.equal(ttnn.to_torch(new[True]).float(), ref.round_values(x, MBITS[dt])), f"call {i}: values"
+        for c in (False, True):
+            ttnn.bringup.bfp_round(t, out=tables[c], row0=row0, prepared=prepared, compact=c)
+        a, b = (ttnn.to_torch(tables[c]).float().reshape(rows, 128) for c in (False, True))
+        assert torch.equal(a, b), f"call {i}: compact table != default table"
+        assert torch.equal(b[row0 : row0 + n], ref.round_values(x, MBITS[dt]).reshape(n, 128)), f"call {i}: rows"
+    if prepared:
+        assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"

@@ -180,3 +180,61 @@ def test_ckv_bfp8_prepared(device, blocks):
         assert torch.equal(a, b), f"call {i}: prepared table != generic_op table"
     assert len(mod._PREPARED) == before + 1, "the program was not prepared exactly once"
     assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
+
+
+@pytest.mark.parametrize("prepared", [False, True], ids=["generic", "prepared"])
+@pytest.mark.parametrize(
+    "npre, n, row0, compact, blocks",
+    [
+        (128, 5120, 0, True, True),  # deepseek_v41_flash_d_p's window: [carry 128 | chunk 5120] at 0 (LOWBIT_HOST)
+        (128, 2048, 0, False, True),  # prefix alone
+        (0, 2048, 128, True, True),  # compact alone
+        (64, 320, 96, True, False),  # bfloat8_b row records, compact + prefix at another row0
+    ],
+)
+def test_ckv_bfp8_prefix_compact(device, npre, n, row0, compact, blocks, prepared):
+    """Options prefix ([prefix | ckv] in one call) and compact (merged core ranges, no per-core runtime args, the
+    kernels split the bands): the same records as the default path's two calls (prefix at row0, ckv after it), on the
+    bytes the format defines (a block page's gaps are never written: stale L1, DS41-144), the host rule, other pages
+    untouched; with prepared, two more calls at other inputs stay equal and the program could be prepared."""
+    total = npre + n
+    pages = (row0 + total) // 32 + 2
+    shape = [1, 1, pages, ref.BLOCK_BYTES] if blocks else [1, 1, pages * 32, 576]
+
+    def table():
+        return ttnn.from_torch(torch.full(shape, FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
+
+    def up(x):
+        return ttnn.from_torch(x.reshape(1, 1, -1, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    kw = dict(dtype=ttnn.bfloat8_b, blocks=blocks, prepared=prepared)
+    for call in range(2 if prepared else 1):
+        x = _inputs(total, 11 * total + row0 + call)
+        pre, ckv = (up(x[:npre]) if npre else None), up(x[npre:])
+        a, b = table(), table()
+        if pre is not None:
+            ttnn.bringup.ckv_bfp4(pre, a, row0, **kw)
+        ttnn.bringup.ckv_bfp4(ckv, a, row0 + npre, **kw)
+        ttnn.bringup.ckv_bfp4(ckv, b, row0, prefix=pre, compact=compact, **kw)
+        ga, gb = (ttnn.to_torch(t).view(torch.uint8) for t in (a, b))
+        if blocks:
+            ga, gb = (g.reshape(pages, ref.BLOCK_BYTES) for g in (ga, gb))
+            exp, mask = ref.encode_blocks(x)
+            p0 = row0 // 32
+            mine = gb[p0 : p0 + total // 32]
+            bad = ((mine != exp) & mask).any(-1).nonzero().flatten()
+            assert not len(bad), f"call {call}: {len(bad)} blocks differ from the host rule, first {bad[:5].tolist()}"
+            bad = ((ga[p0 : p0 + total // 32] != mine) & mask).any(-1).nonzero().flatten()
+            assert not len(
+                bad
+            ), f"call {call}: {len(bad)} blocks differ from the two-call path, first {bad[:5].tolist()}"
+            assert (gb[:p0] == FILL).all() and (gb[p0 + total // 32 :] == FILL).all(), "pages outside written"
+        else:
+            assert torch.equal(ga, gb), f"call {call}: the one-call table != the two-call table"
+            exp = ref.encode_rows(x, mbits=7)
+            gb = gb.reshape(-1, 576)
+            assert torch.equal(gb[row0 : row0 + total], exp), f"call {call}: records differ from the host rule"
+            assert (gb[:row0] == FILL).all() and (gb[row0 + total :] == FILL).all(), "rows outside written"
+    if prepared:
+        mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
+        assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
