@@ -40,7 +40,18 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     moe_fabric_payload,
     torus_xy_device_params,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
+from models.demos.deepseek_v3_d_p.tests.test_prefill_block import (
+    _glm_norm_weight,
+    _glm_random_dense_ffn_weights,
+    _glm_random_moe_weights,
+)
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    full_indexer_rank,
+    indexer_layer_is_reused,
+    num_full_indexer_layers,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -1166,9 +1177,29 @@ def test_kimi_prefill_block_chunked_padded(
 
 
 def _random_block_state_dict(variant, config, layer_idx):
+    if resolve_has_indexer(config):
+        hidden = config.hidden_size
+        state_dict = {
+            "attn_norm_weight": _glm_norm_weight(hidden, 1),
+            "mla_weights": build_weights(variant, config, seed=42)[0],
+            "ffn_norm_weight": _glm_norm_weight(hidden, 2),
+        }
+        if layer_idx < config.first_k_dense_replace:
+            state_dict["ffn_weights"] = _glm_random_dense_ffn_weights(hidden, config.intermediate_size, seed=3)
+            return state_dict
+        gate, routed, shared = _glm_random_moe_weights(
+            hidden, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, seed=3
+        )
+        return state_dict | {"gate_weights": gate, "routed_expert_weights": routed, "shared_expert_weights": shared}
     torch.manual_seed(42)
     hf = create_hf_model(variant, config, layer_idx + 1)
     return extract_layer_state_dict(variant, hf.state_dict(), layer_idx, hf.layers[layer_idx])
+
+
+def _sliding_window_topk(chunk_idx, sp, topk):
+    """Causal window top-k: query p selects p, p-1, ..., p-topk+1; negative positions become a 0xFFFFFFFF tail."""
+    idx = (chunk_idx * CHUNK + torch.arange(CHUNK))[:, None] - torch.arange(topk)
+    return torch.where(idx >= 0, idx, 0xFFFFFFFF).to(torch.int32).reshape(sp, 1, CHUNK // sp, topk)
 
 
 def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, num_iterations, num_links, topology):
@@ -1201,7 +1232,7 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
         slot_num=1,
         layer_num=1,
         routing_use_l1_small_for_semaphores=True,
-        tp_shard_kv=None if has_indexer else True,
+        tp_shard_kv=True,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
@@ -1214,8 +1245,38 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=1,
-        tp_axis=None if has_indexer else tp_axis,
+        tp_axis=tp_axis,
     )
+    index_kv_cache = (
+        init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=SEQ_CACHE,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
+        if has_indexer
+        else None
+    )
+    shared_indexer = indexer_layer_is_reused(config, layer_idx)
+    window_topk = []
+    if shared_indexer:
+        sp, tp = mesh_shape
+        assert block.mla.indexer_indices_shape() == (1, 1, CHUNK // (sp * tp), config.index_topk)
+        window_topk = [
+            ttnn.from_torch(
+                _sliding_window_topk(c, sp, config.index_topk),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, 2)),
+            )
+            for c in range(n_chunks)
+        ]
 
     shard_dims = [None, None]
     shard_dims[sp_axis] = -2
@@ -1243,13 +1304,19 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
                 actual_start=c * CHUNK,
                 actual_end=(c + 1) * CHUNK,
                 cache_user_id=0,
+                indexer_indices=window_topk[c] if shared_indexer else None,
+                index_kv_cache=index_kv_cache,
             )
             out[c * CHUNK : (c + 1) * CHUNK] = ttnn.to_torch(
                 tt_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
             ).to(torch.float32)[0, 0]
         ttnn.synchronize_device(mesh_device)
-        snapshot = {"output": out.clone(), "kvpe": gather_cache_natural(tt_kvpe_cache, mesh_device, not has_indexer)[0]}
+        snapshot = {"output": out.clone(), "kvpe": gather_cache_natural(tt_kvpe_cache, mesh_device, True)[0]}
+        if has_indexer and not shared_indexer:
+            snapshot["index_k"] = gather_cache_natural(index_kv_cache, mesh_device)[0][
+                full_indexer_rank(config, layer_idx)
+            ]
         logger.info(f"  pass {it + 1}/{num_iterations} done")
         if it == 0:
             for name, t in snapshot.items():
@@ -1287,6 +1354,40 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(3600)
 def test_kimi_prefill_block_chunked_random(
+    variant, config_only, mesh_device, device_params, layer_idx, n_chunks, num_iterations, num_links
+):
+    run_chunked_block_random(
+        variant,
+        config_only,
+        mesh_device,
+        layer_idx,
+        n_chunks,
+        num_iterations,
+        num_links,
+        per_axis_topology(device_params["fabric_config"]),
+    )
+
+
+@pytest.mark.parametrize("num_iterations", [2], ids=["iter2"])
+@pytest.mark.parametrize("n_chunks", [2], ids=["chunks2"])
+@pytest.mark.parametrize("layer_idx", [0, 6, 3], ids=["dense_L0", "moe_full_L6", "moe_shared_L3"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=768),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA (indexer) is Blackhole-only")
+@pytest.mark.timeout(3600)
+def test_glm_prefill_block_chunked_random(
     variant, config_only, mesh_device, device_params, layer_idx, n_chunks, num_iterations, num_links
 ):
     run_chunked_block_random(
