@@ -25,6 +25,8 @@ namespace sfpu {
 // before power-of-two scaling. Intended for BF16 Dest; this preserves the normal
 // reciprocal ±2^-126 at input ±2^126 instead of flushing an intermediate result.
 // normalized=true requires a finite input with magnitude in [1, 2) and skips scaling.
+// _softsign_x2_ in ckernel_sfpu_softsign.h carries a two-row interleaved copy of this
+// algorithm (seed, scale, Newton-Raphson steps); keep it in sync with changes here.
 template <int max_iter = 2, bool round_to_bf16 = false, bool normalized = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
