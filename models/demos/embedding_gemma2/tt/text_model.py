@@ -182,6 +182,7 @@ class TextModel(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             policy=self.out_policy,
             dtype=self.out_policy.out_ttnn_dtype,
+            role="final",
         )
         ttnn.deallocate(n)
         return out

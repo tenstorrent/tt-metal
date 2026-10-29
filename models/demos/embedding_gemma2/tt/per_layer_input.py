@@ -125,6 +125,7 @@ class PerLayerInput(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             policy=self.policy,
             dtype=self.policy.out_ttnn_dtype,
+            role="ple_wide",
         )
 
     def layer_input(self, projection: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
@@ -143,6 +144,7 @@ class PerLayerInput(LightweightModule):
                 memory_config=mem,
                 policy=self.policy,
                 dtype=self.policy.out_ttnn_dtype,
+                role="ple_layer",
             )
         out = self.norm(piece, memory_config=mem)
         ttnn.deallocate(piece)
@@ -212,8 +214,10 @@ class PerLayerInputBlock(LightweightModule):
         mem = act_memory_config(hidden_states.device(), B, S, self.config.hidden_size)
         p = self.policy
         dt = p.out_ttnn_dtype
-        gated = gated_product(hidden_states, self.w_gate, per_layer_input, memory_config=mem, policy=p, dtype=dt)
-        proj = linear(gated, self.w_proj, memory_config=mem, policy=p, dtype=dt)
+        gated = gated_product(
+            hidden_states, self.w_gate, per_layer_input, memory_config=mem, policy=p, dtype=dt, role="ple_gate"
+        )
+        proj = linear(gated, self.w_proj, memory_config=mem, policy=p, dtype=dt, role="ple_proj")
         ttnn.deallocate(gated)
         normed = self.post_norm(proj, memory_config=mem)
         ttnn.deallocate(proj)

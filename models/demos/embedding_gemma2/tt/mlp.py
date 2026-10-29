@@ -116,9 +116,9 @@ class MLP(LightweightModule):
         B, S = x.shape[0], x.shape[2]
         mem = act_memory_config(x.device(), B, S, self.config.intermediate_size)
         gu, dn = self.gate_up_policy, self.down_policy
-        up = linear(x, self.w_up, memory_config=mem, policy=gu, dtype=gu.out_ttnn_dtype)
-        h = gated_product(x, self.w_gate, up, memory_config=mem, policy=gu, dtype=gu.out_ttnn_dtype)
+        up = linear(x, self.w_up, memory_config=mem, policy=gu, dtype=gu.out_ttnn_dtype, role="up")
+        h = gated_product(x, self.w_gate, up, memory_config=mem, policy=gu, dtype=gu.out_ttnn_dtype, role="gate")
         ttnn.deallocate(up)
-        out = linear(h, self.w_down, memory_config=out_memory_config, policy=dn, dtype=dn.out_ttnn_dtype)
+        out = linear(h, self.w_down, memory_config=out_memory_config, policy=dn, dtype=dn.out_ttnn_dtype, role="down")
         ttnn.deallocate(h)
         return out

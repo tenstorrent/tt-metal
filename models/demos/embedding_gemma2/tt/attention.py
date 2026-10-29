@@ -193,7 +193,8 @@ class Attention(LightweightModule):
         mem_qkv = act_memory_config(dev, B, S, cfg.q_width + 2 * cfg.kv_width)
         mem_q = mem_kv = act_memory_config(dev, B, S, cfg.q_width)  # one config for the q/k/v heads
         p = self.qkv_policy
-        xqkv = linear(x, self.wqkv, memory_config=mem_qkv, policy=p, dtype=p.out_ttnn_dtype)
+        kind = "sliding" if cfg.layer_type == SLIDING else "full"  # tuned-config role suffix (tt/linear.py)
+        xqkv = linear(x, self.wqkv, memory_config=mem_qkv, policy=p, dtype=p.out_ttnn_dtype, role=f"qkv_{kind}")
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=cfg.num_heads,
@@ -246,6 +247,8 @@ class Attention(LightweightModule):
         if out_memory_config is None:
             out_memory_config = act_memory_config(dev, B, S, cfg.hidden_size)
         p = self.o_policy
-        out = linear(o_cat, self.wo, memory_config=out_memory_config, policy=p, dtype=p.out_ttnn_dtype)
+        out = linear(
+            o_cat, self.wo, memory_config=out_memory_config, policy=p, dtype=p.out_ttnn_dtype, role=f"o_{kind}"
+        )
         ttnn.deallocate(o_cat)
         return out
