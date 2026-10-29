@@ -796,3 +796,17 @@ NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 969787
   Selftests 647 pass (the 1 failure = the known xing40 fixed threshold).
 - NEXT: P.6 ENGRAM_ASYNC (bar chunk_wall_ms < 434 = FIX.8's bfp4 walls at 0k), orchestrator --until P.6, accept on a
   clean win; then release FIX.9 (shared expert bfp8) -> P.7 -> P.4 -> P.5 -> index query fp4.
+
+## 2026-10-29 02:55 MILESTONE + HAND-OFF: P.6 ENGRAM_ASYNC accepted + committed 6e20afb4b50 (clean win)
+- A/B (quick, last rung): accuracy identical to the digit; warm wall 421.0 on / 462.6 off (-41.6 ms, -9 %), spread 26 vs
+  62 ms; gate: chunk_wall_ms 402.1 (< 434), device_ms_total 219.78 (<= 230). begin_chunk 48.9 -> 0.6 ms; ~42 of 49 ms of
+  engram host work hidden (layer 1 still waits ~6 ms); PCIe upload ~2.7 ms a layer (first measurement); the old
+  upload held the GIL ~35 ms a layer (DS41-136, fixed with a reused staging buffer). No 2nd command queue (one CQ in
+  the harness and tt-d-gen). Overseer accepted under the clean-win rule.
+- Framework tonight: F210 (dashboards out of gate commits; second try 6801b494a86: explicit file list, the exclude
+  pathspec skipped explicitly named new files), F211 (commit-only ignores framework records), F212 (device_ms_* with
+  wall-only profile segments refused; P.4-P.7 commands fixed), F213 (a released fix is not placed before a perf pick
+  whose A/B is measured; FIX.9 was, aborted within 30 s), F214 PENDING (P.6's recorded accept vanished from
+  state.json; workaround: gate + commit by hand).
+- NEXT: orchestrator --until P.5: FIX.9 (shared expert x/h bfp8, placed, attempt 3) -> P.7 CKV_BFP4_PREPARED -> P.4 ->
+  P.5 (perf picks stop for the overseer's A/B decision; clean wins accepted) -> index query fp4 (to queue).
