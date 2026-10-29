@@ -1581,6 +1581,22 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 23:05: the 1 M prompt through the API, and two more APC defects
+
+`needle1m_r4` (the catalogued 1 M profile, APC on the HOST store, resident on): a 1 039 157-token prompt prefilled end
+to end in 64 sequence-parallel chunks of 16 K at 7.4-7.5 s each (the chunk-end snapshots to the host store, issued
+without blocking, cost nothing visible), TTFT 472.0 s, then 32 tokens in 1.8 s (56 ms per token at ~1 M context);
+the engine stayed up. The needle itself was not in the 32-token answer, which the model spent on its thinking preamble
+("The user is asking for the secret passphrase for the vault..."): retrieval at 1 M is re-checked with a 256-token
+answer (`needle1m_r5`, the client's `NEEDLE_TOKENS`). `apc_r3` showed why no hit had been served in any round: the
+per-row-ownership sequence-parallel step never took chunk-end snapshots (`on_chunk` was wired only on the other
+branch; r2's 16 "snapshots" were decode crossings), and the plugin's confirmer still was not installed in the
+engine-core process (neither the CLI hook nor a pre-constructor platform check runs there). Fixed: 1742dbfadf9
+(chunk-end snapshots on the SP step; a repeated prompt re-prefills on the free slot retaining it, i.e. the same mesh
+row, so its greedy text repeats bit-exactly: the smoke's stage b under APC) and plugin 7a7bf5d (the confirmer from
+the general entry point). `apc_r4` runs every fix. The bench's tok/s per user under APC varied 14.1 / 11.8 / 8.9
+across runs while the adapter's step stayed 62 ms with the chain engaged: an engine-side cost for the parity work.
+
 ### 2026-10-29 22:15: APC on the 1 M profile: three served rounds, three defects, the needle at 1 M
 
 `served_8x4_apc_r1` died at boot: the snapshot ring sized from the live DRAM was re-checked against the planner's
