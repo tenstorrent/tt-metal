@@ -799,16 +799,11 @@ def test_unary_row_major_sharded_unaligned_rows(
     assert torch.equal(ttnn_output, torch.abs(torch_input))
 
 
-@pytest.mark.parametrize("width", [7, 10, 20, 100])
+@pytest.mark.parametrize("width", [7, 10, 20, 32, 40, 64, 88, 100])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
 def test_unary_row_major_specless_block_output_unaligned_page(device, width, dtype):
-    """A specless row-major BLOCK_SHARDED output synthesizes shard width div_up(width, grid_x); when that row page is
-    not L1-aligned or does not divide the tensor width, the output falls back to interleaved (#58189)."""
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    shard_width = -(-width // device.compute_with_storage_grid_size().x)
-    if (shard_width * torch.tensor([], dtype=torch_dtype).element_size()) % 16 == 0 and width % shard_width == 0:
-        pytest.skip(f"Synthesized BLOCK shard width {shard_width} is already a valid page on this grid")
     torch_input = torch.randn((1, 1, 64, width), dtype=torch_dtype)
     ttnn_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
@@ -817,16 +812,12 @@ def test_unary_row_major_specless_block_output_unaligned_page(device, width, dty
     if mem_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
         page = mem_config.shard_spec.shape[1] * torch_input.element_size()
         assert page % 16 == 0, f"BLOCK RM shard page must be L1-aligned; got page={page}B"
+        assert mem_config.shard_spec.shape[1] >= width, f"BLOCK RM shard must span the row; got {mem_config.shard_spec}"
     assert torch.equal(ttnn.to_torch(ttnn_output), torch.relu(torch_input))
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 64, 32), (1, 1, 100, 32), (1, 2, 96, 32)])
 def test_unary_row_major_specless_block_output_tile_width_spec(device, shape):
-    """When the synthesized shard width is not a valid row page but a tile-width shard covers the whole row, the specless
-    row-major BLOCK_SHARDED output keeps a BLOCK spec with shard width 32, the same as transpose (#58189)."""
-    shard_width = -(-shape[-1] // device.compute_with_storage_grid_size().x)
-    if (shard_width * 2) % 16 == 0 and shape[-1] % shard_width == 0:
-        pytest.skip(f"Synthesized BLOCK shard width {shard_width} is already a valid page on this grid")
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)

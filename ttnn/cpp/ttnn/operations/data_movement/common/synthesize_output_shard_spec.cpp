@@ -175,8 +175,6 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     if (rm_page_valid(spec.shape[1], element_size_bytes, tensor_width)) {
         return spec;
     }
-    // Only WIDTH_SHARDED can be repaired by shrinking nc; HEIGHT pins shard_width to tensor_width, BLOCK to the grid.
-    // Lenient returns `spec` unchanged; Strict rejects so caller falls back.
     if (memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         return (mode == RmPageAlignmentMode::Strict) ? std::optional<ShardSpec>{std::nullopt} : std::optional{spec};
     }
@@ -224,12 +222,19 @@ std::optional<ShardSpec> rm_block_shard_spec_or_fallback(
     const ShardSpec& tile_spec,
     uint32_t element_size_bytes,
     uint64_t tensor_width,
-    TensorMemoryLayout memory_layout) {
-    if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED ||
-        rm_shard_page_valid(rm_spec, element_size_bytes, tensor_width)) {
+    TensorMemoryLayout memory_layout,
+    bool whole_row_shards_only) {
+    if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
         return rm_spec;
     }
-    if (rm_shard_page_valid(tile_spec, element_size_bytes, tensor_width)) {
+    const auto usable = [&](const ShardSpec& spec) {
+        return rm_shard_page_valid(spec, element_size_bytes, tensor_width) &&
+               (!whole_row_shards_only || spec.shape[1] >= tensor_width);
+    };
+    if (usable(rm_spec)) {
+        return rm_spec;
+    }
+    if (usable(tile_spec)) {
         return tile_spec;
     }
     return std::nullopt;

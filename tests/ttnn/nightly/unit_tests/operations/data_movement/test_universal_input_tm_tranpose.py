@@ -498,9 +498,6 @@ def test_transpose_rm_specless_height_shard_direct_path(device):
 
 
 def test_transpose_rm_specless_block_shard_direct_path(device):
-    """RM BLOCK_SHARDED specless output from a WIDTH-sharded RM irregular input: transpose(1,1,64,40)→
-    (1,1,40,64), out tw=64 with div_up(64, grid.x=8)=8 yields L1-aligned page=16B; on grids where div_up gives an
-    unaligned page the tile-inflated spec (shard width 32) is used instead."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x < 4 or compute_grid.y < 4:
         pytest.skip("Block direct-path test needs >=4x4 compute cores")
@@ -530,12 +527,10 @@ def test_transpose_rm_specless_block_shard_direct_path(device):
     ids=["height", "block"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "f32"])
-@pytest.mark.parametrize("shape", [(1, 1, 7, 64), (1, 1, 16, 40), (1, 1, 44, 64), (1, 1, 96, 40), (1, 1, 100, 64)])
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 7, 64), (1, 1, 16, 40), (1, 1, 32, 40), (1, 1, 44, 64), (1, 1, 96, 40), (1, 1, 100, 64)]
+)
 def test_transpose_rm_specless_shard_unaligned_page(shape, dtype, out_layout, device):
-    """RM HEIGHT / BLOCK_SHARDED specless output whose synthesized shard row is not L1-aligned (#58189): transpose
-    (1,1,H,W)->(1,1,W,H) from a WIDTH-sharded RM input, out tensor_w=H. HEIGHT pages a whole row, which the allocator
-    pads, so it keeps its spec. BLOCK takes the tile-inflated spec or falls back to INTERLEAVED; a BLOCK result must
-    carry an L1-aligned page. Either way the result matches torch."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x < 4 or compute_grid.y < 4:
         pytest.skip("Unaligned-page test needs >=4x4 compute cores")

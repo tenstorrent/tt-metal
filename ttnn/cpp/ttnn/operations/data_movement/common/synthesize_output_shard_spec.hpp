@@ -60,7 +60,8 @@ std::optional<tt::tt_metal::ShardSpec> rm_block_shard_spec_or_fallback(
     const tt::tt_metal::ShardSpec& tile_spec,
     uint32_t element_size_bytes,
     uint64_t tensor_width,
-    tt::tt_metal::TensorMemoryLayout memory_layout);
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    bool whole_row_shards_only = false);
 
 // Rescales a true-ND shard spec to fit a sliced output shape, keeping the orientation/distribution
 // strategy and (where possible) the per-dimension shard count.

@@ -753,17 +753,15 @@ std::optional<tt::tt_metal::ShardSpec> generate_output_shard_spec(
                 padded_out_shape,
                 memory_layout,
                 {.is_tile = true, .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR, .caller_tag = "Unary"});
-            if (tile_spec.shape[1] < tensor_width) {
-                tile_spec = spec;
-            }
+            constexpr bool whole_row_shards_only = true;
             auto block_spec = ttnn::operations::data_movement::common::rm_block_shard_spec_or_fallback(
-                spec, tile_spec, output_element_size_bytes, tensor_width, memory_layout);
+                spec, tile_spec, output_element_size_bytes, tensor_width, memory_layout, whole_row_shards_only);
             if (!block_spec.has_value()) {
                 static std::once_flag warn_flag;
                 std::call_once(warn_flag, [] {
                     log_warning(
                         tt::LogOp,
-                        "Unary: no L1-aligned ROW_MAJOR BLOCK_SHARDED spec for the output; falling back to "
+                        "Unary: no ROW_MAJOR BLOCK_SHARDED spec with shards spanning the full row; falling back to "
                         "INTERLEAVED");
                 });
                 return std::nullopt;
