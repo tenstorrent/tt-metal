@@ -395,11 +395,14 @@ def test_indexer_static_maintenance_matches_offset_path(mesh_device, monkeypatch
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
-    "aligned, split",
-    [((16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522))],
-    ids=["65514-continued-at-36736-and-52992"],
+    "layer_idx, aligned, split",
+    [
+        (3, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522)),
+        (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522)),
+    ],
+    ids=["layer3-65514-continued-at-36736-and-52992", "layer0-kda-65514-continued-at-36736-and-52992"],
 )
-def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, aligned, split):
+def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, layer_idx, aligned, split):
     """A chunk plan whose chunks end at 32-aligned but not device-chunk-aligned positions deep in the sparse
     range must give the same layer output as the device-chunk-aligned plan of the same prompt. That is what
     vLLM's chunked-prefill budget produces under prefix caching when two prompts prefill in one step (the
@@ -408,7 +411,6 @@ def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, aligned, split
     (DSA + MoE), random activations at the dump's scale (no HF dump at this length), both plans in the same
     decoder on their own user slot. Gate: PCC between the plans > 0.999 overall and on the rows after the
     first unaligned continuation (bf16 noise only; a wrong prefix read / split shows as a collapse there)."""
-    layer_idx = 3
     raw, cfg = _load(layer_idx)
     assert sum(aligned) == sum(split), (aligned, split)
     S = sum(aligned)
@@ -417,7 +419,7 @@ def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, aligned, split
     torch.manual_seed(0)
     x_in = (torch.randn(1, S, 4, cfg.hidden_size) * scale).to(pre["x_in"].dtype)
     dec = _decoder(mesh_device, raw, cfg, layer_idx, S + 64, max_batch=2)
-    assert not dec.layer.is_kda, "layer 3 is a DSA layer"
+    assert dec.layer.is_kda == (layer_idx == 0), "layer 0 is the KDA case, layer 3 the DSA case"
     ref, _ = prefill_chunked(dec, x_in, aligned, mesh_device, user=0)
     out, _ = prefill_chunked(dec, x_in, split, mesh_device, user=1)
     first_unaligned_end = next(e for e in torch.tensor(split).cumsum(0).tolist() if e % 16384)
