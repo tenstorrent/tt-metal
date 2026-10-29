@@ -17,6 +17,7 @@ Routed experts are tensor-parallel too: every chip holds all 256 experts with 1/
 """
 
 import contextlib
+import fcntl
 import math
 import os
 
@@ -131,6 +132,30 @@ def cache_name(cache_dir, *parts):
     if cache_dir is None:
         return None
     return os.path.join(cache_dir, "_".join(str(p) for p in parts))
+
+
+@contextlib.contextmanager
+def cache_fill(cache_dir, tag):
+    """Yields whether ``tag``'s tensors must be converted (its ``complete`` marker is missing; always without a
+    ``cache_dir``), and writes the marker when the block finishes.
+
+    Several processes may build one cache at once (``serving/serve_rows.sh``: one vLLM engine per Galaxy row, all on
+    one ``MIMO_TT_CACHE``), and ``ttnn.as_tensor`` writes a cache file in place. So a cold tag is filled under an
+    exclusive lock on ``<tag>_lock``: one process converts and writes it, the others wait, then find it complete and
+    load it. A complete tag takes no lock."""
+    if cache_dir is None:
+        yield True
+        return
+    done = cache_name(cache_dir, tag, "complete")
+    if os.path.exists(done):
+        yield False
+        return
+    with open(cache_name(cache_dir, tag, "lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)  # released when the file closes, also when the block raises
+        need = not os.path.exists(done)
+        yield need
+        if need:
+            open(done, "w").close()
 
 
 def cache_exists(cache_file, dtype, layout=ttnn.TILE_LAYOUT):
