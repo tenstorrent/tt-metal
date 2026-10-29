@@ -17,6 +17,7 @@ from agentx_sim import (  # noqa: E402
     PrefixCache,
     SlotCache,
     json_record,
+    main,
     parse_cache,
     parse_config,
     parse_sessions,
@@ -284,6 +285,8 @@ def test_request_waits_for_a_slot_and_is_looked_up_when_seated():
         res = run(_OneSecondSteps(), [session], BLOCK, BLOCK, "fcfs", 1, slots=slots)
         b = _by_rows(res)[3 * BLOCK]
         assert b.cached == cached and b.done == pytest.approx(b.send + chunks)
+        if slots:
+            assert b.ideal_hit == 2 * BLOCK, "the unlimited cache holds A before B is seated"
     assert res["evictions"] is None
 
 
@@ -317,6 +320,16 @@ def test_parse_cache(cache, parsed):
 def test_parse_cache_rejects(cache):
     with pytest.raises(SystemExit, match="bad --cache"):
         parse_cache(cache)
+
+
+@pytest.mark.parametrize(
+    "flag, value", [("--inject-depth", "9,0"), ("--chunk-overhead-ms", "-1"), ("--request-overhead-ms", "95,-5")]
+)
+def test_main_rejects_bad_knobs_before_loading_traces(monkeypatch, capsys, flag, value):
+    monkeypatch.setattr(sys, "argv", ["agentx_sim.py", "--traces", "/nonexistent", flag, value])
+    with pytest.raises(SystemExit):
+        main()
+    assert f"bad {flag}" in capsys.readouterr().err
 
 
 def test_rr_inject_depth_queues_a_new_requests_first_chunk_behind_queued_ones():
