@@ -381,6 +381,21 @@ DEST-sweep math diagnostic measures about 362 cycles/output tile. On 120
 ideally balanced cores this projects to about 292 GElem/s, or 584 GB/s of
 BF16 output; encoded input plus prepared scales accounts for about 183 GB/s.
 
+### Latest bit-construction and harness follow-up
+
+The [input-bit and evaluator-throughput loop](OPTIMIZATION_2026_10_29_LAYOUT_AND_HARNESS.md)
+retains standard nibble packing. Opaque HI16 loads, arithmetic shifts, and a
+programmable signed-magnitude mask remove separate sign insertion. The decoder
+uses three/four replay instructions and measures about 298 cycles/output tile.
+Ordinary tiled L1 output batches two writes; DRAM, transposed, and row-major
+outputs retain single writes after consumer profiling exposed batching regressions.
+
+Matched-clock 32-call confirmations measure about 521 versus 567 cycles/output
+tile, approximately 7.5–8% less complete L1 conversion time, with unchanged numerical
+gates. The tested ordinary-L1 linear projection improves about 3.2%; there is no
+established DRAM gain. The harness now exposes screen/full modes, repeated timing,
+per-stage/test counts, and device-lock/JIT overhead accounting.
+
 ### Transposed output for a linear consumer
 
 `transpose_output=True` is an opt-in mode requiring `experimental_fast=True`

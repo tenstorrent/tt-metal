@@ -26,6 +26,22 @@ SFPU_ACCURACY_GATE = {
 }
 
 
+TENSOR_SCALES = (
+    0.0,
+    1.0,
+    0.8125,
+    0.7314453125,
+    0.1,
+    1.00390625,
+    1.01171875,
+    1.0234375,
+    1.02734375,
+    1.03125,
+    2**-40,
+    2**40,
+)
+
+
 def _accuracy_gate_failures(metrics):
     failures = []
     for key in ("max_bf16_ulp", "mean_bf16_ulp", "median_bf16_ulp"):
@@ -195,20 +211,7 @@ def test_nvfp4_accuracy_survey(device, tmp_path):
     }
     # Include exact BF16 scales, FP32 -> BF16 halfway cases and a non-dyadic
     # decimal specified through the FP32 API, plus widely separated exponents.
-    tensor_scales = [
-        0.0,
-        1.0,
-        0.8125,
-        0.7314453125,
-        0.1,
-        1.00390625,
-        1.01171875,
-        1.0234375,
-        1.02734375,
-        1.03125,
-        2**-40,
-        2**40,
-    ]
+    tensor_scales = TENSOR_SCALES
     gate_failures = []
     try:
         for tensor_scale in tensor_scales:

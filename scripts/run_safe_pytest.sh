@@ -44,6 +44,11 @@
 
 set -o pipefail
 
+# Bash supplies microsecond timestamps without launching a process. These
+# markers let callers distinguish cooperative lock wait from test execution.
+timing_event() { echo "SAFE_PYTEST_TIMING: $1 ${EPOCHREALTIME}"; }
+timing_event runner_start
+
 # SAFE_PYTEST status lines and triage/watcher dumps go to stdout (plain echo),
 # the same stream the metal runtime uses for its logging/DPRINT/JIT output;
 # pytest's own stdout/stderr pass through unchanged.
@@ -108,6 +113,7 @@ shift
 DEFERRED_WARNINGS=()
 defer_warning() { DEFERRED_WARNINGS+=("$1"); }
 flush_deferred_warnings() {
+    timing_event runner_end
     if [[ ${#DEFERRED_WARNINGS[@]} -gt 0 ]]; then
         echo ""
         local w
@@ -140,7 +146,9 @@ if [[ "$SIM_MODE" == false ]]; then
     exec 9>"$LOCK_FILE"
 
     echo "SAFE_PYTEST: Waiting for device lock..."
+    timing_event lock_wait_start
     flock 9
+    timing_event lock_acquired
     echo "SAFE_PYTEST: Device lock acquired"
 
     # --- Check if device needs reset from previous hang ---
@@ -264,8 +272,10 @@ if [[ "$PROFILE_MODE" == true ]]; then
     PROFILE_CSV_BEFORE=$(ls -t "${PROFILE_REPORTS_DIR}"/*/ops_perf_results*.csv 2>/dev/null | head -1)
 fi
 
+timing_event pytest_start
 "${PYTEST_CMD[@]}"
 EXIT_CODE=$?
+timing_event pytest_end
 
 echo "========================================"
 

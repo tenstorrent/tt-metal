@@ -58,6 +58,45 @@ missing clock metadata reject the evaluation. Accuracy failures stop before
 performance profiling. Each evaluation needs a new result directory so stale
 artifacts cannot satisfy validation.
 
+### Screens, repeated measurements, and loop accounting
+
+`evaluate --screen` checks the complete SFPU reconstruction corpus and original
+twelve tensor scales, but omits the precise/FPU/storage-baseline survey and broad
+regressions. Its successful status is `screened`, distinct from `passed` full
+validation. Full validation includes 140 operation cases: 134 passes and the six
+documented exclusions, including the transpose/consumer suite. Screens cannot
+replace full validation before promotion. Both paths share `TENSOR_SCALES` and
+the same numerical thresholds.
+
+Use `--perf-repeats 4` for confirmation: four eight-call benchmark tests produce
+32 recorded operations. Discard the first two calls of **each** group, retaining
+24 samples. Repetition count becomes workload metadata, so incompatible runs
+cannot be compared silently. Actual clock/core-count and evaluator/source checks
+remain mandatory; a different reported frequency rejects the comparison.
+
+Each stage writes `timing.json` and `pytest_metrics.json`. Safe-runner timestamps
+separate lock wait, preflight, test execution, and cleanup. Pytest reports expose
+collection and setup/call/teardown durations and actual case outcomes. Failed
+experiments and resets remain in the logs/counts. JIT time overlaps these phases;
+dedicated `TT_METAL_LOG_JIT_TELEMETRY=1` audits can distinguish cached/cold builds.
+
+```bash
+python scripts/nvfp4_loop_stats.py generated/nvfp4_second --output generated/loop-stats.json
+```
+
+The summary distinguishes evaluator runs, source/encoding fingerprints, and
+worktrees; counts pytest outcomes separately from scalar gate comparisons; and
+reports cumulative queue/phase time. Concurrent workers' summed waiting time
+must not be interpreted as elapsed loop time. Partial live artifacts are listed
+and skipped until complete. See the [layout and throughput report](OPTIMIZATION_2026_10_29_LAYOUT_AND_HARNESS.md).
+
+For offline bit-layout research, a worker manifest may specify
+`input_bit_permutation`, a sixteen-element bijection: entry i identifies the
+source bit placed at output bit i. The trusted plugin applies it only after
+fast packing, leaves scale data unchanged, and the evaluator verifies that it
+remains fixed. Shipping a different input representation also requires its
+packing contract/tests; the retained implementation uses ordinary nibbles.
+
 Pipeline cycles are derived from the profiler-reported clock and divided by
 the largest per-core **output-tile** assignment. Four 32x32 BF16 output tiles
 come from each packed UINT16 tile. The full pipeline includes reader/writer

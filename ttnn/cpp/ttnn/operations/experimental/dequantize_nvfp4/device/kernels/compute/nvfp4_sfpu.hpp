@@ -77,6 +77,9 @@ inline void nvfp4_decode_plane(const volatile uint32_t* scales, uint32_t plane, 
     }
     _llk_math_eltwise_sfpu_done_();
 }
+// Preserve this uniform mask outside the eight LRegs used by scale expansion.
+sfpi_inline void nvfp4_configure_raw_mask() { sfpi::vConstIntPrgm0 = static_cast<int32_t>(0x81c00000u); }
+
 sfpi_inline void nvfp4_convert_begin() { _llk_math_eltwise_sfpu_start_(0); }
 sfpi_inline void nvfp4_convert_end() { _llk_math_eltwise_sfpu_done_(); }
 

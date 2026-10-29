@@ -27,19 +27,33 @@ void kernel_main() {
     constexpr uint32_t face_height = height / 2;
     constexpr uint32_t face_width = width / 2;
     constexpr uint32_t row_bytes = width * element_bytes;
-    for (uint32_t tile = start; tile < start + count; ++tile) {
-        output_cb.wait_front(1);
+    // Ordinary tiled L1 output benefits from pairing. Host ranges are packed-tile counts
+    // times two (UINT8) or four (UINT16), so pairs have no tail or CB-ring split.
+    // Transposed tile IDs are scattered and DRAM pairing did not help measured
+    // consumers. Preserve single writes for those paths and for row-major output.
+    constexpr uint32_t batch = tiled && !transpose_output && !output_args.is_dram ? 2 : 1;
+    for (uint32_t tile = start; tile < start + count;) {
+        output_cb.wait_front(batch);
         if constexpr (tiled) {
-            uint32_t output_tile = tile;
-            if constexpr (transpose_output) {
-                constexpr uint32_t matrix_tiles = original_height_tiles * original_width_tiles;
-                const uint32_t batch = tile / matrix_tiles;
-                const uint32_t matrix_tile = tile % matrix_tiles;
-                const uint32_t row = matrix_tile / original_width_tiles;
-                const uint32_t col = matrix_tile % original_width_tiles;
-                output_tile = batch * matrix_tiles + col * original_height_tiles + row;
+#pragma GCC unroll 2
+            for (uint32_t index = 0; index < batch; ++index) {
+                const uint32_t source_tile = tile + index;
+                uint32_t output_tile = source_tile;
+                if constexpr (transpose_output) {
+                    constexpr uint32_t matrix_tiles = original_height_tiles * original_width_tiles;
+                    const uint32_t matrix_batch = source_tile / matrix_tiles;
+                    const uint32_t matrix_tile = source_tile % matrix_tiles;
+                    const uint32_t row = matrix_tile / original_width_tiles;
+                    const uint32_t col = matrix_tile % original_width_tiles;
+                    output_tile = matrix_batch * matrix_tiles + col * original_height_tiles + row;
+                }
+                noc.async_write(
+                    output_cb,
+                    output,
+                    height * row_bytes,
+                    {.offset_bytes = index * page_bytes},
+                    {.page_id = output_tile});
             }
-            noc.async_write(output_cb, output, height * row_bytes, {}, {.page_id = output_tile});
         } else {
             const auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_cb.get_read_ptr());
             auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch.get_write_ptr());
@@ -66,6 +80,7 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        output_cb.pop_front(1);
+        output_cb.pop_front(batch);
+        tile += batch;
     }
 }

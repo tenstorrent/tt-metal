@@ -24,6 +24,7 @@ void kernel_main() {
     if constexpr (fpu_tensor_scale) {
         global_cb.wait_front(1);
     }
+    MATH((sfpu::nvfp4_configure_raw_mask()));
     for (uint32_t tile = 0; tile < count; ++tile) {
         data_cb.wait_front(1);
         scale_cb.wait_front(planes * 4);

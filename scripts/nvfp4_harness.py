@@ -37,6 +37,8 @@ TRUSTED_FILES = [
     OPERATIONS / "test_nvfp4_accuracy.py",
     OPERATIONS / "test_dequantize_nvfp4.py",
     OPERATIONS / "test_nvfp4_perf.py",
+    OPERATIONS / "test_nvfp4_candidate_screen.py",
+    OPERATIONS / "test_nvfp4_transpose_output.py",
     Path("ttnn/ttnn/_experimental/nvfp4.py"),
 ]
 
@@ -89,6 +91,14 @@ def validate_candidate(candidate):
         != Path(git("rev-parse", "--path-format=absolute", "--git-common-dir")).resolve()
     ):
         raise EvaluationError("Candidate is not a worktree of the trusted repository")
+    permutation = manifest.get("input_bit_permutation")
+    if permutation is not None and (
+        not isinstance(permutation, list)
+        or len(permutation) != 16
+        or any(type(bit) is not int for bit in permutation)
+        or sorted(permutation) != list(range(16))
+    ):
+        raise EvaluationError("input_bit_permutation must be a bijection of bits 0..15")
     base = manifest["base_revision"]
     changed = git("diff", "--name-only", base, cwd=candidate).splitlines()
     untracked = git("ls-files", "--others", "--exclude-standard", cwd=candidate).splitlines()
@@ -123,7 +133,7 @@ def validate_junit(path, expected_skips=0):
         raise EvaluationError(f"Failed, errored, unexpectedly skipped, or empty pytest run: {path}")
 
 
-def run_stage(candidate, output, name, flags, tests, extra_env, timeout):
+def run_stage(candidate, output, name, flags, tests, extra_env, timeout, pytest_args=()):
     stage = output / name
     stage.mkdir()
     env = os.environ.copy()
@@ -152,6 +162,12 @@ def run_stage(candidate, output, name, flags, tests, extra_env, timeout):
         PATH=str(REPO / "python_env/bin") + os.pathsep + env.get("PATH", ""),
     )
     env.update(extra_env)
+    manifest_path = candidate / MANIFEST
+    if manifest_path.exists():
+        env["NVFP4_INPUT_BIT_PERMUTATION"] = json.dumps(read_json(manifest_path).get("input_bit_permutation"))
+    else:
+        env["NVFP4_INPUT_BIT_PERMUTATION"] = json.dumps(read_json(output / "result.json").get("input_bit_permutation"))
+    env["NVFP4_PYTEST_METRICS"] = str(stage / "pytest_metrics.json")
     junit = stage / "pytest.xml"
     command = [
         str(REPO / "scripts/run_safe_pytest.sh"),
@@ -161,9 +177,11 @@ def run_stage(candidate, output, name, flags, tests, extra_env, timeout):
         "-p",
         "scripts.nvfp4_harness_plugin",
         f"--junitxml={junit}",
+        *pytest_args,
     ]
     write_json(stage / "command.json", {"argv": command, "candidate": str(candidate), "timeout_seconds": timeout})
     print(f"NVFP4 {name}: {candidate.name}", flush=True)
+    started = time.time()
     with (stage / "run.log").open("w") as log:
         process = subprocess.Popen(
             command, cwd=REPO, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
@@ -179,22 +197,65 @@ def run_stage(candidate, output, name, flags, tests, extra_env, timeout):
                 process.wait()
             # The safe runner's dirty marker remains for its next invocation.
             raise EvaluationError(f"Stage timed out: {name}; inspect {stage / 'run.log'}") from exc
+    write_json(stage / "timing.json", stage_timing(stage, started, time.time()))
     if code:
         raise EvaluationError(f"Stage {name} failed with exit code {code}; inspect {stage / 'run.log'}")
     # The six intentional UINT8/BF16-DEST exclusions are the only allowed skips.
-    validate_junit(junit, expected_skips=6 if name == "accuracy" else 0)
+    screen = read_json(output / "result.json").get("validation_level") == "screen"
+    validate_junit(junit, expected_skips=6 if name == "accuracy" and not screen else 0)
     return stage
 
 
-def profile_metrics(stage, repetitions=1):
+def stage_timing(stage, started, finished):
+    events = dict(
+        (name, float(value))
+        for name, value in re.findall(r"SAFE_PYTEST_TIMING: (\w+) ([\d.]+)", (stage / "run.log").read_text())
+    )
+
+    def interval(first, last):
+        return events[last] - events[first] if first in events and last in events else None
+
+    result = dict(
+        started_unix=started,
+        finished_unix=finished,
+        wall_seconds=finished - started,
+        lock_wait_seconds=interval("lock_wait_start", "lock_acquired"),
+        preflight_seconds=interval("lock_acquired", "pytest_start"),
+        test_command_seconds=interval("pytest_start", "pytest_end"),
+    )
+    metrics = stage / "pytest_metrics.json"
+    if metrics.exists():
+        payload = read_json(metrics)
+        result["collected"] = payload["collected"]
+        result["collection_seconds"] = payload["collection_seconds"]
+        reports = payload["reports"]
+        result["test_counts"] = {
+            "passed": sum(r["phase"] == "call" and r["outcome"] == "passed" for r in reports),
+            "failed": sum(r["outcome"] == "failed" for r in reports),
+            "skipped": sum(r["outcome"] == "skipped" for r in reports),
+        }
+        result["pytest_phase_seconds"] = {
+            phase: sum(r["seconds"] for r in reports if r["phase"] == phase) for phase in ("setup", "call", "teardown")
+        }
+        if "pytest_start" in events:
+            result["python_startup_seconds"] = payload["session_start_unix"] - events["pytest_start"]
+        if "pytest_end" in events:
+            result["post_session_seconds"] = events["pytest_end"] - payload["session_end_unix"]
+    return result
+
+
+def profile_metrics(stage, repetitions=1, pytest_repeats=1):
     files = list((stage / "profiler").glob("reports/*/ops_perf_results*.csv"))
     if len(files) != 1:
         raise EvaluationError(f"Expected one fresh profiler report, found {len(files)} in {stage}")
     with files[0].open() as stream:
         rows = [row for row in csv.DictReader(stream) if row["OP CODE"] == "Nvfp4DeviceOperation"]
     metadata = read_json(stage / "workload.json")
-    if len(rows) != metadata["calls"]:
-        raise EvaluationError(f"Expected {metadata['calls']} profiled operations, got {len(rows)}")
+    expected_calls = metadata["calls"] * pytest_repeats
+    if len(rows) != expected_calls:
+        raise EvaluationError(f"Expected {expected_calls} profiled operations, got {len(rows)}")
+    if pytest_repeats != 1:
+        metadata["pytest_repeats"] = pytest_repeats
     raw_files = list((stage / "profiler").rglob("profile_log_device.csv"))
     if not raw_files:
         raise EvaluationError("Profiler raw device cycles/clock metadata are missing")
@@ -206,7 +267,9 @@ def profile_metrics(stage, repetitions=1):
         raise EvaluationError(f"Cannot determine device clock from {raw_files[0]}: {first.strip()}")
     mhz = float(clock.group(1))
     samples, math_samples = [], []
-    for row in rows[metadata["warmup_calls"] :]:
+    for index, row in enumerate(rows):
+        if index % metadata["calls"] < metadata["warmup_calls"]:
+            continue
         if int(row["CORE COUNT"]) != metadata["cores"]:
             raise EvaluationError("Profiled core count differs from workload metadata")
         divisor = metadata["maximum_output_tiles_per_core"]
@@ -260,11 +323,15 @@ def math_overlay(candidate, output, repeats):
     compute = overlay / KERNELS / "compute"
     compute.mkdir(parents=True)
     source = (candidate / KERNELS / "compute/dequantize_fast.cpp").read_text()
+    init_anchor = "        MATH((sfpu::nvfp4_init_raw()));\n"
     start_anchor = "#pragma GCC unroll 4\n        for (uint32_t plane = 0; plane < planes; ++plane) {"
     end_anchor = "        MATH((sfpu::nvfp4_convert_end()));"
-    if source.count(start_anchor) != 1 or source.count(end_anchor) != 1:
+    if (source.count(init_anchor) != 1 and source.count(start_anchor) != 1) or source.count(end_anchor) != 1:
         raise EvaluationError("Math diagnostic cannot instrument this candidate's complete decode sweep")
-    start, end = source.index(start_anchor), source.index(end_anchor)
+    start = (
+        source.index(init_anchor) + len(init_anchor) if source.count(init_anchor) == 1 else source.index(start_anchor)
+    )
+    end = source.index(end_anchor)
     if end <= start:
         raise EvaluationError("Math diagnostic found an invalid decode sweep boundary")
     sweep = source[start:end]
@@ -281,7 +348,7 @@ def math_overlay(candidate, output, repeats):
     return overlay
 
 
-def evaluate(candidate, output, diagnostic, timeout, accuracy_only=False):
+def evaluate(candidate, output, diagnostic, timeout, accuracy_only=False, screen=False, perf_repeats=1):
     candidate, manifest, before = validate_candidate(candidate)
     if output.exists():
         raise EvaluationError(f"Result directory must be new: {output}")
@@ -289,6 +356,8 @@ def evaluate(candidate, output, diagnostic, timeout, accuracy_only=False):
     evaluator = hashes(REPO, TRUSTED_FILES)
     result = {
         "status": "running",
+        "validation_level": "screen" if screen else "full",
+        "input_bit_permutation": manifest.get("input_bit_permutation"),
         "candidate": str(candidate),
         "base_revision": manifest["base_revision"],
         "candidate_revision": git("rev-parse", "HEAD", cwd=candidate),
@@ -304,7 +373,15 @@ def evaluate(candidate, output, diagnostic, timeout, accuracy_only=False):
             output,
             "accuracy",
             ["--dev"],
-            [OPERATIONS / "test_nvfp4_accuracy.py", OPERATIONS / "test_dequantize_nvfp4.py"],
+            (
+                [OPERATIONS / "test_nvfp4_candidate_screen.py"]
+                if screen
+                else [
+                    OPERATIONS / "test_nvfp4_accuracy.py",
+                    OPERATIONS / "test_dequantize_nvfp4.py",
+                    OPERATIONS / "test_nvfp4_transpose_output.py",
+                ]
+            ),
             {"NVFP4_ACCURACY_REPORT": str(output / "accuracy.json")},
             timeout,
         )
@@ -324,8 +401,9 @@ def evaluate(candidate, output, diagnostic, timeout, accuracy_only=False):
                 [OPERATIONS / "test_nvfp4_perf.py"],
                 {"NVFP4_BENCH_REPORT": str(output / "pipeline/workload.json")},
                 timeout,
+                pytest_args=[f"--count={perf_repeats}"],
             )
-            result["performance"] = profile_metrics(stage)
+            result["performance"] = profile_metrics(stage, pytest_repeats=perf_repeats)
             save_disassembly(candidate, output, stage, result["performance"])
             if diagnostic:
                 overlay = math_overlay(candidate, output, 128)
@@ -337,25 +415,36 @@ def evaluate(candidate, output, diagnostic, timeout, accuracy_only=False):
                     [OPERATIONS / "test_nvfp4_perf.py"],
                     {"NVFP4_BENCH_REPORT": str(output / "math_isolate/workload.json")},
                     timeout,
+                    pytest_args=[f"--count={perf_repeats}"],
                 )
-                result["math_isolate"] = profile_metrics(stage, repetitions=128)
+                result["math_isolate"] = profile_metrics(stage, repetitions=128, pytest_repeats=perf_repeats)
                 save_disassembly(overlay, output, stage, result["math_isolate"])
                 result["math_isolate"][
                     "scope"
                 ] = "Repeated complete DEST decode sweep; amortized pipeline, not standalone LLK MATH_ISOLATE"
-        if before != validate_candidate(candidate)[2] or evaluator != hashes(REPO, TRUSTED_FILES):
+        after_manifest = read_json(candidate / MANIFEST)
+        if (
+            before != validate_candidate(candidate)[2]
+            or evaluator != hashes(REPO, TRUSTED_FILES)
+            or manifest.get("input_bit_permutation") != after_manifest.get("input_bit_permutation")
+        ):
             raise EvaluationError("Candidate or trusted evaluator changed during evaluation")
-        result["status"] = "passed"
+        result["status"] = "screened" if screen else "passed"
     except (EvaluationError, OSError, ValueError, KeyError, ET.ParseError, subprocess.CalledProcessError) as exc:
         result.update(status="failed", error=str(exc))
+    result["stages"] = {p.parent.name: read_json(p) for p in output.glob("*/timing.json")}
     result["finished_unix"] = time.time()
+    result["elapsed_seconds"] = result["finished_unix"] - result["started_unix"]
     write_json(output / "result.json", result)
     return result
 
 
 def compare(baseline_path, candidate_path):
     baseline, candidate = read_json(baseline_path), read_json(candidate_path)
-    if any(result["status"] != "passed" or "performance" not in result for result in [baseline, candidate]):
+    if any(
+        result["status"] not in ("passed", "screened") or "performance" not in result
+        for result in [baseline, candidate]
+    ):
         raise EvaluationError("Comparison requires two passing accuracy+performance evaluations")
     if baseline["evaluator_hashes"] != candidate["evaluator_hashes"]:
         raise EvaluationError("Evaluations used different trusted evaluators")
@@ -372,7 +461,7 @@ def compare(baseline_path, candidate_path):
         "improvement_percent": 100 * saved / a["pipeline_cycles_per_output_tile"],
         "screening_noise_floor_cycles": noise,
         "screening_improvement": saved > noise,
-        "promotion_requires": "Independent paired hardware remeasurement; this comparison does not modify any branch",
+        "promotion_requires": "Full regression validation and independent paired hardware remeasurement; comparison does not modify branches",
     }
 
 
@@ -387,7 +476,19 @@ def main():
     run.add_argument("--output", type=Path, required=True)
     run.add_argument("--math-isolate", action="store_true")
     run.add_argument("--accuracy-only", action="store_true")
+    run.add_argument(
+        "--screen",
+        action="store_true",
+        help="Full SFPU reconstruction corpus only; broad regression required before promotion",
+    )
     run.add_argument("--timeout-seconds", type=int, default=600)
+    run.add_argument(
+        "--perf-repeats",
+        type=int,
+        default=1,
+        choices=range(1, 33),
+        help="Repeat each eight-call benchmark, discarding two warmups per group",
+    )
     diff = commands.add_parser("compare")
     diff.add_argument("--baseline", type=Path, required=True)
     diff.add_argument("--candidate", type=Path, required=True)
@@ -399,7 +500,13 @@ def main():
             result = compare(args.baseline, args.candidate)
         else:
             result = evaluate(
-                args.candidate, args.output.resolve(), args.math_isolate, args.timeout_seconds, args.accuracy_only
+                args.candidate,
+                args.output.resolve(),
+                args.math_isolate,
+                args.timeout_seconds,
+                args.accuracy_only,
+                args.screen,
+                args.perf_repeats,
             )
     except (EvaluationError, OSError, ValueError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"NVFP4 harness: {exc}\n")
