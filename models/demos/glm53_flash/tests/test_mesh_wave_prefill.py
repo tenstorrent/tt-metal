@@ -107,11 +107,11 @@ def test_wave_prefill_vs_sequence_parallel(mesh_device, expect_error):
     ids_a = torch.tensor(
         tok.encode(
             "The lighthouse keeper collected stamps from every ship that passed, and on winter nights he sorted them by the colour of their seas. "
-            * 3
+            * 8
         ),
         dtype=torch.long,
     )
-    ids_b = torch.tensor(tok.encode("量子计算机使用量子比特，它可以同时处于多个状态；这使得某些问题的求解速度远远超过经典计算机。" * 4), dtype=torch.long)
+    ids_b = torch.tensor(tok.encode("量子计算机使用量子比特，它可以同时处于多个状态；这使得某些问题的求解速度远远超过经典计算机。" * 10), dtype=torch.long)
     n_a, n_b = int(ids_a.numel()), int(ids_b.numel())
     assert n_a > 96 and n_b > 128 and n_a != n_b, (n_a, n_b)
     model = GLM53MeshModel(mesh_device, cfg, layers, max_batch=2, max_seq_len=2048, weight_cache_path=CACHE_ROOT)
