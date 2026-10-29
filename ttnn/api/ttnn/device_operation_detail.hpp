@@ -86,12 +86,15 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
 
 /**
- * Backs ttnn::CONFIG's verify_program_cache_hits. Throws when `rebuilt`, a workload just created by the
- * op's factory for this invocation, differs from the `cached` one the hit would dispatch. The message names the
- * first differing element of each, which points at the input the op's program hash leaves out.
+ * Backs ttnn::CONFIG's verify_program_cache_hits. When `rebuilt`, a workload just created by the op's factory for
+ * this invocation, differs from the `cached` one the hit would dispatch: throws if `fatal`, otherwise logs the first
+ * differing element once per `program_hash` and returns. The message names that element, which points at the input
+ * the op's program hash leaves out.
  */
 void verify_cached_mesh_workload(
     std::string_view operation_name,
+    uint64_t program_hash,
+    bool fatal,
     tt::tt_metal::distributed::MeshWorkload& cached,
     tt::tt_metal::distributed::MeshWorkload& rebuilt);
 

@@ -74,6 +74,10 @@ TEST_F(ProgramFingerprintTest, RuntimeArgsAreLeftOut) {
     EXPECT_EQ(describe_with({}), describe_with({.runtime_args = {8}}));
 }
 
+TEST_F(ProgramFingerprintTest, RuntimeArgCountChangesIt) {
+    EXPECT_NE(describe_with({}), describe_with({.runtime_args = {7, 8}}));
+}
+
 TEST_F(ProgramFingerprintTest, CompileArgsChangeIt) {
     EXPECT_NE(describe_with({}), describe_with({.compile_args = {1, 2, 4}}));
 }

@@ -16,7 +16,9 @@
 
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/dynamic_length.hpp"
 #include "ttnn/graph/graph_processor.hpp"
+#include "ttnn/operations/trace.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -115,10 +117,77 @@ protected:
             device_);
     }
 
-    static auto verify_hits(bool enabled) {
+    static auto verify_hits(bool enabled, bool fatal = true) {
         const bool previous = ttnn::CONFIG.get<"verify_program_cache_hits">();
+        const bool previous_fatal = ttnn::CONFIG.get<"verify_program_cache_hits_fatal">();
         ttnn::CONFIG.set<"verify_program_cache_hits">(enabled);
-        return ttsl::make_cleanup([previous]() { ttnn::CONFIG.set<"verify_program_cache_hits">(previous); });
+        ttnn::CONFIG.set<"verify_program_cache_hits_fatal">(fatal);
+        return ttsl::make_cleanup([previous, previous_fatal]() {
+            ttnn::CONFIG.set<"verify_program_cache_hits">(previous);
+            ttnn::CONFIG.set<"verify_program_cache_hits_fatal">(previous_fatal);
+        });
+    }
+};
+
+// Length stays out of the hash. `Bake` puts it in a compile-time arg, which a hit must not share.
+template <bool Bake>
+struct DynamicLengthVerifyOp {
+    struct operation_attributes_t {
+        uint32_t length = 0;
+    };
+    struct tensor_args_t {
+        Tensor input;
+    };
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    struct Factory {
+        struct shared_variables_t {};
+        using cached_program_t = CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& attrs, const tensor_args_t&, tensor_return_value_t&) {
+            tt::tt_metal::Program program;
+            std::vector<uint32_t> compile_args;
+            if constexpr (Bake) {
+                compile_args.push_back(attrs.length);
+            }
+            tt::tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+                CoreCoord{0, 0},
+                tt::tt_metal::DataMovementConfig{.compile_args = compile_args});
+            return cached_program_t(std::move(program), shared_variables_t{});
+        }
+
+        static void override_runtime_arguments(
+            cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&) {}
+    };
+    using program_factory_t = std::variant<Factory>;
+
+    static std::vector<dynamic_length::DynamicAxis> dynamic_axes(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+        return {dynamic_length::DynamicAxis{
+            .name = "length",
+            .capacity = tensor_args.input.logical_shape()[-2],
+            .value = attrs.length,
+        }};
+    }
+
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&) {}
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t& tensor_args) {
+        return tensor_args.input.tensor_spec();
+    }
+
+    static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+        return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input.device());
+    }
+
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t& tensor_args) {
+        return ttsl::hash::hash_objects_with_default_seed(tensor_args.input.tensor_spec());
     }
 };
 
@@ -162,6 +231,43 @@ TEST_F(ProgramCacheHitVerifyTest, SkippedDuringGraphCapture) {
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     const auto end_capture = ttsl::make_cleanup([]() { ttnn::graph::GraphProcessor::end_graph_capture(); });
     EXPECT_NO_THROW(launch<UnpatchedOp>({.baked_value = 2}, {.input = input}));
+}
+
+TEST_F(ProgramCacheHitVerifyTest, NonFatalModeContinues) {
+    const auto restore = verify_hits(true, /*fatal=*/false);
+    const auto input = make_input();
+    launch<UnpatchedOp>({.baked_value = 1}, {.input = input});
+    EXPECT_NO_THROW(launch<UnpatchedOp>({.baked_value = 2}, {.input = input}));
+}
+
+TEST_F(ProgramCacheHitVerifyTest, SkippedDuringTraceCapture) {
+    const auto restore = verify_hits(true);
+    const auto input = make_input();
+    launch<UnpatchedOp>({.baked_value = 1}, {.input = input});
+    const auto trace_id = ttnn::operations::trace::begin_trace_capture(device_, ttnn::QueueId(0));
+    struct Release {
+        tt::tt_metal::distributed::MeshDevice* device;
+        ttnn::MeshTraceId id;
+        ~Release() {
+            ttnn::operations::trace::end_trace_capture(device, id, ttnn::QueueId(0));
+            ttnn::operations::trace::release_trace(device, id);
+        }
+    } release{device_, trace_id};
+    EXPECT_NO_THROW(launch<UnpatchedOp>({.baked_value = 2}, {.input = input}));
+}
+
+TEST_F(ProgramCacheHitVerifyTest, DynamicLengthHitBelowCapacityPasses) {
+    const auto restore = verify_hits(true);
+    const auto input = make_input();
+    launch<DynamicLengthVerifyOp<false>>({.length = 16}, {.input = input});
+    EXPECT_NO_THROW(launch<DynamicLengthVerifyOp<false>>({.length = 32}, {.input = input}));
+}
+
+TEST_F(ProgramCacheHitVerifyTest, DynamicLengthBakedIntoCompileArgThrows) {
+    const auto restore = verify_hits(true);
+    const auto input = make_input();
+    launch<DynamicLengthVerifyOp<true>>({.length = 16}, {.input = input});
+    EXPECT_THROW(launch<DynamicLengthVerifyOp<true>>({.length = 32}, {.input = input}), std::exception);
 }
 
 TEST_F(ProgramCacheHitVerifyTest, HonestHitsPass) {

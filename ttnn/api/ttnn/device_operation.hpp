@@ -287,9 +287,14 @@ ttnn::MeshCoordinateRangeSet compute_workload_coordinates(
         tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
     } else {
         // Slow path - iterate over coordinates and merge them into a range set one by one.
-        log_warning(
-            tt::LogOp,
-            "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
+        // Through a lambda: log_* directly in this function template trips a g++12 bug in tt-logger. Debug, because
+        // verification calls this on every hit.
+        auto log_msg_func = [] {
+            log_debug(
+                tt::LogOp,
+                "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
+        };
+        log_msg_func();
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
         }
@@ -351,7 +356,12 @@ void handle_mesh_adapter_cache_hit(
                 compute_workload_coordinates(tensor_args, mesh_device),
                 tensor_args,
                 tensor_return_value);
-            verify_cached_mesh_workload(operation_name, cached_mesh_workload.workload, rebuilt.workload);
+            verify_cached_mesh_workload(
+                operation_name,
+                program_key.hash,
+                ttnn::CONFIG.get<"verify_program_cache_hits_fatal">(),
+                cached_mesh_workload.workload,
+                rebuilt.workload);
         }
 
         use_workload(cached_mesh_workload.workload);

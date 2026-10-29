@@ -70,9 +70,22 @@ std::string describe_kernel(const Kernel& kernel) {
         }
     });
 
+    // Values are omitted: override_runtime_arguments rewrites them on every hit. The cores that carry unique
+    // args, and how many per core and in common, are fixed at creation, so a hash that drops a worker split
+    // (48 cores versus 64) still shows up here.
+    const auto& arg_cores = kernel.cores_with_runtime_args();
+    std::vector<std::string> arg_core_names;
+    std::vector<uint32_t> per_core_counts;
+    arg_core_names.reserve(arg_cores.size());
+    per_core_counts.reserve(arg_cores.size());
+    for (const auto& core : arg_cores) {
+        arg_core_names.push_back(core.str());
+        per_core_counts.push_back(static_cast<uint32_t>(const_cast<Kernel&>(kernel).runtime_args(core).size()));
+    }
+
     return fmt::format(
         "kernel {} source={} cores={} processor_class={} compile_args=[{}] named_args=[{}] defines=[{}] opt={}/{} "
-        "settings_hash={:x}",
+        "settings_hash={:x} runtime_arg_cores=[{}] per_core_counts=[{}] common_count={}",
         kernel.name(),
         source_id,
         cores_to_string(kernel.core_range_set()),
@@ -82,7 +95,10 @@ std::string describe_kernel(const Kernel& kernel) {
         fmt::join(key_values(defines), ","),
         kernel.get_compiler_opt_level(),
         kernel.get_linker_opt_level(),
-        kernel.compute_hash());
+        kernel.compute_hash(),
+        fmt::join(arg_core_names, ","),
+        fmt::join(per_core_counts, ","),
+        kernel.get_common_runtime_args_count());
 }
 
 std::string describe_tile(const std::optional<Tile>& tile) {
