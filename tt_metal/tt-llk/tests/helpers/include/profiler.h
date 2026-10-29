@@ -66,8 +66,9 @@ enum class EntryType : std::uint32_t
 
 constexpr std::uint32_t TRISC_ID = llk_barrier::THREAD_ID;
 
-constexpr std::uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
-constexpr std::uint32_t ZONE_WORDS    = 4;     // words a zone writes on scope exit: its ZONE_START and ZONE_END
+constexpr std::uint32_t BUFFER_LENGTH    = 0x400; // 1024 entries per core
+constexpr std::uint32_t ZONE_START_WORDS = 2;     // words written per ZONE_START (on scope exit, with the end)
+constexpr std::uint32_t ZONE_END_WORDS   = 2;     // words written per ZONE_END on scope exit
 // Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t NUM_CORES   = 4;
@@ -116,7 +117,7 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     return (BUFFER_LENGTH - (write_idx + reserved_words_count)) < 4;
 }
 
-__attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16, std::uint64_t timestamp)
+__attribute__((always_inline)) inline void write_entry_at(EntryType type, std::uint16_t id16, std::uint64_t timestamp)
 {
     std::uint32_t timestamp_high = static_cast<std::uint32_t>(timestamp >> 32);
 
@@ -127,10 +128,29 @@ __attribute__((always_inline)) inline void write_entry(EntryType type, std::uint
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(timestamp);
 }
 
+__attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
+{
+    write_entry_at(type, id16, ckernel::read_wall_clock());
+}
+
 __attribute__((always_inline)) inline void write_data(std::uint64_t data)
 {
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data >> 32);
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
+}
+
+// Only the two wall clock reads are inline. The bookkeeping and both records (written after the end read, so no L1
+// store lands in the window) are out of line and noipa, so they cannot change the kernel code around them.
+__attribute__((noipa, section(".text.llk_zone.reserve"))) inline void zone_reserve()
+{
+    reserved_words_count += ZONE_START_WORDS + ZONE_END_WORDS;
+}
+
+__attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record(std::uint16_t id16, std::uint64_t start_timestamp, std::uint64_t end_timestamp)
+{
+    reserved_words_count -= ZONE_START_WORDS + ZONE_END_WORDS;
+    write_entry_at(EntryType::ZONE_START, id16, start_timestamp);
+    write_entry_at(EntryType::ZONE_END, id16, end_timestamp);
 }
 
 template <std::uint16_t id16>
@@ -152,8 +172,7 @@ public:
         if (!is_buffer_full())
         {
             is_opened = true;
-            reserved_words_count += ZONE_WORDS;
-            ckernel::fence_compiler(); // the bookkeeping stores stay before the start read
+            zone_reserve();
             start_timestamp = ckernel::read_wall_clock();
         }
         ckernel::fence_compiler();
@@ -165,10 +184,7 @@ public:
         if (is_opened)
         {
             const std::uint64_t end_timestamp = ckernel::read_wall_clock();
-            ckernel::fence_compiler(); // both records are written after the end read, so no store lands in the window
-            reserved_words_count -= ZONE_WORDS;
-            write_entry(EntryType::ZONE_START, id16, start_timestamp);
-            write_entry(EntryType::ZONE_END, id16, end_timestamp);
+            zone_record(id16, start_timestamp, end_timestamp);
         }
         ckernel::fence_compiler();
     }
@@ -178,7 +194,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16)
 {
     if (!is_buffer_full())
     {
-        write_entry(EntryType::TIMESTAMP, id16, ckernel::read_wall_clock());
+        write_entry(EntryType::TIMESTAMP, id16);
     }
 }
 
@@ -186,7 +202,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 {
     if (!is_buffer_full())
     {
-        write_entry(EntryType::TIMESTAMP_DATA, id16, ckernel::read_wall_clock());
+        write_entry(EntryType::TIMESTAMP_DATA, id16);
         write_data(data);
     }
 }
