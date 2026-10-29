@@ -25,6 +25,7 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.generator_vllm import GLM53DecodeOutput, GLM53FlashForCausalLM
 from models.demos.glm53_flash.tt.memory_plan import MemoryPlan
 from models.demos.glm53_flash.tt.vllm_config import (
+    DEFAULT_WAVE_ROWS,
     LogicalBlockTable,
     PrefillPlanner,
     ServingGeometry,
@@ -34,6 +35,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     WavePlanner,
     greedy_rows,
     max_tokens_all_users,
+    prefill_buckets,
 )
 
 VOCAB = 64
@@ -184,7 +186,13 @@ def test_sp_eligibility_is_exact_only_while_the_other_rows_are_free():
 
 def test_wave_planner_groups_walks_and_traces():
     g = ServingGeometry(
-        rows=4, cols=2, users_per_row=2, max_seq_len=65536, rows_independent=True, traced_prefill_lengths=(256, 2048)
+        rows=4,
+        cols=2,
+        users_per_row=2,
+        max_seq_len=65536,
+        rows_independent=True,
+        traced_prefill_lengths=(256, 2048),
+        traced_wave_lengths=(256, 2048),  # the per-row wave lengths decide a wave's trace, not the SP lengths
     )
     t = SlotTable(g)
     pp = PrefillPlanner(g)
@@ -210,13 +218,14 @@ def test_wave_planner_groups_walks_and_traces():
     # waves 2 and 3: only request 0 has tokens left; the last chunk is padded to a tile multiple
     assert [(m.logical, m.start, m.end) for m in w2.members] == [(0, 2048, 4096)] and w2.t_pad == 2048
     assert [(m.logical, m.start, m.end) for m in w3.members] == [(0, 4096, 5000)] and w3.t_pad == 928
-    # a wave of fresh prompts within a captured length is traced at that length
+    # a wave of fresh prompts within a captured per-row length is traced at that length
+    assert WavePlanner(g, t, pp, wave_captured=lambda T: False).plan([(0, 0, 200)])[0].call.traced_length is None
     tr = wp.plan([(0, 0, 300), (1, 0, 100)])
     assert len(tr) == 1 and tr[0].call.traced_length == 2048 and tr[0].call.t_pad == 320
     assert wp.plan([(0, 0, 300), (1, 0, 100)], enable_trace=False)[0].call.traced_length is None
     assert wp.plan([(0, 0, 200)])[0].call.traced_length == 256
     # phase 2 ("row" affinity): one group, a row serves its requests one after the other
-    gr = dataclasses.replace(g, wave_affinity="row", traced_prefill_lengths=())
+    gr = dataclasses.replace(g, wave_affinity="row", traced_wave_lengths=())
     t2 = SlotTable(gr)
     p2 = WavePlanner(gr, t2, PrefillPlanner(gr))
     placed = [(s.row, s.user) for s in (t2.allocate(i) for i in range(6))]
@@ -368,6 +377,8 @@ class _FakeMeshModel:
         self.calls: list[tuple] = []
         self._traced = tuple(traced)
         self._captured: list[int] = []
+        self._ready_waves: list[int] = []  # prepared (allocated + compiled) wave lengths
+        self._captured_waves: list[int] = []  # captured per-row wave lengths
         self.trace_id = None
         self._fed_ids = None
         self._fed_pos = None
@@ -386,6 +397,27 @@ class _FakeMeshModel:
         self.calls.append(("capture_prefill",))
         new = [T for T in self._traced if T not in self._captured]
         self._captured += new
+        return new
+
+    # waves: the per-row lengths within the dense range, prepared (before any capture) then captured
+    def wave_trace_lengths(self):
+        return [T for T in self._traced if T <= 2048]
+
+    def has_wave_trace(self, T):
+        return T in self._captured_waves
+
+    def prepare_waves(self, lengths=None):
+        self.calls.append(("prepare_waves",))
+        new = [T for T in (lengths or self.wave_trace_lengths()) if T not in self._ready_waves + self._captured_waves]
+        self._ready_waves += new
+        return new
+
+    def capture_waves(self, lengths=None):
+        self.calls.append(("capture_waves",))
+        new = [T for T in (lengths or self.wave_trace_lengths()) if T not in self._captured_waves]
+        assert all(T in self._ready_waves for T in new), "the served warm-up prepares every wave before the captures"
+        self._ready_waves = [T for T in self._ready_waves if T not in new]
+        self._captured_waves += new
         return new
 
     def warmup_decode(self, ids, positions):
@@ -496,7 +528,7 @@ class _FakeMeshModel:
         return self._wave("prefill_wave", call)
 
     def prefill_traced_wave(self, call: WaveCall):
-        assert call.traced_length in self._captured and all(m.start == 0 for m in call.members)
+        assert call.traced_length in self._captured_waves and all(m.start == 0 for m in call.members)
         return self._wave("prefill_traced_wave", call)
 
 
@@ -508,7 +540,14 @@ class _FakeMeshModelNoWaves(_FakeMeshModel):
 
 
 def _adapter(
-    rows=2, cols=4, users_per_row=4, max_seq_len=65536, warm=True, independent=False, model_cls=_FakeMeshModel
+    rows=2,
+    cols=4,
+    users_per_row=4,
+    max_seq_len=65536,
+    warm=True,
+    independent=False,
+    model_cls=_FakeMeshModel,
+    wave_rows=DEFAULT_WAVE_ROWS,
 ):
     model = model_cls(rows, cols, users_per_row, max_seq_len)
     g = ServingGeometry(
@@ -520,6 +559,7 @@ def _adapter(
         pad_token_id=PAD,
         rows_independent=independent,
         wave_affinity="row" if model.wave_per_row_users else "user",
+        wave_rows=wave_rows,
     )
     a = GLM53FlashForCausalLM(model, g)
     if warm:  # the plugin's order: eager prefill, eager decode, traced prefill, traced decode
@@ -871,11 +911,28 @@ def _decode_kw(**kw):
 def test_rows_independent_needs_the_wave_prefill():
     with expect_error(NotImplementedError, "prefill_wave"):
         _adapter(independent=True, warm=False, model_cls=_FakeMeshModelNoWaves)
-    a, m = _adapter(independent=True)  # the fake has it: capacity = rows x users_per_row, the wave warm-up ran
+    a, m = _adapter(independent=True)  # the fake has it: capacity = rows x users_per_row, the wave ladder ran
     assert a.geometry.request_capacity == 8 and a.tt_supported_decode_batch_sizes == (8,)
+    assert a.geometry.traced_wave_lengths == (256, 512, 1024, 2048)  # the model's per-row wave lengths
+    g = a.geometry
     waves = [c for c in m.calls if c[0] == "prefill_wave"]
-    t_pad = -(-a._warmup_prefill_lengths()[0] // 32) * 32  # the wave warm-up takes the ladder's shortest length
-    assert len(waves) == 1 and waves[0][1] == 0 and waves[0][2] == t_pad and [r for r, *_ in waves[0][4]] == [0, 1]
+    assert all(c[3] is None and [r for r, *_ in c[4]] == [0, 1] for c in waves)  # eager, every row a member
+    # every per-row bucket up to the wave width into slot 0 (the shortest into every slot) at start 0, at the
+    # wave width (a second chunk) and at every prefix bucket (the chunk here: no GLM53_PREFIX_BUCKET)
+    buckets = [b for b in prefill_buckets() if b <= g.wave_rows]
+    starts = [0, g.wave_rows] + [j * g.device_prefill_chunk for j in range(1, g.max_seq_len // g.device_prefill_chunk)]
+    shapes = {(c[1], c[2], c[4][0][2]) for c in waves}  # (slot index, t_pad, start)
+    assert shapes == {(0, b, s) for s in starts for b in buckets} | {
+        (u, buckets[0], s) for s in starts for u in (1, 2, 3)
+    }
+    assert all(c[4][0][3] - c[4][0][2] == c[2] for c in waves)  # full chunks (the kernels clip to the valid rows)
+    # the traced phase: the wave inputs + compiles before ANY capture, the waves captured after the prefill traces
+    order = [c[0] for c in m.calls if c[0] in ("prepare_waves", "capture_prefill", "capture_waves", "capture")]
+    assert order == ["prepare_waves", "capture_prefill", "capture_waves", "capture"]
+    assert m._captured_waves == [256, 512, 1024, 2048] and not m._ready_waves
+    # the wave width must be a prefill bucket: a wave's chunk pads to the next bucket
+    with expect_error(ValueError, "not a prefill bucket"):
+        _adapter(independent=True, warm=False, wave_rows=2304)
 
 
 def test_wave_prefill_routes_rows_and_decodes_per_row():

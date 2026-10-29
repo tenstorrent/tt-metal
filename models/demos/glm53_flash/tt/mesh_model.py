@@ -279,6 +279,7 @@ class GLM53MeshModel:
             WaveSlot.allocate(self.mesh, self.layers) if self.layers and self.mesh.rows > 1 else None
         )
         self.wave_traces: dict[int, WaveTraceInputs] = {}  # per-row length -> the captured wave
+        self._wave_ready: dict[int, WaveTraceInputs] = {}  # prepared (allocated + compiled), not yet captured
         self.prefill_traces: dict[int, PrefillTraceInputs] = {}
         # the slot-level prefix cache's KDA snapshot store (tt/kda_snapshot.py): allocated by the served adapter
         # through ``allocate_kda_snapshots`` before any capture; None = no snapshots
@@ -539,13 +540,19 @@ class GLM53MeshModel:
         ttnn.deallocate(logits)
         return streams
 
-    def capture_waves(self, lengths=None, cq_id: int = 0, warmup_user: int = 0) -> list[int]:
-        """Capture one wave trace per per-row length (default ``wave_trace_lengths``): the persistent inputs are
-        allocated first, each graph is compiled eagerly with every row a member (dummy tokens into slot
-        ``warmup_user``), then captured; like ``capture_prefill`` (before ``capture`` or after ``warmup_decode``)."""
+    def prepare_waves(self, lengths=None, warmup_user: int = 0) -> list[int]:
+        """Allocate the persistent inputs of every requested per-row wave length (default ``wave_trace_lengths``)
+        and compile each graph eagerly (every row a member, dummy tokens into slot ``warmup_user``) without
+        capturing: the served warm-up prepares the waves before ANY capture (an allocation after a capture may alias
+        that trace's transient buffers) and ``capture_waves`` captures them after the prefill traces. Returns the
+        lengths prepared now."""
         if self.wave_slot is None:
             raise RuntimeError("waves need a multi-row mesh with layers")
-        todo = [T for T in (self.wave_trace_lengths() if lengths is None else lengths) if T not in self.wave_traces]
+        todo = [
+            T
+            for T in (self.wave_trace_lengths() if lengths is None else lengths)
+            if T not in self.wave_traces and T not in self._wave_ready
+        ]
         if not todo:
             return []
         vocab = self.cfg.vocab_size if self.head is not None else None
@@ -558,8 +565,21 @@ class GLM53MeshModel:
             inp.set_wave(self.mesh, dummy.reshape(1, 1, 1, -1), (T,) * rows)
             ttnn.deallocate(self._wave_graph(inp))
             ttnn.synchronize_device(self.device)
+            self._wave_ready[T] = inp
             logger.info(f"traced wave: T={T} per row compiled in {time.perf_counter() - t0:.1f} s")
-        for T, inp in new.items():
+        return todo
+
+    def capture_waves(self, lengths=None, cq_id: int = 0, warmup_user: int = 0) -> list[int]:
+        """Capture one wave trace per per-row length (default ``wave_trace_lengths``), preparing (``prepare_waves``:
+        inputs + eager compile) any length not prepared yet; like ``capture_prefill`` (before ``capture`` or after
+        ``warmup_decode``). Returns the lengths captured now."""
+        todo = [T for T in (self.wave_trace_lengths() if lengths is None else lengths) if T not in self.wave_traces]
+        if not todo:
+            return []
+        self.prepare_waves(todo, warmup_user=warmup_user)
+        self.wave_slot.set(warmup_user, ())
+        for T in todo:
+            inp = self._wave_ready.pop(T)
             t0 = time.perf_counter()
             inp.trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
             inp.streams = self._wave_graph(inp)
@@ -605,6 +625,7 @@ class GLM53MeshModel:
         for inp in self.wave_traces.values():
             ttnn.release_trace(self.device, inp.trace_id)
         self.wave_traces = {}
+        self._wave_ready = {}
 
     def rewind_user(self, user: int, position: int) -> None:
         """Set every layer's chunked-prefill cursor of slot ``user`` to ``position`` (a 32-multiple)."""

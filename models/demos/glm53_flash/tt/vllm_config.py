@@ -130,6 +130,7 @@ class ServingGeometry:
     wave_rows: int = DEFAULT_WAVE_ROWS
     wave_affinity: str = "user"
     sp_fallback: bool = True
+    traced_wave_lengths: tuple[int, ...] = ()  # the per-row lengths the mesh model captures waves at
     # multimodal serving (image + video prompts through the vision tower, tt/multimodal.py::VisionRuntime): off =
     # the text-only engine, bit for bit; vision_resident = the tower's weights stay on every chip (planner static
     # bytes) vs. built per request inside the prefill reserve; vision_batch_patches = the tower's per-call budget
@@ -661,10 +662,23 @@ class WavePlanner:
     per-row traced length is marked for the traced replay.
     """
 
-    def __init__(self, geometry: ServingGeometry, slots: SlotTable, prefill_planner: PrefillPlanner):
+    def __init__(
+        self,
+        geometry: ServingGeometry,
+        slots: SlotTable,
+        prefill_planner: PrefillPlanner,
+        wave_captured: Callable[[int], bool] | None = None,
+    ):
         self.g = geometry
         self.slots = slots
         self.pp = prefill_planner
+        self._wave_captured = wave_captured or (lambda T: T in geometry.traced_wave_lengths)
+
+    def captured_wave_length(self, n_tokens: int) -> int | None:
+        """The smallest captured per-row wave length (``ServingGeometry.traced_wave_lengths``, the capture
+        confirmed by ``wave_captured``) that holds ``n_tokens``, else None (the eager wave)."""
+        fits = [T for T in self.g.traced_wave_lengths if T >= n_tokens and self._wave_captured(T)]
+        return min(fits) if fits else None
 
     def plan(self, pending: Sequence[tuple[int, int, int]], *, enable_trace: bool = True) -> list:
         items = []
@@ -720,7 +734,7 @@ class WavePlanner:
             t_pad = -(-n // TILE) * TILE
             traced = None
             if enable_trace and all(m.start == 0 for m in members):
-                traced = self.pp.captured_length(n)
+                traced = self.captured_wave_length(n)
             out.append(
                 WaveStep(
                     WaveCall(rows=self.g.rows, t_pad=t_pad, members=tuple(members), user=user, traced_length=traced)

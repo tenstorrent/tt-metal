@@ -147,6 +147,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     max_tokens_all_users,
     mm_payload_missing,
     mm_spans_of_row,
+    prefill_buckets,
 )
 
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
@@ -615,6 +616,18 @@ class GLM53FlashForCausalLM:
         # that accepts ``vllm_config``, ``embed_input_ids``, ``forward(input_ids, positions)``) before it admits the
         # generate runner, so the signature has to advertise the keyword like the tt_transformers adapters do.
         self.model = model
+        if geometry.rows_independent:
+            # the per-row lengths the mesh model captures waves at (the planner's traced-wave decision); a wave's
+            # chunk pads to the next prefill bucket, so the wave width must be one (else every full chunk pads up)
+            lengths = getattr(model, "wave_trace_lengths", None)
+            if not geometry.traced_wave_lengths and callable(lengths):
+                geometry = dataclasses.replace(geometry, traced_wave_lengths=tuple(int(T) for T in lengths()))
+            padded = eager_pad_length(geometry.wave_rows, TILE)
+            if padded != geometry.wave_rows:
+                raise ValueError(
+                    f"wave_rows {geometry.wave_rows} is not a prefill bucket ({prefill_buckets()}): a wave's chunk "
+                    f"pads to {padded}; add it to GLM53_PREFILL_BUCKETS or pick a bucket width (GLM53_VLLM_WAVE_ROWS)"
+                )
         self.geometry = geometry
         # the vision tower (``tt/multimodal.py::VisionRuntime`` or a test double with ``encode`` / ``chunk_streams``);
         # None = text-only: a prompt that arrives with pixel data is refused
@@ -648,7 +661,7 @@ class GLM53FlashForCausalLM:
         self.prefill_planner = PrefillPlanner(geometry, traced_available=self._has_prefill_trace)
         # per-row prefill ownership (GLM53_VLLM_ROWS_INDEPENDENT): the step's prefill rows become waves (one chunk per
         # mesh row, different prompts) and, while exact, sequence-parallel single-prompt steps (ROW_OWNERSHIP.md)
-        self.waves = WavePlanner(geometry, self.slots, self.prefill_planner)
+        self.waves = WavePlanner(geometry, self.slots, self.prefill_planner, wave_captured=self._has_wave_trace)
         if geometry.rows_independent and not callable(getattr(model, "prefill_wave", None)):
             raise NotImplementedError(
                 "GLM53_VLLM_ROWS_INDEPENDENT=1 needs a mesh model with the row-local wave prefill "
@@ -829,6 +842,8 @@ class GLM53FlashForCausalLM:
             # model's, scaled to the subset so the gate does not refuse a 4-layer build on an 8-chip block
             plan = dataclasses.replace(plan, weights_bytes=plan.weights_bytes * len(layers) / cfg.num_hidden_layers)
             logger.info(f"GLM53 vLLM: {len(layers)}-layer build: the planner's weight bytes scaled to the subset")
+        if rows_independent:
+            plan = dataclasses.replace(plan, wave_rows=geometry.wave_rows)
         geometry.check_memory_plan(plan)
         # the speculative path: decided once from the env + geometry (the same rule ``spec_plan`` applied at config
         # time); the drafter and its buffers are built right after the model, before any warm-up or capture
@@ -1119,20 +1134,8 @@ class GLM53FlashForCausalLM:
                     )
                 self._warmup_prefix_starts(lengths)
                 logger.info(f"GLM53 vLLM: after the prefill warm-up: {_dram_line(_mesh_device_of(self.model))}")
-                n = lengths[0]
-                dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
-                if self.geometry.rows_independent:  # the wave path compiles its own programs: one wave on every row
-                    g = self.geometry
-                    members = tuple(WaveMember(logical=r, row=r, user=0, start=0, end=n) for r in range(g.rows))
-                    call = WaveCall(rows=g.rows, t_pad=-(-n // TILE) * TILE, members=members, user=0)
-                    for m in members:
-                        call.ids[m.row] = dummy.clone()
-                    t0 = time.perf_counter()
-                    self.model.prefill_wave(call)
-                    self._sync()
-                    logger.info(
-                        f"GLM53 vLLM: eager wave warm-up ({n} tokens x {g.rows} rows) in {time.perf_counter() - t0:.1f} s"
-                    )
+                if self.geometry.rows_independent:
+                    self._warmup_waves()
                 if self.vision is not None and _env_flag(WARMUP_MM_ENV, "1"):
                     self._warmup_multimodal()
                 if self.spec is not None:
@@ -1162,9 +1165,22 @@ class GLM53FlashForCausalLM:
         if self.trace_id is not None:
             raise RuntimeError("prefill traces must be captured before the decode trace (allocation order)")
         self._ensure_decode_inputs(U)
+        waves = self.geometry.rows_independent and callable(getattr(self.model, "capture_waves", None))
+        if waves:  # the wave traces' persistent inputs + their eager compiles precede EVERY capture
+            t0 = time.perf_counter()
+            prepared = self.model.prepare_waves()
+            logger.info(
+                f"GLM53 vLLM: wave traces {prepared} (per-row lengths) prepared in {time.perf_counter() - t0:.0f} s"
+            )
         t0 = time.perf_counter()
         captured = self.model.capture_prefill()
         logger.info(f"GLM53 vLLM: prefill traces {captured} captured in {time.perf_counter() - t0:.0f} s")
+        if waves:
+            t0 = time.perf_counter()
+            captured = self.model.capture_waves()
+            logger.info(
+                f"GLM53 vLLM: wave traces {captured} (per-row lengths) captured in {time.perf_counter() - t0:.0f} s"
+            )
         self.already_warmed_up_prefill = True
 
     def _warmup_apc_snapshots(self) -> None:
@@ -1302,6 +1318,48 @@ class GLM53FlashForCausalLM:
         logger.info(
             f"GLM53 vLLM: continued-chunk warm-up ({n_calls} chunks at {max(0, g.max_seq_len // bucket - 1)} prefix "
             f"bucket start(s) of {bucket} into {B} slot(s), tails {tails}) in {time.perf_counter() - t0:.1f} s"
+        )
+
+    def _warmup_waves(self) -> None:
+        """The eager wave ladder (``GLM53_VLLM_ROWS_INDEPENDENT``): the wave path compiles its own programs, one set
+        per per-row bucket (a wave's chunk pads to the next prefill bucket, up to the wave width) and, like the SP
+        ladder, per prefix bucket of a continued chunk (the sparse read's kv shape) and per slot (the slot-keyed
+        slices and state writes), so no wave shape compiles after the captures. Every row is a member (the idle-row
+        form runs the same programs under masks); starts 0 (the dense first chunk), the wave width (a second chunk)
+        and every prefix bucket (``GLM53_VLLM_WARMUP_PREFIX_STARTS=0`` drops these); slot 0 walks every bucket, the
+        other warm-up slots the shortest. The chunk cursors are rewound around every call; the caches and states hold
+        placeholders afterwards (the next prompt overwrites them; the KDA states are zeroed after the captures)."""
+        g = self.geometry
+        W = g.wave_rows
+        tails = sorted({b for b in prefill_buckets() if b <= W} | {W})
+        starts = [0, W] if W <= g.max_seq_len else [0]
+        if os.environ.get("GLM53_VLLM_WARMUP_PREFIX_STARTS", "1") == "1":
+            bucket = int(os.environ.get(PREFIX_BUCKET_ENV, "0")) or g.device_prefill_chunk
+            starts += [j * bucket for j in range(1, g.max_seq_len // bucket) if j * bucket != W]
+        slots = self._warmup_slots(g.users_per_row)
+        t0 = time.perf_counter()
+        n_calls = 0
+        for start in starts:
+            for u in slots:
+                for n in tails if u == slots[0] else tails[:1]:
+                    if start + n > g.max_seq_len:
+                        continue
+                    dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
+                    members = tuple(
+                        WaveMember(logical=r, row=r, user=u, start=start, end=start + n) for r in range(g.rows)
+                    )
+                    call = WaveCall(rows=g.rows, t_pad=n, members=members, user=u)
+                    for m in members:
+                        call.ids[m.row] = dummy.clone()
+                    self.model.rewind_user(u, start)
+                    self.model.prefill_wave(call)
+                    n_calls += 1
+        for u in slots:
+            self.model.rewind_user(u, 0)
+        self._sync()
+        logger.info(
+            f"GLM53 vLLM: eager wave warm-up ({n_calls} waves x {g.rows} rows: per-row buckets {tails} at starts "
+            f"{starts} into {len(slots)} slot(s)) in {time.perf_counter() - t0:.1f} s"
         )
 
     def _warmup_slots(self, B: int) -> list[int]:
@@ -1721,6 +1779,10 @@ class GLM53FlashForCausalLM:
     def _has_prefill_trace(self, T: int) -> bool:
         has = getattr(self.model, "has_prefill_trace", None)
         return bool(has(T)) if has is not None else False
+
+    def _has_wave_trace(self, T: int) -> bool:
+        has = getattr(self.model, "has_wave_trace", None)
+        return bool(has(T)) if callable(has) else False
 
     # ================================================================================= decode
     def decode_forward(
