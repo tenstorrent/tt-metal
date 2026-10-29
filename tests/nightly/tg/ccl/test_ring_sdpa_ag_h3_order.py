@@ -14,7 +14,8 @@ and before PR #62456 ring SDPA through the same getter (attention_minimax_h3.py)
 so ring SDPA and the second weight gather after it wait on the same out_ready semaphores (pp1) on the same CCL core.
 This test builds that CCLManager (2 links, Linear, full-grid CCL cores, sub-device 0) and calls the same ops with H3's
 arguments in that order: per iteration W_a pp0 -> ring SDPA pp1 -> W_b pp0 -> W_c pp1 -> W_d pp0 -> W_e pp1.
-BUGBC_BLOCK=short drops W_d and W_e (the 4-op order of the first device runs). Ring SDPA takes its semaphores from the
+BUGBC_BLOCK=short drops W_d and W_e (the 4-op order of the first device runs). BUGBC_BLOCK=capture is the order of
+H3 capture A (see below). Ring SDPA takes its semaphores from the
 getter attention_minimax_h3.py uses in the tree under test: get_ag_ping_pong_semaphore before PR #62456,
 get_ring_sdpa_ping_pong_semaphore with it. Axis-0 ops are left out: they draw from the axis-0 pools, which no axis-1
 op touches. Absolute semaphore addresses differ from H3's by a fixed offset (H3 allocates other CCLManagers first);
@@ -30,6 +31,19 @@ with the watcher's debug delay and run only on the chip/core the atomic delay ma
 (TR0 = TRISC0, which issues no NOC atomics, so the mask slows nothing else.) With no delay set the test is its own
 control. Set TT_METAL_OPERATION_TIMEOUT_SECONDS so a hang raises; the test then reads every axis-1 out_ready semaphore
 with direct L1 reads (no dispatch), again 30 s later, and fails with BUGBC_RESULT HANG.
+
+BUGBC_BLOCK=capture (H3 capture A, task #5261): ring joint SDPA keeps the out_ready address of its first (cache-miss)
+call. The semaphore is not in its program-cache key and its cache-hit path re-applies only buffers and KV-cache scalars
+(ring_joint_sdpa_program_factory.cpp), so later calls ignore what the getter hands them. In capture A the ring's cached
+program used pp1 (0x17b840) while the getter gave it pp0, so W(to_qkv) pp1 -> ring (device pp1) -> axis-0 TP all_gather
+-> W(to_out) pp1 ran with no axis-1 op between the ring and W(to_out): a neighbour that finished the ring and the TP
+gather could increment the slow rank's 0x17b840 before that rank's ring reader reset it. The capture block rebuilds that:
+a prime step (W pp0, then the ring's first call with getter pp1: the cache miss bakes pp1), a probe step (the ring with
+getter pp0, the one extra axis-1 get that shifts parity; a sentinel written to the getter's slot beforehand must survive,
+which shows on device that the cached ring used its baked slot), then per iteration
+    W_a pp1 -> ring SDPA (getter pp0, device pp1) -> axis-0 TP all_gather (own pool) -> W_b pp1 -> W_c pp0 -> W_d pp1 -> W_e pp0
+BUGBC_RINGADDR logs the ring's device address next to the getter's and W_b's, and the test asserts the device address
+equals W_b's (stock) or lies in the ring's own pool (PR #62456, where the ring has its own pool).
 """
 
 import os
@@ -53,13 +67,15 @@ N_LOCAL_HEADS, HEAD_DIM = 14, 128
 W_ROWS, W_COLS = 5376, 5376
 # H3's five FSDP weight gathers per block (default), or the earlier 3-gather order.
 BLOCK = os.environ.get("BUGBC_BLOCK", "h3")
-assert BLOCK in ("h3", "short"), f"BUGBC_BLOCK={BLOCK}: use h3 or short"
+assert BLOCK in ("h3", "short", "capture"), f"BUGBC_BLOCK={BLOCK}: use h3, short or capture"
 # H3 allocates its ring K/V gather buffers with kv_gather_capacity rows (bucketed denoise); unset = exact size.
 KV_CAPACITY = int(os.environ["BUGBC_KV_CAPACITY"]) if os.environ.get("BUGBC_KV_CAPACITY") else None
 # H3's axis-1 ag pool addresses (getter log of a stock-build H3 soak on one 4x8 BH Galaxy), for the side-by-side log.
 H3_ADDRS = {"pp0": (0x17B8C0, 0x17B880), "pp1": (0x17B840, 0x17B800)}
+# Written to the getter's slot before the capture probe; any value above the ring reader's target would end its wait.
+SENTINEL = 0x5E5E
 
-GETS = []  # (iter, caller, getter, pp, addrs)
+GETS = []  # (iter, caller, getter, pp, addrs, axis)
 
 
 def chunk_sizes(seq_local):
@@ -120,10 +136,11 @@ def test_ring_sdpa_then_fsdp_gathers_h3_order(mesh_device):
         orig = getattr(ccl, getter_name)
 
         def get(mesh_axis):
-            idx = ccl.ag_ping_pong_idx[mesh_axis] if getter_name == "get_ag_ping_pong_semaphore" else None
+            idx_attr = "ag_ping_pong_idx" if getter_name == "get_ag_ping_pong_semaphore" else "ring_sdpa_ping_pong_idx"
+            idx = getattr(ccl, idx_attr)[mesh_axis] if hasattr(ccl, idx_attr) else None
             sems = orig(mesh_axis)
             addrs = tuple(ttnn.get_global_semaphore_address(s) for s in sems)
-            GETS.append((caller["iter"], caller["op"], getter_name, idx, addrs))
+            GETS.append((caller["iter"], caller["op"], getter_name, idx, addrs, mesh_axis))
             if caller["iter"] < 2:
                 logger.info(
                     f"BUGBC_GET iter {caller['iter']} {caller['op']} axis {mesh_axis} {getter_name} "
@@ -222,8 +239,76 @@ def test_ring_sdpa_then_fsdp_gathers_h3_order(mesh_device):
             use_column_major_ccl=True,
         )
 
+    def tp_gather(ring_out):
+        # attention_minimax_h3.py after ring SDPA: concatenate_heads, then all_gather on the TP axis (axis-0 pool).
+        caller["op"] = "tp_ag"
+        spatial = ttnn.unsqueeze(ttnn.transformer.concatenate_heads(ring_out[0]), 0)
+        return ccl.all_gather(spatial, dim=3, mesh_axis=tp_axis, use_hyperparams=False)
+
+    def ring_cached(tag):
+        """Ring SDPA call; returns its output and whether it hit the program cache."""
+        before = mesh_device.num_program_cache_entries()
+        out = ring_sdpa()
+        hit = mesh_device.num_program_cache_entries() == before
+        logger.info(f"BUGBC_CACHE {tag} ring SDPA program cache {'hit' if hit else 'miss'} (entries {before})")
+        return out, hit
+
+    def last_get(op, axis=sp_axis):
+        return next(g for g in reversed(GETS) if g[1] == op and g[5] == axis)
+
     sem_list = list(pools)
+    ring_device_addrs = None  # the out_ready addresses ring SDPA's cached program uses (capture block)
+    ring_pool_addrs = set()
+    if has_ring_pool:
+        ring_pool_addrs = {ttnn.get_global_semaphore_address(s) for s in ccl.ring_sdpa_ping_pong_semaphores[sp_axis]}
     ttnn.synchronize_device(mesh_device)
+    if BLOCK == "capture":
+        # Prime: W pp0, then the ring's first call draws its slot (stock: ag pp1) and bakes it on the cache miss.
+        caller["iter"] = -1
+        weight_gather("W_prime")
+        _, hit = ring_cached("prime")
+        assert not hit, "capture prime: ring SDPA was already in the program cache; its slot would not be the prime's"
+        ring_device_addrs = last_get("ring_sdpa")[4]
+        ttnn.synchronize_device(mesh_device)
+        left = read_sems(mesh_device, sem_list, sem_cores)
+        log_sems("after capture prime", left, device_ids)
+        assert not left, f"capture prime: out_ready credits left over: {left}"
+        # Probe: the extra axis-1 get (stock: ag pp0). A sentinel on the getter's slot survives only if the cached
+        # ring program ignores that slot and keeps its baked one.
+        caller["iter"] = -1
+        idx_attr = "ring_sdpa_ping_pong_idx" if has_ring_pool else "ag_ping_pong_idx"
+        n_sems = len(ring_device_addrs)
+        pool = ccl.ring_sdpa_ping_pong_semaphores[sp_axis] if has_ring_pool else ccl.ag_ping_pong_semaphores[sp_axis]
+        nxt = getattr(ccl, idx_attr)[sp_axis]
+        probe_addrs = tuple(ttnn.get_global_semaphore_address(s) for s in pool[nxt * n_sems : (nxt + 1) * n_sems])
+        assert set(probe_addrs).isdisjoint(ring_device_addrs), "capture probe: getter's next slot is the baked one"
+        coords = [ttnn.MeshCoordinate(r, c) for r in range(rows) for c in range(cols)]
+        for addr in probe_addrs:
+            for coord in coords:
+                for core in sem_cores:
+                    ttnn.experimental.reload.write_core_l1(mesh_device, core, addr, [SENTINEL], coord)
+        _, hit = ring_cached("probe")
+        got = last_get("ring_sdpa")[4]
+        assert tuple(got) == probe_addrs, f"capture probe: getter gave {[hex(a) for a in got]}"
+        ttnn.synchronize_device(mesh_device)
+        changed = {}
+        for addr in probe_addrs:
+            for coord in coords:
+                for core in sem_cores:
+                    word = list(ttnn.experimental.reload.read_core_l1(mesh_device, core, addr, 4, coord))[0]
+                    if word != SENTINEL:
+                        changed[(hex(addr), coord[0], coord[1], core.x, core.y)] = word
+                    ttnn.experimental.reload.write_core_l1(mesh_device, core, addr, [0], coord)
+        stale = hit and not changed
+        logger.info(
+            f"BUGBC_STALE ring SDPA getter gave {[hex(a) for a in probe_addrs]}, cache {'hit' if hit else 'miss'}, "
+            f"sentinel {SENTINEL:#x} on that slot {'intact on every chip and core' if not changed else f'changed at {len(changed)} places, e.g. {sorted(changed.items())[:4]}'}"
+            f" -> device uses {'its baked' if stale else 'the getter'} slot {[hex(a) for a in (ring_device_addrs if stale else probe_addrs)]}"
+        )
+        assert stale, "capture probe: ring SDPA used the getter's slot; no stale out_ready address in this tree"
+        left = read_sems(mesh_device, sem_list, sem_cores)
+        log_sems("after capture probe", left, device_ids)
+        assert not left, f"capture probe: out_ready credits left over: {left}"
     t_start = time.time()
     for i in range(ITERS):
         caller["iter"] = i
@@ -231,10 +316,33 @@ def test_ring_sdpa_then_fsdp_gathers_h3_order(mesh_device):
         try:
             # No host sync inside the block: as in the model, a fast rank moves on to the next op.
             weight_gather("W_a")
-            ring_sdpa()
+            if BLOCK == "capture":
+                ring_out, hit = ring_cached(f"iter {i}") if i < 2 else (ring_sdpa(), True)
+                assert hit, f"iter {i}: ring SDPA missed the program cache; it would re-bake its slot"
+                tp_gather(ring_out)
+            else:
+                ring_sdpa()
             weight_gather("W_b")
+            if BLOCK == "capture":
+                g_ring, g_wb = last_get("ring_sdpa"), last_get("W_b")
+                if has_ring_pool:
+                    # PR #62456: the ring has its own pool; its stale slot can only meet the ring's own credits.
+                    ok = set(ring_device_addrs) <= ring_pool_addrs and set(ring_device_addrs).isdisjoint(g_wb[4])
+                else:
+                    ok = tuple(ring_device_addrs) == tuple(g_wb[4])
+                if i < 2 or not ok:
+                    logger.info(
+                        f"BUGBC_RINGADDR iter {i}: ring SDPA getter pp{g_ring[3]} {[hex(a) for a in g_ring[4]]}, "
+                        f"device (cached) {[hex(a) for a in ring_device_addrs]} (low bits {ring_device_addrs[0] & 0xFFF:#x}; "
+                        f"H3 capture A 0x840), next axis-1 op W_b pp{g_wb[3]} {[hex(a) for a in g_wb[4]]}: "
+                        f"{'same slot' if tuple(ring_device_addrs) == tuple(g_wb[4]) else 'different slot'}"
+                    )
+                assert ok, (
+                    f"iter {i}: ring SDPA device slot {[hex(a) for a in ring_device_addrs]} vs W_b {[hex(a) for a in g_wb[4]]}: "
+                    + ("ring slot not in its own pool" if has_ring_pool else "not the slot of the next axis-1 op")
+                )
             out = weight_gather("W_c")
-            if BLOCK == "h3":
+            if BLOCK in ("h3", "capture"):
                 weight_gather("W_d")
                 out = weight_gather("W_e")
             ttnn.synchronize_device(mesh_device)
@@ -244,8 +352,10 @@ def test_ring_sdpa_then_fsdp_gathers_h3_order(mesh_device):
                 f"BUGBC_HANG iter {i} after {dt:.0f} s ({time.time() - t_start:.0f} s into the loop): "
                 f"{type(e).__name__}: {str(e)[:300]}"
             )
-            for g in GETS[-6:]:
-                logger.error(f"BUGBC_HANG getter {g[1]} {g[2]} pp{g[3]} {[hex(a) for a in g[4]]}")
+            for g in GETS[-7:]:
+                logger.error(f"BUGBC_HANG getter {g[1]} axis {g[5]} {g[2]} pp{g[3]} {[hex(a) for a in g[4]]}")
+            if ring_device_addrs:
+                logger.error(f"BUGBC_HANG ring SDPA device out_ready (cached) {[hex(a) for a in ring_device_addrs]}")
             log_sems(f"hang iter {i}", read_sems(mesh_device, sem_list, sem_cores), device_ids)
             # A slow rank still working would move the counters; an erased credit leaves them stuck.
             time.sleep(30)
@@ -267,8 +377,8 @@ def test_ring_sdpa_then_fsdp_gathers_h3_order(mesh_device):
     # Which pool slot each op drew, for the comparison with H3's getter table.
     order = [
         f"{op}:{getter.replace('get_', '').replace('_ping_pong_semaphore', '')}/pp{pp}"
-        for it, op, getter, pp, _ in GETS
-        if it == 1
+        for it, op, getter, pp, _, axis in GETS
+        if it == 1 and axis == sp_axis
     ]
     logger.info(f"BUGBC_ORDER iter 1: {' -> '.join(order)}")
     logger.info(f"BUGBC_RESULT PASS {ITERS} iters in {time.time() - t_start:.0f} s")
