@@ -1,7 +1,7 @@
 # Kimi-K3 prefill on SC4 as 8 stages of 4x4: two per Galaxy, chained top(H) -> bottom(H) -> top(H+1).
 # Even meshes are top tray halves (rows 0-3), odd meshes bottom halves (rows 4-7). Nothing here names a
-# host or a chip: the rank binding (assemble_pipeline_binding.py) puts meshes 2k and 2k+1 on the k-th
-# host of the cabling ring and gives each its half's chips.
+# host or a chip: tt-run discovery (or an explicit binding from assemble_pipeline_binding.py) puts
+# meshes 2k and 2k+1 on the k-th host of the cabling ring and gives each its half's chips.
 #
 # Inside a half only the 4-wide X axis (mesh axis 1) keeps its ring, so SP runs on axis 1 and TP on
 # axis 0: dim_types [LINE, RING].
