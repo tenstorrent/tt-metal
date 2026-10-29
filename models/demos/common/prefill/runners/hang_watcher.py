@@ -245,7 +245,7 @@ def main(probe_path: str) -> int:
             moved = dev00.read()
         except Exception:
             return 1
-        # Until the first real chunk is out, trace capture and cold compiles can take minutes.
+        # Until the first real chunk is out, the trace capture can hold the stage still for seconds.
         limit_s = handoff.timeout_s if dev00.produced >= 1 + handoff.dummy else handoff.first_chunk_timeout_s
 
         now = time.monotonic()

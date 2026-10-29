@@ -8,8 +8,8 @@ L1 address) and how far it moves per chunk. hang_watcher.py polls them out of pr
 them after arming. The hand-off is one line of JSON. Spread out, with one device of a GLM-5.3 middle rank
 (addresses made up):
 
-    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "dummy": 0, "timeout_s": 30.0,
-     "first_chunk_timeout_s": 600.0, "poll_s": 1.0, "command": "",
+    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "dummy": 0, "timeout_s": 10.0,
+     "first_chunk_timeout_s": 300.0, "poll_s": 2.0, "command": "",
      "devices": [
        {"uid": 81985529, "r": 0, "c": 0,
         "inputs": [{"name": "activation",
@@ -40,9 +40,9 @@ TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_TIMEOUT_SECONDS"
 FIRST_CHUNK_TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_FIRST_CHUNK_TIMEOUT_SECONDS"
 POLL_ENV = "TT_PREFILL_STAGE_HANG_POLL_SECONDS"
 COMMAND_ENV = "TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE"
-DEFAULT_TIMEOUT_S = 30.0
-DEFAULT_FIRST_CHUNK_TIMEOUT_S = 600.0  # covers trace capture and cold first-chunk compiles
-DEFAULT_POLL_S = 1.0
+DEFAULT_TIMEOUT_S = 10.0
+DEFAULT_FIRST_CHUNK_TIMEOUT_S = 300.0  # covers trace capture and cold first-chunk compiles
+DEFAULT_POLL_S = 2.0
 
 BYTES_SENT_OFFSET = 0
 _SENDER_MD_WORDS = 7  # bytes_acked_array[] follows, at the next L1-aligned offset
