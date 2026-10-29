@@ -80,11 +80,15 @@ def _attention(mesh_device, raw, cfg, max_batch: int, max_seq_len: int):
     return attn, TtLatentCache(mesh_device, cfg, max_batch=max_batch, max_seq_len=max_seq_len, mesh=mesh), mesh
 
 
-def _chunk_to_device(mesh: GLMMesh, rows_t: torch.Tensor, start: int, n: int, slab: bool) -> ttnn.Tensor:
+def _chunk_to_device(
+    mesh: GLMMesh, rows_t: torch.Tensor, start: int, n: int, slab: bool, t_pad: int | None = None
+) -> ttnn.Tensor:
     """rows [S, 4096] bf16 -> the chunk [start, start + n) as [1,1,T_pad,4096] bf16 TILE, T_pad a multiple of
-    32 * rows: replicated over the mesh (v1 feeds the gathered chunk) or row-sharded on dim 2 (the slabs)."""
+    32 * rows (or the given ``t_pad``: a served bucket): replicated over the mesh (v1 feeds the gathered chunk) or
+    row-sharded on dim 2 (the slabs)."""
     unit = TILE * mesh.rows
-    T = -(-n // unit) * unit
+    T = -(-n // unit) * unit if t_pad is None else int(t_pad)
+    assert T >= n and T % unit == 0, (T, n, unit)
     x = torch.zeros(1, 1, T, rows_t.shape[-1], dtype=torch.bfloat16)
     x[0, 0, :n] = rows_t[start : start + n]
     return mesh.upload(x, ttnn.bfloat16, rows=2 if slab else None)

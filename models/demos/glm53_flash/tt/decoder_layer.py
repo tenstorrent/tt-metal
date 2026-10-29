@@ -321,7 +321,9 @@ class TtDecoderLayer(LightweightModule):
                 )
                 return ttnn.reshape(y, [1, 1, T_loc, self.hidden])
             if wave_mode:  # every row its own chunk: per-row fills / index / attention (``TtDSA._prefill_wave``)
-                return self.attn.prefill_forward(h, state.cache, user, T, start=0, wave=wave)
+                return self.attn.prefill_forward(
+                    h, state.cache, user, T, start=0, wave=wave, slot=slot, ring_sel=ring_sel
+                )
             dsa_kw = dict(start=start, slot=slot, ring_sel=ring_sel)
             if self.mesh.rows == 1:
                 return self.attn.prefill_forward(h, state.cache, user, seq_len, **dsa_kw)

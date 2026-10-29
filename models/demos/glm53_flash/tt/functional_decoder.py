@@ -618,6 +618,54 @@ class FunctionalDecoder(LightweightModule):
             ttnn.deallocate(t)
         self._write_user_kda_state(user, KdaState(recurrent=sel_rec, convolution=sel_conv))
 
+    def _write_wave_kda_state_slot(self, slot, new: KdaState) -> None:
+        """The traced wave's carry write: ``dst = dst * keep + new * mask`` on the batched recurrent state
+        (``[B,H,K,V]`` x the slot's per-row ``[B,1,1,1]`` masks) and the tap-major conv history (``[taps,B,W]`` x
+        ``[taps,B,1]``): a member row's slot ``user`` takes the fresh carry, an idle row's state is unchanged; no
+        host value of the wave in the graph."""
+        dst = self.kda_batched
+        attn = self._require_weights().attn
+        if not attn.conv_tiled:
+            raise NotImplementedError("traced waves need the block KDA decode (tiled conv history)")
+        ttnn.multiply(dst.recurrent, slot.rec_keep, output_tensor=dst.recurrent)
+        fresh = ttnn.multiply(new.recurrent, slot.rec_mask)  # [1,H,K,V] x [B,1,1,1] -> [B,H,K,V]
+        ttnn.add(dst.recurrent, fresh, output_tensor=dst.recurrent)
+        ttnn.deallocate(fresh)
+        ttnn.multiply(dst.convolution, slot.conv_keep, output_tensor=dst.convolution)
+        rows = ttnn.multiply(new.convolution, slot.conv_mask)  # [taps,1,W] x [taps,B,1] -> [taps,B,W]
+        ttnn.add(dst.convolution, rows, output_tensor=dst.convolution)
+        ttnn.deallocate(rows)
+        ttnn.deallocate(new.recurrent)
+        ttnn.deallocate(new.convolution)
+
+    def prefill_wave_traced(self, streams: ttnn.Tensor, *, wave: WaveInfo, slot, ring_sel, row_mask) -> ttnn.Tensor:
+        """The trace-replayable wave (every member at start 0; ``slot``: ``trace_prefill.WaveSlot``): KDA from the
+        read-only zero state with the per-row chronology scalars, the carries blended into the slots by the slot's
+        per-row masks; DSA through the device-slot fill / index with ``ring_sel`` (per row). The caller's host
+        bookkeeping (``next_start_rows``) follows the replay."""
+        layer = self._require_weights()
+        T = int(streams.shape[-2])
+        if wave.T != T or wave.rows != self.mesh.rows or any(wave.starts):
+            raise ValueError("a traced wave covers T rows per row with every member at start 0")
+        if self.is_kda:
+            out, new_state = layer.prefill_forward(
+                streams, LayerState(kda=slot.kda_zero), user=slot.user, seq_len=T, start=0, wave=wave, row_mask=row_mask
+            )
+            self._write_wave_kda_state_slot(slot, new_state.kda)
+        else:
+            out, _ = layer.prefill_forward(
+                streams,
+                LayerState(cache=self.cache),
+                user=slot.user,
+                seq_len=T,
+                start=0,
+                wave=wave,
+                slot=slot,
+                ring_sel=ring_sel,
+                row_mask=row_mask,
+            )
+        return out
+
     def prefill_wave_forward(self, streams: ttnn.Tensor, *, user: int, wave: WaveInfo) -> ttnn.Tensor:
         """One wave (``doc/mesh/row_ownership.md`` mechanism (a), phase 1: the same slot ``user`` on every row): row
         r of the mesh runs its own chunk ``[starts[r], starts[r] + valids[r])`` of the ``T = streams.shape[-2]``

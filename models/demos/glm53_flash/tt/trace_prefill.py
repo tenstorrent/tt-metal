@@ -47,7 +47,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.indexer import ring_selector
 from models.demos.glm53_flash.tt.mesh import GLMMesh
-from models.demos.glm53_flash.tt.moe import pad_row_mask_host
+from models.demos.glm53_flash.tt.moe import pad_row_mask_host, wave_row_mask_host
 
 TILE = 32
 DENSE_ROWS = 2048  # TtDSA.sparse_row_start: rows at positions < 2048 attend densely (the traced range, Phase A)
@@ -205,6 +205,178 @@ class PrefillSlot:
         _refresh(self.mesh, mask, self.conv_mask)
         _refresh(self.mesh, keep, self.conv_keep)
         self.user = user
+
+
+# ------------------------------------------------------------------------------------- wave slot
+@dataclass
+class WaveSlot:
+    """Device-side targets of a traced WAVE (``doc/mesh/row_ownership.md``, phase 1: one slot index per wave): every
+    chip's own fill target (``cache_idx``: the user's slot on its owner column, the dummy row elsewhere and on every
+    column of an idle row), and the per-row KDA carry blend masks (``rec_mask`` / ``rec_keep`` ``[B,1,1,1]`` fp32,
+    ``conv_mask`` / ``conv_keep`` ``[taps,B,1]`` bf16: one-hot at ``user`` on a member row, all-keep on an idle row),
+    so a replay writes each member row's carry into ITS slot and leaves an idle row's slot untouched. Allocated once
+    before any capture; ``set`` refreshes the values per wave."""
+
+    mesh: GLMMesh
+    max_batch: int
+    partition: bool
+    users_per_chip: int
+    cache_idx: ttnn.Tensor  # [1] int32 RM per chip (row-major chip order)
+    scratch_idx: ttnn.Tensor | None
+    conv_mask: ttnn.Tensor  # [taps, B, 1] bf16 TILE per row
+    conv_keep: ttnn.Tensor
+    rec_mask: ttnn.Tensor  # [B, 1, 1, 1] fp32 TILE per row
+    rec_keep: ttnn.Tensor
+    kda_zero: KdaState | None
+    user: int = -1
+    idle: tuple = ()
+
+    @classmethod
+    def allocate(cls, mesh: GLMMesh, decoders) -> "WaveSlot":
+        decoders = list(decoders)
+        max_batch = decoders[0].max_batch
+        kda = [d for d in decoders if d.is_kda]
+        dsa = [d for d in decoders if not d.is_kda]
+        partition = bool(dsa and dsa[0].partition)
+        users_per_chip = max_batch // mesh.cols if partition else max_batch
+        has_scratch = partition and dsa[0].cache.scratch is not None
+        rm, i32 = ttnn.ROW_MAJOR_LAYOUT, ttnn.int32
+        rows = mesh.rows
+        chips = cls._chip_slots_host(partition, users_per_chip, rows, mesh.cols, 0, ())
+        cache_idx = _upload(mesh, chips, i32, rm, mapper=mesh.shard_2d(0, 0))
+        scratch_idx = _upload(mesh, torch.tensor([users_per_chip], dtype=torch.int32), i32, rm) if has_scratch else None
+        kda_zero, taps = None, 3
+        if kda:
+            attn = kda[0]._require_weights().attn
+            taps = attn.kcfg.conv_kernel_size - 1
+            kda_zero = attn.allocate_state(1)
+        cm, ck, rmk, rk = cls._masks_host(taps, max_batch, rows, 0, ())
+        return cls(
+            mesh=mesh,
+            max_batch=max_batch,
+            partition=partition,
+            users_per_chip=users_per_chip,
+            cache_idx=cache_idx,
+            scratch_idx=scratch_idx,
+            conv_mask=_upload(mesh, cm, ttnn.bfloat16, ttnn.TILE_LAYOUT, rows_dim=0),
+            conv_keep=_upload(mesh, ck, ttnn.bfloat16, ttnn.TILE_LAYOUT, rows_dim=0),
+            rec_mask=_upload(mesh, rmk, ttnn.float32, ttnn.TILE_LAYOUT, rows_dim=0),
+            rec_keep=_upload(mesh, rk, ttnn.float32, ttnn.TILE_LAYOUT, rows_dim=0),
+            kda_zero=kda_zero,
+            user=0,
+            idle=(),
+        )
+
+    @staticmethod
+    def _chip_slots_host(partition: bool, upc: int, rows: int, cols: int, user: int, idle) -> torch.Tensor:
+        """[rows * cols] int32: the slot every chip's paged fills write for a wave into ``user``."""
+        if not partition:
+            if idle:
+                raise NotImplementedError("a traced wave with idle rows needs a partitioned cache (dummy rows)")
+            return torch.full((rows * cols,), user, dtype=torch.int32)
+        owner, slot = divmod(user, upc)
+        out = []
+        for r in range(rows):
+            for c in range(cols):
+                out.append(upc if (r in idle or c != owner) else slot)
+        return torch.tensor(out, dtype=torch.int32)
+
+    @staticmethod
+    def _masks_host(taps: int, B: int, rows: int, user: int, idle):
+        cm = torch.zeros(rows, taps, B, 1)
+        rmk = torch.zeros(rows, B, 1, 1, 1)
+        for r in range(rows):
+            if r not in idle:
+                cm[r, :, user, 0] = 1.0
+                rmk[r, user] = 1.0
+        return cm, 1.0 - cm, rmk, 1.0 - rmk
+
+    def set(self, user: int, idle) -> None:
+        if not 0 <= user < self.max_batch:
+            raise ValueError(f"user {user} >= max_batch {self.max_batch}")
+        idle = tuple(sorted(int(r) for r in idle))
+        rows, cols = self.mesh.rows, self.mesh.cols
+        _refresh(
+            self.mesh,
+            self._chip_slots_host(self.partition, self.users_per_chip, rows, cols, user, idle),
+            self.cache_idx,
+            mapper=self.mesh.shard_2d(0, 0),
+        )
+        cm, ck, rmk, rk = self._masks_host(int(self.conv_mask.shape[0]), self.max_batch, rows, user, idle)
+        for host, dst in ((cm, self.conv_mask), (ck, self.conv_keep), (rmk, self.rec_mask), (rk, self.rec_keep)):
+            _refresh(self.mesh, host, dst, rows_dim=0)
+        self.user, self.idle = user, idle
+
+
+@dataclass
+class WaveTraceInputs:
+    """The persistent inputs of one traced wave length ``T`` (rows per mesh row; every member at start 0)."""
+
+    T: int
+    hidden: int
+    ids: ttnn.Tensor  # [1,1,1,rows*T] uint32 RM row-sharded on dim 3: row r embeds its own T tokens
+    starts: ttnn.Tensor  # [1,1,1,1] uint32 per row: 0 (the KDA actual_start)
+    ends: ttnn.Tensor  # [1,1,1,1] uint32 per row: the row's valid length (ttKDA actual_end)
+    ring_sel: ttnn.Tensor  # [1,1,32,T] bf16 per row: its ring-row selector (zeros on an idle row)
+    row_mask: ttnn.Tensor  # [1,1,T,32] bf16 per row: the MoE pad-row mask of its chunk
+    tile_start: ttnn.Tensor  # [4] int32 per row: the row's last token's tile
+    tile_end: ttnn.Tensor
+    onehot: ttnn.Tensor  # [1,1,32,32] bf16 per row: row 0 picks the row's last token inside the tile
+    out_logits: ttnn.Tensor | None  # [1,1,1,V] bf16 per row: the row's last-token logits, copied inside the trace
+    valids: tuple = ()
+    trace_id: object = None
+    streams: ttnn.Tensor | None = None
+
+    @classmethod
+    def allocate(cls, mesh: GLMMesh, T: int, hidden: int, vocab: int | None) -> "WaveTraceInputs":
+        if T % TILE:
+            raise ValueError(f"wave T={T} must be a multiple of {TILE}")
+        rows = mesh.rows
+        i32, rm = ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+        one = lambda t, dt, lay, rd: _upload(mesh, t, dt, lay, rows_dim=rd)
+        return cls(
+            T=T,
+            hidden=hidden,
+            ids=one(torch.zeros(1, 1, 1, rows * T, dtype=torch.int32), ttnn.uint32, rm, 3),
+            starts=one(torch.zeros(rows, 1, 1, 1, dtype=torch.int32), ttnn.uint32, rm, 0),
+            ends=one(torch.full((rows, 1, 1, 1), T, dtype=torch.int32), ttnn.uint32, rm, 0),
+            ring_sel=one(torch.zeros(rows, 1, TILE, T), ttnn.bfloat16, ttnn.TILE_LAYOUT, 0),
+            row_mask=one(wave_row_mask_host(T, (T,) * rows), ttnn.bfloat16, ttnn.TILE_LAYOUT, 2),
+            tile_start=one(torch.tensor([0, 0, T - TILE, 0] * rows, dtype=torch.int32), i32, rm, 0),
+            tile_end=one(torch.tensor([1, 1, T, hidden] * rows, dtype=torch.int32), i32, rm, 0),
+            onehot=one(torch.zeros(rows, 1, TILE, TILE), ttnn.bfloat16, ttnn.TILE_LAYOUT, 0),
+            out_logits=one(torch.zeros(rows, 1, 1, vocab), ttnn.bfloat16, ttnn.TILE_LAYOUT, 0) if vocab else None,
+        )
+
+    def set_wave(self, mesh: GLMMesh, ids_host: torch.Tensor, valids: tuple[int, ...]) -> None:
+        """``ids_host`` [1,1,1,rows*T] int32 (row r's padded chunk at [r*T, (r+1)*T)), ``valids[r]`` its token count
+        (0 = idle)."""
+        rows, T = mesh.rows, self.T
+        if len(valids) != rows or any(not 0 <= v <= T for v in valids):
+            raise ValueError(f"wave valids {valids} for {rows} rows of {T}")
+        _refresh(mesh, ids_host, self.ids, rows_dim=3)
+        _refresh(mesh, torch.tensor(valids, dtype=torch.int32).reshape(rows, 1, 1, 1), self.ends, rows_dim=0)
+        sel = torch.cat([ring_selector(v, T, RING_ROWS) if v else torch.zeros(1, 1, TILE, T) for v in valids], dim=0)
+        _refresh(mesh, sel, self.ring_sel, rows_dim=0)
+        _refresh(mesh, wave_row_mask_host(T, valids), self.row_mask, rows_dim=2)
+        last = [max(1, v) - 1 for v in valids]
+        _refresh(
+            mesh,
+            torch.tensor([[0, 0, (n // TILE) * TILE, 0] for n in last], dtype=torch.int32).reshape(-1),
+            self.tile_start,
+            rows_dim=0,
+        )
+        _refresh(
+            mesh,
+            torch.tensor([[1, 1, (n // TILE) * TILE + TILE, self.hidden] for n in last], dtype=torch.int32).reshape(-1),
+            self.tile_end,
+            rows_dim=0,
+        )
+        onehot = torch.zeros(rows, 1, TILE, TILE)
+        for r, n in enumerate(last):
+            onehot[r, 0, 0, n % TILE] = 1.0
+        _refresh(mesh, onehot, self.onehot, rows_dim=0)
+        self.valids = tuple(valids)
 
 
 # ---------------------------------------------------------------------------------- per-length inputs

@@ -141,8 +141,9 @@ def prefill_user(attn, cache, mesh, rows_t, user, chunks, start0, qblock, env, r
     rec = OwnerIndexRecorder(mesh, start0 + sum(chunks), 0 if owner is None else owner)
     attn.on_indices = rec if record else None
     outs, walls, start = [], [], start0
-    for n in chunks:
-        x = _chunk_to_device(mesh, rows_t, start - start0, n, True)
+    for c in chunks:
+        n, t_pad = c if isinstance(c, tuple) else (c, None)  # (n, T_pad): the served bucket padding of a ragged chunk
+        x = _chunk_to_device(mesh, rows_t, start - start0, n, True, t_pad=t_pad)
         ttnn.synchronize_device(mesh.device)
         t0 = time.perf_counter()
         y = attn.prefill_forward(x, cache, user, n, start=start, slab=True)
@@ -446,3 +447,37 @@ def test_dsa_attention_wave_vs_slab(mesh_device, monkeypatch):
     check("sparse wave 2: A[2048:2500] on row 0 (start 2048)", ref_A[2048:], got2[0])
     check("sparse wave 2: B[1024:2300] on row 1 (start 1024)", ref_B[1024:], got2[1])
     assert not failures, "\n".join(failures)
+
+
+@pytest.mark.timeout(1500)
+@pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_dsa_attention_served_padded_ragged_chunk(mesh_device, monkeypatch):
+    """The served shape the chip-0 tests cannot run (their single-row scorer refuses query blocks past the valid end):
+    a ragged middle chunk padded to its bucket (3968 valid rows of 8192 at start 8192: row 1's slab lies entirely past
+    the valid end, the superset case) followed by a continuation, through the slab path with the heads2users cache,
+    against the same prompt in unpadded chunks: every row of every chunk agrees (the 2026-10-29 APC smoke's odd chunk
+    ends: a 3968-token chunk ran as a 16384-row bucket, then [36736, 52992) continued)."""
+    raw, cfg = _load()
+    L = 8192 + 3968 + 4225
+    x_in = torch.load(R16385 / f"layer{LAYER}_prefill.pt")["x_in"][:, :L]
+    rows_t = attention_input(raw, cfg, x_in)
+    attn, mesh = _attention(mesh_device, raw, cfg)
+    _, part = _caches(mesh_device, cfg, mesh, L + 64 * mesh.rows)
+    user = 1
+    ref, _, _ = prefill_user(attn, part, mesh, rows_t, user, (8192, 3968, 4225), 0, 2048, monkeypatch, record=False)
+    got, _, _ = prefill_user(
+        attn, part, mesh, rows_t, user, (8192, (3968, 8192), 4225), 0, 2048, monkeypatch, record=False
+    )
+    r = row_pcc(ref, got)
+    for name, lo, hi in (
+        ("chunk 1 [0, 8192)", 0, 8192),
+        ("padded chunk [8192, 12160)", 8192, 12160),
+        ("continued [12160, L)", 12160, L),
+    ):
+        rr = r[lo:hi]
+        logger.info(
+            f"served-padded vs unpadded, {name}: pcc min {rr.min():.7f} median {rr.median():.7f}; bit-exact rows {int((ref[lo:hi] == got[lo:hi]).all(dim=1).sum())} of {hi - lo}"
+        )
+    below = int((r < ROW_PCC_BAR).sum())
+    assert below == 0, f"{below} rows below {ROW_PCC_BAR} (min {r.min():.7f} at row {int(r.argmin())})"

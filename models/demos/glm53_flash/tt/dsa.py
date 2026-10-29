@@ -1335,7 +1335,7 @@ class TtDSA(LightweightModule):
             cache.release_prefix()  # the device-slot fill names its user on device: no arena can follow it
         if wave is not None:
             cache.release_prefix()  # the wave reads its kv straight from the pages (per-row starts)
-            return self._prefill_wave(x, cache, user, wave)
+            return self._prefill_wave(x, cache, user, wave, slot=slot, ring_sel=ring_sel)
         if slab and self.mesh.rows > 1:
             return self._prefill_slab(x, cache, user, seq_len, start, slot=slot, ring_sel=ring_sel)
         T = x.shape[-2]
@@ -1409,7 +1409,9 @@ class TtDSA(LightweightModule):
         return y
 
     # ------------------------------------------------------------------ waves (per-row chunks)
-    def _prefill_wave(self, x: ttnn.Tensor, cache: TtLatentCache, user: int, wave) -> ttnn.Tensor:
+    def _prefill_wave(
+        self, x: ttnn.Tensor, cache: TtLatentCache, user: int, wave, slot=None, ring_sel=None
+    ) -> ttnn.Tensor:
         """A wave (``doc/mesh/row_ownership.md`` mechanism (a), phase 1): mesh row r's ``x`` [1,1,T,4096] is ITS own
         chunk ``[starts[r], starts[r] + valids[r])`` of slot ``user`` (``wave.starts`` / ``wave.valids``; an idle row
         runs pad rows, its results discarded). No gathers: each row fills its own slot's pages and pools from its own
@@ -1429,8 +1431,28 @@ class TtDSA(LightweightModule):
         q_resid = self._q_resid(x)
         q = self._q(q_resid)  # [1,1,T,H*Dq]
         c = self._latent(x)  # [1,1,T,L]
-        k_idx, g_idx = self.indexer.keys_and_gates(x)  # [1,1,T,D]
         self._mark("prefill_stems")
+        if slot is not None:
+            # the traced wave (tt/trace_prefill.py WaveSlot): every member at start 0 within the dense range, the fill
+            # targets and the ring rows come from per-chip device tensors (an idle row's chips name the dummy row), the
+            # whole padded chunk is indexed, the dense attention runs over the row's own latent (no cache read: no
+            # host value of the wave inside the graph)
+            if any(starts) or T > self._dense_rows(cache):
+                raise ValueError("a traced wave starts every member at 0 within the dense range")
+            cache.fill(c, user, start=0, slot=slot)
+            self._mark("cache_fill")
+            self.indexer.maintain_prefill(x, cache.index, user, T, start=0, slot=slot, ring_sel=ring_sel)
+            self._mark("index_maintain")
+            ttnn.deallocate(q_resid)
+            o = self._dense_attention(q, c, None, 0)
+            ttnn.deallocate(q)
+            ttnn.deallocate(c)
+            self._mark("dense_attention")
+            y = self._o_proj(o)
+            ttnn.deallocate(o)
+            self._mark("out_proj")
+            return y
+        k_idx, g_idx = self.indexer.keys_and_gates(x)  # [1,1,T,D]
         cache.fill_wave(c, user, starts, idle)
         self._mark("cache_fill")
         self.indexer.maintain_prefill_wave(cache.index, user, k_idx, g_idx, starts, valids)

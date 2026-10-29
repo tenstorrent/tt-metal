@@ -251,16 +251,34 @@ class TtModelHead(LightweightModule):
         bounds = lambda t: self.mesh.upload(t.reshape(-1), ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
         start = bounds(torch.tensor([[0, 0, (r // TILE) * TILE, 0] for r in last], dtype=torch.int32))
         end = bounds(torch.tensor([[1, 1, (r // TILE) * TILE + TILE, W] for r in last], dtype=torch.int32))
-        tile = ttnn.slice(input_tensor=hn, starts=start, ends=end, slice_dim=2, num_devices=T // TILE)
-        ttnn.deallocate(hn)
         onehot = torch.zeros(rows, 1, TILE, TILE)
         for r, n in enumerate(last):
             onehot[r, 0, 0, n % TILE] = 1.0
-        sel = self.mesh.upload(onehot, tile.dtype, rows=0)  # [1, 1, 32, 32] per chip: row 0 picks its row's token
+        sel = self.mesh.upload(onehot, hn.dtype, rows=0)  # [1, 1, 32, 32] per chip: row 0 picks its row's token
+        out = self._last_token_logits_normed(hn, start, end, sel)
+        for t in (start, end, sel):
+            ttnn.deallocate(t)
+        return out
+
+    def last_token_logits_rows_from(
+        self, streams: ttnn.Tensor, tile_start: ttnn.Tensor, tile_end: ttnn.Tensor, onehot: ttnn.Tensor
+    ) -> ttnn.Tensor:
+        """``last_token_logits_rows`` on persistent per-row device bounds / one-hot (the traced wave: no host value
+        of the wave inside the graph). Returns ``[1, 1, 1, vocab]`` per chip."""
+        h = self.collapse(streams)
+        hn = self.norm(h)
+        if h is not streams:
+            ttnn.deallocate(h)
+        return self._last_token_logits_normed(hn, tile_start, tile_end, onehot)
+
+    def _last_token_logits_normed(self, hn, start, end, sel) -> ttnn.Tensor:
+        T = int(hn.shape[-2])
+        tile = ttnn.slice(input_tensor=hn, starts=start, ends=end, slice_dim=2, num_devices=T // TILE)
+        ttnn.deallocate(hn)
         picked = ttnn.matmul(sel, tile, dtype=tile.dtype, compute_kernel_config=self.hifi4)
         logits = self.logits(picked)  # [1, 1, 32, vocab]
         out = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, 1, int(logits.shape[-1])])
-        for t in (start, end, tile, sel, picked, logits):
+        for t in (tile, picked, logits):
             ttnn.deallocate(t)
         return out
 

@@ -32,9 +32,12 @@ from models.demos.glm53_flash.tt.moe import pad_mask_enabled
 from models.demos.glm53_flash.tt.packed_inputs import UINT32, PackedDecodeLayout
 from models.demos.glm53_flash.tt.trace_prefill import (
     DEFAULT_LENGTHS,
+    DENSE_ROWS,
     PrefillSlot,
     PrefillTraceInputs,
     PrefillTraceResult,
+    WaveSlot,
+    WaveTraceInputs,
     pick_prefill_length,
     supported_prefill_lengths,
 )
@@ -300,6 +303,10 @@ class GLM53MeshModel:
         # the traced prefill's device-side user slot (tt/trace_prefill.py): allocated here, before any trace
         # capture, because a persistent tensor allocated after a capture may alias that trace's transient buffers
         self.prefill_slot: PrefillSlot | None = PrefillSlot.allocate(self.mesh, self.layers) if self.layers else None
+        self.wave_slot: WaveSlot | None = (
+            WaveSlot.allocate(self.mesh, self.layers) if self.layers and self.mesh.rows > 1 else None
+        )
+        self.wave_traces: dict[int, WaveTraceInputs] = {}  # per-row length -> the captured wave
         self.prefill_traces: dict[int, PrefillTraceInputs] = {}
 
     # ------------------------------------------------------------------ inputs
@@ -511,6 +518,116 @@ class GLM53MeshModel:
                 res[r] = (int(torch.argmax(host_logits[r])), host_logits[r])
         ttnn.deallocate(streams)
         return res
+
+    # ----------------------------------------------------------------- traced waves
+    def wave_trace_lengths(self, lengths=DEFAULT_LENGTHS) -> list[int]:
+        """The per-row lengths a wave can be captured at: multiples of 32 within the dense range."""
+        return [int(T) for T in lengths if T % TILE == 0 and T <= DENSE_ROWS]
+
+    def has_wave_trace(self, T: int) -> bool:
+        return pick_prefill_length(T, self.wave_traces) is not None
+
+    def _wave_host(self, call, T: int) -> tuple[torch.Tensor, tuple[int, ...]]:
+        rows = self.mesh.rows
+        members = {int(m.row): m for m in call.members}
+        valids = tuple(int(members[r].n_tokens) if r in members else 0 for r in range(rows))
+        host = torch.full((rows, T), int(self.embedding.pad_token_id), dtype=torch.int32)
+        for r, m in members.items():
+            ids = torch.as_tensor(call.ids[r]).reshape(-1)
+            if int(ids.numel()) != valids[r] or valids[r] > T:
+                raise ValueError(f"row {r}: {int(ids.numel())} ids for a chunk of {valids[r]} tokens in a {T}-row wave")
+            host[r, : valids[r]] = ids.to(torch.int32)
+        return self.embedding.tokens_to_host(host.reshape(-1)), valids
+
+    def _wave_graph(self, inp: WaveTraceInputs):
+        """The traced wave graph on the persistent inputs ``inp`` + ``self.wave_slot`` (no host value of the wave
+        inside): embedding -> every layer (the device-slot wave form) -> the head on each row's selected token."""
+        slot = self.wave_slot
+        info = WaveInfo(T=inp.T, starts=(0,) * self.mesh.rows, valids=inp.valids, start_t=inp.starts, end_t=inp.ends)
+        streams = self.embedding(inp.ids)  # [1,1,T,16384] per row: its own chunk
+        for dec in self.layers:
+            out = dec.prefill_wave_traced(
+                streams,
+                wave=info,
+                slot=slot,
+                ring_sel=inp.ring_sel,
+                row_mask=inp.row_mask if pad_mask_enabled() else None,
+            )
+            ttnn.deallocate(streams)
+            streams = out
+        if self.head is None:
+            return streams
+        logits = self.head.last_token_logits_rows_from(streams, inp.tile_start, inp.tile_end, inp.onehot)
+        ttnn.copy(logits, inp.out_logits)
+        ttnn.deallocate(logits)
+        return streams
+
+    def capture_waves(self, lengths=None, cq_id: int = 0, warmup_user: int = 0) -> list[int]:
+        """Capture one wave trace per per-row length (default ``wave_trace_lengths``): the persistent inputs are
+        allocated first, each graph is compiled eagerly with every row a member (dummy tokens into slot
+        ``warmup_user``), then captured; like ``capture_prefill`` (before ``capture`` or after ``warmup_decode``)."""
+        if self.wave_slot is None:
+            raise RuntimeError("waves need a multi-row mesh with layers")
+        todo = [T for T in (self.wave_trace_lengths() if lengths is None else lengths) if T not in self.wave_traces]
+        if not todo:
+            return []
+        vocab = self.cfg.vocab_size if self.head is not None else None
+        new = {T: WaveTraceInputs.allocate(self.mesh, T, self.cfg.hidden_size, vocab) for T in todo}
+        rows = self.mesh.rows
+        self.wave_slot.set(warmup_user, ())
+        for T, inp in new.items():
+            t0 = time.perf_counter()
+            dummy = (torch.arange(rows * T, dtype=torch.long) % 1000 + 1000).to(torch.int32)
+            inp.set_wave(self.mesh, dummy.reshape(1, 1, 1, -1), (T,) * rows)
+            ttnn.deallocate(self._wave_graph(inp))
+            ttnn.synchronize_device(self.device)
+            logger.info(f"traced wave: T={T} per row compiled in {time.perf_counter() - t0:.1f} s")
+        for T, inp in new.items():
+            t0 = time.perf_counter()
+            inp.trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
+            inp.streams = self._wave_graph(inp)
+            ttnn.end_trace_capture(self.device, inp.trace_id, cq_id=cq_id)
+            self.mesh.allocations_frozen[0] = True
+            ttnn.synchronize_device(self.device)
+            self.wave_traces[T] = inp
+            logger.info(f"traced wave: T={T} per row captured in {time.perf_counter() - t0:.1f} s")
+        return todo
+
+    def prefill_traced_wave(self, call, cq_id: int = 0) -> dict[int, tuple[int, torch.Tensor]]:
+        """``prefill_wave`` through the captured wave of the smallest per-row length that holds every member (all
+        members at start 0): refreshes the wave slot (slot index + idle rows) and the per-length inputs, replays,
+        reads each member row's last-token logits. Returns ``{row: (first greedy token, logits [vocab] fp32)}``."""
+        rows = self.mesh.rows
+        if int(call.rows) != rows or call.user is None:
+            raise ValueError("a traced wave needs call.rows == mesh rows and a slot index (phase 1)")
+        if any(int(m.start) for m in call.members):
+            raise ValueError("a traced wave starts every member at 0")
+        n_max = max(int(m.n_tokens) for m in call.members)
+        T = pick_prefill_length(n_max, self.wave_traces)
+        if T is None:
+            raise ValueError(f"no wave trace for {n_max} tokens per row (captured: {sorted(self.wave_traces)})")
+        inp = self.wave_traces[T]
+        host, valids = self._wave_host(call, T)
+        idle = tuple(r for r, v in enumerate(valids) if v == 0)
+        self.wave_slot.set(int(call.user), idle)
+        inp.set_wave(self.mesh, host, valids)
+        ttnn.execute_trace(self.device, inp.trace_id, cq_id=cq_id, blocking=True)
+        for dec in self.layers:
+            for r, v in enumerate(valids):
+                if v:
+                    dec.next_start_rows[r][int(call.user)] = v
+        res: dict[int, tuple[int, torch.Tensor]] = {}
+        if inp.out_logits is not None:
+            host_logits = self.mesh.to_host(inp.out_logits, rows=0).float().reshape(rows, -1)
+            for m in call.members:
+                r = int(m.row)
+                res[r] = (int(torch.argmax(host_logits[r])), host_logits[r])
+        return res
+
+    def release_wave_traces(self):
+        for inp in self.wave_traces.values():
+            ttnn.release_trace(self.device, inp.trace_id)
+        self.wave_traces = {}
 
     def rewind_user(self, user: int, position: int) -> None:
         """Set every layer's chunked-prefill cursor of slot ``user`` to ``position`` (a 32-multiple)."""
