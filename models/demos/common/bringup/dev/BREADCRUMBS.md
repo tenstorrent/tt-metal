@@ -2313,6 +2313,21 @@ MISSING metric, which would have started a second agent attempt for nothing. Fix
 in Ledger.validate (unfinished tasks) and in the gate's pre-check; P.4-P.7's commands lost the flag (the gate adds the
 wall run itself). Selftest test_a_gate_that_needs_device_time_but_only_profiles_the_wall_is_refused_up_front.
 
+## F213: a released fix is not placed before a perf pick whose A/B is measured (DeepSeek-V4.1 FIX.9 / P.6, 2026-10-29)
+Problem: P.6 was accepted (A/B measured, its change in the tree, not yet gated / committed) and FIX.9 released; at the
+next boundary _place_fixes put FIX.9 before the first unpassed task, P.6, made P.6 depend on it (F206) and started its
+agent on a tree holding P.6's uncommitted change, whose gate commit would have swept P.6 in. Fix: _first_open skips a
+perf pick whose state has `waiting` or `ab` (the decision pending or made); the fix goes before the next open task.
+Selftest test_a_fix_is_not_placed_before_a_perf_pick_whose_ab_is_measured. (By hand: FIX.9 aborted, P.6's dep on it
+dropped, P.6 gated and committed directly.)
+
+## F214 (pending): an accepted A/B decision was lost from state.json (DeepSeek-V4.1 P.6, 2026-10-29)
+`decide --task P.6 --accept` printed "accept recorded" at ~02:23:20; at 02:26 no task in state.json had an `ab` record
+(P.6 back to its WAITING entry). Writers in between: the orchestrator resume (02:23:38: placed FIX.9, started and lost
+its agent to an abort), `overseer abort`, a BLOCKED `gate P.6`. ledger.update merges under the lock, so a stale
+whole-state write is suspected (a process saving a state it read before the decide). To do: find the writer; a
+selftest that a decide survives a resume. Workaround used: the A/B table on disk + `gate P.6` (commits on PASS).
+
 ## F220: a model switch set in the environment is part of a unit's stamp (DeepSeek-V4.1 2x2 engram bfp8 A/B, 2026-10-28)
 
 `DS41_ENGRAM_ROWS=bfp8 verify --tasks L.s4096 L.last L.s55296` printed "reused: same code, kept PASS" for all three
