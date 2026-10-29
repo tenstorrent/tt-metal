@@ -551,7 +551,8 @@ TEST_F(HDSocketFixture, H2DSocket) {
     }
 }
 
-TEST_F(HDSocketFixture, H2DSocketHostTransferStats) {
+using H2DSocketStatsFixture = MeshDevice1x1Fixture;
+TEST_F(H2DSocketStatsFixture, H2DSocketHostTransferStats) {
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
