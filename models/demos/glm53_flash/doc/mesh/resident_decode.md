@@ -16,6 +16,9 @@ harness's traced replay), the adapter's step is 61.2 ms host wall, the vLLM benc
 
 Steps 2 and 4 serialize with the device: the upload must land before the replay, the read waits for it. Nothing of
 the next step is submitted before the read completes, and vLLM's scheduler runs between (no-async-scheduling).
+(Measured window: the adapter's perf timer starts after step 2, so its 61 ms is the replay plus the readback; the
+upload is inside the engine's 30 ms. The bench's inter-token latency is the A/B measure of the chain, not the perf
+line; the perf line now also counts the chain steps, so a served run shows whether the chain engaged.)
 
 ## The plugin's contract for the alternative (`async_decode.plan_decode_reload`)
 

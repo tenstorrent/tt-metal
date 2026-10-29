@@ -1615,8 +1615,9 @@ TTFT included the tower's cold build; here the tower is resident).
 
 ### 2026-10-29 18:30: served parity, measured
 
-The same 48 ms device step at 32 users shows as 61 ms per step in the adapter (host wall: the packed token / position
-upload, the per-row ids readback and the event sync, all synchronous under the version-1 reload contract) and as 91 ms
+The same 48 ms device step at 32 users shows as 61 ms per step in the adapter (host wall from the replay's submission:
+the blocking replay plus the per-row ids readback; the packed token / position upload runs before the adapter's timer
+and sits in the engine's share, all synchronous under the version-1 reload contract) and as 91 ms
 inter-token in the vLLM bench (the engine loop per step with no-async-scheduling, plus decode steps held while a burst's
 later arrivals still prefill). TTFT follows the same shape: 120 ms for one 128-token prompt, 5.2 s mean for a burst of 32.
 The levers, in order: resident decode in the adapter (the plugin's reload-plan contract: device-sampled ids fed back and
