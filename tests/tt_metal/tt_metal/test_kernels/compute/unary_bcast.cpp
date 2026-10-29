@@ -21,8 +21,8 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_dim = get_arg(args::per_core_block_dim);
-    // Tiles broadcast per DEST section. Above 1, tile t is read at index t and lands at DEST slot 2 * t + 1, as in the
-    // binary_ng SFPU broadcast kernels.
+    // Tiles broadcast per DEST section. Tile t of a section is read at input index t and lands at DEST slot
+    // tile_index + t, so a block of per_core_block_dim tiles fills slots 0..per_core_block_dim - 1.
     constexpr uint32_t tiles_per_section = get_arg(args::tiles_per_section);
     static_assert(
         per_core_block_dim % tiles_per_section == 0, "per_core_block_dim must be a multiple of tiles_per_section");
@@ -33,21 +33,19 @@ void kernel_main() {
 
     compute_kernel_hw_startup(icb, ocb);
     unary_bcast_init<BCAST_DIM>(icb);
-    auto dst_slot = [](uint32_t tile_index, uint32_t t) { return tiles_per_section == 1 ? tile_index : 2 * t + 1; };
 
-    // TODO (tt-metal #42792): revert to batched multi-tile broadcast once Quasar unpack<->pack semaphores land.
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; tile_index += tiles_per_section) {
             dfb_src.wait_front(tiles_per_section);
             dfb_dst.reserve_back(tiles_per_section);
             tile_regs_acquire();
             for (uint32_t t = 0; t < tiles_per_section; ++t) {
-                unary_bcast<BCAST_DIM>(icb, t, dst_slot(tile_index, t));
+                unary_bcast<BCAST_DIM>(icb, t, tile_index + t);
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t t = 0; t < tiles_per_section; ++t) {
-                pack_tile(dst_slot(tile_index, t), ocb);
+                pack_tile(tile_index + t, ocb);
             }
             tile_regs_release();
             dfb_src.pop_front(tiles_per_section);

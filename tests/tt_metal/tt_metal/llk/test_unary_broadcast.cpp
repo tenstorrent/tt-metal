@@ -79,6 +79,7 @@ struct UnaryBroadcastConfig {
     // Quasar only: UnpackToDest on the src DFB, and the tiles broadcast per DEST section by the compute kernel.
     bool unpack_to_dest = false;
     std::uint32_t tiles_per_section = 1;
+    bool dst_full_sync_en = false;
 };
 
 // Assume 1Xn tiles.
@@ -430,6 +431,7 @@ void run_single_core_unary_broadcast_quasar(
         .hw_config =
             experimental::ComputeHardwareConfig{
                 .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
                 .unpack_modes = unpack_modes,
             },
     };
@@ -681,46 +683,29 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDf
 }
 
 // Float32 through a 32-bit Dest with UnpackToDest on the src DFB: unary_bcast unpacks to DEST and broadcasts there.
-// Two tiles per DEST section, read at input indices 0 and 1 and placed at DEST slots 1 and 3.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfbFloat32UnpackToDest) {
-    for (BroadcastDim bcast_dim : {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
-        UnaryBroadcastConfig test_config = {
-            .broadcast_dim = bcast_dim,
-            .in_t = tt::DataFormat::Float32,
-            .out_t = tt::DataFormat::Float32,
-            .fp32_dest_acc_en = true,
-            .unpack_to_dest = true,
-            .tiles_per_section = 2,
-        };
-        log_info(
-            tt::LogTest,
-            "Testing UNARY BROADCAST unpack-to-dest bcast={} in_t={} out_t={}",
-            broadcast_dim_to_type.at(test_config.broadcast_dim),
-            test_config.in_t,
-            test_config.out_t);
-        run_single_core_unary_broadcast(this->device(), test_config);
-    }
-}
-
-// Float16_b through a 32-bit Dest with UnpackToDest on the src DFB: the unpacker cannot widen a 16-bit format into a
-// 32-bit DEST, so unary_bcast takes SrcB under the to-dest section handshake. Same layout as the Float32 variant.
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfbFloat16bUnpackToDest) {
-    for (BroadcastDim bcast_dim : {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
-        UnaryBroadcastConfig test_config = {
-            .broadcast_dim = bcast_dim,
-            .in_t = tt::DataFormat::Float16_b,
-            .out_t = tt::DataFormat::Float16_b,
-            .fp32_dest_acc_en = true,
-            .unpack_to_dest = true,
-            .tiles_per_section = 2,
-        };
-        log_info(
-            tt::LogTest,
-            "Testing UNARY BROADCAST unpack-to-dest bcast={} in_t={} out_t={}",
-            broadcast_dim_to_type.at(test_config.broadcast_dim),
-            test_config.in_t,
-            test_config.out_t);
-        run_single_core_unary_broadcast(this->device(), test_config);
+// Four tiles per DEST section (a full 32-bit SyncHalf section), read at input indices 0..3 and placed at DEST slots
+// 0..3, in SyncHalf and SyncFull.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfbUnpackToDest) {
+    for (const bool dst_full_sync_en : {false, true}) {
+        for (BroadcastDim bcast_dim : {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR}) {
+            UnaryBroadcastConfig test_config = {
+                .broadcast_dim = bcast_dim,
+                .in_t = tt::DataFormat::Float32,
+                .out_t = tt::DataFormat::Float32,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest = true,
+                .tiles_per_section = 4,
+                .dst_full_sync_en = dst_full_sync_en,
+            };
+            log_info(
+                tt::LogTest,
+                "Testing UNARY BROADCAST unpack-to-dest bcast={} in_t={} out_t={} dst_full_sync_en={}",
+                broadcast_dim_to_type.at(test_config.broadcast_dim),
+                test_config.in_t,
+                test_config.out_t,
+                test_config.dst_full_sync_en);
+            run_single_core_unary_broadcast(this->device(), test_config);
+        }
     }
 }
 

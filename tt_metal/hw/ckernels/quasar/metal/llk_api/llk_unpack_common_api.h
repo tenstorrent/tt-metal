@@ -87,6 +87,10 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     }
 }
 
+// SrcB dummy valids requested in the current DEST section, issued by llk_unpack_dest_section_done. Defined in the
+// unpack TRISC firmware; thread_local so each Neo's unpack thread keeps its own count.
+extern thread_local std::uint32_t unpack_to_dest_deferred_srcb_dummies;
+
 /**
  * @brief Unpack thread of tile_regs_acquire: wait until a DEST bank is free for the unpack thread to write:
  * unpack-to-dest section begin.
@@ -123,13 +127,19 @@ inline void llk_unpack_wait_for_dest_available() {
  * @note Math blocks in tile_regs_acquire until this post, so it sees nothing of the section before the unpack thread
  *       commits it. SrcA / SrcB unpacks issued in the same section are therefore consumed only after this call and
  *       must fit the src banks. A section that mixes unpack-to-dest copies with a src-path run is outside
- *       this contract and stalls both threads!
+ *       this contract and stalls both threads! SrcB dummy valids are the exception: @ref
+ *       llk_unpack_set_srcb_dummy_valid defers them, and they are issued here, after the UNPACK_MATH post.
  */
 template <bool EN_32BIT_DEST>
 inline void llk_unpack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+        // Math runs the section from here on and frees a SrcB bank per dummy, so each dummy's wait now ends.
+        for (std::uint32_t i = 0; i < unpack_to_dest_deferred_srcb_dummies; i++) {
+            _llk_unpack_set_srcB_dummy_valid_();
+        }
+        unpack_to_dest_deferred_srcb_dummies = 0;
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             _llk_unpack_dest_section_advance_<EN_32BIT_DEST>();
         }
@@ -225,7 +235,18 @@ inline void llk_unpack_reconfig_data_format(
 }
 
 /**
- * @brief Issues a dummy SrcB dvalid so the math thread can satisfy its SRCB_VLD
- * stall in transpose-dest. Used by the transpose_dest compute API.
+ * @brief Hands math a dummy SrcB dvalid for an op that reads DEST through SrcB (MOVD2B), such as transpose-dest or a
+ * broadcast to dest.
+ *
+ * With UnpackToDestEn, math starts a section only after @ref llk_unpack_dest_section_done posts UNPACK_MATH, and the
+ * dummy waits until math frees the SrcB bank it reads. Issued inside the section, a second dummy would wait on math
+ * while math waits on the post behind it, so the dummy is deferred and issued after that post. Without
+ * UnpackToDestEn, math does not wait on the unpacker and the dummy is issued at once.
  */
-inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcB_dummy_valid_(); }
+inline void llk_unpack_set_srcb_dummy_valid() {
+    if constexpr (UnpackToDestEn) {
+        unpack_to_dest_deferred_srcb_dummies++;
+    } else {
+        _llk_unpack_set_srcB_dummy_valid_();
+    }
+}

@@ -128,7 +128,8 @@ inline void llk_unpack_A_init(
                     "unpack_to_dest unary broadcast requires a 32-bit DEST on Quasar");
                 _llk_unpack_unary_broadcast_operands_to_dest_init_<BType>(bfd_id);
             } else {
-                _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BType, DST_ACCUM_MODE>(bfd_id, 1);
+                _llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, BType, DST_ACCUM_MODE>(
+                    bfd_id, 1 /*num_tiles_per_unpack*/);
             }
         }
     }
@@ -189,7 +190,7 @@ inline void llk_unpack_A(
         } else {
             _llk_unpack_unary_broadcast_operands_to_dest_tile_(l1_tile_idx, dst_tile_index);
             // The math broadcast reads DEST through SrcB (MOVD2B), which stalls on SrcB dvalid.
-            _llk_unpack_set_srcB_dummy_valid_();
+            llk_unpack_set_srcb_dummy_valid();
         }
     } else if constexpr (BType == BroadcastType::NONE) {
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
@@ -259,7 +260,7 @@ inline void llk_unpack_A_block(
                 _llk_unpack_unary_broadcast_operands_to_dest_tile_(
                     rd_entry_idx + (start_tile_index + i) * stride_size_tiles, start_dst_tile_index + i);
                 // The math broadcast reads DEST through SrcB (MOVD2B), which stalls on SrcB dvalid.
-                _llk_unpack_set_srcB_dummy_valid_();
+                llk_unpack_set_srcb_dummy_valid();
             }
         }
         WAYPOINT("UPAD");

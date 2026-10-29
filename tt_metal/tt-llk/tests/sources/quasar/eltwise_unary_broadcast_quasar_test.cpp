@@ -82,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en>(bfd_unpack, 1);
+            _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en>(bfd_unpack, 1 /*num_tiles_per_unpack*/);
         }
 
         PROFILER_SYNC();
@@ -126,7 +126,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        _llk_unpack_unary_broadcast_operands_to_dest_tile_((block * tiles_in_block) + tile /*l1_tile_idx*/, tile /*dst_tile_idx*/);
+                        const std::uint32_t input_tile_idx = (block * tiles_in_block) + tile;
+                        _llk_unpack_unary_broadcast_operands_to_dest_tile_(input_tile_idx, tile /*dst_tile_idx*/);
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
