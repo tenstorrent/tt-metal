@@ -356,8 +356,16 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
     logger.info(f"budget split: B's miss recompute [0, {split_end}) in {miss_ms:.0f} ms; apc {a.apc.stats}")
     la = srv.prefill(0, A, 2 * CHUNK)  # A continues from 2048
     lb = srv.prefill(1, Bp, split_end)  # B continues from the chunk-unaligned 2112
-    toks_a, outs_a = srv.generate(0, la, n, N_CHECK)
-    toks_b, outs_b = srv.generate(1, lb, n, N_CHECK)
+    # both decode together (a prefilled slot that is not in the decode batch counts as mid-prefill)
+    toks_a, outs_a, toks_b, outs_b = [], [], [], []
+    ta, tb = int(la.argmax()), int(lb.argmax())
+    for k in range(N_CHECK):
+        res = srv.decode({0: (ta, n + k), 1: (tb, n + k)})
+        toks_a.append(ta)
+        toks_b.append(tb)
+        outs_a.append(res[0])
+        outs_b.append(res[1])
+        ta, tb = int(res[0].argmax()), int(res[1].argmax())
     a.release_request(0)
     a.release_request(1)
     for key in a.apc.retained_slots():
