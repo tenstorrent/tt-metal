@@ -147,6 +147,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
+#ifdef MATMUL_STOCH_RND
+        _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
+#endif
+#line 129
         _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,

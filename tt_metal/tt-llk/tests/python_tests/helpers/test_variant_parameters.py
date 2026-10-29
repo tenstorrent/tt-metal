@@ -317,6 +317,16 @@ def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt
 
 
 @dataclass
+class MATMUL_STOCH_RND(TemplateParameter):
+    """Matmul unpack thread that programs the ALU stochastic rounding units (None, Fpu, Pack, All) after its hw configure, as _llk_unpack_configure_stoch_rnd_ does for the other tests."""
+
+    stochastic_rounding: StochasticRounding = StochasticRounding.No
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_STOCH_RND\nconstexpr auto STOCHASTIC_RND = ckernel::{self.stochastic_rounding.value};"
+
+
+@dataclass
 class MATMUL_L1_ACC(TemplateParameter):
     """Blackhole matmul pack thread with the packer L1 accumulate switch on, as the ttnn bmm kernels run the later K blocks of a spilled output
     (llk_pack_reconfig_l1_acc(1) after the first pack). The perf loop accumulates into the same L1 tiles; the values do not matter."""
