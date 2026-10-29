@@ -295,13 +295,13 @@ public:
         Completion& completion,
         uint32_t index_in_pool,
         const std::atomic<uint64_t>& pool_published_job,
-        const std::atomic<uint64_t>& pool_park_after_job,
+        const std::atomic<uint64_t>& pool_spin_window_closed_at,
         const std::unique_ptr<ParallelJob>* pool_jobs,
         std::chrono::nanoseconds spin_window) :
         completion_(completion),
         index_(index_in_pool),
         pool_published_job_(pool_published_job),
-        pool_park_after_job_(pool_park_after_job),
+        pool_spin_window_closed_at_(pool_spin_window_closed_at),
         pool_jobs_(pool_jobs),
         spin_window_(spin_window) {
         // Set the priority for this process to 0 (niceness value in linux)
@@ -359,13 +359,15 @@ private:
         if (spin_until([this] { return has_work(); })) {
             return;
         }
-        // The spin window ends early once the pool asks its workers to park after the job this one last saw.
-        auto park_requested = [this] { return pool_park_after_job_.load(std::memory_order_relaxed) == last_seen_job_; };
-        if (spin_window_.count() > 0 && !park_requested() &&
+        // close_spin_window() ends it early for a worker whose last job is the one published at that time.
+        auto window_closed = [this] {
+            return pool_spin_window_closed_at_.load(std::memory_order_relaxed) == last_seen_job_;
+        };
+        if (spin_window_.count() > 0 && !window_closed() &&
             spin_for(
                 spin_window_,
-                [&] { return has_work() || shutdown_.load(std::memory_order_relaxed) || park_requested(); }) &&
-            !park_requested()) {
+                [&] { return has_work() || shutdown_.load(std::memory_order_relaxed) || window_closed(); }) &&
+            !window_closed()) {
             return;
         }
         // seq_cst pairs with wake(): either the producer sees the worker parked, or the worker sees the work.
@@ -383,7 +385,7 @@ private:
     std::atomic<bool> shutdown_ = false;
     alignas(64) const uint32_t index_;
     const std::atomic<uint64_t>& pool_published_job_;
-    const std::atomic<uint64_t>& pool_park_after_job_;
+    const std::atomic<uint64_t>& pool_spin_window_closed_at_;
     const std::unique_ptr<ParallelJob>* const pool_jobs_;
     const std::chrono::nanoseconds spin_window_;
     uint64_t last_seen_job_ = 0;
@@ -659,7 +661,7 @@ public:
                 completion_,
                 i,
                 published_,
-                park_after_,
+                spin_window_closed_at_,
                 jobs_.data(),
                 spin_window));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
@@ -674,7 +676,14 @@ public:
 
         for (uint32_t i = 0; i < thread_count; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id, i, completion_, i, published_, park_after_, jobs_.data(), std::chrono::nanoseconds(0)));
+                context_id,
+                i,
+                completion_,
+                i,
+                published_,
+                spin_window_closed_at_,
+                jobs_.data(),
+                std::chrono::nanoseconds(0)));
             phys_device_to_thread_id_[i] = i;
             map_worker_to_device(i, i);
         }
@@ -746,8 +755,8 @@ public:
         }
     }
 
-    void park_workers() override {
-        park_after_.store(published_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    void close_spin_window() override {
+        spin_window_closed_at_.store(published_.load(std::memory_order_relaxed), std::memory_order_relaxed);
     }
 
     void wait() override {
@@ -815,8 +824,8 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
-    // The published word after which idle workers park without their spin window (park_workers).
-    alignas(64) std::atomic<uint64_t> park_after_ = UINT64_MAX;
+    // The published word when close_spin_window() was last called: workers that last saw it park without polling.
+    alignas(64) std::atomic<uint64_t> spin_window_closed_at_ = UINT64_MAX;
     // Worker by physical device id; NO_WORKER for a device without one.
     static constexpr uint32_t NO_WORKER = UINT32_MAX;
     std::vector<uint32_t> worker_of_device_;

@@ -33,9 +33,9 @@ public:
     // concurrently, on the workers or on the calling thread, but calls for the same device run one at a time, in index
     // order. Rethrows the first exception thrown by fn. Independent of enqueue() and wait().
     virtual void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) = 0;
-    // Lets idle workers park now instead of polling through their spin window, for a caller about to wait on
-    // something slower. They get their spin window again after the next fan-out.
-    virtual void park_workers() {}
+    // For a caller about to wait on something slow: closes idle workers' spin window, so they park now instead of
+    // polling. Does not wait for them; they get a new spin window after the next fan-out.
+    virtual void close_spin_window() {}
 };
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
