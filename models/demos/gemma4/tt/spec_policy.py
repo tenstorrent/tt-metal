@@ -93,16 +93,25 @@ The warmup table is only the prior. The adapter times every step it serves
 (the wall between two consecutive proposals, the tokens the runner committed
 in it) and feeds ``Calibration``: per mode (``("plain", bucket)`` for the
 plain step at the decode bucket of the live rows, ``("step", shape, width)``
-for a record at its rung) an EWMA of the clean wall per step and of the
-tokens per step, and per shape the reseed as served. A sample is clean when
-no prefill ran inside the interval, the mode did not change at its start,
-nothing reseeded at its start and the live rows stayed. Once a mode has
-``GEMMA4_SPEC_CALIB_MIN`` clean samples the decision reads the measured
-wall instead of the table; the entry rule compares the measured record
-wall per expected token against the measured plain wall, and the reseed as
-served. While one mode serves, after ``GEMMA4_SPEC_CALIB_PROBE_STEPS`` steps
-without a sample of the other one a bounded probe of the other mode (one
-step, overhead-gated like the retry) keeps both estimates fresh.
+for a record at its rung) the clean walls as *ratios* to the warmup table
+at each step's own position, kept in a window of the last ``CALIB_WINDOW``
+samples whose median scales the table at decision time (so the position
+stays in the model: a long-context sample does not price a short-context
+step), the tokens those steps committed per row, and per shape the reseed
+as served (a ratio too). A sample is clean when no prefill ran inside the
+interval, the mode did not change at its start, nothing reseeded at its
+start and the live rows stayed; a clean sample above ``OUTLIER_FACTOR``
+times the running median (a wait that is not the mode's work, such as the
+lock-step wait on another engine's prefill) is an outlier, reported and
+never averaged in. Once a mode has ``GEMMA4_SPEC_CALIB_MIN`` clean samples
+the decision reads the table scaled by its ratio and the measured tokens per
+row instead of the acceptance model; the entry rule compares that against
+the measured plain step, with the reseed as served, over a horizon capped
+by the measured request length in steps (``note_request_steps``): a short
+request cannot amortize a reseed a long one can. While one mode serves,
+after ``GEMMA4_SPEC_CALIB_PROBE_STEPS`` steps without a sample of the other
+one a bounded probe of the other mode (one step, overhead-gated like the
+retry) keeps both estimates fresh.
 
 Joining rows
 ------------
@@ -118,6 +127,7 @@ reseed as served.
 
 from __future__ import annotations
 
+import collections
 import dataclasses
 import os
 
@@ -159,8 +169,14 @@ SPEC_POLICY_ENV = (
     SPEC_CALIB_MIN_ENV,
     SPEC_CALIB_PROBE_STEPS_ENV,
 )
-#: The EWMA weight of one clean step sample in the online cost calibration.
+#: The EWMA weight of the request-length estimate (steps per request) the entry horizon is capped by.
 CALIB_EWMA = 0.25
+#: Clean samples a mode keeps for its median ratio to the warmup table.
+CALIB_WINDOW = 32
+#: A clean sample above this multiple of the running median is an outlier (reported, never calibrating)...
+OUTLIER_FACTOR = 3.0
+#: ...once the mode has this many samples to take the median of.
+OUTLIER_MIN_SAMPLES = 4
 #: A row's own conditional at a position overrides the batch prior's after this many observations of it.
 ROW_MIN_OBSERVATIONS = 3
 #: Consecutive decisions below the exit gain before a speculating batch leaves for the plain step.
@@ -398,6 +414,7 @@ class RecordCandidate:
     cost_ms: float
     entry_ms: float = 0.0
     members: tuple | None = None
+    tokens_per_row: float | None = None  # measured in serving (a calibrated mode); None = the acceptance model
 
 
 @dataclasses.dataclass(frozen=True)
@@ -437,7 +454,10 @@ def rank_records(candidates, rows, plain_ms):
         if members is not None and (not members or any(i < 0 or i >= n for i in members)):
             raise ValueError(f"record {cand.shape} names members {members} outside the {n} rows")
         inside = range(n) if members is None else members
-        tokens = sum(rows[i].expected_tokens(k_v) for i in inside) + (n - len(inside))
+        if cand.tokens_per_row is not None:
+            tokens = float(cand.tokens_per_row) * len(inside) + (n - len(inside))
+        else:
+            tokens = sum(rows[i].expected_tokens(k_v) for i in inside) + (n - len(inside))
         gain = (tokens / n) / (cost / plain_ms)
         ranked.append(
             RecordChoice(
@@ -451,45 +471,77 @@ def rank_records(candidates, rows, plain_ms):
 class ModeStats:
     """What one mode (the plain step at a bucket, or a record at a rung) measured in serving.
 
-    ``steps``/``tokens`` count every step served in the mode, ``clean`` the
-    samples that calibrate it (``wall_ewma`` ms per step, ``tokens_ewma``
-    committed tokens per step, ``wall_sum`` for the window's mean).
+    ``steps``/``tokens`` count every step served in the mode and ``clean``
+    the samples that calibrate it. A clean sample is kept as its ratio to
+    the warmup table at the step's own position (so the position stays in
+    the model), in a window of the last ``CALIB_WINDOW`` samples whose
+    median calibrates the mode; a sample above ``OUTLIER_FACTOR`` times the
+    running median (a wait that is not this mode's work) goes to
+    ``outliers`` and is reported, never averaged in. ``rows_tokens`` keeps
+    the tokens per live row of the same samples (the measured tokens a step
+    of the mode commits per row).
     """
 
-    __slots__ = ("steps", "tokens", "clean", "wall_sum", "wall_ewma", "tokens_ewma")
+    __slots__ = ("steps", "tokens", "clean", "wall_sum", "tokens_sum", "ratios", "rows_tokens", "outliers")
 
     def __init__(self):
         self.steps = 0
         self.tokens = 0
         self.clean = 0
         self.wall_sum = 0.0
-        self.wall_ewma = None
-        self.tokens_ewma = None
+        self.tokens_sum = 0
+        self.ratios = collections.deque(maxlen=CALIB_WINDOW)
+        self.rows_tokens = collections.deque(maxlen=CALIB_WINDOW)
+        self.outliers = [0, 0.0]  # count, ms
 
-    def note(self, wall_ms, tokens, clean, alpha):
+    def note(self, wall_ms, tokens, clean, table_ms, live_rows):
+        """One step: ``wall_ms`` against ``table_ms`` (the warmup table at its position); clean samples calibrate."""
         self.steps += 1
         self.tokens += int(tokens)
-        if not clean:
+        if not clean or table_ms is None:
+            return
+        ratio = float(wall_ms) / max(float(table_ms), 1e-9)
+        if len(self.ratios) >= OUTLIER_MIN_SAMPLES and ratio > OUTLIER_FACTOR * self.ratio():
+            self.outliers[0] += 1
+            self.outliers[1] += float(wall_ms)
             return
         self.clean += 1
         self.wall_sum += float(wall_ms)
-        if self.wall_ewma is None:
-            self.wall_ewma, self.tokens_ewma = float(wall_ms), float(tokens)
-        else:
-            self.wall_ewma += alpha * (float(wall_ms) - self.wall_ewma)
-            self.tokens_ewma += alpha * (float(tokens) - self.tokens_ewma)
+        self.tokens_sum += int(tokens)
+        self.ratios.append(ratio)
+        self.rows_tokens.append(float(tokens) / max(int(live_rows), 1))
 
-    def describe(self, name, rows_hint=None):
+    def ratio(self):
+        """The median ratio of the clean walls to the table, or None without a sample."""
+        return _median(self.ratios)
+
+    def tokens_per_row(self):
+        """The median tokens one step of the mode committed per live row, or None without a sample."""
+        return _median(self.rows_tokens)
+
+    def describe(self, name):
         if self.clean:
             mean = self.wall_sum / self.clean
-            per_token = mean / max(self.tokens_ewma, 1e-9) if self.tokens_ewma else float("nan")
+            tokens = self.tokens_sum / self.clean
             text = (
                 f"{name}: {self.steps} steps, {self.tokens} tokens, {self.clean} clean, {mean:.1f} ms/step, "
-                f"{self.tokens_ewma:.2f} tokens/step, {per_token:.1f} ms/token, ewma {self.wall_ewma:.1f}"
+                f"{tokens:.2f} tokens/step, {mean / max(tokens, 1e-9):.1f} ms/token, ratio {self.ratio():.2f}x"
             )
         else:
             text = f"{name}: {self.steps} steps, {self.tokens} tokens, 0 clean"
+        if self.outliers[0]:
+            text += f", outliers {self.outliers[0]} at {self.outliers[1] / self.outliers[0]:.1f} ms"
         return text
+
+
+def _median(values):
+    values = sorted(values)
+    if not values:
+        return None
+    mid = len(values) // 2
+    if len(values) % 2:
+        return float(values[mid])
+    return (float(values[mid - 1]) + float(values[mid])) / 2.0
 
 
 def mode_name(mode):
@@ -501,12 +553,17 @@ def mode_name(mode):
 
 
 class Calibration:
-    """Online cost measurements that override the warmup table once a mode has enough clean samples.
+    """Online cost measurements that scale the warmup table once a mode has enough clean samples.
 
     ``modes`` keep the engine-life ``ModeStats`` per mode and ``window`` the
-    ones since the last stats line; ``reseeds`` the reseed ms EWMA per
-    shape (and their count and sum, engine life and window).
+    ones since the last stats line; ``reseeds`` the reseed of each shape as
+    served (count, ms, ratios to the table), ``dirty`` the steps whose
+    interval was not a clean sample by cause (prefill, reseed, switch,
+    rows) and ``total`` every step's wall and tokens, both per window and
+    engine life, so the clean figures reconcile with the served latency.
     """
+
+    CAUSES = ("prefill", "reseed", "switch", "rows", "untabled")
 
     def __init__(self, min_samples, alpha=CALIB_EWMA):
         self.min_samples = int(min_samples)
@@ -515,30 +572,47 @@ class Calibration:
             raise ValueError(f"Calibration needs min_samples >= 1, got {min_samples}")
         self.modes = {}
         self.window = {}
-        self.reseeds = {}  # shape -> [count, ms_sum, ewma]
+        self.reseeds = {}  # shape -> [count, ms_sum, ratios]
         self.window_reseeds = [0, 0.0]
         self.phases = {}  # name -> [calls, ms_sum] (engine life)
         self.window_phases = {}
         self.prefills = 0
         self.window_prefills = 0
+        self.dirty = {}  # cause -> [steps, ms]
+        self.window_dirty = {}
+        self.total = [0, 0.0, 0]  # steps, ms, tokens
+        self.window_total = [0, 0.0, 0]
         self.steps_since = {}  # mode kind ("plain" / "step") -> steps since its last clean sample
 
-    def note_step(self, mode, wall_ms, tokens, clean):
-        """One served step of ``mode`` (``("plain", bucket)`` or ``("step", shape, width)``)."""
+    def note_step(self, mode, wall_ms, tokens, clean, table_ms, live_rows=1, cause=None):
+        """One served step of ``mode`` (``("plain", bucket)`` or ``("step", shape, width)``) whose wall is
+        compared to ``table_ms``, the warmup table at the step's position; an unclean step names its ``cause``."""
         mode = tuple(mode)
         for table in (self.modes, self.window):
-            table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, self.alpha)
+            table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, table_ms, live_rows)
+        for total in (self.total, self.window_total):
+            total[0] += 1
+            total[1] += float(wall_ms)
+            total[2] += int(tokens)
+        if not clean:
+            cause = cause if cause in self.CAUSES else "switch"
+            for table in (self.dirty, self.window_dirty):
+                entry = table.setdefault(cause, [0, 0.0])
+                entry[0] += 1
+                entry[1] += float(wall_ms)
         for kind in ("plain", "step"):
             if kind == mode[0] and clean:
                 self.steps_since[kind] = 0
             else:
                 self.steps_since[kind] = self.steps_since.get(kind, 0) + 1
 
-    def note_reseed(self, shape, ms):
-        entry = self.reseeds.setdefault(tuple(shape), [0, 0.0, None])
+    def note_reseed(self, shape, ms, table_ms=None):
+        """A reseed (or bootstrap) of ``shape`` took ``ms``; ``table_ms`` is the warmup line at its position."""
+        entry = self.reseeds.setdefault(tuple(shape), [0, 0.0, collections.deque(maxlen=CALIB_WINDOW)])
         entry[0] += 1
         entry[1] += float(ms)
-        entry[2] = float(ms) if entry[2] is None else entry[2] + self.alpha * (float(ms) - entry[2])
+        if table_ms is not None:
+            entry[2].append(float(ms) / max(float(table_ms), 1e-9))
         self.window_reseeds[0] += 1
         self.window_reseeds[1] += float(ms)
 
@@ -554,20 +628,28 @@ class Calibration:
 
     def calibrated(self, mode):
         stats = self.modes.get(tuple(mode))
-        return stats is not None and stats.clean >= self.min_samples
+        return stats is not None and len(stats.ratios) >= self.min_samples
 
     def step_ms(self, mode, prior):
-        """The measured wall per step of ``mode`` once calibrated, else ``prior`` (the warmup table)."""
+        """``prior`` (the warmup table at the step's position) scaled by the mode's measured ratio once calibrated."""
         stats = self.modes.get(tuple(mode))
-        if stats is not None and stats.clean >= self.min_samples:
-            return float(stats.wall_ewma)
+        if stats is not None and len(stats.ratios) >= self.min_samples:
+            return float(prior) * stats.ratio()
         return float(prior)
 
+    def tokens_per_row(self, mode):
+        """The measured tokens per row and step of ``mode`` once calibrated, else None (the model decides)."""
+        stats = self.modes.get(tuple(mode))
+        if stats is not None and len(stats.ratios) >= self.min_samples:
+            return stats.tokens_per_row()
+        return None
+
     def reseed_ms(self, shape, prior):
-        """The reseed of ``shape`` as served once measured ``min_samples`` times, else ``prior``."""
+        """``prior`` (the warmup line at the position) scaled by the shape's reseed ratio as served, once
+        measured ``min_samples`` times."""
         entry = self.reseeds.get(tuple(shape))
-        if entry is not None and entry[0] >= self.min_samples:
-            return float(entry[2])
+        if entry is not None and len(entry[2]) >= self.min_samples:
+            return float(prior) * _median(entry[2])
         return float(prior)
 
     def steps_without(self, kind):
@@ -575,19 +657,37 @@ class Calibration:
         return self.steps_since.get(kind, 0)
 
     def describe(self, window=True):
-        """The stats line's body: every mode, the reseeds, the phases, the prefills, the calibrated modes."""
+        """The stats line's body: every mode, the reseeds, the dirty steps by cause, the totals, the phases,
+        the prefills, the calibrated modes."""
         table = self.window if window else self.modes
         parts = [stats.describe(mode_name(mode)) for mode, stats in sorted(table.items(), key=lambda kv: str(kv[0]))]
         if window:
-            count, total = self.window_reseeds
-            phases = self.window_phases
-            prefills = self.window_prefills
+            count, total_ms = self.window_reseeds
+            phases, prefills, dirty, total = (
+                self.window_phases,
+                self.window_prefills,
+                self.window_dirty,
+                self.window_total,
+            )
         else:
             count = sum(entry[0] for entry in self.reseeds.values())
-            total = sum(entry[1] for entry in self.reseeds.values())
-            phases = self.phases
-            prefills = self.prefills
-        parts.append(f"reseeds {count}" + (f" at {total / count:.1f} ms" if count else ""))
+            total_ms = sum(entry[1] for entry in self.reseeds.values())
+            phases, prefills, dirty, total = self.phases, self.prefills, self.dirty, self.total
+        parts.append(f"reseeds {count}" + (f" at {total_ms / count:.1f} ms" if count else ""))
+        if dirty:
+            steps = sum(entry[0] for entry in dirty.values())
+            ms = sum(entry[1] for entry in dirty.values())
+            parts.append(
+                f"dirty {steps} steps, {ms:.0f} ms: "
+                + ", ".join(
+                    f"{cause} {dirty[cause][0]}/{dirty[cause][1]:.0f}" for cause in self.CAUSES if cause in dirty
+                )
+            )
+        if total[0]:
+            parts.append(
+                f"total {total[0]} steps, {total[1]:.0f} ms, {total[2]} tokens, "
+                f"{total[1] / max(total[2], 1):.1f} ms/token"
+            )
         if phases:
             parts.append(
                 "phases ms/call: "
@@ -599,11 +699,13 @@ class Calibration:
         return " | ".join(parts)
 
     def flush_window(self):
-        """Close the stats window: its ``ModeStats``, reseeds, phases and prefills start over."""
+        """Close the stats window: its ``ModeStats``, reseeds, dirty steps, totals, phases and prefills start over."""
         self.window = {}
         self.window_reseeds = [0, 0.0]
         self.window_phases = {}
         self.window_prefills = 0
+        self.window_dirty = {}
+        self.window_total = [0, 0.0, 0]
 
 
 def _smallest_k(choices, above=None):
@@ -639,6 +741,7 @@ class SpecPolicy:
         self.last_k = None
         self.trial = False
         self.last_reason = None  # why the last decision was what it was ("gain", ..., "exit", "calibrate", "declined")
+        self.request_steps = None  # EWMA of the steps a request lived (the entry horizon of a joining row)
 
     def new_row(self):
         return self.prior.child()
@@ -660,12 +763,33 @@ class SpecPolicy:
     def speculating(self):
         return self.last_k is not None and self.last_k > 0
 
-    def entry_pays(self, choice, plain_ms):
+    def note_request_steps(self, steps):
+        """A request ended after ``steps`` proposals: the entry horizon of a new request follows this EWMA."""
+        steps = float(steps)
+        self.request_steps = (
+            steps
+            if self.request_steps is None
+            else self.request_steps + self.alpha_steps * (steps - self.request_steps)
+        )
+
+    alpha_steps = CALIB_EWMA
+
+    def entry_horizon(self, remaining=None):
+        """The steps an entry's saving is counted over: ``GEMMA4_SPEC_ENTRY_HORIZON`` capped by the steps the
+        entering rows are expected to live (``remaining``, else the measured request length)."""
+        horizon = self.config.entry_horizon
+        if remaining is None:
+            remaining = self.request_steps
+        if remaining is not None:
+            horizon = min(horizon, max(1, int(round(remaining))))
+        return horizon
+
+    def entry_pays(self, choice, plain_ms, remaining=None):
         """Whether the saving of ``choice`` over the entry horizon covers its entry cost (true when there is none)."""
         if choice.entry_ms <= 0.0:
             return True
         saving = choice.tokens_per_row * float(plain_ms) - choice.cost_ms
-        return self.config.entry_horizon * saving >= choice.entry_ms
+        return self.entry_horizon(remaining) * saving >= choice.entry_ms
 
     def retry_choice(self, ranked, plain_ms):
         """The retry for a plain-serving batch, or None: the cheapest candidate (entry plus step) once at least
@@ -694,20 +818,20 @@ class SpecPolicy:
         forgone = max(0.0, choice.tokens_per_row - 1.0) * float(plain_ms)
         return choice.entry_ms + forgone <= cfg.retry_overhead * since * float(plain_ms)
 
-    def would_speculate(self, candidates, rows, plain_ms):
+    def would_speculate(self, candidates, rows, plain_ms, remaining=None):
         """Whether ``decide`` would replay a record now, without changing any counter (the dFlash bootstrap gate)."""
         ranked = rank_records(candidates, rows, plain_ms)
-        if self.admissible(ranked, plain_ms) is not None:
+        if self.admissible(ranked, plain_ms, remaining) is not None:
             return True
         held = self.holdable(ranked)
         if self.speculating and not self.trial and held is not None and held.gain >= self.config.exit_gain:
             return True
         return self.retry_choice(ranked, plain_ms) is not None
 
-    def admissible(self, ranked, plain_ms):
+    def admissible(self, ranked, plain_ms, remaining=None):
         """The best candidate that clears the entry gain and whose entry (if any) pays over the horizon."""
         for choice in ranked:
-            if choice.gain >= self.config.min_gain and self.entry_pays(choice, plain_ms):
+            if choice.gain >= self.config.min_gain and self.entry_pays(choice, plain_ms, remaining):
                 return choice
         return None
 
@@ -719,18 +843,19 @@ class SpecPolicy:
                 return choice
         return None
 
-    def decide(self, candidates, rows, plain_ms, k_cap):
+    def decide(self, candidates, rows, plain_ms, k_cap, remaining=None):
         """The record for a step of ``rows`` (their statistics) among ``candidates``, or None for plain.
 
         ``k_cap`` is the largest draft length the step may use (the rows-based
-        cap); a choice below it counts toward the probe.
+        cap); a choice below it counts toward the probe. ``remaining`` caps the
+        entry horizon by the steps the entering rows are expected to live.
         """
         cfg = self.config
         candidates = list(candidates)
         if not candidates:
             raise ValueError("decide needs at least one candidate record")
         ranked = rank_records(candidates, rows, plain_ms)
-        best = self.admissible(ranked, plain_ms)
+        best = self.admissible(ranked, plain_ms, remaining)
         held = self.holdable(ranked)
         choice = None
         reason = "declined"

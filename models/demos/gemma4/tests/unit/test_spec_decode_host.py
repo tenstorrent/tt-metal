@@ -2120,25 +2120,58 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     assert cost_at(30.0, 700) == 30.0 and cost_at((0, 30.0, 1000, 80.0), 250) == 42.5 and cost_at(line, 250) == 42.5
     assert CostLine.of(line) is line and CostLine.flat(7.0, 100) == CostLine(0, 7.0, 100, 7.0)
     assert CostLine(0, 30.0, 0, 80.0).at(10) == 30.0, "a line without a span is flat"
-    # online calibration: a mode reads the warmup prior until it has min_samples clean steps, then its EWMA
+    # online calibration: a mode reads the warmup table until it has min_samples clean steps, then the table
+    # scaled by the median ratio of its clean walls to the table at each step's own position
     calib = Calibration(2)
     mode = ("step", (8, 3), 2048)
     assert calib.step_ms(mode, 35.0) == 35.0 and not calib.calibrated(mode)
-    calib.note_step(mode, 80.0, 3, True)
-    calib.note_step(mode, 90.0, 3, False)  # not clean: counted, never calibrates
+    calib.note_step(mode, 80.0, 3, True, 40.0, 1)  # ratio 2.0
+    calib.note_step(mode, 90.0, 3, False, 40.0, 1, cause="prefill")  # not clean: counted, never calibrates
     assert calib.step_ms(mode, 35.0) == 35.0 and calib.modes[mode].steps == 2 and calib.modes[mode].clean == 1
-    calib.note_step(mode, 84.0, 3, True)
-    assert calib.calibrated(mode) and calib.step_ms(mode, 35.0) == pytest.approx(81.0)  # 80 + 0.25 x (84 - 80)
-    assert calib.modes[mode].tokens_ewma == pytest.approx(3.0) and calib.modes[mode].tokens == 9
+    calib.note_step(mode, 100.0, 3, True, 40.0, 1)  # ratio 2.5
+    assert calib.calibrated(mode) and calib.step_ms(mode, 35.0) == pytest.approx(35.0 * 2.25)
+    assert calib.step_ms(mode, 136.0) == pytest.approx(136.0 * 2.25), "the position stays in the table"
+    assert calib.tokens_per_row(mode) == 3.0 and calib.modes[mode].tokens == 9
+    assert calib.dirty == {"prefill": [1, 90.0]} and calib.total == [3, 270.0, 9]
+    # an outlier: above 3x the running median once four samples exist; reported, never averaged in
+    for wall in (84.0, 88.0):
+        calib.note_step(mode, wall, 3, True, 40.0, 1)
+    calib.note_step(mode, 800.0, 3, True, 40.0, 1)
+    assert calib.modes[mode].outliers == [1, 800.0] and calib.modes[mode].clean == 4
+    assert calib.step_ms(mode, 40.0) == pytest.approx(40.0 * 2.15)  # the median of 2.0, 2.5, 2.1, 2.2
     assert calib.reseed_ms((8, 3), 250.0) == 250.0
-    calib.note_reseed((8, 3), 300.0)
-    calib.note_reseed((8, 3), 340.0)
-    assert calib.reseed_ms((8, 3), 250.0) == pytest.approx(310.0) and calib.reseeds[(8, 3)][0] == 2
-    assert calib.steps_without("plain") == 3 and calib.steps_without("step") == 0
-    calib.note_step(("plain", 8), 31.0, 8, True)
+    calib.note_reseed((8, 3), 300.0, 250.0)
+    calib.note_reseed((8, 3), 350.0, 250.0)
+    assert calib.reseed_ms((8, 3), 250.0) == pytest.approx(250.0 * 1.3) and calib.reseeds[(8, 3)][0] == 2
+    assert calib.reseed_ms((8, 3), 500.0) == pytest.approx(650.0), "a ratio too: the position stays in the line"
+    assert calib.steps_without("plain") == 6 and calib.steps_without("step") == 0
+    calib.note_step(("plain", 8), 31.0, 8, True, 30.0, 8)
     assert calib.steps_without("plain") == 0 and calib.steps_without("step") == 1
     with expect_error(ValueError, "min_samples"):
         Calibration(0)
+    # the entry horizon follows the measured request length (steps), capped by GEMMA4_SPEC_ENTRY_HORIZON
+    policy = SpecPolicy(SpecPolicyConfig(entry_horizon=64), 5)
+    assert policy.entry_horizon() == 64 and policy.entry_horizon(10) == 10
+    policy.note_request_steps(34)
+    assert policy.request_steps == 34.0 and policy.entry_horizon() == 34
+    policy.note_request_steps(10)
+    assert policy.request_steps == pytest.approx(28.0) and policy.entry_horizon() == 28
+    assert policy.entry_horizon(500) == 64
+    # a saving of 64 x 15.7 = 1002 ms covers a 500 ms reseed over the configured horizon, not over 20 steps
+    entering = [RecordCandidate((8, 3), 2048, 35.0, 500.0)]
+    row = _row([0.7] * 5)  # 2.53 tokens: 15.7 ms saved per step at plain 20
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(entering, [row], _PLAIN, 3).reason == "enter"
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(entering, [row], _PLAIN, 3, remaining=20) is None
+    short = SpecPolicy(SpecPolicyConfig(), 5)
+    short.note_request_steps(20)
+    assert short.decide(entering, [row], _PLAIN, 3) is None, "the measured request length caps the horizon"
+    assert not short.would_speculate(entering, [row], _PLAIN) and short.would_speculate(entering, [row], _PLAIN, 64)
+    # the measured tokens per row of a calibrated record replace the acceptance model
+    measured = [RecordCandidate((8, 3), 2048, 35.0, 0.0, tokens_per_row=1.2)]
+    assert rank_records(measured, [row], _PLAIN)[0].expected_tokens == pytest.approx(1.2)
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(measured, [row], _PLAIN, 3) is None
+    partial = [RecordCandidate((8, 3), 2048, 55.0, 0.0, members=(0,), tokens_per_row=3.0)]
+    assert rank_records(partial, [row, row], _PLAIN)[0].expected_tokens == pytest.approx(3.0 + 1.0)
 
 
 def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length(expect_error=None):
@@ -2175,19 +2208,19 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
         choice = probing.decide(_cands(_COSTS), rows, _PLAIN, 5)
         kinds.append(None if choice is None else choice.reason)
         if choice is not None:
-            probing.calibration.note_step(("step", choice.shape, choice.width), 50.0, 6, True)
+            probing.calibration.note_step(("step", choice.shape, choice.width), 50.0, 6, True, 50.0, 1)
         else:
-            probing.calibration.note_step(("plain", 1), 20.0, 1, True)
+            probing.calibration.note_step(("plain", 1), 20.0, 1, True, 20.0, 1)
     assert kinds == ["gain", "gain", "gain", None, "gain"] and probing.last_reason == "gain"
     assert probing.calibration.steps_without("plain") == 1
     never = SpecPolicy(SpecPolicyConfig(calib_probe_steps=0, probe_steps=0), 5)
     for _ in range(6):
         assert never.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
-        never.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True)
+        never.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True, 50.0, 1)
     costly = SpecPolicy(SpecPolicyConfig(calib_probe_steps=3, retry_overhead=0.03, probe_steps=0), 5)
     for _ in range(6):  # 5 tokens forgone x 20 ms over 3+ steps is far above 3 % of them: no probe
         assert costly.decide(_cands(_COSTS), rows, _PLAIN, 5) is not None
-        costly.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True)
+        costly.calibration.note_step(("step", (1, 5), 1024), 50.0, 6, True, 50.0, 1)
 
 
 def _policy_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps(expect_error=None):
@@ -2255,22 +2288,28 @@ def _policy_describe_costs_lists_the_plain_step_then_every_record(expect_error=N
     assert mode_name(("plain", 8)) == "plain[b=8]" and mode_name(("step", (8, 3), 2048)) == "(8,3)@2048"
     stats = ModeStats()
     assert stats.describe("plain[b=8]") == "plain[b=8]: 0 steps, 0 tokens, 0 clean"
-    stats.note(31.0, 8, True, 0.25)
-    stats.note(33.0, 8, True, 0.25)
-    stats.note(99.0, 8, False, 0.25)
+    stats.note(31.0, 8, True, 30.0, 8)
+    stats.note(33.0, 8, True, 30.0, 8)
+    stats.note(99.0, 8, False, 30.0, 8)
     assert stats.describe("plain[b=8]") == (
-        "plain[b=8]: 3 steps, 24 tokens, 2 clean, 32.0 ms/step, 8.00 tokens/step, 4.0 ms/token, ewma 31.5"
+        "plain[b=8]: 3 steps, 24 tokens, 2 clean, 32.0 ms/step, 8.00 tokens/step, 4.0 ms/token, ratio 1.07x"
     )
+    for wall in (30.0, 32.0, 900.0):
+        stats.note(wall, 8, True, 30.0, 8)
+    assert stats.describe("plain[b=8]").endswith("3.9 ms/token, ratio 1.05x, outliers 1 at 900.0 ms")
+    assert stats.tokens_per_row() == 1.0 and stats.clean == 4
     calib = Calibration(8)
-    calib.note_step(("plain", 8), 31.0, 8, True)
-    calib.note_reseed((8, 3), 248.0)
+    calib.note_step(("plain", 8), 31.0, 8, True, 30.0, 8)
+    calib.note_step(("plain", 8), 250.0, 8, False, 30.0, 8, cause="switch")
+    calib.note_reseed((8, 3), 248.0, 240.0)
     calib.note_phase("replay", 41.5)
     calib.note_phase("replay", 42.5)
     calib.note_prefill()
     assert calib.describe() == (
-        "plain[b=8]: 1 steps, 8 tokens, 1 clean, 31.0 ms/step, 8.00 tokens/step, 3.9 ms/token, ewma 31.0 | "
-        "reseeds 1 at 248.0 ms | phases ms/call: replay 42.0 | prefills 1 | calibrated: none"
+        "plain[b=8]: 2 steps, 16 tokens, 1 clean, 31.0 ms/step, 8.00 tokens/step, 3.9 ms/token, ratio 1.03x | "
+        "reseeds 1 at 248.0 ms | dirty 1 steps, 250 ms: switch 1/250 | total 2 steps, 281 ms, 16 tokens, "
+        "17.6 ms/token | phases ms/call: replay 42.0 | prefills 1 | calibrated: none"
     )
     calib.flush_window()
     assert calib.describe() == "reseeds 0 | prefills 0 | calibrated: none"
-    assert calib.describe(window=False).startswith("plain[b=8]: 1 steps, 8 tokens, 1 clean")
+    assert calib.describe(window=False).startswith("plain[b=8]: 2 steps, 16 tokens, 1 clean")

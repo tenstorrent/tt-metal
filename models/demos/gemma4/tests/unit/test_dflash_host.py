@@ -3341,6 +3341,7 @@ def _dflash_rejections_end_the_session_and_the_request_runs_plain(adapter, monke
     calib = costed._spec_policy.calibration
     assert calib.modes[("step", (1, 5), 1024)].steps == 7 and calib.modes[("plain", 32)].steps == 2
     assert calib.reseeds[(1, 5)][0] == 1, "the bootstrap is the entry, measured once"
+    assert costed._spec_policy.request_steps == 8.0, "the ended session's steps feed the entry horizon"
     assert calib.phases["replay"][0] == 7 and calib.phases["refresh"][0] == 8 and calib.phases["host"][0] == 10
     assert all(stats.wall_sum >= 0.0 for stats in calib.modes.values())
 
@@ -3578,7 +3579,8 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
     assert adaptive._spec_policy.declined == 2 and not adaptive._spec_policy.trial
     # the instrumentation: the closed intervals by mode, clean only without a switch, a reseed or a prefill
     calib = adaptive._spec_policy.calibration
-    modes = {mode: (stats.steps, stats.clean) for mode, stats in calib.modes.items()}
+    # an outlier (a host step over 3x the median) is a clean interval the window reports apart
+    modes = {mode: (stats.steps, stats.clean + stats.outliers[0]) for mode, stats in calib.modes.items()}
     assert modes[("step", (1, 5), 1024)] == (6, 5), "the first interval starts with a reseed"
     assert modes[("step", (8, 3), 1024)] == (11, 10), "the first (8,3) interval starts at a switch"
     assert modes[("plain", 32)] == (4, 2), "the last decision's interval never closes; the switches are not clean"
@@ -3592,6 +3594,11 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
         "host": 23,
     }
     assert calib.prefills == 1 and calib.window_prefills == 1
+    assert calib.total[0] == 22 and calib.total[2] == 6 + 16 + 5, "every closed interval, with its tokens"
+    assert (
+        sum(entry[0] for entry in calib.dirty.values()) + sum(s.clean + s.outliers[0] for s in calib.modes.values())
+        == 22
+    )
 
 
 def _mtp_a_batch_may_replay_a_smaller_record_than_its_rows_select(
@@ -3747,12 +3754,14 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
     assert len(lines) == 2 and lines[0].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 3 steps")
     assert re.search(
         r"\(1,5\)@1024: 3 steps, 18 tokens, 2 clean, \d+\.\d ms/step, 6\.00 tokens/step, \d+\.\d ms/token, "
-        r"ewma \d+\.\d \| reseeds 1 at \d+\.\d ms \| phases ms/call: tables \d+\.\d, refresh \d+\.\d, "
+        r"ratio \d+\.\d\dx \| reseeds 1 at \d+\.\d ms \| dirty 1 steps, \d+ ms: reseed 1/\d+ \| total 3 steps, "
+        r"\d+ ms, 18 tokens, \d+\.\d ms/token \| phases ms/call: tables \d+\.\d, refresh \d+\.\d, "
         r"reseed \d+\.\d, replay \d+\.\d, host \d+\.\d \| prefills 1 \| calibrated: none$",
         lines[0],
     )
     assert lines[1].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 4 steps, 24 tokens, 4 clean")
-    assert "reseeds 0 | phases ms/call: tables" in lines[1] and "| prefills 0 | calibrated: none" in lines[1]
+    assert "| reseeds 0 | total 4 steps, " in lines[1] and "| phases ms/call: tables" in lines[1]
+    assert "| prefills 0 | calibrated: none" in lines[1] and "dirty" not in lines[1]
 
 
 def _mtp_record_switches_are_rate_limited_to_one_line_per_interval(
@@ -3785,6 +3794,7 @@ def _mtp_the_session_summary_reports_the_accepted_drafts_ewma(
     assert len(summary) == 1 and summary[0].startswith(
         "Gemma4MTP adaptive summary: engine life 2 steps | (1,5)@1024: 2 steps, 10 tokens"
     )
+    assert adaptive._spec_policy.request_steps == 3.0, "the released session's steps feed the entry horizon"
     assert "| reseeds 1 at " in summary[0] and "| prefills 1 | calibrated: none" in summary[0]
 
 
