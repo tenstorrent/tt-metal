@@ -486,6 +486,82 @@
   budget_type: unit
   category: docs_examples
 
+# --- Wormhole legs moved from the Sanity pipeline (ttnn_sanity_tests.yaml) ---
+# These used to run on wh_n300_civ2 on every push to main. Sanity still runs the same
+# commands on Blackhole and ttsim; Wormhole hardware now runs them here, nightly.
+# ttnn indexer_score group moved too, but needs no entry: its WH coverage is the
+# full indexer_score file in "ttnn nightly experimental tests (wormhole)" above.
+
+- name: ttnn conv group (WH, from sanity)
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: unit
+  category: conv
+
+- name: ttnn pool group (WH, from sanity)
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: unit
+  category: pool
+
+- name: ttnn sdpa group (WH, from sanity)
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: unit
+  category: sdpa
+
+- name: ttnn matmul group (WH, from sanity)
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: matmul
+
+- name: ttnn fused group 1 (WH, from sanity)
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: fused
+
+- name: ttnn fused group 2 (WH, from sanity)
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: fused
+
+- name: ttnn reduce group (WH, from sanity)
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: reduction
+
 # --- C++ ttnn unit tests ---
 
 - name: ttnn tensor accessor

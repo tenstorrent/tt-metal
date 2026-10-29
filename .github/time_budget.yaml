@@ -78,9 +78,9 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 580
+    wh_n300_civ2: 290
     bh_p100: 545
-    bh_p150b_civ2: 565
+    bh_p150b_civ2: 570
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
@@ -94,7 +94,7 @@ ttnn:
     bh_p100: 815
     bh_p150b_civ2: 900  # data_movement leg 80 -> 100 min (#61862)
     wh_n150_civ2: 1050
-    wh_n300_civ2: 1200
+    wh_n300_civ2: 1470
     bh_p150b_civ2_viommu: 125
     bh_p300: 60
     bh_quietbox_2: 60
@@ -222,7 +222,6 @@ scaleout:
   sanity:
     wh_galaxy: 20
     wh_llmbox_civ2: 30
-    wh_n300_civ2: 15
     bh_quietbox_2: 15
     bh_p300: 15
     wh_n300_perf: 5
@@ -475,8 +474,6 @@ umd:
   unit:
     wh_galaxy_perf: 35
   sanity:
-    wh_n150_civ2: 15
-    wh_n300_civ2: 15
     bh_p100a_civ2_viommu: 15
     bh_p150b_civ2_viommu: 15
 
