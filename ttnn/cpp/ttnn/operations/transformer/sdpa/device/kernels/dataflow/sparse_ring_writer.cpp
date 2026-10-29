@@ -15,11 +15,9 @@
 
 // Device-profiler zones around the writer's waits (when built with SPARSE_STEP_PROFILE, under
 // TT_METAL_DEVICE_PROFILER=1).
-#if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE)
-#define SPARSE_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define SPARSE_ZONE(name)
-#endif
+// DEBUG (dev branch): the zones only open inside the profile window (sparse_prof_window.hpp), by pass.
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_prof_window.hpp"
+#define SPARSE_ZONE(name) SPARSE_PROF_ZONE(name, sparse_prof::pass_on)
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
@@ -140,6 +138,7 @@ void kernel_main() {
         const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
         RingSDPAOpReceiver pass_receiver = receiver_start;
         for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+            sparse_prof::begin_iter(q_pass, ring_iter);  // DEBUG: profile window
             // The ring-id sequence advances on every iteration so the writer stays aligned with the reader, compute
             // and the all-gather; only the pass's last active iteration writes.
             const uint32_t ring_id =

@@ -18,6 +18,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/kernel_profiler.hpp"
 
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_prof_window.hpp"  // DEBUG (dev branch)
+
 // BH benefits from blocked pack at width 4; WH keeps the threshold at 8 because
 // width-4 blocked-pack reconfiguration costs more than it saves there.
 #ifdef ARCH_BLACKHOLE
@@ -1196,7 +1198,8 @@ void sdpa_ring_resident(
         // The step's first wait, taken before the zone opens (it returns at once inside): RING_STEP then measures
         // compute only, and a late K/V entry shows as a gap between steps instead of as step time.
         CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles * step_entries);
-        MaybeDeviceZoneScopedN(kRingStepProfiling, "RING_STEP");
+        SPARSE_PROF_SUM("RING_STEP_SUM");                     // DEBUG: whole-op total (TT_METAL_PROFILER_SUM=1)
+        SPARSE_PROF_ZONE("RING_STEP", sparse_prof::take_step());  // DEBUG: windowed (sparse_prof_window.hpp)
         sdpa_resident_piece_step_compact<
             Sq_chunk_t,
             Sk_chunk_t,
@@ -1430,7 +1433,7 @@ void sdpa_ring_resident(
         // Normalize every resident chunk, in slot order, into cb_out for the writer: the sum and out slots are
         // consumed from the front. Then release the unused slots, the max slots and Q, so every slot CB is empty with
         // its pointers back at the base.
-        MaybeDeviceZoneScopedN(kRingStepProfiling, "RES_NORM");
+        SPARSE_PROF_ZONE("RES_NORM", sparse_prof::pass_on);  // DEBUG: windowed by pass
         for (uint32_t i = 0; i < n_res; ++i) {
             ASSERT((initialized >> i) & 1u);
             normalize_row_streaming<

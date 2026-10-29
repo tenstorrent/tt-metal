@@ -16,3 +16,8 @@ Branch workflow:
 Env vars: allowed on this branch for in-progress experiments only. Before a change moves to the clean branch,
 each one becomes a default, a value the host derives, or an op argument (the clean branch has none; check with
 `git grep -n getenv sosborne/general-sparse-ring-attn -- ttnn/cpp/ttnn/operations/transformer/sdpa`).
+
+Profiling knobs (DEBUG commit; see `kernels/sparse_prof_window.hpp`): zones open only inside a window,
+`TT_SPARSE_PROF_PASS/_ITER/_SKIP/_STEPS` (defaults 0/1/0/100, ITER=-1 = all iterations), since the per-RISC buffer
+holds ~125 zones. `run.sh sum10` gives whole-op per-core totals (`TT_METAL_PROFILER_SUM=1`, no window needed).
+`TT_SPARSE_PAIR_STEPS=0` forces D4 pair steps off (`run.sh perf_pairs` runs both). Set knobs once per process.

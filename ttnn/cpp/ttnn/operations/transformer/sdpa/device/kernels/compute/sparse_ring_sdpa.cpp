@@ -125,6 +125,7 @@ void kernel_main() {
             if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
                 continue;
             }
+            sparse_prof::begin_iter(q_pass, ring_iter);  // DEBUG: profile window (sparse_prof_window.hpp)
             const bool is_first_active_iter = !seen_active_iter;
             seen_active_iter = true;
             const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);

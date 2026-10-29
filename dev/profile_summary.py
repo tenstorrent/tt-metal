@@ -19,6 +19,7 @@ import re
 import sys
 
 COMPUTE_ZONE = "RING_STEP"
+SUM_ZONE = "RING_STEP_SUM"
 READER_ZONES = [  # sparse_ring_reader.cpp
     "RD_RES_PIECES",
     "RD_GROUP_RX",
@@ -68,6 +69,9 @@ def main(path):
     re_type = re.compile(r"counter type['\"]?\s*[:;]\s*['\"]?([A-Za-z0-9_]+)")
     re_val = re.compile(r"['\"]value['\"]\s*[:;]\s*(\d+)")
     re_ref = re.compile(r"ref cnt['\"]?\s*[:;]\s*(\d+)")
+    # Sum zones (TT_METAL_PROFILER_SUM=1, SPARSE_PROF_SUM in sparse_prof_window.hpp): one ZONE_TOTAL row per RISC with
+    # the whole op's summed step cycles in the data column. (run, dev, x, y, risc) -> cycles.
+    step_sums = {}
     with open(path) as f:
         head = f.readline()
         if "CHIP_FREQ[MHz]:" in head:
@@ -79,6 +83,9 @@ def main(path):
                 mt, mv, mr = re_type.search(c[12]), re_val.search(c[12]), re_ref.search(c[12])
                 if mt and mv and mr:
                     counters[(c[7], c[0], c[1], c[2])][mt.group(1)] = (int(mv.group(1)), int(mr.group(1)))
+                continue
+            if len(c) >= 12 and c[11] == "ZONE_TOTAL" and c[10] == SUM_ZONE:
+                step_sums[(c[7], c[0], c[1], c[2], c[3])] = int(c[6])
                 continue
             if len(c) < 12 or c[10] not in WANTED:
                 continue
@@ -106,6 +113,7 @@ def main(path):
                     s = span.setdefault((run, dev, x, y), [t0, t])
                     s[0], s[1] = min(s[0], t0), max(s[1], t)
     us = lambda cyc: cyc / freq_mhz
+    report_step_sums(step_sums, us)
 
     # Run host IDs are per device: the attention op is each device's longest run.
     runs = collections.defaultdict(list)
@@ -275,6 +283,34 @@ def main(path):
             sorted((k for k in producers if k[1] == dev0), key=lambda k: (int(k[3]), int(k[2]))),
             "group producers, device " + dev0,
         )
+
+
+def report_step_sums(step_sums, us):
+    """Whole-op compute busy time per core from the sum zones: per device, min / median / max over cores of the
+    largest TRISC total (the TRISC that is busiest bounds the core), and the five busiest cores."""
+    if not step_sums:
+        return
+    per_core = collections.defaultdict(int)  # (run, dev, x, y) -> max over TRISCs
+    for (run, dev, x, y, risc), cyc in step_sums.items():
+        if risc.startswith("TRISC"):
+            per_core[(run, dev, x, y)] = max(per_core[(run, dev, x, y)], cyc)
+    # Per device keep the run with the largest total (the attention op).
+    run_total = collections.defaultdict(int)
+    for (run, dev, x, y), cyc in per_core.items():
+        run_total[(run, dev)] += cyc
+    main_run = {}
+    for (run, dev), cyc in run_total.items():
+        if cyc > run_total.get((main_run.get(dev), dev), -1):
+            main_run[dev] = run
+    print("\nwhole-op step time per core from sum zones (us; max over TRISCs; RING_STEP_SUM):")
+    print("  %-6s %6s %9s %9s %9s" % ("device", "cores", "min", "median", "max"))
+    busiest = []
+    for dev in sorted(main_run, key=lambda d: int(d) if d.isdigit() else d):
+        vals = sorted(cyc for (run, d, x, y), cyc in per_core.items() if d == dev and run == main_run[dev])
+        busiest += [(cyc, dev, x, y) for (run, d, x, y), cyc in per_core.items() if d == dev and run == main_run[dev]]
+        print("  %-6s %6d %9.1f %9.1f %9.1f" % (dev, len(vals), us(vals[0]), us(vals[len(vals) // 2]), us(vals[-1])))
+    for cyc, dev, x, y in sorted(busiest, reverse=True)[:5]:
+        print("  busiest: dev %s core (%s, %s) %.1f us" % (dev, x, y, us(cyc)))
 
 
 if __name__ == "__main__":

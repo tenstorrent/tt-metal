@@ -480,7 +480,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // Pair steps (one step over two consecutive pieces of a head, halving the per-step fixed cost) apply to small
     // pieces (<= 256 keys). They need a 4-deep K/V CB, so a pair and the next piece's delivery fit together, and twice
     // the score scratch; the pass split below turns them on only when that costs no extra pass.
-    const bool pair_steps_eligible = Sk_chunk_t <= 8;
+    // DEBUG (dev branch): TT_SPARSE_PAIR_STEPS=0 forces pair steps off for A/B timing. Not in the op's program hash:
+    // set it once per process (the op program cache is per process).
+    const char* pair_steps_env = std::getenv("TT_SPARSE_PAIR_STEPS");
+    const bool pair_steps_env_off = pair_steps_env != nullptr && std::string(pair_steps_env) == "0";
+    const bool pair_steps_eligible = Sk_chunk_t <= 8 && !pair_steps_env_off;
     bool pair_steps = false;                       // decided with the pass split
     uint32_t kv_cb_pages = group_mcast ? 3u : 2u;  // decided with the pass split
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -1698,6 +1702,18 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
     reader_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
     writer_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
+    // DEBUG: the profile window (sparse_prof_window.hpp) from TT_SPARSE_PROF_PASS / _ITER / _SKIP / _STEPS. Defines are
+    // part of the kernel build hash, so the JIT cache keys on them; the op program cache does not, so set them once
+    // per process.
+    for (const char* knob : {"PASS", "ITER", "SKIP", "STEPS"}) {
+        const std::string env_name = std::string("TT_SPARSE_PROF_") + knob;
+        if (const char* value = std::getenv(env_name.c_str())) {
+            const std::string define = std::string("SPARSE_PROF_") + knob;
+            compute_kernel.defines.emplace_back(define, value);
+            reader_kernel.defines.emplace_back(define, value);
+            writer_kernel.defines.emplace_back(define, value);
+        }
+    }
     // The compute kernel builds at O2: at the default level the 5 s program sits at the 70,656 B kernel config buffer,
     // and O2 cuts the three TRISC binaries by ~30 %. Profiled runs at O2 showed the same per-piece compute as the
     // default-level timings: the step is bound by Tensix instruction throughput, not by RISC issue. This kernel file

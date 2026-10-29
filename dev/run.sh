@@ -15,6 +15,13 @@
 #                           # for the per-zone tables; PROFILE_K overrides the -k filter.
 #   ./dev/run.sh profile10  # the same from dev/profile_case.py at 10 s (also profile5, profile15), summarized to
 #                           # log_val_profile10_summary.txt
+#   ./dev/run.sh sum10      # whole-op per-core step totals at 10 s from sum zones (also sum5, sum15)
+#   ./dev/run.sh perf_pairs # the 5 s perf subset with D4 pair steps forced off, then at the factory default
+#
+# Knobs (dev branch only, read by the DEBUG factory code; set once per process, they are not in the op's program
+# hash): TT_SPARSE_PROF_PASS / _ITER / _SKIP / _STEPS pick the profile window (defaults 0 / 1 / 0 / 100; ITER=-1 =
+# every ring iteration): e.g. TT_SPARSE_PROF_ITER=3 TT_SPARSE_PROF_SKIP=100 ./dev/run.sh profile15.
+# TT_SPARSE_PAIR_STEPS=0 forces D4 pair steps off.
 set -u
 cd "$(dirname "$0")/.."
 SD=tests/nightly/blackhole/sdpa
@@ -88,6 +95,22 @@ case "$ONLY" in
         run "$ONLY" 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
             pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only}"
         summarize_profile "profile${n}_summary"
+        ;;
+    # sum5 / sum10 / sum15: the same call under TT_METAL_PROFILER_SUM=1 with the zone window empty, so the buffer
+    # keeps room for the per-RISC totals (RING_STEP_SUM); the summary prints min / median / max per device.
+    sum5 | sum10 | sum15)
+        n=${ONLY#sum}
+        shape=s$(printf '%02d' "$n")
+        run "$ONLY" 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_SUM=1 TT_SPARSE_PROF_STEPS=0 \
+            pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only}"
+        summarize_profile "sum${n}_summary"
+        ;;
+    # perf_pairs: A/B of D4 pair steps at 5 s, separate processes (the op program cache is per process).
+    perf_pairs)
+        for p in 0 1; do
+            run "perf_pairs$p" 2400 env TT_SPARSE_PAIR_STEPS=$p \
+                pytest "$PERF" -s -k "5s and (dense_and_gather or (k256 and sparse))"
+        done
         ;;
 esac
 exit 0

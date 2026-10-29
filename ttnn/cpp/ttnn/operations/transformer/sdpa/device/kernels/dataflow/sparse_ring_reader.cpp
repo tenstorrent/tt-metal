@@ -20,11 +20,9 @@
 // Device-profiler zones around the reader's waits (when built with SPARSE_STEP_PROFILE, under
 // TT_METAL_DEVICE_PROFILER=1), so a stall shows up as a long RD_* zone on the core that waits instead of as a gap in
 // the compute zones.
-#if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE)
-#define SPARSE_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define SPARSE_ZONE(name)
-#endif
+// DEBUG (dev branch): the zones only open inside the profile window (sparse_prof_window.hpp), by pass and ring iteration.
+#include "ttnn/operations/transformer/sdpa/device/kernels/sparse_prof_window.hpp"
+#define SPARSE_ZONE(name) SPARSE_PROF_ZONE(name, sparse_prof::iter_on)
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -421,6 +419,7 @@ void kernel_main() {
         q_pushed = false;
         pooled_pending = true;
         for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+            sparse_prof::begin_iter(q_pass, ring_iter);  // DEBUG: profile window
             uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
             ring_joint::PackedKVSourceReadiness packed_readiness;
             if (packed_sources) {
