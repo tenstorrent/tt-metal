@@ -32,13 +32,15 @@
 // more gather count each), reduces them to (order key, vocab id), exchanges that 16 B record with every
 // peer hub over fabric and picks the same token on every chip (largest key, then smallest id, the host's
 // rule). Then into tok (DRAM): ring + 1 and pos + 1, the token's embedding row as x0 and the rope tiles of
-// pos + 1; into out: (token, pos + 1). Counts on the global semaphores are monotonic: a peer can start
-// the next step and count into this chip before this hub ends, so nothing is reset here. A per-hub
-// launch counter gives each launch its base; the host zeroes all of them while the device is idle.
+// pos + 1 (expanded from the rope table's compact entry, see expand_rope); into out: (token, pos + 1).
+// Counts on the global semaphores are monotonic: a peer can start the next step and count into this chip
+// before this hub ends, so nothing is reset here. A per-hub launch counter gives each launch its base; the
+// host zeroes all of them while the device is idle.
 // Compile-time args 13 feed, 14 max_pos, 15 tok page bytes, 16 rope offset in tok, 17 rope bytes, 18 feed
 // kind, 19 rope offset in the peer's tok, 20 embedding row bytes.
 // Runtime args (feed), after the rectangles: argmax records, candidate slots (L1, num_chips x 16 B, same
-// address on every chip), candidate semaphore, launch counter, tok, embedding table, rope table, out, sampling
+// address on every chip), candidate semaphore, launch counter, tok, embedding table, rope table (a page per
+// position: cos then sin of its ROT / 2 rotation angles as bf16, kRopeEntry bytes), out, sampling
 // parameters, then the peer's tok (verify kinds).
 //
 // Compile-time arg 21 sample (feed kind 0): the records are the streamers' top-k lists and the candidate slots
@@ -91,6 +93,8 @@ constexpr bool sample = get_compile_time_arg_val(21) != 0;
 static_assert(!sample || (feed && feed_kind == 0), "sampling feeds batch 1");
 constexpr uint32_t cand_bytes = sample ? sampling::kListBytes : 16;
 constexpr uint32_t packets_per_vector = (vector_bytes + packet_bytes - 1) / packet_bytes;
+constexpr uint32_t kRopeEntry = 128;  // compact rope table page: cos[32] | sin[32] bf16
+static_assert(rope_bytes == 3 * 2048, "the token state's rope tiles: cos, sin, -sin");
 constexpr uint32_t num_headers = 2 * packets_per_vector * 2 + (feed ? 2 : 0);
 constexpr bool pooled = num_headers <= NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;
 
@@ -107,7 +111,31 @@ void scatter_row(uint32_t row, uint32_t dst, uint32_t u) {
     }
 }
 
-// feed kinds 1 and 2 (see above); h: this launch's token state head (64 B, in L1 at `stage`)
+// the compact rope entry at `src` (cos[32] | sin[32] bf16) as the token state's cos, sin and -sin tiles at `dst`:
+// bf16 32x32 tiles whose rows all equal the vector (faces 0 and 2 hold its first 16 values, faces 1 and 3 the
+// rest; model.py tile_bytes_rows_replicated). -sin flips the sign bits, which is exact
+void expand_rope(uint32_t src, uint32_t dst) {
+    volatile tt_l1_ptr uint32_t* in = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
+    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+    uint32_t v[16];
+    for (uint32_t t = 0; t < 3; t++) {
+        const uint32_t flip = t == 2 ? 0x80008000u : 0;
+        for (uint32_t w = 0; w < 16; w++) {
+            v[w] = in[(t == 0 ? 0 : 16) + w] ^ flip;
+        }
+        for (uint32_t f = 0; f < 4; f++) {
+            const uint32_t* half = v + (f & 1) * 8;
+            for (uint32_t r = 0; r < 16; r++) {
+                for (uint32_t w = 0; w < 8; w++) {
+                    out[t * 512 + f * 128 + r * 8 + w] = half[w];
+                }
+            }
+        }
+    }
+}
+
+// feed kinds 1 and 2 (see above); h: this launch's token state head (64 B, in L1 at `stage`); rope_c: L1 scratch
+// for the two compact rope entries
 void feed_verify(
     volatile tt_l1_ptr uint32_t* h,
     const uint32_t* best,
@@ -116,7 +144,8 @@ void feed_verify(
     uint32_t rope_addr,
     uint32_t peer_tok_addr,
     uint32_t out_addr,
-    uint32_t x_addr) {
+    uint32_t x_addr,
+    uint32_t rope_c) {
     // stage: head | peer head | x0 (kind 1: 2 vectors) | rope (2 rows) | 2 embedding rows
     const uint32_t ph = stage + 64, x0 = stage + 128;
     const uint32_t x0_bytes = (feed_kind == 1 ? 2 : 1) * vector_bytes;
@@ -169,15 +198,17 @@ void feed_verify(
     const uint32_t r0 = rope_p < max_pos ? rope_p : max_pos - 1;
     const uint32_t r1 = rope_p + 1 < max_pos ? rope_p + 1 : max_pos - 1;
     const InterleavedAddrGen<true> emb{.bank_base_address = embed_addr, .page_size = row_bytes};
-    const InterleavedAddrGen<true> rtab{.bank_base_address = rope_addr, .page_size = rope_bytes};
+    const InterleavedAddrGen<true> rtab{.bank_base_address = rope_addr, .page_size = kRopeEntry};
     noc_async_read(emb.get_noc_addr(toks[0]), rows_l1, row_bytes);
     noc_async_read(emb.get_noc_addr(toks[1]), rows_l1 + row_bytes, row_bytes);
-    noc_async_read(rtab.get_noc_addr(r0), rope, rope_bytes);
-    noc_async_read(rtab.get_noc_addr(r1), rope + rope_bytes, rope_bytes);
+    noc_async_read(rtab.get_noc_addr(r0), rope_c, kRopeEntry);
+    noc_async_read(rtab.get_noc_addr(r1), rope_c + kRopeEntry, kRopeEntry);
     if constexpr (feed_kind == 1) {
         noc_async_read(get_noc_addr(x_addr), x0 + vector_bytes, vector_bytes);  // this step's x (row 0, 1)
     }
     noc_async_read_barrier();
+    expand_rope(rope_c, rope);
+    expand_rope(rope_c + kRopeEntry, rope + rope_bytes);
     scatter_row(rows_l1, x0, 0);
     scatter_row(rows_l1 + row_bytes, x0, 1);
     const InterleavedAddrGen<true> peer{.bank_base_address = peer_tok_addr, .page_size = 64};
@@ -418,6 +449,18 @@ void kernel_main() {
         noc_async_read(tok.get_noc_addr(0), head, 64);
         // sample: the parameters, the global list and the draw's weights after the rope tiles
         const uint32_t params = rope + rope_bytes, list = params + 64, weights = list + sampling::kListBytes;
+        // the compact rope entries, at the end of the parity-1 slots (after everything staged above, in either kind)
+        const uint32_t rope_c = (slots + 2 * num_chips * vector_bytes - 2 * kRopeEntry) & ~63u;
+        // (staged bytes, plus the two 64 B alignments and the entries themselves)
+        static_assert(
+            feed_kind > 0 ||
+                128 + vector_bytes + rope_bytes + 64 + 3 * sampling::kListBytes / 2 + 128 + 2 * kRopeEntry <=
+                    num_chips * vector_bytes,
+            "kind 0 staging overlaps the compact rope entries");
+        static_assert(
+            feed_kind == 0 || 128 + 2 * vector_bytes + 2 * rope_bytes + 2 * row_bytes + 128 + 2 * kRopeEntry <=
+                                  num_chips * vector_bytes,
+            "verify staging overlaps the compact rope entries");
         if constexpr (sample) {
             const InterleavedAddrGen<true> par{.bank_base_address = params_addr, .page_size = 64};
             noc_async_read(par.get_noc_addr(0), params, 64);
@@ -434,14 +477,15 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights));
         }
         if constexpr (feed_kind > 0) {
-            feed_verify(h, best_is, stage, embed_addr, rope_addr, peer_tok_addr, out_addr, cb_base(2));
+            feed_verify(h, best_is, stage, embed_addr, rope_addr, peer_tok_addr, out_addr, cb_base(2), rope_c);
         } else {
             const uint32_t pos = h[1] + 1 < max_pos ? h[1] + 1 : max_pos - 1;
             const InterleavedAddrGen<true> emb{.bank_base_address = embed_addr, .page_size = vector_bytes};
-            const InterleavedAddrGen<true> rtab{.bank_base_address = rope_addr, .page_size = rope_bytes};
+            const InterleavedAddrGen<true> rtab{.bank_base_address = rope_addr, .page_size = kRopeEntry};
             noc_async_read(emb.get_noc_addr(best_i), x0, vector_bytes);
-            noc_async_read(rtab.get_noc_addr(pos), rope, rope_bytes);
+            noc_async_read(rtab.get_noc_addr(pos), rope_c, kRopeEntry);
             noc_async_read_barrier();
+            expand_rope(rope_c, rope);
             h[0] = h[0] + 1;
             h[1] = pos;
             noc_async_write(head, tok.get_noc_addr(0), 64);

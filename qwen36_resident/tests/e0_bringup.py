@@ -99,7 +99,7 @@ def run_real(mesh, ref_path, max_seq_len, ttft_lens, tpot_steps):
     def phase(name):
         print(f"[{time.time() - t0:7.1f} s] {name}", flush=True)
 
-    st = State(d, layers - n_attn, n_attn, 0, max_pos=max_len + 64, zero=True)
+    st = State(d, layers - n_attn, n_attn, 0, max_pos=max_len + 64, zero=True, kv=False)
     phase("state")
     pp = PPPrefill(mesh, ck, layers, interval, chunk=list(PREFILL_CHUNKS), max_len=max_len)
     phase("prefill model")

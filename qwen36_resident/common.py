@@ -7,6 +7,7 @@ import struct
 import torch
 
 import ttnn
+from qwen36_resident import PKG_DIR
 
 TILE = 32
 TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
@@ -114,3 +115,86 @@ def rect_cover(mesh, cores):
 
 def quantize(w, dtype):
     return ttnn.to_torch(ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT)).float()
+
+
+def zero_dram(mesh, tensors, cores_per_bank=4, chunk=32768):
+    """zero-fill DRAM tensors on device (kernels/dram_zero.cpp), on every chip, without a host image: per bank
+    the allocator's part of each buffer, ceil(pages / banks) aligned pages from the buffer address (interleaved
+    or sharded over all banks). All-zero bytes are zeros in every format used (bf16, fp32, bf8 / bf4 tiles,
+    integers)."""
+    banks = mesh.dram_grid_size().x
+    grid = mesh.compute_with_storage_grid_size()
+    cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(banks * cores_per_bank)]
+    ranges = [[] for _ in cores]
+    for t in tensors:
+        per_bank = -(-t.buffer_num_pages() // banks) * t.buffer_aligned_page_size()
+        step = -(-per_bank // cores_per_bank // 64) * 64
+        for b in range(banks):
+            for k in range(cores_per_bank):
+                lo, hi = k * step, min(per_bank, (k + 1) * step)
+                if lo < hi:
+                    ranges[b * cores_per_bank + k] += [t.buffer_address() + lo, hi - lo]
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+    rt = ttnn.RuntimeArgs()
+    for i, c in enumerate(cores):
+        rt[c.x][c.y] = [i // cores_per_bank, len(ranges[i]) // 2] + ranges[i]
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            ttnn.KernelDescriptor(
+                kernel_source=f"{PKG_DIR}/kernels/dram_zero.cpp",
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=core_set,
+                compile_time_args=[chunk],
+                runtime_args=rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                ),
+            )
+        ],
+        semaphores=[],
+        cbs=[
+            ttnn.CBDescriptor(
+                total_size=chunk,
+                core_ranges=core_set,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=chunk)],
+            )
+        ],
+    )
+    n = mesh.get_num_devices()
+    pd = ttnn.MeshProgramDescriptor()
+    pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, n - 1))] = program
+    io = list(tensors)
+    ttnn.generic_op(io * 2 if len(io) == 1 else io, pd)  # (generic_op takes an input and an output at least)
+    ttnn.synchronize_device(mesh)
+
+
+def device_zeros(mesh, shape, dtype, memory_config, layout=ttnn.TILE_LAYOUT):
+    """a zero-filled device tensor of `shape` per chip (allocated on device, zeroed by zero_dram)"""
+    t = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dtype, layout, mesh, memory_config)
+    zero_dram(mesh, [t])
+    return t
+
+
+class Deferred:
+    """one chip's matrix of a layer, read from the checkpoint when placed (load(lazy=True)): fn() returns every
+    chip's, and the last fn's result is kept, so the chips of one layer read it once"""
+
+    _last = (None, None)
+
+    def __init__(self, key, fn, chip):
+        self.key, self.fn, self.chip = key, fn, chip
+
+    def get(self):
+        if Deferred._last[0] != self.key:
+            Deferred._last = (None, None)  # drop the previous layer's first
+            Deferred._last = (self.key, self.fn())
+        return Deferred._last[1][self.chip]
+
+    @staticmethod
+    def release():
+        Deferred._last = (None, None)
+
+
+def materialize(w):
+    """a weight that may be Deferred, as a tensor"""
+    return w.get() if isinstance(w, Deferred) else w

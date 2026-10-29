@@ -30,7 +30,7 @@ from qwen36_resident import PKG_DIR
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from qwen36_resident.prefill import pp_weights as PW
 from qwen36_resident.prefill.smm import SmallMatmul
-from qwen36_resident.common import EPS, HIDDEN, INTER
+from qwen36_resident.common import EPS, HIDDEN, INTER, device_zeros
 from qwen36_resident.model import (
     CONV_K,
     DK,
@@ -207,8 +207,9 @@ class PPPrefill:
         self.S, self.carry, self.K, self.V = {}, {}, {}, {}
         for j, attn in enumerate(self.kinds):
             if attn:
-                z = torch.zeros(n * kv_blocks, NKV, block, HD)
-                self.K[j], self.V[j] = dev(z, ttnn.bfloat8_b), dev(z, ttnn.bfloat8_b)
+                # zero-filled on device: at max_len 256K a host image would be 4.3 GB of fp32 per cache
+                kv = lambda: device_zeros(mesh, [kv_blocks, NKV, block, HD], ttnn.bfloat8_b, DRAM)
+                self.K[j], self.V[j] = kv(), kv()
             else:
                 self.S[j] = dev(torch.zeros(n, NV, DK, DV), ttnn.float32)
                 self.carry[j] = dev(torch.zeros(n, 1, TILE, CONV_CH), ttnn.bfloat16)
