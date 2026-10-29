@@ -17,10 +17,16 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.blackhole.qwen36.tt.dflash2 import DEFAULT_WEIGHTS, H, resolve_weights_dir
+from models.demos.blackhole.qwen36.tt.dflash2 import H, resolve_weights_dir
 from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP
 from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 from qwen36_resident import weights as Q
+
+
+# The drafter checkpoint the resident engine was validated with, pinned to its commit: resolve_weights_dir finds
+# snapshots/<rev> in the HF cache offline (HF_HUB_OFFLINE=1) without a refs/main entry, which a cache populated by
+# `hf download --revision` or a copied snapshot lacks. DFLASH_WEIGHTS (a local dir or org/name[@rev]) overrides it.
+DRAFTER_WEIGHTS = "incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4"
 
 
 def ccl_topology():
@@ -58,7 +64,7 @@ def build_drafter(mesh, ck, weights_dir=None, embed=None, block=None):
     """DFlash2DrafterTP on `mesh` for the target checkpoint ck; weights cached under $TT_CACHE_PATH/resident_dflash.
     DFL_MLP_DTYPE / DFL_LM_DTYPE (bf16 | bf8 | bf4): the drafter's MLP weights (default bf16) and its lm_head
     (default bf8)"""
-    weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DEFAULT_WEIGHTS)
+    weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DRAFTER_WEIGHTS)
     real = os.path.realpath(resolve_weights_dir(weights_dir))
     root = cache_root()
     if root:
@@ -131,7 +137,7 @@ class ResidentDFlash:
         n_attn = sum(is_attn(l, interval) for l in range(layers))
         emb = Q.embedding(ck)
         self.emb = emb.float()
-        weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DEFAULT_WEIGHTS)
+        weights_dir = weights_dir or os.environ.get("DFLASH_WEIGHTS", DRAFTER_WEIGHTS)
         tap_layers = list(load_config(weights_dir)["taps"])
         self.pp, self.window = None, window
         self.use_prefill = prefill  # (False: every prompt token through verify steps, e.g. as a reference)
