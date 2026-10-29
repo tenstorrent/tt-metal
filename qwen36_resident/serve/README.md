@@ -19,8 +19,16 @@ about 6 minutes before the server answers. Extra arguments go to `vllm serve`.
 | --- | --- | --- |
 | plain | `Qwen36ResidentForCausalLM` | any; greedy and top_k <= 32 drawn on device (full speed), others on the host |
 | mtp | `Qwen36ResidentMTPForCausalLM` (`TT_MODEL_CLASS_OVERRIDES`) | greedy only (HTTP sampling controls are ignored); 4 tokens per step |
+| multi | `Qwen36ResidentRowsForCausalLM` (chosen by `initialize_vllm_model` when max_num_seqs > 1) | host sampling until the rows-mode hub feed (WP7) lands, then `SAMPLE_ON_DEVICE=1` |
 
-Both: `--max-model-len 32768 --max-num-seqs 1 --block-size 64 --async-scheduling`, additional config
+`multi` serves `MAX_NUM_SEQS` users (default 8) on the rows-mode build: launches of 8 independent users, one paged KV
+pool of the plugin's block count (`RESIDENT_MAX_TOKENS_ALL_USERS` tokens, default `MAX_MODEL_LEN` per user), one trace
+per launch (`qwen36_resident/vllm_rows.py`). A prompt joining live users is prefilled in chunks of
+`PREFILL_CHUNK_TOKENS` (default 1024, a multiple of the PP chunk) with decode steps between them. It needs
+vllm-tt-plugin branch `resident-mu` (`VLLM_TT_PLUGIN_SRC`), whose TT chunk core keeps chunks aligned, one split
+prompt in flight and its chunk steps exclusive, and turns chunked prefill off at max_num_seqs 1.
+
+`plain` and `mtp`: `--max-model-len 32768 --max-num-seqs 1 --block-size 64 --async-scheduling`, additional config
 `{"tt": {"trace_region_size": 134217728, "sample_on_device_mode": "decode_only"}}`, and
 `TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0` (without it the large host -> device uploads can stall for 10-40 min in
 the driver's `ioctl_pin_pages`).

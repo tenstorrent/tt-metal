@@ -1005,6 +1005,42 @@ class PPPrefill:
         ttnn.synchronize_device(self.mesh)
         return T
 
+    def run_span(self, token_ids, first_chunk, n_tokens, drain=True, chunk=None):
+        """resume one prompt's prefill across calls (chunked serving; reset() starts a prompt): feed token_ids,
+        the prompt's tokens from position first_chunk * C, as chunks first_chunk, first_chunk + 1, .... n_tokens is
+        the prompt length seen so far: until the draining call every fed chunk is full and n_tokens ends on a
+        chunk. drain: also run the pipeline drain, after which the state is that of run(prompt[:n_tokens]) with the
+        same chunk size. The chunk size must stay the same for the whole prompt. Between calls the pipeline holds
+        the chunks in flight (x_last), the states and the KV scratch; nothing else may use the prefill."""
+        T = token_ids.shape[0]
+        self._use(chunk or self.C)
+        n, C = self.n, self.C
+        chunks = (n_tokens + C - 1) // C
+        new = (T + C - 1) // C
+        assert n_tokens <= self.max_len and first_chunk * C + T == n_tokens, (first_chunk, C, T, n_tokens)
+        assert drain or T == new * C, "only the draining call may end on a partial chunk"
+        ids = torch.zeros(new * C, dtype=torch.int32)
+        ids[:T] = token_ids.to(torch.int32)
+        shard = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+        for t in range(first_chunk, chunks + n - 1 if drain else chunks):
+            chunk_ids = torch.zeros(n, 1, C, dtype=torch.int32)
+            if t < chunks:
+                chunk_ids[0, 0] = ids[(t - first_chunk) * C : (t - first_chunk + 1) * C]
+            writes = self._control(t, n_tokens) + [
+                (
+                    ttnn.from_torch(chunk_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=shard),
+                    self.ids,
+                )
+            ]
+            for host, dev in writes:
+                ttnn.copy_host_to_device_tensor(host, dev)
+            if self.trace_id is not None:
+                ttnn.execute_trace(self.mesh, self.trace_id, cq_id=0, blocking=False)
+            else:
+                self._body()
+        ttnn.synchronize_device(self.mesh)
+        return n_tokens
+
     # ------------------------------------------------------------------ handoff
     def handoff(self, model, n_tokens, timings=None):
         """move the state after n_tokens prompt tokens into the resident decode `model` (TP-sharded):
