@@ -397,7 +397,7 @@ def test_collect_gate_names_only_the_bad_step(tmp_path, monkeypatch):
 
     def sh(ctx, cmd, log, env=None, timeout=None):
         log.parent.mkdir(parents=True, exist_ok=True)
-        if "test_glm_prefill_block" in cmd:
+        if "test_glm_prefill_block[" in cmd:
             log.write_text("ERROR: not found: x.py::test_glm_prefill_block\n")
         else:
             names = [a.strip("'").split("::")[-1] for a in cmd.split() if "::" in a]
@@ -485,3 +485,24 @@ def test_mla_step_fails_without_reps_line(tmp_path, monkeypatch):
     r = mla_step("mla-smoke", 50).run(Ctx(tmp_path, tmp_path, False), State())
     assert r.status == Status.FAIL
     assert "50 reps" in r.reason
+
+
+def test_block_random_runs_per_layer_type_random_rows():
+    from gwdt_steps import build_steps
+
+    ids = {
+        s.key: [i.split("::")[-1] for i in s.collect(None)]
+        for s in build_steps(["kimi_k2_7", "glm53"])
+        if s.group == "block-random"
+    }
+    assert ids == {
+        "block-random:kimi_k2_7": [
+            "test_kimi_prefill_block_chunked_random[blackhole-kimi_k2_7-torus-xy-8x4-dense_L0-chunks2-iter2]",
+            "test_kimi_prefill_block_chunked_random[blackhole-kimi_k2_7-torus-xy-8x4-moe_L1-chunks2-iter2]",
+        ],
+        "block-random:glm53": [
+            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-dense_L0-chunks2-iter2]",
+            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-moe_full_L6-chunks2-iter2]",
+            "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-moe_shared_L3-chunks2-iter2]",
+        ],
+    }
