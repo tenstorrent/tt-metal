@@ -1009,3 +1009,16 @@ line that DRAM holds row records, tiles only in L1).
   selection error, F226). Its swap-test failures: 5 fail identically with the formats off - the swap limits lost the
   reference arithmetic at FIX.6 (LOWBIT_PHASE1.md section 8; owner to decide). FIX.13 stopped by hand (abort; no code
   changed, records committed; FIX.13 stays TODO in state like FIX.11 - F216). Next: merge, rebuild, FIX.14.
+- 18:29 FIX.14 PASS (2814202d636, pushed): the 2x2's window KV bfloat8_b blocks + index K/Q bfloat4_b at 8x4. Every
+  accuracy metric within its limit (worst ratio 0.76); top-k state rises as expected (L24 0.281 vs 0.548), none of the
+  2x2's waivers needed here; DS41-141's two contract checks now pass without the waiver. DRAM a chip at 1M: index ring
+  key buffers 1657.5 -> 466.2 MiB (-1.16 GiB), window 20.5 -> 2.9 MiB. Index score -7.5..-8.5 %, sparse_sdpa ~-1 %, new
+  window writes +2.84 ms: device 203.80 -> 205.36 ms (+0.8 %), host overhead +17.7 ms (bfp_round 0.5 ms a call host,
+  DS41-142), wall 386.7 vs 367.4 (off spread 274). DS41-143 (agent, matches my finding): the served window KV and
+  index keys hold the UNROUNDED bf16 rows (only compressed KV serves the rounded values) - question 1 on the KV
+  handover page (https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR, v3). Agent's perf ideas: per-chip window region;
+  one shared _kbuf per capacity (-358 MiB a chip).
+  Next: profile series LOW (tmux posprof, /scratch/dnijemcevic/posprof/series_lowbit.sh: device, wall, host at
+  0/50k/100k/200k/500k + 5k chunk, ~1.5 h), then the 4-bit page (FIX.14 window / index) and the profile page, then
+  P.4 -> P.5 -> P.11 (launcher with --until P.11).
+- 19:00 OWNER: do the host-time cut of FIX.14's low-bit writes -> P.12 LOWBIT_HOST queued after P.11 (X.3 deps P.12): check bfp_round's prepared path (0.5 ms vs ckv_bfp4's 0.21), one window-block write per layer (80 -> 40 calls), move per-call host work out. Both ops were already prepared=True (the 2x2 applied P.7's pattern); the remaining cost is per call.
