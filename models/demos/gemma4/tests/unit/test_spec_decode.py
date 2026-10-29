@@ -3028,6 +3028,65 @@ def test_argmax_cost(mesh_device, device_params, reset_seeds):
         logger.info(
             f"[argmax] {mode}: [1,1,1,{V}]={m1:.2f} ms, [1,1,{K+1},{V}]={m5:.2f} ms, fused-total~={4*m1+m5:.1f} ms"
         )
+    shard_mc = _time_argmax(1, V // tp, replicate, mode="untile_mc")
+    logger.info(
+        f"[argmax] untile_mc per-shard over [1,1,1,{V//tp}] = {shard_mc:.2f} ms (the TP-sharded drafter logits)"
+    )
+
+    # width-parallel alternatives on the TILE tensor: the row max (the bandwidth floor of one pass over the
+    # logits) and topk(k=32) whose first index is the argmax (ties: first index, like ttnn.argmax)
+    def _time_op(rows, width, fn, label):
+        t = ttnn.from_torch(
+            torch.randn(1, 1, rows, width),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=replicate,
+        )
+        try:
+            out = fn(t)  # compile
+        except Exception as exc:  # the op may refuse the width: report, never fail the probe on it
+            logger.info(
+                f"[argmax] {label} over [1,1,{rows},{width}]: unsupported ({type(exc).__name__}: {str(exc)[:120]})"
+            )
+            t.deallocate(True)
+            return None
+        ttnn.synchronize_device(mesh_device)
+        for o in out if isinstance(out, (tuple, list)) else (out,):
+            o.deallocate(True)
+        tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        out = fn(t)
+        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        ms = (time.perf_counter() - t0) / reps * 1e3
+        ttnn.release_trace(mesh_device, tid)
+        logger.info(f"[argmax] {label} over [1,1,{rows},{width}] = {ms:.2f} ms")
+        for o in out if isinstance(out, (tuple, list)) else (out,):
+            o.deallocate(True)
+        t.deallocate(True)
+        return ms
+
+    for rows in (1, K + 1):
+        _time_op(rows, V, lambda t: ttnn.max(t, dim=-1, keepdim=True), "max")
+        _time_op(rows, V, lambda t: ttnn.topk(t, k=32, dim=-1), "topk32")
+    _time_op(1, V // tp, lambda t: ttnn.topk(t, k=32, dim=-1), "topk32 per-shard")
+    # topk's first index must be the argmax (random logits: no ties)
+    ref = torch.randn(1, 1, K + 1, V)
+    t = ttnn.from_torch(ref, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
+    try:
+        _vals, idxs = ttnn.topk(t, k=32, dim=-1)
+        got = ttnn.to_torch(ttnn.get_device_tensors(idxs)[0])[0, 0, :, 0].to(torch.int64).tolist()
+        want = ref.to(torch.bfloat16).float().argmax(-1)[0, 0].tolist()
+        logger.info(f"[argmax-chk] topk32 first index ok={got == want} got={got} want={want}")
+        idxs.deallocate(True)
+        _vals.deallocate(True)
+    except Exception as exc:
+        logger.info(f"[argmax-chk] topk32 unsupported at V={V}: {type(exc).__name__}: {str(exc)[:120]}")
+    t.deallocate(True)
 
     # ── CORRECTNESS: known argmax per row, bare vs untilize+multicore ────────
     def _check(rows):
