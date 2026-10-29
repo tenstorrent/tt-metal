@@ -20,7 +20,7 @@ struct CoreSchedule {
 // cell; per-cell counts differ by at most one and the widest is ceil(units / lanes). Fused work keeps the
 // ring-arrival lane distribution.
 template <bool Ring>
-inline constexpr CoreSchedule for_core(
+constexpr CoreSchedule for_core(
     uint32_t core_id, uint32_t group_rows, const indexer_ring_schedule::Geometry& geometry) {
     const uint32_t row = core_id / geometry.cols;
     const uint32_t col = core_id % geometry.cols;
