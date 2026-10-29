@@ -89,6 +89,20 @@ from models.demos.blackhole.qwen36.tt.spec_logprobs import (
     candidates_from_logits,
     permute_candidates,
 )
+from models.demos.blackhole.qwen36.tt.spec_masks import (
+    MASK_NEG,
+    PermMaskStagingRing,
+    apply_to_logits,
+    is_unconstrained,
+    mask_rows_flat,
+    mask_to_engine_rows,
+)
+from models.demos.blackhole.qwen36.tt.spec_penalties import (
+    PenaltyDevice,
+    apply_penalties_exact,
+    column_history_counts,
+    parse_penalties,
+)
 from models.demos.blackhole.qwen36.tt.spec_shadow import StatsShadow
 from models.demos.blackhole.qwen36.tt.tp_common import (
     engine_spec_buckets,
@@ -102,6 +116,8 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_chain_enabled,
     spec_chain_sampled_enabled,
     spec_device_logprobs_enabled,
+    spec_device_mask_enabled,
+    spec_device_penalties_enabled,
     spec_device_topp_enabled,
     spec_fast_join_enabled,
     spec_fast_prefill_enabled,
@@ -128,6 +144,9 @@ MAX_SPEC_ROWS = ttnn.TILE_SIZE
 _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 2248, 2448, 2948, 3948, 4096)
 # Runner contract: token id for unused tail columns of a returned block.
 PLACEHOLDER_TOKEN_ID = -1
+# Phase 3 (work/research_1026/85): a split step whose second half is enqueued later than this after its first half counts in
+# ``mask_late_finish`` (the forward takes about 31 ms: the mask is "late" when the device may have gone idle). A counter only.
+MASK_LATE_MS = 30.0
 # "topk" (QWEN36_VERIFY_DEVICE_TOPK): the exact per-position top-M candidates instead of the full logits, with the
 # full logits fetched lazily when a row cannot be served from them (note 26).
 SPEC_MODES = ("argmax_ids", "logits", "topk", "fused_sample")
@@ -822,8 +841,14 @@ class FusedHandle:
         self.parity, self.cap, self.skip, self.finished = 0, 0, [], False
         self.gen = None  # per-engine-row generations at creation (see MTPSpecEngine._row_gens)
         self.bucket = None  # verify row bucket of the step (QWEN36_SPEC_BUCKETS; None while the flag is off)
+        # phase 3 split step (decode_forward_begin / decode_forward_finish): ``pending`` = the forward is queued and the second half is
+        # not (no event, no reads: nobody may wait on the handle); ``post`` = the closure the finish runs; ``mask_keep`` = the host
+        # buffers of the mask write, alive until the event
+        self.pending, self.post, self.mask_keep, self.sync_tail = False, None, None, None
 
     def wait(self):
+        """Block on the step's event (reader thread). A handle of a split step that is still ``pending`` has no event: this raises
+        (the reader must be given the handle only after ``decode_forward_finish``)."""
         return self._eng._def_wait(self)
 
     def candidates(self):
@@ -856,6 +881,11 @@ def chunk_exact_resume_enabled():
 
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
+
+    # phase 3 defaults (class level: a test stub built without __init__ has them too)
+    _split_begin = False  # True inside decode_forward_begin
+    _split_pending = None  # the FusedHandle whose second half (decode_forward_finish) is due
+    mask_steps = mask_rows = mask_late_finish = mask_fallback_rows = 0
 
     _dr_hostset = False  # class default (engines built without __init__ in tests); set by _alloc_drafter_inputs
 
@@ -951,6 +981,17 @@ class MTPSpecEngine:
         # that carried a certificate row and of those whose certificate failed
         self._fs_trace_c = None
         self.cert_steps = self.cert_failed_steps = 0
+        # phase 3 (work/research_1026/85): packed token masks inside the fused sampled step: the permuted staging ring of the device
+        # input, the counters (steps with a mask trace, constrained engine rows, split steps finished late), the split-step state
+        self._mask_ring = PermMaskStagingRing()
+        self.mask_steps = self.mask_rows = self.mask_late_finish = self.mask_fallback_rows = 0
+        self._split_begin = False
+        self._split_pending = None
+        # phase 3 part 2: the penalty state / bodies (PenaltyDevice), the pen update trace, and the counters of the steps that carried a
+        # penalty row and of the host walks that repaired the device counts
+        self._pen = None
+        self._pen_upd_trace = None
+        self.pen_steps = self.pen_host_walks = 0
         # phase 2 step S8: the failure-rate probe (QWEN36_SPEC_STATS_SHADOW_EVERY; 0 = off, no extra work), its counters, the eligible-step count
         self._shadow_every = spec_stats_shadow_every()
         self._shadow = None
@@ -1272,6 +1313,8 @@ class MTPSpecEngine:
     # class defaults of the fused-step state (set per instance in __init__; engines built without it read these)
     _fa = _fa_trace = _fused_cache = _fa_pt_host = None
     _fs = _fs_trace = _fs_trace_c = None
+    _pen = _pen_upd_trace = None
+    pen_steps = pen_host_walks = 0
     _fs_standin = ()
     fused_steps = fused_boundary_diffs = cert_steps = cert_failed_steps = 0
     fused_sampled_steps = fused_audited_steps = 0
@@ -1898,6 +1941,81 @@ class MTPSpecEngine:
         ttnn.synchronize_device(self.mesh)
         self._prepare_stats_trace()
         self._prepare_cert_body()
+        self._prepare_mask_trace()
+        self._prepare_pen_trace()
+
+    def _prepare_mask_trace(self):
+        """Phase 3 (work/research_1026/85): warm the model's mask traces (a packed token mask edits the shard logits in place before the
+        topk trace). Needs the certificate variant of the sampled accept (it carries the tie-overflow guard of a masked row) and the
+        model API; off with QWEN36_SPEC_DEVICE_MASK=0. A build error is raised (no silent downgrade): the serving flag stays off until
+        a model passes."""
+        model, fs = self.model, self._fs
+        if not spec_device_mask_enabled() or not hasattr(model, "prepare_verify_mask"):
+            logger.info("[spec_engine] mask trace off (QWEN36_SPEC_DEVICE_MASK=0 or no model API)")
+            return
+        if fs is None or getattr(fs, "stats_in", None) is None:
+            logger.info(
+                "[spec_engine] mask trace off: needs the certificate accept (QWEN36_SPEC_DEVICE_TOPP=1 and the stats trace)"
+            )
+            return
+        model.prepare_verify_mask()
+        logger.info("[spec_engine] mask trace warmed (captured with the verify traces)")
+
+    def _mask_ok(self):
+        """The mask traces exist (QWEN36_SPEC_DEVICE_MASK on, built and captured) together with the accept variant a masked row needs.
+        This is the engine half of the adapter capability supports_spec_device_mask."""
+        return bool(
+            spec_device_mask_enabled()
+            and getattr(self.model, "_vfy_mask_ready", False)
+            and self._fs_trace is not None
+            and self._fs_trace_c is not None
+        )
+
+    def _prepare_pen_trace(self):
+        """Phase 3 part 2 (work/research_1026/80 section 4, tt/spec_penalties.py): allocate the penalty state and warm the pen traces'
+        bodies over this engine's verify buffers and accept result buffer. The model captures the per-bucket pen traces with its verify
+        traces and ``_capture_pen_update`` the update trace. Off with QWEN36_SPEC_DEVICE_PENALTIES=0, without the sampled accept or the
+        verify topk trace, or for a model without the pen API. A build error is raised (no silent downgrade)."""
+        model, fs = self.model, self._fs
+        if not spec_device_penalties_enabled() or fs is None or not hasattr(model, "prepare_verify_pen"):
+            logger.info(
+                "[spec_engine] penalty traces off (QWEN36_SPEC_DEVICE_PENALTIES=0, no sampled accept or no model API)"
+            )
+            return
+        if not getattr(model, "_vfy_topk", False) or getattr(fs, "result_out", None) is None:
+            logger.info("[spec_engine] penalty traces off (no verify topk trace or no accept result buffer)")
+            return
+        TP = int(model.num_devices)
+        pen = PenaltyDevice.allocate(
+            self.mesh, self.B, self.K, int(model.vocab_size) // TP, int(model.vocab_size), model._vfy_token_buf
+        )
+        pen.bind_result(fs.result_out)
+        model.prepare_verify_pen(pen)
+        self._pen = pen
+        logger.info("[spec_engine] penalty traces warmed (captured with the verify traces)")
+
+    def _capture_pen_update(self):
+        """Inside the guarded capture scope, after the sampled accept trace: capture the pen update trace (counts += the committed ids
+        of result_out). Without the pen state or the sampled accept trace no penalty step can run (``_pen_ok`` is False).
+        """
+        pen = self._pen
+        if pen is None or self._fs is None or self._fs_trace is None:
+            return
+        pen.bind_result(self._fs.result_out)
+        self._pen_upd_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+        pen.update_body()
+        ttnn.end_trace_capture(self.mesh, self._pen_upd_trace, cq_id=0)
+        ttnn.synchronize_device(self.mesh)
+        logger.info("[spec_engine] penalty update trace captured (output counts += committed ids)")
+        self._log_trace_memory("pen_update")
+
+    def _pen_ok(self):
+        """The pen state, its update trace and the model's pen traces exist."""
+        return (
+            self._pen is not None
+            and self._pen_upd_trace is not None
+            and getattr(self.model, "_vfy_pen_trace_id", None) is not None
+        )
 
     def _prepare_cert_body(self):
         """Phase 2: compile the certificate variant of the sampled accept (body(cert=True)) over the model's stats buffer. Needs the
@@ -2006,6 +2124,7 @@ class MTPSpecEngine:
                 "[spec_engine] top-p certificate accept trace captured (full-vocabulary nucleus of top_k = 0 rows)"
             )
             self._log_trace_memory("accept_c")
+        self._capture_pen_update()
 
     def _seed_buffers(self):
         """The device buffers a seed trace bakes in, per GDN layer (compared by identity at replay)."""
@@ -2124,6 +2243,9 @@ class MTPSpecEngine:
         zero_stats = getattr(self.model, "zero_verify_stats", None)
         if zero_stats is not None:
             zero_stats()  # the stats buffer is finite before its first replay
+        reset_mask = getattr(self.model, "reset_verify_mask", None)
+        if reset_mask is not None:
+            reset_mask()  # the mask input is all ones (no constraint) before its first write
         if not self._bucketed():
             return
         m = self.model
@@ -2180,10 +2302,13 @@ class MTPSpecEngine:
             "_vfy_topk_vals_out",
             "_vfy_topk_ids_out",
             "_vfy_stats_out",
+            "_vfy_mask_in",
             "_vfy_token_buf",
             "_vfy_aux_buf",
         ):
             add(f"model.{n}", getattr(model, n, None))
+        for n in ("counts", "mask", "rep", "inv", "freq", "pres"):  # the penalty state the pen traces baked in
+            add(f"pen.{n}", getattr(self._pen, n, None))
         for k, t in enumerate(self._dr_outs or ()):
             add(f"dr_outs[{k}]", t)
         for n in ("_dr_pack", "_dr_eye", "_dr_rs_pt", "_hp_buf", "_mtp_pt", "_anchor_sel"):
@@ -2250,6 +2375,10 @@ class MTPSpecEngine:
         if self._fs_trace_c is not None:
             ttnn.release_trace(self.mesh, self._fs_trace_c)
             self._fs_trace_c = None
+        if self._pen_upd_trace is not None:
+            ttnn.release_trace(self.mesh, self._pen_upd_trace)
+            self._pen_upd_trace = None
+        self._pen = None  # its buffers were freed with the verify trace (model.release_verify_pen)
         if self._fs is not None:
             fs = self._fs
             for t in (
@@ -2540,6 +2669,8 @@ class MTPSpecEngine:
         _chunk_prog) resumes exactly at e and first warms the drafter slot e-1 with (that row, token e)."""
         assert final or vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
+        if getattr(self, "_split_pending", None) is not None:
+            raise RuntimeError("a split step is pending: decode_forward_finish(handle, mask) must run before a prefill")
         if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
             self._chain_drop("prefill")
         if (
@@ -3421,6 +3552,15 @@ class MTPSpecEngine:
                     tokens, start_pos, mi_prev, vpt, active, fresh, read_logits or read_topk or sampling is not None
                 )
             if fused:  # QWEN36_SPEC_FAST_JOIN=0: the eager seed / join read host logits; walk them on the host
+                if self._split_begin:  # decode_forward_begin: the host walk waits for the mask
+
+                    def eager_join(mask=None):
+                        self._finish_sampling_mask(sampling, mask)
+                        return self._fused_fallback_result(
+                            out[0], tokens, num_valid_drafts, "eager_join", logits=out[1], sampling=sampling
+                        )
+
+                    return None, None, self._split_handle(eager_join)
                 return self._fused_fallback_result(
                     out[0], tokens, num_valid_drafts, "eager_join", logits=out[1], sampling=sampling
                 )
@@ -3685,6 +3825,8 @@ class MTPSpecEngine:
         only because the step in flight ends them at max_tokens; freed without parking (see _apply_finishing)."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
+        if self._split_pending is not None and not self._split_begin:
+            raise RuntimeError("a split step is pending: decode_forward_finish(handle, mask) must run first")
         if spec_sampling is not None and spec_mode != "fused_sample":
             raise ValueError(f"spec_sampling needs spec_mode 'fused_sample', got {spec_mode!r}")
         if defer_read:
@@ -3756,7 +3898,10 @@ class MTPSpecEngine:
         if narrow_col0 and spec_mode == "logits":
             kw["narrow"] = True
         if spec_mode == "fused_sample":
-            sampling = self._engine_sampling(spec_sampling)  # None: nothing sampled and no logprobs row (the S1 step)
+            sampling = self._engine_sampling(
+                spec_sampling, active
+            )  # None: nothing sampled and no logprobs row (the S1 step)
+            self._pen_stage(sampling)
             ids, _, fz = self.verify(
                 clean,
                 start0,
@@ -3767,25 +3912,10 @@ class MTPSpecEngine:
                 fused=True,
                 sampling=sampling,
             )
-            ids, committed, counts = self._to_slots(ids, fz.committed, fz.counts)
-            if fz.drafts is not None:  # cache what the plugin's propose will ask for, in runner slots
-                cpos = self._committed_positions(start0, active, fz.committed, fz.counts)
-                cpos, act = self._to_slots(cpos, active)
-                self._fused_cache = (fz.drafts, committed.clone(), cpos, counts.clone(), act.clone())
-            if self._ch_g is not None:  # the next step may chain on this one once its propose took the cache
-                self._chain_in = None
-                if fz.drafts is not None and self._chain_cand is not None:
-                    self._chain_prev, self._chain_cand = self._chain_cand, None
-                else:
-                    self._chain_drop("prev_not_fused")
-            cands = None if fz.candidates is None else self._cands_to_slots(fz.candidates)
-            return VerifyResult(
-                spec_mode,
-                mask_unused_columns(ids, num_valid_drafts),
-                accepted_token_ids=committed.to(torch.int32),
-                accepted_counts=counts.to(torch.int32),
-                candidates=cands,
-            )
+            if self._split_begin:  # decode_forward_begin: the forward is queued, the second half is the finish
+                fz.sync_tail = dict(defer=False, start0=start0, active=active, num_valid_drafts=num_valid_drafts)
+                return VerifyResult(spec_mode, None, handle=fz)
+            return self._fused_sync_result(spec_mode, ids, fz, start0, active, num_valid_drafts)
         ids, logits = self.verify(
             clean,
             start0,
@@ -3807,6 +3937,105 @@ class MTPSpecEngine:
             )
         ids, logits = self._to_slots(ids, logits)
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
+
+    def _fused_sync_result(self, spec_mode, ids, fz, start0, active, num_valid_drafts):
+        """The tail of a synchronous fused_sample decode_forward: engine rows -> runner slots, the cache the plugin's propose takes,
+        the chain bookkeeping, the VerifyResult. ``num_valid_drafts`` in runner slots."""
+        ids, committed, counts = self._to_slots(ids, fz.committed, fz.counts)
+        if fz.drafts is not None:  # cache what the plugin's propose will ask for, in runner slots
+            cpos = self._committed_positions(start0, active, fz.committed, fz.counts)
+            cpos, act = self._to_slots(cpos, active)
+            self._fused_cache = (fz.drafts, committed.clone(), cpos, counts.clone(), act.clone())
+        if self._ch_g is not None:  # the next step may chain on this one once its propose took the cache
+            self._chain_in = None
+            if fz.drafts is not None and self._chain_cand is not None:
+                self._chain_prev, self._chain_cand = self._chain_cand, None
+            else:
+                self._chain_drop("prev_not_fused")
+        cands = None if fz.candidates is None else self._cands_to_slots(fz.candidates)
+        return VerifyResult(
+            spec_mode,
+            mask_unused_columns(ids, num_valid_drafts),
+            accepted_token_ids=committed.to(torch.int32),
+            accepted_counts=counts.to(torch.int32),
+            candidates=cands,
+        )
+
+    def decode_forward_begin(
+        self,
+        tokens,
+        start_pos,
+        *,
+        num_valid_drafts,
+        accepted_counts,
+        page_table,
+        spec_mode="fused_sample",
+        slot_remap=None,
+        spec_sampling=None,
+        defer_read=False,
+        finishing_slots=None,
+    ):
+        """First half of a split fused step (phase 3 stage P3a, work/research_1026/85): the same arguments as ``decode_forward``
+        (``spec_mode`` must be "fused_sample"; no ``chain_rows`` / ``chain_tip``: a split step is not chained; ``spec_sampling`` is
+        required and has NO ``mask`` key). Does all the host pre-work and enqueues the MAIN verify trace only; returns
+        VerifyResult(spec_mode, None, handle=FusedHandle) with ``handle.pending`` True. The step is the S2 sampled step. The mask
+        arrives in ``decode_forward_finish(handle, mask)``, which enqueues the rest. One split step at a time: nothing else may run
+        on the engine (decode_forward, prefill) until the finish. The reader thread must not wait on the handle before the finish
+        (``handle.wait()`` raises). Without a mask trace (or with ``QWEN36_SPEC_DEVICE_MASK=0``) nothing is enqueued here and the
+        finish runs the full-logits host walk with the mask. ``defer_read``: the finish returns the handle for the reader thread
+        (see decode_forward); a certificate row needs ``defer_read=False`` (the sync finish also reads and returns the result).
+        """
+        if spec_mode != "fused_sample":
+            raise ValueError(f"decode_forward_begin needs spec_mode 'fused_sample', got {spec_mode!r}")
+        if self._split_pending is not None:
+            raise RuntimeError("decode_forward_begin: the previous split step has no decode_forward_finish yet")
+        if spec_sampling is None:
+            raise ValueError("decode_forward_begin needs spec_sampling: a masked step is a sampled (S2) step")
+        if spec_sampling.get("mask") is not None:
+            raise ValueError("decode_forward_begin takes the mask later: decode_forward_finish(handle, mask)")
+        self._split_begin = True
+        try:
+            res = self.decode_forward(
+                tokens,
+                start_pos,
+                num_valid_drafts=num_valid_drafts,
+                accepted_counts=accepted_counts,
+                page_table=page_table,
+                spec_mode=spec_mode,
+                slot_remap=slot_remap,
+                spec_sampling=spec_sampling,
+                defer_read=defer_read,
+                finishing_slots=finishing_slots,
+            )
+        finally:
+            self._split_begin = False
+        self._split_pending = res.handle
+        return res
+
+    def decode_forward_finish(self, handle, mask=None):
+        """Second half of a split step: ``mask`` int32 [b, 1+K, W] (runner slots; b <= B users, W <= 7760 words, standard packing:
+        bit v % 32 of word v // 32 = token v allowed; see _attach_mask) or None (no constraint). Writes the mask, replays the mask trace
+        (only when a live row is constrained), then the topk / stats / accept (certificate variant when a row is masked or a certificate
+        row) / drafter traces and the reads, in the order of the one-call step; a deferred step records its event here. Returns what
+        ``decode_forward`` returns for that mode: ``defer_read=True``: VerifyResult(handle=the same handle, now readable);
+        ``defer_read=False``: the full VerifyResult (synchronizes). An empty mask row is not checked here (the adapter does).
+        """
+        if handle is not self._split_pending or not handle.pending:
+            raise RuntimeError("decode_forward_finish: not the handle of the pending split step")
+        tail = handle.sync_tail
+        try:
+            out = handle.post(mask)
+        finally:
+            self._split_pending = None
+        if tail["defer"]:
+            if not isinstance(out, FusedHandle):  # a fallback step ran synchronously: its result is on the host already
+                self._def_ready_handle(out[2], tail["start0"], tail["active"], handle)
+            return VerifyResult("fused_sample", None, handle=handle)
+        ids, _, fz = out
+        handle.pending, handle.post = False, None
+        return self._fused_sync_result(
+            "fused_sample", ids, fz, tail["start0"], tail["active"], tail["num_valid_drafts"]
+        )
 
     def _verify_split(self, tokens, positions, mi_prev, **kw):
         """verify_traced with the readback timed separately (hooks ttnn.get_device_tensors);
@@ -3860,6 +4089,12 @@ class MTPSpecEngine:
                 + f", row_delta_mixed_steps {self.__dict__.get('row_delta_mixed_steps', 0)}"
                 + (f"; cert steps {self.cert_steps}, failed {self.cert_failed_steps}" if self.cert_steps else "")
                 + (
+                    f"; pen steps {self.pen_steps}, host walks {self.pen_host_walks}, rebuilds {self._pen.stats['rebuilds']} "
+                    f"({self._pen.stats['rebuild_rows']} rows)"
+                    if self.pen_steps and self._pen is not None
+                    else ""
+                )
+                + (
                     f"; chain steps {self.chain_steps}, breaks "
                     + (
                         ", ".join(f"{k}={v}" for k, v in sorted(self.__dict__.get("chain_breaks", {}).items()))
@@ -3899,27 +4134,46 @@ class MTPSpecEngine:
             out += f"; finishing rows freed {fin}"
         return out
 
-    def _fused_fallback_result(self, ids, tokens, num_valid, reason, logits=None, sampling=None):
+    def _fused_fallback_result(self, ids, tokens, num_valid, reason, logits=None, sampling=None, mask=None):
         """Fallback tail: ``ids`` [B, T] (from the argmax verify) walked on the host with the greedy rule; no drafts cached.
         A step with ``sampling`` (stage S2) walks the full ``logits`` [B, T, V] or [B*T, V] instead (host_redo_walk, the
-        plugin's uniforms)."""
+        plugin's uniforms). ``mask``: see _host_walk_step; the ``ids`` greedy walk (no ``sampling``) reads no mask."""
         self._fused_note(reason)
         if sampling is not None:
-            cands = self._cand_from_logits(logits) if self._need_cands(sampling) else None
-            fz = self._host_walk_step(logits, tokens, num_valid, sampling)
+            cands = (
+                self._cand_from_logits(logits, sampling if mask is None else dict(sampling, mask=mask))
+                if self._need_cands(sampling)
+                else None
+            )  # the payload (raw logprobs) is taken after the grammar: from the MASKED logits
+            fz = self._host_walk_step(logits, tokens, num_valid, sampling, mask=mask)
             fz.candidates = cands
             return ids, None, fz
         committed, counts = fused_greedy_walk(ids, tokens, num_valid, self.K)
         return ids, None, FusedStep(committed.to(torch.int32), counts.to(torch.int32), None)
 
-    def _host_walk_step(self, logits, tokens, num_valid, sampling, users=None, dev=None):
+    def _host_walk_step(self, logits, tokens, num_valid, sampling, users=None, dev=None, mask=None):
         """The exact host walk of a sampled fused step on the full logits (engine rows): a FusedStep without drafts, so the
         propose that follows runs the normal path. ``users`` (with ``dev`` = the device (committed [B, T], counts [B])): redo only
         those users and keep the device result for the others; a user's walk reads only its own rows, tokens, uniforms and
-        parameters, so the merge equals a full redo."""
+        parameters, so the merge equals a full redo. ``mask`` (engine rows, int32 [B, T, W] of spec_masks; default
+        ``sampling["mask"]`` when the step has one): the packed token mask applied to the logits rows before the walk.
+        """
         B, K = self.B, self.K
+        if mask is None:
+            mask = sampling.get("mask")
+        lg = torch.as_tensor(logits).reshape(B * (K + 1), -1)[:, : self.vocab]
+        pen = sampling.get("pen")
+        walked = (
+            []
+            if pen is None or not pen.any_live
+            else [u for u in (range(B) if users is None else users) if bool(pen.live[u])]
+        )
+        if (
+            walked
+        ):  # phase 3 part 2: the device pen trace did not touch these logits (the logits trace recomputes them raw)
+            lg = self._pen_host_logits(lg, tokens, num_valid, pen, walked)
         committed, counts = host_redo_walk(
-            torch.as_tensor(logits).reshape(B * (K + 1), -1)[:, : self.vocab],
+            lg,
             tokens,
             sampling,
             sampling["uniforms"],
@@ -3927,9 +4181,15 @@ class MTPSpecEngine:
             K=K,
             num_valid=num_valid,
             users=users,
+            mask=mask,
         )
         if users is not None:
             committed, counts = merge_redo(dev[0], dev[1], committed, counts, users)
+        if (
+            walked
+        ):  # the update trace did not count these users' commit (fallback step) or masked it (overflow redo): add it now
+            self._pen.add_committed_host(committed, walked)
+            self.pen_host_walks += 1
         return FusedStep(committed, counts, None)
 
     def _fused_ineligible(self, start_pos, nv, active):
@@ -3981,11 +4241,24 @@ class MTPSpecEngine:
         reason, aux = self._fused_ineligible(start_pos, nv, active)
         if sampling is not None:
             reason = reason or self._sampled_ineligible(sampling)
+            if reason is None and self._split_begin and not self._mask_ok():
+                reason = (
+                    "no_mask_trace"  # a split step is a masked step: the host walk applies the mask when it arrives
+                )
             if reason is not None:
-                ids, vfeed, lt = self.model.verify_traced(*args, **dict(kw, read_logits=True))
-                self._vfeed = vfeed
-                ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
-                return self._fused_fallback_result(ids, tokens, nv, reason, logits=lt, sampling=sampling)
+                split = self._split_begin
+
+                def fallback(mask=None):
+                    if split:
+                        self._finish_sampling_mask(sampling, mask)
+                    ids, vfeed, lt = self.model.verify_traced(*args, **dict(kw, read_logits=True))
+                    self._vfeed = vfeed
+                    ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
+                    return self._fused_fallback_result(ids, tokens, nv, reason, logits=lt, sampling=sampling)
+
+                if split:  # decode_forward_begin: nothing is enqueued; the finish runs the fallback with the mask
+                    return None, None, self._split_handle(fallback)
+                return fallback()
             return self._verify_fused_sampled(tokens, start_pos, pt, active, nv, args, kw, sampling, aux)
         if reason is not None:
             ids, vfeed, _ = self.model.verify_traced(*args, **kw)
@@ -4453,7 +4726,8 @@ class MTPSpecEngine:
         cmask = None if cr is None else (self._to_rows(cr)[0] & active)
         if cmask is not None and not bool(cmask.any()):
             cmask = None
-        sampling = self._engine_sampling(spec_sampling)
+        sampling = self._engine_sampling(spec_sampling, active)
+        self._pen_stage(sampling)
         kind_s = sampling is not None
         # ---- which rows chain
         if self._bucketed():
@@ -4468,6 +4742,8 @@ class MTPSpecEngine:
                 reason = self._def_events(active)
             if reason is None and kind_s:
                 reason = self._sampled_ineligible(sampling)
+            if reason is None and kind_s and self._mask_rows(sampling, active):
+                reason = "mask"  # a masked step is not chained (phase 3: the mask follows the forward)
             if reason is None and self._bucketed() and prev.bucket != self._vb:
                 reason = "bucket_change"  # only when no other reason breaks the chain (that one is counted instead)
         if self._bucketed() and (cmask is None or (reason is not None and reason != "bucket_change")):
@@ -4518,6 +4794,8 @@ class MTPSpecEngine:
         finally:
             self._def_ctx = None
         if ids is None and isinstance(fz, FusedHandle):
+            if self._split_begin:  # decode_forward_begin: what the finish needs to convert a fallback result
+                fz.sync_tail = dict(defer=True, start0=start0, active=active)
             return VerifyResult("fused_sample", None, handle=fz)
         h = self._def_ready_handle(
             fz, start0, active
@@ -4553,12 +4831,18 @@ class MTPSpecEngine:
     def _def_enqueue(self, kind, tokens, start_pos, pt, active, nv, args, kw, sampling, aux, chain=None):
         """The enqueue half of a fused step (greedy 'g' or sampled 's'; ``chain`` None = host-staged first step of a chain): the call
         order of _verify_fused / _verify_fused_sampled up to the drafter trace, the GDN parity flipped at enqueue, then the
-        non-blocking reads and one event. NO synchronize. Returns the FusedHandle."""
+        non-blocking reads and one event. NO synchronize. Returns the FusedHandle.
+        Phase 3: a sampled step with a live masked row also writes the mask and replays the mask trace behind the main trace (order:
+        main, mask, topk, [stats], accept variant, drafter). Inside decode_forward_begin (``_split_begin``) only the staging and the
+        MAIN trace run; the rest is the closure ``handle.post(mask)`` that decode_forward_finish calls, and the handle is ``pending``
+        (no event: the reader thread must not wait on it)."""
         B, T, K = self.B, self.T, self.K
         if kind == "s" and bool(self._cert_rows(sampling).any()):
             raise ValueError(
                 "a deferred step cannot carry a top-p certificate row (top_k = 0, top_p < 1): run it synchronously"
             )
+        split = self._split_begin
+        assert not split or kind == "s", "a split step is a sampled step"
         fa, fs, model = self._fa, self._fs, self.model
         self._check_scratch(pt)
         declined = aux[2, :B].bool()
@@ -4590,7 +4874,7 @@ class MTPSpecEngine:
             n = self.chain_steps
             self.chain_steps = n + 1
             do_audit = spec_chain_audit_enabled() and n % spec_chain_audit_every() == 0
-        if kind == "s":
+        if kind == "s" and not split:
             fs.stage_samp(
                 sampling["temperature"], sampling["top_k"], sampling["top_p"], sampling["greedy"], sampling["uniforms"]
             )
@@ -4606,79 +4890,146 @@ class MTPSpecEngine:
         shadow = kind == "s" and self._shadow_due(
             sampling
         )  # S8 probe step: the same stats replay and reads, no payload
+        pen_live = kind == "s" and self._pen_live(sampling)
         extra = (
-            {"execute_topk": True, **({"execute_stats": True} if need_stats or shadow else {})} if kind == "s" else {}
+            {
+                "execute_topk": True,
+                **({"execute_stats": True} if need_stats or shadow else {}),
+                **({"execute_pen": True} if pen_live else {}),
+            }
+            if kind == "s"
+            else {}
         )
         read = lambda t: ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False)
-        audit = None
-        if chain is None:
-            model.verify_stage_and_enqueue(*args, **kw, **extra, flip_parity=True)
-        else:
-            ttnn.execute_trace(
-                self.mesh, self._ch_trace_g if prev.kind == "g" else self._ch_trace_s, cq_id=0, blocking=False
-            )
-            model._vfy_aux_staged = None
-            if (
-                do_audit
-            ):  # the device-built words of THIS step, copied right behind the chain trace; checked at this step's read
-                audit = dict(tok=read(model._vfy_token_buf), aux=read(model._vfy_aux_buf), fa=read(fa.aux_in))
-            model.verify_stage_and_enqueue(
-                *args, **kw, **extra, skip_tokens_h2d=True, skip_aux_h2d=True, skip_kv_check=True, flip_parity=True
-            )
-        ttnn.execute_trace(self.mesh, self._fa_trace if kind == "g" else self._fs_trace, cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
-        self._vfeed = model._vfy_rows_out
-        self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
-        res_t = read(fa.result_out if kind == "g" else fs.result_out)
-        aux_t = read(fa.aux_in)  # still this step's aux: the next chain trace is enqueued after these reads
-        dr_ts = [read(t) for t in self._dr_outs]
-        ids_t = union = None
-        if kind == "g":
-            n_g = self.fused_greedy_checked
-            self.fused_greedy_checked = n_g + 1
-            if spec_fused_audit_enabled() and n_g % spec_fused_audit_every() == 0:
-                ids_t = read(model._vfy_ids_out)
-        else:
-            n_s = self.fused_sampled_steps
-            self.fused_sampled_steps = n_s + 1
-            if spec_fused_audit_enabled() and n_s % spec_fused_audit_every() == 0:
-                ids_t = read(model._vfy_ids_out)
-                union = (read(fs.union_vals_in), read(fs.union_ids_in))
-        cand_t = (
-            self._cand_enqueue_reads(union) if need_stats or shadow else None
-        )  # same queue slot as the audit union read (read once)
-        event = ttnn.record_event(self.mesh, 0)
-        h = FusedHandle(self, self._def_next_tip(), kind)
-        h.event, h.res_t, h.aux_t, h.dr_ts, h.ids_t, h.union, h.audit = event, res_t, aux_t, dr_ts, ids_t, union, audit
-        h.cand_t, h.shadow_t = (None, cand_t) if shadow else (cand_t, None)
-        h.res_rows = 2 if kind == "g" else 3
-        h.active, h.declined, h.cmask, h.prev = active.clone(), declined.clone(), cmask, prev
-        h.nvv = torch.as_tensor(nv).to(torch.int64).reshape(B).clone()
-        h.nv_own = torch.where(declined, torch.zeros_like(h.nvv), torch.full_like(h.nvv, K))
-        h.tokens = torch.as_tensor(tokens).to(torch.int64).clone()
-        h.start_host = torch.as_tensor(start_pos).to(torch.int64).clone()
-        h.mi_host = torch.as_tensor(args[2]).to(torch.int64).clone()
-        h.parity, h.aux, h.pt, h.sampling = parity, aux.clone(), pt.clone(), sampling
-        h.gen = list(self._row_gens())
-        h.lo = (chain["lo"] if chain is not None else h.start_host).clone()
-        h.hi = (chain["hi"] if chain is not None else h.start_host).clone()
-        h.skip = [bool(s) for s in propose_skip_plan(self._no_draft, B)[0]]
-        h.cap = table_capacity(self._last_cap_blocks, self.block_size)
-        h.perm = self._phys_perm
-        if self._bucketed():
-            h.bucket = self._vb
-        if prev is not None:
-            prev.succ = weakref.ref(h)
-        self._offered = {u for u in range(B) if not bool(declined[u])}
-        self._fused_note(None)
-        self._def_last = h
-        return h
+        h = FusedHandle(self, self._def_next_tip(), kind) if split else None
+        vh = None
+        if split:  # the first half: the host-staged main trace, no chain (the mask is not known yet)
+            vh = model.verify_stage_and_enqueue(*args, **kw, forward_only=True, flip_parity=True)
+        t_begin = time.perf_counter()
 
-    def _def_ready_handle(self, fz, start0, active):
+        def post(mask=None):
+            nonlocal vh, h
+            midx, mask_buf, ex = [], None, dict(extra)
+            if split:
+                self._finish_sampling_mask(sampling, mask)
+                midx = self._mask_rows(sampling, active)
+                fs.stage_samp(
+                    sampling["temperature"],
+                    sampling["top_k"],
+                    sampling["top_p"],
+                    sampling["greedy"],
+                    sampling["uniforms"],
+                )
+            else:
+                midx = self._mask_rows(sampling, active)
+            if midx:
+                if not self._mask_ok():
+                    raise RuntimeError(
+                        "a masked step reached the device path without the mask traces (engine._mask_ok())"
+                    )
+                mask_buf = self._mask_stage(sampling, midx)
+                ex.update(execute_mask=True, mask_host=mask_buf)
+                if split and (time.perf_counter() - t_begin) * 1e3 > MASK_LATE_MS:
+                    self.mask_late_finish += 1  # the forward may have ended: the device waited for the mask
+            audit = None
+            if split:
+                model.verify_enqueue_post(vh, **ex)
+            elif chain is None:
+                vh = model.verify_stage_and_enqueue(*args, **kw, **ex, flip_parity=True)
+            else:
+                ttnn.execute_trace(
+                    self.mesh, self._ch_trace_g if prev.kind == "g" else self._ch_trace_s, cq_id=0, blocking=False
+                )
+                model._vfy_aux_staged = None
+                if (
+                    do_audit
+                ):  # the device-built words of THIS step, copied right behind the chain trace; checked at this step's read
+                    audit = dict(tok=read(model._vfy_token_buf), aux=read(model._vfy_aux_buf), fa=read(fa.aux_in))
+                vh = model.verify_stage_and_enqueue(
+                    *args, **kw, **ex, skip_tokens_h2d=True, skip_aux_h2d=True, skip_kv_check=True, flip_parity=True
+                )
+            ttnn.execute_trace(
+                self.mesh,
+                self._fa_trace if kind == "g" else self._accept_trace(sampling, masked=bool(midx)),
+                cq_id=0,
+                blocking=False,
+            )
+            if pen_live:
+                ttnn.execute_trace(self.mesh, self._pen_upd_trace, cq_id=0, blocking=False)
+                self.pen_steps += 1
+            ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+            self._vfeed = model._vfy_rows_out
+            self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
+            res_t = read(fa.result_out if kind == "g" else fs.result_out)
+            aux_t = read(fa.aux_in)  # still this step's aux: the next chain trace is enqueued after these reads
+            dr_ts = [read(t) for t in self._dr_outs]
+            ids_t = union = None
+            if kind == "g":
+                n_g = self.fused_greedy_checked
+                self.fused_greedy_checked = n_g + 1
+                if spec_fused_audit_enabled() and n_g % spec_fused_audit_every() == 0:
+                    ids_t = read(model._vfy_ids_out)
+            else:
+                n_s = self.fused_sampled_steps
+                self.fused_sampled_steps = n_s + 1
+                if spec_fused_audit_enabled() and n_s % spec_fused_audit_every() == 0:
+                    ids_t = read(model._vfy_ids_out)
+                    union = (read(fs.union_vals_in), read(fs.union_ids_in))
+            cand_t = (
+                self._cand_enqueue_reads(union) if need_stats or shadow else None
+            )  # same queue slot as the audit union read (read once)
+            event = ttnn.record_event(self.mesh, 0)
+            if h is None:
+                h = FusedHandle(self, self._def_next_tip(), kind)
+            h.event, h.res_t, h.aux_t, h.dr_ts, h.ids_t, h.union, h.audit = (
+                event,
+                res_t,
+                aux_t,
+                dr_ts,
+                ids_t,
+                union,
+                audit,
+            )
+            h.cand_t, h.shadow_t = (None, cand_t) if shadow else (cand_t, None)
+            h.res_rows = 2 if kind == "g" else 3
+            h.active, h.declined, h.cmask, h.prev = active.clone(), declined.clone(), cmask, prev
+            h.nvv = torch.as_tensor(nv).to(torch.int64).reshape(B).clone()
+            h.nv_own = torch.where(declined, torch.zeros_like(h.nvv), torch.full_like(h.nvv, K))
+            h.tokens = torch.as_tensor(tokens).to(torch.int64).clone()
+            h.start_host = torch.as_tensor(start_pos).to(torch.int64).clone()
+            h.mi_host = torch.as_tensor(args[2]).to(torch.int64).clone()
+            h.parity, h.aux, h.pt, h.sampling = parity, aux.clone(), pt.clone(), sampling
+            h.gen = list(self._row_gens())
+            h.lo = (chain["lo"] if chain is not None else h.start_host).clone()
+            h.hi = (chain["hi"] if chain is not None else h.start_host).clone()
+            h.skip = [bool(s) for s in propose_skip_plan(self._no_draft, B)[0]]
+            h.cap = table_capacity(self._last_cap_blocks, self.block_size)
+            h.perm = self._phys_perm
+            if self._bucketed():
+                h.bucket = self._vb
+            if mask_buf is not None:  # the host tensors of the mask write stay alive until the step's event
+                h.mask_keep = (mask_buf, getattr(vh, "mask_keep", None))
+            if prev is not None:
+                prev.succ = weakref.ref(h)
+            self._offered = {u for u in range(B) if not bool(declined[u])}
+            self._fused_note(None)
+            self._def_last = h
+            h.pending, h.post = False, None
+            return h
+
+        if split:
+            h.pending, h.post = True, post
+            return h
+        return post()
+
+    def _def_ready_handle(self, fz, start0, active, h=None):
         """A handle for a step that ran synchronously (a fallback): its result is on the host already, no drafts were made (the
-        propose of the plugin, or a chain onto it, runs the ordinary propose), and nothing can chain on it."""
+        propose of the plugin, or a chain onto it, runs the ordinary propose), and nothing can chain on it. ``h``: the pending handle of
+        a split step whose finish ran the fallback (filled in place)."""
         B, T = self.B, self.T
-        h = FusedHandle(self, self._def_next_tip(), None)
+        if h is None:
+            h = FusedHandle(self, self._def_next_tip(), None)
+        h.kind, h.pending, h.post = None, False, None
         h.device, h.ready, h.chainable = False, True, False
         h.gen = list(self._row_gens())
         committed = torch.as_tensor(fz.committed).to(torch.int64).reshape(B, T)
@@ -4717,6 +5068,10 @@ class MTPSpecEngine:
         """The step's host data (engine rows), after its device work finished: event_synchronize on the reader thread, or one
         synchronize_device on the engine thread (materialize / lazy finish before the read). Cached per handle; runs the checks once.
         """
+        if h.pending:
+            raise RuntimeError(
+                f"step {h.tip_id}: the second half of a split step is not enqueued (decode_forward_finish) - nothing to wait on"
+            )
         with h._lock:
             if h._data is not None:
                 return h._data
@@ -4917,17 +5272,159 @@ class MTPSpecEngine:
 
     _SAMPLING_NAMES = ("temperature", "top_k", "top_p", "greedy", "uniforms")
 
-    def _engine_sampling(self, spec_sampling):
+    def _engine_sampling(self, spec_sampling, active=None):
         """The plugin's ``spec_sampling`` (runner slots) as the engine-row dict of a step, or None. Phase 2: the optional key
         ``num_logprobs`` int32 [B] (-2 = no logprobs, 0.. = top-N) rides along; a step with a logprobs row keeps the dict (so the
-        S2 sampled step runs, the S1 greedy step has no topk / stats trace) even when every row is greedy."""
+        S2 sampled step runs, the S1 greedy step has no topk / stats trace) even when every row is greedy. Phase 3: the optional key
+        ``mask`` int32 [b, 1+K, W] (runner slots, standard packing; see ``_attach_mask``) keeps the dict too, and a greedy user with a
+        constrained mask row becomes a sampled one (T 1, top_k 1, top_p 0). Inside decode_forward_begin (``_split_begin``) the mask
+        comes later (decode_forward_finish): the step is always the S2 sampled step and the greedy rewrite waits for the mask.
+        Phase 3 part 2: the optional key ``penalties`` becomes ``sampling["pen"]`` (a PenaltyStep over engine rows, see _pen_stage); a
+        penalty row must be a SAMPLED row (the plugin sends a greedy one as top_k 1, top_p 0; a greedy row that a constrained mask row
+        rewrites counts as sampled, the mask is attached before the penalty check; in a split step the check runs at the finish): the
+        main trace's argmax is taken before the penalties. ``active``: engine rows that hold a request (a padding row's penalties are
+        ignored)."""
+        split = self._split_begin
         if spec_sampling is None:
+            if split:
+                raise ValueError("decode_forward_begin needs spec_sampling: a masked step is a sampled (S2) step")
             return None
         names = self._SAMPLING_NAMES + (("num_logprobs",) if spec_sampling.get("num_logprobs") is not None else ())
         sampling = dict(zip(names, self._to_rows(*(spec_sampling[n] for n in names))))
-        if bool(torch.as_tensor(sampling["greedy"]).all()) and not self._need_cands(sampling):
-            return None  # nothing sampled, no logprobs: the S1 step
+        if spec_sampling.get("mask") is not None:
+            if split:
+                raise ValueError("decode_forward_begin takes the mask later: decode_forward_finish(handle, mask)")
+            self._attach_mask(sampling, spec_sampling["mask"])
+        penal = spec_sampling.get("penalties")
+        if penal is not None:
+            ps = parse_penalties(penal, self.B, self._to_rows, active=active)
+            if ps.any_live or ps.rebuild:
+                if not split:  # a split step checks at the finish, after its mask has rewritten the greedy rows
+                    self._pen_check_greedy(sampling, ps)
+                if not self._pen_ok():
+                    raise ValueError(
+                        "spec_sampling carries penalties but the engine has no pen traces (QWEN36_SPEC_DEVICE_PENALTIES=0, no sampled "
+                        "accept or no verify topk trace)"
+                    )
+                sampling["pen"] = ps
+        if (
+            not split
+            and bool(torch.as_tensor(sampling["greedy"]).all())
+            and not self._need_cands(sampling)
+            and "mask" not in sampling
+        ):
+            return None  # nothing sampled, no logprobs, no mask: the S1 step
         return sampling
+
+    def _attach_mask(self, sampling, mask):
+        """Put the plugin's token mask (``mask`` int32 [b, 1+K, W] in runner slots, b <= B, standard packing: bit v % 32 of word v // 32
+        = token v allowed) into the engine-row ``sampling`` dict as ``sampling["mask"]`` int32 [B, 1+K, W] (the slot -> engine row map
+        of ``_to_rows``; users the plugin did not send are all ones). Rows that are all ones are no constraint: when no row is
+        constrained the key is not set (the step is a normal step). A greedy user with a constrained row is rewritten as a sampled
+        user (temperature 1, top_k 1, top_p 0, greedy False): the sampled accept keeps one candidate, the nucleus keeps column 0 =
+        the lowest id of the top tie group (= the host argmax), and the device greedy path would commit the unmasked ``ids``.
+        New tensors: the plugin's own are never changed. Returns True when a constrained row exists."""
+        inv = None if self._phys_perm is None else self._phys_perm[1]
+        rows = mask_to_engine_rows(mask, inv, self.B, self.T)
+        con = ~is_unconstrained(rows)  # [B, T]
+        sampling.pop("mask", None)
+        if not bool(con.any()):
+            return False
+        sampling["mask"] = rows
+        users = con.any(dim=1) & torch.as_tensor(sampling["greedy"]).bool()
+        if bool(users.any()):
+            t, k, p = (torch.as_tensor(sampling[n]) for n in ("temperature", "top_k", "top_p"))
+            sampling["temperature"] = torch.where(users, torch.ones_like(t), t)
+            sampling["top_k"] = torch.where(users, torch.ones_like(k), k)
+            sampling["top_p"] = torch.where(users, torch.zeros_like(p), p)
+            sampling["greedy"] = torch.as_tensor(sampling["greedy"]).bool() & ~users
+            self.mask_greedy_rewrites = self.__dict__.get("mask_greedy_rewrites", 0) + int(users.sum())
+        return True
+
+    def _finish_sampling_mask(self, sampling, mask):
+        """decode_forward_finish: attach the mask of a split step to its engine-row ``sampling`` (None = no constraint: the step stays
+        the S2 sampled step with its own parameters). See _attach_mask."""
+        if mask is not None:
+            self._attach_mask(sampling, mask)
+        ps = sampling.get("pen")
+        if ps is not None and ps.any_live:
+            self._pen_check_greedy(sampling, ps)
+
+    def _mask_rows(self, sampling, active):
+        """Engine rows r = u*T + j (list) whose mask row is constrained and whose user is active: the rows the mask trace must
+        clear. [] = no live constrained row: the mask trace is not replayed (a normal step)."""
+        mask = None if sampling is None else sampling.get("mask")
+        if mask is None:
+            return []
+        con = ~is_unconstrained(mask) & torch.as_tensor(active).bool().reshape(self.B, 1)
+        return torch.nonzero(con.reshape(-1)).reshape(-1).tolist()
+
+    def _mask_stage(self, sampling, rows):
+        """The device input of the mask write: the permuted [8, 32, 970] buffer of the constrained engine rows ``rows`` (repack of those
+        rows only, all other rows ones), from the staging ring. The caller keeps it alive until the step's event."""
+        ring = self.__dict__.get("_mask_ring")
+        if ring is None:
+            ring = self.__dict__["_mask_ring"] = PermMaskStagingRing()
+        buf = ring.stage(mask_rows_flat(sampling["mask"], self.B, self.T), rows)
+        self.mask_steps += 1
+        self.mask_rows += len(rows)
+        return buf
+
+    @staticmethod
+    def _pen_check_greedy(sampling, ps):
+        """A penalty row must be a sampled row: the argmax of the main trace is taken before the penalties. Runs after the mask
+        attach (its greedy rewrite turns a constrained greedy row into a sampled one) and, for a split step, at the finish.
+        """
+        bad = ps.live & torch.as_tensor(sampling["greedy"]).bool()
+        if bool(bad.any()):
+            raise ValueError(
+                f"engine rows {bad.nonzero().reshape(-1).tolist()} carry penalties and are marked greedy: a penalty row must be sent "
+                "as a sampled row (top_k 1, top_p 0), the argmax of the main trace is taken before the penalties"
+            )
+
+    def _pen_stage(self, sampling):
+        """Before a fused step is enqueued (sync or deferred, after the slot remap): write the state of the rows the plugin rebuilt from
+        host token lists (join, resume, a slot the plugin moved) and the step's per-row penalty parameters. The writes are queued behind
+        every step already enqueued, so a step in flight is not disturbed: it updates the old state first and the merge replaces exactly
+        the rebuilt rows. The rebuild token lists are dropped after the write."""
+        pen = None if sampling is None else sampling.get("pen")
+        if pen is None:
+            return
+        if pen.rebuild:
+            self._pen.rebuild(pen.rebuild)
+            pen.rebuild = {}
+        if pen.any_live:
+            self._pen.stage_params(pen)
+
+    @staticmethod
+    def _pen_live(sampling):
+        """The step replays the pen trace and the pen update trace: some live row has a non-neutral penalty."""
+        pen = None if sampling is None else sampling.get("pen")
+        return pen is not None and pen.any_live
+
+    def _pen_host_logits(self, lg, tokens, num_valid, pen, rows):
+        """Host walks (engine fallback, overflow redo): fp32 logits [B*T, V] with the penalties of the engine rows ``rows`` applied by the
+        plugin-reference math (apply_penalties_exact: fp32, no bf16 rounding, history = committed output + drafts[:min(j, valid)] read from
+        the device counts, which hold every commit up to the previous step). A host walk therefore differs from the device pen trace by
+        the device's bf16 rounding of penalized tokens only (about half a bf16 ulp)."""
+        B, T = self.B, self.T
+        counts, mask = self._pen.read_rows(rows)
+        tok = torch.as_tensor(tokens).reshape(B, T)
+        nv = torch.as_tensor(num_valid).reshape(B)
+        lg = lg.to(torch.float32, copy=True)  # never edit the caller's logits (the logprob payload reads them too)
+        for i, u in enumerate(rows):
+            sl = slice(u * T, (u + 1) * T)
+            hist = column_history_counts(counts[i], tok[u, 1:], int(nv[u]), T)
+            ones = torch.ones(T)
+            lg[sl] = apply_penalties_exact(
+                lg[sl],
+                hist,
+                mask[i].reshape(1, -1).expand(T, -1),
+                ones * pen.rep[u],
+                ones * pen.freq[u],
+                ones * pen.pres[u],
+            )
+        return lg
 
     @staticmethod
     def _need_cands(sampling):
@@ -4955,10 +5452,11 @@ class MTPSpecEngine:
         """The certificate accept trace exists (QWEN36_SPEC_DEVICE_TOPP on, stats trace ready at capture) and the stats are still there."""
         return self._fs_trace_c is not None and bool(getattr(self.model, "_vfy_stats_ready", False))
 
-    def _accept_trace(self, sampling):
-        """The sampled accept trace of a SYNC step: the certificate variant when a live row is a certificate row, else the plain one
-        (normal steps replay the same trace as without the certificate)."""
-        return self._fs_trace_c if bool(self._cert_rows(sampling).any()) else self._fs_trace
+    def _accept_trace(self, sampling, masked=False):
+        """The sampled accept trace of a step: the certificate variant when a live row is a certificate row OR a live row is masked
+        (the variant carries the ``kth > -1e20`` tie guard of a masked row), else the plain one (normal steps replay the same trace
+        as without the certificate)."""
+        return self._fs_trace_c if masked or bool(self._cert_rows(sampling).any()) else self._fs_trace
 
     def _cands_to_slots(self, cand):
         """DeviceCandidates engine rows -> runner slots (the same permutation as _to_slots)."""
@@ -5010,12 +5508,21 @@ class MTPSpecEngine:
         stats = ttnn.to_torch(reads[2]).reshape(-1).to(torch.float32)  # rows 0..31 L_raw, 32..63 L_T (certificate)
         return candidates_from_device(vals, idx, None, stats[: B * T], fs.per_shard, B, T, M=fs.M)
 
-    def _cand_from_logits(self, logits):
-        """The same payload from FULL logits (engine rows; [B, T, V] or [B*T, V]): the engine fallback paths."""
+    def _cand_from_logits(self, logits, sampling=None):
+        """The same payload from FULL logits (engine rows; [B, T, V] or [B*T, V]): the engine fallback paths. ``sampling`` with a
+        ``mask`` (engine rows): the payload comes from the MASKED logits (disallowed ids = MASK_NEG, as the device's edited shards: raw
+        logprobs are taken after the grammar), constrained rows only."""
         B, T = self.B, self.T
-        return candidates_from_logits(
-            torch.as_tensor(logits).reshape(B * T, -1)[:, : self.vocab], B, T, M=self._cand_m()
-        )
+        x = torch.as_tensor(logits).reshape(B * T, -1)[:, : self.vocab]
+        mask = None if sampling is None else sampling.get("mask")
+        if mask is not None:
+            flat = mask_rows_flat(mask, B, T)
+            con = (~is_unconstrained(flat)).nonzero().reshape(-1).tolist()
+            if con:
+                x = x.clone()
+                for r in con:
+                    x[r] = apply_to_logits(x[r : r + 1], flat[r : r + 1], fill=MASK_NEG)[0]
+        return candidates_from_logits(x, B, T, M=self._cand_m())
 
     def _cand_m(self):
         fs = self._fs
@@ -5028,6 +5535,8 @@ class MTPSpecEngine:
             return "no_sampled_trace"
         if self._need_cands(sampling) and not self._stats_ok():
             return "no_stats_trace"  # logprobs asked, no stats trace (kill switch off): the host payload from the full logits
+        if sampling.get("mask") is not None and not self._mask_ok():
+            return "no_mask_trace"  # a masked step without the mask traces: the full-logits host walk applies the mask
         k = torch.as_tensor(sampling["top_k"]).to(torch.int64)
         greedy = torch.as_tensor(sampling["greedy"]).bool()
         cert = (
@@ -5038,28 +5547,36 @@ class MTPSpecEngine:
         return None
 
     def _verify_fused_sampled(self, tokens, start_pos, pt, active, nv, args, kw, sampling, aux):
-        """Stage S2 step. Call order: stage aux, samp (pack_samp_host), pt rows / MTP table when changed; enqueue verify, topk
-        (execute only, no host read), stats trace (a logprobs or certificate row), sampled accept trace (the certificate variant when
-        a row is a certificate row), drafter trace; enqueue the non-blocking drafter-id reads; ONE synchronize; read ids, result
-        [3, W] (committed, counts, overflow) and the draft ids (+ the union in audit mode).
+        """Stage S2 step. Call order: stage aux, samp (pack_samp_host), pt rows / MTP table when changed; enqueue verify, [mask write +
+        mask trace of a masked step], topk (execute only, no host read), stats trace (a logprobs or certificate row), sampled accept
+        trace (the certificate variant when a row is a certificate row or masked), drafter trace; enqueue the non-blocking drafter-id
+        reads; ONE synchronize; read ids, result [3, W] (committed, counts, overflow) and the draft ids (+ the union in audit mode).
         An ``overflow`` word on a user (bit 1: a top-k tie group reached the last union candidate; bit 2: the top-p certificate
         failed) redoes that user on the host: the full logits (logits trace on the intact verify rows) walked by host_redo_walk
-        with the SAME uniforms; the other users keep the device result. The result carries no drafts, so the propose that
-        follows runs normally (and rewrites what the drafter trace wrote)."""
+        with the SAME uniforms and the step's mask; the other users keep the device result. The result carries no drafts, so the
+        propose that follows runs normally (and rewrites what the drafter trace wrote).
+        Inside decode_forward_begin (``_split_begin``, phase 3) the step stops after the MAIN trace and returns a pending FusedHandle:
+        ``handle.post(mask)`` (decode_forward_finish) runs the rest and returns what this call returns otherwise. A masked step is not
+        chained."""
         B, T, K = self.B, self.T, self.K
         if self._def_ctx is not None:  # decode_forward(defer_read=True): enqueue, no synchronize
             return None, None, self._def_enqueue("s", tokens, start_pos, pt, active, nv, args, kw, sampling, aux)
         fa, fs, model = self._fa, self._fs, self.model
+        split = self._split_begin
         self._check_scratch(pt)
         declined = aux[2, :B].bool()
-        chain = self._chain_plan(tokens, start_pos, active, nv, args, kw)
+        masked = split or bool(self._mask_rows(sampling, active))
+        chain = None if masked else self._chain_plan(tokens, start_pos, active, nv, args, kw)
+        if masked:
+            self._chain_drop("mask")
         if chain is None:
             fa.stage_aux(aux)  # aux_in / pt_rows_in are shared with the S1 device
         else:
             expect = self._chain_stage(chain, tokens, start_pos, active, aux, args)
-        fs.stage_samp(
-            sampling["temperature"], sampling["top_k"], sampling["top_p"], sampling["greedy"], sampling["uniforms"]
-        )
+        if not split:
+            fs.stage_samp(
+                sampling["temperature"], sampling["top_k"], sampling["top_p"], sampling["greedy"], sampling["uniforms"]
+            )
         if self._fa_pt_host is None or not torch.equal(self._fa_pt_host, pt):
             fa.stage_pt_rows(pt.repeat_interleave(T, dim=0))
             self._fa_pt_host = pt.clone()
@@ -5072,48 +5589,107 @@ class MTPSpecEngine:
         need_cands = self._need_cands(sampling)  # a logprobs row: the union / stats reads for the payload
         shadow = self._shadow_due(sampling)  # S8 probe step: the same stats replay and reads, no payload
         n_cert = int(self._cert_rows(sampling).sum())
-        ex = {"execute_topk": True, **({"execute_stats": True} if need_stats or shadow else {})}
-        if chain is None:
-            handle = model.verify_stage_and_enqueue(*args, **kw, **ex)  # verify, then topk (+ stats), no host read
-        else:
-            self._chain_exec(chain)
-            handle = model.verify_stage_and_enqueue(*args, **kw, **ex, skip_tokens_h2d=True, skip_aux_h2d=True)
-        ttnn.execute_trace(self.mesh, self._accept_trace(sampling), cq_id=0, blocking=False)
-        ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
-        dr_handles = self._ids_enqueue_reads(self._dr_outs)
-        cand_reads = self._cand_enqueue_reads() if need_cands or shadow else None
-        ttnn.synchronize_device(self.mesh)  # the only one of the step
-        ids, vfeed, _ = model.verify_after_external_sync(handle)
-        self._vfeed = vfeed
-        self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
-        res = ttnn.to_torch(ttnn.get_device_tensors(fs.result_out)[0]).reshape(3, -1).to(torch.int64)
-        steps = self._ids_from_handles(dr_handles)
-        ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
-        committed, counts, overflow = res[0, : B * T].reshape(B, T), res[1, :B], res[2, :B]
-        if chain is not None:
-            self._chain_audit(expect)
-        self.cert_steps += n_cert > 0
-        if bool(overflow.any()):
-            self._fused_note("overflow_redo")
-            self.cert_failed_steps += bool((overflow & OVF_CERT).any())
-            redo = overflow.nonzero().reshape(-1).tolist()  # only the flagged users: the others keep the device result
-            logits = model.fetch_verify_logits()  # logits trace over the intact _vfy_normed_out: one more round trip
-            fz = self._host_walk_step(logits, tokens, nv, sampling, users=redo, dev=(committed, counts))
-            if (
-                need_cands
-            ):  # the redo owns the step: its payload comes from the same full logits (exact, no device stats)
-                fz.candidates = self._cand_from_logits(logits)
-            return ids, None, fz
-        cands = self._cand_build(cand_reads) if need_cands else None
-        if shadow:
-            self._shadow_note(cand_reads, counts[:B], active.bool() & ~declined, sampling)
-        n_sampled = self.fused_sampled_steps
-        self.fused_sampled_steps = n_sampled + 1
-        if spec_fused_audit_enabled() and n_sampled % spec_fused_audit_every() == 0:
-            self.fused_audited_steps += 1
-            self._audit_sampled(ids, committed, counts, tokens, nv, pt, aux, sampling)
-        self._chain_note_step("s", committed, counts, steps, start_pos, active)
-        return self._fused_finish(ids, committed, counts, steps, start_pos, active, declined, cands)
+        pen_live = self._pen_live(
+            sampling
+        )  # phase 3 part 2: the pen trace after the mask trace, the update trace after the accept
+        ex = {
+            "execute_topk": True,
+            **({"execute_stats": True} if need_stats or shadow else {}),
+            **({"execute_pen": True} if pen_live else {}),
+        }
+        vh = None
+        if (
+            split
+        ):  # the first half: the main trace only (the mask, the sampling controls and the rest follow in the finish)
+            vh = model.verify_stage_and_enqueue(*args, **kw, forward_only=True)
+        t_begin = time.perf_counter()
+
+        def post(mask=None):
+            nonlocal vh
+            midx = []
+            if split:
+                self._finish_sampling_mask(sampling, mask)
+                fs.stage_samp(
+                    sampling["temperature"],
+                    sampling["top_k"],
+                    sampling["top_p"],
+                    sampling["greedy"],
+                    sampling["uniforms"],
+                )
+            midx = self._mask_rows(sampling, active)
+            ex_m = dict(ex)
+            if midx:
+                if not self._mask_ok():
+                    raise RuntimeError(
+                        "a masked step reached the device path without the mask traces (engine._mask_ok())"
+                    )
+                ex_m.update(execute_mask=True, mask_host=self._mask_stage(sampling, midx))
+                if split and (time.perf_counter() - t_begin) * 1e3 > MASK_LATE_MS:
+                    self.mask_late_finish += 1
+            if split:
+                model.verify_enqueue_post(vh, **ex_m)
+                handle = vh
+            elif chain is None:
+                handle = model.verify_stage_and_enqueue(
+                    *args, **kw, **ex_m
+                )  # verify, [mask], [pen], topk (+ stats), no host read
+            else:
+                self._chain_exec(chain)
+                handle = model.verify_stage_and_enqueue(*args, **kw, **ex_m, skip_tokens_h2d=True, skip_aux_h2d=True)
+            ttnn.execute_trace(self.mesh, self._accept_trace(sampling, masked=bool(midx)), cq_id=0, blocking=False)
+            if pen_live:
+                ttnn.execute_trace(self.mesh, self._pen_upd_trace, cq_id=0, blocking=False)
+                self.pen_steps += 1
+            ttnn.execute_trace(self.mesh, self._dr_trace_for(self._vb), cq_id=0, blocking=False)
+            dr_handles = self._ids_enqueue_reads(self._dr_outs)
+            cand_reads = self._cand_enqueue_reads() if need_cands or shadow else None
+            ttnn.synchronize_device(self.mesh)  # the only one of the step
+            ids, vfeed, _ = model.verify_after_external_sync(handle)
+            self._vfeed = vfeed
+            self._dr_rs_dirty = True  # the accept trace rewrote the reseed page table (and the pack)
+            res = ttnn.to_torch(ttnn.get_device_tensors(fs.result_out)[0]).reshape(3, -1).to(torch.int64)
+            steps = self._ids_from_handles(dr_handles)
+            ids = torch.tensor(ids, dtype=torch.int32).reshape(B, T)
+            committed, counts, overflow = res[0, : B * T].reshape(B, T), res[1, :B], res[2, :B]
+            if chain is not None:
+                self._chain_audit(expect)
+            self.cert_steps += n_cert > 0
+            if bool(overflow.any()):
+                self._fused_note("overflow_redo")
+                self.cert_failed_steps += bool((overflow & OVF_CERT).any())
+                redo = (
+                    overflow.nonzero().reshape(-1).tolist()
+                )  # only the flagged users: the others keep the device result
+                logits = (
+                    model.fetch_verify_logits()
+                )  # logits trace over the intact _vfy_normed_out: one more round trip
+                fz = self._host_walk_step(logits, tokens, nv, sampling, users=redo, dev=(committed, counts))
+                if (
+                    need_cands
+                ):  # the redo owns the step: its payload comes from the same full logits (exact, no device stats)
+                    fz.candidates = self._cand_from_logits(logits, sampling)
+                return ids, None, fz
+            cands = self._cand_build(cand_reads) if need_cands else None
+            if shadow:
+                self._shadow_note(cand_reads, counts[:B], active.bool() & ~declined, sampling)
+            n_sampled = self.fused_sampled_steps
+            self.fused_sampled_steps = n_sampled + 1
+            if spec_fused_audit_enabled() and n_sampled % spec_fused_audit_every() == 0:
+                self.fused_audited_steps += 1
+                self._audit_sampled(ids, committed, counts, tokens, nv, pt, aux, sampling)
+            self._chain_note_step("s", committed, counts, steps, start_pos, active)
+            return self._fused_finish(ids, committed, counts, steps, start_pos, active, declined, cands)
+
+        if split:
+            return None, None, self._split_handle(post, kind="s")
+        return post()
+
+    def _split_handle(self, post, kind="s"):
+        """The pending FusedHandle of a split step (decode_forward_begin): the forward is queued (or, for a fallback step, nothing is),
+        ``post(mask)`` is the second half. Nobody may wait on it before decode_forward_finish."""
+        h = FusedHandle(self, self._def_next_tip(), kind)
+        h.pending, h.post = True, post
+        return h
 
     def _audit_sampled(self, ids, committed, counts, tokens, nv, pt, aux, sampling):
         """QWEN36_SPEC_FUSED_AUDIT (default on): read the union back (two extra reads) and recompute the step with
@@ -5139,7 +5715,9 @@ class MTPSpecEngine:
     def _audit_sampled_core(self, vals, idx, ids, committed, counts, tokens, nv, pt, aux, sampling, full_norm=None):
         """The check of _audit_sampled on host tensors (also the deferred read-time audit). Returns the number of users whose
         difference is a float32 boundary (explained); raises RuntimeError on any other difference. ``full_norm`` [B*T] (L_T):
-        a certificate step's reference and boundary zone use it."""
+        a certificate step's reference and boundary zone use it. ``sampling["mask"]`` (engine rows) is passed to the reference:
+        the union read back is after the device edit, so it only adds the same edit and the ``kth > -1e20`` tie guard.
+        """
         B, T, K = self.B, self.T, self.K
         fs = self._fs
         tok_flat = torch.as_tensor(tokens).reshape(-1)
@@ -5161,6 +5739,7 @@ class MTPSpecEngine:
             uniforms=sampling["uniforms"],
             num_valid=nv,
             full_norm=full_norm,
+            mask=sampling.get("mask"),
         )
         same = torch.equal(ref.committed.to(torch.int64), committed) and torch.equal(ref.counts.to(torch.int64), counts)
         if same:

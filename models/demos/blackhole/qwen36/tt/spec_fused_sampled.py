@@ -35,6 +35,15 @@ from models.demos.blackhole.qwen36.tt.spec_fused import (
     aux_row_deltas,
     ridx_deltas,
 )
+from models.demos.blackhole.qwen36.tt.spec_masks import (
+    MASK_KTH_GUARD,
+    MASK_NEG,
+    apply_to_logits,
+    is_unconstrained,
+    mask_rows_flat,
+    token_allowed,
+    unpack_allowed,
+)
 from models.demos.blackhole.qwen36.tt.tp_common import pack_u32_rows, rope_row_index
 
 UNION_PAD_WIDTH = 1024  # ttnn.topk multi-core needs width >= 1024 at one tile row, k <= 64
@@ -163,6 +172,7 @@ def fused_sampled_reference(
     uniforms,
     num_valid=None,
     full_norm=None,
+    mask=None,
 ):
     """Fused sampled (and greedy-mixed) accept + drafter inputs, float32, the device algorithm.
 
@@ -175,6 +185,13 @@ def fused_sampled_reference(
     sampled row with top_k = 0 (full vocabulary) and top_p < 1 is a certificate row: keep all M candidates, nucleus cut
     ``1 - p / q`` (certificate_cut); overflow bit OVF_CERT when the certificate fails, never OVF_TIE for it. Without it top_k = 0
     stays out of range as before.
+    ``mask`` (optional) int32 [B, T, W] or [R, W]: the packed token mask (spec_masks layout). The device edits the shard logits
+    with it BEFORE the topk trace, so the union it reads back already holds the masked values; this applies the same edit to
+    the union candidates (value -> MASK_NEG = -2**99 where the id is disallowed, before the temperature), which changes nothing on
+    a union read back after the edit. An allowed token outside the union is not here: build the union from the masked logits.
+    A masked k-th value (fewer allowed candidates than top_k) never raises OVF_TIE: the tie rule needs kth > MASK_KTH_GUARD.
+    A greedy row with a mask is sent as sampled with top_k 1 and top_p 0 (the lowest id among ties); a row flagged ``greedy``
+    commits the unmasked ``ids``.
     A user whose ``overflow`` is not 0 has meaningless committed/counts/drafter fields: redo the step on the host."""
     T, R = K + 1, B * (K + 1)
     aux64 = torch.as_tensor(aux).to(torch.int64) & 0xFFFFFFFF
@@ -196,6 +213,8 @@ def fused_sampled_reference(
     drafts = toks[:, 1:]  # [B, K]
     am = torch.as_tensor(ids).reshape(-1)[:R].to(torch.int64).reshape(B, T)
 
+    # 0. the token mask, as the device edits the shard logits before the topk trace
+    union_vals = _mask_union(union_vals, union_local_ids, per_shard, M, mask_rows_flat(mask, B, T))
     # 1. global top-M of the union
     vals, gids = union_topk_stable(union_vals, union_local_ids, per_shard, M)  # [R, M]
     # 2. temperature, top-k cut, overflow flag
@@ -203,7 +222,7 @@ def fused_sampled_reference(
     kth = v.gather(1, (kk - 1).repeat_interleave(T)[:, None])
     keep = v >= kth
     neg = float("-inf")
-    overflow_row = (v[:, M - 1 :] >= kth) & (kth > neg)  # [R, 1]
+    overflow_row = (v[:, M - 1 :] >= kth) & (kth > neg) & (kth > MASK_KTH_GUARD)  # [R, 1] (a masked kth: no tie rule)
     overflow_row = overflow_row.reshape(B, T) & ~cert[:, None]
     v = torch.where(keep, v, torch.full_like(v, neg))
     # 3. top-p after the top-k cut (softmax over kept, reverse cumsum, drop tail mass <= 1 - p, never column 0)
@@ -277,6 +296,21 @@ def fused_sampled_reference(
         cum,
         cert_q,
     )
+
+
+def _mask_union(union_vals, union_local_ids, per_shard, M, mask_flat):
+    """The union values with every disallowed candidate set to MASK_NEG (the device's masked value). ``mask_flat`` [R, W] or None.
+    Rows without a constraint keep their values (the same tensor object when nothing is constrained)."""
+    if mask_flat is None:
+        return union_vals
+    vals = torch.as_tensor(union_vals)
+    R, W = vals.shape
+    live = ~is_unconstrained(mask_flat[:R])
+    if not bool(live.any()):
+        return union_vals
+    gid = torch.as_tensor(union_local_ids).to(torch.int64) + (torch.arange(W, dtype=torch.int64) // M) * per_shard
+    allowed = token_allowed(mask_flat[:R], gid) | ~live[:, None]
+    return torch.where(allowed, vals.to(torch.float32), torch.full_like(vals, MASK_NEG, dtype=torch.float32))
 
 
 def predraw_uniforms(generators, rows, K, num_valid, seeded_mask=None, *, draw_global=True):
@@ -517,6 +551,9 @@ class FusedSampledDevice(FusedGreedyDevice):
         M candidates, takes L_T from ``stats_in`` and cuts the nucleus at 1 - p / q (q = Zc / max(L_T, Zc)); the overflow word gets
         bit 2 (OVF_CERT) when q - p < CERT_EPS in an examined column. Every other op and every non-certificate row is the plain
         body's (a certificate mask of 0 adds exactly 0): the plain body is NOT changed, ``cert=False`` records the same ops as before.
+        Phase 3 (masked steps): the variant also multiplies the tie-overflow flag by ``kth > MASK_KTH_GUARD`` (a row whose allowed
+        set is smaller than top_k has kth = MASK_NEG / T; the host reference has the same rule); the factor is exactly 1 for a row
+        with real logits, so the variant gives the plain body's result on every normal row.
         """
         import ttnn
 
@@ -584,6 +621,9 @@ class FusedSampledDevice(FusedGreedyDevice):
             omp_r = add(omp_r, mul(cert_r, sub(rsub(ttnn.divide(topp_r, q), 1.0), omp_r)))
             fail_row = mul(cert_r, fl(ttnn.lt(sub(q, topp_r), self.c_eps)))  # [R,1]
             ovf_row = mul(ovf_row, rsub(cert_r, 1.0))  # no top-k tie rule on a certificate row
+            ovf_row = mul(
+                ovf_row, fl(ttnn.gt(kth, MASK_KTH_GUARD))
+            )  # a masked k-th value (MASK_NEG / T): no tie rule (exactly 1 on real rows)
         p0m = ttnn.divide(e, sumk(e))
         cum = ttnn.cumsum(p0m, dim=1, reverse_order=True)
         drop = mul(fl(ttnn.le(cum, omp_r)), self.c_notfirst)
@@ -674,6 +714,9 @@ class FusedSampledDevice(FusedGreedyDevice):
 # --------------------------------------------------------------------------- #
 # Overflow redo (host, full logits, float64) and the audit's boundary classification
 # --------------------------------------------------------------------------- #
+MASKED_COMPACT_MAX = (
+    8192  # a masked row with at most this many allowed ids is walked on those ids only (host_redo_walk)
+)
 ROW_DIST_PREFIX = (
     4096  # candidates the fast row distribution sorts (the rest is bounded by a full-vocabulary normaliser)
 )
@@ -777,7 +820,7 @@ def _inverse_cdf_f64(w, u):
     return min(pick, last)
 
 
-def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid, users=None):
+def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid, users=None, mask=None):
     """The exact accept walk of one verify step on the FULL logits, for the step the device flagged ``overflow`` (a top-k tie
     group reached the last union candidate, so the candidates cannot decide it). Same decisions as accept_sampled_support's
     reference path with the same ``uniforms`` [B, K+2] (column 0 bonus, 1..K accepts, K+1 correction): float64 arithmetic,
@@ -789,6 +832,9 @@ def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid, u
     dict temperature [B] / top_k [B] / top_p [B] / greedy [B] bool, num_valid [B]. Only the rows the walk examines are
     evaluated. ``users`` (optional iterable of user indices): redo only those users; the other users come back as
     committed = -1 and counts = 1 (meaningless: merge_redo keeps the device result for them). A top_k <= 0 or >= V means off.
+    ``mask`` (optional) int32 [B, T, W] or [R, W], the packed token mask of spec_masks: a disallowed token is written MASK_NEG
+    (-2**99, the device's value) on the raw logits, before the temperature, top-k and top-p (probability 0 after the exp). A greedy row
+    walks the argmax of the masked row. A walked row with no allowed token raises ValueError.
     Returns (committed [B, T] int32, -1 past the count; counts [B] int32 in [1, T])."""
     T, R = K + 1, B * (K + 1)
     logits = torch.as_tensor(full_logits)
@@ -803,9 +849,33 @@ def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid, u
     committed = torch.full((B, T), -1, dtype=torch.int32)
     counts = torch.ones(B, dtype=torch.int32)
 
+    mask_flat = mask_rows_flat(mask, B, T)
+    nrows = {}  # r -> (masked row, allowed ids or None) for the rows of a masked walk
+
+    def masked_row(r):
+        """Row r of the logits with the mask applied (MASK_NEG), and its allowed ids when the allowed set is small."""
+        row = logits[r]
+        if mask_flat is None or bool(is_unconstrained(mask_flat[r])):
+            return row, None
+        if r not in nrows:
+            allowed = unpack_allowed(mask_flat[r], int(row.shape[-1]))
+            if not bool(allowed.any()):
+                raise ValueError(f"row {r}: the mask allows no token")
+            ids = allowed.nonzero().reshape(-1) if int(allowed.sum()) <= MASKED_COMPACT_MAX else None
+            nrows[r] = (apply_to_logits(row, mask_flat[r], fill=MASK_NEG), ids)
+        return nrows[r]
+
     def argmax_row(r):
-        row = logits[r].to(torch.float32)
+        row = masked_row(r)[0].to(torch.float32)
         return int((row == row.max()).nonzero()[0])
+
+    def distribution(r):
+        row, ids = masked_row(r)
+        if ids is None:
+            return _row_distribution(row, temp[u], topk[u], topp[u])
+        # a small allowed set: the other entries have probability 0, so the compact row (ids ascending) has the same distribution
+        order, prob = _row_distribution(row[ids], temp[u], topk[u], topp[u])
+        return ids[order], prob
 
     todo = range(B) if users is None else sorted({int(u) for u in users})
     for u in todo:
@@ -820,7 +890,7 @@ def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid, u
             continue
         m, rejected, dist = 0, False, None
         while m < n:
-            order, prob = _row_distribution(logits[u * T + m], temp[u], topk[u], topp[u])
+            order, prob = distribution(u * T + m)
             hit = (order == int(toks[u, m + 1])).nonzero()
             p_d = float(prob[int(hit[0])]) if hit.numel() else 0.0
             if p_d > 0 and p_d >= float(uni[u, 1 + m]):
@@ -830,7 +900,7 @@ def host_redo_walk(full_logits, tok_buf, params, uniforms, *, B, K, num_valid, u
             rejected, dist = True, (order, prob)
             break
         if dist is None:  # every draft accepted (or none): bonus from row n
-            dist = _row_distribution(logits[u * T + m], temp[u], topk[u], topp[u])
+            dist = distribution(u * T + m)
         order, prob = dist
         w, uc = prob.clone(), float(uni[u, K + 1] if rejected else uni[u, 0])
         if rejected:

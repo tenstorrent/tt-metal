@@ -143,6 +143,25 @@ def spec_device_topp_enabled():
     return os.environ.get("QWEN36_SPEC_DEVICE_TOPP", "1") != "0"
 
 
+def spec_device_mask_enabled():
+    """QWEN36_SPEC_DEVICE_MASK (default "1"): the engine builds the mask traces (work/research_1026/80 section 3.2, 85): per verify
+    bucket a small trace that unpacks a packed token mask and edits the shard logits in place before the topk trace, so grammar /
+    allowed_token_ids / bad_words / min_tokens rows run inside the fused sampled step. Model-side kill switch; it also decides the
+    model capability supports_spec_device_mask (human-approved 2026-10-28). Needs the sampled accept, the stats trace and its
+    certificate variant of the accept (QWEN36_SPEC_FUSED=1, QWEN36_SPEC_FUSED_SAMPLED, QWEN36_SPEC_DEVICE_TOPP): the variant
+    carries the tie-overflow guard a masked row needs."""
+    return os.environ.get("QWEN36_SPEC_DEVICE_MASK", "1") != "0"
+
+
+def spec_device_penalties_enabled():
+    """QWEN36_SPEC_DEVICE_PENALTIES (default "1"; needs QWEN36_SPEC_FUSED=1 and the sampled accept, QWEN36_SPEC_FUSED_SAMPLED): phase 3
+    part 2 (PEN-1, tt/spec_penalties.py): the engine builds the pen trace (repetition / presence / frequency penalties on the shard
+    logits before the top-k trace), the pen update trace (output counts) and their per-row device state. Model-side kill switch; it
+    also decides the model capability supports_spec_device_penalties. Off: a penalty request keeps the logits-mode host walk.
+    """
+    return os.environ.get("QWEN36_SPEC_DEVICE_PENALTIES", "1") != "0"
+
+
 def spec_stats_shadow_every():
     """QWEN36_SPEC_STATS_SHADOW_EVERY (default "0" = off; integer N >= 1): debug probe of the top-p certificate (phase 2 step S8,
     tt/spec_shadow.py). Every N-th fused sampled step that has no logprobs and no certificate row also replays the stats trace and

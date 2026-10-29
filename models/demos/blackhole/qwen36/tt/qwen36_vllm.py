@@ -33,6 +33,8 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     fabric_router_config,
     spec_chain_enabled,
     spec_device_logprobs_enabled,
+    spec_device_mask_enabled,
+    spec_device_penalties_enabled,
     spec_device_topp_enabled,
     spec_fused_enabled,
     spec_fused_sampled_enabled,
@@ -149,6 +151,19 @@ def _plugin_candidates(cand):
     from vllm_tt_plugin.spec_decode import SpecCandidates
 
     return SpecCandidates(ids=cand.ids, values=cand.values, lse=cand.lse)
+
+
+def _spec_mask_capability():
+    """Import-time part of the model capability supports_spec_device_mask (human-approved 2026-10-28): the fused sampled step, the model-side
+    kill switch QWEN36_SPEC_DEVICE_MASK, and the traces the mask trace builds on (the stats trace and the certificate accept:
+    QWEN36_SPEC_DEVICE_TOPP). The adapter then clears the key after warmup when the engine did not build the mask traces.
+    """
+    return bool(
+        spec_fused_enabled()
+        and spec_fused_sampled_enabled()
+        and spec_device_mask_enabled()
+        and spec_device_topp_enabled()
+    )
 
 
 def _build_model_capabilities():
@@ -1162,6 +1177,20 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_spec_device_top_p": bool(
             spec_fused_enabled() and spec_fused_sampled_enabled() and spec_device_topp_enabled()
         ),
+        # Phase 3 (human-approved 2026-10-28): the fused sampled step applies a packed token mask (grammar / allowed_token_ids /
+        # bad_words / min_tokens, one composed int32 [b, 1+K, W] ``mask`` key of spec_sampling, or the two-call decode_forward_begin /
+        # decode_forward_finish). Import-time part: the fused sampled step, the mask kill switch (QWEN36_SPEC_DEVICE_MASK) and the traces it
+        # builds on (the stats trace and the certificate accept: QWEN36_SPEC_DEVICE_TOPP). ``_publish_mask_capability`` then sets the key
+        # from the engine after the traces are captured (False when the mask traces were not built).
+        "supports_spec_device_mask": _spec_mask_capability(),
+        # Phase 3 part 2 (PEN-1, tt/spec_penalties.py): repetition / presence / frequency penalties computed on the device inside the fused
+        # step (per-row counts + prompt mask state, a pen trace before the top-k trace, an update trace after the accept), chained like any
+        # sampled step. Penalized tokens are fp32 results rounded to bf16 (about half a bf16 ulp from the host reference); a logprobs row
+        # with a penalty is not served. The engine builds the traces with the verify traces and raises at startup when it cannot, so the
+        # flag set is the whole condition. Approved by name on 2026-10-28.
+        "supports_spec_device_penalties": bool(
+            spec_fused_enabled() and spec_fused_sampled_enabled() and spec_device_penalties_enabled()
+        ),
         "output_tokens_per_step": 1,
         "supports_sample_on_device": False,
     }
@@ -1337,6 +1366,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if enable_trace:
             if not eng.captured:
                 eng.capture_decode()
+            self._publish_mask_capability(eng)
             # all spec traces (prefill record, verify, drafter) are parked by now
             self._maybe_forbid_post_capture_compile(enable_trace)
         elif not eng.prepared:
@@ -1345,6 +1375,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def _ensure_ready(self, kv_cache=None):
         eng = self._engine()
         if eng.prefill_recorded and eng.captured:
+            self._publish_mask_capability(eng)
             return eng
         logger.warning("Qwen36 MTP engine not warmed up (enable_model_warmup=False?); warming lazily")
         # plugin warmup order: allocate and compile everything before any trace is recorded
@@ -1356,6 +1387,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             eng.record_prefill()
         if not eng.captured:
             eng.capture_decode()
+        self._publish_mask_capability(eng)
         return eng
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
@@ -1406,8 +1438,58 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # per-request delta is model-side (build_request_rope sets rope.rope_delta during the prefill).
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
 
+    def decode_forward_begin(self, *args, **kwargs):
+        """First half of a split fused step (phase 3 stage P3a; needs the capability supports_spec_device_mask). The arguments are those
+        of ``decode_forward`` for spec_mode "fused_sample", by keyword, with these differences: ``spec_sampling`` is REQUIRED and has
+        no ``mask`` key (the mask comes in the finish); ``chain_rows`` / ``chain_tip`` must be absent (a split step is not chained);
+        ``defer_read`` as for decode_forward (True: the step is read by the reader thread; False: the finish synchronizes and returns
+        the result; a top-p certificate row needs False). Does the host pre-work and enqueues the main verify trace only. Returns
+        VerifyOutput(spec_mode, handle=pending FusedHandle): ``handle.pending`` is True, ``handle.wait()`` raises, so the reader thread
+        must get the handle only after ``decode_forward_finish``. One split step at a time (a second begin, a decode_forward or a
+        prefill before the finish raises RuntimeError)."""
+        return self.decode_forward(*args, _split=True, **kwargs)
+
+    def decode_forward_finish(self, tt_out, mask=None):
+        """Second half of a split fused step. ``tt_out``: what ``decode_forward_begin`` returned (the VerifyOutput or its handle).
+        ``mask``: the composed token mask int32 [b, 1+K, W] (runner slots, b <= the padded rows, W <= 7760 words, bit v % 32 of word
+        v // 32 = token v allowed, all ones = no constraint, a row of zeros raises ValueError) or None (no constraint). Writes the mask,
+        replays the mask trace when a live row is constrained, then enqueues the rest of the step (topk, stats, accept, drafter, reads,
+        event). Returns VerifyOutput(spec_mode, handle=the same handle, readable now) for defer_read=True, else the full
+        VerifyOutput of a synchronous fused step (accepted_token_ids / counts, candidates)."""
+        from vllm_tt_plugin.spec_decode import VerifyOutput
+
+        handle = getattr(tt_out, "handle", tt_out)
+        eng = self._ensure_ready()
+        if mask is not None:
+            mask = self._check_mask(mask, int(eng.B))
+        res = eng.decode_forward_finish(handle, mask)
+        if res.handle is not None:
+            return VerifyOutput(spec_mode=res.spec_mode, handle=res.handle)
+        cand = getattr(res, "candidates", None)
+        return VerifyOutput(
+            spec_mode=res.spec_mode,
+            argmax_ids=res.argmax_ids,
+            accepted_token_ids=res.accepted_token_ids,
+            accepted_counts=res.accepted_counts,
+            hidden=None,
+            **({} if cand is None else {"candidates": _plugin_candidates(cand)}),
+        )
+
+    def _publish_mask_capability(self, eng):
+        """Set supports_spec_device_mask from the captured engine (the class dict is shared, so the plugin sees it after warmup): False
+        when the mask traces were not built (the import-time value already covers the switches)."""
+        caps = type(self).model_capabilities
+        ok = getattr(eng, "_mask_ok", None)
+        if ok is not None and caps.get("supports_spec_device_mask", False) and not ok():
+            caps["supports_spec_device_mask"] = False
+            logger.warning(
+                "supports_spec_device_mask is False: the engine has no mask traces (see the [spec_engine] mask trace log)"
+            )
+
     def decode_forward(self, *args, **kwargs):
         from vllm_tt_plugin.spec_decode import VerifyOutput, check_spec_side_tensors
+
+        split = bool(kwargs.pop("_split", False))  # decode_forward_begin: the first half of a split step
 
         def _read(name, pos):
             return kwargs[name] if name in kwargs else (args[pos] if pos < len(args) else None)
@@ -1415,6 +1497,19 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         tokens, start_pos, page_table = _read("tokens", 0), _read("start_pos", 1), _read("page_table", 2)
         remap = _read("slot_remap", _DECODE_POSITIONAL.index("slot_remap"))
         narrow = "spec_mode" not in kwargs
+        if split:
+            if narrow or kwargs["spec_mode"] != "fused_sample":
+                raise ValueError("decode_forward_begin needs spec_mode 'fused_sample'")
+            if kwargs.get("chain_rows") is not None or kwargs.get("chain_tip") is not None:
+                raise ValueError("a split step is not chained: decode_forward_begin takes no chain_rows / chain_tip")
+            if not self.model_capabilities.get("supports_spec_device_mask", False):
+                raise ValueError("decode_forward_begin needs the supports_spec_device_mask capability")
+            if kwargs.get("spec_sampling") is None:
+                raise ValueError("decode_forward_begin needs spec_sampling (a masked step is a sampled step)")
+            if "mask" in kwargs["spec_sampling"]:
+                raise ValueError(
+                    "decode_forward_begin takes no spec_sampling['mask']: pass the mask to decode_forward_finish"
+                )
         if narrow:
             return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap)
         num_valid_drafts = kwargs.pop("num_valid_drafts")
@@ -1453,7 +1548,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         assert kwargs.get("page_tables_per_layer") is None, "per-layer page tables unsupported"
         spec_sampling = self._check_spec_sampling(kwargs.pop("spec_sampling", None), spec_mode, int(tokens.shape[0]))
         eng = self._ensure_ready()
-        res = eng.decode_forward(
+        res = (eng.decode_forward_begin if split else eng.decode_forward)(
             tokens,
             start_pos,
             num_valid_drafts=num_valid_drafts,
@@ -1468,9 +1563,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             **({} if not finishing_slots else {"finishing_slots": finishing_slots}),
         )
         logits = res.logits if spec_mode == "logits" else None
-        if (
+        if split or (
             spec_mode == "fused_sample" and defer_read
-        ):  # stage S4b: no host tensors; the reader thread resolves the handle
+        ):  # stage S4b: no host tensors; the reader thread resolves the handle (a split step: after decode_forward_finish)
             return VerifyOutput(spec_mode=res.spec_mode, handle=res.handle)
         cand = getattr(res, "candidates", None)
         if spec_mode == "fused_sample":  # QWEN36_SPEC_FUSED: greedy rows (S1) or, with spec_sampling, sampled rows (S2)
@@ -1558,8 +1653,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         }
         if "num_logprobs" in ss:  # phase 2 (optional): int32 [B], -2 = no logprobs, 0..max_logprobs = top-N
             want["num_logprobs"] = ((B,), torch.int32)
-        if set(ss) != set(want):
-            raise ValueError(f"spec_sampling keys {sorted(ss)} != {sorted(want)}")
+        if set(ss) - {"mask", "penalties"} != set(
+            want
+        ):  # "mask" (phase 3, checked by _check_mask below) and "penalties" (phase 3 part 2, checked by _check_spec_penalties) are optional
+            raise ValueError(f"spec_sampling keys {sorted(set(ss) - {'mask', 'penalties'})} != {sorted(want)}")
         for name, (shape, dtype) in want.items():
             t = ss[name]
             if not isinstance(t, torch.Tensor) or tuple(t.shape) != shape or t.dtype != dtype:
@@ -1583,7 +1680,88 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 raise ValueError(
                     "spec_sampling['num_logprobs'] >= 0 needs the supports_spec_device_logprobs capability"
                 )
+        if "mask" in ss:
+            self._check_mask(ss["mask"], B)
+        if ss.get("penalties") is not None:
+            self._check_spec_penalties(ss, B)
         return ss
+
+    def _check_mask(self, mask, B):
+        """Validate the composed token mask of a step (phase 3; spec_sampling["mask"] or decode_forward_finish): int32 [b, 1+K, W] on the
+        host, runner slots, 1 <= b <= B (users the plugin does not send are all ones), W <= 7760 words (a narrower mask leaves the
+        missing ids disallowed), standard packing (bit v % 32 of word v // 32 = token v allowed; -1 words = no constraint). Needs the
+        capability supports_spec_device_mask. A row with no allowed token (all zero words) raises ValueError: the plugin must route such
+        a step to logits mode (the engine host walk raises on it too). Returns ``mask``."""
+        from models.demos.blackhole.qwen36.tt.spec_masks import MASK_WORDS
+
+        if not self.model_capabilities.get("supports_spec_device_mask", False):
+            raise ValueError("a token mask needs the supports_spec_device_mask capability (QWEN36_SPEC_DEVICE_MASK=1)")
+        K = self._SPEC_K
+        ok = isinstance(mask, torch.Tensor) and mask.dtype == torch.int32 and mask.dim() == 3
+        if not (ok and mask.shape[1] == K + 1 and 1 <= mask.shape[0] <= B and 1 <= mask.shape[2] <= MASK_WORDS):
+            got = (tuple(mask.shape), mask.dtype) if isinstance(mask, torch.Tensor) else type(mask).__name__
+            raise ValueError(f"the token mask must be an int32 tensor [1..{B}, {K + 1}, 1..{MASK_WORDS}], got {got}")
+        if bool((mask == 0).all(dim=-1).any()):
+            raise ValueError("the token mask has a row that allows no token (run such a step in logits mode)")
+        return mask
+
+    def _check_spec_penalties(self, ss, B):
+        """Validate ``spec_sampling["penalties"]`` (phase 3 part 2; docs/SPEC_DECODE_CONTRACT.md): a dict with ``repetition``, ``frequency``
+        and ``presence`` fp32 [B] (one value per runner slot; 1 / 0 / 0 = no penalty, a padding row sends those) and the optional
+        ``rebuild`` {runner slot: (prompt ids, output ids)} (1-D integer tensors): the plugin sends it for a request whose device state is
+        not current (join, resume, a slot move, a step the host walked), only on a step that does not continue a chain for that row. A row
+        with a non-neutral penalty must be a sampled row (top_k 1, top_p 0 for a greedy request) and must not ask for logprobs (the raw
+        logprobs come before the penalties and the device returns the penalized candidates). Needs supports_spec_device_penalties.
+        """
+        pen = ss["penalties"]
+        if not isinstance(pen, dict) or not {"repetition", "frequency", "presence"} <= set(pen) <= {
+            "repetition",
+            "frequency",
+            "presence",
+            "rebuild",
+        }:
+            raise ValueError(
+                f"spec_sampling['penalties'] must be a dict with repetition / frequency / presence [B] and an optional rebuild, got "
+                f"{sorted(pen) if isinstance(pen, dict) else type(pen).__name__}"
+            )
+        for name in ("repetition", "frequency", "presence"):
+            t = pen[name]
+            if not isinstance(t, torch.Tensor) or tuple(t.shape) != (B,) or t.dtype != torch.float32:
+                got = (tuple(t.shape), t.dtype) if isinstance(t, torch.Tensor) else type(t).__name__
+                raise ValueError(
+                    f"spec_sampling['penalties'][{name!r}] must be a float32 tensor of shape ({B},), got {got}"
+                )
+        rep, freq, pres = pen["repetition"], pen["frequency"], pen["presence"]
+        if not bool(torch.isfinite(torch.stack([rep, freq, pres])).all()) or bool((rep <= 0).any()):
+            raise ValueError(
+                f"spec_sampling['penalties'] must be finite with repetition > 0: repetition {rep.tolist()}, frequency {freq.tolist()}, "
+                f"presence {pres.tolist()}"
+            )
+        live = (rep != 1.0) | (freq != 0.0) | (pres != 0.0)
+        rebuild = pen.get("rebuild") or {}
+        if (bool(live.any()) or rebuild) and not self.model_capabilities.get("supports_spec_device_penalties", False):
+            raise ValueError("spec_sampling['penalties'] needs the supports_spec_device_penalties capability")
+        if bool((live & ss["greedy"]).any()):
+            raise ValueError(
+                f"spec_sampling rows {(live & ss['greedy']).nonzero().reshape(-1).tolist()} carry penalties and are marked greedy; send a "
+                "greedy penalty row as a sampled row with top_k 1 and top_p 0"
+            )
+        nl = ss.get("num_logprobs")
+        if nl is not None and bool((live & (nl >= 0)).any()):
+            raise ValueError(
+                f"spec_sampling rows {(live & (nl >= 0)).nonzero().reshape(-1).tolist()} ask for logprobs and carry penalties: the device "
+                "returns penalized candidates, the raw logprobs are not served for such a row"
+            )
+        for slot, lists in rebuild.items():
+            if not 0 <= int(slot) < B or len(lists) != 2:
+                raise ValueError(
+                    f"spec_sampling['penalties']['rebuild'] entry {slot!r} must be slot in range({B}) -> (prompt, output)"
+                )
+            for ids in lists:
+                if not isinstance(ids, torch.Tensor) or ids.dim() != 1 or ids.dtype not in (torch.int32, torch.int64):
+                    raise ValueError(
+                        f"spec_sampling['penalties']['rebuild'][{slot}] needs 1-D int32 / int64 tensors, got {type(ids).__name__}"
+                    )
 
     def _decode_narrow(self, tokens, start_pos, page_table, kwargs, remap=None):
         """Ordinary [B, 1] decode step (no drafts) run as a 1-column verify; ``accepted_counts`` resolves a

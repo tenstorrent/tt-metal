@@ -22,6 +22,7 @@ from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
+from models.demos.blackhole.qwen36.tt.spec_masks import MASK_NEG, MASK_ROWS, SHARD_WORDS
 from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
 from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
@@ -48,12 +49,16 @@ def serve_device_decode_env_enabled():
 class VerifyHandle:
     """What ``verify_after_external_sync`` needs from ``verify_stage_and_enqueue``."""
 
-    __slots__ = ("rows", "B", "read_logits", "read_topk", "read_col0", "fused", "bucket")
+    __slots__ = ("rows", "B", "read_logits", "read_topk", "read_col0", "fused", "bucket", "post_pending", "mask_keep")
 
-    def __init__(self, rows, B, read_logits, read_topk, read_col0, fused, bucket=None):
+    def __init__(self, rows, B, read_logits, read_topk, read_col0, fused, bucket=None, post_pending=False):
         self.rows, self.B = rows, B
         self.read_logits, self.read_topk, self.read_col0, self.fused = read_logits, read_topk, read_col0, fused
         self.bucket = bucket  # the row bucket b < B the step replayed (QWEN36_SPEC_BUCKETS), None = the B-row traces
+        self.post_pending = (
+            post_pending  # forward_only enqueue: the main trace is queued, verify_enqueue_post is still due
+        )
+        self.mask_keep = None  # the ttnn host tensor of this step's mask write (kept until the step's event; phase 3)
 
 
 class _VfyBucket:
@@ -69,6 +74,8 @@ class _VfyBucket:
         self.stats_trace_id = (
             None  # the stats trace (QWEN36_SPEC_DEVICE_LOGPROBS / _TOPP), see _forward_verify_stats_body
         )
+        self.mask_trace_id = None  # the mask trace (QWEN36_SPEC_DEVICE_MASK), see _forward_verify_mask_body
+        self.pen_trace_id = None  # the pen trace (QWEN36_SPEC_DEVICE_PENALTIES), see prepare_verify_pen
         self.shard_spec = (
             None  # (shape, dtype, layout, memory_config) of this bucket's shard logits (stats warm stand-in)
         )
@@ -2610,6 +2617,61 @@ class Qwen36Model:
         ttnn.end_trace_capture(self.device, tid, cq_id=0)
         return tid
 
+    def prepare_verify_pen(self, pen):
+        """Warm the pen bodies (phase 3 part 2, tt/spec_penalties.py): ``pen`` is the engine's PenaltyDevice (state, parameters and the
+        update trace's result buffer bound). Runs the apply body once over a stand-in of the B-row shard logits and of every prepared
+        row bucket's, the update body and the eager writes, so every program is compiled before ANY capture (capture forbids cache
+        misses). record_verify_trace / record_verify_bucket then capture the pen traces. Needs the verify topk trace. Idempotent.
+        Raises when the ops cannot be built (no silent downgrade)."""
+        if getattr(self, "_vfy_pen_ready", False):
+            return
+        assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
+        if not getattr(self, "_vfy_topk", False):
+            raise ValueError("the pen trace needs the verify topk trace (QWEN36_VERIFY_DEVICE_TOPK=1)")
+        dev = self.device
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        specs = [self._vfy_specs["shard_logits"]] + [
+            bk.shard_spec
+            for _, bk in sorted((getattr(self, "_vfy_bk", None) or {}).items(), reverse=True)
+            if bk.shard_spec is not None
+        ]
+        xs = [
+            ttnn.from_torch(
+                torch.zeros(*shape, dtype=torch.bfloat16),
+                dtype=dt,
+                layout=layout,
+                device=dev,
+                memory_config=mc,
+                mesh_mapper=rep,
+            )
+            for shape, dt, layout, mc in specs
+        ]
+        try:
+            pen.warm(xs)
+        finally:
+            for x in xs:
+                ttnn.deallocate(x)
+        self._vfy_pen = pen
+        self._vfy_pen_ready = True
+
+    def _capture_pen_trace(self, bk=None):
+        """Capture the pen trace of the B-row traces (bk None) or of row bucket ``bk``; returns the trace id. No-op (None) when
+        prepare_verify_pen did not run."""
+        if not getattr(self, "_vfy_pen_ready", False):
+            return None
+        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self._vfy_pen.apply_body(self._vfy_shard_logits_out if bk is None else bk.shard_logits)
+        ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        return tid
+
+    def release_verify_pen(self):
+        """Free the pen state buffers (the traces themselves are released with their verify trace)."""
+        pen = getattr(self, "_vfy_pen", None)
+        if pen is not None:
+            for t in pen.tensors():
+                ttnn.deallocate(t)
+        self._vfy_pen, self._vfy_pen_ready = None, False
+
     def zero_verify_stats(self):
         """Write zeros into the stats buffer in place (trace capture runs no op, so it would hold uninitialized memory until the
         first stats replay). No-op without a stats trace."""
@@ -2639,6 +2701,127 @@ class Qwen36Model:
                 ttnn.deallocate(t)
         self._vfy_stats_out, self._vfy_stats_consts, self._vfy_stats_samp = None, None, None
         self._vfy_stats_ready = False
+
+    def _forward_verify_mask_body(self, bk=None, x=None):
+        """Fifth verify trace (QWEN36_SPEC_DEVICE_MASK, work/research_1026/80 section 3.2 and 81, 85): edit the shard logits IN PLACE
+        with a packed token mask, between the main trace and the topk trace. ``_vfy_mask_in`` int32 ROW_MAJOR [1,32,970] per
+        device (row r = engine row r; the host sends the PERMUTED words: bit k of word w of shard s is token s*31040 + k*970 + w).
+        Chain (P0b "W", bitwise equal to the host ``x + where(allowed, 0, MASK_NEG)`` in bf16): slice the rows of the bucket,
+        reshape [R,1,970], bitwise_right_shift by arange(32) [1,32,1] (broadcast), bitwise_and 1, reshape [1,1,R,31040], TILE,
+        where(bit, 0, MASK_NEG), add_ into ``x``. MASK_NEG = -2**99 is exact in bf16 (a truncated scalar would differ from the host
+        value); adding it to a bf16 logit gives it back, adding 0 keeps the logit. 0.3 ms for 32 rows (a captured trace: eager
+        dispatch is 1.7 ms). Rows of an unconstrained mask row are all ones and stay unchanged.
+        ``bk``: a row bucket (edits its ``shard_logits``); ``x``: an explicit tensor (warm-up stand-in)."""
+        if x is None:
+            x = self._vfy_shard_logits_out if bk is None else bk.shard_logits
+        rows, width = int(x.shape[2]), int(x.shape[3])
+        assert width == 32 * SHARD_WORDS and rows <= MASK_ROWS, (rows, width)
+        m = self._vfy_mask_in
+        cut = rows < MASK_ROWS
+        if cut:
+            m = ttnn.slice(m, [0, 0, 0], [1, rows, SHARD_WORDS])
+        s = ttnn.bitwise_right_shift(ttnn.reshape(m, (rows, 1, SHARD_WORDS)), self._vfy_mask_ar)  # [R,32,970]
+        if cut:
+            ttnn.deallocate(m)
+        b = ttnn.bitwise_and(s, 1)
+        ttnn.deallocate(s)
+        t = ttnn.to_layout(ttnn.reshape(b, (1, 1, rows, width)), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(b)
+        add = ttnn.where(t, 0.0, MASK_NEG)
+        ttnn.deallocate(t)
+        ttnn.add_(x, add)
+        ttnn.deallocate(add)
+
+    def prepare_verify_mask(self):
+        """Warm the mask trace bodies (B-row and every prepared row bucket) and allocate their persistent buffers, after
+        prepare_verify_trace / prepare_verify_buckets and before ANY capture (capture forbids cache misses). Needs the verify topk
+        trace. Idempotent. record_verify_trace / record_verify_bucket then capture the traces. Raises when the ops cannot be built
+        (no silent downgrade)."""
+        if getattr(self, "_vfy_mask_ready", False):
+            return
+        assert getattr(self, "_vfy_prepared_key", None) is not None, "call prepare_verify_trace first"
+        if not getattr(self, "_vfy_topk", False):
+            raise ValueError("the mask trace needs the verify topk trace (QWEN36_VERIFY_DEVICE_TOPK=1)")
+        dev = self.device
+        n = int(self.num_devices)
+        if 32 * SHARD_WORDS * n != int(self.vocab_size):
+            raise ValueError(
+                f"the mask layout needs vocab {32 * SHARD_WORDS * n} = {n} x {SHARD_WORDS} words x 32 bits, got {self.vocab_size}"
+            )
+        rep = ttnn.ReplicateTensorToMesh(dev)
+        RM, i32, DRAM = ttnn.ROW_MAJOR_LAYOUT, ttnn.int32, ttnn.DRAM_MEMORY_CONFIG
+        self._vfy_mask_in = ttnn.from_torch(
+            torch.full((n, MASK_ROWS, SHARD_WORDS), -1, dtype=torch.int32),
+            dtype=i32,
+            layout=RM,
+            device=dev,
+            mesh_mapper=ttnn.ShardTensorToMesh(dev, dim=0),
+            memory_config=DRAM,
+        )
+        self._vfy_mask_ar = ttnn.from_torch(
+            torch.arange(32, dtype=torch.int32).reshape(1, 32, 1),
+            dtype=i32,
+            layout=RM,
+            device=dev,
+            mesh_mapper=rep,
+            memory_config=DRAM,
+        )
+        specs = [self._vfy_specs["shard_logits"]] + [
+            bk.shard_spec
+            for _, bk in sorted((getattr(self, "_vfy_bk", None) or {}).items(), reverse=True)
+            if bk.shard_spec is not None
+        ]
+        for shape, dt, layout, mc in specs:
+            x = ttnn.from_torch(
+                torch.zeros(*shape, dtype=torch.bfloat16),
+                dtype=dt,
+                layout=layout,
+                device=dev,
+                memory_config=mc,
+                mesh_mapper=rep,
+            )
+            self._forward_verify_mask_body(x=x)
+            ttnn.deallocate(x)
+        ttnn.synchronize_device(dev)
+        self._vfy_mask_ready = True
+
+    def _capture_mask_trace(self, bk=None):
+        """Capture the mask trace of the B-row traces (bk None) or of row bucket ``bk``; returns the trace id. No-op (None) when
+        prepare_verify_mask did not run."""
+        if not getattr(self, "_vfy_mask_ready", False):
+            return None
+        tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+        self._forward_verify_mask_body(bk)
+        ttnn.end_trace_capture(self.device, tid, cq_id=0)
+        return tid
+
+    def reset_verify_mask(self):
+        """Write all ones (no constraint) into the persistent mask input in place (trace capture runs no op, so it would hold
+        uninitialized memory until the first mask write; a replay then would edit the logits at random). No-op without a mask
+        trace."""
+        if not getattr(self, "_vfy_mask_ready", False):
+            return
+        self.verify_stage_mask(torch.full((int(self.num_devices), MASK_ROWS, SHARD_WORDS), -1, dtype=torch.int32))
+
+    def verify_stage_mask(self, mask):
+        """H2D of the mask input: ``mask`` int32 [num_devices, 32, 970] contiguous (spec_masks.device_mask_input / the permuted
+        staging ring), sharded on dim 0 (one [1,32,970] block per device; P0b: 0.03 ms host build, 0.04 ms call). Returns the ttnn
+        host tensor: the caller keeps it (and ``mask``) alive until the step's event. Ordered in the queue after every enqueued
+        trace, before the next one."""
+        assert getattr(self, "_vfy_mask_ready", False), "no mask trace"
+        host = ttnn.from_torch(
+            mask, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0)
+        )
+        ttnn.copy_host_to_device_tensor(host, self._vfy_mask_in)
+        return host
+
+    def release_verify_mask(self):
+        """Free the mask trace buffers (the traces themselves are released with their verify trace)."""
+        for t in (getattr(self, "_vfy_mask_in", None), getattr(self, "_vfy_mask_ar", None)):
+            if t is not None:
+                ttnn.deallocate(t)
+        self._vfy_mask_in = self._vfy_mask_ar = None
+        self._vfy_mask_ready = False
 
     def _vfy_setup_device_topk(self):
         """Resolve QWEN36_VERIFY_DEVICE_TOPK (default ON) and QWEN36_VERIFY_TOPK_M (default 64) for this verify
@@ -2788,8 +2971,16 @@ class Qwen36Model:
         if getattr(self, "_vfy_stats_trace_id", None) is not None:
             ttnn.release_trace(self.mesh_device, self._vfy_stats_trace_id)
             self._vfy_stats_trace_id = None
+        if getattr(self, "_vfy_mask_trace_id", None) is not None:
+            ttnn.release_trace(self.mesh_device, self._vfy_mask_trace_id)
+            self._vfy_mask_trace_id = None
+        if getattr(self, "_vfy_pen_trace_id", None) is not None:
+            ttnn.release_trace(self.mesh_device, self._vfy_pen_trace_id)
+            self._vfy_pen_trace_id = None
         self.release_verify_buckets()
         self.release_verify_stats()
+        self.release_verify_mask()
+        self.release_verify_pen()
 
     def release_verify_buckets(self):
         """Release every row bucket's traces and bucket-local buffers (dl constants, stand-ins, trace outputs). No-op when
@@ -2798,7 +2989,14 @@ class Qwen36Model:
         bks = getattr(self, "_vfy_bk", None) or {}
         for b in sorted(bks):
             bk = bks[b]
-            for name in ("trace_id", "logits_trace_id", "topk_trace_id", "stats_trace_id"):
+            for name in (
+                "trace_id",
+                "logits_trace_id",
+                "topk_trace_id",
+                "stats_trace_id",
+                "mask_trace_id",
+                "pen_trace_id",
+            ):
                 if getattr(bk, name) is not None:
                     ttnn.release_trace(self.mesh_device, getattr(bk, name))
                     setattr(bk, name, None)
@@ -3103,6 +3301,11 @@ class Qwen36Model:
                 ttnn.end_trace_capture(dev, self._vfy_topk_trace_id, cq_id=0)
                 # prepare_verify_stats ran (QWEN36_SPEC_DEVICE_LOGPROBS / _TOPP): a fourth, small trace (fp32 sums over the vocabulary)
                 self._vfy_stats_trace_id = self._capture_stats_trace()
+                # prepare_verify_mask ran (QWEN36_SPEC_DEVICE_MASK): a fifth trace that edits the shard logits in place (replayed
+                # between the main and the topk trace of a masked step only)
+                self._vfy_mask_trace_id = self._capture_mask_trace()
+                # prepare_verify_pen ran (QWEN36_SPEC_DEVICE_PENALTIES): a sixth, small trace edits the shard logits in place
+                self._vfy_pen_trace_id = self._capture_pen_trace()
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         if getattr(self, "_vfy_bk", None):
             self._log_trace_memory(f"V{B}")
@@ -3238,6 +3441,8 @@ class Qwen36Model:
             self._forward_verify_topk_body(bk)
             ttnn.end_trace_capture(dev, bk.topk_trace_id, cq_id=0)
             bk.stats_trace_id = self._capture_stats_trace(bk)
+            bk.mask_trace_id = self._capture_mask_trace(bk)
+            bk.pen_trace_id = self._capture_pen_trace(bk)
         for t in bk.standins:  # warm-pass hand-off targets, used by no trace
             ttnn.deallocate(t)
         bk.standins = []
@@ -3317,11 +3522,15 @@ class Qwen36Model:
         read_col0=False,
         execute_topk=False,
         execute_stats=False,
+        execute_pen=False,
         skip_tokens_h2d=False,
         skip_aux_h2d=False,
         skip_kv_check=False,
         flip_parity=False,
         bucket=None,
+        execute_mask=False,
+        mask_host=None,
+        forward_only=False,
     ):
         """First half of ``verify_traced`` (same arguments): validate, stage every per-replay input, and enqueue the
         main trace plus the optional logits / topk traces with ``blocking=False``. No synchronize and no readback.
@@ -3329,6 +3538,9 @@ class Qwen36Model:
         read_topk=False); the fused sampled accept trace consumes ``_vfy_topk_vals_out`` / ``_vfy_topk_ids_out`` on the device.
         ``execute_stats`` (phase 2, work/research_1026/67): also enqueue the stats trace right after the topk trace (needs a topk
         replay in the same call and prepare_verify_stats before capture); results stay on the device (fetch_verify_stats).
+        ``execute_pen`` (phase 3 part 2, tt/spec_penalties.py): enqueue the pen trace right after the main trace, before the topk
+        trace, so the topk / stats / accept traces see the penalized shard logits (needs a topk replay in the same call and
+        prepare_verify_pen before capture). The caller replays it only when a live row has a non-neutral penalty.
         ``skip_tokens_h2d`` / ``skip_aux_h2d`` (QWEN36_SPEC_CHAIN, stage S3c): the chain trace already wrote the token buffer / the
         packed aux buffer on the device, so the host copy is not made (the arguments still feed the page-table and KV-write checks);
         skipping the aux copy forgets the host mirror ``_vfy_aux_staged`` (it no longer describes the device words).
@@ -3340,6 +3552,13 @@ class Qwen36Model:
         ``bucket`` (QWEN36_SPEC_BUCKETS): the row bucket b whose traces to replay (None or B = the B-row traces). Everything staged
         is the same B-row host state; the b-row traces use rows 0..b-1 of it and hand their outputs to the shared B-row buffers. The
         caller keeps every live row below b (the engine parks the others).
+
+        ``execute_mask`` / ``mask_host`` (phase 3, QWEN36_SPEC_DEVICE_MASK, work/research_1026/85): write the packed token mask
+        ``mask_host`` (int32 [num_devices, 32, 970], the permuted words) into the mask input and replay the mask trace between the
+        main trace and the topk trace (order: main, mask, topk, stats). Needs a topk replay (or ``forward_only``) and a captured mask
+        trace. ``forward_only`` (the split step, ``verify_enqueue_post``): stage everything and enqueue the MAIN trace only (no
+        logits / mask / topk / stats trace); the returned handle has ``post_pending`` True and ``verify_enqueue_post`` enqueues the
+        rest. The GDN parity flip (``flip_parity``) is done here either way.
 
         Returns a ``VerifyHandle`` for ``verify_sync_and_read`` (blocking read) or ``verify_after_external_sync``
         (the caller already synchronized the device). Exactly one of those must follow each call: the GDN window
@@ -3367,6 +3586,9 @@ class Qwen36Model:
                 raise ValueError("execute_stats needs a topk replay in the same step (the stats read its union)")
             if _stats_tid is None:
                 raise ValueError("execute_stats needs a captured stats trace (prepare_verify_stats before capture)")
+        self._vfy_check_post(bk, read_topk or execute_topk, execute_mask, mask_host, forward_only)
+        _pen_tid = getattr(self, "_vfy_pen_trace_id", None) if bk is None else bk.pen_trace_id
+        self._vfy_check_pen(_pen_tid, read_topk or execute_topk or forward_only, execute_pen)
         T, B = self._vfy_T, self._vfy_B
         rows = B * T
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
@@ -3471,16 +3693,27 @@ class Qwen36Model:
                 self._vfy_stage_aux(self._vfy_aux_host(pos, mi_prev))
         ttnn.execute_trace(dev, _main_tid, cq_id=0, blocking=False)
         self._vfy_last_bucket = bk
-        if read_logits and self._vfy_sharded:
-            ttnn.execute_trace(dev, _logits_tid, cq_id=0, blocking=False)
-        if read_topk or execute_topk:
-            ttnn.execute_trace(dev, _topk_tid, cq_id=0, blocking=False)
-        if execute_stats:
-            ttnn.execute_trace(dev, _stats_tid, cq_id=0, blocking=False)
+        mask_keep = None
+        if not forward_only:
+            if read_logits and self._vfy_sharded:
+                ttnn.execute_trace(dev, _logits_tid, cq_id=0, blocking=False)
+            # Trace order (phase 3 merge): main, [logits], mask, pen, topk, stats. Mask and penalties edit the same shard logits
+            # in place and commute (a masked -inf stays -inf under every penalty step), the topk trace reads the result.
+            if execute_mask:  # phase 3: the mask edits the shard logits the topk trace reads
+                mask_keep = self.verify_stage_mask(mask_host)
+                ttnn.execute_trace(
+                    dev, bk.mask_trace_id if bk is not None else self._vfy_mask_trace_id, cq_id=0, blocking=False
+                )
+            if execute_pen:  # phase 3 part 2: the penalties edit the same shard logits
+                ttnn.execute_trace(dev, _pen_tid, cq_id=0, blocking=False)
+            if read_topk or execute_topk:
+                ttnn.execute_trace(dev, _topk_tid, cq_id=0, blocking=False)
+            if execute_stats:
+                ttnn.execute_trace(dev, _stats_tid, cq_id=0, blocking=False)
         if flip_parity and _fused:
             for dn in self._vfy_gdn:
                 dn._spec_win_par ^= 1
-        return VerifyHandle(
+        handle = VerifyHandle(
             rows=rows,
             B=B,
             read_logits=read_logits,
@@ -3488,7 +3721,69 @@ class Qwen36Model:
             read_col0=read_col0,
             fused=_fused and not flip_parity,
             bucket=None if bk is None else bk.b,
+            post_pending=bool(forward_only),
         )
+        handle.mask_keep = mask_keep
+        return handle
+
+    def _vfy_check_post(self, bk, topk, execute_mask, mask_host, forward_only):
+        """Validation of the mask arguments of ``verify_stage_and_enqueue`` / ``verify_enqueue_post`` (before anything is staged)."""
+        if not execute_mask:
+            return
+        tid = getattr(self, "_vfy_mask_trace_id", None) if bk is None else bk.mask_trace_id
+        if tid is None:
+            raise ValueError("execute_mask needs a captured mask trace (prepare_verify_mask before capture)")
+        if mask_host is None:
+            raise ValueError("execute_mask needs mask_host (int32 [num_devices, 32, 970])")
+        if not (topk or forward_only):
+            raise ValueError(
+                "execute_mask needs a topk replay in the same step (the mask edits the logits the topk trace reads)"
+            )
+
+    def _vfy_check_pen(self, pen_tid, topk, execute_pen):
+        """Validation of ``execute_pen`` of ``verify_stage_and_enqueue`` / ``verify_enqueue_post`` (before anything is staged)."""
+        if not execute_pen:
+            return
+        if not topk:
+            raise ValueError(
+                "execute_pen needs a topk replay in the same step (the topk trace ranks the penalized logits)"
+            )
+        if pen_tid is None:
+            raise ValueError("execute_pen needs a captured pen trace (prepare_verify_pen before capture)")
+
+    def verify_enqueue_post(
+        self, handle, execute_topk=True, execute_stats=False, execute_mask=False, mask_host=None, execute_pen=False
+    ):
+        """Second half of a ``forward_only`` enqueue: enqueue [mask write + mask trace], the topk trace and the optional stats
+        trace behind the main trace of ``handle`` (same bucket, same order as the one-call path: main, mask, pen, topk, stats; ``execute_pen`` as in ``verify_stage_and_enqueue``). Clears
+        ``handle.post_pending``; ``handle.mask_keep`` holds the host tensor of the mask write until the step's event. No synchronize,
+        no readback."""
+        if not handle.post_pending:
+            raise ValueError("verify_enqueue_post: the handle has no pending second half")
+        bk = None if handle.bucket is None else self._vfy_bk[handle.bucket]
+        _topk_tid = getattr(self, "_vfy_topk_trace_id", None) if bk is None else bk.topk_trace_id
+        _stats_tid = getattr(self, "_vfy_stats_trace_id", None) if bk is None else bk.stats_trace_id
+        if execute_topk and _topk_tid is None:
+            raise ValueError("verify_enqueue_post(execute_topk=True) needs QWEN36_VERIFY_DEVICE_TOPK=1 at capture")
+        if execute_stats and (not execute_topk or _stats_tid is None):
+            raise ValueError("execute_stats needs a topk replay and a captured stats trace")
+        self._vfy_check_post(bk, execute_topk, execute_mask, mask_host, False)
+        _pen_tid = getattr(self, "_vfy_pen_trace_id", None) if bk is None else bk.pen_trace_id
+        self._vfy_check_pen(_pen_tid, execute_topk, execute_pen)
+        dev = self.device
+        if execute_mask:
+            handle.mask_keep = self.verify_stage_mask(mask_host)
+            ttnn.execute_trace(
+                dev, bk.mask_trace_id if bk is not None else self._vfy_mask_trace_id, cq_id=0, blocking=False
+            )
+        if execute_pen:
+            ttnn.execute_trace(dev, _pen_tid, cq_id=0, blocking=False)
+        if execute_topk:
+            ttnn.execute_trace(dev, _topk_tid, cq_id=0, blocking=False)
+        if execute_stats:
+            ttnn.execute_trace(dev, _stats_tid, cq_id=0, blocking=False)
+        handle.post_pending = False
+        return handle
 
     def verify_sync_and_read(self, handle):
         """Second half of ``verify_traced``: synchronize the device, then ``verify_after_external_sync``."""
@@ -3498,6 +3793,8 @@ class Qwen36Model:
     def verify_after_external_sync(self, handle):
         """``verify_sync_and_read`` minus the synchronize (the caller synced after enqueueing). Flips the GDN window
         parity (once per replay) and reads ids / logits / topk. Returns what ``verify_traced`` returns."""
+        if handle.post_pending:
+            raise ValueError("verify_after_external_sync: the second half of a forward_only step was never enqueued")
         rows, B = handle.rows, handle.B
         read_logits, read_topk, read_col0, _fused = handle.read_logits, handle.read_topk, handle.read_col0, handle.fused
         if _fused:
