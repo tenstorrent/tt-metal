@@ -183,3 +183,15 @@ def test_sdpa_12x10_differs_only_in_listed_entries(monkeypatch):
 def test_sdpa_identity_check_detects_a_planted_13x10_entry(monkeypatch):
     monkeypatch.setattr(A, "SDPA_TUNED", {**A.SDPA_TUNED, P150: {(512, 2048): (128, 128, None)}})
     assert sdpa_differing(monkeypatch, P150) == {"hd512@b1_s2048"}
+
+
+def test_sliding_map_policy_13x10_unchanged(monkeypatch):
+    """The sliding block map buckets and the padding-aware map (tt/masks.py) follow the tuned switch and
+    leave 13 x 10 at the default (BLOCK_MAP_MIN_SEQ, no padding-aware map)."""
+    from models.demos.embedding_gemma2.tt.masks import BLOCK_MAP_MIN_SEQ
+
+    for on in (True, False):
+        monkeypatch.setattr(A, "SDPA_TUNED_ON", on)
+        assert A.sliding_map_policy(*P150, BLOCK_MAP_MIN_SEQ) == (BLOCK_MAP_MIN_SEQ, False)
+    monkeypatch.setattr(A, "SDPA_TUNED_ON", False)
+    assert A.sliding_map_policy(*GALAXY, BLOCK_MAP_MIN_SEQ) == (BLOCK_MAP_MIN_SEQ, False)

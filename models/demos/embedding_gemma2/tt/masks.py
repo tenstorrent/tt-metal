@@ -37,8 +37,13 @@ correct for any batch).
 Contract
     prepare(S)        setup-time host -> device upload of the band (+ block map) for bucket S
     forward(keep)     keep [B, 1, 1, S] bf16 TILE (1 = valid token, 0 = padding), device-only ops
-                      returns {"sliding_attention": [B,1,S,S], "full_attention": [B,1,S,S]} bfp4 TILE DRAM
-    block_map(S, B)   the prepared sliding-layer block map for batch B, or None
+                      returns {"sliding_attention": [B,1,S,S], "full_attention": [B,1,S,S]} bfp4 TILE DRAM,
+                      + "sliding_attention_block_map" (int32 ROW_MAJOR) where the grid's policy builds the
+                      padding-aware map per forward (E9.4, `attention.sliding_map_policy`, batch 1)
+    block_map(S, B)   the prepared (band-only) sliding-layer block map for batch B, or None
+
+Which buckets get a block map and whether it is padding-aware is per compute grid
+(`attention.sliding_map_policy`; default from BLOCK_MAP_MIN_SEQ, no padding-aware map).
 """
 
 from __future__ import annotations
@@ -58,6 +63,8 @@ BLOCK_MAP_MIN_SEQ = int(os.environ.get("EG2_BLOCK_MAP_MIN_SEQ", "4096"))
 # key bias as pre-activations of the full-mask add (2 ops fewer), sliding mask = band + full.
 MASK_BIAS_FUSED = os.environ.get("EG2_MASK_BIAS_FUSED", "1") == "1"
 MASK_SLIDING_FROM_FULL = os.environ.get("EG2_MASK_SLIDING_FROM_FULL", "1") == "1"
+# forward() key of the per-forward sliding block map (padded_block_map), next to the masks of each kind
+BLOCK_MAP_SUFFIX = "_block_map"
 
 
 def band_mask(seq_len: int, radius: int) -> torch.Tensor:
@@ -74,12 +81,15 @@ def band_mask(seq_len: int, radius: int) -> torch.Tensor:
 
 
 def band_block_map(seq_len: int, radius: int, q_chunk: int, k_chunk: int) -> torch.Tensor:
-    """[1, 1, S/q_chunk, S/k_chunk] int32: 1 where some (q, k) in the block has |q - k| <= radius."""
-    nq, nk = seq_len // q_chunk, seq_len // k_chunk
+    """[1, 1, ceil(S/q_chunk), ceil(S/k_chunk)] int32: 1 where some (q, k) in the block has |q - k| <= radius.
+    A chunk that does not divide S leaves a partial last block (rows / keys clipped to S)."""
+    nq, nk = -(-seq_len // q_chunk), -(-seq_len // k_chunk)
     q0 = torch.arange(nq)[:, None] * q_chunk
     k0 = torch.arange(nk)[None, :] * k_chunk
-    # closest distance between [q0, q0+qc-1] and [k0, k0+kc-1]
-    gap = torch.clamp(torch.maximum(k0 - (q0 + q_chunk - 1), q0 - (k0 + k_chunk - 1)), min=0)
+    q1 = torch.clamp(q0 + q_chunk - 1, max=seq_len - 1)
+    k1 = torch.clamp(k0 + k_chunk - 1, max=seq_len - 1)
+    # closest distance between [q0, q1] and [k0, k1]
+    gap = torch.clamp(torch.maximum(k0 - q1, q0 - k1), min=0)
     return (gap <= radius).to(torch.int32).reshape(1, 1, nq, nk)
 
 
@@ -94,6 +104,8 @@ class AttentionMasks(LightweightModule):
         self.bands: dict[int, ttnn.Tensor | None] = {}
         self.zero_cols: dict[int, ttnn.Tensor] = {}
         self.block_maps: dict[int, ttnn.Tensor] = {}
+        self.band_map_tiles: dict[int, ttnn.Tensor] = {}  # padding-aware map (sliding_map_policy)
+        self.map_k_chunk: dict[int, int] = {}
 
     def prepare(self, seq_len: int) -> None:
         if seq_len in self.bands:
@@ -116,20 +128,58 @@ class AttentionMasks(LightweightModule):
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        if seq_len >= BLOCK_MAP_MIN_SEQ:
-            from models.demos.embedding_gemma2.tt.attention import sdpa_program_config
+        from models.demos.embedding_gemma2.tt.attention import sdpa_program_config, sliding_map_policy
 
-            pc = sdpa_program_config(self.sliding_head_dim, seq_len, 1, self.num_heads, compute_grid(self.device))
+        grid = compute_grid(self.device)
+        min_seq, pad_map = sliding_map_policy(grid.x, grid.y, BLOCK_MAP_MIN_SEQ)
+        if seq_len >= min_seq:
+            pc = sdpa_program_config(self.sliding_head_dim, seq_len, 1, self.num_heads, grid)
+            bm = band_block_map(seq_len, self.sliding_window, pc.q_chunk_size, pc.k_chunk_size)
             self.block_maps[seq_len] = ttnn.from_torch(
-                band_block_map(seq_len, self.sliding_window, pc.q_chunk_size, pc.k_chunk_size),
+                bm,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if pad_map and seq_len % pc.k_chunk_size == 0:
+                # bf16 TILE copy of the band map: forward() multiplies it by the per-key-chunk validity
+                self.band_map_tiles[seq_len] = ttnn.from_torch(
+                    bm.to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                self.map_k_chunk[seq_len] = pc.k_chunk_size
 
     def block_map(self, seq_len: int, batch: int) -> ttnn.Tensor | None:
+        """The constant (band-only) sliding block map of the bucket, batch 1."""
         return self.block_maps.get(seq_len) if batch == 1 else None
+
+    def padded_block_map(self, keep: ttnn.Tensor) -> ttnn.Tensor | None:
+        """Per-forward sliding block map, batch 1: the band map with every key chunk that holds only padding
+        cleared, so SDPA skips those blocks (E9.4). The dense mask still masks padding keys inside the
+        visited blocks; a skipped block only held keys the mask sets to MASK_NEG. Five small device ops:
+        [1,1,1,S] keep -> [1,1,S/k,k] -> max over each chunk -> [1,1,1,S/k] -> x band [1,1,S/q,S/k] -> int32
+        ROW_MAJOR (the layout SDPA reads)."""
+        B, S = keep.shape[0], keep.shape[-1]
+        if B != 1 or S not in self.band_map_tiles:
+            return None
+        k = self.map_k_chunk[S]
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        chunks = ttnn.reshape(keep, (1, 1, S // k, k))
+        valid = ttnn.max(chunks, dim=-1, keepdim=True, memory_config=dram)  # [1,1,S/k,1]: 1 if any key valid
+        ttnn.deallocate(chunks)
+        row = ttnn.transpose(valid, -2, -1, memory_config=dram)  # [1,1,1,S/k]
+        ttnn.deallocate(valid)
+        m = ttnn.multiply(self.band_map_tiles[S], row, memory_config=dram)
+        ttnn.deallocate(row)
+        mi = ttnn.typecast(m, ttnn.int32, memory_config=dram)
+        ttnn.deallocate(m)
+        out = ttnn.to_layout(mi, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+        ttnn.deallocate(mi)
+        return out
 
     @staticmethod
     def key_bias_activations() -> list:
@@ -167,4 +217,8 @@ class AttentionMasks(LightweightModule):
             sliding = ttnn.add(band, bias, dtype=self.dtype, memory_config=dram)
         if bias is not None:
             ttnn.deallocate(bias)
-        return {SLIDING: sliding, FULL: full}
+        out = {SLIDING: sliding, FULL: full}
+        pad_map = self.padded_block_map(keep)
+        if pad_map is not None:
+            out[SLIDING + BLOCK_MAP_SUFFIX] = pad_map
+        return out

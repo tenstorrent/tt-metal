@@ -30,7 +30,7 @@ from models.demos.embedding_gemma2.tt.config import SLIDING, RMSNormConfig, Text
 from models.demos.embedding_gemma2.tt.embedding import TextEmbedding
 from models.demos.embedding_gemma2.tt.encoder_layer import EncoderLayer
 from models.demos.embedding_gemma2.tt.linear import linear
-from models.demos.embedding_gemma2.tt.masks import AttentionMasks
+from models.demos.embedding_gemma2.tt.masks import BLOCK_MAP_SUFFIX, AttentionMasks
 from models.demos.embedding_gemma2.tt.per_layer_input import PerLayerInput
 from models.demos.embedding_gemma2.tt.pooler import Pooler
 from models.demos.embedding_gemma2.tt.precision import PrecisionConfig, resolve_precision
@@ -160,7 +160,7 @@ class TextModel(LightweightModule):
             pli = self.per_layer_input.layer_input(ple, i)
             if i == n - 1 and ple is not h:
                 ttnn.deallocate(ple)
-            h_next = layer(h, pli, masks[kinds[i]])
+            h_next = layer(h, pli, masks[kinds[i]], block_map=masks.get(kinds[i] + BLOCK_MAP_SUFFIX))
             ttnn.deallocate(pli)
             if h is not ple or i == n - 1:
                 ttnn.deallocate(h)

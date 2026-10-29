@@ -119,12 +119,15 @@ class EncoderLayer(LightweightModule):
             raise ValueError(f"{prefix}.layer_scalar: expected 1 element, got {tuple(scalar.shape)}")
         return cls(config, norms, attention, mlp, ple_block, float(scalar.float().item()), precision.residual_dtype)
 
-    def forward(self, x: ttnn.Tensor, per_layer_input: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, per_layer_input: ttnn.Tensor, mask: ttnn.Tensor, block_map: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """`block_map`: a per-forward SDPA block map for this layer kind (masks.padded_block_map), or None."""
         B, S, H = x.shape[0], x.shape[2], x.shape[3]
         mem = act_memory_config(x.device(), B, S, H)  # [B,1,S,hidden] intermediates
         dram = mem if RESIDUAL_IN_L1 else ttnn.DRAM_MEMORY_CONFIG  # residual stream h1, h2, out
         h = self.input_layernorm(x, memory_config=mem)
-        a = self.self_attn(h, mask, out_memory_config=mem)
+        a = self.self_attn(h, mask, out_memory_config=mem, block_map=block_map)
         ttnn.deallocate(h)
         a_n = self.post_attention_layernorm(a, memory_config=mem)
         ttnn.deallocate(a)

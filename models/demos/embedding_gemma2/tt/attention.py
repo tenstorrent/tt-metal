@@ -72,7 +72,28 @@ def _sdpa_tuned_12x10() -> dict[tuple[int, int], tuple[int, int, tuple[int, int]
     """E9.4 kept SDPA configs for the 12 x 10 grid at batch 1 (doc/prefill/04-attention/README.md):
     (head_dim, bucket) -> (q_chunk, k_chunk, grid or None = the full compute grid). head_dim 256 is
     the sliding layers' call, 512 the full layers'."""
+    g88 = (8, 8)
     t: dict[tuple[int, int], tuple[int, int, tuple[int, int] | None]] = {}
+    # 128: the full layers' 8 units on 8 cores (4 x 2) instead of the 8 x 8 grid (same chunks)
+    t[(512, 128)] = (64, 128, (4, 2))
+    # 256: fewer, larger units (16 sliding / 8 full instead of 32 each); bitwise equal to the rule
+    t[(256, 256)] = (64, 128, g88)
+    t[(512, 256)] = (128, 128, g88)
+    # 512: q 64 (32 units per kind instead of 64): sliding on 32 cores (4 x 8), full on 8 x 8
+    t[(256, 512)] = (64, 64, (4, 8))
+    t[(512, 512)] = (64, 32, g88)
+    # 1024: k chunk 64 (sliding) / 32 (full)
+    t[(256, 1024)] = (64, 64, g88)
+    t[(512, 1024)] = (64, 32, g88)
+    # 2048: 64 sliding units (q 128) on 64 cores with the band block map (SLIDING_MAP_MIN_SEQ); full q 96:
+    # 88 units in one wave on 120 cores instead of 128 units in two
+    t[(256, 2048)] = (128, 128, g88)
+    t[(512, 2048)] = (96, 64, None)
+    # >= 4096: full q 160: 104 / 208 / 412 / 820 / 1640 units = 1 / 2 / 4 / 7 / 14 waves on 120 cores (q 128:
+    # 2 / 3 / 5 / 9 / 18 waves of 128 rows); 8192: sliding on 8 x 8 (128 units in 2 waves on either grid)
+    for s in (4096, 8192, 16384, 32768, 65536):
+        t[(512, s)] = (160, 128, None)
+    t[(256, 8192)] = (256, 128, g88)
     return t
 
 
@@ -85,6 +106,20 @@ SDPA_TUNED: dict[tuple[int, int], dict[tuple[int, int], tuple[int, int, tuple[in
 }
 SDPA_TUNED_ON = os.environ.get("EG2_SDPA_TUNED", "1") == "1"
 SDPA_OVERRIDES: dict[tuple[int, int], tuple[int, int, tuple[int, int] | None]] = {}
+
+
+# Sliding-layer SDPA block map per grid (E9.4; tt/masks.py): the smallest bucket that gets the band block map
+# (other grids: masks.BLOCK_MAP_MIN_SEQ), and whether the map is rebuilt per forward to also skip key blocks
+# that hold only padding (batch 1). Both follow `EG2_SDPA_TUNED`.
+SLIDING_MAP_MIN_SEQ: dict[tuple[int, int], int] = {(12, 10): 2048}
+SLIDING_PAD_MAP: dict[tuple[int, int], bool] = {(12, 10): True}
+
+
+def sliding_map_policy(gx: int, gy: int, default_min_seq: int) -> tuple[int, bool]:
+    """(min bucket for the sliding block map, per-forward padding-aware map) on this grid."""
+    if not SDPA_TUNED_ON:
+        return default_min_seq, False
+    return SLIDING_MAP_MIN_SEQ.get((gx, gy), default_min_seq), SLIDING_PAD_MAP.get((gx, gy), False)
 
 
 def lookup_sdpa(head_dim: int, seq_len: int, batch: int, gx: int, gy: int):
@@ -220,7 +255,9 @@ class Attention(LightweightModule):
         v_norm = RMSNorm(RMSNormConfig(dim=config.head_dim, eps=config.rms_norm_eps, with_scale=False), None, ckc_norm)
         return cls(config, wqkv, wo_t, q_norm, k_norm, v_norm, rope, masks=masks, precision=precision)
 
-    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, out_memory_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, out_memory_config=None, block_map=None) -> ttnn.Tensor:
+        """`block_map`: per-forward sliding block map (masks.padded_block_map); None uses the bucket's constant
+        band map (sliding layers, batch 1) or none."""
         cfg = self.config
         dev = x.device()
         B, S = x.shape[0], x.shape[2]
@@ -246,8 +283,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        block_map = None
-        if self.masks is not None and cfg.layer_type == SLIDING:
+        if block_map is None and self.masks is not None and cfg.layer_type == SLIDING:
             block_map = self.masks.block_map(S, B)  # skips blocks outside the band (long buckets)
 
         q_r = self.rope(q_n, cfg.layer_type, memory_config=mem_q)
