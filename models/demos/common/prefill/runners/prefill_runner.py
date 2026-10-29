@@ -925,8 +925,6 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "mtp_levels": MTP_LEVELS,
         "mtp_decode_levels": MTP_DECODE_LEVELS,
         "sparse_kv_cache_format": _sparse_kv_cache_format(),
-        "use_trace": USE_TRACE,
-        "dflash": DFLASH_ENABLED,
         "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
@@ -1250,6 +1248,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 logger.info(f"[migration] drained {n_warm} D2H warm-up ack records from the trace capture")
             layer_ack_service.start()
 
+    logger.info(f"[pp rank {rank}] setup complete, entering request loop")
+
     hang_detector = HangDetector.arm(
         mesh_device,
         rank,
@@ -1263,9 +1263,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         dummy=int(traced),
         layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
     )
-
-    logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-
     try:
         run_request_loop(
             runtime,
