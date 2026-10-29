@@ -1,0 +1,27 @@
+depth | device ms/step before -> after | ops/step before -> after
+    1 |    74.81 ->    72.86 (  -1.95) |   116 ->   116
+    2 |   107.28 ->   103.27 (  -4.01) |   218 ->   218
+    4 |   172.09 ->   163.82 (  -8.27) |   422 ->   422
+    8 |   301.72 ->   285.30 ( -16.42) |   830 ->   830
+fit: fixed 42.42 -> 42.52, per layer 32.413 -> 30.344, projection 1339.0 -> 1256.3 ms (-82.7)
+class projection: glue 36.4 -> 36.0, layout 30.5 -> 30.0, math 1234.9 -> 1189.5, other 37.1 -> 0.8
+
+items (projected ms/step, ops/step), |delta| >= 1.0 ms:
+   -296.30 ms    296.30 ->     0.00  ops   40.0 ->    0.0  GONE MatmulDeviceOperation | 1x1x1024x5184 | 1x1x5184x65536 | 88
+   +254.42 ms      0.00 ->   254.42  ops    0.0 ->   40.0  NEW  MatmulDeviceOperation | 1x1x1024x5184 | 1x1x5184x65536 | 100
+    -31.59 ms     31.59 ->     0.00  ops   40.0 ->    0.0  GONE UpdateKVCacheOperation | 162x1x32x65536 | 1x1x32x65536 | 1
+     -3.74 ms      3.74 ->     0.00  ops   80.0 ->    0.0  GONE SliceDeviceOperation | 1x1x5184x1024 |  | 110
+     -3.44 ms      3.44 ->     0.00  ops   80.0 ->    0.0  GONE MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x1024x5120 | 88
+     -3.37 ms      3.37 ->     0.00  ops   40.0 ->    0.0  GONE MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x32[16]x4096 | 66
+     -3.30 ms      3.30 ->     0.00  ops   40.0 ->    0.0  GONE AdamWDeviceOperation | 1x1x65536x32[16] | 1x1x65536x32[16] | 110
+     -3.03 ms     40.87 ->    37.84  ops   40.0 ->   40.0       SwigluPackedBwDeviceOperation | 1x1x1024x65536 | 1x1x1024x32768 | 110
+     -3.01 ms      3.01 ->     0.00  ops   40.0 ->    0.0  GONE MatmulDeviceOperation | 1x1x1024x5120 | 1x1x5120x32[16] | 33
+     -2.98 ms      2.98 ->     0.00  ops   40.0 ->    0.0  GONE UpdateKVCacheOperation | 162x1x32x6144 | 1x1x32x6144 | 1
+     -2.80 ms      2.80 ->     0.00  ops   80.0 ->    0.0  GONE NLPConcatHeadsDeviceOperation | 1x32x1024x128 |  | 110
+     -2.66 ms      2.66 ->     0.00  ops  320.0 ->    0.0  GONE BinaryNgDeviceOperation | 1x1x32[16]x6144 |  | 110
+     -2.50 ms      2.50 ->     0.00  ops   40.0 ->    0.0  GONE MatmulDeviceOperation | 1x1x1024x4096 | 1x1x32[16]x4096 | 33
+     -2.48 ms      2.48 ->     0.00  ops   40.0 ->    0.0  GONE UpdateKVCacheOperation | 130x1x32x5120 | 1x1x32x5120 | 1
+     -2.41 ms      2.41 ->     0.00  ops   40.0 ->    0.0  GONE ConcatDeviceOperation | 1x1x1024x4096 | 1x1x1024x1024 | 110
+     -2.27 ms      2.27 ->     0.00  ops   40.0 ->    0.0  GONE MatmulDeviceOperation | 1x1x1024x6144 | 1x1x1024x32[16] | 99
+     -1.99 ms      1.99 ->     0.00  ops   40.0 ->    0.0  GONE MatmulDeviceOperation | 1x1x1024x32[16] | 1x1x5120x32[16] | 88
+     -1.97 ms      1.97 ->     0.00  ops   40.0 ->    0.0  GONE NlpCreateHeadsDeviceOperation | 1x1x1024x6144 |  | 110

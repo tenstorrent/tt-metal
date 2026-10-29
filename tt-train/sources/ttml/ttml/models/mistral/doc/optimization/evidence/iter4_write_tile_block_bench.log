@@ -1,0 +1,23 @@
+# ttml.ops.metal.write_tile_block vs ttnn.fill_cache through the [R/32, 1, 32, C] block view (iteration 4), chip 0,
+# 20 reps after one warm-up, wall ms per call; "exact" = the destination equals the torch expectation bit for bit,
+# "same buffer" = the op wrote in place. Script: iter4_write_tile_block_bench.py (run 2026-10-29 16:5x UTC).
+R: [5184,65536] offset 160: exact True same buffer True
+T: write_tile_block [5184,65536]                              0.057 ms
+T: fill_cache [5184,65536]                                    0.848 ms
+R: rewrite exact True
+R: [5184,6144] offset 160: exact True same buffer True
+T: write_tile_block [5184,6144]                               0.048 ms
+T: fill_cache [5184,6144]                                     0.095 ms
+R: rewrite exact True
+R: [4160,5120] offset 128: exact True same buffer True
+T: write_tile_block [4160,5120]                               0.030 ms
+T: fill_cache [4160,5120]                                     0.082 ms
+R: rewrite exact True
+R: [5184,16384] offset 160: exact True same buffer True
+T: write_tile_block [5184,16384]                              0.030 ms
+T: fill_cache [5184,16384]                                    0.223 ms
+R: rewrite exact True
+R: [8256,5120] offset 256: exact True same buffer True
+T: write_tile_block [8256,5120]                               0.047 ms
+T: fill_cache [8256,5120]                                     0.083 ms
+R: rewrite exact True

@@ -1,0 +1,5 @@
+depth 8: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     386740412 |        383.88 |        1.007 |         384829600 |   385791519 |           0.2 |     0.94
+mean effective clock 1007 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.340x too short
+control, step 1 (mostly idle: compiles and untilize): 1.3482 GHz

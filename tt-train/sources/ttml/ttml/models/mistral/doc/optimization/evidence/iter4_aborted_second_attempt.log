@@ -1,0 +1,12 @@
+=== TP smoke 2 layers 2026-10-29T17:39:50Z
+rc=0
+Mistral: 2 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+frozen weights stored transposed: 5 linears
+2 of 40 layers, tp 4: 42.3 ms/step over 2 steps (best 42.2), 175.7 TFLOP/s, MFU 29.57%
+=== iter4 harness 2026-10-29T17:40:16Z
+harness rc=0
+================== 14 passed, 2 warnings in 192.82s (0:03:12) ==================
+=== iter4 tracy 1/2/4/8 2026-10-29T17:43:33Z
+tracy 1 rc=0
+tracy 2 rc=0
+tracy 4 rc=0

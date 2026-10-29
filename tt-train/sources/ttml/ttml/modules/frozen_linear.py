@@ -26,6 +26,7 @@ __all__ = [
     "forward_core_grid",
     "transpose_frozen_weights",
     "FORWARD_CORE_GRID",
+    "FORWARD_PROGRAM_CONFIG",
     "TRANSPOSED_SHAPES",
 ]
 
@@ -100,6 +101,46 @@ def forward_core_grid(in_features: int, out_features: int):
     return ttnn.CoreGrid(y=min(y, grid.y), x=min(x, grid.x))
 
 
+# Explicit 1D-mcast program configs for the forward matmul ``[rows, in] x [in, out]``, from the iteration-4 sweep
+# (``examples/mistral_train/matmul_sweep1d.py``, HiFi4 / fp32 accumulate, bit-exact against ttnn's default choice):
+# gate_up 7.92 -> 7.35 ms (ttnn's pick: 8x11 grid, per_core_N 24, in0_block_w 2, out_subblock 2x2, out_block 16x12).
+# ``grid`` is (x, y); ``per_core_M`` follows from ``rows``. Shapes not listed fall back to ``forward_core_grid``.
+FORWARD_PROGRAM_CONFIG: dict[tuple[int, int], dict] = {
+    (5120, 65536): dict(
+        grid=(10, 10), in0_block_w=2, out_subblock_h=4, out_subblock_w=1, out_block_h=16, out_block_w=7, per_core_N=21
+    ),
+}
+
+
+def forward_matmul_kwargs(in_features: int, out_features: int, rows: int) -> dict:
+    """``program_config=`` (a swept 1D config) or ``core_grid=`` keyword arguments for the forward matmul."""
+    spec = FORWARD_PROGRAM_CONFIG.get((in_features, out_features))
+    grid = ttml.autograd.AutoContext.get_instance().get_device().compute_with_storage_grid_size()
+    if (
+        spec is None
+        or rows % 32 != 0
+        or (rows // 32) % spec["out_block_h"] != 0
+        or spec["grid"][0] > grid.x
+        or spec["grid"][1] > grid.y
+    ):
+        return {"core_grid": forward_core_grid(in_features, out_features)}
+    return {
+        "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=spec["grid"],
+            in0_block_w=spec["in0_block_w"],
+            out_subblock_h=spec["out_subblock_h"],
+            out_subblock_w=spec["out_subblock_w"],
+            out_block_h=spec["out_block_h"],
+            out_block_w=spec["out_block_w"],
+            per_core_M=rows // 32,
+            per_core_N=spec["per_core_N"],
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    }
+
+
 class FrozenLinearT(Function):
     """``y = x @ W_t`` for a frozen ``W_t = [1, 1, in, out]``; no weight gradient, ``dx = (W_t @ g^T)^T``."""
 
@@ -114,7 +155,7 @@ class FrozenLinearT(Function):
             x.get_value(),
             w,
             compute_kernel_config=_compute_config(),
-            core_grid=forward_core_grid(in_features, out_features),
+            **forward_matmul_kwargs(in_features, out_features, x.get_value().shape[-2]),
         )
         if bias is not None:
             y = ttnn.add(y, bias.get_value())

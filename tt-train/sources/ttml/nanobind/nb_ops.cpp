@@ -23,6 +23,7 @@
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
+#include "metal/ops/write_tile_block/write_tile_block.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -752,6 +753,14 @@ void py_module(nb::module_& m) {
             nb::arg("preallocated_dL_dpacked") = nb::none(),
             "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
             "dL/dpacked [.., R, 2*I] = [dgate|dup].");
+        py_metal.def(
+            "write_tile_block",
+            &ttml::metal::write_tile_block,
+            nb::arg("destination"),
+            nb::arg("source"),
+            nb::arg("tile_row_offset"),
+            "Copy every tile of `source` ([.., Rs, C] TILE bf16) into `destination` ([.., R, C]) at tile-row "
+            "`tile_row_offset`, in place, split over all cores by tile. Returns `destination`.");
         py_metal.def(
             "rmsnorm_fw",
             &ttml::metal::rmsnorm_fw,

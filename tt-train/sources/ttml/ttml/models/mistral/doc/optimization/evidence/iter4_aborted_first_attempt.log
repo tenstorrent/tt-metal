@@ -1,0 +1,6 @@
+=== TP smoke 2 layers 2026-10-29T17:18:36Z
+rc=0
+Mistral: 2 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+frozen weights stored transposed: 5 linears
+2 of 40 layers, tp 4: 59.3 ms/step over 2 steps (best 59.1), 125.2 TFLOP/s, MFU 21.09%
+=== iter4 harness 2026-10-29T17:21:31Z

@@ -1,0 +1,230 @@
+2026-10-29 16:27:41.459 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/agobeljic/tt-metal/tt-train/../python_env/bin/python
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/agobeljic/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, cov-7.0.0, dash-2.15.0, anyio-4.15.1, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 14 items / 13 deselected / 1 selected
+
+tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul] 2026-10-29 16:28:35.278 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-29 16:28:35.278 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-29 16:28:35.279 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-29 16:28:35.279 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-29 16:28:35.298 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-29 16:28:35.299 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-29 16:28:35.586 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-29 16:28:35.586 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-29 16:28:35.586 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-29 16:28:35.586 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-29 16:28:35.604 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-29 16:28:35.794 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-29 16:28:35.866 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-29 16:28:35.866 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-29 16:28:35.866 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-29 16:28:36.015 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+decoder block under LoRA: tensor | shape | PCC | rel err | bar
+  out                          (1, 1, 1024, 5120)       0.998206 5.99e-02  (>= 0.999, <= 0.02) FAIL
+  dx                           (1, 1, 1024, 5120)       0.996117 8.81e-02  (>= 0.98, <= 0.08) FAIL
+  d lora_A qkv_linear          (16, 5120)               nan 1.00e+00  (>= 0.98, <= 0.08) FAIL
+  d lora_B qkv_linear          (6144, 16)               0.972327 2.34e-01  (>= 0.98, <= 0.08) FAIL
+  d lora_A out_linear          (16, 4096)               nan 1.00e+00  (>= 0.98, <= 0.08) FAIL
+  d lora_B out_linear          (5120, 16)               0.987517 1.58e-01  (>= 0.98, <= 0.08) FAIL
+  d lora_A w_gate_up           (16, 5120)               nan 1.00e+00  (>= 0.99, <= 0.05) FAIL
+  d lora_B w_gate_up           (65536, 16)              0.993410 1.15e-01  (>= 0.99, <= 0.05) FAIL
+  d lora_A w2                  (16, 32768)              0.990793 1.35e-01  (>= 0.99, <= 0.05) FAIL
+  d lora_B w2                  (5120, 16)               0.990563 1.37e-01  (>= 0.99, <= 0.05) FAIL
+FAILED
+
+=================================== FAILURES ===================================
+_ test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul] _
+
+transposed = 'fused'
+
+    @pytest.mark.parametrize(
+        "transposed",
+        ["plain", "transposed", "fused"],
+        ids=["weights [out,in]", "frozen weights transposed", "transposed + LoRA fused into the base matmul"],
+    )
+    def test_block_forward_and_gradients_under_lora(transposed):
+        """A whole decoder block at real shapes with LoRA on its four linears: output, dx, every adapter gradient;
+        base weights and gammas frozen and gradient-free. ``transposed`` runs the base projections through the
+        transposed-weight path (``transpose_frozen_weights``) the training example uses."""
+        rng = seeded(6)
+        x_np = rand_x(rng)
+        gammas = [bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN))) for _ in range(2)]
+        w_qkv = rand_weight(rng, (HEADS + 2 * KV_HEADS) * HEAD_DIM, HIDDEN)
+        w_out = rand_weight(rng, HIDDEN, HEADS * HEAD_DIM, std=0.02)
+        w_gu = rand_weight(rng, 2 * INTER, HIDDEN)
+        w2 = rand_weight(rng, HIDDEN, INTER, std=0.004)
+        dout_np = rand_x(rng, std=0.01)
+        shapes = {
+            "qkv_linear": (HIDDEN, w_qkv.shape[2]),
+            "out_linear": (HEADS * HEAD_DIM, HIDDEN),
+            "w_gate_up": (HIDDEN, 2 * INTER),
+            "w2": (INTER, HIDDEN),
+        }
+        adapters = {
+            name: (
+                bf16(rng.uniform(-1 / math.sqrt(i), 1 / math.sqrt(i), (1, 1, RANK, i))),
+                bf16(rng.normal(0.0, 0.02, (1, 1, o, RANK))),
+            )
+            for name, (i, o) in shapes.items()
+        }
+
+        block = LlamaBlock(
+            HIDDEN, HEADS, KV_HEADS, rope_params(), head_dim=HEAD_DIM, intermediate_size=INTER, rms_norm_eps=EPS
+        )
+        assign(block.attention_norm.gamma.tensor, gammas[0])
+        assign(block.mlp_norm.gamma.tensor, gammas[1])
+        assign(block.attention.qkv_linear.weight.tensor, w_qkv)
+        assign(block.attention.out_linear.weight.tensor, w_out)
+        assign(block.mlp.w_gate_up.weight.tensor, w_gu)
+        assign(block.mlp.w2.weight.tensor, w2)
+        lora = LoraModel(
+            block,
+            LoraConfig(
+                rank=RANK,
+                alpha=ALPHA,
+                target_modules=[r"attention\.qkv_linear$", r"attention\.out_linear$", r"mlp\.w_gate_up$", r"mlp\.w2$"],
+            ),
+        )
+        lora_layers = {
+            "qkv_linear": block.attention.qkv_linear,
+            "out_linear": block.attention.out_linear,
+            "w_gate_up": block.mlp.w_gate_up,
+            "w2": block.mlp.w2,
+        }
+        for name, layer in lora_layers.items():
+            assert isinstance(layer, LoraLinear), name
+            assign(layer.lora_A.tensor, adapters[name][0])
+            assign(layer.lora_B.tensor, adapters[name][1])
+        if transposed != "plain":
+            # qkv, out and gate_up have a measured win and are stored [in, out]; w2 (32768 -> 5120) does not and stays.
+            converted = transpose_frozen_weights(lora)
+            assert sorted(converted) == [
+                "model.attention.out_linear",
+                "model.attention.qkv_linear",
+                "model.mlp.w_gate_up",
+            ], converted
+            assert tuple(block.mlp.w_gate_up.weight.tensor.shape()) == (1, 1, HIDDEN, 2 * INTER)
+            assert tuple(block.mlp.w2.weight.tensor.shape()) == (1, 1, HIDDEN, INTER)
+        if transposed == "fused":
+            fused = fuse_lora_into_frozen_weights(lora)
+            assert sorted(fused) == sorted(converted), fused
+            assert tuple(block.mlp.w_gate_up.weight.tensor.shape()) == (1, 1, HIDDEN + 64, 2 * INTER)
+        x = to_device(x_np, requires_grad=True)
+        out = lora(x, None)
+        out_val = to_host(out)
+        _backward(out, dout_np)
+
+        # torch reference, same math, adapters applied as base + scaling * (x A^T) B^T
+        s = ALPHA / RANK
+        A = {k: t(v[0][0, 0], True) for k, v in adapters.items()}
+        Bm = {k: t(v[1][0, 0], True) for k, v in adapters.items()}
+        xr = t(x_np, True)
+
+        def lin(name, inp, w):
+            return inp @ w.T + ((inp @ A[name].T) @ Bm[name].T) * s
+
+        h = ref_rmsnorm(xr, t(gammas[0]))
+        Bsz, _, T, _ = h.shape
+        qkv = lin("qkv_linear", h[:, 0], t(w_qkv[0, 0]))
+        q, k, v = torch.split(qkv, [HEADS * HEAD_DIM, KV_HEADS * HEAD_DIM, KV_HEADS * HEAD_DIM], dim=-1)
+        q = ref_rope(q.view(Bsz, T, HEADS, HEAD_DIM).transpose(1, 2))
+        k = ref_rope(k.view(Bsz, T, KV_HEADS, HEAD_DIM).transpose(1, 2)).repeat_interleave(HEADS // KV_HEADS, dim=1)
+        v = v.view(Bsz, T, KV_HEADS, HEAD_DIM).transpose(1, 2).repeat_interleave(HEADS // KV_HEADS, dim=1)
+        scores = (q @ k.transpose(-1, -2)) / math.sqrt(HEAD_DIM)
+        scores = scores.masked_fill(torch.triu(torch.ones(T, T, dtype=torch.bool), diagonal=1), float("-inf"))
+        merged = (torch.softmax(scores, -1) @ v).transpose(1, 2).reshape(Bsz, 1, T, HEADS * HEAD_DIM)
+        h = xr + lin("out_linear", merged, t(w_out[0, 0]))
+        m = ref_rmsnorm(h, t(gammas[1]))
+        gu = lin("w_gate_up", m, t(w_gu[0, 0]))
+        ref = h + lin("w2", torch.nn.functional.silu(gu[..., :INTER]) * gu[..., INTER:], t(w2[0, 0]))
+        ref.backward(t(dout_np))
+
+        rep = Report("decoder block under LoRA")
+        rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+        rep.check("dx", grad_of(x), xr.grad.numpy(), ATTN_GRAD_PCC, ATTN_GRAD_REL)
+        for name, layer in lora_layers.items():
+            bar = (ATTN_GRAD_PCC, ATTN_GRAD_REL) if name in ("qkv_linear", "out_linear") else (GRAD_PCC, GRAD_REL)
+            rep.check(f"d lora_A {name}", grad_of(layer.lora_A.tensor)[0, 0], A[name].grad.numpy(), *bar)
+            rep.check(f"d lora_B {name}", grad_of(layer.lora_B.tensor)[0, 0], Bm[name].grad.numpy(), *bar)
+>       rep.done()
+
+tests/python/test_mistral.py:464:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <tt-train.tests.python.test_mistral.Report object at 0x77968ef0e630>
+
+    def done(self) -> None:
+        lines = [f"{self.title}: tensor | shape | PCC | rel err | bar"]
+        failures = []
+        for name, shape, p, r, pmin, rmax in self.rows:
+            ok = p >= pmin and r <= rmax
+            lines.append(
+                f"  {name:28s} {str(shape):24s} {p:.6f} {r:.2e}  (>= {pmin}, <= {rmax}) {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failures.append(name)
+        print("\n".join(lines))
+>       assert not failures, f"{self.title}: below the bar: {failures}"
+E       AssertionError: decoder block under LoRA: below the bar: ['out', 'dx', 'd lora_A qkv_linear', 'd lora_B qkv_linear', 'd lora_A out_linear', 'd lora_B out_linear', 'd lora_A w_gate_up', 'd lora_B w_gate_up', 'd lora_A w2', 'd lora_B w2']
+E       assert not ['out', 'dx', 'd lora_A qkv_linear', 'd lora_B qkv_linear', 'd lora_A out_linear', 'd lora_B out_linear', ...]
+
+tests/python/test_mistral.py:143: AssertionError
+=============================== warnings summary ===============================
+tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+  /home/ttuser/agobeljic/tt-metal/python_env/lib/python3.12/site-packages/numpy/lib/function_base.py:2897: RuntimeWarning: invalid value encountered in divide
+    c /= stddev[:, None]
+
+tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+  /home/ttuser/agobeljic/tt-metal/python_env/lib/python3.12/site-packages/numpy/lib/function_base.py:2898: RuntimeWarning: invalid value encountered in divide
+    c /= stddev[None, :]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/ttuser/agobeljic/tt-metal/tt-train/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+190.41s call     tt-train/tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED tests/python/test_mistral.py::test_block_forward_and_gradients_under_lora[transposed + LoRA fused into the base matmul]
+=========== 1 failed, 13 deselected, 2 warnings in 190.88s (0:03:10) ===========
+nanobind: leaked 2 instances!
+nanobind: leaked 20 types!
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "_ttml.modules.ModuleBase"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - leaked type "TensorMemoryLayout"
+ - ... skipped remainder
+nanobind: leaked 272 functions!
+ - leaked function "__repr__"
+ - leaked function "experimental_per_core_buffer_address"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "from_json"
+ - leaked function "enable_program_cache"
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "reshape"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-10-29 16:30:56.418 | info     |    BuildKernels | JIT cache stats: 367/368 hits (99.7%) [367 cached, 114 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-29 16:30:56.418 | info     |    BuildKernels | JIT telemetry: 33 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-29 16:30:56.461 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-29 16:30:56.461 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-29 16:30:56.644 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-29 16:30:56.644 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-29 16:30:56.644 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

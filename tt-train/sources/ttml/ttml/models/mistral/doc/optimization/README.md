@@ -7,6 +7,7 @@ Phase 3 of the tt-train bring-up. Contract: `../plan.md` (target 1620 ms cycle-t
 - Single-chip Tracy at 1/2/4/8 layers (`analyze_tracy.py`, four-point fit, projection to 40) is the attribution and the cycle-time A/B (`diff_tracy.py`: targeted ops gone, nothing new). Tracy ms are cycles / 1.35 GHz; the delivered clock of each run is taken from the cycle counters (`clock_analysis.py`) so wall-clock comparisons are made at a stated clock.
 - Single-chip MFU at 8 of 40 layers (no profiler) with `tt-smi` sampled alongside; TP=4 full-model MFU (40 layers, 594 TFLOP/s denominator) with all four chips sampled, after a cool-down, and a 4-layer TP profile checked per chip (`tp_analysis.py`) for a stalled chip before any TP number is believed.
 - PCC harness (`tests/python/test_mistral.py`, 11 tests at the composite baseline, 14 at the final path with the transposed and fused cases; every module and layer kind, forward and every gradient) must pass before a change lands.
+- From iteration 4 on (user priority, 2026-10-29): the full-model TP=4 MFU run after a cool-down is the result; the single-chip Tracy depths only attribute and rank; no single-chip MFU runs.
 
 ## Iterations
 
@@ -23,6 +24,10 @@ Port of `LoraApply` / `_LoraUpdateAdd` from `umales/qwen38` into `ttml/modules/l
 ### Iteration 3: LoRA update fused into the base matmul (glue + LoRA math), landed
 
 `ttml/modules/fused_lora.py`: `[x | x A^T] @ [[W_t], [s B^T]]` for the transposed adapters (qkv, out, gate_up), tail rewritten per step, one `W_cat_t @ g^T` in the backward. Harness 14 passed (a tail-scale bug on the first run was caught by the fused block case). Cycle-time projection 1398.7 -> 1339.0 ms (-4.3 %; glue 72 -> 36 ms); single-chip MFU at 8 of 40 layers 375.3 ms / 38.53 %; TP=4 full model 564.5 -> 556.5 ms (29.15 %). The remaining cost of the fusion is the per-step tail write (`ttnn.fill_cache`, 0.79 ms per gate_up layer, 31.6 ms per step), the next layout item. With 1339 ms of cycle-time the single-chip step is 17 % under the plan's 1620 ms target; details in `../perf_analysis.md`, "Iteration 3".
+
+### Iteration 4: multi-core tail write + swept gate_up program config (tail writes + math), landed; loop resumed
+
+User direction on resuming: continue past the met target; HiFi4 with fp32 accumulation is mandatory; the full-model TP=4 MFU run is the result of an iteration, single-chip depth runs only rank what to fix next (no single-chip MFU runs, no 16-layer profile from here on). New ttml metal op `ttml.ops.metal.write_tile_block` (`metal/ops/write_tile_block/`, multi-core tiled block copy in place) replaces the one-core `fill_cache` tail write (gate_up tail 0.85 -> 0.06 ms); `FORWARD_PROGRAM_CONFIG` in `frozen_linear.py` applies the swept 1D config for the gate_up forward (7.92 -> 7.35 ms, bit-exact). Harness 14 passed. Cycle-time projection 1339.0 -> **1256.3 ms** (-6.2 %; gate_up fwd 296 -> 254, tail writes 37 -> 1). **TP=4 full model 558.5 ms / 29.05 %, unchanged**: the config is keyed on the single-chip shape and the TP-local `[5184, 16384]` keeps the default; the tail-write gain at TP (~7 ms) is under the thermal noise of that run (chip 2 at 1.10 GHz effective). Details in `../perf_analysis.md`, "Iteration 4".
 
 ## Exit
 

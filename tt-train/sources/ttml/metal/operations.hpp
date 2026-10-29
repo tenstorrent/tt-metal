@@ -30,5 +30,6 @@
 #include "ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "ops/variable_matmul/variable_matmul.hpp"
+#include "ops/write_tile_block/write_tile_block.hpp"
 #include "optimizers/adamw/adamw.hpp"
 #include "optimizers/sgd/sgd.hpp"

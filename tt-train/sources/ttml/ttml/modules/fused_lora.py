@@ -13,7 +13,7 @@ so the base matmul with K extended by the (tile-padded) rank computes base and u
 B matmul, the ``addalpha`` and, in the backward, the ``dh = g @ B`` matmul disappear (for gate_up: 0.83 + 0.78 +
 0.77 ms per layer at 1-5 % of peak). ``W_cat_t = [in + pad, out]`` holds the frozen weight with ``s * B^T`` in the
 first ``r`` rows of its tail, rewritten every step (the tail is a contiguous tile-row block, written with
-``ttnn.fill_cache`` through a block view); the tail rows beyond ``r`` stay zero. The backward reads
+``ttml.ops.metal.write_tile_block``); the tail rows beyond ``r`` stay zero. The backward reads
 ``dX_cat^T = W_cat_t @ g^T``: its first ``in`` rows are ``dx_base^T``, its tail rows ``s * dh^T``.
 
 The adapter stays a separate trainable ``B`` (``[out, r]``, the usual layout for the optimizer and checkpoints);
@@ -29,7 +29,7 @@ import ttnn
 import ttml
 from ttml.autograd import Function
 
-from .frozen_linear import TRANSPOSED_SHAPES, _compute_config, forward_core_grid, full_core_grid, local_in_out
+from .frozen_linear import TRANSPOSED_SHAPES, _compute_config, forward_matmul_kwargs, full_core_grid, local_in_out
 
 __all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "TAIL_ROWS"]
 
@@ -39,17 +39,15 @@ __all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "TAIL_ROWS"]
 TAIL_ROWS = 64
 
 
-def _tail_view(weight_cat):
-    """The ``[in + TAIL_ROWS, out]`` weight viewed as blocks of 32 rows (a free view of the same buffer)."""
-    rows, cols = int(weight_cat.shape[-2]), int(weight_cat.shape[-1])
-    return ttnn.reshape(weight_cat, [rows // 32, 1, 32, cols])
-
-
 def write_tail(weight_cat, tail_rows, in_features):
     """Overwrite the first tail block (rows ``in_features .. in_features + 32``) of ``weight_cat`` with ``tail_rows``
-    (``[1, 1, 32, out]``), in place. The remaining tail rows stay zero."""
-    view = _tail_view(weight_cat)
-    ttnn.fill_cache(view, tail_rows, in_features // 32)
+    (``[1, 1, 32, out]``), in place. The remaining tail rows stay zero.
+
+    ``ttml.ops.metal.write_tile_block`` copies the tile block with every core taking a share of its tiles. The earlier
+    ``ttnn.fill_cache`` through the ``[R / 32, 1, 32, C]`` block view parallelised over the input's tile-rows, so a
+    one-tile-row tail ran on a single core (0.79 ms for gate_up); narrowing the view is not possible because
+    ``ttnn.reshape`` copies whenever the last dimension changes (iteration 4)."""
+    ttml.ops.metal.write_tile_block(weight_cat, tail_rows, in_features // 32)
 
 
 class FusedLoraLinearT(Function):
@@ -87,7 +85,9 @@ class FusedLoraLinearT(Function):
         h_pad = ttnn.pad(h, padding=[(0, 0), (0, 0), (0, 0), (0, TAIL_ROWS - rank)], value=0.0)
         x_cat = ttnn.concat([x_val, h_pad], dim=3)  # [T, in + TAIL_ROWS]
         ttnn.deallocate(h_pad)
-        y = ttnn.matmul(x_cat, w_val, compute_kernel_config=cfg, core_grid=forward_core_grid(in_features, out_features))
+        y = ttnn.matmul(
+            x_cat, w_val, compute_kernel_config=cfg, **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2])
+        )
         ctx.save_for_backward(x_val, a_val, h, w_val)
         ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis)
         return y
