@@ -102,7 +102,9 @@ def time_traced(perf_encoder, batch, bucket, cases, eg2_snapshot, act):
     log_result("audio_host_prep_ms", host_ms, 0.0, **fields)
 
 
-@pytest.mark.parametrize("batch,bucket,cases", [PERF_CASES[1], PERF_CASES[2]], ids=["b1_s768", "b4_s256"])
+@pytest.mark.parametrize(
+    "batch,bucket,cases", [PERF_CASES[1], PERF_CASES[2], PERF_CASES[0]], ids=["b1_s768", "b4_s256", "b1_s256"]
+)
 def test_tracy_audio_forward(batch, bucket, cases, eg2_device, tt_audio_model, eg2_snapshot):
     enc = AudioEncoder(tt_audio_model, eg2_device, eg2_snapshot)
     _, x = device_inputs(enc, *_inputs(eg2_snapshot, cases))

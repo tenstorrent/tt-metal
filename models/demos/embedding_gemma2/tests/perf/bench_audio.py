@@ -4,35 +4,24 @@
 """Burst and sustained traced latency of the audio forward (subsampling -> 12 conformer layers ->
 output_proj -> embed_audio).
 
-Same protocol as `bench_vision.py` / `bench_sustained.py`:
-
-    burst      `--idle` s idle, then `--burst` back-to-back replays timed with one sync; repeated
-               `--reps` times; the median of the per-window means is reported
-    sustained  `--soak` s of back-to-back replays, then `--reps` windows of `--sustained` replays
-               each, timed with one sync per window; median of the window means
+Same harness, switches and definitions as `bench_vision.py` (`run_tower_bench`, read its docstring for
+the option table and costs): a plain run is the headline shape (1 x 768, a 30 s clip), burst only, on the
+12 x 10 grid; EMBEDDING_GEMMA2_BENCH_CONTRACT=1 adds every batch-1 contract shape (1 x 256 = 10 s,
+1 x 768 = 30 s); EMBEDDING_GEMMA2_BENCH_SUSTAINED / _TELEMETRY / _CHECK / _ALL as there;
+EMBEDDING_GEMMA2_GRID=13x10 for the P150 grid.
 
 Device-only timing: inputs already resident, `execute_trace` + one synchronize per window.
 Inputs are the real processor outputs of the audio test cases (`audio_common.load_case`).
 
 Run:
-    python models/demos/embedding_gemma2/tests/perf/bench_audio.py \
-        --cases 1x256,1x768,4x256 [--json out.jsonl] [--label name]
+    python models/demos/embedding_gemma2/tests/perf/bench_audio.py [--cases 1x256,1x768] [--json out.jsonl] [--label name]
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import statistics
-import time
-
 import torch
 
-import ttnn
-from models.demos.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID
-from models.demos.embedding_gemma2.tests.pcc.audio.audio_common import load_case
-from models.demos.embedding_gemma2.tt.audio.audio_encoder import AudioEncoder
-from models.demos.embedding_gemma2.tt.weights import resolve_snapshot
+from models.demos.embedding_gemma2.tests.perf.bench_vision import TowerSpec, run_tower_bench
 
 # (batch, token bucket) -> processor cases concatenated along the batch (as test_audio_perf.PERF_CASES)
 CASE_INPUTS = {
@@ -44,95 +33,49 @@ CASE_INPUTS = {
 }
 
 
-def _inputs(snapshot, b: int, s: int):
+def _case_inputs(snapshot, b: int, s: int):
+    """(case names, (input_features, input_features_mask)) for shape b x s."""
+    from models.demos.embedding_gemma2.tests.pcc.audio.audio_common import load_case
+
     names = CASE_INPUTS.get((b, s))
     if names is None:
         raise ValueError(f"no input case for {b}x{s}")
     feats, masks = zip(*(load_case(str(snapshot), c) for c in names))
-    return torch.cat(feats), torch.cat(masks)
+    return names, (torch.cat(feats), torch.cat(masks))
 
 
-def _window_ms(enc: AudioEncoder, b: int, s: int, n: int) -> float:
-    t0 = time.perf_counter()
-    for _ in range(n):
-        enc.execute_captured(b, s)
-    ttnn.synchronize_device(enc.device)
-    return (time.perf_counter() - t0) * 1e3 / n
+def _inputs(snapshot, b: int, s: int):
+    """prepare_inputs args for shape b x s (also used by dtype_sweep_towers.py)."""
+    return _case_inputs(snapshot, b, s)[1]
 
 
-def _soak(enc: AudioEncoder, b: int, s: int, seconds: float) -> None:
-    t_end = time.perf_counter() + seconds
-    while time.perf_counter() < t_end:
-        _window_ms(enc, b, s, 5)
+def _audio_reference(snapshot, args):
+    from models.demos.embedding_gemma2.reference.hf_audio_reference import load_reference_audio, run_audio_reference
+
+    torch.set_num_threads(max(torch.get_num_threads(), 16))
+    tower, embed, _ = load_reference_audio(snapshot)
+    feats, mask = args
+    return run_audio_reference(tower, embed, feats, mask, capture_layers=()).soft_tokens
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--cases", default="1x256,1x768,4x256")
-    ap.add_argument("--burst", type=int, default=20)
-    ap.add_argument("--sustained", type=int, default=40)
-    ap.add_argument("--reps", type=int, default=5)
-    ap.add_argument("--idle", type=float, default=3.0)
-    ap.add_argument("--soak", type=float, default=10.0)
-    ap.add_argument("--no-sustained", action="store_true")
-    ap.add_argument("--json", default="")
-    ap.add_argument("--label", default="")
-    args = ap.parse_args()
+def _audio_build(device, snapshot):
+    from models.demos.embedding_gemma2.tt.audio.audio_encoder import AudioEncoder
 
-    cases = [tuple(int(v) for v in c.split("x")) for c in args.cases.split(",")]
-    snapshot = resolve_snapshot(MODEL_ID)
-    device = ttnn.open_device(device_id=0, **DEVICE_PARAMS)
-    try:
-        enc = AudioEncoder.from_pretrained(device, str(snapshot))
-        enc.capture_all(cases)
-        for b, s in cases:
-            host = enc.prepare_inputs(*_inputs(snapshot, b, s))
-            assert (host.batch, host.seq_len) == (b, s)
-            soft, _ = enc.replay(host)
-            out = AudioEncoder.read_rows(soft, host.num_tokens)
-            assert all(torch.isfinite(o).all() for o in out)
-            _window_ms(enc, b, s, 3)  # warm
+    return AudioEncoder.from_pretrained(device, snapshot)
 
-            burst = []
-            for _ in range(args.reps):
-                time.sleep(args.idle)
-                burst.append(_window_ms(enc, b, s, args.burst))
-            rec = {
-                "label": args.label,
-                "batch": b,
-                "seq_len": s,
-                "burst_ms_median": statistics.median(burst),
-                "burst_ms_min": min(burst),
-                "burst_ms_max": max(burst),
-                "burst_windows": burst,
-            }
-            if not args.no_sustained:
-                _soak(enc, b, s, args.soak)
-                sus = [_window_ms(enc, b, s, args.sustained) for _ in range(args.reps)]
-                rec.update(
-                    sustained_ms_median=statistics.median(sus),
-                    sustained_ms_min=min(sus),
-                    sustained_ms_max=max(sus),
-                    sustained_windows=sus,
-                )
-                time.sleep(args.idle)
-            msg = (
-                f"BENCH {args.label} b{b} s{s}: burst median {rec['burst_ms_median']:.3f} ms "
-                f"[{rec['burst_ms_min']:.3f}, {rec['burst_ms_max']:.3f}] ({rec['burst_ms_median'] / b:.3f} ms/clip)"
-            )
-            if "sustained_ms_median" in rec:
-                msg += (
-                    f"; sustained median {rec['sustained_ms_median']:.3f} ms "
-                    f"[{rec['sustained_ms_min']:.3f}, {rec['sustained_ms_max']:.3f}]"
-                )
-            print(msg, flush=True)
-            if args.json:
-                with open(args.json, "a") as f:
-                    f.write(json.dumps(rec) + "\n")
-        enc.release_traces()
-    finally:
-        ttnn.close_device(device)
+
+AUDIO = TowerSpec(
+    name="audio",
+    unit="clip",
+    headline=("1x768",),
+    contract=("1x256", "1x768"),
+    burst_default=20,
+    build=_audio_build,
+    inputs=_case_inputs,
+    counts=lambda host: host.num_tokens,
+    reference=_audio_reference,
+)
 
 
 if __name__ == "__main__":
-    main()
+    run_tower_bench(AUDIO)
