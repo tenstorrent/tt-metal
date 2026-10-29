@@ -1072,7 +1072,8 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
             }
             if (impl_->relay) {
                 for (const auto& [coord, addr] : impl_->relay->l1_allocs) {
-                    svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                    svc.deallocate_l1(
+                        tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
                 }
             }
         }
@@ -1236,7 +1237,8 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
             }
             if (impl_->relay) {
                 for (const auto& [coord, addr] : impl_->relay->l1_allocs) {
-                    svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                    svc.deallocate_l1(
+                        tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
                 }
             }
         }
@@ -1704,7 +1706,7 @@ std::shared_ptr<RelayLocal> allocate_relay(
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     for (const auto& cable : relay->plan.cables) {
         const auto coord = is_sender ? cable.exit_coord : cable.entry_coord;
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const CoreCoord core = service_cores.at(coord);
         auto alloc = [&](uint32_t bytes) {
             const DeviceAddr addr = svc.allocate_l1(device, core, bytes);
@@ -2113,7 +2115,7 @@ CoreCoord relay_noc(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
     const distributed::MeshCoordinate& c) {
-    return mesh->get_device(c)->worker_core_from_logical_core(service_cores.at(c));
+    return tt::tt_metal::internal::get_device(*mesh, c)->worker_core_from_logical_core(service_cores.at(c));
 }
 
 // Lanes of the unchanged sender kernel at `src` toward its exit relay. Same rule as
@@ -2736,7 +2738,7 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
     const auto config_addr = static_cast<uint32_t>(impl.socket->get_config_buffer()->address());
     const auto ws_for = [&](const tm_distributed::MeshCoordinate& c) {
         return CMAKE_UNIQUE_NAMESPACE::make_worker_sync_args(
-            mesh->get_device(c),
+            tt::tt_metal::internal::get_device(*mesh, c),
             impl.worker_cores,
             impl.num_workers,
             static_cast<uint32_t>(impl.consumed_sem->address()),
@@ -2757,7 +2759,7 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
             continue;
         }
         const auto& words = relay.words[p];
-        auto* device = mesh->get_device(c);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, c);
         const CoreCoord core = impl.service_cores.at(c);
         const auto src_node = relay.sender_nodes.at(c);
         const auto exit_node = relay.sender_nodes.at(cable.exit_coord);
@@ -2831,7 +2833,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
     const auto fifo_addr = static_cast<uint32_t>(impl.socket->get_data_buffer()->address());
     const auto ws_for = [&](const tm_distributed::MeshCoordinate& c) {
         return CMAKE_UNIQUE_NAMESPACE::make_worker_sync_args(
-            mesh->get_device(c),
+            tt::tt_metal::internal::get_device(*mesh, c),
             impl.worker_cores,
             impl.num_workers,
             static_cast<uint32_t>(impl.data_ready_sem->address()),
@@ -2850,7 +2852,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
         if (c == cable.entry_coord) {
             continue;
         }
-        auto* device = mesh->get_device(c);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, c);
         const CoreCoord core = impl.service_cores.at(c);
         const auto t_node = relay.receiver_nodes.at(c);
         const auto entry_node = relay.receiver_nodes.at(cable.entry_coord);
