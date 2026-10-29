@@ -1581,6 +1581,19 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 19:45: resident decode served: +28 % decode at 32 users, ids identical
+
+`served_8x4_resident_r1` (the catalogued 1 M profile, 32 slots, `GLM53_RESIDENT_DECODE=1`): the in-graph feedback
+compiled and captured on the 8x4 (eager warm-up 9.5 s, decode trace 3.4 s); stages a / b / d PASS. Stage b's four
+greedy texts are byte-identical to the reload path's (the 13:45 A7 run, same prompts): the chain reproduces the
+reload path's ids. Stage d, ISL 128 / OSL 128 / 32 users: TTFT mean 5.20 s (unchanged: the prefill path is the
+same), decode 14.13 tok/s per user / 288.5 aggregate against the reload path's 11.0 / 244 (inter-token 91 -> 71 ms);
+ISL 65536 / OSL 32 / 4 users: TTFT mean 87.3 s (SP-first chunks, the 10:51 reference's 90 s mean). The remaining
+23 ms per step over the 48 ms device step are the engine loop and the synchronous readback (step 3: vLLM's async
+scheduling, which the plugin now admits; the adapter's `read_decode_output(async_read=True)` is still a blocking
+read) and the decode steps held during a burst's prefills (step 4, the interleave). The 64 K x 4 point's 0.93 tok/s
+per user is that hold: a user's 32 tokens wait for the other three prompts' chunks.
+
 ### 2026-10-29 19:15: resident decode coded (plan A12 step 1)
 
 `GLM53_RESIDENT_DECODE=1` (`tt/resident_decode.py`): the captured decode step ends with the head's greedy ids copied
