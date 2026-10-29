@@ -44,6 +44,7 @@ from qwen36_resident.model import (
     ROPE_THETA,
     ROT,
     State,
+    TraceL1Guard,
     is_attn,
     l1_layout,
     quantize_rows,
@@ -976,6 +977,7 @@ class PPPrefill:
             self.x_out = self._body()
             ttnn.end_trace_capture(self.mesh, self.trace_id, cq_id=0)
             ttnn.synchronize_device(self.mesh)
+        self._trace_guard = TraceL1Guard(self.mesh, "prefill")  # the L1 its replays assume (model.TraceL1Guard)
 
     def reset(self):
         self._use(self.C)
@@ -1003,11 +1005,13 @@ class PPPrefill:
 
         T = token_ids.shape[0]
         assert T <= self.max_len
-        if getattr(self, "_l1_layout", None) is not None and l1_layout() != self._l1_layout:
-            raise RuntimeError(
-                "the decode models' L1 layout changed since the prefill traces were captured: their replays could "
-                "overwrite the new model's L1 buffers; call capture() again after building it (model.l1_layout)"
-            )
+        if getattr(self, "_l1_layout", None) is not None:
+            if l1_layout() != self._l1_layout:
+                raise RuntimeError(
+                    "the decode models' L1 layout changed since the prefill traces were captured: their replays could "
+                    "overwrite the new model's L1 buffers; call capture() again after building it (model.l1_layout)"
+                )
+            self._trace_guard.check(full=True)
         self._use(chunk or self.pick_chunk(T))
         n, C = self.n, self.C
         chunks = (T + C - 1) // C
