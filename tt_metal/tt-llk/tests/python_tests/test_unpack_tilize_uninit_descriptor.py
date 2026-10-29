@@ -51,6 +51,13 @@ def test_unpack_tilize_uninit_descriptor(
             "BH unpack_tilize does not support num_faces=1; see https://github.com/tenstorrent/tt-metal/issues/50707"
         )
 
+    # face_r_dim < 16 is a tile shape only as face_r_dim x 32 (num_faces=2). With 1 or 4 faces
+    # it is 8x16, 2x16, 16x32 of 8-row faces or 4x32 of 2-row faces, none of which tilize ran on main.
+    if face_r_dim < 16 and num_faces != 2:
+        pytest.skip(
+            "Asserted: tilize supports face_r_dim < 16 only on 1/2/4/8x32 tiles (_llk_unpack_tilize_init_)"
+        )
+
     TestConfig(
         "sources/unpack_tilize_uninit_descriptor_test.cpp",
         formats,
