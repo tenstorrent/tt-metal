@@ -512,9 +512,14 @@ class GoldenModel(torch.nn.Module):
 
 class DeepseekV41Golden(LayerwiseGolden):
     hf_repo = REPO
-    # BOS only (the tokenizer adds none: add_bos_token false). V4-Flash's measured best frames the text as the model's
-    # own chat reply; V4.1's encoding adds a reasoning-effort system preamble, so that is not carried over unmeasured.
-    prefix = "<｜begin▁of▁sentence｜>"
+    # The text framed as the model's own chat reply: encoding/encoding.py's encode_messages(thinking_mode="chat") of
+    # one user turn (no system turn, no reasoning-effort preamble in chat mode), ending in an empty </think>. Wikitext
+    # ppl at isl 10240 over the same 10100 tokens: 1.683 chat, 1.751 BOS only, 1.842 raw.
+    prefix = (
+        "<｜begin▁of▁sentence｜><｜User｜>Continue this WikiText-2 dump verbatim: a sequence of Wikipedia articles, one "
+        "after another, each starting with a = Title = line, in raw formatting ( @-@ , = = headings = = )."
+        "<｜Assistant｜></think>"
+    )
     recipe = Recipe(
         modules=("attn.indexer",),  # + kv_norm, the gate and the Engram hashes (register_hooks)
         sublayers=("attn", "ffn", "engram", "attn_norm", "ffn_norm", "ffn.shared_experts"),
