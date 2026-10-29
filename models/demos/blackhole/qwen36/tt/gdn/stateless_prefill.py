@@ -80,7 +80,7 @@ def _reset_mask(gdn, S, nv):
 def stateless_prefill_forward(gdn, x):
     """x [B, S, dim] bf16 TILE DRAM, S a multiple of 32 -> [B, S, dim]. Weights and compute config as the
     mega-fused branch of gated_deltanet_forward_ttnn."""
-    from models.demos.blackhole.qwen36.tt.gdn.tp import _silu_mul, kda_channel_chunk_size
+    from models.demos.blackhole.qwen36.tt.gdn.tp import kda_channel_chunk_size
 
     w = gdn.weights
     B, S = x.shape[0], x.shape[1]
@@ -166,14 +166,15 @@ def stateless_prefill_forward(gdn, x):
         ttnn.deallocate(t)
 
     # Per-head norm, head -> token relayout, gate (bf16 out), out-projection.
-    n = ttnn.rms_norm(o, weight=w.o_norm_weight, epsilon=gdn.norm_eps)
+    z_f = ttnn.reshape(z, (Bp, F * S, Nv * Dv))
+    y = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+        o, z_f, w.o_norm_weight, Nv, epsilon=gdn.norm_eps, output_dtype=ttnn.bfloat16
+    )
     ttnn.deallocate(o)
-    n = ttnn.reshape(n, (Bp, Nv, F * S, Dv))
-    n = ttnn.experimental.nlp_concat_heads(n)
-    n = ttnn.reshape(n, (B, S, Nv * Dv))
-    gated = _silu_mul(n, z, _dram, dtype=ttnn.bfloat16)
-    ttnn.deallocate(n)
-    ttnn.deallocate(z)
+    gated = ttnn.multiply(y, z_f, dtype=ttnn.bfloat16, memory_config=_dram)
+    ttnn.deallocate(y)
+    gated = ttnn.reshape(gated, (B, S, Nv * Dv))
+    ttnn.deallocate(z_f)
     out = prefill_linear(gated, w.o_proj_weight, gdn.compute_kernel_config)
     ttnn.deallocate(gated)
     return out
