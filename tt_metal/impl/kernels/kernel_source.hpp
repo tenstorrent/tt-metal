@@ -35,8 +35,8 @@ struct KernelSource {
         return "Kernel_Source_Code";
     }
 
-    // The full path, not name(): stems recur across ops and would fuse unrelated TUs onto one zone tu-id.
-    std::string profiler_zone_src_id() const {
+    // The full path, not name(): stems recur across ops and would fuse unrelated TUs onto one event tu-id.
+    std::string debug_event_src_id() const {
         if (this->source_type_ == SourceType::FILE_PATH) {
             return this->path_.string();
         }

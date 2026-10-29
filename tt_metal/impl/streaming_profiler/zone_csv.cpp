@@ -77,35 +77,35 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
             zone_cycles_ += z.end_device_cycles() - z.start_device_cycles();
             zone_ns_ += z.duration().count();
         }
-        const uint32_t id = name_hash(z.site().name);
+        const uint32_t id = name_hash(z.debug_event().name);
         for (int end = 0; end < 2; end++) {
             Row& r = rows_.emplace_back(row_for(z.core()));
             r.timer_id = id;
             r.timestamp = end ? z.end_device_cycles() : z.start_device_cycles();
             r.runtime_id = z.runtime_id();
-            r.zone_name = z.site().name;
+            r.zone_name = z.debug_event().name;
             r.type = end ? "ZONE_END" : "ZONE_START";
         }
     }
     for (const api::TimestampedData& d : batch.records<api::TimestampedData>()) {
-        const uint32_t legacy = sync_legacy_id(d.site().name);
+        const uint32_t legacy = sync_legacy_id(d.debug_event().name);
         Row& r = rows_.emplace_back(row_for(d.core()));
-        r.timer_id = legacy != 0 ? legacy : name_hash(d.site().name);
+        r.timer_id = legacy != 0 ? legacy : name_hash(d.debug_event().name);
         r.timestamp = d.device_cycles();
         // The CSV has one data column, so a record with several values writes its first.
         r.data = d.payload().front();
         r.runtime_id = d.runtime_id();
         if (legacy == 0) {
-            r.zone_name = d.site().name;
+            r.zone_name = d.debug_event().name;
         }
         r.type = "TS_DATA";
     }
     for (const api::Event& e : batch.records<api::Event>()) {
         Row& r = rows_.emplace_back(row_for(e.core()));
-        r.timer_id = name_hash(e.site().name);
+        r.timer_id = name_hash(e.debug_event().name);
         r.timestamp = e.device_cycles();
         r.runtime_id = e.runtime_id();
-        r.zone_name = e.site().name;
+        r.zone_name = e.debug_event().name;
         r.type = "TS_EVENT";
     }
 }

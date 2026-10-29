@@ -490,7 +490,7 @@ PROFILER_INLINE_ATTR void record_event(uint32_t data_id) {
 // intact canary reads as painted-and-unused to measure_stack_usage(). Compiled out for firmware
 // (__stack_base is a kernel-link symbol) and active ERISC (stack guarded by -Werror=stack-usage).
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
-TT_ZONE_DEFINE_ID(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW");
+TT_DEBUG_EVENT_DEFINE_ID(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW");
 constexpr uint32_t STACK_CANARY_PATTERN = 0xBABABABA;  // == watcher stack_usage_pattern
 struct stackCanaryScope {
     FORCE_INLINE stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
@@ -510,12 +510,12 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 #include "perf_counters.hpp"
 #include "internal/profiler/synchronization_event_profiler.hpp"
 
-#define DeviceZoneScopedN(name)    \
-    TT_ZONE_DEFINE_ID(hash, name); \
+#define DeviceZoneScopedN(name)           \
+    TT_DEBUG_EVENT_DEFINE_ID(hash, name); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceZoneScopedNIf(name, active) \
-    TT_ZONE_DEFINE_ID(hash, name);        \
+    TT_DEBUG_EVENT_DEFINE_ID(hash, name); \
     kernel_profiler::profileScopeIf<hash> zone = kernel_profiler::profileScopeIf<hash>(active);
 
 // DeviceTimestampedData carries a payload; DeviceRecordEvent is a bare 2-word marker. Both have a compile-time
@@ -523,14 +523,14 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 // names every point marker from the ELF, so the argument is a compile-time name like the other macros'.
 #define DeviceTimestampedData(name, data)               \
     {                                                   \
-        TT_ZONE_DEFINE_ID(hash, name);                  \
+        TT_DEBUG_EVENT_DEFINE_ID(hash, name);           \
         kernel_profiler::time_stamped_data(hash, data); \
     }
 
-#define DeviceRecordEvent(name)              \
-    {                                        \
-        TT_ZONE_DEFINE_ID(hash, name);       \
-        kernel_profiler::record_event(hash); \
+#define DeviceRecordEvent(name)               \
+    {                                         \
+        TT_DEBUG_EVENT_DEFINE_ID(hash, name); \
+        kernel_profiler::record_event(hash);  \
     }
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);

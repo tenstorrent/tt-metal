@@ -22,7 +22,7 @@ OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : file_(std::fopen(path.
 
 void OpsCsvConsumer::operator()(const Batch& batch) {
     for (const auto& zone : batch.records<Zone>()) {
-        if (zone.runtime_id() == 0 || !zone.site().name.ends_with("-KERNEL")) {
+        if (zone.runtime_id() == 0 || !zone.debug_event().name.ends_with("-KERNEL")) {
             continue;
         }
         const experimental::streaming_profiler::Core core = zone.core();
