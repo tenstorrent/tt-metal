@@ -1581,6 +1581,15 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 13:48: the 1 M profile served at 32 requests as catalogued (A7)
+
+The catalogued 1 M profile (32 requests, `GLM53_VLLM_ROWS_INDEPENDENT=1`, prefix cache off) boots through the exact wave ladder
+(68 waves + 1 lone wave for a scorer width the bucket-multiple starts missed, so the enumeration is not idle at this profile
+either), 0 program-cache misses: stage a = HF's first token, stage b coherent and identical across rounds, `vllm bench` 128 x 128
+at 32 requests TTFT 5.2 s / 11.0 tok/s per user / 244 aggregate (adapter step 61.2 ms = 16.3 / 522 over 32 live users), 4 x 65 514
+TTFT 88.3 s mean with the SP-first placement. The README's serving section carries the paragraph; the 128 K profile's flip to 224
+waits for its served check.
+
 ### 2026-10-29 13:10: the rows-2/3 corruption closed served-side
 
 r5's exact stage c on the finite-guard tree (4 x 65514 needles, `GLM53_VLLM_SP_FIRST=0` so the prompts share slot index 0

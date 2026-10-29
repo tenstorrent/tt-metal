@@ -125,6 +125,17 @@ layers, 1 M profile, one smoke run): exact first tokens (128-token TTFT 160 ms i
 three shapes and the word named; the clip request needs `media-io-kwargs: {"video": {"video_backend": "glm5next"}}` on
 vLLM 0.30.0 (its video-processor lookup returns transformers 5.20's per-backend dict; fixed upstream).
 
+Served 2026-10-29 13:48 on the 1 M profile as catalogued (32 distinct requests under per-row prefill ownership,
+`GLM53_VLLM_ROWS_INDEPENDENT=1`, the slot-level prefix cache off at 32 slots; one smoke run, 0 program-cache misses): exact
+first token, greedy determinism across rounds; `vllm bench` 128 x 128 at 32 concurrent requests: TTFT 5.2 s mean (the 32
+arrivals prefill in traced waves between decode steps, decode held until no continuation is pending), 11.0 tok/s per user,
+244 tok/s output by the bench's wall; the adapter's decode step 61.2 ms = 16.3 tok/s per user, 522 tok/s aggregate over the 32
+live users (the harness's traced step at this batch: 48.4 ms = 20.7). 4 concurrent 65 514-token prompts: TTFT 88.3 s mean
+(60 / 60 / 119 / 119 s: each prompt runs sequence-parallel chunks of 16 K at 7.5 s, two per step; forced through the per-row
+waves the same four take 180 / 237 / 408 / 464 s and still answer 4/4). Eager waves pay only near full occupancy (a 2048-row
+wave costs a 16 K SP chunk), so eager prompts take a free slot index first (`SlotTable.allocate(prefer_sp)`,
+`doc/mesh/row_ownership.md` 2.4) and the waves serve the fifth concurrent long prompt on and every short burst.
+
 Served decode (2026-10-27, today's defaults, `vllm bench` 128 x 128 tokens): 1 M profile 94.2 ms per token = 10.6 tok/s per user at
 concurrency 1 (TTFT 272 ms) and 103.4 ms = 9.7 tok/s per user at 4 (37 tok/s output); 128 K profile (28 users per row, 224 traced
 slots) 150.9 ms = 6.6 tok/s per user at 1 and 172.8 ms = 5.8 tok/s per user at 28 (142 tok/s output); boot ~10 min on a warm cache.
