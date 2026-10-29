@@ -11,7 +11,7 @@ permissions:
   checks: write
   contents: read
   packages: write
-  pull-requests: read
+  pull-requests: write
 jobs:
   changes:
     runs-on: ubuntu-slim
