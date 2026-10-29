@@ -1357,3 +1357,23 @@ bucket. Until then the served default restores at chunk-aligned snapshots only (
   guard read `inspect.signature` of the `FastOperation` wrapper (`(*args, **kwargs)`): it now reads the binding's
   `__call__` docstring. `kda_local_8x4_sp1` (one prompt per row vs HF per row, cross-row independence, local vs SP) started
   00:27 on the 8x4.
+
+### 2026-10-29 01:00: A0/A1 validated on the 8x4 (row-local KDA prefill), H1 = -5.7 ms per decode step
+
+- `test_mesh_local_kda` on the 8x4 from the base-port override tree (`arg/kda_sequence_parallel_size_base`
+  @6abcade6099 = base 73fb055f995 + the ttnn `sequence_parallel_size` + the ttKDA axis fix): one 1024-token prompt per
+  row through `prefill_forward(..., local=True)`, layer 0: output PCC vs HF per row 0.999683-0.999952, recurrent carry
+  0.99985-0.99987, conv history 0.99999, another row's prompt 0.003-0.006 (independent chronologies); the
+  sequence-parallel path on prompt 0 vs the local one: PCC 1.000000. 31 s on the mesh.
+- Two defects on the way: (1) the main-based override (origin/main 464267840c3) does not open this Galaxy
+  (`Timeout (10000 ms) waiting for physical cores to finish` in initialize_and_launch_firmware, FW bundle 19.16.0),
+  while the base runtime opens the same chips before and after -> the override is carried on the base commit for the
+  tests here (main keeps `tail`/`init` on summarize_chunk_recurrence where the base has `packed_head`); the
+  main-based branch is the PR. (2) ttKDA set the TP collective axis to `None` whenever the chronology was not
+  sequence-parallel (a 1D-mesh assumption): size 1 on the 8x4 reduce-scattered the o_proj partials over the wrong
+  device set (512 of 4096 columns per chip). The axis now follows the mesh's SP extent; fixed on both branches.
+- `e2e_8x4_B4_h1_f103` (`GLM53_HYBRID_GATHER=compact`, 45 layers, 4 users per row = 32): traced decode step 55.80 ms =
+  17.9 tok/s per user, 573 tok/s aggregate (61.5 ms before), first token = HF (102647), warm 128-token prompt 897 ms.
+  H1+H2 (`allreduce` / `allreduce_ccl`) next in the queue.
+- APC r3 analysis and the chip-0 unaligned-continuation test: see the 00:30 entry's follow-up in the plan (D7) and the
+  ledger note of 00:59 (`sched_validate.log`).
