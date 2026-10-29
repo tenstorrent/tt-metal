@@ -236,16 +236,7 @@ def test_replay_records_are_gathering_bracketed():
         FastMode,
         MathOperation,
     )
-    from helpers.test_variant_parameters import (
-        APPROX_MODE,
-        CLAMP_NEGATIVE,
-        FAST_MODE,
-        MATH_OP,
-        NUM_BLOCKS,
-        NUM_TILES_IN_BLOCK,
-        TILE_COUNT,
-        generate_input_dim,
-    )
+    from test_eltwise_unary_sfpu import build_eltwise_unary_sfpu_config
 
     # bf16 Dest + APPROX_MODE=No selects _sfpu_exp_21f_bf16_tti_, the replayed body.
     formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
@@ -256,28 +247,18 @@ def test_replay_records_are_gathering_bracketed():
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_gathering_test.cpp",
+    configuration = build_eltwise_unary_sfpu_config(
         formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.Exp),
-        ],
-        runtimes=[TILE_COUNT(1), NUM_BLOCKS(1), NUM_TILES_IN_BLOCK(1)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=DestAccumulation.No,
+        DestAccumulation.No,
+        ApproximationMode.No,
+        MathOperation.Exp,
+        input_dimensions,
+        src_A,
+        src_B,
+        tile_cnt_A,
+        tile_cnt_B,
+        test_name="sources/eltwise_unary_sfpu_gathering_test.cpp",
+        fast_mode=FastMode.No,
     )
     # Build only: the assertions are on the binary.
     configuration.prepare()

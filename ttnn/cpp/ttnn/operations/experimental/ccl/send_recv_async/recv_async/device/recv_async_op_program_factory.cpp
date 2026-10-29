@@ -89,6 +89,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
 
     const auto& mesh_socket = operation_attributes.mesh_socket;
     const auto& output_tensor = tensor_args;
+    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(output_tensor, mesh_dispatch_coordinate, "recv_async");
 
@@ -108,8 +109,8 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
     {
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
-        auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+        auto available_link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -244,8 +245,8 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
                 num_pages_remainder = pages_for_this_core % num_pages_per_packet;
             }
 
-            auto link_indices =
-                tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+                *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
@@ -351,8 +352,8 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
                     mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
             }
 
-            auto link_indices =
-                tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+                *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];

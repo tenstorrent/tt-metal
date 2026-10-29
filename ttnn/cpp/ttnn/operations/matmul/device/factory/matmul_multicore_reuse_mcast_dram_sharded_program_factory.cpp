@@ -201,7 +201,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
-    uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;
+    const uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;
+    // A one-row subblock reuses SrcA across columns and keeps packing overlapped
+    // with the next Dest half. WH/BH support a shortened final column span.
+    if (per_core_M > 1 && !is_quasar) {
+        out_subblock_h = 1;
+        out_subblock_w = 1;
+    }
     // The widening below may pad per_core_N_compute past per_core_N_in1_sender, in which case the
     // compute kernel narrows matmul_block's ct_dim on the last in1 subblock. Quasar's matmul LLK
     // bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init, so a per-call ct_dim that
@@ -282,7 +288,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t in1_block_tiles = per_core_N_in1_sender * in0_block_w;
     uint32_t in1_num_entries = in1_block_tiles;
     if (B * num_blocks > 1) {
-        in1_num_entries = in1_num_entries * 3;  // triple buffer
+        // Three slots preserve read lookahead while compute reuses each block across M.
+        in1_num_entries *= 3;
     }
 
     uint32_t out_block_tiles = per_core_M * per_core_N_compute;
@@ -300,10 +307,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             "in0_block_w ({}) wider than the in0 shard ({} tiles) must be a multiple of it",
             in0_block_w,
             in0_shard_width_in_tiles);
-        TT_FATAL(
-            per_core_M == 1,
-            "a multi-shard in0 block gathers one tile row per shard; per_core_M ({}) must be 1",
-            per_core_M);
         shards_per_block = in0_block_w / in0_shard_width_in_tiles;
     }
     uint32_t bias_num_entries = per_core_N_compute;
@@ -374,7 +377,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         std::swap(start_core_noc, end_core_noc);
     }
 
-
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
@@ -385,14 +387,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         shards_per_block,
         input_all_storage_cores_vec.size());
     uint32_t num_blocks_per_shard = shards_per_block > 1 ? 1 : num_blocks / input_all_storage_cores_vec.size();
-    if (per_core_M > 1) {
-        TT_FATAL(
-            num_blocks_per_shard == 1,
-            "currently not support per_core_M larger than 1, while split one shard into multiple blocks (per_core_M "
-            "{}, num_blocks_per_shard {})",
-            per_core_M,
-            num_blocks_per_shard);
-    }
 
     const KernelSpecName IN0_SENDER{"in0_sender"};
     const KernelSpecName IN1_SENDER_WRITER{"in1_sender_writer"};
@@ -472,8 +466,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     //                      Build DataflowBufferSpecs
     ////////////////////////////////////////////////////////////////////////////
 
-    const bool share_out_interm_buffer =
-        !((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1)));
+    // With one output block, conversion consumes partials in order before packing
+    // the smaller output behind the read pointer. Equal byte capacities let the two
+    // DFBs share storage without an extra L1 copy or changing the partials' wrap point.
+    const bool compact_output_alias = B == 1 && per_core_M > 1 && !untilize_out &&
+                                      interm0_single_tile_size > output_single_tile_size &&
+                                      interm0_single_tile_size % output_single_tile_size == 0;
+    const bool share_out_interm_buffer = compact_output_alias || !((interm0_data_format != output_data_format) ||
+                                                                   (untilize_out && (in1_num_subblocks > 1)));
 
     DataflowBufferSpec in0_dfb_spec{
         .unique_id = IN0_DFB,
@@ -497,7 +497,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
-        .num_entries = out_num_entries,
+        .num_entries = compact_output_alias ? out_num_entries * (interm0_single_tile_size / output_single_tile_size)
+                                            : out_num_entries,
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
     };
@@ -947,6 +948,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                 {"in0_block_num_tiles", in0_block_num_tiles},
                 {"in0_block_size_bytes", in0_block_num_tiles * in0_single_tile_size},
                 {"in0_last_ktile_w", in0_last_ktile_w},
+                {"in0_tile_height", in0_tile.get_tile_shape()[0]},
                 {"in0_last_ktile_h", 0u},  // transpose not supported
                 {"in0_mcast_num_dests", num_worker_cores},
                 {"in0_mcast_num_cores", num_mcast_cores},
@@ -1030,6 +1032,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                 {"out_tensor_stride_w_bytes", per_core_N_compute * output_single_tile_size},
                 {"out_reshard_tensor_stride_w_bytes", per_core_N_storage * output_single_tile_size},
                 {"per_core_M", per_core_M},
+                {"in1_buffer_blocks", in1_num_entries / in1_block_tiles},
+                {"out_subblock_h", out_subblock_h},
+                {"out_subblock_w", out_subblock_w},
                 {"workers_per_bank", workers_per_bank},
                 {"bank_row_stride_tiles", in1_shard_width_tiles},
                 {"reader_width_tiles", per_core_N_in1_sender},
@@ -1280,6 +1285,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const tt::tt_metal::MeshTensor& out_tensor,
     ComputeHardwareConfig compute_hw,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
+    uint32_t total_Mt,
     uint32_t Kt,
     uint32_t Nt,
     uint32_t k_block,
@@ -1328,12 +1334,31 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         num_dram_banks,
         Nbt);
 
-    // Layout: CN column groups per bank, CK row groups per column group, P column passes per core. A
-    // count above the shard width is rounded down to a multiple of it (CN = Nbt, CK = N / Nbt).
-    const uint32_t CN = std::min(cores_per_bank, Nbt);
-    const uint32_t CK = cores_per_bank > Nbt ? cores_per_bank / Nbt : 1;
+    // Split columns first. On Wormhole, narrow column slices duplicate a large
+    // activation read across workers; two M groups reduce that traffic enough to
+    // repay the second weight read for tall matrices. Keep wide slices and
+    // Blackhole's two-stream readers column-partitioned.
+    const uint32_t column_tiles = div_up(Nbt, std::min(cores_per_bank, Nbt));
+    const bool split_m = arch == tt::ARCH::WORMHOLE_B0 && total_Mt % 2 == 0 && cores_per_bank % 2 == 0 &&
+                         cores_per_bank <= Nbt &&
+                         ((total_Mt >= 4 && column_tiles <= 3) || (total_Mt >= 8 && column_tiles <= 6));
+    const uint32_t CM = split_m ? 2u : 1u;
+    const uint32_t Mt = total_Mt / CM;
+    const uint32_t workers_per_m = cores_per_bank / CM;
+    const uint32_t CN = std::min(workers_per_m, Nbt);
+    // Every K group must compute a partial; empty groups would publish unwritten tiles.
+    const uint32_t CK = workers_per_m > Nbt ? std::min(workers_per_m / Nbt, Kt) : 1;
     const uint32_t ncmax = div_up(Nbt, CN);
-    const uint32_t P = div_up(ncmax, dst_tiles);
+    TT_FATAL(k_block >= 1, "num_workers_per_dram_bank: in0_block_w must be at least 1");
+    const uint32_t KB = std::min(k_block, div_up(Kt, CK));
+    const uint32_t max_rows = div_up(Kt, CK);
+    const uint32_t max_blocks = div_up(max_rows, KB);
+
+    // Preserve the resident activation/whole-K Dest schedule for one tile row.
+    // Multirow work reuses each weight block across M with a bounded activation
+    // window; double-buffered Dest overlaps compute and packing of L1 partials.
+    const bool streaming = Mt > 1;
+    const uint32_t P = streaming ? 1u : div_up(ncmax, dst_tiles);
     const uint32_t ncp = div_up(ncmax, P);
     TT_FATAL(CK == 1 || P == 1, "num_workers_per_dram_bank: K row groups need a single column pass");
     // Every core needs work in every pass, or the pass waits on a weight block nobody streams.
@@ -1343,26 +1368,24 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         cores_per_bank,
         Nbt,
         P);
-    TT_FATAL(k_block >= 1, "num_workers_per_dram_bank: in0_block_w must be at least 1");
-    const uint32_t KB = std::min(k_block, div_up(Kt, CK));
-    const uint32_t max_rows = div_up(Kt, CK);
-    const uint32_t max_blocks = div_up(max_rows, KB);
 
-    // Cores and work items: wi = (bank * CN + cn) * CK + kidx; role = wi + 1 (0 = idle).
-    const auto cores = dram_sharded_helpers::get_dram_bank_adjacent_workers(
-        device, tt::tt_metal::NOC::NOC_0, CN * CK, num_banks);
+    // Cores and work items: wi = ((bank * CM + cm) * CN + cn) * CK + kidx; role = wi + 1 (0 = idle).
+    const auto cores =
+        dram_sharded_helpers::get_dram_bank_adjacent_workers(device, tt::tt_metal::NOC::NOC_0, CM * CN * CK, num_banks);
     const auto grid = device.compute_with_storage_grid_size();
     std::vector<uint32_t> role(grid.x * grid.y, 0);
     std::vector<CoreCoord> work_cores;
     uint32_t max_own = 0;
     for (uint32_t bank = 0; bank < num_banks; ++bank) {
-        for (uint32_t cn = 0; cn < CN; ++cn) {
-            const uint32_t n0 = Nbt * cn / CN, n1 = Nbt * (cn + 1) / CN;
-            for (uint32_t kidx = 0; kidx < CK; ++kidx) {
-                const CoreCoord core = cores[bank][(cn * CK) + kidx];
-                role[(core.y * grid.x) + core.x] = work_cores.size() + 1;
-                work_cores.push_back(core);
-                max_own = std::max(max_own, ((n1 - n0) * (kidx + 1) / CK) - ((n1 - n0) * kidx / CK));
+        for (uint32_t cm = 0; cm < CM; ++cm) {
+            for (uint32_t cn = 0; cn < CN; ++cn) {
+                const uint32_t n0 = Nbt * cn / CN, n1 = Nbt * (cn + 1) / CN;
+                for (uint32_t kidx = 0; kidx < CK; ++kidx) {
+                    const CoreCoord core = cores[bank][((cm * CN + cn) * CK) + kidx];
+                    role[(core.y * grid.x) + core.x] = work_cores.size() + 1;
+                    work_cores.push_back(core);
+                    max_own = std::max(max_own, ((n1 - n0) * (kidx + 1) / CK) - ((n1 - n0) * kidx / CK));
+                }
             }
         }
     }
@@ -1409,7 +1432,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         Kt);
 
     const uint32_t x_tile_size = in0_tile.get_tile_size(in0_data_format);
-    const uint32_t w_tile_size = tt::align(in1_tile.get_tile_size(in1_data_format), tt::tt_metal::hal::get_dram_alignment());
+    const uint32_t w_tile_size =
+        tt::align(in1_tile.get_tile_size(in1_data_format), tt::tt_metal::hal::get_dram_alignment());
     const uint32_t out_tile_size = output_tile.get_tile_size(output_data_format);
     const uint32_t part_tile_size = output_tile.get_tile_size(part_format);
 
@@ -1432,7 +1456,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = X_DFB,
         .entry_size = x_tile_size,
-        .num_entries = max_blocks * KB,
+        .num_entries = streaming ? 3 * Mt * KB : Mt * max_blocks * KB,
         .data_format_metadata = in0_data_format,
         .tile_format_metadata = in0_tile,
     });
@@ -1445,37 +1469,53 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
             .tile_format_metadata = in1_tile,
         });
     }
-    dataflow_buffers.push_back(DataflowBufferSpec{
+    // Final conversion/reduction reads each source tile before overwriting its
+    // storage with the equal-or-smaller output. All views reset on program entry.
+    const bool alias_output = streaming && part_tile_size % out_tile_size == 0;
+    const uint32_t alias_tiles = (CK > 1 ? CK : 1u) * Mt * max_own;
+    DataflowBufferSpec out_spec{
         .unique_id = OUT_DFB,
         .entry_size = out_tile_size,
-        .num_entries = max_own,
+        .num_entries = alias_output ? alias_tiles * (part_tile_size / out_tile_size) : Mt * max_own,
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
-    });
-    if (!fp32_dest && CK == 1) {
-        dataflow_buffers.push_back(DataflowBufferSpec{
+    };
+    if (alias_output) {
+        out_spec.advanced_options.alias_with.push_back(CK > 1 ? RECV_DFB : ACC_DFB);
+    }
+    dataflow_buffers.push_back(std::move(out_spec));
+    if ((streaming || !fp32_dest) && CK == 1) {
+        DataflowBufferSpec acc_spec{
             .unique_id = ACC_DFB,
             .entry_size = part_tile_size,
-            .num_entries = max_own,
+            .num_entries = Mt * max_own,
             .data_format_metadata = part_format,
             .tile_format_metadata = output_tile,
-        });
+        };
+        if (alias_output) {
+            acc_spec.advanced_options.alias_with.push_back(OUT_DFB);
+        }
+        dataflow_buffers.push_back(std::move(acc_spec));
     }
     if (CK > 1) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = PART_DFB,
             .entry_size = part_tile_size,
-            .num_entries = ncp,
+            .num_entries = Mt * ncp,
             .data_format_metadata = part_format,
             .tile_format_metadata = output_tile,
         });
-        dataflow_buffers.push_back(DataflowBufferSpec{
+        DataflowBufferSpec recv_spec{
             .unique_id = RECV_DFB,
             .entry_size = part_tile_size,
-            .num_entries = CK * max_own,
+            .num_entries = CK * Mt * max_own,
             .data_format_metadata = part_format,
             .tile_format_metadata = output_tile,
-        });
+        };
+        if (alias_output) {
+            recv_spec.advanced_options.alias_with.push_back(OUT_DFB);
+        }
+        dataflow_buffers.push_back(std::move(recv_spec));
     }
 
     Group<SemaphoreSpec> semaphores;
@@ -1485,6 +1525,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
 
     // Shared compile-time layout; every kernel derives its work item from these.
     const std::vector<std::pair<std::string, uint32_t>> layout_args = {
+        {"MT", Mt},
+        {"CM", CM},
         {"Nbt", Nbt},
         {"KT", Kt},
         {"KB", KB},
@@ -1492,7 +1534,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         {"CK", CK},
         {"P", P},
         {"NCP", ncp},
-        {"NGRP", num_banks * CN},
+        {"NGRP", num_banks * CM * CN},
         {"ROT", 1u},
         {"GX", static_cast<uint32_t>(grid.x)},
         {"MAXOWN", max_own},
@@ -1517,6 +1559,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         };
         auto& defines = k.compiler_options.defines;
         defines["DSMC_ROLE"] = role_table;
+        if (streaming) {
+            defines["DSMC_STREAMING"] = "1";
+        }
         for (const auto& [arg, value] : layout_args) {
             k.compile_time_args.insert({arg, value});
         }
@@ -1540,6 +1585,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
             k.compile_time_args.insert({"XT", x_tile_size});
             k.compile_time_args.insert({"SW", x_shard_w});
             k.compile_time_args.insert({"XL", x_lookahead});
+            if (streaming && !two_streams) {
+                defines["DSMC_X_SYNC"] = "1";
+            }
             k.compile_time_args.insert({"OT", out_tile_size});
             k.compile_time_args.insert({"OW", out_shard_w});
             k.compile_time_args.insert({"OCAP", static_cast<uint32_t>(out_cores.size()) * out_shard_w});
@@ -1564,10 +1612,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         return k;
     };
 
-    // Each column pass keeps its whole K in Dest at full-sync capacity. Dest precision, fidelity and
-    // approximation modes are the caller's: with fp32_dest_acc_en off the accumulation rounds to
-    // 16 bits per K tile like the single-reader path's Float16_b intermediates.
-    compute_hw.double_buffer_dest = false;
+    // One-row work keeps a whole column pass in full-sync Dest. Multirow work
+    // alternates Dest halves while packing partials in the caller's precision.
+    compute_hw.double_buffer_dest = streaming;
     compute_hw.unpack_modes = {
         {X_DFB, UnpackMode::UnpackToSrc},
         {W0_DFB, UnpackMode::UnpackToSrc},
@@ -1578,8 +1625,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     if (CK > 1) {
         compute_hw.unpack_modes.insert({RECV_DFB, UnpackMode::UnpackToSrc});
     }
-    if (!fp32_dest && CK == 1) {
-        compute_hw.unpack_modes.insert({ACC_DFB, UnpackMode::UnpackToSrc});
+    if ((streaming || !fp32_dest) && CK == 1) {
+        compute_hw.unpack_modes.insert({ACC_DFB, fp32_dest ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc});
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -1588,6 +1635,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
         .hw_config = std::move(compute_hw),
     };
     compute.compiler_options.defines["DSMC_ROLE"] = role_table;
+    compute.compile_time_args.insert({"DST_TILES", streaming && fp32_dest ? 4u : 8u});
+    if (streaming) {
+        compute.compiler_options.defines["DSMC_STREAMING"] = "1";
+    }
     {
         // The same opt-in di/dt mitigations as the single-reader path (TT_MM_STAGGER_TYPE, TT_MM_THROTTLE_PERF).
         std::map<std::string, std::string> throttle_defines;
@@ -1605,12 +1656,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     if (!fp32_dest) {
         compute.compiler_options.defines["DSMC_L1ACC"] = "1";
         compute.compile_time_args.insert({"G", div_up(l1acc_k_tiles, KB)});
-        if (CK == 1) {
-            compute.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::PRODUCER});
-            compute.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::CONSUMER});
-        }
+    }
+    if ((streaming || !fp32_dest) && CK == 1) {
+        compute.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute.dfb_bindings.push_back(
+            DFBBinding{.dfb_spec_name = ACC_DFB, .accessor_name = "acc", .endpoint_type = DFBEndpointType::CONSUMER});
     }
     for (const auto& [arg, value] : layout_args) {
         compute.compile_time_args.insert({arg, value});
@@ -1808,6 +1859,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
             output_mesh,
             ttnn::to_compute_hardware_config(compute_kernel_config),
             ttnn::get_throttle_level(operation_attributes.compute_kernel_config),
+            Mt,
             Kt,
             Nt,
             in0_block_w,
