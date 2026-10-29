@@ -21,15 +21,28 @@ namespace sfpu {
 // replay buffer. Kernels that record in their init and replay later (mac, cumsum, cumprod) record
 // again when their init runs, which the compute API requires after any other op.
 constexpr std::uint32_t TILED_PROD_REPLAY_SLOT = 0;
-// Instructions sfpi emits for the recorded loop: 2x (SFPLOAD, SFPSTORE, SFPMUL). A window that
-// does not match the emitted body replays the wrong instructions and corrupts the tile, which
-// the full-tile bit-exact check in tt-llk's test_sfpu_tiled_prod.py catches.
-constexpr std::uint32_t TILED_PROD_REPLAY_LEN = 6;
 // Elements per recorded window: each element stores one partial product.
 constexpr int TILED_PROD_ELEMENTS_PER_REPLAY = 2;
+// Instructions sfpi emits per element of the recorded loop: SFPLOAD, SFPSTORE, SFPMUL. A window
+// that does not match the emitted body replays the wrong instructions and corrupts the tile,
+// which the full-tile bit-exact check in tt-llk's test_sfpu_tiled_prod.py catches.
+constexpr std::uint32_t TILED_PROD_INSTRUCTIONS_PER_ELEMENT = 3;
+constexpr std::uint32_t TILED_PROD_REPLAY_LEN =
+    TILED_PROD_INSTRUCTIONS_PER_ELEMENT * static_cast<std::uint32_t>(TILED_PROD_ELEMENTS_PER_REPLAY);
 static_assert(
     TILED_PROD_REPLAY_SLOT + TILED_PROD_REPLAY_LEN <= ckernel::math::replay_buf_offset,
     "calculate_tiled_prod: the recorded window must stay in the SFPU half of the replay buffer");
+// Elements per lane in one tile: SFP_DESTREG_STRIDE Dest rows per element, FACE_R_DIM rows per face.
+constexpr int TILED_PROD_STEPS = static_cast<int>(TILE_NUM_FACES * FACE_R_DIM / SFP_DESTREG_STRIDE);
+// Stores per lane: the recording stores the first TILED_PROD_ELEMENTS_PER_REPLAY elements and the
+// tail the last TILED_PROD_TAIL_STORES (the one whose load it issues and the final product), so the
+// replays store the elements between them.
+constexpr int TILED_PROD_TAIL_STORES = 2;
+constexpr int TILED_PROD_REPLAYS =
+    (TILED_PROD_STEPS - TILED_PROD_ELEMENTS_PER_REPLAY - TILED_PROD_TAIL_STORES) / TILED_PROD_ELEMENTS_PER_REPLAY;
+static_assert(
+    (TILED_PROD_REPLAYS + 1) * TILED_PROD_ELEMENTS_PER_REPLAY + TILED_PROD_TAIL_STORES == TILED_PROD_STEPS,
+    "calculate_tiled_prod: the recording, the replays and the tail must store every element once");
 
 #if defined(MM_THROTTLE) && MM_THROTTLE > 0
 // A throttled matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 itself in matmul_init, which fused
@@ -42,12 +55,12 @@ constexpr bool TILED_PROD_STORE_ADVANCES_DEST = true;
 
 inline void tiled_prod_init() {
     if constexpr (TILED_PROD_STORE_ADVANCES_DEST) {
-        // The stores advance the Dest counter by one SFPU row (SFP_DESTREG_STRIDE) each, under the
-        // SFPU addr_mod base (real slot ADDR_MOD_6, selected as ADDR_MOD_2 from the instruction);
-        // the loads keep ADDR_MOD_3 (real ADDR_MOD_7, no increment). ADDR_MOD_6 is not reserved:
-        // each SFPU op that advances Dest through it (comparison, unary max/min, typecast, ...)
-        // programs its own increment in its init, and llk_math_eltwise_unary_sfpu_init runs that
-        // init on every op switch.
+        // ADDR_MOD_6: dest += SFP_DESTREG_STRIDE, one SFPU row. calculate_tiled_prod's SFPSTOREs
+        // select it as ADDR_MOD_2 (the SFPU call sets the addr_mod base, which maps 0..3 to 4..7),
+        // so each store advances the Dest counter; its SFPLOADs keep ADDR_MOD_3 (real ADDR_MOD_7,
+        // no increment). ADDR_MOD_6 is not reserved: each SFPU op that advances Dest through it
+        // (comparison, unary max/min, typecast, ...) programs its own increment in its init, and
+        // llk_math_eltwise_unary_sfpu_init runs that init on every op switch.
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = SFP_DESTREG_STRIDE}}.set(ADDR_MOD_6);
         // The product's 1.0 seed, read by the first SFPMUL (see calculate_tiled_prod).
         vConstFloatPrgm0 = 1.0f;
@@ -78,6 +91,7 @@ inline void calculate_tiled_prod() {
         ITERATIONS * static_cast<int>(SFP_DESTREG_STRIDE) == static_cast<int>(FACE_R_DIM),
         "calculate_tiled_prod: ITERATIONS steps of SFP_DESTREG_STRIDE Dest rows must cover one face");
     constexpr int STEPS = static_cast<int>(TILE_NUM_FACES) * ITERATIONS;  // 32 elements per lane
+    static_assert(STEPS == TILED_PROD_STEPS, "calculate_tiled_prod: one call covers one tile");
     if constexpr (!TILED_PROD_STORE_ADVANCES_DEST) {
         vFloat result = 1.0f;
 #pragma GCC unroll 8
@@ -111,22 +125,15 @@ inline void calculate_tiled_prod() {
     vFloat result = vConstFloatPrgm0 * v;
     asm volatile("" ::: "memory");
     lltt::record<lltt::Exec>(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
-#pragma GCC unroll 2
+#pragma GCC unroll TILED_PROD_ELEMENTS_PER_REPLAY
     for (int k = 0; k < TILED_PROD_ELEMENTS_PER_REPLAY; k++) {
         v = dst_reg[1];
         dst_reg[0].mode(ADDR_MOD_2) = result;
         result *= v;
     }
-    // Stores per lane: the recording stores the first TILED_PROD_ELEMENTS_PER_REPLAY elements and
-    // the tail below the last TAIL_STORES (the one whose load it issues and the final product), so
-    // the replays store the STEPS - 4 elements between them.
-    constexpr int TAIL_STORES = 2;
-    constexpr int REPLAYS = (STEPS - TILED_PROD_ELEMENTS_PER_REPLAY - TAIL_STORES) / TILED_PROD_ELEMENTS_PER_REPLAY;
-    static_assert(
-        REPLAYS * TILED_PROD_ELEMENTS_PER_REPLAY + TILED_PROD_ELEMENTS_PER_REPLAY + TAIL_STORES == STEPS,
-        "calculate_tiled_prod: the recording, the replays and the tail must store every element once");
-#pragma GCC unroll 16
-    for (int i = 0; i < REPLAYS; i++) {
+    // The replays store the elements between the recording's and the tail's (TILED_PROD_TAIL_STORES).
+#pragma GCC unroll TILED_PROD_REPLAYS
+    for (int i = 0; i < TILED_PROD_REPLAYS; i++) {
         lltt::replay(TILED_PROD_REPLAY_SLOT, TILED_PROD_REPLAY_LEN);
     }
     v = dst_reg[1];
