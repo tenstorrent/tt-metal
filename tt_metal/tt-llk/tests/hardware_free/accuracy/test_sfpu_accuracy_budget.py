@@ -563,21 +563,10 @@ ONLY_EVER_TOLERANCE = frozenset(
 )
 
 
-# Enrolled on one architecture's table only: its figures there are carried from the
-# other table as tolerance rows, which bind nowhere, until a card of this one sweeps it.
-# #54080: Logsigmoid was swept on the ttsim Wormhole model only.
-_TOLERANCE_UNTIL_SWEPT_ON = {
-    ChipArchitecture.BLACKHOLE: frozenset({MathOperation.Logsigmoid}),
-}
-
-
 def test_every_enrolled_op_reaches_its_step_budget():
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
-    expected = ONLY_EVER_TOLERANCE | _TOLERANCE_UNTIL_SWEPT_ON.get(
-        MEASURED_ARCH, frozenset()
-    )
-    assert missing == expected, sorted(op.name for op in missing)
+    assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
 
 
 # Ops exact by construction: a sign-bit change, a copy, or an integer-valued result.
@@ -889,18 +878,20 @@ def test_every_exact_op_is_driven_by_a_gate():
     assert not unreached, sorted(op.name for op in unreached)
 
 
-#: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why.
-#: A cell listed here is a decision, with its reason, not a gap.
+#: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why,
+#: per architecture's table. A cell listed here is a decision, with its reason, not a gap.
 _UNRESOLVED_SWEPT_CELLS: dict = {
-    # #54080: Logsigmoid was swept on the ttsim Wormhole model, which cannot unpack a
-    # Float32 input, and budgets do not transfer from Blackhole. These cells resolve to
-    # tolerance until a Wormhole board sweeps them.
-    (MathOperation.Logsigmoid, DataFormat.Float32, out, approx, dest): (
-        "Float32 input unreachable on the ttsim Wormhole model"
-    )
-    for out in (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
-    for approx in (ApproximationMode.Yes, ApproximationMode.No)
-    for dest in (DestAccumulation.Yes, DestAccumulation.No)
+    ChipArchitecture.WORMHOLE: {
+        # #54080: Logsigmoid was swept on the ttsim Wormhole model, which cannot unpack a
+        # Float32 input, and budgets do not transfer from Blackhole. These cells resolve
+        # to tolerance until a Wormhole board sweeps them.
+        (MathOperation.Logsigmoid, DataFormat.Float32, out, approx, dest): (
+            "Float32 input unreachable on the ttsim Wormhole model"
+        )
+        for out in (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
+        for approx in (ApproximationMode.Yes, ApproximationMode.No)
+        for dest in (DestAccumulation.Yes, DestAccumulation.No)
+    },
 }
 
 
@@ -911,6 +902,7 @@ def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
     resolve to a step budget outright: the emitter demoting one is a real deviation on
     an op that should be exact."""
     exact = set(_swept_exact_ops())
+    listed = _UNRESOLVED_SWEPT_CELLS.get(MEASURED_ARCH, {})
     unresolved, demoted, resolved = [], [], []
     for op in enrolled_ops():
         if op not in sfpu_unary_ops():
@@ -927,9 +919,9 @@ def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
             key = (op, in_fmt, out_fmt, approx, dest)
             cell = f"{op.name} {in_fmt.name}->{out_fmt.name} {approx.name} {dest.name}"
             if contract is TOLERANCE_CONTRACT:
-                if key not in _UNRESOLVED_SWEPT_CELLS:
+                if key not in listed:
                     unresolved.append(cell)
-            elif key in _UNRESOLVED_SWEPT_CELLS:
+            elif key in listed:
                 resolved.append(cell)
             elif op in exact and contract.metric is not Metric.ULP:
                 demoted.append(cell)
