@@ -7,11 +7,11 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu
 {
@@ -19,20 +19,23 @@ namespace ckernel::sfpu
 template <typename T>
 constexpr bool is_supported_threshold_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
+/**
+ * Programs the threshold kernel's Dest walk (see _init_sfpu_row_pair_) and resets the Dest counters.
+ * @note Call before @ref _calculate_threshold_; nothing may rewrite ADDR_MOD_6 in between.
+ */
 inline void _init_threshold_()
 {
-    // The loop body handles two dest rows; its second store walks dest through physical addr_mod
-    // slot 6 by the four counter steps those rows take, so the body needs no separate increment.
-    // Unary SFPU sets addr_mod_base, so the store names ADDR_MOD_2, which maps to physical slot 6.
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 4},
-    }
-        .set(ADDR_MOD_6);
+    _init_sfpu_row_pair_();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * Replaces every Dest value <= threshold with value, ITERATIONS rows from the current Dest row.
+ * @tparam APPROXIMATION_MODE: Unused; the kernel is exact in both modes.
+ * @tparam ITERATIONS: Number of Dest rows to process; must be even.
+ * @tparam T: float, or std::uint32_t holding fp32 bits.
+ * @note Call @ref _init_threshold_ first: the body advances Dest through ADDR_MOD_6.
+ */
 template <bool APPROXIMATION_MODE, int ITERATIONS, typename T>
 inline void _calculate_threshold_(T threshold, T value)
 {
@@ -51,7 +54,7 @@ inline void _calculate_threshold_(T threshold, T value)
         v_threshold = Converter::as_float(threshold);
         v_value     = Converter::as_float(value);
     }
-    // Two rows per body: the second row's store carries the dest increment (see _init_threshold_),
+    // Two rows per body: the second row's store carries the Dest increment (see ckernel_sfpu_row_pair.h),
     // which drops the per-row TTINCRWC. The compare is left in the v_if on purpose: `in <= t` lowers
     // to the SFPMAD `-1 * in + t` with the constant as the first multiplicand and a sign test on the
     // result, and the sign of a NaN produced by that MAD (t = +-inf against in = +-inf, or a NaN
@@ -70,9 +73,10 @@ inline void _calculate_threshold_(T threshold, T value)
         v_endif;
         v_if (in1 <= v_threshold)
         {
-            sfpi::dst_reg[1].mode(ADDR_MOD_2) = v_value;
+            _sfpu_row_pair_store_second_(v_value);
         }
         v_endif;
+        _sfpu_row_pair_end_();
     }
 }
 

@@ -8,14 +8,13 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu {
 
 inline void hardshrink_init() {
-    // The loop body handles two dest rows; its second store walks dest through physical addr_mod
-    // slot 6 by the four counter steps those rows take, so the body needs no separate increment.
-    // Unary SFPU sets addr_mod_base, so the store names ADDR_MOD_2, which maps to physical slot 6.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    // The two-row body advances Dest from its second store (see sfpu/ckernel_sfpu_row_pair.h).
+    _init_sfpu_row_pair_();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
@@ -30,31 +29,32 @@ inline void calculate_hardshrink(std::uint32_t param0) {
     // FP32→FP19b truncation, keeping comparisons consistent.
     static_assert(ITERATIONS % 2 == 0, "calculate_hardshrink() processes dest rows in pairs.");
     sfpi::vFloat lambda = Converter::as_float(param0);
-    // Two rows per body: the SFPMAD that forms each difference has a 2-cycle result shadow, and the
-    // compiler pads a one-row body with an SFPNOP before the SFPSETCC. With two independent rows it
-    // interleaves the second row's setsgn/MAD into that shadow instead. Per row the operations are
-    // unchanged, so the result is bit-identical to the one-row body.
+    // Two rows per body: the second row's store also advances Dest (see sfpu/ckernel_sfpu_row_pair.h).
+    // The SFPMAD that forms each difference has a 2-cycle result shadow, and the compiler pads a
+    // one-row body with an SFPNOP before the SFPSETCC; with two independent rows it interleaves the
+    // second row's setsgn/MAD into that shadow instead. Each row runs the same operations as a
+    // one-row body would, so the result is bit-identical to it.
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat v0 = sfpi::dst_reg[0];
         sfpi::vFloat v1 = sfpi::dst_reg[1];
-        sfpi::vFloat abs_v0 = sfpi::setsgn(v0, 0);
-        sfpi::vFloat abs_v1 = sfpi::setsgn(v1, 0);
-        // abs_v <= lambda written as lambda - abs_v >= 0. Wormhole SFPSETCC only has
-        // LT0/GTE0/EQ0/NE0, so the <= form costs two SFPSETCCs plus an SFPCOMPC while
-        // this one lands directly on GTE0. Both operands are non-negative (lambda is a
-        // magnitude), so the subtraction cannot overflow and equality still lands on +0.
+        sfpi::vFloat abs_v0 = sfpi::setsgn(v0, 0 /* sgn */);
+        sfpi::vFloat abs_v1 = sfpi::setsgn(v1, 0 /* sgn */);
+        // Per row, abs_v <= lambda is written as d = lambda - abs_v >= 0. Wormhole SFPSETCC only
+        // has LT0/GTE0/EQ0/NE0, so the <= form costs two SFPSETCCs plus an SFPCOMPC while this
+        // one lands directly on GTE0. Both operands are non-negative (lambda is a magnitude), so
+        // the subtraction cannot overflow and equality still lands on +0.
         //
-        // setsgn(v, 0) is kept rather than switched to sfpi::abs: SFPABS in float mode
-        // leaves a -NaN sign-set (see ckernel_sfpu_isclose.h), whereas setsgn clears it
-        // unconditionally, so abs() would feed a different operand into the compare for
-        // -NaN. Only the predicate changes here; the operand is the baseline's.
+        // abs_v comes from setsgn(v, 0) rather than sfpi::abs: SFPABS in float mode leaves a -NaN
+        // sign-set (see ckernel_sfpu_isclose.h), whereas setsgn clears it unconditionally, so
+        // abs() would feed a different operand into the compare for -NaN.
         sfpi::vFloat d0 = lambda - abs_v0;
         sfpi::vFloat d1 = lambda - abs_v1;
         v_if(d0 >= 0.0f) { sfpi::dst_reg[0] = 0.0f; }
         v_endif;
-        v_if(d1 >= 0.0f) { sfpi::dst_reg[1].mode(ADDR_MOD_2) = 0.0f; }
+        v_if(d1 >= 0.0f) { _sfpu_row_pair_store_second_(0.0f); }
         v_endif;
+        _sfpu_row_pair_end_();
     }
 }
 
