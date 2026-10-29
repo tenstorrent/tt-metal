@@ -25,6 +25,26 @@ User direction (2026-10-29): "you need to have different K value based on batch 
 * The plugin contract already allows a per-row draft count below the width: `propose_draft_tokens` returns
   `draft_token_ids [rows, K_max]` + `num_valid [rows]` (`model_runner.py`), and a row offering 0 takes the plain step.
 
+## The sweep (2026-10-29, `tests/test_mtp_spec.py -k spec_decode_lossless`, 45 layers, fused commit, H1/H2 defaults)
+
+| users per row | K | verify rows | tok/s per user | aggregate | accepted per step | lossless |
+|---|---|---|---|---|---|---|
+| 1 | 3 | 4 | 31.5 | 252 | 3.05 | yes |
+| 2 | 3 | 8 | 33.9 | 543 | 3.37 | yes |
+| 2 | 7 | 16 | 23.9 | 383 | 2.47 | yes |
+| 2 | 15 | 32 | 15.4 | 246 | 3.37 | NO (row 5, token 4) |
+| 4 | 3 | 16 | 24.0 | 768 | 2.5 | yes |
+| 4 | 5 | 24 | 24.4 | 782 | 3.37 | yes |
+| 4 | 7 | 32 | -- | -- | -- | NO (row 5, token 4) |
+| 8 | 1 | 16 | 19.8 | 1267 | 1.94 | yes |
+| 8 | 2 | 24 | (B8_K2 running) | | | |
+| 8 | 3 | 32 | 19.9 | 1274 | 3.20 | NO (row 5, token 4) |
+| 16 | 1 | 32 | 16.6 | 2124 | 1.88 | NO (row 5, token 4) |
+
+The harness's "plain" rate is a readback artifact; the comparable plain step is the e2e 48.4 ms (20.7 tok/s per user at
+32 users). The acceptance plateaus near 2.5-3.4 drafts per step whatever K, so the shortest K that keeps the plateau wins,
+and every point on the full 32-row tile breaks losslessness on mesh row 5 (the open verify defect).
+
 ## The policy
 
 `k_by_rows`: a table of (users per row live, K) measured on the harness (`tests/test_mtp_spec.py` at 45 layers on the
