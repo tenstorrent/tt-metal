@@ -1686,8 +1686,8 @@ def run_chunked_transformer_updated(
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
-    readback, no PCC). Tokens are the real (longbook) ids from the golden trace when present, else a
-    deterministic in-vocab pattern, so this is trace-optional. The KV cache is reused across iterations
+    readback, no PCC). Tokens are the real (longbook) ids from the golden trace when PREFILL_TRACE_DIR is set
+    or PCC is requested, else a deterministic in-vocab pattern, so this is trace-optional. The KV cache is reused across iterations
     (each chunk overwrites the same [preload_isl, preload_isl + measured_len) region in order).
 
     `preload_isl` (must be a multiple of CHUNK): treat the cache as already holding this many prior KV
@@ -1886,15 +1886,17 @@ def run_chunked_transformer_updated(
 
     iteration_chunk_times: list[list[float]] = []
 
-    # Token ids: prefer the real (code_debug/longbook) ids from the golden trace (same source as the PCC
-    # test) but never compared here; fall back to a deterministic in-vocab pattern so this stays
-    # trace-optional. _resolve_trace_dir raises when the base dir is absent (e.g. the code_debug dataset
-    # isn't staged on this host), so swallow that too and fall back -- the verdict is trace-independent.
+    # Token ids come from the golden trace only when PREFILL_TRACE_DIR is set or PCC is requested, so a
+    # determinism-only run never reads a golden; otherwise a deterministic in-vocab pattern is used.
+    # _resolve_trace_dir raises when the base dir is absent (e.g. the code_debug dataset isn't staged on
+    # this host), so swallow that too and fall back -- the verdict is trace-independent.
     vocab_size = config.vocab_size
-    try:
-        trace_dir = _resolve_trace_dir(variant)
-    except FileNotFoundError:
-        trace_dir = None
+    trace_dir = None
+    if check_pcc or check_layer_pcc or os.environ.get("PREFILL_TRACE_DIR"):
+        try:
+            trace_dir = _resolve_trace_dir(variant)
+        except FileNotFoundError:
+            pass
     # preload_isl needs REAL prior KV (for representative MoE routing), which only the golden trace has.
     # KV depths beyond the trace are filled with random KV in the preload (see helper), so a trace is
     # required for preload_isl>0 but preload_isl may exceed the trace length.
