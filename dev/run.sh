@@ -4,6 +4,7 @@
 # so a hang in one step cannot block the rest.
 #
 #   ./dev/run.sh            # = all: the correctness steps (smoke, check, prod, dense)
+#   ./dev/run.sh a b c      # several steps in one call; presets: quick, night (see below)
 #   ./dev/run.sh smoke      # keep-all mask at r512k512 must match dense
 #   ./dev/run.sh check      # every non-production case of test_sparse_ring_sdpa.py
 #   ./dev/run.sh prod       # the production-size cases (5 s / 10 s)
@@ -28,6 +29,23 @@ SD=tests/nightly/blackhole/sdpa
 SPARSE=$SD/test_sparse_ring_sdpa.py
 PERF=$SD/test_sparse_ring_sdpa_perf.py
 DENSE=$SD/test_ring_joint_sdpa.py
+# Several steps in one call run one after another (one job pays the rsync / reset once); presets:
+#   quick = smoke perf profile5                      (a kernel experiment whose correctness is known)
+#   night = smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15
+case "${1:-all}" in
+    quick) set -- smoke perf profile5 ;;
+    night) set -- smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15 ;;
+esac
+if [ $# -gt 1 ]; then
+    worst=0
+    for step in "$@"; do
+        "$0" "$step"
+        rc=$?
+        [ "$rc" -gt "$worst" ] && worst=$rc
+    done
+    echo "=== steps: $*  worst exit code: $worst"
+    exit "$worst"
+fi
 ONLY=${1:-all}
 
 run() {
@@ -40,7 +58,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all smoke check check_rescale prod dense perf perf_all profile profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 WORST=0  # worst exit code of any step, returned at the end
 note() { local rc=$1; [ "$rc" -gt "$WORST" ] && WORST=$rc; return 0; }
@@ -91,6 +109,11 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 [ "$ONLY" = profile ] && ONLY=profile5  # one sparse call only: the summary treats the longest run as the op
 # profile5 / profile10 / profile15: one untraced sparse call at 5 / 10 / 15 s from dev/profile_case.py (inputs made on
 # device, setup in seconds), 256-key pieces, density 0.2; PROFILE_K overrides the -k filter (see profile_case.py ids).
+if [ "$ONLY" = profile5_nopairs ]; then  # the 5 s profile with D4 pair steps forced off (the pre-D4 baseline)
+    run profile5_nopairs 1800 env TT_SPARSE_PAIR_STEPS=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
+        pytest dev/profile_case.py -s -k "${PROFILE_K:-s05 and k256 and d020 and sparse_only}"
+    summarize_profile profile5_nopairs_summary
+fi
 case "$ONLY" in
     profile5 | profile10 | profile15)
         n=${ONLY#profile}
