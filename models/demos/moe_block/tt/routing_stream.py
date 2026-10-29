@@ -178,6 +178,9 @@ def _plan_fn(subs):
 # + increment. args at r0: nd (0: no role), nr (remote), self, my buffer, PCAP, slot tensor address, c0, c1, planner
 # core 0 (x, y), calls (global: this core's call count), ready (global), mesh, then the destinations' chip ids [nd]
 RA_SEND = r"""
+#ifndef RA_NF_
+#define RA_NF_ 16  // (a forwarding port's slots: their flags, then the landed count - RoutingStream.NF)
+#endif
 // one packet's way on: to the next hop (kind 0: the destination's DRAM slot page par N + src, its arrival counter on
 // planner core 0; kind 1: the next forwarding port's DRAM slot page (fbase: the forward slots tensor, slot | page << 8),
 // its flag on that port), chunks of MAXP, the last with the increment. (A forward slot in DRAM, not the port's L1: a
@@ -213,7 +216,7 @@ FORCE_INLINE void ra_hop(C& conn, H hdr, uint32_t src_l1, uint32_t bytes, uint32
     }
     if (kind == 1) {  // (+1 on the next forwarder's landed count, behind the packet: its poll reads one word)
         noc_async_writes_flushed();
-        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(nx, ny, flags + 16 * 16), 1, true});  // (slot unused)
+        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(nx, ny, flags + 16 * RA_NF_), 1, true});
         conn.wait_for_empty_write_slot();
         conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
     }
@@ -280,7 +283,7 @@ struct RASend {
 // first page, then per slot (next chip, kind, x, y, slot | page << 8)
 struct RAFwd {
     uint32_t r0, n, fb, fl, PCAP, sl, c0, c1, px, py, mesh, fd, pg0, left, lastc;
-    uint32_t sent[16];
+    uint32_t sent[RA_NF_];
     void init(uint32_t a) {
         r0 = a; n = get_arg_val<uint32_t>(a); left = n; lastc = 0;
         if (!n) return;
@@ -288,14 +291,14 @@ struct RAFwd {
         sl = get_arg_val<uint32_t>(a + 4); c0 = get_arg_val<uint32_t>(a + 5); c1 = get_arg_val<uint32_t>(a + 6);
         px = get_arg_val<uint32_t>(a + 7); py = get_arg_val<uint32_t>(a + 8); mesh = get_arg_val<uint32_t>(a + 9);
         fd = get_arg_val<uint32_t>(a + 10); pg0 = get_arg_val<uint32_t>(a + 11);
-        for (uint32_t k = 0; k < 16; ++k) sent[k] = 0;
+        for (uint32_t k = 0; k < RA_NF_; ++k) sent[k] = 0;
     }
     static uint32_t len(uint32_t a) { const uint32_t n = get_arg_val<uint32_t>(a); return n ? 12 + 5 * n : 1; }
     template <typename C, typename H>
     void poll(C& conn, H hdr, bool blocking, uint32_t RA_N, uint32_t RA_M, uint32_t RA_HBP, uint32_t MAXP) {
         // (the landed count - one increment a packet, behind its data and flag - says when a scan of the flags can find
         // something: a poll between the other streams' packets reads one word)
-        volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl + 16 * 16);
+        volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl + 16 * RA_NF_);
         while (left) {
             bool any = false;
             invalidate_l1_cache();
@@ -408,7 +411,9 @@ class RoutingStream:
     """The routing exchange + planner in the head (module docstring). router: the head's RouterStream (its cores are the
     planner cores; its out tensor the own joint rows); xg: the gather (its ports); watcher: the watcher core."""
 
-    def __init__(self, mesh_device, xg, router, *, S, K, EPC, A, L, luts, nps, rows_cap, ycores, arena, flags):
+    def __init__(
+        self, mesh_device, xg, router, *, S, K, EPC, A, L, luts, nps, rows_cap, ycores, arena, flags, fslots=16
+    ):
         """ycores: the logical cores the Y senders run on (BRISC; one a needed Y direction); arena: (base, bytes free
         from offset off0 on the router cores: the planner's region; the ports' and Y cores' buffers in the arena's
         range there)."""
@@ -481,7 +486,8 @@ class RoutingStream:
         nx = max(len(v) for c in xg.chips for k, v in self.serve(c).items() if k[0] == "x")
         ny = max([len(v) for c in xg.chips for k, v in self.serve(c).items() if k[0] == "y"] + [0])
         self.fbase = self.xbase + nx * self.PCAP
-        self.flags = flags  # (the forwarding slots' flags: 16 B a slot, zeroed L1)
+        self.flags = flags  # (the forwarding slots' flags: 16 B a slot, zeroed L1 - fslots of them, then the count)
+        self.NF = fslots
         nf = max([len(v) for v in self.fwd_plan()[0].values()] + [0])
         assert al(router.pbuf_sub) + (nx + nf) * self.PCAP <= abytes, (
             f"ports: no L1 for the routing buffers ({al(router.pbuf_sub)} B logits + {nx} + {nf} slots x {self.PCAP} B = "
@@ -521,7 +527,7 @@ class RoutingStream:
         self.slots = dev(z(2 * self.N, self.PCAP // 4))
         # the forwarding ports' slots: a DRAM page each (PCAP), per forwarding port key 16 - the same on every chip
         self.fkeys = sorted({k for (_, k) in self.fwd_plan()[0]})
-        self.fslots = dev(z(max(1, len(self.fkeys)) * 16, self.PCAP // 4))
+        self.fslots = dev(z(max(1, len(self.fkeys)) * self.NF, self.PCAP // 4))
         import os
 
         self.dbg = dev(z(16, 32)) if os.environ.get("RA_DBG") else None  # (the planner's phase stamps, a page a core)
@@ -635,7 +641,7 @@ class RoutingStream:
             ci, key = steps[i + 1]
             core = virt(self._core_of((ci // self.C, ci % self.C), key))
             slot = self.fwd_plan()[1][(s, d, i + 1)]
-            return [int(node(ci).chip_id), 1, core.x, core.y, slot | (self.fkeys.index(key) * 16 + slot) << 8]
+            return [int(node(ci).chip_id), 1, core.x, core.y, slot | (self.fkeys.index(key) * self.NF + slot) << 8]
         return [int(node(d).chip_id), 0, 0, 0, 0]
 
     def fwd_block(self, coord, key):
@@ -646,10 +652,10 @@ class RoutingStream:
         virt = self.mesh.worker_core_from_logical_core
         p0 = virt(self.router.cores[0])
         node = self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
-        assert len(lst) <= 16
+        assert len(lst) <= self.NF, f"routing: a port forwards {len(lst)} packets > its {self.NF} slots"
         out = [len(lst), self.fbase, self.flags, self.PCAP, int(self.slots.buffer_address()), self.addr["c0"]]
         out += [self.addr["c1"], p0.x, p0.y, int(node.mesh_id)]
-        out += [int(self.fslots.buffer_address()), self.fkeys.index(key) * 16]
+        out += [int(self.fslots.buffer_address()), self.fkeys.index(key) * self.NF]
         for s_, d, i in lst:
             out += self.next_hop(s_, d, i)
         return out
@@ -799,6 +805,7 @@ class RoutingStream:
                 RA_BB_=self.BB,
                 RA_BBP_=self.BBP,
                 RA_MAXP_=self.MAXP,
+                RA_NF_=self.NF,
             ).items()
         )
 

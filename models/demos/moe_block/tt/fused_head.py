@@ -410,7 +410,15 @@ class HeadSE3:
             # ports' sub-block words: 16 B a (unit, core) - a port's units (the owners it sends to) x its link's router
             # cores, at least 16)
             HS = persist_l1.handoff_bytes()  # (a hand-off word every HS bytes: 16, or 4 with PERSIST_L1=small)
-            self.lw_off = (2 * GX * GY * HS // 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
+            # (the routing's forwarding slots: the most packets a port forwards on this mesh, 16 at least)
+            self.fslots = 16
+            if routing is not None:
+                from models.demos.moe_block.tt.head_plan import routing_paths
+
+                R_ = tuple(mesh_device.shape)[0]
+                rp_ = routing_paths(R_, G, self.xg.ring, bool(routing.torus[1] and R_ > 2), num_links)
+                self.fslots = max(16, rp_[2] if not isinstance(rp_, str) else 16)
+            self.lw_off = (2 * GX * GY * HS // 4 + 4 * 8 + 4 * self.fslots + 4 + 3) // 4 * 4
             nrc = rows // 32 // G * (2 if router is not None and router.split else 1)
             self.port_words = max(16, (G - 1) * -(-nrc // num_links))
             # (then, with chunks, the RS zone credits: a port's zone-free word (its chip's cores) and zone-credit word
@@ -506,6 +514,7 @@ class HeadSE3:
                 ycores=[watcher],
                 arena=(self.eng.base, self.eng.arena_bytes, off0),
                 flags=int(self.mbox.buffer_address()) + persist_l1.handoff_bytes() * 2 * GX * GY + 128,
+                fslots=self.fslots,
             )
             self.router.ra = self.routing
             if routing.prep:

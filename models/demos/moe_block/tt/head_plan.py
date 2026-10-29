@@ -386,8 +386,8 @@ def cores_check(shape: HeadShape, lay: HeadLayout, eng, rs_plan, arena):
     if isinstance(rt, str):
         return f"routing exchange: {rt}"
     nx, ny, nf, nsend = rt
-    if nf > 16:
-        return f"routing exchange: a port forwards {nf} packets > 16"
+    if nf > 64:  # (a forwarding port's slots - their flags in the head's mailbox, the sender's sent[] - grow to it)
+        return f"routing exchange: a port forwards {nf} packets > 64"
     pcap = slot_bytes(S, K, EPC, M)
     if _al(pbuf) + (nx + nf) * pcap > arena:
         return (
