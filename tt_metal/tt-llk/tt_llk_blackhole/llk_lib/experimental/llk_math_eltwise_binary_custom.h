@@ -236,7 +236,7 @@ inline void _llk_math_sub_bcast_cols_compensated_init_()
 {
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 8}}.set(ADDR_MOD_3);
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 0x3F & -8}, .dest = {.incr = 8}}.set(ADDR_MOD_5);
-    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_6);
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_2);
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -295,7 +295,7 @@ inline void _llk_math_sub_bcast_cols_compensated_(
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0);
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
         }
 
         // Publish SrcA for the next input tile while keeping the split mean resident.
