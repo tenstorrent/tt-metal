@@ -28,14 +28,19 @@
 //
 // The hub's slots address arrives in sem_addr before the first partial (the slots are a hub CB).
 //
+// Rows mode (active_rows.hpp): a GDN layer writes its whole shifted history (h1, h2, y) back to slots 0..2;
+// with the preserve word, only the active rows' face rows of its q|k|v tiles.
+//
 // With the lm_head the writer scans this core's logits for their maximum (the first one on ties) and
 // writes (order key, vocab index) to record slot [core] on the hub, so the host reads num_streamers
-// candidates per chip instead of the logits. With sample (batch 1) it writes this core's top sampling::kTopK
-// instead, for the hub's on-device sampling (sampling.hpp).
+// candidates per chip instead of the logits. With sample it writes this core's top sampling::kTopK instead, for
+// the hub's on-device sampling (sampling.hpp): batch 1, or (rows mode) one list per row, the active rows' filled,
+// laid out [row][streamer] on the hub.
 
 #include "api/dataflow/dataflow_api.h"
 #include "sampling.hpp"
 #include "streamer_common.hpp"
+#include "active_rows.hpp"
 
 using namespace resident;
 
@@ -95,7 +100,10 @@ void kernel_main() {
     while (*ring_sem == 0) {
         invalidate_l1_cache();
     }
-    const uint32_t ring = *ring_sem - 1;
+    // (rows mode: the active rows and the preserve word, see the reader)
+    const uint32_t ring = rows_mode ? 0 : *ring_sem - 1;
+    const uint32_t active_mask = *ring_sem & 0xffff;
+    const bool preserve = rows_mode && ((*ring_sem >> 16) & 1);
 
     // x of round 0 (x0) is seeded and released by the reader; the hub multicasts x of the later rounds
     auto take_slots = [&](uint32_t round) {
@@ -180,7 +188,8 @@ void kernel_main() {
         } else {
             send_runs(q_off_gdn);
             o_expected += o_heads;
-            constexpr uint32_t outs = verify_pair ? 3 : 1;  // verify: T(k + 2), T(k + 3), T(k + 4)
+            // verify: T(k + 2), T(k + 3), T(k + 4); rows mode: (h1, h2, y)
+            constexpr uint32_t outs = verify_pair || rows_mode ? 3 : 1;
             cb_wait_front(cb_hist_out, outs * kBlkViews);
             if (verify_rows && n_conv > 0) {
                 // input row r -> ring slot ring + 3 + r: rows 0 .. n1 - 1 to block b from row o, the rest to block
@@ -202,15 +211,35 @@ void kernel_main() {
                     }
                 }
                 noc_async_write_barrier();
-            }
-            if (!verify_rows && n_conv > 0) {
+            } else if (rows_mode && preserve && n_conv > 0) {
+                // the active rows' two face rows of each q|k|v tile of the 3 slots
+                const uint32_t row = first_row + g % gdn_copies;
+                for (uint32_t u = 0; u < batch; u++) {
+                    if (!((active_mask >> u) & 1)) {
+                        continue;
+                    }
+                    for (uint32_t j = 0; j < outs; j++) {
+                        for (uint32_t t = 0; t < n_conv; t++) {
+                            for (uint32_t f = 0; f < 2; f++) {
+                                const uint32_t off = t * kTileBytes + (f * batch + u) * 32;
+                                noc_async_write(
+                                    get_read_ptr(cb_hist_out) + j * kBlkViews * 2048 + off,
+                                    hist.get_noc_addr(row, j * kBlkBytes + off),
+                                    32);
+                            }
+                        }
+                    }
+                }
+                noc_async_write_barrier();
+            } else if (n_conv > 0) {
                 // the 32x32 views holding the q|k|v tiles
                 const uint32_t step = conv_step(ring, g, gdn_copies);
                 for (uint32_t j = 0; j < outs; j++) {
                     noc_async_write(
                         get_read_ptr(cb_hist_out) + j * kBlkViews * 2048,
                         hist.get_noc_addr(
-                            first_row + g % gdn_copies, ((step + (verify_pair ? 2 + j : 0)) % kHistSlots) * kBlkBytes),
+                            first_row + g % gdn_copies,
+                            (rows_mode ? j : (step + (verify_pair ? 2 + j : 0)) % kHistSlots) * kBlkBytes),
                         views_of(n_conv) * 2048);
                 }
                 noc_async_write_barrier();
@@ -262,15 +291,22 @@ void kernel_main() {
             auto key = [](uint32_t b) { return sampling::key_of(b); };
             volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_pout));
             if constexpr (sample) {
-                static_assert(nd_max * kTileBytes >= sampling::kListBytes, "the list is staged in cb_pout");
-                sampling::clear(rec);
-                for (uint32_t i = 0; i < valid_cols; i += 2) {
-                    const uint32_t c = i % 32;
-                    const uint32_t w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        base + (i / 32) * kTileBytes + (c / 16) * 32)[(c % 16) / 2];
-                    sampling::insert(rec, key(w & 0xffff), first_index + i);
-                    if (i + 1 < valid_cols) {
-                        sampling::insert(rec, key(w >> 16), first_index + i + 1);
+                // per row its list (rows mode: the active rows'; the others stay cleared)
+                static_assert(nd_max * kTileBytes >= batch * sampling::kListBytes, "the lists are staged in cb_pout");
+                for (uint32_t u = 0; u < batch; u++) {
+                    volatile tt_l1_ptr uint32_t* list = rec + u * 2 * sampling::kTopK;
+                    sampling::clear(list);
+                    if (rows_mode && !((active_mask >> u) & 1)) {
+                        continue;
+                    }
+                    for (uint32_t i = 0; i < valid_cols; i += 2) {
+                        const uint32_t c = i % 32;
+                        const uint32_t w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            base + (i / 32) * kTileBytes + ((c / 16) * batch + u) * 32)[(c % 16) / 2];
+                        sampling::insert(list, key(w & 0xffff), first_index + i);
+                        if (i + 1 < valid_cols) {
+                            sampling::insert(list, key(w >> 16), first_index + i + 1);
+                        }
                     }
                 }
             }
@@ -297,8 +333,18 @@ void kernel_main() {
                 rec[4 * u + 1] = first_index + best_i;
             }
             constexpr uint32_t rec_bytes = sample ? sampling::kListBytes : batch * 16;
-            noc_async_write(
-                get_write_ptr(cb_pout), get_noc_addr(hub_x, hub_y, argmax_addr + core * rec_bytes), rec_bytes);
+            if constexpr (sample && batch > 1) {
+                // row u's lists of every streamer back to back on the hub: [row][streamer]
+                for (uint32_t u = 0; u < batch; u++) {
+                    noc_async_write(
+                        get_write_ptr(cb_pout) + u * sampling::kListBytes,
+                        get_noc_addr(hub_x, hub_y, argmax_addr + (u * num_streamers + core) * sampling::kListBytes),
+                        sampling::kListBytes);
+                }
+            } else {
+                noc_async_write(
+                    get_write_ptr(cb_pout), get_noc_addr(hub_x, hub_y, argmax_addr + core * rec_bytes), rec_bytes);
+            }
             noc_async_write_barrier();
             noc_semaphore_inc(hub_gather_sem, 1);  // the record is on the hub (a feeding hub waits for it)
         }

@@ -33,6 +33,7 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "streamer_common.hpp"
+#include "active_rows.hpp"
 
 using namespace resident;
 
@@ -276,14 +277,15 @@ FORCE_INLINE void add_residual(uint32_t nd, uint32_t pout_off) {
 // streamed-in history (cb_conv_hist, oldest first) and taps; y[t] goes to cb_hist_out; the first n_conv
 // of this core's columns are q|k|v, the rest (z, a, b) are copied through (attention: all of them).
 // The conv runs once on the 32x32 views of the column block. Verify of R > 2 rows: the windows of the older taps
-// are picked from y and the two history blocks by 0/1 matmuls (see streamer_common.hpp).
+// are picked from y and the two history blocks by 0/1 matmuls (see streamer_common.hpp). Rows mode: the shifted
+// history (h1, h2, y) goes to cb_hist_out (the history operands are still intact in DST after the conv).
 FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
     cb_wait_front(cb_qkvz, kBlk);
     cb_reserve_back(cb_qkvz_out, kBlk);
     if (gdn) {
         cb_wait_front(cb_conv_w, 4 * kBlk);
         cb_wait_front(cb_conv_hist, 3 * kBlk);
-        cb_reserve_back(cb_hist_out, (verify_pair ? 3 : 1) * kBlkViews);
+        cb_reserve_back(cb_hist_out, (verify_pair || rows_mode ? 3 : 1) * kBlkViews);
     }
     if (n_conv > 0) {
         reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
@@ -343,6 +345,10 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
             if constexpr (verify_pair) {
                 pack_tile<true>(6, cb_hist_out, v);
                 pack_tile<true>(0, cb_hist_out, kBlkViews + v);
+            } else if constexpr (rows_mode) {
+                pack_tile<true>(4, cb_hist_out, v);
+                pack_tile<true>(6, cb_hist_out, kBlkViews + v);
+                pack_tile<true>(0, cb_hist_out, 2 * kBlkViews + v);
             } else {
                 pack_tile<true>(0, cb_hist_out, v);
             }
@@ -380,7 +386,8 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
     cb_push_back(cb_qkvz_out, kBlk);
     cb_pop_front(cb_qkvz, kBlk);
     if (gdn) {
-        cb_push_back(cb_hist_out, (verify_pair ? 3 : 1) * kBlkViews);  // with no q|k|v columns the writer skips it
+        // with no q|k|v columns the writer skips it
+        cb_push_back(cb_hist_out, (verify_pair || rows_mode ? 3 : 1) * kBlkViews);
         cb_pop_front(cb_conv_w, 4 * kBlk);
         cb_pop_front(cb_conv_hist, 3 * kBlk);
     }

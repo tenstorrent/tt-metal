@@ -33,6 +33,7 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/dataflow/circular_buffer.h"
+#include "active_rows.hpp"
 
 namespace {
 
@@ -187,8 +188,15 @@ void kernel_main() {
     constexpr uint32_t st = Kt * Vt;
     constexpr uint32_t kSoftplusThreshold = 0x41a00000u;  // 20.0f
 
-    constexpr uint32_t layers = get_compile_time_arg_val(9);
     compute_kernel_hw_startup(cb_q_in, cb_row_mask, cb_scratch);
+    // (layer, user) steps: CT 9, or (rows mode) the GDN layers times this core's active users of the step
+    uint32_t layers = get_compile_time_arg_val(9);
+    if constexpr (rows_mode) {
+        constexpr uint32_t cb_active = 29;
+        CircularBuffer(cb_active).wait_front(1);
+        layers = get_named_compile_time_arg_val("gdn_layers") * read_tile_value(cb_active, 0, 0);
+        CircularBuffer(cb_active).pop_front(1);
+    }
     CircularBuffer(cb_ones).wait_front(1);
     CircularBuffer(cb_row_mask).wait_front(1);
     for (uint32_t layer = 0; layer < layers; layer++) {
