@@ -7,7 +7,7 @@
 // word0 = [31:27] type(5) | [26:0] low27, word1 = payload32. Markers carry the zone id (16 bits, assigned to each
 // image at load, hostdev/profiler_zone_id.h) in low27 and timer_low; timer_hi rides the rare STICKY_TIMER.
 // Plain C, read by the host decoder; the producer keeps its own copy of the packer (ppfmt in
-// kernel_profiler_streaming.hpp).
+// hostdev/streaming_profiler_common.h).
 
 #ifndef SPSC_PACKET_H
 #define SPSC_PACKET_H

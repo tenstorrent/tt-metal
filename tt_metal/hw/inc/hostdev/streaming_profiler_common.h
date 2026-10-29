@@ -9,7 +9,7 @@
 // Everything the streaming backend adds on top of the DRAM profiler's hostdev/profiler_common.h lives here,
 // so that header stays byte-for-byte the DRAM profiler's own. The two backends are mutually exclusive at run
 // time (TT_METAL_DEVICE_PROFILER vs TT_METAL_STREAMING_PROFILER, see llrt/rtoptions.cpp), and the device
-// producer for this backend is internal/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
+// producer for this backend is DevicePublish's ring, internal/debug/device_publish_ring.h, under -DPROFILE_STREAMING.
 
 #include <cstdint>
 
@@ -137,18 +137,51 @@ struct ResidentCtrl {
 constexpr std::uint32_t kRelayCoreRecordBytes = 128;
 constexpr std::uint32_t kEthRelayMaxDrained = 16;  // eth cores the eth relay drains besides the wall-clock core
 
-// STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
-// word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host
-// forward-fills that identity onto the following timing markers. Its type sits in the same bits as a
-// marker's type. Value 6 == PP_STICKY_META in impl/streaming_profiler/spsc_packet.h (which is plain C and cannot
-// include this header); spsc_marker_decode.hpp static_asserts the two agree. This used to be a trailing
-// enumerator on the DRAM profiler's PacketTypes; it never belonged to that wire.
-static constexpr std::uint32_t SPSC_TYPE_STICKY_META = 6;
+// The type of a packet a RISC writes on its ring, and of a relay's frame, in word 0's top 3 bits. 0 is no packet: rings
+// and frames pad with zero words.
+enum class PacketType : std::uint32_t {
+    Record = 1,         // a DevicePublish record
+    TimerHigh = 2,      // the timer's high 32 bits, for the 32-bit records that follow it
+    RuntimeId = 3,      // the runtime id of the records that follow it
+    RuntimeIdWide = 4,  // the same, for a runtime id too wide for word 0, in word 1
+    Frame = 5,          // a relay's frame
+};
+
+// Word 0 of a packet: bits 31-29 are its PacketType, and the rest
+//   of a record:         28-20 its packet words, word 0 included   19 send to the external process
+//                        18-16 unused, room for the call site id to grow   15-0 the call site id
+//   of any other packet: its value
+struct ppfmt {
+    static constexpr std::uint32_t TYPE_SHIFT = 29;
+    static constexpr std::uint32_t VALUE_MASK = (1u << TYPE_SHIFT) - 1;
+    static constexpr std::uint32_t PACKET_WORDS_SHIFT = 20;
+    static constexpr std::uint32_t PACKET_WORDS_MASK = 0x1FF;
+    static constexpr std::uint32_t TO_EXTERNAL = 1u << 19;
+    static constexpr std::uint32_t CALL_SITE_ID_MASK = 0xFFFF;
+
+    static constexpr PacketType type(std::uint32_t w0) { return PacketType(w0 >> TYPE_SHIFT); }
+    static constexpr std::uint32_t w0(PacketType type, std::uint32_t value) {
+        return std::uint32_t(type) << TYPE_SHIFT | (value & VALUE_MASK);
+    }
+    static constexpr std::uint32_t record_w0(std::uint32_t packet_words) {
+        return w0(PacketType::Record, packet_words << PACKET_WORDS_SHIFT);
+    }
+    static constexpr std::uint32_t packet_words(std::uint32_t record_w0) {
+        return (record_w0 >> PACKET_WORDS_SHIFT) & PACKET_WORDS_MASK;
+    }
+
+    // A stall's record is a zone's 32-bit one: the stall's end as its publish Timestamp, then its start's delta back.
+    static constexpr std::uint32_t STALL_PACKET_WORDS = 3;
+    // The most words a record and the timer packet ahead of it can take: the ring, less a stall record and its timer
+    // packet twice, one held in reserve and one kept free while the writer waits for room (device_publish_ring.h).
+    static constexpr std::uint32_t MAX_RECORD_WORDS = PROFILER_L1_VECTOR_SIZE - 2 * (1 + STALL_PACKET_WORDS);
+};
+static_assert(ppfmt::MAX_RECORD_WORDS <= ppfmt::PACKET_WORDS_MASK, "word 0 holds the longest record's packet words");
 
 // SPSC span frame, the relay wire format: a control block (identity from the host-seeded coordinate, progress from
 // the heads, extent from the tails) followed by the ring words it describes; the relay injects nothing of its own.
 //
-//   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits are layout flags
+//   [0]                       w0 = PacketType::Frame in the type bits; the bits below are layout flags
 //   [1]                       payload_words = control block + pack pads + shipped ring words
 //   [2 .. 2+RISC)             ring head each RISC's run starts at, relay-written
 //   [7]                       the core's NoC coordinate (y << 16 | x), relay-written
@@ -164,11 +197,6 @@ static constexpr std::uint32_t SPSC_TYPE_STICKY_META = 6;
 // spsc_span_pack_pad() skipped words, never written; the host reads past them. The 8-word prefix puts the
 // control block at 32 B and the payload at 96 B, both NoC-alignment multiples.
 constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 8;
-// Wire type code. Must equal PP_BULK_SPAN in tt_metal/impl/streaming_profiler/spsc_packet.h, which is plain C and
-// cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
-constexpr static std::uint32_t SPSC_SPAN_PACKET_TYPE = 13;
-// Where the packet type sits in word0 of every packet in this stream (PP_TYPE_SHIFT in spsc_packet.h).
-constexpr static std::uint32_t SPSC_SPAN_TYPE_SHIFT = 27;
 // Socket page granularity in words; frames pad up to a whole number. 64 B is the host socket's PCIe alignment (its
 // smallest legal page); larger pages concentrate the same credit wait into stalls long enough to miss the ring-fill
 // deadline.
@@ -194,7 +222,7 @@ constexpr bool spsc_span_wrap_image(std::uint32_t start, std::uint32_t extent, s
     return (start & (ring_cap - 1u)) + extent > ring_cap && ring_cap - extent <= SPSC_SPAN_WRAP_IMAGE_MAX_PAD_WORDS;
 }
 
-inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
+inline std::uint32_t spsc_span_w0() { return ppfmt::w0(PacketType::Frame, 0); }
 
 // Control block of a packed frame: control-vector words SPSC_WIRE_CV_BASE..+16 exactly as the relay's one 64 B NoC
 // read of them lands in the frame -- the lanes' state slots and their tails. The heads and XY the relay adds go in
@@ -225,13 +253,7 @@ static_assert(
         SPSC_PREFIX_HEAD_0 + PROFILER_SPSC_TENSIX_RISC == SPSC_PREFIX_XY && SPSC_PREFIX_XY < SPSC_SPAN_PREFIX_WORDS,
     "the control block is one 64 B window of the control vector; heads and XY fit the prefix");
 
-// ---- Wire codes shared with the producer and the host decoder --------------------------------------
-//
-// Codes MUST match spsc_packet.h's PP_* -- asserted in spsc_marker_decode.hpp, which is the one place that
-// sees both headers -- and kernel_profiler_streaming.hpp's ppfmt (inlined there because the JIT build lacks the
-// spsc_packet.h include path).
-
-// Producer tail-publish batch (kernel_profiler_streaming.hpp publish_tail_batched): the published TAIL can lag
+// Producer tail-publish batch (device_publish_ring.h publish_tail_batched): the published TAIL can lag
 // true ring occupancy by up to this many words between fenced publishes -- drainer-invisible occupancy
 // against the producer's 506-word bar. Must be a power of two. 16, not 64: the interleaved microbench
 // (device reset between runs, 200k zones/RISC) measured 64 at 59.82/60.31 cycles/zone and 16 at
@@ -240,17 +262,6 @@ static_assert(
 // goes 25-44 stalls to 0/0/0. NOT 8: it buys delay 9 (0-1 stalls) but measures 59.87 cycles/zone --
 // a real producer cost over 16 -- and producer overhead outranks the knee here by policy.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 16;
-
-static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;      // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
-static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
-static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
-
-// Marker ids are the FULL 27 bits. The mask was 0xFFFF once, and that truncation was invisible: markers rendered
-// perfectly and only their NAMES could not be resolved. Any change to the id width has to be made in every packer
-// at once: ppfmt in kernel_profiler_streaming.hpp and pp_* in spsc_packet.h.
-// DATA is 3 + N words: word0 is shaped like a zone marker (type | 27-bit id), the length lives in word2.
-static constexpr std::uint32_t SPSC_TYPE_DATA = 10;
-static constexpr std::uint32_t SPSC_DATA_SIZE_SHIFT = 25;
 
 // Words in a staging/ring slot. A slot must hold the PACKED image of a span, which can be LARGER than the
 // raw span it replaces: the raw layout needs no pads (lane r starts at prefix + ctrl + r*ring, inherently

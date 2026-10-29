@@ -15,17 +15,15 @@ OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"
 
-/* Fake VMAs for the kernel profiler's zone sections below. All three are (INFO), so they are
-   non-ALLOC, never appear in a PT_LOAD and are never placed on the device; the host resolves the
-   pointers they hold by subtracting the section's own sh_addr (llrt/zone_meta.cpp). The string and
-   record sections only need a defined base so that the link-time pointers from .tt_zone_meta into
-   .tt_zone_str are well-formed. The id section's base must keep its upper 20 bits nonzero (see its
-   comment); 0x6800000 is also hostdev/profiler_zone_id.h's TT_ZONE_IDS_LINK_VMA. Kept 1 MB apart and
-   clear of the device memory map, continuing the ladder the .device_print_strings sections started
-   at 0x6400000. */
-#define TT_ZONE_STR_VMA 0x6600000
-#define TT_ZONE_META_VMA 0x6700000
-#define TT_ZONE_IDS_VMA 0x6800000
+/* Fake VMAs for the streaming profiler's call-site sections below (internal/debug/device_publish_impl.h). All four are
+   (INFO), so they are non-ALLOC, never appear in a PT_LOAD and are never placed on the device; the host resolves the
+   pointers they hold by subtracting the section's own sh_addr (llrt/call_sites.cpp). Each only needs a defined base so
+   that the link-time pointers between them are well-formed. They sit at least 1 MB apart and clear of the device memory
+   map, continuing the ladder the .device_print_strings sections started at 0x6400000. */
+#define DEVICE_PUBLISH_DESCRIPTOR_CONTENTS_VMA 0x6900000
+#define DEVICE_PUBLISH_DESCRIPTORS_VMA 0x6A00000
+#define DEVICE_PUBLISH_STRINGS_VMA 0x6B00000
+#define DEVICE_PUBLISH_IDS_VMA 0x6C00000
 
 #if defined(COMPILE_FOR_BRISC)
 #define DATA_START MEM_LOCAL_BASE
@@ -164,43 +162,30 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Zone names + __FILE__ strings for the kernel profiler. Mergeable strings, so each distinct
-     string is stored once however many zones reference it. .tt_zone_meta holds VMAs into here,
-     which the host rebases by this section's sh_addr. (INFO) strips SHF_ALLOC, so the section
-     never enters a PT_LOAD and costs no device memory. */
-  .tt_zone_str TT_ZONE_STR_VMA (INFO) :
+  /* What DevicePublish's call-site descriptors point at: texts, field codes, argument and packet layout tables,
+     metadata values and samples. */
+  .device_publish_descriptor_contents DEVICE_PUBLISH_DESCRIPTOR_CONTENTS_VMA (INFO) :
   {
-    __tt_zone_str_start = .;
-    KEEP(*(.tt_zone_str))
-    __tt_zone_str_end = .;
+    KEEP(*(.device_publish_descriptor_contents))
     . = ALIGN(4);
   }
-
-  /* Zone source locations: a fixed-stride array of 16-byte {zone_id, name_ptr, file_ptr, line}
-     records emitted by TT_ZONE_DEFINE_ID (hostdev/profiler_zone_id.h), which the host walks
-     by that stride. (INFO) for the same reason as above. */
-  .tt_zone_meta TT_ZONE_META_VMA (INFO) :
+  /* One descriptor per call site, zones' and DevicePublish records' alike. */
+  .device_publish_descriptors DEVICE_PUBLISH_DESCRIPTORS_VMA (INFO) :
   {
-    __tt_zone_meta_start = .;
-    KEEP(*(.tt_zone_meta))
-    __tt_zone_meta_end = .;
-    . = ALIGN(4);
+    KEEP(*(.device_publish_descriptors))
   }
-
-  /* Zone ids: one byte per zone site, so a site's id is its address and one image's ids are dense
-     from TT_ZONE_IDS_VMA in link order. The host moves the section to the image's block of the
-     16-bit id space when it loads the image, re-resolving every relocation against it (which is
-     why the link keeps its relocations, -Wl,--emit-relocs); a site materializes its id as lui/addi
-     of the handle, and this VMA's nonzero upper bits keep relaxation from folding that into a single
-     addi the host could not rebase. (INFO) for the same reason as above. */
-  .tt_zone_ids TT_ZONE_IDS_VMA (INFO) :
+  /* Each String's hash and its text, which the host looks the String up by. */
+  .device_publish_strings DEVICE_PUBLISH_STRINGS_VMA (INFO) :
   {
-    __tt_zone_ids_start = .;
-    KEEP(*(.tt_zone_ids))
-    __tt_zone_ids_end = .;
+    KEEP(*(.device_publish_strings))
   }
-  ASSERT(__tt_zone_ids_end - __tt_zone_ids_start < 0xFFFF,
-         "more KERNEL_PROFILER zone sites in one image than the 16-bit zone id space holds")
+  /* One byte per call site, so a site's id is its address and one image's ids are dense from DEVICE_PUBLISH_IDS_VMA
+     in link order. A site materializes its id as lui/addi of its handle plus its packet's type and length, whose
+     type bits keep the linker from relaxing the pair into a single addi the host could not rebase. */
+  .device_publish_ids DEVICE_PUBLISH_IDS_VMA (INFO) :
+  {
+    KEEP(*(.device_publish_ids))
+  }
 
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :

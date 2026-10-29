@@ -32,7 +32,6 @@
 
 #include "context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -250,7 +249,7 @@ bool Receiver::walk_frame(Stream& s) {
             ? w1 != 0 && w1 % kp::kSyncRecordWords == 0 && w1 <= kp::kSyncFrameRecords * kp::kSyncRecordWords
             : w1 >= kp::SPSC_SPAN_WIRE_CTRL_WORDS && w1 <= profiler::kSpscMaxPayloadWords;
     TT_FATAL(
-        pp_is_bulkspan(w0) && payload_fits,
+        kp::ppfmt::type(w0) == kp::PacketType::Frame && payload_fits,
         "streaming profiler: device {} socket {} page {} is not a frame header ({:#010x} {:#010x}); {} of {} pages "
         "landed",
         s.captured.device_index,

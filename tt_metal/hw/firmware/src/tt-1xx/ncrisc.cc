@@ -64,9 +64,12 @@ uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __a
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
+// Only the DRAM profiler uses these.
+#if !defined(PROFILE_STREAMING)
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+#endif
 }  // namespace kernel_profiler
 #endif
 
