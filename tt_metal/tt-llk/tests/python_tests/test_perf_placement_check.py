@@ -159,6 +159,38 @@ def test_not_slower_anywhere_is_not_reproduced(tmp_path):
     assert result["outcome"] == "not-reproduced"
 
 
+def test_a_baseline_that_no_longer_measures_what_it_stored_is_named(tmp_path):
+    # Stage 1 stored _BASE for the baseline. Measured again, the baseline commit gives 1.2 * _BASE, the
+    # same as the head. The head did not get slower; the stored baseline was a bad measurement.
+    base = _side(tmp_path / "base", [_BASE * 1.2] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="aaa")
+
+    [result] = _decide(tmp_path, base, cur)
+
+    assert result["outcome"] == "stale-baseline"
+    assert result["why"] == "stored 2000 cycles, measured again 2400"
+
+
+def test_a_baseline_that_still_measures_what_it_stored_is_only_not_reproduced(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE] * 5, window="aaa")
+
+    [result] = _decide(tmp_path, base, cur)
+
+    assert result["outcome"] == "not-reproduced"
+
+
+def test_a_bad_stored_baseline_is_in_the_verdict_line(tmp_path):
+    base = _side(tmp_path / "base", [_BASE * 1.2] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="aaa")
+
+    report = render(_decide(tmp_path, base, cur), "blackhole")
+
+    assert "⚠️ no confirmed regression, 1 from a bad stored baseline" in report
+    assert "### The stored baseline is wrong, not this change: all 1" in report
+    assert "- perf_x L1_TO_L1: stored 2000 cycles, measured again 2400 cycles" in report
+
+
 def test_nodes_maps_candidates_to_their_test(tmp_path):
     _side(tmp_path / "cur", [_BASE] * 5)
     window_map = read_window_map([tmp_path / "cur" / "p0" / "perf_x.1.windowhash"])
@@ -192,7 +224,7 @@ def test_report_shows_every_outcome(tmp_path):
     [confirmed] = _decide(tmp_path, base, cur)
     others = [
         dict(confirmed, outcome=o, why="")
-        for o in ("review", "partial", "placement", "not-reproduced")
+        for o in ("review", "partial", "placement", "stale-baseline", "not-reproduced")
     ]
 
     report = render([confirmed] + others, "wormhole")
@@ -208,6 +240,7 @@ def test_report_shows_every_outcome(tmp_path):
         in report
     )
     assert "### Code-placement effects (hardware): all 1" in report
+    assert "### The stored baseline is wrong, not this change: all 1" in report
     assert "<summary>Not reproduced: all 1</summary>" in report
     assert "+20.0% / +20.0% / +20.0% / +20.0% / +20.0%" in report
 

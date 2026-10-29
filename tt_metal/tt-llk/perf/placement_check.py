@@ -11,6 +11,9 @@ Each stage-1 regression gets one outcome; none is dropped from the report:
 - partial: the loop code changed, but it is slower at some code positions only.
 - placement: the loop code did not change and it is slower at some code positions only, so the move follows
   where the code sits (a hardware effect).
+- stale-baseline: slower at no code position when measured again, and the baseline commit does not measure
+  what the stored baseline says. The stored baseline is wrong, not the head, so every queue entry compared
+  against it is misreported until the next entry replaces it.
 - not-reproduced: slower at no code position when measured again.
 - unmeasured: not measured at every position on both sides, or no window fingerprint.
 
@@ -108,6 +111,8 @@ def read_candidates(path):
                 "run_type": row["run_type"],
                 "config": config,
                 "delta_pct": float(row["delta_pct"]),
+                "stage1_baseline": float(row["baseline"]),
+                "stage1_current": float(row["current"]),
             }
         )
     return out
@@ -221,6 +226,20 @@ def decide(
         why = ""
         if not any(slower):
             outcome = "not-reproduced"
+            # The finding did not reproduce. Either stage 1's measurement of the head was wrong, or the
+            # stored baseline was. Stage 2 just measured the baseline commit again, so it can say which:
+            # if the fresh baseline disagrees with the stored one by more than the threshold, the stored
+            # baseline is what moved. That matters beyond this report, because the same stored baseline
+            # is compared against every queue entry until the next one replaces it.
+            stored = c.get("stage1_baseline")
+            fresh = base[0][lookup]
+            if (
+                stored
+                and abs(fresh - stored) / stored > limit
+                and abs(fresh - stored) > min_cycles
+            ):
+                outcome = "stale-baseline"
+                why = f"stored {stored:.0f} cycles, measured again {fresh:.0f}"
         elif missing:
             outcome, why = "unmeasured", "no window fingerprint"
         elif all(slower):
@@ -283,6 +302,14 @@ _SECTIONS = (
         False,
     ),
     (
+        "stale-baseline",
+        "The stored baseline is wrong, not this change",
+        "Measured again, the baseline commit does not give the cycles the stored baseline claims, and this "
+        "change is slower at no code position. The stored baseline holds a bad measurement. Every queue entry "
+        "is compared against it until the next entry replaces it, so other PRs may carry the same finding.",
+        False,
+    ),
+    (
         "not-reproduced",
         "Not reproduced",
         "Slower at no code position when measured again.",
@@ -302,6 +329,8 @@ def render(results, arch, limit_note=""):
         verdict = f"❌ {len(by['regression'])} confirmed regression(s)"
     elif by["review"] or by["partial"]:
         verdict = f"⚠️ no confirmed regression, {len(by['review']) + len(by['partial'])} to review"
+    elif by["stale-baseline"]:
+        verdict = f"⚠️ no confirmed regression, {len(by['stale-baseline'])} from a bad stored baseline"
     elif by["unmeasured"]:
         verdict = f"⚠️ no confirmed regression, {len(by['unmeasured'])} not re-measured"
     elif by["placement"]:
@@ -344,6 +373,12 @@ def render(results, arch, limit_note=""):
             + [head, rule]
             + [_row(r, fixed.get(r["module"], ())) for r in rows[:_TOP_N]]
         )
+        if key == "stale-baseline":
+            table += [""] + [
+                f"- {r['module']} {r['run_type']}: {r['why']} cycles"
+                for r in rows[:_TOP_N]
+                if r["why"]
+            ]
         if folded:
             lines += ["", "<details>", f"<summary>{caption}</summary>", ""] + table
             lines += ["", "</details>"]
