@@ -297,13 +297,13 @@ public:
         const std::atomic<uint64_t>& pool_published_job,
         const std::atomic<uint64_t>& pool_park_after_job,
         const std::unique_ptr<ParallelJob>* pool_jobs,
-        std::chrono::nanoseconds spin_before_park) :
+        std::chrono::nanoseconds spin_window) :
         completion_(completion),
         index_(index_in_pool),
         pool_published_job_(pool_published_job),
         pool_park_after_job_(pool_park_after_job),
         pool_jobs_(pool_jobs),
-        spin_before_park_(spin_before_park) {
+        spin_window_(spin_window) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
@@ -353,17 +353,17 @@ private:
         return !tasks_.empty() || pool_published_job_.load(std::memory_order_seq_cst) != last_seen_job_;
     }
 
-    // Stays awake for the spin window so back-to-back work is picked up without entering the kernel, then parks
-    // until a producer publishes work or the executor shuts down.
+    // A short spin (spin_until), then the pool's spin window (spin_for) if it has one, so that back-to-back work is
+    // picked up without entering the kernel; then parks until a producer publishes work or the executor shuts down.
     void wait_for_work() {
         if (spin_until([this] { return has_work(); })) {
             return;
         }
-        // Stop spinning once the pool asks its workers to park after the job this one last saw.
+        // The spin window ends early once the pool asks its workers to park after the job this one last saw.
         auto park_requested = [this] { return pool_park_after_job_.load(std::memory_order_relaxed) == last_seen_job_; };
-        if (spin_before_park_.count() > 0 && !park_requested() &&
+        if (spin_window_.count() > 0 && !park_requested() &&
             spin_for(
-                spin_before_park_,
+                spin_window_,
                 [&] { return has_work() || shutdown_.load(std::memory_order_relaxed) || park_requested(); }) &&
             !park_requested()) {
             return;
@@ -385,7 +385,7 @@ private:
     const std::atomic<uint64_t>& pool_published_job_;
     const std::atomic<uint64_t>& pool_park_after_job_;
     const std::unique_ptr<ParallelJob>* const pool_jobs_;
-    const std::chrono::nanoseconds spin_before_park_;
+    const std::chrono::nanoseconds spin_window_;
     uint64_t last_seen_job_ = 0;
     std::exception_ptr stored_exception_;
 };
@@ -648,13 +648,20 @@ public:
     DeviceBoundThreadPool(
         ContextId context_id,
         const std::vector<tt::tt_metal::Device*>& physical_devices,
-        std::chrono::nanoseconds spin = std::chrono::nanoseconds(0)) :
+        std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0)) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id, physical_devices[i]->id(), completion_, i, published_, park_after_, jobs_.data(), spin));
+                context_id,
+                physical_devices[i]->id(),
+                completion_,
+                i,
+                published_,
+                park_after_,
+                jobs_.data(),
+                spin_window));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
             map_worker_to_device(i, physical_devices[i]->id());
         }
@@ -808,7 +815,7 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
-    // The published word after which idle workers park instead of spinning (park_workers).
+    // The published word after which idle workers park without their spin window (park_workers).
     alignas(64) std::atomic<uint64_t> park_after_ = UINT64_MAX;
     // Worker by physical device id; NO_WORKER for a device without one.
     static constexpr uint32_t NO_WORKER = UINT32_MAX;
@@ -847,8 +854,10 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices, std::chrono::microseconds spin) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, spin);
+    ContextId context_id,
+    const std::vector<tt::tt_metal::Device*>& physical_devices,
+    std::chrono::microseconds spin_window) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, spin_window);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {
