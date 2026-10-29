@@ -111,10 +111,11 @@ class TTConv2D:
     halo has read it; the DRAM input itself is never freed.
 
     ``output_layout`` is the layout conv2d emits, None for its TILE default; a 1x1 conv run as
-    ``ttnn.linear`` emits TILE. conv2d's DRAM path runs every slice through its L1 conv with a TILE
-    output and, with a single slice, returns that tensor as it is, whatever layout was asked for.
-    Without ``dram_activation``, a ROW_MAJOR conv runs unsliced on the L1 path, so its activation
-    and output must fit in L1.
+    ``ttnn.linear`` emits TILE and takes no other. conv2d's DRAM path runs every slice through its
+    L1 conv with a TILE output and, with a single slice, returns that tensor as it is, whatever
+    layout was asked for; so a ROW_MAJOR conv whose slice count comes to one, and one without
+    ``dram_activation``, runs unsliced on the L1 path instead, and its activation and output must
+    fit in L1. Its output is then sharded in L1.
     ``l1_output`` lets a 1x1 conv run as ``ttnn.linear`` write its output height-sharded in L1
     when each core's shard fits ``L1_OUTPUT_MAX_SHARD_BYTES``; ``output_in_l1`` says whether it does.
     ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
@@ -196,7 +197,11 @@ class TTConv2D:
         self.output_height = (self.input_height + 2 * self.padding[0] - self.kernel_size[0]) // self.stride[0] + 1
         self.output_width = (self.input_width + 2 * self.padding[1] - self.kernel_size[1]) // self.stride[1] + 1
 
+        assert not (
+            dram_activation and self.is_pointwise and output_layout == ttnn.ROW_MAJOR_LAYOUT
+        ), "a 1x1 conv run as ttnn.linear emits TILE"
         self.slice_config = None
+        num_slices = None
         if self.dram_activation and not self.is_pointwise:
             # conv2d's automatic slice count can overflow L1 on large activations, so the
             # count is fixed here. Width slices of a TILE output are whole tiles wide, so a
@@ -208,7 +213,7 @@ class TTConv2D:
                 slice_type = ttnn.Conv2dDRAMSliceWidth
                 num_slices = min(dram_conv_slices, math.ceil(self.output_width / ttnn.TILE_SIZE))
             self.slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
-        elif output_layout == ttnn.ROW_MAJOR_LAYOUT:
+        if output_layout == ttnn.ROW_MAJOR_LAYOUT and num_slices in (None, 1):
             self.slice_config = ttnn.Conv2dL1FullSliceConfig
 
         self.linear_weight = None

@@ -171,7 +171,8 @@ class TTFPN:
         laterals = [ttnn.to_memory_config(lateral, memory_config=ttnn.DRAM_MEMORY_CONFIG) for lateral in laterals]
         for i in range(used_backbone_levels):
             lateral = ttnn.to_layout(laterals[i], ttnn.ROW_MAJOR_LAYOUT)
-            # Every level comes out ROW_MAJOR: its consumer splits the cameras in ROW_MAJOR anyway
+            # Every backbone level comes out ROW_MAJOR (a single-slice DRAM conv runs on the L1 path
+            # for it, TTConv2D): its consumer splits the cameras in ROW_MAJOR anyway
             # (TTPerceptionTransformer.camera_features), and the extra conv reshapes the last level
             # to NHWC, which in TILE copies it, as its width is not a tile multiple.
             out = self.fpn_convs[i](lateral)

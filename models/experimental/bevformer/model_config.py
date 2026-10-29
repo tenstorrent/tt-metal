@@ -303,10 +303,9 @@ CAMERA_GROUPS = {0: 1, 1: 1, 2: 3}
 # tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
 BLOCK_SHARDED_STAGES = (2, 3)
 
-# Width slices for the DRAM levels' 3x3 output convs, by level (0 is C3), over DRAM_CONV_SLICES:
-# height sharded, C4 fits L1 whole and C3 in 4 slices. Block sharding splits the 256 channels
-# into one-tile-wide blocks and runs several times slower.
-FPN_OUTPUT_CONV_DRAM_CONV_SLICES = {0: 4, 1: 1}
+# Width slices for the DRAM levels' 3x3 output convs, by level, over DRAM_CONV_SLICES: height
+# sharded, C3 takes 4 slices and C4 fits L1 whole, so it runs on conv2d's L1 path (TTConv2D).
+FPN_OUTPUT_CONV_DRAM_CONV_SLICES = dict(zip(_C3_C4_LEVELS, (4, 1)))
 
 # Layers whose DCNs take their input height-sharded rather than interleaved in L1: most bilinear
 # corners then lie in the core's own shard or a neighbour's. Sharding pays where each core owns many
