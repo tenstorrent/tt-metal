@@ -3,7 +3,7 @@
 
 #pragma once
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 namespace kda_chronology {
 // The four-tap convolution retains three preceding tokens.
 constexpr uint32_t history_rows = 3;

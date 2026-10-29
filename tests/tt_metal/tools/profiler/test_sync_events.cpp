@@ -8,18 +8,21 @@
 // Producer delays DELAY_CYCLES before signaling.
 // Consumer waits - the measured wait duration should match the delay.
 //
-// Usage: test_sync_events_timing [API_ID]
-//   0 = CB test
-//   1 = Semaphore local test
-//   2 = Semaphore remote test
-//   3 = Semaphore wait_min test
-//   (no arg = run all)
+// Usage: test_sync_events [CASE_ID...]
+//   CASE_ID indexes the `tests` table in main(); no arg = run all.
+//
+// Every case runs in this one process, on one device open: opening a device is the bulk of a case's cost, so a
+// process per case made the suite pay for 20 opens. Each case's program carries runtime id CASE_ID + 1 (0 is the
+// untagged default), which the zone CSV writes on every row, so a reader splits the shared capture back per case.
+// The harness prints `CASE <id> runtime_id=<n>` before each case it runs.
 
 #include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <vector>
 
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
@@ -27,7 +30,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using Risc = tt::tt_metal::experimental::streaming_profiler::Risc;
+using tt::tt_metal::experimental::streaming_profiler::Processor;
 
 constexpr uint32_t DELAY_CYCLES = 10000;
 
@@ -37,16 +40,16 @@ void RunApiTest(
     int consumer_api_id,
     bool use_remote_core,
     const char* test_name,
-    Risc producer_risc = Risc::BRISC,
-    Risc consumer_risc = Risc::NCRISC) {
-    const char* risc_names[] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+    uint32_t runtime_id,
+    Processor producer = Processor::BRISC,
+    Processor consumer = Processor::NCRISC) {
     fmt::print(
         "Running {} (producer api={} on {}, consumer api={} on {}{})...\n",
         test_name,
         producer_api_id,
-        risc_names[(int)producer_risc],
+        enchantum::to_string(producer),
         consumer_api_id,
-        risc_names[(int)consumer_risc],
+        enchantum::to_string(consumer),
         use_remote_core ? ", different core" : "");
 
     CoreCoord producer_core = {0, 0};
@@ -55,6 +58,7 @@ void RunApiTest(
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     tt_metal::Program program = tt_metal::CreateProgram();
+    program.set_runtime_id(runtime_id);
 
     // Create CB
     constexpr uint32_t cb_id = 0;
@@ -86,7 +90,7 @@ void RunApiTest(
     };
 
     // Create producer kernel
-    if (producer_risc == Risc::TRISC0) {
+    if (producer == Processor::TRISC0) {
         auto producer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tools/profiler/kernels/sync_apis_compute.cpp",
@@ -99,9 +103,9 @@ void RunApiTest(
             "tests/tt_metal/tools/profiler/kernels/sync_apis_dm.cpp",
             producer_core,
             tt_metal::DataMovementConfig{
-                .processor = producer_risc == Risc::BRISC ? tt_metal::DataMovementProcessor::RISCV_0
+                .processor = producer == Processor::BRISC ? tt_metal::DataMovementProcessor::RISCV_0
                                                           : tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = producer_risc == Risc::BRISC ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default,
+                .noc = producer == Processor::BRISC ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default,
                 .defines = defines});
         SetRuntimeArgs(
             program,
@@ -116,7 +120,7 @@ void RunApiTest(
     }
 
     // Create consumer kernel
-    if (consumer_risc == Risc::TRISC0) {
+    if (consumer == Processor::TRISC0) {
         auto consumer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tools/profiler/kernels/sync_apis_compute.cpp",
@@ -129,9 +133,9 @@ void RunApiTest(
             "tests/tt_metal/tools/profiler/kernels/sync_apis_dm.cpp",
             consumer_core,
             tt_metal::DataMovementConfig{
-                .processor = consumer_risc == Risc::NCRISC ? tt_metal::DataMovementProcessor::RISCV_1
+                .processor = consumer == Processor::NCRISC ? tt_metal::DataMovementProcessor::RISCV_1
                                                            : tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = consumer_risc == Risc::NCRISC ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
+                .noc = consumer == Processor::NCRISC ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
                 .defines = defines});
         SetRuntimeArgs(
             program,
@@ -156,60 +160,64 @@ int main(int argc, char* argv[]) {
         int device_id = 0;
         auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        int test_api = -1;
-        if (argc > 1) {
-            test_api = std::atoi(argv[1]);
-        }
-
-        // Test configs: (producer_api, consumer_api, remote, name, producer_risc, consumer_risc)
         struct TestConfig {
             int producer_api;
             int consumer_api;
             bool remote;
             const char* name;
-            Risc producer_risc;
-            Risc consumer_risc;
+            Processor producer;
+            Processor consumer;
         };
 
         TestConfig tests[] = {
             // Raw CB APIs
-            {0, 1, false, "CB wait", Risc::BRISC, Risc::NCRISC},
-            {7, 8, false, "CB reserve", Risc::BRISC, Risc::NCRISC},
+            {0, 1, false, "CB wait", Processor::BRISC, Processor::NCRISC},
+            {7, 8, false, "CB reserve", Processor::BRISC, Processor::NCRISC},
 
             // Raw Semaphore APIs. The noc 1 cases are produced from NCRISC; every other case is noc 0.
-            {2, 3, false, "Raw: sem_set + sem_wait", Risc::BRISC, Risc::NCRISC},
-            {4, 5, true, "Raw: sem_inc remote", Risc::BRISC, Risc::NCRISC},
-            {2, 6, false, "Raw: sem_set + sem_wait_min", Risc::BRISC, Risc::NCRISC},
-            {11, 12, true, "Raw: sem_inc_multicast", Risc::BRISC, Risc::NCRISC},
-            {13, 14, true, "Raw: sem_set_multicast", Risc::BRISC, Risc::NCRISC},
-            {31, 5, true, "Raw: sem_set_remote", Risc::BRISC, Risc::NCRISC},
-            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Risc::BRISC, Risc::NCRISC},
-            {4, 5, true, "Raw: sem_inc remote (noc 1)", Risc::NCRISC, Risc::BRISC},
-            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Risc::NCRISC, Risc::BRISC},
-            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Risc::NCRISC, Risc::BRISC},
+            {2, 3, false, "Raw: sem_set + sem_wait", Processor::BRISC, Processor::NCRISC},
+            {4, 5, true, "Raw: sem_inc remote", Processor::BRISC, Processor::NCRISC},
+            {2, 6, false, "Raw: sem_set + sem_wait_min", Processor::BRISC, Processor::NCRISC},
+            {11, 12, true, "Raw: sem_inc_multicast", Processor::BRISC, Processor::NCRISC},
+            {13, 14, true, "Raw: sem_set_multicast", Processor::BRISC, Processor::NCRISC},
+            {31, 5, true, "Raw: sem_set_remote", Processor::BRISC, Processor::NCRISC},
+            {33, 5, true, "Raw: sem_set_multicast_loopback_src", Processor::BRISC, Processor::NCRISC},
+            {4, 5, true, "Raw: sem_inc remote (noc 1)", Processor::NCRISC, Processor::BRISC},
+            {11, 12, true, "Raw: sem_inc_multicast (noc 1)", Processor::NCRISC, Processor::BRISC},
+            {13, 14, true, "Raw: sem_set_multicast (noc 1)", Processor::NCRISC, Processor::BRISC},
 
             // Semaphore class APIs (dataflow)
-            {20, 21, false, "Class: set() + wait()", Risc::BRISC, Risc::NCRISC},
-            {22, 23, false, "Class: up() + wait_min()", Risc::BRISC, Risc::NCRISC},
-            {24, 25, true, "Class: up() remote", Risc::BRISC, Risc::NCRISC},
-            {20, 26, false, "Class: set() + down()", Risc::BRISC, Risc::NCRISC},
-            {27, 28, true, "Class: set_multicast()", Risc::BRISC, Risc::NCRISC},
-            {29, 30, true, "Class: inc_multicast()", Risc::BRISC, Risc::NCRISC},
+            {20, 21, false, "Class: set() + wait()", Processor::BRISC, Processor::NCRISC},
+            {22, 23, false, "Class: up() + wait_min()", Processor::BRISC, Processor::NCRISC},
+            {24, 25, true, "Class: up() remote", Processor::BRISC, Processor::NCRISC},
+            {20, 26, false, "Class: set() + down()", Processor::BRISC, Processor::NCRISC},
+            {27, 28, true, "Class: set_multicast()", Processor::BRISC, Processor::NCRISC},
+            {29, 30, true, "Class: inc_multicast()", Processor::BRISC, Processor::NCRISC},
 
             // Compute RISC (TRISC) CB APIs - all architectures
-            {0, 102, false, "Compute CB: BRISC push + TRISC wait+pop", Risc::BRISC, Risc::TRISC0},
-            {100, 1, false, "Compute CB: TRISC push + NCRISC wait", Risc::TRISC0, Risc::NCRISC},
+            {0, 102, false, "Compute CB: BRISC push + TRISC wait+pop", Processor::BRISC, Processor::TRISC0},
+            {100, 1, false, "Compute CB: TRISC push + NCRISC wait", Processor::TRISC0, Processor::NCRISC},
         };
 
         constexpr int num_tests = sizeof(tests) / sizeof(tests[0]);
-        if (test_api >= 0 && test_api < num_tests) {
-            auto& t = tests[test_api];
-            RunApiTest(mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer_risc, t.consumer_risc);
-        } else {
-            for (auto& t : tests) {
-                RunApiTest(
-                    mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, t.producer_risc, t.consumer_risc);
+        std::vector<int> case_ids;
+        for (int i = 1; i < argc; i++) {
+            const int id = std::atoi(argv[i]);
+            TT_FATAL(id >= 0 && id < num_tests, "case id {} out of range [0, {})", argv[i], num_tests);
+            case_ids.push_back(id);
+        }
+        if (case_ids.empty()) {
+            for (int id = 0; id < num_tests; id++) {
+                case_ids.push_back(id);
             }
+        }
+
+        for (const int id : case_ids) {
+            const auto& t = tests[id];
+            const uint32_t runtime_id = static_cast<uint32_t>(id) + 1;
+            fmt::print("CASE {} runtime_id={}\n", id, runtime_id);
+            RunApiTest(
+                mesh_device, t.producer_api, t.consumer_api, t.remote, t.name, runtime_id, t.producer, t.consumer);
         }
 
         // Streaming profiler writes the zone CSV automatically on device close

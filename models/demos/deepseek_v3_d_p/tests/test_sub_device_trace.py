@@ -27,7 +27,7 @@ def test_release_walks_trace_owners_without_firing_replay_acks(monkeypatch):
         (controller._TRACE, "default-before"),
         (controller._LOAD, "overlap"),
         (controller._TRACE, "overlap-trace"),
-        (controller._ACK, 17),
+        (controller._ACK, (17,)),
         (controller._CLEAR, None),
         (controller._TRACE, "default-after"),
     ]

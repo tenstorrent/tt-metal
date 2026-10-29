@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace ttnn::kernel_lib::host::api_test {
 using tt::tt_metal::CoreCoord;
@@ -397,7 +398,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     channel.attach(spec, args, "channel", targets);
     EXPECT_EQ(spec.semaphores.size(), 2u);
     const auto& spec_kernel = spec.kernels.front();
-    const auto spec_ct_base = spec_kernel.compile_time_args.get("channel_mcast_ct_base").value();
+    const auto spec_ct_base = spec_kernel.compile_time_args.get("channel_mcast_ct_base").value().to_uint32();
     EXPECT_EQ(
         wire::decode_compile_time_metadata(
             spec_kernel.advanced_options.compile_time_varargs.data() + spec_ct_base, false)
@@ -544,7 +545,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
     m2::ProgramRunArgs args;
     channel.attach(spec, args, "channel", targets);
     auto workload = m2::MakeMeshWorkloadFromSpec(device, spec);
-    auto* physical = device.get_devices().front();
+    auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         auto invocation = args;
         const uint32_t seed = 73 + 101 * run;

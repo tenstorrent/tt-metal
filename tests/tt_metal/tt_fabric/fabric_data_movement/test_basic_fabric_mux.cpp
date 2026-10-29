@@ -272,7 +272,7 @@ void create_mux_kernel(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto src_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device_id);
     const auto dst_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_device_id);
-    const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
+    const auto& available_links = get_forwarding_link_indices(*device, src_node_id, dst_node_id);
     TT_FATAL(
         !available_links.empty(),
         "Couldnt find any forwarding routing planes from: {} to: {}",

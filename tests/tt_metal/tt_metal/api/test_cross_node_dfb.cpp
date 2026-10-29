@@ -17,7 +17,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <exception>
 #include <limits>
-#include <map>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -31,11 +30,12 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 
-// Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr
+// Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr, MeshDeviceImpl, MetalEnvImpl
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/program/dispatch.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tests/tt_metal/tt_metal/api/cross_node_dfb_test_utils.hpp"
 
 namespace tt::tt_metal {
@@ -205,8 +205,7 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     program_with_cn.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
     program_without_cn.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
 
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
-    const auto& hal = metal_ctx.hal();
+    const auto& hal = mesh_device->impl().metal_env().get_hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     ASSERT_FALSE(program_with_cn.impl().get_kernel_groups(index).empty());
     ASSERT_FALSE(program_without_cn.impl().get_kernel_groups(index).empty());
@@ -215,7 +214,10 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     // Any L1-aligned offset that is not the NONE sentinel.
     constexpr uint32_t kSharedRegionOffset = 256;
     program_dispatch::finalize_cross_node_dfbs(
-        metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs.data(), programs.size()), kSharedRegionOffset);
+        mesh_device->impl().metal_context(),
+        index,
+        ttsl::Span<detail::ProgramImpl*>(programs.data(), programs.size()),
+        kSharedRegionOffset);
 
     for (const auto& kg : program_with_cn.impl().get_kernel_groups(index)) {
         EXPECT_EQ(
@@ -257,8 +259,7 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
 
     program.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
 
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
-    const auto& hal = metal_ctx.hal();
+    const auto& hal = mesh_device->impl().metal_env().get_hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     const auto& kernel_groups = program.impl().get_kernel_groups(index);
     ASSERT_EQ(kernel_groups.size(), 1u);
@@ -416,14 +417,13 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     // finalize sizes only the shared dense index from the program-wide slot count (2),
     // not from any one core's sparse participant count (1).
     program.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
-    const auto& hal = metal_ctx.hal();
+    const auto& hal = mesh_device->impl().metal_env().get_hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     detail::ProgramImpl* programs[] = {&program.impl()};
     constexpr uint32_t kBase = 256;
     const uint32_t next = program_dispatch::finalize_cross_node_dfbs(
-        metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
-    const uint32_t l1_align = metal_ctx.hal().get_alignment(HalMemType::L1);
+        mesh_device->impl().metal_context(), index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
+    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
     const uint32_t region_bytes = remote_dfb_config_region_words(2) * sizeof(uint32_t);
     const uint32_t expected_next = (kBase + region_bytes + l1_align - 1) & ~(l1_align - 1);
     EXPECT_EQ(next, expected_next);

@@ -39,6 +39,7 @@ set(TTNN_CORE_SRCS
     core/tensor/host_buffer/functions.cpp
     core/tensor/serialization.cpp
     core/tensor/storage.cpp
+    core/tensor/topology_check.cpp
     core/tensor/tensor.cpp
     core/tensor/tensor_attributes.cpp
     core/tensor/tensor_impl.cpp
@@ -127,7 +128,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
-    cpp/ttnn-nanobind/counter_channel.cpp
     cpp/ttnn-nanobind/layer_ack_service.cpp
     cpp/ttnn-nanobind/layer_completion.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp

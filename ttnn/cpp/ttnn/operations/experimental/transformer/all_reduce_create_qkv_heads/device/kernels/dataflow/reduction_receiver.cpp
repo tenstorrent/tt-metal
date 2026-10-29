@@ -10,7 +10,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "internal/risc_attribs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/debug/kernel_profiler.hpp"
 
 using namespace tt::constants;

@@ -13,7 +13,7 @@
 // which gathers them on its NoC into the same shared cb_k_rm L1.
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>  // tt::constants::TILE_HEIGHT
+#include "api/tile_constants.h"  // tt::constants::TILE_HEIGHT
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_gather.hpp"  // dual-NoC trid-ring gather helper (shared with the writer)

@@ -7,7 +7,8 @@
 // arena and there is no secondary operand. Every other responsibility — the
 // hand-off of the geometry to the SFPU, boundary handling, the NoC gather of the
 // four bilinear neighbours, the tile scatter and the input-tile contract — is in
-// fused_msda_reader_common.hpp and identical to V2's.
+// fused_msda_reader_common.hpp (the row-major gather in msda_gather_rows.hpp)
+// and identical to V2's.
 //
 // The coordinate space (MSDA [0, 1] vs grid_sample [-1, 1]) and align_corners
 // are folded into the per-level scale and bias the compute kernel applies, so

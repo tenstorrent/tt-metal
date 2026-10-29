@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.modules import tt_ccl as common_tt_ccl
+from models.common import tt_ccl as common_tt_ccl
 from models.tt_transformers.tt import ccl as tt_transformers_ccl
 
 
