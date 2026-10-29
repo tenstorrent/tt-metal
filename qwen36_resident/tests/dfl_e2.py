@@ -286,6 +286,36 @@ def summarize_timeline(tl, layers, interval, step_ms):
     return out
 
 
+HUB_PARTS = ["send", "peers", "sum", "mcast", "taps", "wait_next"]
+
+
+def summarize_hub(model, layers, interval, tick_ms):
+    """the hubs' rounds (mlp_hub.cpp timeline: gathered, sent, peers in, summed, multicast, done): per round kind
+    (mixer half of a GDN / attention layer, mlp half) the median us of each part over the chips' rounds 2 .. end,
+    and wait_next = done to the next round's partials gathered"""
+    if model.hub_ts_t is None:
+        return None
+    ts = ttnn.to_torch(model.hub_ts_t, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh, dim=0)).to(torch.int64)
+    ts = (ts & 0xFFFFFFFF).reshape(model.d.n, -1, 8)
+    out = {}
+    for chip in range(model.d.n):
+        t = ts[chip]
+        for r in range(2, t.shape[0] - 1):
+            l, half = divmod(r, 2)
+            kind = ("attn" if is_attn(l, interval) else "gdn") + ("_mixer" if half == 0 else "_mlp")
+            d = [((t[r, i + 1] - t[r, i]) % 2**32).item() for i in range(5)] + [
+                ((t[r + 1, 0] - t[r, 5]) % 2**32).item()
+            ]
+            out.setdefault(kind, []).append(d)
+    return {
+        k: {
+            n: round(float(torch.tensor(v, dtype=torch.float64)[:, i].median()) * tick_ms * 1e3, 2)
+            for i, n in enumerate(HUB_PARTS)
+        }
+        for k, v in out.items()
+    }
+
+
 def run_proxy(mesh, a):
     clock = Clock(mesh, log)
     ck, d, layers, interval, n_attn = target(mesh)
@@ -352,10 +382,12 @@ def run_proxy(mesh, a):
                 row["timeline"] = summarize_timeline(tl, layers, interval, row["step_ms"])
                 raw = ttnn.to_torch(model.ts_t, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh, dim=0))
                 row["raw_s0"] = (raw[0].to(torch.int64) & 0xFFFFFFFF).reshape(layers, 32).tolist()  # chip 0 streamer 0
+                row["hub"] = summarize_hub(model, layers, interval, row["timeline"]["tick_ms"])
             rows[p] = row
             log(
                 f"{cfg} pos {p}: {row['step_ms']:.2f} ms/step device, {row['host_loop_ms']:.2f} ms with host I/O "
                 + (json.dumps(row.get("timeline")) if a.timeline else "")
+                + (f" hub {json.dumps(row.get('hub'))}" if a.timeline else "")
             )
         out["configs"][cfg] = dict(G=model.head_groups, ring_bytes=model.ring_bytes, rows=rows)
         model.release_trace()
