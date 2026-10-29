@@ -84,6 +84,19 @@ def test_ring_is_released_after_each_chunk(media):
     assert mp.media_chunks == 40
 
 
+def test_producer_metadata_size_follows_prefill_media_set_after_import(monkeypatch):
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    try:
+        monkeypatch.setenv("PREFILL_MEDIA", "1")
+        producer._load_env_config()
+        assert len(producer._pack_metadata(1, 2, 3)) == producer.CHUNK_METADATA_SIZE_BYTES == 16
+    finally:
+        monkeypatch.setenv("PREFILL_MEDIA", "0")
+        producer._load_env_config()
+    assert len(producer._pack_metadata(1, 2, 3)) == 12
+
+
 def test_row_source_needs_the_stub_until_a_real_one_exists(monkeypatch, expect_error):
     monkeypatch.delenv("M3_MEDIA_STUB_EMBEDDINGS", raising=False)
     with expect_error(NotImplementedError, "M3_MEDIA_STUB_EMBEDDINGS"):

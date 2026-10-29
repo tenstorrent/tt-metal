@@ -95,6 +95,14 @@ def test_missing_media_times_out(ring, expect_error):
         r.read_chunk(0, 0, 1, timeout_s=0.01)
 
 
+def test_payload_past_the_slab_end_is_fatal(ring, expect_error):
+    r, w = ring
+    mr._DESC.pack_into(w.mm, mr.PAGE, 0, 0, 0, 1, 0, 4, b"\x01" * 32, 10, 10, 3, 0, 0, mr.DTYPE_U8, w.S - 100, 300)
+    w.c[64].value = 1
+    with expect_error(mr.MediaRingError, "bad payload"):
+        r.read_chunk(0, 0, 1, timeout_s=0.01)
+
+
 def test_more_items_than_the_ring_holds_is_fatal(ring, expect_error):
     r, _ = ring
     with expect_error(mr.MediaRingError, "ring holds 256"):

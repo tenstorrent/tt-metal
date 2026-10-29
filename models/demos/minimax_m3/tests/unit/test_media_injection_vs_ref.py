@@ -13,7 +13,6 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import comp_pcc
 from models.demos.common.prefill.media import MediaItem, build_injection, media_rows_for_chunk, stub_embeddings
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
@@ -212,6 +211,4 @@ def test_post_injection_vs_hf(mesh_device, device_params, monkeypatch, emb_tp_sh
     is_image = image_mask(items, first_chunk_start, len(ids))
     assert torch.equal(is_image, ids[first_chunk_start:] == IMAGE_TOKEN), "image positions differ from HF's"
     assert torch.equal(got[~is_image], want[~is_image]), "a text position differs from HF"
-    if is_image.any():
-        passing, pcc = comp_pcc(want[is_image], got[is_image], 0.98)
-        assert passing, f"image rows vs HF: {pcc}"
+    assert torch.equal(got[is_image], want[is_image]), "an image row differs from HF"
