@@ -7,6 +7,7 @@ and the final state is dropped: no valid_len masks are needed. The conv is the f
 split in one program, reading the TILE projection in place); q/k/v reach the chunk op flat, and o comes back
 head-major (the same sequence as the tensor-parallel layer in tp.py).
 """
+
 import torch
 
 import ttnn
@@ -37,6 +38,46 @@ def stateless_prefill_supported(gdn, mode, stateless):
         and w.fused_conv_weight_taps is not None
         and w.fused_conv_bias_dev is None
     )
+
+
+# Fused gate activations: ttnn.sigmoid's accurate mode (vector mode RC), ttnn.softplus's beta = 1, threshold = 20.
+_SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0)
+_SOFTPLUS = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)
+_A_COL, _B_COL, _Z_COL = 6144, 6176, 6208  # a, b, z columns of the stateless projection (a, b: 16 + 16 zero cols)
+
+
+def _projection_weight(gdn):
+    """[dim, qkv 6144 | a 16 + 16 zero | b 16 + 16 zero | z 2048] copy of the mega weight, built once per layer.
+
+    Whole-tile column moves keep the bfp8 values exact, and the new columns are exact zeros. Built by the warm
+    eager forward, before any trace exists."""
+    pw = getattr(gdn, "_stateless_projection_weight", None)
+    if pw is None:
+        w = gdn.weights
+        qkv, a_dim, b_dim = w.mega_qkv_dim, w.mega_a_dim, w.mega_b_dim
+        assert (qkv, a_dim, b_dim) == (_A_COL, 16, 16), (qkv, a_dim, b_dim)
+        t = ttnn.to_torch(w.mega_fused_weight)
+        t = t.reshape(t.shape[-2], t.shape[-1])
+        pad = torch.zeros(t.shape[0], 32 - a_dim, dtype=t.dtype)
+        fused = torch.cat(
+            [
+                t[:, :qkv],
+                t[:, qkv : qkv + a_dim],
+                pad,
+                t[:, qkv + a_dim : qkv + a_dim + b_dim],
+                pad,
+                t[:, qkv + a_dim + b_dim :],
+            ],
+            dim=-1,
+        ).contiguous()
+        pw = gdn._stateless_projection_weight = ttnn.from_torch(
+            fused,
+            dtype=w.mega_fused_weight.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=gdn.device,
+            memory_config=w.mega_fused_weight.memory_config(),
+        )
+    return pw
 
 
 def _consts(gdn):
@@ -99,19 +140,11 @@ def stateless_prefill_forward(gdn, x):
     assert S % 32 == 0, f"stateless GDN prefill: S={S} is not a multiple of 32"
     _dram = ttnn.DRAM_MEMORY_CONFIG
 
-    # In-projection: qkv | a | b | z.
-    mega = prefill_linear(x, w.mega_fused_weight, gdn.compute_kernel_config)
-    a_off, b_off, g_off = w.mega_qkv_dim, w.mega_qkv_dim + w.mega_a_dim, w.mega_qkv_dim + w.mega_a_dim + w.mega_b_dim
-    if a_off % 32 == 0 and g_off % 32 == 0:
-        # Cut the a|b block on tile edges first; the unaligned a/b split then runs on [B, S, 32], not on mega.
-        ab = ttnn.to_layout(mega[:, :, a_off:g_off], ttnn.TILE_LAYOUT)
-        a = ttnn.to_layout(ab[:, :, : w.mega_a_dim], ttnn.TILE_LAYOUT)
-        b = ttnn.to_layout(ab[:, :, w.mega_a_dim :], ttnn.TILE_LAYOUT)
-        ttnn.deallocate(ab)
-    else:
-        a = ttnn.to_layout(mega[:, :, a_off:b_off], ttnn.TILE_LAYOUT)
-        b = ttnn.to_layout(mega[:, :, b_off:g_off], ttnn.TILE_LAYOUT)
-    z = ttnn.to_layout(mega[:, :, g_off:], ttnn.TILE_LAYOUT)
+    # In-projection: qkv | a | b | z, with a and b each in a tile of their own: all cuts start on a tile edge.
+    mega = prefill_linear(x, _projection_weight(gdn), gdn.compute_kernel_config)
+    a = mega[:, :, _A_COL : _A_COL + Nv]
+    b = mega[:, :, _B_COL : _B_COL + Nv]
+    z = mega[:, :, _Z_COL:]
 
     # Conv + SiLU + q/k/v split from a zero history, reading qkv (columns [0, C) of mega) in place. The op takes one
     # [1, T, W] row: the B rows fold into time, and segment_length=S restarts the history at every row start.
@@ -133,10 +166,19 @@ def stateless_prefill_forward(gdn, x):
     )
     ttnn.deallocate(mega)
 
-    # Gates (fp32, the chunk op's contract; the values are the bf16 ones the masked path multiplied up to fp32).
-    beta = ttnn.typecast(ttnn.sigmoid(b), ttnn.float32)
+    # Gates (fp32, the chunk op's contract): beta = sigmoid(b), g = -exp(A_log) * softplus(a + dt_bias). a and b
+    # are cast to fp32 first so no intermediate rounds to bf16 (error ~2e-3 vs ~3e-2 on g); the activations run
+    # inside the binary ops.
+    a = ttnn.typecast(a, ttnn.float32)
+    b = ttnn.typecast(b, ttnn.float32)
+    beta = ttnn.multiply(b, 1.0, input_tensor_a_activations=[_SIGMOID], dtype=ttnn.float32, memory_config=_dram)
     ttnn.deallocate(b)
-    g = ttnn.typecast(ttnn.multiply(w.A_neg, ttnn.softplus(ttnn.add(a, w.dt_bias))), ttnn.float32)
+    g = ttnn.multiply(
+        ttnn.add(a, w.dt_bias, activations=[_SOFTPLUS], memory_config=_dram),
+        w.A_neg,
+        dtype=ttnn.float32,
+        memory_config=_dram,
+    )
     ttnn.deallocate(a)
     beta = ttnn.reshape(beta, (B, S, Nv))
     g = ttnn.reshape(g, (B, S, Nv))
