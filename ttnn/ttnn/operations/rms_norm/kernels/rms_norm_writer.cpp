@@ -39,7 +39,8 @@ void kernel_main() {
     constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(9);
     [[maybe_unused]] constexpr uint32_t gamma_stick_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t gamma_depth = get_compile_time_arg_val(11);
-    constexpr auto output_args = TensorAccessorArgs<12>();
+    constexpr uint32_t write_batch_tiles = get_compile_time_arg_val(12);
+    constexpr auto output_args = TensorAccessorArgs<13>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -84,6 +85,31 @@ void kernel_main() {
         cb_push_back(cb_gamma_tiles, w_chunk_tiles);
     };
 
+    // A ragged last chunk leaves later windows unaligned to the ring, so a window may straddle
+    // fifo_limit: addresses wrap, and the pop is split there (cb_pop_front may only land on the limit).
+    const uint32_t out_fifo_limit = get_local_cb_interface(cb_output_tiles).fifo_limit;
+    const uint32_t out_fifo_size = get_local_cb_interface(cb_output_tiles).fifo_size;
+    auto drain_tiles = [&](uint32_t first_tile, uint32_t num_tiles) {
+        cb_wait_front(cb_output_tiles, num_tiles);
+        const uint32_t rd_ptr = get_read_ptr(cb_output_tiles);
+        uint32_t l1_read_addr = rd_ptr;
+        for (uint32_t tile = 0; tile < num_tiles; ++tile) {
+            noc_async_write(l1_read_addr, output_accessor.get_noc_addr(first_tile + tile), output_tile_bytes);
+            l1_read_addr += output_tile_bytes;
+            if (l1_read_addr == out_fifo_limit) {
+                l1_read_addr -= out_fifo_size;
+            }
+        }
+        noc_async_writes_flushed();
+        const uint32_t tiles_to_limit = (out_fifo_limit - rd_ptr) / output_tile_bytes;
+        if (num_tiles > tiles_to_limit) {
+            cb_pop_front(cb_output_tiles, tiles_to_limit);
+            cb_pop_front(cb_output_tiles, num_tiles - tiles_to_limit);
+        } else {
+            cb_pop_front(cb_output_tiles, num_tiles);
+        }
+    };
+
     if constexpr (has_gamma) {
         for (uint32_t chunk = 0; chunk < gamma_depth && chunk < total_chunks; ++chunk) {
             build_gamma_chunk(chunk);
@@ -100,12 +126,8 @@ void kernel_main() {
         // Compute packs the chunk row-major over (rows, cols).
         for (uint32_t row = 0; row < rows; ++row) {
             const uint32_t first_tile = (row_start + block_row + row) * tensor_w_tiles + first_col;
-            for (uint32_t col = 0; col < cols; ++col) {
-                cb_wait_front(cb_output_tiles, 1);
-                noc_async_write(
-                    get_read_ptr(cb_output_tiles), output_accessor.get_noc_addr(first_tile + col), output_tile_bytes);
-                noc_async_writes_flushed();
-                cb_pop_front(cb_output_tiles, 1);
+            for (uint32_t col = 0; col < cols; col += write_batch_tiles) {
+                drain_tiles(first_tile + col, (cols - col) < write_batch_tiles ? (cols - col) : write_batch_tiles);
             }
         }
 

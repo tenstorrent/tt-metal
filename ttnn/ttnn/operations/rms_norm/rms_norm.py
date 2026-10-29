@@ -11,9 +11,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .rms_norm_program_descriptor import create_program_descriptor, select_blocking
-
-TILE = 32
+from .rms_norm_program_descriptor import TILE, create_program_descriptor, select_blocking
 
 
 # ---------------------------------------------------------------------------

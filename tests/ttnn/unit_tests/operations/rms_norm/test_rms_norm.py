@@ -7,6 +7,8 @@ Phase 0: TILE layout, interleaved DRAM, bfloat16 / float32 input at fp32_dest_ac
 tile-aligned and non-tile-aligned H / W, ranks 2-4, optional ROW_MAJOR gamma of shape (1, 1, 1, W).
 """
 
+import dataclasses
+import importlib
 import pytest
 import torch
 import ttnn
@@ -154,3 +156,16 @@ def test_rms_norm_rejects_gamma_width_mismatch(device, expect_error):
     # Error wording is not part of the contract; only the exception type is.
     with expect_error((ValueError, RuntimeError), ".*"):
         rms_norm(ttnn_input, gamma=ttnn_gamma)
+
+
+@pytest.mark.parametrize("with_gamma", [True, False], ids=["gamma", "no_gamma"])
+def test_rms_norm_ragged_w_chunk(device, monkeypatch, with_gamma):
+    """Pins C=3 over Wt=8 with 2-row blocks so output windows straddle the cb_output_tiles ring end."""
+    op_module = importlib.import_module("ttnn.operations.rms_norm.rms_norm")
+    select_blocking = op_module.select_blocking
+
+    def ragged_blocking(input_tensor, gamma):
+        return dataclasses.replace(select_blocking(input_tensor, gamma), block_row_tiles=2, w_chunk_tiles=3)
+
+    monkeypatch.setattr(op_module, "select_blocking", ragged_blocking)
+    run_and_check(device, (1, 1, 32 * 440, 256), ttnn.bfloat16, gamma_dtype=ttnn.bfloat16 if with_gamma else None)

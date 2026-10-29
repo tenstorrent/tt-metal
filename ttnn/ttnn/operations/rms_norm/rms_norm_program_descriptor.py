@@ -22,6 +22,8 @@ W_CHUNK_FLOOR = 8
 L1_HEADROOM_BYTES = 64 * 1024
 GAMMA_DEPTH = 2
 OUT_DEPTH = 2
+# Output tiles per writer handshake (one flush per batch); bounded so drains overlap packing on wide chunks.
+WRITE_BATCH_TILES = 8
 
 FLOAT32_TILE_BYTES = ttnn.tile_size(ttnn.float32)
 BFLOAT16_TILE_BYTES = ttnn.tile_size(ttnn.bfloat16)
@@ -64,19 +66,45 @@ def _gamma_stick_bytes(width, gamma):
     return max(_div_up(width, TILE) * TILE * gamma.element_size(), gamma.buffer_aligned_page_size())
 
 
-def _footprint(R, C, in_depth, *, Wt, P, xt, ot, gamma_stick_bytes, gt, has_gamma):
-    """Closed-form per-core CB bytes; mirrors l1_ledger.md."""
-    g = 1 if has_gamma else 0
-    return (
-        in_depth * R * Wt * xt  # cb_input_tiles
-        + (1 + P) * BFLOAT16_TILE_BYTES  # cb_scaler
-        + (1 + P) * R * FLOAT32_TILE_BYTES  # cb_sumsq
-        + (1 + P) * R * FLOAT32_TILE_BYTES  # cb_rinv
-        + g * gamma_stick_bytes  # cb_gamma_stick
-        + g * GAMMA_DEPTH * C * gt  # cb_gamma_tiles
-        + g * R * C * FLOAT32_TILE_BYTES  # cb_x_normed
-        + OUT_DEPTH * C * ot  # cb_output_tiles
-    )
+def _cb_pages(R, C, in_depth, *, Wt, P, has_gamma):
+    """Page count per CB: the single source for both the L1 footprint and the allocation (l1_ledger.md)."""
+    pages = {
+        CB_INPUT_TILES: in_depth * R * Wt,
+        CB_SCALER: 1 + P,
+        CB_SUMSQ: (1 + P) * R,
+        # (1 + P) * R: with a partial last W tile the second reduce call re-pushes R_b tiles, and a ragged
+        # last block must not wrap mid-window when N1 indexes the R_b rinv tiles.
+        CB_RINV: (1 + P) * R,
+        # Streaming window. Without gamma the writer only drains (WRITE_BATCH_TILES per handshake); with gamma
+        # it builds the next gamma chunk between drains, and a chunk-deep window absorbs that pause.
+        CB_OUTPUT_TILES: OUT_DEPTH * (C if has_gamma else min(C, WRITE_BATCH_TILES)),
+    }
+    if has_gamma:
+        pages[CB_GAMMA_STICK] = 1
+        pages[CB_GAMMA_TILES] = GAMMA_DEPTH * C
+        pages[CB_X_NORMED] = R * C
+    return pages
+
+
+def _cb_page_formats(input_tensor, gamma):
+    """(page bytes, data format) per CB. The output CB follows the input: the output has the input's dtype."""
+    io_format = (input_tensor.tile.get_tile_size(input_tensor.dtype), input_tensor.dtype)
+    formats = {
+        CB_INPUT_TILES: io_format,
+        CB_SCALER: (BFLOAT16_TILE_BYTES, ttnn.bfloat16),
+        CB_SUMSQ: (FLOAT32_TILE_BYTES, ttnn.float32),
+        CB_RINV: (FLOAT32_TILE_BYTES, ttnn.float32),
+        CB_OUTPUT_TILES: io_format,
+    }
+    if gamma is not None:
+        formats[CB_GAMMA_STICK] = (_gamma_stick_bytes(list(input_tensor.shape)[-1], gamma), gamma.dtype)
+        formats[CB_GAMMA_TILES] = (ttnn.tile_size(gamma.dtype), gamma.dtype)
+        formats[CB_X_NORMED] = (FLOAT32_TILE_BYTES, ttnn.float32)
+    return formats
+
+
+def _footprint(pages, formats):
+    return sum(num_pages * formats[index][0] for index, num_pages in pages.items())
 
 
 def _split_rows(device, tensor_row_tiles):
@@ -100,15 +128,7 @@ def select_blocking(input_tensor, gamma):
     has_gamma = gamma is not None
     all_cores, assignment, core_row_tiles_max = _split_rows(input_tensor.device(), tensor_row_tiles)
 
-    sizes = dict(
-        Wt=Wt,
-        P=P,
-        xt=input_tensor.tile.get_tile_size(input_tensor.dtype),
-        ot=input_tensor.tile.get_tile_size(input_tensor.dtype),
-        gamma_stick_bytes=_gamma_stick_bytes(width, gamma) if has_gamma else 0,
-        gt=ttnn.tile_size(gamma.dtype) if has_gamma else 0,
-        has_gamma=has_gamma,
-    )
+    formats = _cb_page_formats(input_tensor, gamma)
     # Allocator-managed L1 per core (CBs start at the allocator base, not at the HAL unreserved base).
     l1_bytes = ttnn.get_memory_view(input_tensor.device(), ttnn.BufferType.L1).total_bytes_per_bank
     budget = l1_bytes - L1_HEADROOM_BYTES
@@ -117,7 +137,7 @@ def select_blocking(input_tensor, gamma):
         return 2 if _div_up(core_row_tiles_max, R) >= 2 else 1
 
     def fits(R, C, d):
-        return _footprint(R, C, d, **sizes) <= budget
+        return _footprint(_cb_pages(R, C, d, Wt=Wt, P=P, has_gamma=has_gamma), formats) <= budget
 
     c_floor = min(Wt, W_CHUNK_FLOOR)
     R = _div_up(core_row_tiles_max, MIN_BLOCKS_PER_CORE)
@@ -172,25 +192,10 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, blocking, *, e
     input_tile_bytes = input_tensor.tile.get_tile_size(input_tensor.dtype)
     output_tile_bytes = output_tensor.tile.get_tile_size(output_tensor.dtype)
 
-    cbs = [
-        _cb(CB_INPUT_TILES, blocking.in_depth * R * Wt, input_tile_bytes, input_tensor.dtype, cores),
-        _cb(CB_SCALER, 1 + P, BFLOAT16_TILE_BYTES, ttnn.bfloat16, cores),
-        _cb(CB_SUMSQ, (1 + P) * R, FLOAT32_TILE_BYTES, ttnn.float32, cores),
-        # (1 + P) * R: with a partial last W tile the second reduce call re-pushes R_b tiles, and a ragged
-        # last block must not wrap mid-window when N1 indexes the R_b rinv tiles.
-        _cb(CB_RINV, (1 + P) * R, FLOAT32_TILE_BYTES, ttnn.float32, cores),
-        _cb(CB_OUTPUT_TILES, OUT_DEPTH * C, output_tile_bytes, output_tensor.dtype, cores),
-    ]
-    gamma_stick_bytes = 0
-    gamma_tile_bytes = 0
-    if has_gamma:
-        gamma_stick_bytes = _gamma_stick_bytes(width, gamma)
-        gamma_tile_bytes = ttnn.tile_size(gamma.dtype)
-        cbs += [
-            _cb(CB_GAMMA_STICK, 1, gamma_stick_bytes, gamma.dtype, cores),
-            _cb(CB_GAMMA_TILES, GAMMA_DEPTH * C, gamma_tile_bytes, gamma.dtype, cores),
-            _cb(CB_X_NORMED, R * C, FLOAT32_TILE_BYTES, ttnn.float32, cores),
-        ]
+    pages = _cb_pages(R, C, blocking.in_depth, Wt=Wt, P=P, has_gamma=has_gamma)
+    formats = _cb_page_formats(input_tensor, gamma)
+    cbs = [_cb(index, num_pages, *formats[index], cores) for index, num_pages in pages.items()]
+    gamma_stick_bytes = formats[CB_GAMMA_STICK][0] if has_gamma else 0
 
     reader_ct_args = [CB_INPUT_TILES, CB_SCALER, R, Wt, input_tile_bytes, width % TILE]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -208,6 +213,7 @@ def create_program_descriptor(input_tensor, gamma, output_tensor, blocking, *, e
         gamma.buffer_aligned_page_size() if has_gamma else 0,
         gamma_stick_bytes,
         GAMMA_DEPTH,
+        WRITE_BATCH_TILES,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(

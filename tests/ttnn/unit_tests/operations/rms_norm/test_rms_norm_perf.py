@@ -18,9 +18,12 @@ _MIN_BLOCKS_OVERRIDE = os.environ.get("RMS_NORM_MIN_BLOCKS_PER_CORE")
 SHAPES = [
     pytest.param((1, 1, 32, 4096), id="decode_4096"),
     pytest.param((1, 1, 32, 8192), id="decode_8192"),
+    pytest.param((1, 1, 32, 7168), id="decode_7168"),
+    pytest.param((1, 1, 640, 7168), id="640x7168"),
     pytest.param((1, 1, 1024, 1024), id="1024x1024"),
     pytest.param((1, 1, 4096, 2048), id="4096x2048"),
     pytest.param((1, 1, 8192, 4096), id="prefill_8192x4096"),
+    pytest.param((1, 1, 8192, 5120), id="prefill_8192x5120"),
     pytest.param((1, 1, 16384, 64), id="narrow_16384x64"),
 ]
 
