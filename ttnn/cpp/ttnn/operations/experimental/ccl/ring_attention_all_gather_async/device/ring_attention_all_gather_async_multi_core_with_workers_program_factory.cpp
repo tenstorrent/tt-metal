@@ -301,12 +301,12 @@ RemoteDramBankTableArgs make_remote_dram_bank_table_args(
     const MeshCoordinate& local_coord,
     const std::optional<MeshCoordinate>& neighbor_coord,
     const std::vector<Tensor>& output_tensors) {
-    const auto local_device_id = static_cast<uint32_t>(mesh_device->get_device(local_coord)->id());
+    const auto local_device_id = static_cast<uint32_t>(mesh_device->get_device(local_coord[0], local_coord[1])->id());
     const auto local_table = tt::tt_metal::internal::get_dram_bank_to_noc_xy_table(local_device_id);
     RemoteDramBankTableArgs result;
     result.args.reserve(1 + local_table.packed_xy.size());
     if (neighbor_coord.has_value()) {
-        const auto neighbor_device_id = static_cast<uint32_t>(mesh_device->get_device(*neighbor_coord)->id());
+        const auto neighbor_device_id = static_cast<uint32_t>(mesh_device->get_device((*neighbor_coord)[0], (*neighbor_coord)[1])->id());
         const auto neighbor_table = tt::tt_metal::internal::get_dram_bank_to_noc_xy_table(neighbor_device_id);
         TT_FATAL(
             neighbor_table.num_nocs == local_table.num_nocs && neighbor_table.num_banks == local_table.num_banks,
@@ -542,7 +542,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         !(remote_dram.remapped && halo.multicast()),
         "Multicast neighbor halo from device {} cannot address receivers whose DRAM bank placement differs "
         "(different harvested DRAM banks)",
-        mesh_device->get_device(target_device_coord)->id());
+        mesh_device->get_device(target_device_coord[0], target_device_coord[1])->id());
 
     // semaphores[0]/[1] coordinate the backward/forward all-gather directions. Keep halo
     // arrivals on semaphores[2] so the protocols cannot consume each other's signals.
