@@ -230,16 +230,18 @@ TEST(RingJointFloaterLayout, HoldsTheProtocolsInvariants) {
 }
 
 // The homes' K multicast strips: every home in exactly one, one band and one first-merge iteration per strip, each
-// a full rectangle (the multicast writes all of it).
+// a full rectangle (the multicast writes all of it), and their injectors (first cores) in distinct columns.
 TEST(RingJointFloaterLayout, StripsShareTheirHomesKStream) {
     for (const Golden& golden : kGoldens) {
         SCOPED_TRACE(::testing::Message() << "heads=" << golden.heads << " bands=" << golden.bands);
         const FloaterLayout layout = layout_of(golden);
         const uint32_t total_q_chunks = golden.heads * 2;
-        std::set<uint32_t> covered;
+        std::set<uint32_t> covered, injector_columns;
         for (const auto& strip : layout.home_strips) {
             ASSERT_FALSE(strip.empty());
-            EXPECT_TRUE(std::is_sorted(strip.begin(), strip.end()));
+            EXPECT_TRUE(std::is_sorted(strip.begin() + 1, strip.end()));
+            EXPECT_TRUE(injector_columns.insert(layout.logical_xy(strip.front()).first).second)
+                << "two injectors in column " << layout.logical_xy(strip.front()).first;
             uint32_t x0 = kGridX, y0 = kGridY, x1 = 0, y1 = 0;
             for (const uint32_t core : strip) {
                 EXPECT_TRUE(covered.insert(core).second) << "core " << core << " in two strips";
@@ -250,7 +252,6 @@ TEST(RingJointFloaterLayout, StripsShareTheirHomesKStream) {
                 x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
             }
             EXPECT_EQ((x1 - x0 + 1) * (y1 - y0 + 1), strip.size());
-            EXPECT_EQ(layout.logical_xy(strip.front()), std::make_pair(x0, y0)) << "the injector is the top-left core";
         }
         EXPECT_EQ(covered.size(), kFloaterHomeBlocks * kFloaterGroupCores);
         EXPECT_EQ(layout.home_strips.size(), golden.bands == 2 ? 6u : 7u);

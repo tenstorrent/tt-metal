@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -171,10 +172,14 @@ struct FloaterLayout {
     std::vector<std::array<uint32_t, kFloaterGroupCores>> groups;
     // Per group, in run order: first pieces, then second pieces.
     std::vector<std::vector<FloaterVisit>> visits;
-    // The homes' K multicast groups, cores ascending: per block row and band, that band's blocks in the row. Every home
-    // of a band reads the same K chunks, so one injector (the first core) reads each chunk once for the strip. Each
-    // strip fills a 2-row rectangle (the multicast writes all of it), and its homes merge their first floater piece at
-    // the same iteration, so the strip stalls at one merge iteration rather than at each home's.
+    // The homes' K multicast groups: per block row and band, that band's blocks in the row. Every home of a band reads
+    // the same K chunks, so one injector (the first core; the rest ascending) reads each chunk once for the strip. The
+    // injectors sit in distinct columns, on a strip's top or bottom row by strip index, as the dense layout's row-wide
+    // multicast spreads its own: each injector's DRAM reads arrive through its column, and injectors sharing one
+    // slow every home's K and the gather's prefetch (the floater groups' injectors, their first cores, are not part of
+    // this spread). Each strip fills a 2-row rectangle (the multicast writes all of
+    // it), and its homes merge their first floater piece at the same iteration, so the strip stalls at one merge
+    // iteration rather than at each home's.
     std::vector<std::vector<uint32_t>> home_strips;
 
     // Home block g is the 2x2 block at (2 (g % cols), 2 (g / cols)) of the sub-grid left of the last grid column.
@@ -363,6 +368,33 @@ inline FloaterLayout build_floater_layout(
                 layout.home_merge_iter[core],
                 layout.home_merge_iter[strip.front()]);
         }
+    }
+    // Narrowest strips first: they have the fewest columns to choose from.
+    std::vector<uint32_t> by_width(layout.home_strips.size());
+    std::iota(by_width.begin(), by_width.end(), 0);
+    std::stable_sort(by_width.begin(), by_width.end(), [&](uint32_t a, uint32_t b) {
+        return layout.home_strips[a].size() < layout.home_strips[b].size();
+    });
+    std::vector<bool> injector_column(grid_x, false);
+    for (const uint32_t s : by_width) {
+        auto& strip = layout.home_strips[s];
+        const uint32_t row = layout.logical_xy(strip.front()).second + s % 2;
+        // A free column in this strip's turn of row, else any free column, else the top-left core.
+        auto free_in = [&](bool own_row) {
+            return std::find_if(strip.begin(), strip.end(), [&](uint32_t core) {
+                const auto [x, y] = layout.logical_xy(core);
+                return !injector_column[x] && (!own_row || y == row);
+            });
+        };
+        auto injector = free_in(true);
+        if (injector == strip.end()) {
+            injector = free_in(false);
+        }
+        if (injector == strip.end()) {
+            injector = strip.begin();
+        }
+        injector_column[layout.logical_xy(*injector).first] = true;
+        std::rotate(strip.begin(), injector, injector + 1);
     }
     return layout;
 }
