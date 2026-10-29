@@ -1887,8 +1887,17 @@ INSTANTIATE_TEST_SUITE_P(
             .mask_type = ttml::metal::AttentionMaskType::Arbitrary},
         // Q kernel with its K/V loop and the gated dO output but no u_scaler; KV kernel with grad_V alone on it.
         SDPABackwardSkipCase{.name = "Gate_QV_FrozenGate", .grad_k = false, .grad_gate = false, .use_gate = true},
+        // As Gate_QV_FrozenGate with grad_gate.
+        SDPABackwardSkipCase{.name = "Gate_FrozenK", .grad_k = false, .use_gate = true},
+        // Q kernel with its K/V loop and grad_gate, but no gated dO output and no u_scaler; no KV kernel.
+        SDPABackwardSkipCase{.name = "Gate_QAndGate", .grad_k = false, .grad_v = false, .use_gate = true},
         // Q kernel without its K/V loop computing u_scaler, grad_gate and the gated dO for the KV kernel.
         SDPABackwardSkipCase{.name = "Gate_FrozenQ", .grad_q = false, .use_gate = true},
+        // As Gate_FrozenQ without grad_gate.
+        SDPABackwardSkipCase{.name = "Gate_FrozenQAndGate", .grad_q = false, .grad_gate = false, .use_gate = true},
+        // Q kernel without its K/V loop computing grad_gate and the gated dO, but no u_scaler; KV kernel with grad_V
+        // alone on it.
+        SDPABackwardSkipCase{.name = "Gate_FrozenQK", .grad_q = false, .grad_k = false, .use_gate = true},
         // Q kernel computing only the gated dO, so it reads neither Y nor anything for the K/V loop; KV kernel with
         // grad_V alone on it.
         SDPABackwardSkipCase{
