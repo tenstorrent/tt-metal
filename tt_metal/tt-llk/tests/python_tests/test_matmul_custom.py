@@ -6,9 +6,11 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, is_dest_acc_needed
-from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
+from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, format_dict
 from helpers.matmul_sweep import (
+    ODD_REUSE_KT_DIMS,
+    ODD_REUSE_RT_CT,
     generate_matmul_dimension_combinations,
     generate_tile_dims,
 )
@@ -18,6 +20,7 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
+    DEST_SYNC,
     MATH_FIDELITY,
     NUM_FACES,
     THROTTLE_LEVEL,
@@ -63,6 +66,14 @@ MATMUL_FORMATS = input_output_formats(
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 
+# Odd t_dim on the 16-tile dest (DestSync.Full); the SyncHalf sweeps above cannot reach it.
+ODD_REUSE_DIMS = [
+    ([rt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, ct_dim * TILE_DIM])
+    for rt_dim, ct_dim in ODD_REUSE_RT_CT
+    for kt_dim in ODD_REUSE_KT_DIMS
+]
+ODD_REUSE_FORMATS = input_output_formats([DataFormat.Float16_b])
+
 
 def _run_matmul_custom(
     math_fidelity,
@@ -72,6 +83,7 @@ def _run_matmul_custom(
     input_B_dimensions,
     throttle_level: int,
     boot_mode: BootMode,
+    dest_sync: DestSync = DestSync.Half,
 ):
     torch_format = format_dict[formats.output_format]
 
@@ -117,7 +129,11 @@ def _run_matmul_custom(
     configuration = TestConfig(
         "sources/matmul_custom_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(math_fidelity), THROTTLE_LEVEL(throttle_level)],
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            THROTTLE_LEVEL(throttle_level),
+            DEST_SYNC(dest_sync),
+        ],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
@@ -234,4 +250,28 @@ def test_matmul_custom_throttle(
         input_B_dimensions,
         throttle_level=throttle_level,
         boot_mode=boot_mode,
+    )
+
+
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+    formats=ODD_REUSE_FORMATS,
+    dimensions=ODD_REUSE_DIMS,
+)
+def test_matmul_custom_odd_reuse(
+    math_fidelity,
+    formats,
+    dimensions,
+    boot_mode=BootMode.DEFAULT,
+):
+    input_A_dimensions, input_B_dimensions = dimensions
+    _run_matmul_custom(
+        math_fidelity,
+        formats,
+        DestAccumulation.No,
+        input_A_dimensions,
+        input_B_dimensions,
+        throttle_level=0,
+        boot_mode=boot_mode,
+        dest_sync=DestSync.Full,
     )
