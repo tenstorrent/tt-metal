@@ -133,6 +133,9 @@ void kernel_main() {
             header[plan_table::kWordNumDevices] == num_devices && header[plan_table::kWordStripeChunk] == stripe_chunk);
         ASSERT(header[plan_table::kWordPagesPerPacket] == pages_per_packet && header[plan_table::kWordBanks] == banks);
         ASSERT(part != PushPart::kRest || header[plan_table::kWordHasSplit] != 0);
+        if (header[plan_table::kWordDense] != 0) {
+            return;  // dense mode: nothing to push, and the writer reads the same flag and skips the packets
+        }
 
         // The requester's compact buffer holds one padded run per owner, in owner order, ours after the lower ones.
         uint32_t run_base = 0;

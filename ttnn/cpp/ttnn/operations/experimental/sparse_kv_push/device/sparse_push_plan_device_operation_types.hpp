@@ -16,6 +16,10 @@ struct SparsePushPlanParams {
     uint32_t stripe_chunk = 0;
     uint32_t max_rows = 0;
     uint32_t page_bytes = 0;  // the push's cache row page; sets the packet shape the compact slots follow
+    // Dense mode: with the chunk start below dense_below, the indices are rewritten to rows of the dense gather into
+    // the compact buffer (chip c's rows from c * dense_slot_rows(dense_below) on) and the table lists no rows to
+    // push. 0: off.
+    uint32_t dense_below = 0;
 };
 
 struct SparsePushPlanInputs {

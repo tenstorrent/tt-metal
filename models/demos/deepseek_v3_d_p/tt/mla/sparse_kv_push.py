@@ -28,6 +28,9 @@ class SparseKvPushPlan:
     compact_indices: ttnn.Tensor
     stripe_chunk: int
     max_rows: int
+    # Chunk starts below this take dense mode: compact_indices address a dense gather into the compact buffer and
+    # the push sends nothing (0: off).
+    dense_below: int = 0
 
 
 def sparse_kv_push_supported(mesh_device) -> bool:
@@ -144,7 +147,7 @@ class SparseKvPushPlanner:
     def buffer_rows(self, distinct_rows: int, max_rows: int, stripe_chunk: int, page_bytes: int) -> int:
         """Compact buffer rows for up to `distinct_rows` pushed rows. A chip's distinct rows are at most its query
         rows x top-k, so the buffer is sized from the chunk, not from the cache (about 220 MiB at a 1M cache instead of
-        the dense gather's 703 MiB)."""
+        the dense gather's 715 MiB)."""
         num_devices = self.mesh_device.get_num_devices()
         pages_per_packet, banks = packet_shape(self.mesh_device, page_bytes)
         unit = pages_per_packet * banks  # each owner's run is padded to whole units
@@ -179,15 +182,18 @@ class SparseKvPushPlanner:
         max_rows: int,
         chunk_start: int = 0,
         chunk_start_tensor: ttnn.Tensor | None = None,
+        dense_below: int = 0,
     ) -> SparseKvPushPlan:
         """The plan for `indices`, cached across the layers that reuse them. The plan op reads the chunk start on
-        device, so with chunk_start_tensor one cached plan serves any chunk of a traced replay."""
+        device, so with chunk_start_tensor one cached plan serves any chunk of a traced replay. Chunks starting below
+        dense_below take dense mode (see SparseKvPushPlan)."""
         start = chunk_start_tensor if chunk_start_tensor is not None else self._chunk_start(chunk_start)
         # Keyed by buffer address: full layers rewrite the shared indices buffer in place and call invalidate(), so
         # an unchanged address means the same indices.
-        key = (indices.buffer_address(), stripe_chunk, page_bytes, start.buffer_address())
+        key = (indices.buffer_address(), stripe_chunk, page_bytes, start.buffer_address(), dense_below)
         if self._plan is None or self._plan_key != key:
-            self._plan_key, self._plan = key, self._build(indices, stripe_chunk, page_bytes, max_rows, start)
+            self._plan_key = key
+            self._plan = self._build(indices, stripe_chunk, page_bytes, max_rows, start, dense_below)
         return self._plan
 
     def _chunk_start(self, start: int) -> ttnn.Tensor:
@@ -197,7 +203,7 @@ class SparseKvPushPlanner:
             )
         return self._starts[start]
 
-    def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start):
+    def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start, dense_below):
         n = self.mesh_device.get_num_devices()
         table, compact_indices = ttnn.experimental.sparse_push_plan(
             indices,
@@ -206,6 +212,7 @@ class SparseKvPushPlanner:
             max_rows=max_rows,
             page_bytes=page_bytes,
             chunk_start=chunk_start,
+            dense_below=dense_below,
         )
         _shard_over_mesh(table, self.mesh_device)
         gathered_rows = table.shape[2] * n
@@ -221,5 +228,9 @@ class SparseKvPushPlanner:
         )
         ttnn.deallocate(table)
         return SparseKvPushPlan(
-            table=self._tables, compact_indices=compact_indices, stripe_chunk=stripe_chunk, max_rows=max_rows
+            table=self._tables,
+            compact_indices=compact_indices,
+            stripe_chunk=stripe_chunk,
+            max_rows=max_rows,
+            dense_below=dense_below,
         )

@@ -291,8 +291,15 @@ inline void owner_bases(const uint32_t* totals, uint32_t* run_bases, uint32_t wo
 }
 
 // Rewrites idx [begin, end) in place from cache rows to compact-buffer pages: a row's rank within its owner is its
-// range's offset + its word's rank + the needed rows below it in the word.
-template <uint32_t num_devices, uint32_t stripe_chunk, uint32_t range_blocks, uint32_t pages_per_packet, uint32_t banks>
+// range's offset + its word's rank + the needed rows below it in the word. In dense mode the buffer holds the dense
+// gather instead, every owner's rows from slot owner * dense_slot_rows on, in its cache's order.
+template <
+    uint32_t num_devices,
+    uint32_t stripe_chunk,
+    uint32_t range_blocks,
+    uint32_t pages_per_packet,
+    uint32_t banks,
+    uint32_t dense_slot_rows>
 inline void rewrite(
     uint32_t* __restrict__ idx,
     uint32_t begin,
@@ -300,7 +307,8 @@ inline void rewrite(
     const uint32_t* __restrict__ bitmap,
     const uint16_t* __restrict__ word_ranks,
     const uint32_t* __restrict__ range_offsets,
-    const uint32_t* __restrict__ run_bases) {
+    const uint32_t* __restrict__ run_bases,
+    bool dense) {
 #pragma GCC unroll 2  // tuning knob
     for (uint32_t i = begin; i < end; ++i) {
         const uint32_t row = idx[i];
@@ -308,12 +316,23 @@ inline void rewrite(
             continue;
         }
         const uint32_t block = row / stripe_chunk;
-        const uint32_t word = row / kRowsPerWord;
         const uint32_t owner = block % num_devices;
+        if (dense) {
+            idx[i] = owner * dense_slot_rows + (block / num_devices) * stripe_chunk + row % stripe_chunk;
+            continue;
+        }
+        const uint32_t word = row / kRowsPerWord;
         const uint32_t rank = range_offsets[(block / range_blocks) * num_devices + owner] + word_ranks[word] +
                               __builtin_popcount(bitmap[word] & ((1u << (row % kRowsPerWord)) - 1u));
         idx[i] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
     }
+}
+
+// Dense mode: the chunk start (read in step 0) is below dense_below, so the shared layers gather densely and the plan
+// only rewrites the indices to dense-buffer rows. dense_below 0: never.
+template <uint32_t dense_below>
+inline bool is_dense(const uint32_t* misc) {
+    return dense_below != 0 && misc[kMiscSplit] < dense_below;
 }
 
 // Steps 4 and 5 for one worker: owner prefixes and totals, then run bases, then the rewrite of its share of idx.
@@ -323,6 +342,8 @@ template <
     uint32_t range_blocks,
     uint32_t pages_per_packet,
     uint32_t banks,
+    uint32_t dense_below,
+    uint32_t dense_slot_rows,
     typename DoneSem>
 inline void bases_and_rewrite(
     uint32_t* idx,
@@ -337,14 +358,15 @@ inline void bases_and_rewrite(
     sync_workers(done_sem, worker, kTotalled);
     owner_bases<num_devices, pages_per_packet, banks>(misc + kMiscTotals, misc + kMiscBase, worker);
     sync_workers(done_sem, worker, kBased);
-    rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks>(
+    rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks, dense_slot_rows>(
         idx,
         share_begin(index_count, worker),
         share_begin(index_count, worker + 1),
         bitmap,
         word_ranks,
         partials,
-        misc + kMiscBase);
+        misc + kMiscBase,
+        is_dense<dense_below>(misc));
     post(done_sem(worker), kRewritten);  // report only: the write-back waits for it
 }
 

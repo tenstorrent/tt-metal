@@ -49,6 +49,9 @@ void kernel_main() {
     const uint32_t landing_l1 = CircularBuffer(metadata_cb_id).get_write_ptr();
     const ChipShardGeometry geometry =
         read_chip_shard_geometry<kValidPrefixFromMetadata, kGeometryCommonArgs>(noc, landing_l1, valid_prefix_args);
+    if (!geometry.active) {  // every chip reads the same chunk start, so every kernel of the op skips together
+        return;
+    }
     const uint32_t cache_slot_first_page =
         read_cache_slot_first_page<kCacheSlotFromMetadata>(noc, landing_l1, cache_slot_args);
     const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(0), page_bytes);

@@ -27,7 +27,8 @@ FORCE_INLINE uint32_t read_metadata_word(const Noc& noc, const Accessor& metadat
 
 // The chip shard geometry block of the common args, the same in every kernel, starting at common arg kFirstArg (after
 // the kernel's own common args): [+0] prefix tensor address [+1] valid pages per outer slice (host) [+2] outer slices
-// [+3] pages per outer slice [+4] ranks [+5] KV slab [+6] full gathered length [+7] pages per KV slab.
+// [+3] pages per outer slice [+4] ranks [+5] KV slab [+6] full gathered length [+7] pages per KV slab [+8] output pages
+// per outer slice [+9] active below (0: always active).
 template <bool kValidPrefixFromMetadata, uint32_t kFirstArg, typename PrefixArgs>
 FORCE_INLINE ChipShardGeometry
 read_chip_shard_geometry(const Noc& noc, uint32_t landing_l1, const PrefixArgs& prefix_args) {
@@ -35,13 +36,19 @@ read_chip_shard_geometry(const Noc& noc, uint32_t landing_l1, const PrefixArgs& 
     geometry.num_outer_slices = get_common_arg_val<uint32_t>(kFirstArg + 2);
     geometry.pages_per_outer_slice = get_common_arg_val<uint32_t>(kFirstArg + 3);
     geometry.num_ranks = get_common_arg_val<uint32_t>(kFirstArg + 4);
+    geometry.output_pages_per_outer_slice = get_common_arg_val<uint32_t>(kFirstArg + 8);
+    geometry.active = true;
     if constexpr (kValidPrefixFromMetadata) {
         const auto prefix = TensorAccessor(prefix_args, get_common_arg_val<uint32_t>(kFirstArg), sizeof(uint32_t));
-        geometry.valid_pages_per_outer_slice = valid_pages_from_prefix_start(
-            read_metadata_word(noc, prefix, landing_l1),
-            get_common_arg_val<uint32_t>(kFirstArg + 5),
-            get_common_arg_val<uint32_t>(kFirstArg + 6),
-            get_common_arg_val<uint32_t>(kFirstArg + 7));
+        const uint32_t prefix_start = read_metadata_word(noc, prefix, landing_l1);
+        const uint32_t active_below = get_common_arg_val<uint32_t>(kFirstArg + 9);
+        geometry.active = active_below == 0 || prefix_start < active_below;
+        geometry.valid_pages_per_outer_slice = geometry.active ? valid_pages_from_prefix_start(
+                                                                     prefix_start,
+                                                                     get_common_arg_val<uint32_t>(kFirstArg + 5),
+                                                                     get_common_arg_val<uint32_t>(kFirstArg + 6),
+                                                                     get_common_arg_val<uint32_t>(kFirstArg + 7))
+                                                               : 0;
     } else {
         (void)noc;
         (void)landing_l1;

@@ -654,6 +654,15 @@ class ttMLA:
             # The dense buffer is idle in shared layers, so when the push buffer fits in it, it serves as one parity.
             self._push_reuses_dense = self._push_rows <= dense.shape[2]
             self._push.push_buffer(0, self._push_rows, dense)
+            # Dense mode: a chunk starting below this gathers its whole (short) prefix into the compact buffer
+            # instead, cheaper than pushing there. Decided on device from the chunk start, so one trace serves both.
+            self._push_dense_below = int(os.environ.get("SPARSE_KV_PUSH_DENSE_BELOW", "0"))
+            slab = self.active_seq_len_local * self.sp_factor
+            largest_extent = ceil_div(self._push_dense_below - 1 + slab, slab) * slab
+            assert self._push_dense_below == 0 or largest_extent <= min(self._push_rows, dense.shape[2]), (
+                f"dense mode below {self._push_dense_below} gathers up to {largest_extent} rows, more than the "
+                f"{self._push_rows}-row push buffer"
+            )
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
@@ -1997,12 +2006,13 @@ class ttMLA:
         )
         plan = self._sparse_push_plan(indices, kv_actual_isl, metadata)
         storage = kvpe_cache.storage
+        output = self._sparse_push_buffer(self.layer_idx)
         # If the previous layer pushed this layer's prefix beside its attention, for these same indices (the same
         # cached plan), push only the rest; otherwise push every needed row.
         prefetched = self._push.prefetched.pop(self.layer_idx, None) is plan
         compact = ttnn.experimental.sparse_kv_push(
             storage,
-            output_tensor=self._sparse_push_buffer(self.layer_idx),
+            output_tensor=output,
             table=plan.table,
             stripe_chunk=plan.stripe_chunk,
             max_rows=plan.max_rows,
@@ -2012,6 +2022,21 @@ class ttMLA:
             ready_semaphore=self._push.ready_semaphore,
             data_valid_semaphore=self._push.data_valid_semaphore,
         )
+        if plan.dense_below:
+            # In dense mode the push above sent nothing and this gather fills the buffer, in the layout
+            # plan.compact_indices address; otherwise the gather copies nothing. Every chip reads the same chunk
+            # start, so they agree.
+            ttnn.experimental.high_bw_all_gather(
+                storage,
+                dim=2,
+                output_tensor=output,
+                cluster_axis=None,
+                num_links=self.ccl_num_links,
+                **self._kvpe_gather_slot_kwargs(storage, cache_batch_idx, metadata),
+                gathered_prefix_tensor=metadata[1],
+                gathered_slab_global=seq_len_local * self.sp_factor,
+                gathered_active_below=plan.dense_below,
+            )
         return self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             tt_kvpe=tt_kvpe,
@@ -2061,6 +2086,8 @@ class ttMLA:
             max_rows=self._sparse_kv_gather_buffer.shape[2],
             chunk_start=kv_actual_isl or 0,
             chunk_start_tensor=metadata[1] if metadata is not None else None,
+            # Dense mode needs the chunk start and cache slot read on device, so only on the metadata path.
+            dense_below=self._push_dense_below if metadata is not None else 0,
         )
 
     def _next_layer_prefetch(self, plan, kvpe_cache, cache_batch_idx, metadata):
@@ -2606,8 +2633,6 @@ class ttMLA:
         The prefix is rounded to a whole block-cyclic slab; sparse SDPA only dereferences current top-k
         indices, so its unwritten suffix is never consumed."""
         storage = kvpe_cache.storage
-        slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
-        multi_slot = storage.shape[0] > 1
         stripes = self.sp_factor * self.tp_factor
         # Block-cyclic storage is meaningful only in whole global slabs; the slab is sp-wide because
         # block_cyclic_chunk_local is the per-SP-ROW width (each chip holds 1/tp of it).
@@ -2633,15 +2658,7 @@ class ttMLA:
         # replay would gather the slot that was live at capture time -- while the KV WRITE above, being
         # metadata-driven, lands in the correct slot. Wrong-slot attention, with no error.
         # Single-slot caches keep the scalar form: there is no slot to get wrong.
-        slot_meta_kwargs = (
-            {
-                "input_batch_index_tensor": metadata[0],
-                "batch_slot_num_layers": self.layer_num,
-                "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
-            }
-            if metadata is not None and multi_slot
-            else {"input_batch_index": slot_lo}
-        )
+        slot_meta_kwargs = self._kvpe_gather_slot_kwargs(storage, cache_batch_idx, metadata)
         assert self._sparse_kv_gather_buffer is not None
         # Preconditions of the full-mesh gather -- wrong here means a silently misordered gather.
         # Row-major over the mesh equals the sp*tp linearization only for this axis assignment.
@@ -2685,6 +2702,17 @@ class ttMLA:
             storage=gathered,
             geometry=kvpe_cache.geometry,
         )
+
+    def _kvpe_gather_slot_kwargs(self, storage, cache_batch_idx, metadata):
+        """Cache slot of a KVPE gather: on the metadata path recomposed on device from the user id tensor (see
+        _gather_kvpe_prefix), otherwise the host slot."""
+        if metadata is not None and storage.shape[0] > 1:
+            return {
+                "input_batch_index_tensor": metadata[0],
+                "batch_slot_num_layers": self.layer_num,
+                "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
+            }
+        return {"input_batch_index": cache_batch_idx if storage.shape[0] > 1 else 0}
 
     @staticmethod
     def _declared_seq_shard_factor(t) -> int:

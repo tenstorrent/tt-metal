@@ -22,7 +22,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t page_bytes,
-    const std::optional<Tensor>& chunk_start = std::nullopt);
+    const std::optional<Tensor>& chunk_start = std::nullopt,
+    uint32_t dense_below = 0);
 
 // Owner chips push the cache rows each requester's top-k needs into that requester's compact output_tensor, as laid
 // out by the all-gathered sparse_push_plan tables; `part` picks all of them, the prefix or the rest (see PushPart).

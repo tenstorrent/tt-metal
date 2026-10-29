@@ -47,8 +47,10 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t stripe_chunk,
     uint32_t max_rows,
     uint32_t page_bytes,
-    const std::optional<Tensor>& chunk_start) {
-    return ttnn::prim::sparse_push_plan(indices, num_devices, stripe_chunk, max_rows, page_bytes, chunk_start);
+    const std::optional<Tensor>& chunk_start,
+    uint32_t dense_below) {
+    return ttnn::prim::sparse_push_plan(
+        indices, num_devices, stripe_chunk, max_rows, page_bytes, chunk_start, dense_below);
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

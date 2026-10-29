@@ -30,6 +30,8 @@ using sparse_push::PacketMeta;
 //   done:  after its rows, each sender increments the done count of every requester it served, on the same route as
 //          its data. The fabric delivers in order along a route, so a count lands after the rows it covers; worker 0
 //          of the requester waits for all counts, and the op ends once they are in.
+// In dense mode (plan header word kWordDense) there are no rows to push: every sender skips both handshakes and only
+// shuts its mux down. Every chip's plan read the same chunk start, so all of them skip together.
 
 namespace {
 // Sends a header-only packet that increments the semaphore at sem_noc_addr on chip (dest_mesh, dest_chip), on the same
@@ -59,8 +61,10 @@ void kernel_main() {
     constexpr uint32_t workers = get_compile_time_arg_val(2);
     constexpr uint32_t packet_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t links = get_compile_time_arg_val(4);
-    constexpr auto output_args = TensorAccessorArgs<5>();
-    constexpr uint32_t mux_ct = output_args.next_compile_time_args_offset();
+    constexpr uint32_t table_pages = get_compile_time_arg_val(5);  // per requester
+    constexpr auto output_args = TensorAccessorArgs<6>();
+    constexpr auto table_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr uint32_t mux_ct = table_args.next_compile_time_args_offset();
     constexpr uint8_t mux_num_buffers = get_compile_time_arg_val(mux_ct + 0);
     constexpr size_t mux_buffer_bytes = get_compile_time_arg_val(mux_ct + 1);
     constexpr size_t mux_status_address = get_compile_time_arg_val(mux_ct + 2);
@@ -73,6 +77,7 @@ void kernel_main() {
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t ready_sem = get_common_arg_val<uint32_t>(1);
     const uint32_t done_sem = get_common_arg_val<uint32_t>(2);
+    const uint32_t table_addr = get_common_arg_val<uint32_t>(3);
 
     size_t arg = 0;
     const uint32_t worker = get_arg_val<uint32_t>(arg++);
@@ -101,6 +106,16 @@ void kernel_main() {
     const auto output = TensorAccessor(output_args, output_addr, page_bytes);
     auto* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem);
     auto* done_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem);
+
+    // This chip's own plan table says whether this chunk is in dense mode. Its first header words land in the
+    // packet header slots, which no packet uses yet (one aligned DRAM read).
+    const auto table = TensorAccessor(table_args, table_addr, sparse_push::plan_table::kPageBytes);
+    static_assert(sparse_push::plan_table::kWordDense * sizeof(uint32_t) < sparse_push::kDramReadAlign);
+    noc_async_read(table.get_noc_addr(my_rank * table_pages), headers_l1, sparse_push::kDramReadAlign);
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    const bool dense =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(headers_l1)[sparse_push::plan_table::kWordDense] != 0;
 
     auto run = [&](auto& mux_conn) {
         // Start fence.
@@ -234,12 +249,14 @@ void kernel_main() {
         local_buffer_index_address);
     tt::tt_fabric::wait_for_fabric_endpoint_ready(
         fabric_mux_x, fabric_mux_y, mux_status_address, local_fabric_mux_status_address);
-    tt::tt_fabric::fabric_client_connect(mux_conn);
-    run(mux_conn);
-    // The mux forwards asynchronously: wait for every channel slot to drain before disconnecting.
-    while (mux_conn.get_num_free_write_slots() != mux_num_buffers) {
+    if (!dense) {
+        tt::tt_fabric::fabric_client_connect(mux_conn);
+        run(mux_conn);
+        // The mux forwards asynchronously: wait for every channel slot to drain before disconnecting.
+        while (mux_conn.get_num_free_write_slots() != mux_num_buffers) {
+        }
+        tt::tt_fabric::fabric_client_disconnect(mux_conn);
     }
-    tt::tt_fabric::fabric_client_disconnect(mux_conn);
     // The channel's senders share one mux. Sender 0 (the termination master) waits until its partners have
     // disconnected, then shuts the mux down; the others just report in.
     auto* term_sync = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(termination_sync_id));
@@ -255,7 +272,7 @@ void kernel_main() {
     // Worker 0 waits for this chip's done count: one increment from every remote sender whose channel serves this
     // chip ((N - 1) * links * per_channel), plus one from each of this chip's own senders. Then it resets the count
     // (semaphores only count up, so it adds the negated count, which wraps to zero).
-    if (worker == 0) {
+    if (worker == 0 && !dense) {
         constexpr uint32_t done_count = (num_devices - 1) * links * per_channel + workers;
         noc_semaphore_wait_min(done_ptr, done_count);
         noc_semaphore_inc(get_noc_addr(done_sem), uint32_t{0} - done_count);

@@ -332,16 +332,31 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     configuration (2 links, scaled FP8 rows, 160-row blocks, the planner's grids and sub-device manager)."""
     from safetensors.numpy import load_file
 
-    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
-    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
-
     f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
     if not f.exists():
         pytest.skip(f"1M GLM-5.3 top-k not staged: {f}")
+    num_devices = mesh_device.get_num_devices()
+    natural = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(num_devices, -1, TOPK)
+    measured = _push_steps_us(mesh_device, natural, _TRACE_1M_START)
+    for name, us in measured.items():
+        logger.info(f"GLM push perf L{layer} {name}: {us:.1f} us")
+
+    ceilings = (_GLM_PUSH_PERF_CEILING_US or {}).get(layer)
+    if ceilings is not None:
+        over = {name: (us, ceilings[name]) for name, us in measured.items() if us > ceilings[name]}
+        assert not over, f"L{layer} steps over their ceiling (measured, ceiling us): {over}"
+
+
+def _push_steps_us(mesh_device, natural, chunk_start, dense=False):
+    """Traced us of each step of the push for one 5k chunk at chunk_start, given each chip's natural top-k
+    [num_devices, query_rows, TOPK]. dense: also the dense gather of the prefix and attention over it."""
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
+
     kv_fmt, chunk_global, links = "fp8", 5120, 2
     num_devices = mesh_device.get_num_devices()
     stripe_chunk = query_rows = chunk_global // num_devices
-    cache_tokens = _TRACE_1M_START + chunk_global
+    cache_tokens = chunk_start + chunk_global
     page_bytes = 704  # 656 B scaled FP8 rows, DRAM aligned
     planner = SparseKvPushPlanner(mesh_device, links)
     attention_grid, push_grid = planner.grids(query_rows)
@@ -359,9 +374,8 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
         **common,
     )
     start = ttnn.from_torch(
-        torch.tensor([[[[_TRACE_1M_START]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+        torch.tensor([[[[chunk_start]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
     )
-    natural = next(iter(load_file(str(f)).values())).astype(np.int64).reshape(num_devices, query_rows, TOPK)
     indices = ttnn.from_torch(
         torch.from_numpy(natural.reshape(1, 1, num_devices * query_rows, TOPK).astype(np.int32)),
         dtype=ttnn.uint32,
@@ -428,12 +442,391 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
         "attention, full grid": attention,
         "attention + prefix push on sub-devices": attention_beside_prefix,
     }
+    if dense:
+        gathered = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+        dense_kw = dict(dim=2, output_tensor=gathered, cluster_axis=None, num_links=links, input_batch_index=0)
+        ttnn.experimental.high_bw_all_gather(cache, **dense_kw)
+        steps["dense gather"] = lambda controller: ttnn.experimental.high_bw_all_gather(cache, **dense_kw)
+        steps["dense attention, full grid"] = lambda controller: ttnn.deallocate(
+            _sparse_sdpa(q, gathered, indices, query_rows * TP, kv_fmt)
+        )
     measured = {name: _segmented_traced_us(mesh_device, fn) for name, fn in steps.items()}
+    planner.release()
+    return measured
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("prefix_slabs", [1, 2, 4, 8, 40])
+def test_sparse_kv_push_short_prefix_perf(mesh_device, prefix_slabs):
+    """The push's steps and the dense gather on early chunks, with synthetic causal top-k: each query row takes 2048
+    distinct rows uniformly from the ones at or before it. Query rows are each chip's 160 consecutive positions."""
+    chunk_global = 5120
+    num_devices = mesh_device.get_num_devices()
+    query_rows = chunk_global // num_devices
+    chunk_start = prefix_slabs * chunk_global
+    gen = torch.Generator().manual_seed(0)
+    natural = np.stack(
+        [
+            np.stack(
+                [
+                    torch.randperm(p + 1, generator=gen)[:TOPK].numpy()
+                    for p in range(chunk_start + c * query_rows, chunk_start + (c + 1) * query_rows)
+                ]
+            )
+            for c in range(num_devices)
+        ]
+    ).astype(np.int64)
+    distinct = [len(np.unique(natural[c])) for c in range(num_devices)]
+    rest = [int((np.unique(natural[c]) >= chunk_start).sum()) for c in range(num_devices)]
+    measured = _push_steps_us(mesh_device, natural, chunk_start, dense=True)
+    logger.info(
+        f"short prefix {prefix_slabs} slabs: distinct rows per chip min {min(distinct)} median "
+        f"{int(np.median(distinct))} max {max(distinct)}, of them in this chunk median {int(np.median(rest))}"
+    )
     for name, us in measured.items():
-        logger.info(f"GLM push perf L{layer} {name}: {us:.1f} us")
+        logger.info(f"short prefix {prefix_slabs} slabs {name}: {us:.1f} us")
+
+
+# (attention, gather) grids for a dense prefix gather beside sparse_sdpa: the push's grid, the push's columns, and the
+# full layers' overlap layout (gather on the Ethernet row, top-k below it).
+_DENSE_OVERLAP_GRIDS = {
+    "cols8-11 rows4-9": (_cols(0, 7), ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(8, 4), ttnn.CoreCoord(11, 9))])),
+    "cols8-11": (_cols(0, 7), _cols(8, 11)),
+    "row0": (
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(11, 9))]),
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))]),
+    ),
+}
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("prefix_slabs", [40, 8, 4, 2, 1])
+@pytest.mark.parametrize("layout", list(_DENSE_OVERLAP_GRIDS))
+def test_dense_gather_beside_sparse_sdpa_perf(mesh_device, prefix_slabs, layout):
+    """A dense prefix gather split in two: `quota` slabs on a sub-device beside this layer's sparse_sdpa, the rest
+    after it, against attention followed by the whole gather. The gather has no start offset, so the rest is timed as a
+    gather of the same number of slabs from the start (the same bytes)."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    if (grid.x, grid.y) != (12, 10):
+        pytest.skip(f"needs the 12x10 Galaxy grid, got {grid}")
+    kv_fmt, chunk_global, links = "fp8", 5120, 2
+    n_dev = mesh_device.get_num_devices()
+    s_local = chunk_global // n_dev
+    slabs = prefix_slabs + 1  # the prefix and this chunk
+    cache_tokens = slabs * chunk_global
+    attention_grid, gather_grid = _DENSE_OVERLAP_GRIDS[layout]
+
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    cache = _kv_cache(mesh_device, 1, cache_tokens, kv_fmt, shard_seq, seed=2)
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * s_local, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    idx = ttnn.from_torch(
+        torch.randint(0, cache_tokens, (1, 1, n_dev * s_local, TOPK), dtype=torch.int32),
+        dtype=ttnn.uint32,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    # This layer's gathered prefix, which attention reads, and the next layer's, which the gather writes.
+    this_layer = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+    next_layer = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+    sems = [
+        ttnn.create_global_semaphore(mesh_device, _cols(0, grid.x - 1), 0, ttnn.BufferType.L1_SMALL) for _ in range(2)
+    ]
+    gather_kw = dict(dim=2, cluster_axis=None, num_links=links, input_batch_index=0)
+    ttnn.experimental.high_bw_all_gather(cache, output_tensor=this_layer, **gather_kw)
+    manager = mesh_device.create_sub_device_manager(
+        [ttnn.SubDevice([attention_grid]), ttnn.SubDevice([gather_grid])], 0
+    )
+
+    def gather(n, **sub):
+        return lambda controller: ttnn.experimental.high_bw_all_gather(
+            cache, output_tensor=next_layer, gathered_dim_size=n * chunk_global, **gather_kw, **sub
+        )
+
+    def attention(controller, **grid):
+        ttnn.deallocate(_sparse_sdpa(q, this_layer, idx, s_local * TP, kv_fmt, **grid))
+
+    def attention_beside_gather(n):
+        def fn(controller):
+            (controller.sub_device_load if controller else mesh_device.load_sub_device_manager)(manager)
+            gather(
+                n,
+                subdevice_id=ttnn.SubDeviceId(1),
+                sub_core_grids=gather_grid,
+                ready_semaphore=sems[0],
+                data_valid_semaphore=sems[1],
+            )(controller)
+            attention(controller)
+            (controller.sub_device_clear if controller else mesh_device.clear_loaded_sub_device_manager)()
+
+        return fn
+
+    us = lambda fn: _segmented_traced_us(mesh_device, fn)
+    attention_us = us(attention)
+    attention_grid_us = us(lambda controller: attention(controller, sub_core_grids=attention_grid))
+    gather_us = {n: us(gather(n)) for n in range(1, slabs + 1)}
+    baseline = attention_us + gather_us[slabs]
+    logger.info(
+        f"dense overlap {layout} prefix {prefix_slabs} slabs: attention {attention_us:.0f} us "
+        f"({attention_grid_us:.0f} on its grid), gather {gather_us[slabs]:.0f} us, baseline {baseline:.0f} us"
+    )
+    logger.info(f"dense overlap {layout} prefix {prefix_slabs}: gather us by slabs {gather_us}")
+    rows = []
+    for quota in sorted({1, 2, 4, 6, 12, 15, 21, 30, 40, slabs} & set(range(1, slabs + 1))):
+        beside = us(attention_beside_gather(quota))
+        rest = gather_us[slabs - quota] if quota < slabs else 0.0
+        rows.append((quota, beside, rest, beside + rest, 100 * (1 - (beside + rest) / baseline)))
+    for quota, beside, rest, total, saved in rows:
+        logger.info(
+            f"dense overlap {layout} prefix {prefix_slabs}: quota {quota} | attention + gather {beside:.0f} | "
+            f"rest {rest:.0f} | total {total:.0f} | saved {saved:.1f}%"
+        )
+    mesh_device.clear_loaded_sub_device_manager()
+    mesh_device.remove_sub_device_manager(manager)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("start_slabs", [0, 2, 3, 4, 6], ids=lambda s: f"start{s}")
+def test_dense_mode_matches_gather(mesh_device, start_slabs):
+    """Below dense_below the plan rewrites the indices for a dense gather into the push buffer and the push sends
+    nothing; at or above it the gather copies nothing and the push fills the buffer. Either way, attention over the
+    push buffer must equal today's dense path exactly."""
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
+
+    kv_fmt, chunk_global, links = "fp8", 5120, 2
+    n_dev = mesh_device.get_num_devices()
+    stripe_chunk = query_rows = chunk_global // n_dev
+    cache_tokens = 80 * chunk_global  # more than the push buffer, so the dense gather lands in a short output
+    dense_below = 4 * chunk_global
+    chunk_start = start_slabs * chunk_global
+    page_bytes = 704
+    planner = SparseKvPushPlanner(mesh_device, links)
+    buffer_rows = planner.buffer_rows(query_rows * TOPK, cache_tokens, stripe_chunk, page_bytes)
+    assert buffer_rows < cache_tokens and buffer_rows % n_dev == 0
+
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    cache = _kv_cache(mesh_device, 1, cache_tokens, kv_fmt, shard_seq, seed=4)
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * query_rows, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    start = ttnn.from_torch(
+        torch.tensor([[[[chunk_start]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+    )
+    gen = torch.Generator().manual_seed(start_slabs)
+    natural = torch.stack(
+        [
+            (
+                torch.randperm(p + 1, generator=gen)[:TOPK]
+                if p + 1 >= TOPK
+                else torch.cat([torch.arange(p + 1), torch.full((TOPK - p - 1,), -1)])
+            )
+            for p in range(chunk_start, chunk_start + n_dev * query_rows)
+        ]
+    ).to(torch.int32)
+    indices = ttnn.from_torch(natural.reshape(1, 1, -1, TOPK), dtype=ttnn.uint32, mesh_mapper=shard_seq, **common)
+
+    table, compact_idx = ttnn.experimental.sparse_push_plan(
+        indices,
+        num_devices=n_dev,
+        stripe_chunk=stripe_chunk,
+        max_rows=cache_tokens,
+        page_bytes=page_bytes,
+        chunk_start=start,
+        dense_below=dense_below,
+    )
+    _shard_over_mesh(table, mesh_device)
+    tables = ttnn.from_torch(
+        torch.zeros(1, 1, table.shape[2] * n_dev, table.shape[3], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+        **common,
+    )
+    ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
+    buf = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+    ttnn.experimental.sparse_kv_push(
+        cache,
+        output_tensor=buf,
+        table=tables,
+        stripe_chunk=stripe_chunk,
+        max_rows=cache_tokens,
+        part=Part.ALL,
+        num_links=links,
+        ready_semaphore=planner.ready_semaphore,
+        data_valid_semaphore=planner.data_valid_semaphore,
+    )
+    ttnn.experimental.high_bw_all_gather(
+        cache,
+        dim=2,
+        output_tensor=buf,
+        cluster_axis=None,
+        num_links=links,
+        gathered_prefix_tensor=start,
+        gathered_slab_global=chunk_global,
+        gathered_active_below=dense_below,
+    )
+    sdpa_kw = dict(kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128)
+    got = ttnn.transformer.sparse_sdpa(q, buf, compact_idx, V_DIM, **sdpa_kw)
+
+    dense = _zero_kv_buffer(mesh_device, cache_tokens, kv_fmt)
+    ttnn.experimental.high_bw_all_gather(
+        cache,
+        dim=2,
+        output_tensor=dense,
+        cluster_axis=None,
+        num_links=links,
+        gathered_prefix_tensor=start,
+        gathered_slab_global=chunk_global,
+    )
+    want = _sparse_sdpa(q, dense, indices, query_rows * TP, kv_fmt)
     planner.release()
 
-    ceilings = (_GLM_PUSH_PERF_CEILING_US or {}).get(layer)
-    if ceilings is not None:
-        over = {name: (us, ceilings[name]) for name, us in measured.items() if us > ceilings[name]}
-        assert not over, f"L{layer} steps over their ceiling (measured, ceiling us): {over}"
+    host = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    mode = "dense" if chunk_start < dense_below else "push"
+    # The indices took the mode's layout: the dense one is chip * slot + local row.
+    valid = natural >= 0
+    n = natural[valid].to(torch.int64)
+    block = n // stripe_chunk
+    # A chip's slot: the largest extent below the threshold (a chunk starting just below it, plus that chunk), per chip.
+    dense_slot = -(-(dense_below - 1 + chunk_global) // chunk_global) * stripe_chunk
+    dense_rows = (block % n_dev) * dense_slot + (block // n_dev) * stripe_chunk + n % stripe_chunk
+    rewritten = host(compact_idx).reshape(-1, TOPK).to(torch.int64) & 0xFFFFFFFF
+    in_dense_layout = torch.equal(rewritten[valid], dense_rows)
+    assert in_dense_layout == (mode == "dense"), f"{mode} mode: compact indices are not in the {mode} layout"
+    assert torch.equal(host(want), host(got)), f"{mode} mode (start {chunk_start}) differs from the dense gather"
+
+
+@run_for_blackhole()
+@_PERF
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("start_slabs", [0, 2, 4, 8], ids=lambda s: f"start{s}")
+def test_dense_mode_steps_perf(mesh_device, start_slabs):
+    """Traced us of each switched step at one chunk start, with dense_below at 6 slabs: the plan, the push (nothing to
+    send in dense mode), and the dense gather into the push buffer (nothing to copy in push mode)."""
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
+
+    kv_fmt, chunk_global, links = "fp8", 5120, 2
+    n_dev = mesh_device.get_num_devices()
+    stripe_chunk = query_rows = chunk_global // n_dev
+    cache_tokens = 80 * chunk_global
+    dense_below = 6 * chunk_global
+    chunk_start = start_slabs * chunk_global
+    page_bytes = 704
+    planner = SparseKvPushPlanner(mesh_device, links)
+    buffer_rows = planner.buffer_rows(query_rows * TOPK, cache_tokens, stripe_chunk, page_bytes)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_seq = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    cache = _kv_cache(mesh_device, 1, cache_tokens, kv_fmt, shard_seq, seed=4)
+    start = ttnn.from_torch(
+        torch.tensor([[[[chunk_start]]]], dtype=torch.int32), dtype=ttnn.uint32, mesh_mapper=replicate, **common
+    )
+    gen = torch.Generator().manual_seed(0)
+    natural = torch.stack(
+        [
+            (
+                torch.randperm(p + 1, generator=gen)[:TOPK]
+                if p + 1 >= TOPK
+                else torch.cat([torch.arange(p + 1), torch.full((TOPK - p - 1,), -1)])
+            )
+            for p in range(chunk_start, chunk_start + n_dev * query_rows)
+        ]
+    ).to(torch.int32)
+    indices = ttnn.from_torch(natural.reshape(1, 1, -1, TOPK), dtype=ttnn.uint32, mesh_mapper=shard_seq, **common)
+    plan_kw = dict(
+        num_devices=n_dev, stripe_chunk=stripe_chunk, max_rows=cache_tokens, page_bytes=page_bytes, chunk_start=start
+    )
+    dense_kw = dict(dense_below=dense_below)
+    table, compact_idx = ttnn.experimental.sparse_push_plan(indices, **plan_kw, **dense_kw)
+    _shard_over_mesh(table, mesh_device)
+    tables = ttnn.from_torch(
+        torch.zeros(1, 1, table.shape[2] * n_dev, table.shape[3], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+        **common,
+    )
+    ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
+    buf = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+
+    def plan(controller, **kw):
+        t, c = ttnn.experimental.sparse_push_plan(indices, **plan_kw, **kw)
+        ttnn.deallocate(t)
+        ttnn.deallocate(c)
+
+    steps = {
+        "plan, dense_below": lambda controller: plan(controller, **dense_kw),
+        "plan, no dense mode": plan,
+        "push all": lambda controller: ttnn.experimental.sparse_kv_push(
+            cache,
+            output_tensor=buf,
+            table=tables,
+            stripe_chunk=stripe_chunk,
+            max_rows=cache_tokens,
+            part=Part.ALL,
+            num_links=links,
+            ready_semaphore=planner.ready_semaphore,
+            data_valid_semaphore=planner.data_valid_semaphore,
+        ),
+        "gather into push buffer, active_below": lambda controller: ttnn.experimental.high_bw_all_gather(
+            cache,
+            dim=2,
+            output_tensor=buf,
+            cluster_axis=None,
+            num_links=links,
+            gathered_prefix_tensor=start,
+            gathered_slab_global=chunk_global,
+            gathered_active_below=dense_below,
+        ),
+    }
+    # Marginal cost on the critical path: each step queued right before attention, in one trace, minus attention alone.
+    q = ttnn.from_torch(
+        torch.randn(1, H, n_dev * query_rows, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=shard_seq,
+        **common,
+    )
+    sdpa_kw = dict(kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128)
+    attention = lambda controller: ttnn.deallocate(ttnn.transformer.sparse_sdpa(q, buf, compact_idx, V_DIM, **sdpa_kw))
+
+    def then_attention(step):
+        def fn(controller):
+            step(controller)
+            attention(controller)
+
+        return fn
+
+    steps = {
+        "attention alone": attention,
+        **steps,
+        **{f"{name} + attention": then_attention(fn) for name, fn in steps.items() if not name.startswith("plan, no")},
+    }
+    mode = "dense" if chunk_start < dense_below else "push"
+    for name, fn in steps.items():
+        logger.info(
+            f"dense mode steps start {start_slabs} slabs ({mode}) {name}: {_segmented_traced_us(mesh_device, fn):.1f} us"
+        )
+    planner.release()
