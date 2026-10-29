@@ -360,7 +360,11 @@ def test_demo(
         weight_dtype = ttnn.bfloat16
         optimizations = None  # QuasarModelArgs fills in its bf16 precision
         monkeypatch.setenv("TT_QWEN_FORCE_HOST_SAMPLING", "1")
-        page_params = {**page_params, "page_max_num_blocks": -(-max_seq_len // page_params["page_block_size"])}
+        # KV cache: max_seq_len tokens for each user in the batch.
+        page_params = {
+            **page_params,
+            "page_max_num_blocks": batch_size * -(-max_seq_len // page_params["page_block_size"]),
+        }
         OverrideSession(mesh_device, host_ops=(), disable_wa=()).install(monkeypatch)
     text_args_cls, vision_args_cls = model_args_classes()
 
