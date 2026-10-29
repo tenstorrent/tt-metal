@@ -470,7 +470,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
                 metrics.record(f"pcc_layer_L{i:02d}", v)
                 metrics.record(f"err_layer_L{i:02d}", e)  # F135: the rel error gates, as in the ladder
                 E.check(drift, f"layer_L{i:02d}", f"err_layer_L{i:02d}", e, failed)
-            check_states(state, g, layers, rung["seq"], drift, failed)
+            check_states(state, g, layers, rung["seq"], drift, failed, s.get("tests.waivers"))
             metrics.record("host_transfers_per_layer", max(host) if host else 0)
             worst = max(pcc, key=lambda i: pcc[i][1])
             print(f"PROFILE quick: worst layer rel {pcc[worst][1]:.5f} (L{worst:02d}, PCC {pcc[worst][0]:.5f})")
