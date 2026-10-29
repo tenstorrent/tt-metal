@@ -74,8 +74,9 @@ template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
     // Kept as hand-tuned TTI: the equivalent pure-SFPI form (bitwise magnitude + v_if
     // predication) measured ~1.5-2.1x slower in MATH_ISOLATE on Wormhole. The predicates
-    // below are evaluated on the raw Dest bits so that no SFPSETSGN/SFPSETCC pair is needed:
-    //  - eqz/nez: SFPLZ with NOSGN sets the flag from (v & 0x7FFFFFFF) != 0, i.e. |v| != 0,
+    // below are integer tests on the bits of the FP32 LREG image that SFPLOAD DEFAULT
+    // produces (for a 16-bit Dest, the datum widened to FP32), so no SFPSETSGN is needed:
+    //  - eqz/nez: SFPLZ NOSGN|CC_EQ0 sets the flag where (v & 0x7FFFFFFF) == 0, i.e. |v| == 0,
     //    so ±0 compare equal to zero and every NaN compares non-zero, in one instruction.
     //  - ltz/gtz: two SFPIADD half-plane tests on the bits viewed as a signed int32.
     //    ltz <=> (v - 1 < 0) AND (-inf - v >= 0): the first test keeps [INT_MIN+1, 0] (drops
@@ -85,22 +86,24 @@ inline void calculate_comp() {
     //    INT_MIN (wrap), the second keeps v <= 0x7F800000 and rejects INT_MIN (the subtraction
     //    wraps negative), so the result is {+tiny .. +inf}: ±0, ±NaN and negatives rejected.
     //    SFPIADD only writes the flag of enabled lanes, so the two tests AND together.
-    //  - gez/lez: the 1-lanes are [0, +inf] plus -0 (two bit intervals), so one chain cannot
-    //    select them directly. Enable the strict opposite half (sign test AND |v| != 0 via
-    //    SFPLZ), invert with SFPCOMPC (empty flag stack: inverts against all lanes), then
-    //    drop the remaining NaN with +inf - |v| >= 0 and store 1 over the 0 default.
+    //  - gez/lez: the 1-lanes are two bit intervals (gez: [+0, +inf] plus -0; lez: [-0, -inf]
+    //    plus +0), so one chain cannot select them directly. Default 1. A sign test (v + 0)
+    //    and (±inf - v >= 0) enable the closed half that holds the answer's infinity, and the
+    //    second SFPIADD writes ±inf - v into V on the lanes of the right sign. SFPCOMPC (empty
+    //    flag stack: inverts against all lanes) leaves the 0-lanes plus the other zero. SFPLZ
+    //    NOSGN|CC_NE0 on V then drops that zero (V still holds it, |v| == 0), while a NaN of
+    //    the answer's sign now holds ±inf - v, which is non-zero; store 0 on what is left.
     constexpr std::uint32_t V = p_sfpu::LREG0;
     constexpr std::uint32_t TMP = p_sfpu::LREG2;
     constexpr std::uint32_t INF = p_sfpu::LREG5;
     constexpr std::uint32_t BFLOAT16_INF = 0x7f80;
     constexpr std::uint32_t BFLOAT16_NEG_INF = 0xff80;
+    constexpr std::uint32_t IMM12_ZERO = 0x000;
     constexpr std::uint32_t IMM12_MINUS_ONE = 0xfff;
 
-    if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+    if constexpr (COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::less_than_equal_zero) {
         TTI_SFPLOADI(INF, sfpi::SFPLOADI_MOD0_FLOATB, BFLOAT16_NEG_INF);
-    } else if constexpr (
-        COMP_MODE == SfpuType::greater_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero ||
-        COMP_MODE == SfpuType::less_than_equal_zero) {
+    } else if constexpr (COMP_MODE == SfpuType::greater_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero) {
         TTI_SFPLOADI(INF, sfpi::SFPLOADI_MOD0_FLOATB, BFLOAT16_INF);
     }
 
@@ -111,7 +114,7 @@ inline void calculate_comp() {
         // eqz: default 0, set 1 where |v| == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-            TTI_SFPLZ(0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_EQ0);
+            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_EQ0);
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
@@ -119,7 +122,7 @@ inline void calculate_comp() {
         // nez: default 1, set 0 where |v| == 0
         if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
             TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-            TTI_SFPLZ(0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_EQ0);
+            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_EQ0);
             TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
@@ -142,27 +145,25 @@ inline void calculate_comp() {
             TTI_SFPENCC(0, 0, 0, 0);
         }
 
-        // gez: default 0; enable (v < 0) AND (|v| != 0), invert, then (+inf - |v| >= 0) → 1
+        // gez: default 1; enable (v >= 0) AND (+inf - v >= 0), invert, drop |V| == 0 → 0
         if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-            TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-            TTI_SFPLZ(0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
-            TTI_SFPCOMPC(0, 0, 0, 0);
-            TTI_SFPSETSGN(0, V, TMP, 1);
-            TTI_SFPIADD(0, INF, TMP, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPIADD(IMM12_ZERO, V, TMP, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+            TTI_SFPIADD(0, INF, V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+            TTI_SFPCOMPC(/*imm12_math*/ 0, /*lreg_c*/ 0, /*lreg_dest*/ 0, /*instr_mod1*/ 0);
+            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
 
-        // lez: default 0; enable (v >= 0) AND (|v| != 0), invert, then (+inf - |v| >= 0) → 1
+        // lez: default 1; enable (v < 0) AND (-inf - v >= 0), invert, drop |V| == 0 → 0
         if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
-            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-            TTI_SFPSETCC(0, V, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
-            TTI_SFPLZ(0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
-            TTI_SFPCOMPC(0, 0, 0, 0);
-            TTI_SFPSETSGN(0, V, TMP, 1);
-            TTI_SFPIADD(0, INF, TMP, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
-            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+            TTI_SFPSTORE(p_sfpu::LCONST_1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPIADD(IMM12_ZERO, V, TMP, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPIADD(0, INF, V, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_GTE0);
+            TTI_SFPCOMPC(/*imm12_math*/ 0, /*lreg_c*/ 0, /*lreg_dest*/ 0, /*instr_mod1*/ 0);
+            TTI_SFPLZ(/*imm12_math*/ 0, V, TMP, sfpi::SFPLZ_MOD1_NOSGN_CC_NE0);
+            TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
             TTI_SFPENCC(0, 0, 0, 0);
         }
     }

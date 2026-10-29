@@ -10,7 +10,11 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
-from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
+from helpers.data_format_inference import (
+    dest_acc_for,
+    effective_dest_acc,
+    unpacks_to_dest,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -1211,6 +1215,131 @@ def test_eltwise_unary_sfpu_isinf_isnan(
         input_dimensions,
         spec_A=_isinf_isnan_stimuli_spec(),
         gate_on_step_budget=True,
+    )
+
+
+# The six comparison-to-zero ops. On Wormhole calculate_comp (ckernel_sfpu_comp.h) answers
+# them with integer interval tests on the FP32 bits SFPLOAD hands the SFPU, so a slip in
+# one of its constants shows only on a pattern at an interval end: both zeros (-0.0 is
+# INT_MIN), the denormals beside them (INT_MIN + 1 and 1), both infinities and the NaNs
+# just past them, the largest NaN payloads (INT_MAX and -1, where a subtraction wraps) and
+# quiet NaNs of both signs. The edge sweep sends +-0, +-inf and one +NaN, a random sweep
+# none of these, so they are listed here as raw bits and fed to every lane in turn.
+_COMPARE_ZERO_OPS = [
+    MathOperation.EqualZero,
+    MathOperation.NotEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.LessThanEqualZero,
+    MathOperation.GreaterThanEqualZero,
+]
+
+# fmt: off
+_COMPARE_ZERO_FP32_BITS = (
+    0x00000000, 0x80000000,  # +0, -0
+    0x00000001, 0x80000001,  # smallest denormals
+    0x007FFFFF, 0x807FFFFF,  # largest denormals
+    0x00800000, 0x80800000,  # smallest normals
+    0x3F800000, 0xBF800000,  # +-1
+    0x7F7FFFFF, 0xFF7FFFFF,  # largest finite
+    0x7F800000, 0xFF800000,  # +-inf
+    0x7F800001, 0xFF800001,  # the NaNs next to +-inf
+    0x7FC00000, 0xFFC00000,  # quiet NaNs
+    0x7FFFFFFF, 0xFFFFFFFF,  # largest NaN payloads: INT_MAX and -1
+)
+# fmt: on
+
+_FP32_BITS_PER_BF16 = 16
+
+
+def _compare_zero_bit_stimulus(input_format, num_elements):
+    """The patterns of _COMPARE_ZERO_FP32_BITS in *input_format*, repeated over every lane.
+
+    A bf16 input takes each pattern's top half, which is what SFPLOAD widens a bf16 datum
+    back to. The bf16 host packer quietens a signalling NaN (0x7F81 lands as 0x7FC1),
+    which keeps its sign and class; the exact NaN-next-to-inf patterns need the Float32
+    pipeline."""
+    if input_format == DataFormat.Float32:
+        bits = torch.tensor(_COMPARE_ZERO_FP32_BITS, dtype=torch.int64)
+        values = bits.to(torch.int32).view(torch.float32)
+    else:
+        top_halves = dict.fromkeys(
+            b >> _FP32_BITS_PER_BF16 for b in _COMPARE_ZERO_FP32_BITS
+        )
+        bits = torch.tensor(list(top_halves), dtype=torch.int32).to(torch.int16)
+        values = bits.view(torch.bfloat16)
+    return values.repeat(num_elements // values.numel() + 1)[:num_elements]
+
+
+@parametrize(
+    formats=[
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    ],
+    mathop=_COMPARE_ZERO_OPS,
+    dest_acc=lambda formats: [dest_acc_for(formats.input_format)],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
+    formats: InputOutputFormat,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """Each comparison-to-zero op against IEEE on the interval-end bit patterns, exactly.
+
+    Two Dest widths: Float32 at dest_acc=Yes unpacks the words straight into a 32-bit Dest,
+    and Float16_b at dest_acc=No reaches a 16-bit Dest through SrcA. A Float32 input at
+    dest_acc=No would be narrowed on the way, and a bf16 input at dest_acc=Yes hands the
+    SFPU a NaN as an infinity (see _ISINF_ISNAN_BF16_DEST_UNSUPPORTED), so neither tests
+    the kernel. The SrcA path hands the SFPU a denormal as zero (as on main), so the
+    golden sees the flushed value there; the denormal patterns themselves reach the kernel
+    on the Float32 pipeline. Wormhole only: Blackhole's calculate_comp is a separate
+    kernel and these expectations were measured on Wormhole."""
+    if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE:
+        pytest.skip(reason="raw-bit predicates of the Wormhole calculate_comp")
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = _compare_zero_bit_stimulus(formats.input_format, num_elements)
+    delivered = src_A
+    if not unpacks_to_dest(formats.input_format, dest_acc):
+        tiny = torch.finfo(src_A.dtype).tiny
+        delivered = torch.where(src_A.abs() < tiny, torch.zeros_like(src_A), src_A)
+
+    golden = get_golden_generator(UnarySFPUGolden)(
+        mathop,
+        delivered,
+        formats.output_format,
+        dest_acc,
+        formats.input_format,
+        input_dimensions,
+    ).to(torch.float32)
+
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc,
+        approx_mode=ApproximationMode.No,
+        mathop=mathop,
+        fast_mode=FastMode.No,
+        input_dimensions=input_dimensions,
+        src_A=src_A,
+        check_golden=False,
+    )
+
+    res_tensor = torch.tensor(res_from_L1, dtype=torch.float32)
+    assert res_tensor.shape == golden.shape, "Result and golden differ in length"
+    mismatch = torch.nonzero(res_tensor != golden).flatten()
+    input_bits = src_A.view(
+        torch.int16 if src_A.dtype == torch.bfloat16 else torch.int32
+    )
+    bits_mask = (1 << (8 * src_A.element_size())) - 1
+    assert mismatch.numel() == 0, (
+        f"{mismatch.numel()} of {golden.numel()} lanes differ from IEEE; first: "
+        + ", ".join(
+            f"[{i}] in {int(input_bits[i]) & bits_mask:#x} got {res_tensor[i].item()} "
+            f"want {golden[i].item()}"
+            for i in mismatch[:MAX_REPORTED_MISMATCHES].tolist()
+        )
     )
 
 
