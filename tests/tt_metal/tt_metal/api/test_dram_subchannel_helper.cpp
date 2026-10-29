@@ -188,7 +188,7 @@ constexpr EndpointTable kRelocatedEndpoints = {{{0, 2}, {1, 2}, {1, 2}, {1, 2}, 
 
 TEST_F(DramSubchannelHelperFixture, MriscTelemetrySelectsMatchingEndpointAssignment) {
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     if (soc_desc.harvesting_masks.dram_harvesting_mask != 0) {
