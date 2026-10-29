@@ -866,7 +866,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, device_param
         ),
     ],
 )
-def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, reset_seeds, request):
+def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, device_params, reset_seeds, request):
     """Two 1024-token chunks through the vLLM-style chunked prefill (``chunk_start_idx`` + ``chunk_page_table``,
     the served 8K / 32K path) match the one-shot 2048-token prefill of the same layer: the global layer's second
     chunk attends the paged prefix through ``chunked_prefill_sdpa`` and the sliding layer's through its stashed
