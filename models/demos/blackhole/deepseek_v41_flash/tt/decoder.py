@@ -95,6 +95,33 @@ class DSV41Decoder:
             )  # row-major: a tile layout would pad each user's row to 32 rows (32x the bytes)
         return order, host_c, host_r
 
+    def prepare_packed_cat(self, token_ids, cat, order, positions):
+        """``prepare_packed_inputs`` for rows that are already one bf16 [T,1,1,sum(Kin)] tensor in layer order (DSV41_HOSTOPT_ENGRAM): no per-layer reshape / cat / dtype pass."""
+        import torch
+
+        from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
+
+        rows, cols = tuple(self.md.shape)
+        B = token_ids.shape[0]
+        mp = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(rows, cols))
+        mpr = ttnn.ShardTensor2dMesh(self.md, dims=(0, 3), mesh_shape=(rows, cols)) if self.rows_shard else mp
+        ctrl = torch.zeros(B, 32, dtype=torch.int32)
+                hp[key] = (
+                    ctrl,
+                    ttnn.from_torch(ctrl, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp),
+                    ttnn.from_torch(cat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mpr),
+                    cat,
+                )
+            ctrl, host_c, host_r, _keep = hp[key]
+            ctrl[:, 0] = token_ids.reshape(-1).to(torch.int32)
+            ctrl[:, 1] = positions.reshape(-1).to(torch.int32)
+            return list(order), host_c, host_r
+        ctrl = torch.zeros(B, 32, dtype=torch.int32)
+        ctrl[:, 0], ctrl[:, 1] = token_ids.reshape(-1).to(torch.int32), positions.reshape(-1).to(torch.int32)
+        host_c = ttnn.from_torch(ctrl, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mp)
+        host_r = ttnn.from_torch(cat, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mpr)
+        return list(order), host_c, host_r
+
     def upload_packed_inputs(self, prepared):
         """Device half: copy the prepared host tensors into the persistent buffers (call after the previous replay finished)."""
         self.engram_order, host_c, host_r = prepared

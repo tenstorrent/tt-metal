@@ -137,6 +137,145 @@ def round_hook(r):
 
 
 # ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Engram: hash
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
+class FastNgramHash:
+    """Numpy twin of ``RaggedNgramHash.__call__`` (same state, same cache writes, identical ids). Returns int64 [B, L, n_engram_layers, n_hash_cols] (numpy)."""
+
+    def __init__(self, state):
+        self.st = state
+        self.tmap = state.token_map.numpy().astype(np.int64)
+        self.mult = state.multipliers.numpy().astype(np.int64)  # [layers, ngram]
+        self.primes = state.primes.numpy().astype(np.int64)  # [layers, ngram - 1, heads]
+        self.offsets = state.offsets.numpy().astype(np.int64)  # [layers, (ngram - 1) * heads]
+        self.pad = int(state.pad_id)
+        self.dead = int(state.DEAD)
+        self.ng = int(state.layout.max_ngram_size)
+        self.cache = state.cache.numpy()  # shares the memory of the torch cache: both paths see the same token history
+        self._shifts = np.arange(self.ng).reshape(1, 1, self.ng)
+
+    def __call__(self, input_ids, start, rows=None, token_mask=None):
+        if token_mask is not None:
+            raise NotImplementedError("decode hash has no token mask")
+        ids = input_ids.numpy() if isinstance(input_ids, torch.Tensor) else np.asarray(input_ids)
+        B, L = ids.shape
+        start = (start.numpy() if isinstance(start, torch.Tensor) else np.asarray(start)).reshape(B, 1).astype(np.int64)
+        pos = start + np.arange(L, dtype=np.int64).reshape(1, L)  # [B, L]
+        if rows is None:
+            crow = np.arange(B, dtype=np.int64)
+        else:
+            crow = (rows.numpy() if isinstance(rows, torch.Tensor) else np.asarray(rows)).astype(np.int64).reshape(B)
+        crow = crow.reshape(B, 1, 1)
+        cache = self.cache
+        cache[crow[:, :, 0], pos] = self.tmap[ids]
+        # all look-backs at once: [B, L, ngram]
+        idx = np.maximum(pos[:, :, None] - self._shifts, 0)
+        src = cache[crow, idx]
+        blocked = np.logical_or.accumulate((pos[:, :, None] < self._shifts) | (src == self.dead), axis=2)
+        toks = np.where(blocked, self.pad, src)  # [B, L, ngram]
+        prod = toks[:, :, None, :] * self.mult  # [B, L, layers, ngram] (int64 wrap-around exactly like torch)
+        roll = np.bitwise_xor.accumulate(prod, axis=3)
+        out = [
+            roll[..., i : i + 1] % self.primes[:, i - 1] for i in range(1, self.ng)
+        ]  # python-style modulo, like torch's
+        return np.concatenate(out, axis=-1) + self.offsets
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
+# Engram: table gather + dequant
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
+_LUT16 = None
+LUT16_MAX_T = int(os.environ.get("DSV41_HOSTOPT_LUT16_MAX_T", "20"))  # block tokens (B * n) up to which the 16-bit LUT path is used on a cold core (above: torch's multi-threaded conversion wins, see bench_rows.py)
+LUT16_MAX_T_WARM = int(os.environ.get("DSV41_HOSTOPT_LUT16_MAX_T_WARM", "48"))  # ... and with DSV41_HOSTOPT_WARM on (a warm core favours the LUT: 0.49 vs 0.81 ms at T=24, 0.71 vs 0.88 ms at T=32)
+
+
+def _lut16():
+    """65536-entry table (e8m0 scale byte << 8 | fp8 e4m3fn byte) -> bf16 bits, built with torch's own conversions and the same float32 multiply + round-to-nearest-even as ``_MappedTable.rows``, so a lookup is bit-identical to
+    ``(w.float() * s.float()).to(bfloat16)`` for every byte pair (also NaN / subnormal / overflow)."""
+    global _LUT16
+    if _LUT16 is None:
+        b = torch.arange(256, dtype=torch.uint8)
+        prod = b.view(torch.float8_e8m0fnu).float().unsqueeze(1) * b.view(torch.float8_e4m3fn).float().unsqueeze(0)  # [scale, byte]
+        _LUT16 = prod.to(torch.bfloat16).contiguous().view(torch.int16).numpy().reshape(-1).view(np.uint16).copy()
+    return _LUT16
+
+
+class FastRows:
+    """Rows of every Engram layer straight into one preallocated bf16 buffer [T, sum(Kin)] (layer-id order = the order ``prepare_packed_inputs`` concatenates).
+    Needs the tables in RAM (``in_ram``): the NFS / memmap paths keep the shipped code. Two dequant paths (both bit-identical to the shipped one, checked by bench_rows.py / the round-by-round dumps):
+    small T (see LUT16_MAX_T): gather the fp8 rows + scales (numpy take into reused buffers), one 16-bit LUT lookup per element; larger T: torch index_select + float conversion into reused buffers (multi-threaded)."""
+
+    def __init__(self, host_rows, layer_ids):
+        self.hr = host_rows
+        self.order = sorted(layer_ids)
+        self._bufs = {}
+
+    def usable(self):
+        return all(t.in_ram for t in self.hr.tables.values())
+
+    def _buf(self, T, nh):
+        lut = T <= (LUT16_MAX_T_WARM if ACTIVE["WARM"] else LUT16_MAX_T)
+        b = self._bufs.get((T, lut))
+        if b is None:
+            R = T * nh
+            out = torch.empty(T, len(self.order) * nh * 256, dtype=torch.bfloat16)
+            b = dict(out=out, lut=lut)
+            if b["lut"]:
+                b.update(
+                    lut16=_lut16(),
+                    w=np.empty((R, 256), np.uint8),
+                    s=np.empty((R, 8), np.uint8),
+                    s16=np.empty((R, 8), np.uint16),
+                    i16=np.empty((R, 8, 32), np.uint16),
+                    o16=np.empty((R, 8, 32), np.uint16),
+                    dst=out.view(torch.int16).numpy().reshape(T, len(self.order), nh, 8, 32),
+                )
+            else:
+                b.update(
+                    w=torch.empty(R, 256, dtype=torch.uint8),
+                    s=torch.empty(R, 8, dtype=torch.uint8),
+                    wf=torch.empty(R, 8, 32),
+                    sf=torch.empty(R, 8, 1),
+                    pf=torch.empty(R, 8, 32),
+                    dst=out.view(T, len(self.order), nh, 8, 32),
+                )
+            self._bufs[(T, lut)] = b
+        return b
+
+    def __call__(self, hashes, layer_ids=None):
+        """hashes: int64 [B, L, n_engram_layers, n_hash_cols] (numpy). -> bf16 torch [B*L, 1, 1, len(order) * Kin] (a view of a reused buffer: valid until the next call)."""
+        B, L = hashes.shape[:2]
+        T = B * L
+        nh = hashes.shape[-1]
+        bf = self._buf(T, nh)
+        for j, lid in enumerate(self.order):
+            e = self.hr.engram.mods[lid]
+            flat = np.ascontiguousarray(hashes[:, :, e.layer_hash_index, :]).reshape(-1)
+            tab = self.hr.tables[lid]
+            if bf["lut"]:
+                if not hasattr(tab, "w_u8"):
+                    tab.w_u8, tab.s_u8 = tab.w.view(torch.uint8).numpy(), tab.s.view(torch.uint8).numpy()
+                np.take(tab.w_u8, flat, axis=0, out=bf["w"], mode="clip")
+                np.take(tab.s_u8, flat, axis=0, out=bf["s"], mode="clip")
+                np.copyto(bf["s16"], bf["s"])
+                np.left_shift(bf["s16"], 8, out=bf["s16"])
+                np.bitwise_or(bf["s16"][:, :, None], bf["w"].reshape(-1, 8, 32), out=bf["i16"])
+                np.take(bf["lut16"], bf["i16"], out=bf["o16"], mode="clip")
+                bf["dst"][:, j] = bf["o16"].view(np.int16).reshape(T, nh, 8, 32)
+            else:
+                if not hasattr(tab, "w_t"):
+                    tab.w_t, tab.s_t = tab.w.view(torch.uint8), tab.s.view(torch.uint8)
+                fl = torch.from_numpy(flat)
+                torch.index_select(tab.w_t, 0, fl, out=bf["w"])
+                torch.index_select(tab.s_t, 0, fl, out=bf["s"])
+                bf["wf"].copy_(bf["w"].view(torch.float8_e4m3fn).view(-1, 8, 32))
+                bf["sf"].copy_(bf["s"].view(torch.float8_e8m0fnu).view(-1, 8, 1))
+                torch.mul(bf["wf"], bf["sf"], out=bf["pf"])
+                bf["dst"][:, j].copy_(bf["pf"].view(T, nh, 8, 32))  # float32 -> bf16 round-to-nearest-even
+        return bf["out"].view(T, 1, 1, -1)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------------
 # bit-exactness / timing test hook
 # ---------------------------------------------------------------------------------------------------------------------------------------------------
 DUMP = os.environ.get("DSV41_HOSTOPT_DUMP")

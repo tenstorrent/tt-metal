@@ -285,11 +285,28 @@ class SpecRunner:
         """X [B, n] block tokens, base [B] position of column 0."""
         m, B, n = self.m, self.B, self.n
         rows_d = {}
+        if m.host_rows is not None and hostopt.on("ENGRAM") and self._fast_rows().usable():
+            # DSV41_HOSTOPT_ENGRAM=1: numpy hash + LUT dequant straight into one reused bf16 buffer (bit-identical, tests/test_hostopt_cpu.py)
+            fr = self._fast_rows()
+            cat = fr(self._fast_hash()(X, base, rows=self.phys))
+            pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
+            self.dec.upload_packed_inputs(self.dec.prepare_packed_cat(X.reshape(-1), cat, fr.order, pos))
+            return
         if m.host_rows is not None:
             hs = m.hasher(X, base, rows=self.phys)
             rows_d = {l: r.reshape(B * n, 1, -1) for l, r in m.host_rows.rows_all(hs, m.engram_ids).items()}
         pos = (base.reshape(B, 1) + torch.arange(n).reshape(1, n)).reshape(-1)
         self.dec.set_packed_inputs(X.reshape(-1), rows_d, pos)
+
+    def _fast_hash(self):
+        if getattr(self, "_fh", None) is None:
+            self._fh = hostopt.FastNgramHash(self.m.host_rows.engram.hash)
+        return self._fh
+
+    def _fast_rows(self):
+        if getattr(self, "_fr", None) is None:
+            self._fr = hostopt.FastRows(self.m.host_rows, self.m.engram_ids)
+        return self._fr
 
     def _readback(self, pack=None):
         U, n, rows, cols = self.U, self.n, self.rows, self.cols
