@@ -73,39 +73,40 @@ ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
 void ZoneCsvConsumer::operator()(const Batch& batch) {
     dropped_ += batch.dropped_bytes();
     for (const api::Zone& z : batch.records<api::Zone>()) {
+        const api::Interval& interval = z.payload();
         if (!header_written_) {
-            zone_cycles_ += z.end_device_cycles() - z.start_device_cycles();
-            zone_ns_ += z.duration().count();
+            zone_cycles_ += interval.end.device_cycles() - interval.start.device_cycles();
+            zone_ns_ += interval.duration().count();
         }
-        const uint32_t id = name_hash(z.site().name);
+        const uint32_t id = name_hash(z.metadata().name);
         for (int end = 0; end < 2; end++) {
             Row& r = rows_.emplace_back(row_for(z.core()));
             r.timer_id = id;
-            r.timestamp = end ? z.end_device_cycles() : z.start_device_cycles();
+            r.timestamp = (end ? interval.end : interval.start).device_cycles();
             r.runtime_id = z.runtime_id();
-            r.zone_name = z.site().name;
+            r.zone_name = z.metadata().name;
             r.type = end ? "ZONE_END" : "ZONE_START";
         }
     }
     for (const api::TimestampedData& d : batch.records<api::TimestampedData>()) {
-        const uint32_t legacy = sync_legacy_id(d.site().name);
+        const uint32_t legacy = sync_legacy_id(d.metadata().name);
         Row& r = rows_.emplace_back(row_for(d.core()));
-        r.timer_id = legacy != 0 ? legacy : name_hash(d.site().name);
-        r.timestamp = d.device_cycles();
-        // The CSV has one data column, so a record with several values writes its first.
-        r.data = d.payload().front();
+        r.timer_id = legacy != 0 ? legacy : name_hash(d.metadata().name);
+        r.timestamp = d.published_at().device_cycles();
+        // The CSV has one data column, so a record with several values writes its first, and one with none writes 0.
+        r.data = d.payload().empty() ? 0 : d.payload().front();
         r.runtime_id = d.runtime_id();
         if (legacy == 0) {
-            r.zone_name = d.site().name;
+            r.zone_name = d.metadata().name;
         }
         r.type = "TS_DATA";
     }
     for (const api::Event& e : batch.records<api::Event>()) {
         Row& r = rows_.emplace_back(row_for(e.core()));
-        r.timer_id = name_hash(e.site().name);
-        r.timestamp = e.device_cycles();
+        r.timer_id = name_hash(e.metadata().name);
+        r.timestamp = e.published_at().device_cycles();
         r.runtime_id = e.runtime_id();
-        r.zone_name = e.site().name;
+        r.zone_name = e.metadata().name;
         r.type = "TS_EVENT";
     }
 }

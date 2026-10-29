@@ -22,7 +22,7 @@ OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : file_(std::fopen(path.
 
 void OpsCsvConsumer::operator()(const Batch& batch) {
     for (const auto& zone : batch.records<Zone>()) {
-        if (zone.runtime_id() == 0 || !zone.site().name.ends_with("-KERNEL")) {
+        if (zone.runtime_id() == 0 || !zone.metadata().name.ends_with("-KERNEL")) {
             continue;
         }
         const experimental::streaming_profiler::Core core = zone.core();
@@ -33,10 +33,11 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
         uint32_t& completed = executions_seen_[{core.chip_id, core_key, processor, zone.runtime_id()}];
         OpAgg& op = ops_[{core.chip_id, zone.runtime_id(), completed}];
         completed++;
-        op.start_cycles = std::min(op.start_cycles, zone.start_device_cycles());
-        op.end_cycles = std::max(op.end_cycles, zone.end_device_cycles());
-        const Time start = zone.start_time();
-        const Time end = zone.end_time();
+        const experimental::streaming_profiler::Interval& interval = zone.payload();
+        op.start_cycles = std::min(op.start_cycles, interval.start.device_cycles());
+        op.end_cycles = std::max(op.end_cycles, interval.end.device_cycles());
+        const Time start = interval.start.time();
+        const Time end = interval.end.time();
         op.last_kernel_start = std::max(op.last_kernel_start, start);
         for (Span* span : {&op.processors[processor], &op.cores[core_key]}) {
             span->start = std::min(span->start, start);
