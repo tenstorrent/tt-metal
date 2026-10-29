@@ -5574,12 +5574,21 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         # Keep penalty processing on vLLM's per-request host sampling path
         # when contract verification mixes greedy and sampled rows.
         "supports_device_penalties": False,
-        # TTAsyncDecodeController.plan_decode_reload sends reload_inputs=True
-        # when supports_async_decode is False, including after fused output, and
-        # _spec_plain_decode refuses a decode after fused output without it.
-        # Keep async decode disabled until the runner tracks fused input residency.
-        "supports_async_decode": False,
-        "supports_async_spec_decode": False,
+        # Asynchronous scheduling (contract s.4c). ``supports_async_decode`` is
+        # the base's env-gated declaration (GEMMA4_SUPPORTS_ASYNC_DECODE): under
+        # it the runner keeps the plain decode's inputs device-resident and sends
+        # a steady step reload_inputs=False. This rail answers two ordinary steps
+        # from the drafter (the bootstrap, and a retained proposal the scheduler
+        # sent no drafts for), both only on a step the runner sent
+        # reload_inputs=True (``_dflash_may_serve_ordinary_step``), which it
+        # drains before building the next; the plain decode after such a step
+        # reloads its resident inputs from that next step's host tokens itself
+        # (``_spec_plain_decode``, contract s.4d). ``supports_async_spec_decode``
+        # promises what the deferred verify needs: ``read_decode_output`` hands
+        # the verify's host ids through unread and the drafter's hidden state
+        # never leaves the device (``hidden`` is None). GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE=0
+        # pins it off; the platform then refuses async scheduling with speculation.
+        "supports_async_spec_decode": _dflash_env_flag("GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE", "1"),
         "supports_spec_decode": True,
         # Drafts come from the device and the target hidden state never leaves
         # it, so the runner holds no handle and ``hidden`` is unused.
@@ -5641,6 +5650,11 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         self._dflash_last_pt = None
         self._dflash_steps = 0
         self._dflash_committed = 0
+        # Proposals the runner committed past before answering (a draftless ordinary step it may overlap under
+        # the resident decode, or a proposal published after an overlapped plain step), and plain decodes that
+        # reloaded their resident inputs after a step this rail served (``_spec_plain_decode``).
+        self._dflash_dropped_proposals = 0
+        self._dflash_self_reloads = 0
         # The live session's acceptance statistics (``spec_policy.AcceptanceStats``): opened from the batch
         # prior at bootstrap, fed by the accepted counts, dropped with the session.
         self._dflash_stats = None
@@ -5881,6 +5895,39 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             self.model[0].dflash_capture_taps(None)
         except Exception:
             pass
+
+    def _dflash_may_serve_ordinary_step(self, kwargs):
+        """Whether the drafter may answer this ordinary step.
+
+        Under the resident decode (``supports_async_decode``) the runner overlaps a step it sent
+        ``reload_inputs=False`` with the next one, whose host tokens and positions it builds before
+        this step's answer is applied. A drafter-served step leaves the plain decode's resident
+        inputs stale, and the plain decode after it refills them from that next step's host inputs
+        (``_spec_plain_decode``), which must therefore carry this answer: the drafter answers only a
+        step sent ``reload_inputs=True``, which the runner drains before building the next (the
+        first decode after a prefill and the first plain decode after a verify are such steps).
+        Without the resident decode every step reloads, and every step qualifies.
+        """
+        return bool(kwargs["reload_inputs"]) or not self._spec_resident_decode_declared()
+
+    def _spec_plain_decode(self, args, kwargs, page_tables_per_layer, leaves_inputs_stale=False):
+        """The plain decode; after a step this rail served it reloads the resident inputs itself.
+
+        The runner reloads the first plain decode after a verify and every decode of a non-resident
+        adapter (``plan_decode_reload``); an ordinary step the drafter answered (the bootstrap, a
+        draftless retained step) is no transition it sees, so the plain decode after one arrives
+        with ``reload_inputs=False`` over stale resident inputs. That served step was never
+        overlapped (``_dflash_may_serve_ordinary_step``), so this step's host tokens and positions
+        are the committed ones: the decode runs with ``reload_inputs=True`` (the base's full input
+        upload, which carries the page table and realigns the sampler's seed counters to the host
+        positions), the other commands as sent. The base's refusal stays for a non-resident
+        adapter, where the runner reloads every decode and a stale decode under
+        ``reload_inputs=False`` is a runner fault.
+        """
+        if self._spec_resident_inputs_stale and not kwargs["reload_inputs"] and self._spec_resident_decode_declared():
+            self._dflash_self_reloads += 1
+            kwargs = dict(kwargs, reload_inputs=True, reload_page_table=False)
+        return Gemma4SpecContractBase._spec_plain_decode(self, args, kwargs, page_tables_per_layer, leaves_inputs_stale)
 
     def _dflash_note_step(self, kwargs, page_tables_per_layer):
         """Record a step the drafter session answered.
@@ -6195,6 +6242,17 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
                 # The scheduler sent no drafts for this proposal (it drops
                 # them near max_model_len). The replay's first id is still
                 # the answer, and the next propose commits one token.
+                if not self._dflash_may_serve_ordinary_step(kwargs):
+                    # The runner may overlap this step with the next, whose host inputs would then predate
+                    # this answer: the plain decode serves, the proposal is dropped, the session ends.
+                    self._dflash_dropped_proposals += 1
+                    logger.info(
+                        "Gemma4DFlash speculative contract: a draftless ordinary step sent reload_inputs=False "
+                        "runs the plain decode; the proposal is dropped and the session ends "
+                        f"({self._dflash_dropped_proposals} dropped)"
+                    )
+                    self._dflash_end_session()
+                    return None
                 retained.consumed = True
                 self._dflash_note_step(kwargs, page_tables_per_layer)
                 return retained.posterior[0]
@@ -6207,6 +6265,16 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             self._dflash_drop_pending()
             return None
         if row != 0 or position is None or not self._dflash_can_bootstrap(position, kwargs.get("page_table")):
+            self._dflash_drop_pending()
+            return None
+        if not self._dflash_may_serve_ordinary_step(kwargs):
+            # A bootstrap on a step the runner may overlap would leave the next step's host inputs behind
+            # its answer. The first decode after a prefill always reloads, so this is a step the runner
+            # built from a valid chain: the request runs plain (the taps are dropped).
+            logger.info(
+                "Gemma4DFlash speculative contract: no bootstrap on an ordinary step sent reload_inputs=False "
+                "(the request runs plain)"
+            )
             self._dflash_drop_pending()
             return None
         if not self._dflash_policy_admits(position):
@@ -6409,7 +6477,12 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             return self._spec_decline(rows, k)
         retained = self._dflash_retained
         if retained is not None and not retained.consumed:
-            self._dflash_decline_session("the previous proposal was never answered")
+            # Reachable under the resident decode: the proposal was published at the drain of a plain step the
+            # runner had overlapped, and the step built beside it committed past the proposal.
+            self._dflash_dropped_proposals += 1
+            self._dflash_decline_session(
+                f"the previous proposal was never answered ({self._dflash_dropped_proposals} dropped)"
+            )
             return self._spec_decline(rows, k)
         dec = self._spec_decoder
         block = self._spec_row(committed, rows, row)

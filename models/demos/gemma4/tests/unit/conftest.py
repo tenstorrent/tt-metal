@@ -348,14 +348,19 @@ def install_base_stubs(adapter, monkeypatch):
         monkeypatch.setattr(base, name, _base_stub(name), raising=False)
 
 
-def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None, env=None):
+def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None, env=None, resident=None):
     """A contract-rail model over recording stubs, after a solo-capable warmup.
 
     ``cls`` selects the dFlash contract class to build (the text class by default, or its
-    composed vision class); ``env`` holds the policy knobs the model reads at construction.
+    composed vision class); ``env`` holds the policy knobs the model reads at construction;
+    ``resident`` narrows the instance's ``supports_async_decode`` (the runner's resident-decode
+    mode, which ``plan_decode_reload`` reads off the instance) the way the base narrows it for
+    PLI models; None keeps the class declaration (GEMMA4_SUPPORTS_ASYNC_DECODE, default on).
     """
     cls = cls or adapter.Gemma4DFlashContractForCausalLM
     model = cls.__new__(cls)
+    if resident is not None:
+        model.model_capabilities = {**cls.model_capabilities, "supports_async_decode": bool(resident)}
     model.events = []
     model.prefill_kwargs = []
     model.is_multimodal = False

@@ -86,8 +86,9 @@ def test_declares_the_contract_rail(adapter):
     assert caps["max_device_top_k"] == 32
     assert caps["supports_device_penalties"] is False
     assert caps["supports_chunked_prefill"] is True
-    assert caps["supports_async_decode"] is False
-    assert caps["supports_async_spec_decode"] is False
+    # The resident decode is the base's env-driven value; the deferred verify is this rail's own declaration.
+    assert caps["supports_async_decode"] is adapter.Gemma4ForCausalLM.model_capabilities["supports_async_decode"]
+    assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
 
     # -- the MTP rail: declares the contract rail
     caps = adapter.Gemma4MTPContractForCausalLM.model_capabilities
@@ -105,16 +106,15 @@ def test_declares_the_contract_rail(adapter):
     # Prefix caching is the base's env-driven value: sessions key on slot + generation, not block ids.
     assert caps["supports_prefix_caching"] == adapter.Gemma4ForCausalLM.model_capabilities["supports_prefix_caching"]
     assert adapter.Gemma4MTPContractForCausalLM._SPEC_N == adapter.Gemma4MTPContractForCausalLM._SPEC_DRAFT_LEN + 1
-    # -- the MTP rail: the deferred-verify declaration is inherited by the composed classes and not by dflash
+    # -- both rails: the deferred-verify declaration is inherited by the composed vision classes
     for name in (
         "Gemma4MTPContractVisionForConditionalGeneration",
         "Gemma4MTPContractUnifiedVisionForConditionalGeneration",
+        "Gemma4DFlashContractVisionForConditionalGeneration",
     ):
         caps = getattr(adapter, name).model_capabilities
         assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
-    dflash = adapter.Gemma4DFlashContractForCausalLM.model_capabilities
-    assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
-    # -- the MTP rail: the async declarations follow their environment gates
+    # -- both rails: the async declarations follow their environment gates
     for env, async_decode, async_spec in [
         ({"GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE": "0"}, True, False),
         ({"GEMMA4_SUPPORTS_ASYNC_DECODE": "0"}, False, True),
@@ -126,7 +126,9 @@ def test_declares_the_contract_rail(adapter):
             assert caps["supports_async_decode"] is async_decode and caps["supports_async_spec_decode"] is async_spec
             assert module.Gemma4MTPContractVisionForConditionalGeneration.model_capabilities is caps
             dflash = module.Gemma4DFlashContractForCausalLM.model_capabilities
-            assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
+            assert (
+                dflash["supports_async_decode"] is async_decode and dflash["supports_async_spec_decode"] is async_spec
+            )
 
 
 def _plugin_sampling_router():
@@ -204,12 +206,17 @@ def test_contract_penalty_request_uses_host_sampler(adapter):
 
 
 @pytest.mark.parametrize("value", ["1", "true"])
-def test_dflash_cannot_enable_resident_decode_with_an_environment_override(value):
+def test_dflash_ignores_the_legacy_contract_async_override(value):
+    """GEMMA4_CONTRACT_ASYNC is not read: the two real gates (GEMMA4_SUPPORTS_ASYNC_DECODE, _SPEC_DECODE) drive
+    the dFlash declarations, on by default."""
     with pytest.MonkeyPatch.context() as patch:
         module = import_adapter(patch, {"GEMMA4_CONTRACT_ASYNC": value})
         caps = module.Gemma4DFlashContractForCausalLM.model_capabilities
-        assert caps["supports_async_decode"] is False
-        assert caps["supports_async_spec_decode"] is False
+        assert caps["supports_async_decode"] is True
+        assert caps["supports_async_spec_decode"] is True
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, {"GEMMA4_CONTRACT_ASYNC": value, "GEMMA4_SUPPORTS_ASYNC_DECODE": "0"})
+        assert module.Gemma4DFlashContractForCausalLM.model_capabilities["supports_async_decode"] is False
 
 
 def test_verify_count_pins_the_inherited_width_arithmetic(adapter, expect_error):
@@ -461,6 +468,10 @@ def test_host_sampled_ordinary_step_runs_the_plain_decode_and_drops_the_taps(
     out = mh._ordinary(mtp, [3], [2], [10], result="device")
     assert mtp.read_decode_output(out, async_read=True) == ["device"]
     assert _names(mtp, "read")[-1] == ("read", True)
+    # -- both rails: the dFlash rail's deferred read is the same pass-through (contract s.4c)
+    host, events = model.read_decode_output(ids, async_read=True)
+    assert host is ids and events == []
+    assert model.read_decode_output(ids) is ids
 
     # -- the acceptance-adaptive policy: without a cost table or switched off the rails run as before, and a
     # bad knob is refused at construction (both rails)
@@ -1456,6 +1467,20 @@ def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its
     proposal = _propose(model, [[250, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [5]
     assert _names(model, "commit")[-1] == ("commit", 1, 250)
+    # Under the resident decode the runner may overlap a step it sent reload_inputs=False with the next one,
+    # whose host inputs would predate the answer: such a draftless step runs the plain decode (reloading the
+    # inputs the bootstrap left stale), drops the proposal and ends the session. Without the resident decode
+    # every step reloads and the proposal answers as above.
+    resident = build_model(adapter, monkeypatch)
+    _start_solo(resident)
+    out = _ordinary(resident, [150], [3], [10], result="device", reload_inputs=False)
+    assert out == "device" and not resident._spec_active and resident._dflash_dropped_proposals == 1
+    assert resident.decode_commands[-1]["reload_inputs"] is True and resident._dflash_self_reloads == 1
+    assert _propose(resident, [[250, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]]).num_valid.tolist() == [0]
+    non_resident = build_model(adapter, monkeypatch, resident=False)
+    _start_solo(non_resident)
+    assert _ordinary(non_resident, [150], [3], [10], reload_inputs=False).tolist() == [250]
+    assert non_resident._dflash_dropped_proposals == 0
 
     # -- the MTP rail: an ordinary step answers from the retained proposal when no drafts were sent
     # Without the resident decode (the runner reloads every decode's inputs) a greedy row whose retained
@@ -1640,6 +1665,9 @@ def test_drafter_history_does_not_override_the_reload_commands(model, mtp):
     assert model.decode_commands == [commands, commands]
     _ordinary(model, [7, 8], [7, 11], [10, 20], result="device", reload_inputs=False)
     assert model.reloads == [True, True, False]
+    assert (
+        model.decode_commands[-1]["reload_inputs"] is False and model._dflash_self_reloads == 0
+    ), "a steady step after a plain decode passes through: nothing is stale"
 
     # -- the MTP rail: accepted counts on the narrow step are consumed without reaching the plain decode
     mh._prefill(mtp)
@@ -1675,20 +1703,46 @@ def _peer_joins_an_outstanding_proposal(model):
     "history", [_decline_after_a_verify, _peer_joins_an_outstanding_proposal], ids=["decline", "peer-joined"]
 )
 def test_a_plain_decode_after_a_drafter_served_step_refuses_resident_inputs(
-    model, expect_error_base, history, mtp, expect_error
+    model, expect_error_base, history, mtp, expect_error, adapter, monkeypatch
 ):
     """A drafter-served row never updated the plain decode's resident token and
-    position. Without reload_inputs the plain decode would start from the stale
-    token, so the step raises before the device runs; a reloading decode clears it."""
-    anchors, positions, keys = history(model)
-    decodes = _names(model, "decode")
+    position. Without the resident decode (the runner reloads every decode) a step
+    sent reload_inputs=False raises before the device runs; a reloading decode clears
+    it. Under the resident decode the served step was never overlapped, so the plain
+    decode after it reloads the inputs itself from this step's host tokens (contract
+    s.4d), the other commands as sent."""
+    non_resident = build_model(adapter, monkeypatch, resident=False)
+    anchors, positions, keys = history(non_resident)
+    decodes = _names(non_resident, "decode")
     with expect_error_base(RuntimeError, "reload_inputs=False"):
-        _ordinary(model, anchors, positions, keys, result="device", reload_inputs=False)
-    assert _names(model, "decode") == decodes
-    out = _ordinary(model, anchors, positions, keys)
+        _ordinary(non_resident, anchors, positions, keys, result="device", reload_inputs=False)
+    assert _names(non_resident, "decode") == decodes
+    out = _ordinary(non_resident, anchors, positions, keys)
     assert out == "device"
+    _ordinary(
+        non_resident, [a + 1 for a in anchors], [p + 1 for p in positions], keys, result="device", reload_inputs=False
+    )
+    assert non_resident.reloads[-2:] == [True, False] and non_resident._dflash_self_reloads == 0
+    anchors, positions, keys = history(model)
+    decodes = len(_names(model, "decode"))
+    out = _ordinary(
+        model,
+        anchors,
+        positions,
+        keys,
+        result="device",
+        reload_inputs=False,
+        reload_page_table=True,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    assert out == "device" and len(_names(model, "decode")) == decodes + 1
+    assert model.decode_commands[-1] == dict(
+        reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
+    )
+    assert model._dflash_self_reloads == 1 and not model._spec_resident_inputs_stale
     _ordinary(model, [a + 1 for a in anchors], [p + 1 for p in positions], keys, result="device", reload_inputs=False)
-    assert model.reloads[-2:] == [True, False]
+    assert model.reloads[-2:] == [True, False] and model._dflash_self_reloads == 1, "nothing stale: passes through"
 
     # -- the MTP rail: a plain decode after a drafter served step refuses stale resident inputs
     mh._start_solo(mtp)
@@ -2533,6 +2587,8 @@ def test_fused_bootstrap_resets_sampling_before_the_first_proposal_declines(mode
 
     proposal = _propose(model, [[150, -1, -1, -1, -1, -1]], [[3, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [0]
+    # the resident runner sends the plain step after the (served) bootstrap reload_inputs=False: the decode
+    # reloads itself (the bootstrap was never overlapped), the sampling commands pass through as sent
     _ordinary(
         model,
         [150],
@@ -2540,6 +2596,7 @@ def test_fused_bootstrap_resets_sampling_before_the_first_proposal_declines(mode
         [20],
         result="plain",
         sampling_params=greedy,
+        reload_inputs=False,
         reload_sampling_params=False,
         reset_sampling_state=False,
     )
@@ -2550,6 +2607,7 @@ def test_fused_bootstrap_resets_sampling_before_the_first_proposal_declines(mode
     assert model.decode_commands[-1] == dict(
         reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
     )
+    assert model._dflash_self_reloads == 1
 
 
 @pytest.mark.parametrize("step", ["ordinary", "draftless-verify", "retained-verify"])
