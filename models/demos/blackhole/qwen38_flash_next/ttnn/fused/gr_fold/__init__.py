@@ -114,7 +114,7 @@ class Line:
                 f"line degree histogram is not {{1: 2, 2: 2}}: neighbours {neighbours} reachable {dict(degree)}"
             )
         link_counts = {
-            len(ttnn.get_forwarding_link_indices(self.nodes[a], self.nodes[b]))
+            len(ttnn.get_forwarding_link_indices(mesh, self.nodes[a], self.nodes[b]))
             for a, b in [(r, r + 1) for r in range(TP_SIZE - 1)] + [(r + 1, r) for r in range(TP_SIZE - 1)]
         }
         if len(link_counts) != 1 or min(link_counts) < 1:
