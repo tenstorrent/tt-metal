@@ -34,3 +34,5 @@ teams:
 # tests get flagged. Each entry is a Slack user ID with a "# Name" comment.
 blacklist:
   - U0883RN6CRE # William Ly
+  - U076Z1JJUQZ # Artem Yerofieiev
+  - U05ACKAJTHS # Naif Tarafdar
