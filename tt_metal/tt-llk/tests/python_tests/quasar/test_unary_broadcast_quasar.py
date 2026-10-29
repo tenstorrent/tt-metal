@@ -188,12 +188,11 @@ def test_unary_broadcast_quasar(
     unpacker_sel = UnpackerEngine.UnpA if unpack_to_dest else UnpackerEngine.UnpB
 
     templates = [
+        UNPACKER_ENGINE_SEL(unpacker_sel),
         BROADCAST_TYPE(broadcast_type),
         DEST_SYNC(dest_sync_mode),
     ]
-    if acc_to_dest is None:
-        templates.insert(0, UNPACKER_ENGINE_SEL(unpacker_sel))
-    else:
+    if acc_to_dest is not None:
         templates.append(ACC_TO_DEST(acc_to_dest))
 
     test_config_kwargs = {
