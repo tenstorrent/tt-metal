@@ -50,24 +50,6 @@ def _consts(gdn):
     return c
 
 
-_PAD = 32
-
-
-def _zero_pad(gdn, B, C):
-    """Zero [B, 32, C] bf16 TILE DRAM pad block for the batch fold; cached per (B, C) on the layer."""
-    cache = gdn.__dict__.setdefault("_stateless_pads", {})
-    z = cache.get((B, C))
-    if z is None:
-        z = cache[(B, C)] = ttnn.zeros(
-            (B, _PAD, C),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=gdn.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-    return z
-
-
 _HEADS_PER_PROGRAM = 32  # heads one chunk-op program runs at once (B * Nv above this runs in sequential waves)
 _RESET_GATE = 128.0  # added (negated) to g at a row start: exp() underflows to exactly 0 in fp32, so the reset is exact
 
@@ -111,7 +93,6 @@ def stateless_prefill_forward(gdn, x):
     # In-projection: qkv | a | b | z.
     mega = prefill_linear(x, w.mega_fused_weight, gdn.compute_kernel_config)
     a_off, b_off, g_off = w.mega_qkv_dim, w.mega_qkv_dim + w.mega_a_dim, w.mega_qkv_dim + w.mega_a_dim + w.mega_b_dim
-    qkv = ttnn.to_layout(mega[:, :, :a_off], ttnn.TILE_LAYOUT)
     if a_off % 32 == 0 and g_off % 32 == 0:
         # Cut the a|b block on tile edges first; the unaligned a/b split then runs on [B, S, 32], not on mega.
         ab = ttnn.to_layout(mega[:, :, a_off:g_off], ttnn.TILE_LAYOUT)
@@ -122,18 +103,13 @@ def stateless_prefill_forward(gdn, x):
         a = ttnn.to_layout(mega[:, :, a_off:b_off], ttnn.TILE_LAYOUT)
         b = ttnn.to_layout(mega[:, :, b_off:g_off], ttnn.TILE_LAYOUT)
     z = ttnn.to_layout(mega[:, :, g_off:], ttnn.TILE_LAYOUT)
-    ttnn.deallocate(mega)
 
-    # Conv + SiLU + q/k/v split from a zero history. The op takes one [1, T, C] row, so for B > 1 each batch row
-    # gets 32 zero rows in front (>= K-1, tile aligned) and the rows fold into time: they never mix.
+    # Conv + SiLU + q/k/v split from a zero history, reading qkv (columns [0, C) of mega) in place. The op takes one
+    # [1, T, W] row: the B rows fold into time, and segment_length=S restarts the history at every row start.
     start, hist = _consts(gdn)
     cfg = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=kda_channel_chunk_size(C))
-    if B > 1:
-        xp = ttnn.concat([_zero_pad(gdn, B, C), qkv], dim=1, memory_config=_dram)
-        ttnn.deallocate(qkv)
-        qkv = ttnn.reshape(xp, (1, B * (_PAD + S), C))
     q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-        qkv,
+        ttnn.reshape(mega, (1, B * S, mega.shape[-1])),
         hist,
         *w.fused_conv_weight_taps,
         q_dim,
@@ -143,15 +119,10 @@ def stateless_prefill_forward(gdn, x):
         actual_start=start,
         predecessor_carry=hist,
         memory_config=_dram,
+        input_column_offset=0,
+        segment_length=S,
     )
-    ttnn.deallocate(qkv)
-    if B > 1:
-        outs = []
-        for t, width in ((q, q_dim), (k, k_dim), (v, v_dim)):
-            t = ttnn.reshape(t, (B, _PAD + S, width))
-            outs.append(ttnn.slice(t, (0, _PAD, 0), (B, _PAD + S, width), memory_config=_dram))
-            ttnn.deallocate(t)
-        q, k, v = outs
+    ttnn.deallocate(mega)
 
     # Gates (fp32, the chunk op's contract; the values are the bf16 ones the masked path multiplied up to fp32).
     beta = ttnn.typecast(ttnn.sigmoid(b), ttnn.float32)
@@ -169,11 +140,12 @@ def stateless_prefill_forward(gdn, x):
         g_old = g
         g = ttnn.add(g_old, _reset_mask(gdn, S, Nv))
         ttnn.deallocate(g_old)
-        q = ttnn.reshape(q, (Bp, F * S, q_dim))
-        k = ttnn.reshape(k, (Bp, F * S, k_dim))
-        v = ttnn.reshape(v, (Bp, F * S, v_dim))
         beta = ttnn.reshape(beta, (Bp, F * S, Nv))
         g = ttnn.reshape(g, (Bp, F * S, Nv))
+
+    q = ttnn.reshape(q, (Bp, F * S, q_dim))
+    k = ttnn.reshape(k, (Bp, F * S, k_dim))
+    v = ttnn.reshape(v, (Bp, F * S, v_dim))
 
     # Chunk op: flat q/k/v in, head-major o out; the final state is dropped.
     o, final_state = chunk_gated_delta_rule_fused_adapter(

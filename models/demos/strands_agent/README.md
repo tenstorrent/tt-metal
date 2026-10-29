@@ -20,9 +20,9 @@ B=32: one question repeated 32 times in one call, split into forwards of at most
 
 | Prompt tokens | 128 | 256 | 512 | 1024 | 2048 | 4000 |
 |---|---|---|---|---|---|---|
-| B=1 latency (ms) | 12.0 | 14.8 | 21.8 | 33.1 | 59.0 | 112.9 |
-| B=32 latency (ms) | 122.2 | 222.8 | 428.9 | 852.0 | 1731.3 | 3594.2 |
-| Batch throughput (questions/s) | 261.9 | 143.6 | 74.6 | 37.6 | 18.5 | 8.9 |
+| B=1 latency (ms) | 11.7 | 14.3 | 21.0 | 31.7 | 57.0 | 108.0 |
+| B=32 latency (ms) | 105.2 | 190.4 | 373.3 | 741.6 | 1512.0 | 3144.7 |
+| Batch throughput (questions/s) | 304.2 | 168.1 | 85.7 | 43.1 | 21.2 | 10.2 |
 
 ```bash
 pytest -sv models/demos/strands_agent/tests/test_perf.py
