@@ -69,12 +69,6 @@ int main(void)
 #ifdef ARCH_QUASAR
     *(mailbox_base + 3) = ckernel::RESET_VAL;
 #endif
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
-    for (std::uint32_t slot = 0; slot < 3; ++slot)
-    {
-        host_signal::write(slot, ckernel::RESET_VAL);
-    }
-#endif
     device_setup();
 #if defined(ARCH_QUASAR)
     // No BRISC on Quasar: unpack resets the barrier and scrubs the debug features while the others are held in reset.

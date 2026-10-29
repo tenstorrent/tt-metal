@@ -455,12 +455,6 @@ def reset_mailboxes(location: str = "0,0"):
             addr=MAILBOX_START_BLOCK,
             data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
         )
-        for slot in range(3):
-            addr = host_signal_address(slot)
-            if addr is not None:
-                write_words_to_device(
-                    location=location, addr=addr, data=[0xA3], safe_mode=False
-                )
 
 
 def pull_coverage_stream_from_tensix(
