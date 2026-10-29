@@ -9173,9 +9173,11 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
 
     Call 1 runs on set A. A sentinel then goes into A on every checked core; the reader waits with
     >=, so a stale use of A cannot hang on it. Call 2 runs on set B and must not touch A.
-    The sliding case runs the cache hit through the neighbor-halo exchange (semaphore 2). The sentinel
-    check cannot see a stale halo semaphore there, since the halo reader subtracts its own credits
-    and leaves the slot as it found it; that case only checks the halo patch runs without a hang.
+    The sliding case runs the cache hit through the neighbor-halo exchange (semaphore 2). The halo
+    reader subtracts the arrivals it waited for, so a stale halo semaphore leaves A as it found it and
+    the sentinel check cannot see it. Instead, the halo receive buffers are filled with garbage after
+    call 1: a halo reader still on A finds the sentinel already there, lets the SDPA start before the
+    neighbor's halo lands, and call 2's output differs from call 1's.
     """
     sentinel = 0x5E5E
     mesh_config = gpt_oss_chunked_mesh_config() if sliding else MESH_CONFIG
@@ -9244,7 +9246,7 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
         )
 
         def run(sems):
-            call_sdpa(
+            out = call_sdpa(
                 tt_q,
                 tt_k,
                 tt_v,
@@ -9265,15 +9267,27 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
                 **extra,
             )
             ttnn.synchronize_device(mesh_device)
+            return [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
 
-        run(sem_a)
+        out_a = run(sem_a)
+        if sliding:
+            # Garbage halo: the SDPA reads it unless it waits for the neighbor's halo to land.
+            for buf in (p_buf_k, p_buf_v):
+                garbage = ttnn.from_torch(
+                    torch.full(tuple(buf.shape), 1000.0),
+                    dtype=buf.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                ttnn.copy_host_to_device_tensor(garbage, buf)
+            fence_persistent_buffers(mesh_device)
         entries = mesh_device.num_program_cache_entries()
         for addr in addrs_a:
             for coord in coords:
                 for core in ag_cores:
                     ttnn.experimental.reload.write_core_l1(mesh_device, core, addr, [sentinel], coord)
 
-        run(sem_b)
+        out_b = run(sem_b)
         assert mesh_device.num_program_cache_entries() == entries, "second call must be a program-cache hit"
 
         changed = {}
@@ -9288,6 +9302,11 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
         assert not changed, (
             f"cache hit reused the first call's all-gather semaphores: {len(changed)} slots changed, "
             f"e.g. {sorted(changed.items())[:4]}"
+        )
+        differ = [i for i, (a, b) in enumerate(zip(out_a, out_b)) if not torch.equal(a, b)]
+        assert not differ, (
+            f"cache hit ran the SDPA before the halo landed on devices {differ}: "
+            f"max |call 2 - call 1| = {max((out_b[i] - out_a[i]).abs().max().item() for i in differ)}"
         )
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
