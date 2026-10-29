@@ -94,9 +94,20 @@ CAL_COMPACT = [
 ]
 
 
+def fold_of(E, N):
+    """The router's fold a LoudBox run takes: experts a chip <= 64 for the routing planner (K3 on 8 chips: 8)."""
+    f = 1
+    while E // f // N > 64:
+        f *= 2
+    return f
+
+
 def shape_of(model, rows, mesh, G=4):
     H, Is, E, K, lat = MODELS[model]
-    return HeadShape(rows=rows, H=H, I=Is // G, G=G, E=E, K=K, latent=lat, ring=mesh == "ring")
+    R = 2 if mesh == "2x4" else 1
+    return HeadShape(
+        rows=rows, H=H, I=Is // G, G=G, E=E, K=K, latent=lat, ring=mesh == "ring", R=R, fold=fold_of(E, R * G)
+    )
 
 
 def cal_layouts():
@@ -197,6 +208,7 @@ SWEEP_I = (1024, 2048, 3072, 4096, 6144, 8192)
 SWEEP_ROWS = (128, 256, 384, 512, 640, 768, 1024, 1280, 1536, 2048)
 
 
+@pytest.mark.timeout(1800)  # (every shape's whole plan - the routing exchange's paths and buffers too: minutes)
 @pytest.mark.parametrize("G", [4, 2])
 @pytest.mark.parametrize("mesh", ["2x4", "ring"])
 def test_head_plan_sweep(G, mesh):
@@ -213,7 +225,10 @@ def test_head_plan_sweep(G, mesh):
                 for rows in SWEEP_ROWS:
                     if rows % (32 * G) or (H // 32 // G) % 2:
                         continue
-                    sh = HeadShape(rows=rows, H=H, I=Is // G, G=G, E=E, K=K, ring=mesh == "ring")
+                    R = 2 if mesh == "2x4" else 1
+                    sh = HeadShape(
+                        rows=rows, H=H, I=Is // G, G=G, E=E, K=K, ring=mesh == "ring", R=R, fold=fold_of(E, R * G)
+                    )
                     ps = plan(sh)
                     n += 1
                     if not ps:
