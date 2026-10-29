@@ -41,7 +41,7 @@ import ttnn
 from models.common.utils import block_cyclic_reorder
 from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
-from models.demos.minimax_m3.tt.residual import use_sharded_residual
+from models.demos.minimax_m3.tt.residual import activation_mapper, use_sharded_residual
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
@@ -267,10 +267,6 @@ class TtPrefillRuntime:
         stand-in for a non-first pipeline rank, which receives the real activation over the D2D socket at
         run time."""
         cfg = self.config
-        dims = [None, None]
-        dims[cfg.sp_axis] = 2  # seq across SP rows
-        if cfg.pipeline_activation_emb_tp_sharded:
-            dims[cfg.tp_axis] = 3  # emb across TP cols (else replicated on tp -> left None)
         zeros = torch.zeros(1, 1, cfg.forward_tokens_budget, self.hf_config.hidden_size, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
@@ -278,7 +274,13 @@ class TtPrefillRuntime:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=cfg.mesh_shape),
+            mesh_mapper=activation_mapper(
+                self.mesh_device,
+                mesh_shape=cfg.mesh_shape,
+                sp_axis=cfg.sp_axis,
+                tp_axis=cfg.tp_axis,
+                emb_tp_sharded=cfg.pipeline_activation_emb_tp_sharded,
+            ),
         )
 
     def make_chunk_input(self, token_ids: list, actual_start: int = 0) -> ttnn.Tensor:

@@ -6,15 +6,7 @@
 import torch
 
 import ttnn
-
-
-def activation_mapper(mesh_device, *, mesh_shape, sp_axis: int, tp_axis: int, emb_tp_sharded: bool):
-    """Shards a host [1, 1, seq, hidden] tensor like the embedding output: seq over SP, hidden over TP or replicated."""
-    dims = [None, None]
-    dims[sp_axis] = 2
-    if emb_tp_sharded:
-        dims[tp_axis] = 3
-    return ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(dims), mesh_shape=mesh_shape)
+from models.demos.minimax_m3.tt.residual import activation_mapper
 
 
 def inject_media_embeddings(
