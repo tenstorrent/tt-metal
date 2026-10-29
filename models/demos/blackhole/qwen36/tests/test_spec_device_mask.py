@@ -18,6 +18,10 @@ D8m  test_d8m_fallback_with_mask: engine fallbacks (forced reasons) with a mask:
      trace rows with the mask.
 D9   test_d9_mask_timing: mask trace device time per bucket (gate 1.0 ms), H2D of the mask (gate 0.4 ms).
 D10  test_d10_cert_mask_logprobs_one_step: a certificate row, a masked row and a logprobs row in one sync step: allowed commits, masked payload.
+D5b  test_d5b_chain_soak_masked_row (stage P6, work/research_1026/92 section C): 1000 chained split steps, one masked row (toy grammar).
+D5c  test_d5c_late_mask_in_chain: the finish delayed by a host sleep of 0 / 10 / 20 / 35 / 45 ms: same streams, late counter.
+D5d  test_d5d_preempt_while_pending: the masked row leaves / all masked rows leave / the bucket falls while the split step is pending.
+D9c  test_d9c_phase2_enqueue_latency: host time of the finish (phase 2 enqueue) per bucket.
 
 Run (one node per process): work/scratch/phase3/run_p3_device.sh <tag> <node name>
 """
@@ -35,6 +39,9 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, DEVICE_PARAMS
 from models.demos.blackhole.qwen36.tests import test_spec_continuous as tc
+from models.demos.blackhole.qwen36.tests.test_spec_async_engine import AsyncDriver
+from models.demos.blackhole.qwen36.tests.test_spec_chain_engine import BIG as _CHAIN_BIG
+from models.demos.blackhole.qwen36.tests.test_spec_chain_engine import _marks as _cmarks
 from models.demos.blackhole.qwen36.tests.test_spec_fused_engine import _admit_all
 from models.demos.blackhole.qwen36.tests.test_spec_fused_sampled_engine import SampledDriver
 from models.demos.blackhole.qwen36.tt import spec_masks as SM
@@ -540,3 +547,352 @@ def test_d10_cert_mask_logprobs_one_step(mesh_device, monkeypatch):
     logger.info(
         f"[mask D10] cert steps {eng.cert_steps}, mask steps {eng.mask_steps}, cert failed {eng.cert_failed_steps}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Stage P6: the two-phase CHAINED step (begin on the previous step's tip, mask built from the previous step's result, finish)
+# --------------------------------------------------------------------------- #
+_P6_NB = 80  # page-table width in blocks (5120 tokens): 1000 steps of up to 4 tokens + a 600-token prompt
+_TOY_N = 24  # allowed ids per toy grammar state
+
+
+def _toy_allowed(t, n=_TOY_N):
+    """Toy grammar: the ids allowed after token ``t`` (a fixed pseudo-random set of n ids, a function of t only)."""
+    base = (int(t) * 2654435761 + 12345) % SM.VOCAB
+    return sorted({(base + i * 7919) % SM.VOCAB for i in range(n)})
+
+
+def _pack_ids(ids):
+    w = torch.zeros(SM.MASK_WORDS, dtype=torch.int64)
+    for v in ids:
+        w[v // 32] |= 1 << (v % 32)
+    return torch.where(w >= 2**31, w - 2**32, w).to(torch.int32)
+
+
+def _p6_env(monkeypatch, audit_every=8, audit=True, buckets_hold0=False):
+    monkeypatch.setenv("QWEN36_SPEC_FUSED", "1")
+    monkeypatch.setenv("QWEN36_SPEC_CHAIN", "1")
+    monkeypatch.setenv("QWEN36_SPEC_CHAIN_SAMPLED", "1")
+    monkeypatch.setenv("QWEN36_SPEC_CHAIN_AUDIT", "1" if audit else "0")
+    monkeypatch.setenv("QWEN36_SPEC_CHAIN_AUDIT_EVERY", str(audit_every))
+    monkeypatch.setenv("QWEN36_SPEC_FUSED_AUDIT", "1" if audit else "0")
+    monkeypatch.setenv("QWEN36_SPEC_FUSED_AUDIT_EVERY", str(audit_every))
+    if buckets_hold0:
+        monkeypatch.setenv("QWEN36_SPEC_BUCKET_HOLD", "0")
+    monkeypatch.setattr(tc, "B", 8)
+    monkeypatch.setattr(tc, "NB", _P6_NB)
+    monkeypatch.setattr(tc, "NUM_BLOCKS", 8 * _P6_NB + 40)
+
+
+def _p6_setup(mesh_device):
+    model, eng, tokenizer, prompts = tc._setup(mesh_device)
+    assert eng._ch_g is not None and eng._ch_trace_g is not None, "chain greedy trace missing"
+    assert eng._fa_trace is not None and eng._fs_trace is not None and eng._mask_ok(), "fused / mask traces missing"
+    return model, eng, prompts
+
+
+class MaskChainDriver(AsyncDriver):
+    """AsyncDriver whose steps are TWO-PHASE chained steps: ``decode_forward_begin`` (chained on the previous handle), then the
+    previous step is read (``wait``), the mask of the masked rows is built from ITS commits and ``handle.drafts()``, then
+    ``decode_forward_finish``. Masked rows follow the toy grammar: the token committed at a position must be in
+    ``_toy_allowed(previous token)``. ``masking=False`` = the control run: the same split steps, finish(None)."""
+
+    def __init__(self, eng, seed, masked_rows=(0,), masking=True, sleep_s=0.0, **kw):
+        super().__init__(eng, seed, sampled=lambda s: True, **kw)
+        self.masked_rows, self.masking, self.sleep_s = set(masked_rows), masking, sleep_s
+        self.fin_slots = None  # finishing_slots for the next begin (runner slots)
+        self.last = None  # (ids, counts, drafts) of the newest resolved step
+        self.tail = {}  # row -> last committed token of the masked row (grammar state)
+        self.bad = []  # (row, step, token, previous token) of a masked commit outside its allowed set
+        self.n_checked = 0
+        self.finish_ms, self.begin_ms, self.gap_ms = [], [], []
+
+    # -- begin through decode_forward_begin
+    def begin(self):
+        e = self.eng
+        orig = e.decode_forward
+
+        def route(*a, **k):
+            if e._split_begin:  # decode_forward_begin calls self.decode_forward again from inside
+                return orig(*a, **k)
+            if self.fin_slots:
+                k["finishing_slots"] = list(self.fin_slots)
+                self.fin_slots = None
+            return e.decode_forward_begin(*a, **k)
+
+        e.decode_forward = route
+        try:
+            t0 = time.perf_counter()
+            self.enq()
+            self.begin_ms.append(1e3 * (time.perf_counter() - t0))
+        finally:
+            del e.decode_forward
+        self.t_begin_done = time.perf_counter()
+        return self.pend[-1][0]
+
+    # -- read the oldest step, check the masked commits against the grammar
+    def resolve(self):
+        h, rows, rids = self.pend[0]
+        ids, counts, p0 = h.wait()
+        drafts = h.drafts()
+        for r in rows:
+            q = self.reqs[r]
+            if q is None or q["rid"] != rids[r] or r not in self.masked_rows or not self.masking:
+                continue
+            prev = self.tail.get(r, q["out"][-1])
+            for t in ids[r, : int(counts[r])].tolist():
+                self.n_checked += 1
+                if t not in _toy_allowed(prev):
+                    self.bad.append((r, self.steps, t, prev))
+                prev = t
+            self.tail[r] = prev
+        self.last = (ids.clone(), counts.clone(), drafts.clone())
+        super().resolve()
+
+    # -- the mask of the step just begun, from the newest resolved step (or the host proposal for the first step)
+    def mask_for(self, chained):
+        if not self.masking:
+            return None
+        B, K = tc.B, tc.K
+        rows = [r for r in sorted(self.masked_rows) if self.reqs[r] is not None]
+        if not rows:
+            return None
+        m = torch.full((B, K + 1, SM.MASK_WORDS), -1, dtype=torch.int32)
+        for r in rows:
+            if chained:
+                ids, counts, drafts = self.last
+                toks = [int(ids[r, int(counts[r]) - 1])] + drafts[r].tolist()
+            else:
+                q = self.reqs[r]
+                d = list(q["proposal"])[:K]
+                toks = [q["out"][-1]] + d + [0] * (K - len(d))
+            for j in range(K + 1):
+                m[r, j] = _pack_ids(_toy_allowed(toks[j]))
+        return m
+
+    def run(self, steps, events=None, mask_override=None):
+        """``steps`` two-phase steps. events: {iteration: fn(driver)} runs after begin(N+1) and the read of N, before the finish.
+        mask_override: {iteration: value} replaces the mask of the finish (value None is a real None)."""
+        events = events or {}
+        mask_override = mask_override or {}
+        for it in range(steps):
+            if not self.live():
+                break
+            chained = bool(self.pend)
+            h = self.begin()
+            if len(self.pend) == 2:
+                self.resolve()
+            if it in events:
+                events[it](self)
+            mask = self.mask_for(chained and self.last is not None)
+            if it in mask_override:
+                mask = mask_override[it]
+            if self.sleep_s:
+                time.sleep(self.sleep_s)
+            t0 = time.perf_counter()
+            self.eng.decode_forward_finish(h, mask)
+            t1 = time.perf_counter()
+            self.finish_ms.append(1e3 * (t1 - t0))
+            self.gap_ms.append(1e3 * (t1 - self.t_begin_done))
+        self.drain()
+
+    def finish_all(self):
+        for r in self.live():
+            self._finish(r)
+        return {rid: list(o) for rid, o in self.drv_outs().items()}
+
+    def drv_outs(self):
+        return self.outs
+
+
+_P6_COUNTERS = (
+    "chain_steps",
+    "chain_audits",
+    "fused_audited_steps",
+    "fused_boundary_diffs",
+    "mask_steps",
+    "mask_chain_steps",
+    "mask_late_finish",
+)
+
+
+def _snap(eng):
+    d = {k: int(getattr(eng, k, 0)) for k in _P6_COUNTERS}
+    d["overflow_redo"] = int(dict(getattr(eng, "fused_fallbacks", {})).get("overflow_redo", 0))
+    d["chain_breaks"] = dict(eng.chain_breaks)
+    d["def_breaks"] = dict(eng.__dict__.get("def_breaks", {}))
+    return d
+
+
+def _delta(a, b):
+    d = {k: b[k] - a[k] for k in b if isinstance(b[k], int)}
+    for k in ("chain_breaks", "def_breaks"):
+        d[k] = {r: b[k].get(r, 0) - a[k].get(r, 0) for r in set(b[k]) | set(a[k]) if b[k].get(r, 0) != a[k].get(r, 0)}
+    return d
+
+
+def _p6_run(eng, prompts, tag, steps, seed=5, n_rows=7, masking=True, sleep_s=0.0, events=None, mask_override=None, prep=None,
+            max_new=_CHAIN_BIG):  # fmt: skip
+    """One two-phase pipeline run on a fresh driver. RuntimeError is logged with the counters (overflow risk) and re-raised."""
+    drv = MaskChainDriver(eng, seed, masking=masking, sleep_s=sleep_s)
+    _admit_all(drv, prompts, n_rows, max_new)
+    if prep is not None:
+        prep(drv)
+    s0 = _snap(eng)
+    t0 = time.perf_counter()
+    try:
+        drv.run(steps, events=events, mask_override=mask_override)
+    except RuntimeError as e:
+        logger.error(
+            f"[p3b:{tag}] RuntimeError (overflow / tie / audit mismatch?): {e}; counters {_delta(s0, _snap(eng))}"
+        )
+        raise
+    wall = time.perf_counter() - t0
+    d = _delta(s0, _snap(eng))
+    d.update(
+        steps=drv.steps, wall_s=round(wall, 2), ms_per_step=round(1e3 * wall / max(drv.steps, 1), 2),
+        masked_commits_checked=drv.n_checked, bad=len(drv.bad),
+        finish_ms_median=round(statistics.median(drv.finish_ms), 3) if drv.finish_ms else None,
+    )  # fmt: skip
+    logger.info(f"[p3b:{tag}] {d}")
+    streams = drv.finish_all()
+    return drv, streams, d
+
+
+@_cmarks
+def test_d5b_chain_soak_masked_row(mesh_device, monkeypatch):
+    """1000 two-phase chained steps, 7 rows (row 0 masked by the toy grammar, 1-6 normal, row 7 spare), audits every 8 steps."""
+    _p6_env(monkeypatch)
+    model, eng, prompts = _p6_setup(mesh_device)
+    N = 1000
+    # control first: the same split chained steps, no masked row (finish(None))
+    _, ctl, dc = _p6_run(eng, prompts, "d5b-control", N, masking=False)
+    drv, got, dm = _p6_run(eng, prompts, "d5b-masked", N, masking=True)
+    assert not drv.bad, f"masked row committed a token outside its allowed set: {drv.bad[:5]}"
+    assert drv.n_checked >= N, drv.n_checked
+    assert dm["chain_steps"] >= 0.95 * N, f"chained steps {dm['chain_steps']} of {N}"
+    assert dm["mask_chain_steps"] >= 0.95 * N, dm
+    assert dm["mask_steps"] >= 0.95 * N, dm
+    assert abs(dm["chain_audits"] - N // 8) <= 3 and abs(dm["fused_audited_steps"] - N // 8) <= 3, dm
+    assert dm["fused_boundary_diffs"] == 0, dm
+    for rid in range(1, 7):
+        assert (
+            got[rid] == ctl[rid]
+        ), f"normal row {rid} differs from the control run (len {len(got[rid])} vs {len(ctl[rid])})"
+    logger.info(
+        f"[p3b:d5b] chained share {dm['chain_steps'] / N:.3f}, late {dm['mask_late_finish']} of {dm['mask_chain_steps']}, "
+        f"overflow_redo {dm['overflow_redo']}, audits {dm['chain_audits']}/{dm['fused_audited_steps']}, ms/step {dm['ms_per_step']} "
+        f"(control {dc['ms_per_step']})"
+    )
+
+
+@_cmarks
+def test_d5c_late_mask_in_chain(mesh_device, monkeypatch):
+    """The finish waits a host sleep of 0 / 10 / 20 / 35 / 45 ms: the streams do not change; the late counter follows the 31 ms rule."""
+    _p6_env(monkeypatch)
+    model, eng, prompts = _p6_setup(mesh_device)
+    N = 150
+    ref, res = None, {}
+    for ms in (0, 10, 20, 35, 45):
+        drv, got, d = _p6_run(eng, prompts, f"d5c-sleep{ms}", N, masking=True, sleep_s=ms / 1e3)
+        assert not drv.bad, f"sleep {ms}: {drv.bad[:5]}"
+        res[ms] = d
+        if ref is None:
+            ref = got
+        else:
+            for rid in sorted(ref):
+                assert got[rid] == ref[rid], f"sleep {ms} ms: stream of row {rid} differs from the early run"
+    logger.info(
+        "[p3b:d5c] late finishes: "
+        + ", ".join(f"{ms} ms: {d['mask_late_finish']}/{d['mask_chain_steps']}" for ms, d in res.items())
+    )
+    for ms in (0, 10, 20):
+        assert res[ms]["mask_late_finish"] == 0, f"sleep {ms} ms counted late: {res[ms]}"
+    for ms in (35, 45):
+        assert res[ms]["mask_late_finish"] > 0, f"sleep {ms} ms not counted late: {res[ms]}"
+
+
+def _ones_mask():
+    return torch.full((tc.B, tc.K + 1, SM.MASK_WORDS), -1, dtype=torch.int32)
+
+
+@_cmarks
+def test_d5d_preempt_while_pending(mesh_device, monkeypatch):
+    """Rows leave while a split chained step is pending (after begin(N+1), before its finish). Each scenario has a control run with
+    the same leave schedule and no mask; the rows that remain must equal the control."""
+    _p6_env(monkeypatch, buckets_hold0=True)
+    model, eng, prompts = _p6_setup(mesh_device)
+    L, N = 12, 40
+
+    def leave_finishing(
+        rows,
+    ):  # the plugin flow: the row is dropped by the host, the engine frees it by finishing_slots at N+2
+        def ev(d):
+            for r in rows:
+                q = d.reqs[r]
+                d.outs[q["rid"]] = q["out"]
+                d.reqs[r] = None
+            d.fin_slots = list(rows)
+
+        return ev
+
+    def leave_release(rows):
+        def ev(d):
+            for r in rows:
+                d._finish(r)
+
+        return ev
+
+    scen = {
+        # name: (event, mask override at the leave iteration, rows compared, expected break reason or None)
+        "masked_row_leaves_all_ones_finishing_slot": (leave_finishing([0]), {L: _ones_mask()}, range(1, 7), None),
+        "all_masked_rows_leave_finish_none": (leave_release([0]), {L: None}, range(1, 7), None),
+        "bucket_8_to_4_at_n2": (leave_release([4, 5, 6]), {}, range(1, 7), "bucket_change"),
+    }
+    out = {}
+    for name, (ev, ov, cmp_rows, reason) in scen.items():
+        c_drv, ctl, dc = _p6_run(eng, prompts, f"d5d-{name}-control", N, masking=False, events={L: ev})
+        drv, got, d = _p6_run(eng, prompts, f"d5d-{name}", N, masking=True, events={L: ev}, mask_override=ov)
+        assert not drv.bad, f"{name}: {drv.bad[:5]}"
+        for rid in cmp_rows:
+            assert got[rid] == ctl[rid], f"{name}: row {rid} differs from the control run"
+        if reason is not None:
+            seen = d["chain_breaks"].get(reason, 0) + d["def_breaks"].get(reason, 0)
+            assert seen >= 1, f"{name}: no chain break '{reason}' counted: {d['chain_breaks']} {d['def_breaks']}"
+        out[name] = d
+    logger.info(f"[p3b:d5d] {out}")
+
+
+@_cmarks
+def test_d9c_phase2_enqueue_latency(mesh_device, monkeypatch):
+    """Host time of decode_forward_finish (phase 2 enqueue: mask H2D, mask trace, topk, accept, drafter, reads) per bucket, plus
+    begin return -> finish done, and the mask trace device time (as D9)."""
+    _p6_env(monkeypatch, audit=False, buckets_hold0=True)
+    model, eng, prompts = _p6_setup(mesh_device)
+    dev, res = model.device, {}
+    for n_rows, bucket in ((7, 8), (4, 4), (2, 2), (1, 1)):
+        drv, _, d = _p6_run(eng, prompts, f"d9c-b{bucket}", 80, n_rows=n_rows, masking=True)
+        assert not drv.bad
+        fm, gm = drv.finish_ms[8:], drv.gap_ms[8:]
+        res[bucket] = dict(finish_median=statistics.median(fm), finish_p90=sorted(fm)[int(0.9 * len(fm))],
+                           begin_to_finish_done_median=statistics.median(gm), begin_median=statistics.median(drv.begin_ms[8:]),
+                           late=d["mask_late_finish"], buckets=dict(getattr(eng, "bucket_steps", {})))  # fmt: skip
+        logger.info(f"[p3b:d9c] bucket {bucket}: {res[bucket]}")
+
+    def replay_ms(tid, reps=100):
+        ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(dev)
+        return (time.perf_counter() - t0) / reps * 1e3
+
+    tids = {8: model._vfy_mask_trace_id, **{b: bk.mask_trace_id for b, bk in model._vfy_bk.items()}}
+    mask_ms = {b: replay_ms(t) for b, t in sorted(tids.items())}
+    logger.info(f"[p3b:d9c] mask trace ms per bucket {mask_ms}")
+    with open(os.path.join(OUT_DIR, "d9c_timing.json"), "w") as f:
+        json.dump({"finish": res, "mask_trace_ms": mask_ms}, f, indent=1)
+    for b, r in res.items():
+        assert r["finish_median"] < 3.0, f"bucket {b}: finish enqueue median {r['finish_median']:.2f} ms >= 3 ms"
+    for b, ms in mask_ms.items():
+        assert ms <= 1.0, f"bucket {b}: mask trace {ms:.3f} ms"

@@ -620,7 +620,7 @@ def test_deferred_split_step_late_finish_gives_the_same_result(monkeypatch):
     assert (outs[0][2], outs[1][2]) == (0, 1)
 
 
-def test_deferred_split_step_refuses_a_certificate_row_and_a_chain(monkeypatch):
+def test_deferred_split_step_refuses_a_certificate_row_and_a_chain_row_without_a_tip(monkeypatch):
     B = 3
     r = _MaskDefer(monkeypatch, B)
     logits = _smooth_logits(B * T, 9)
@@ -630,12 +630,13 @@ def test_deferred_split_step_refuses_a_certificate_row_and_a_chain(monkeypatch):
     ss["top_k"][0], ss["top_p"][0] = 0, 0.9  # a certificate row
     _err(lambda: _begin(r, tok, pos, nvd, ss, defer=True), ValueError, "certificate row")
     assert r.e._split_pending is None and not r.e._split_begin
-    # begin takes no chain arguments at all
+    # begin takes chain arguments since P6 (tests/test_spec_mask_chain_engine_host.py); a chain row without its tip is refused
     _err(
         lambda: r.e.decode_forward_begin(tok, pos, num_valid_drafts=nvd, accepted_counts=ONES(B), page_table=_pt(B),
                                          spec_mode="fused_sample", spec_sampling=_sampling(B, nvd, [0.8] * B),
-                                         defer_read=True, chain_rows=torch.ones(B, dtype=torch.bool)), TypeError, "chain_rows",
+                                         defer_read=True, chain_rows=torch.ones(B, dtype=torch.bool)), ValueError, "chain_tip",
     )  # fmt: skip
+    assert r.e._split_pending is None and not r.e._split_begin
 
 
 def test_deferred_one_call_masked_step_is_not_chained_and_materializes(monkeypatch):
@@ -1006,15 +1007,28 @@ def test_adapter_two_call_api_passes_the_arguments_and_the_mask(monkeypatch):
     empty = mask.clone()
     empty[0, 0] = 0
     _err(lambda: cls.decode_forward_finish(fake, handle, empty), ValueError, "allows no token")
-    # begin: spec_sampling is required and carries no mask; no chain; spec_mode fused_sample; the capability
+    # begin: spec_sampling is required and carries no mask; spec_mode fused_sample; the capability (chain args pass through since P6)
     _err(lambda: cls.decode_forward_begin(fake, tok, pos, **kw), ValueError, "needs spec_sampling")
     _err(
         lambda: cls.decode_forward_begin(fake, tok, pos, spec_sampling={**ss, "mask": mask}, **kw), ValueError, "finish"
     )
+    cr = torch.ones(B, dtype=torch.bool)
     _err(
-        lambda: cls.decode_forward_begin(fake, tok, pos, spec_sampling=ss, chain_rows=torch.ones(B, dtype=torch.bool), chain_tip=1, **kw),
-        ValueError, "not chained",
+        lambda: cls.decode_forward_begin(fake, tok, pos, spec_sampling=ss, chain_rows=cr, chain_tip=1, **kw),
+        ValueError, "chain_rows needs defer_read",
     )  # fmt: skip
+    n_b = len(calls)
+    cls.decode_forward_begin(
+        fake,
+        tok,
+        pos,
+        spec_sampling=ss,
+        chain_rows=cr,
+        chain_tip=1,
+        defer_read=True,
+        **{**kw, "accepted_counts": -ONES(B)},
+    )
+    assert calls[n_b][0] == "begin" and calls[n_b][1]["chain_tip"] == 1 and calls[n_b][1]["chain_rows"] is cr
     _err(
         lambda: cls.decode_forward_begin(fake, tok, pos, spec_sampling=ss, **{**kw, "spec_mode": "logits"}),
         ValueError,
