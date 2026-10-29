@@ -68,7 +68,6 @@ def main():
         phase("prefill model")
         blocks, tables = shuffled_tables(1, max_pos, seed=7)
         logits = {}
-        captured = False
         runs = []  # (run name, KV mode): a mode named again runs again as "mode#2", ...
         for mode in a.modes.split(","):
             k = sum(m == mode for _, m in runs)
@@ -84,9 +83,7 @@ def main():
             ttnn.synchronize_device(mesh)
             model.reset()
             model.capture_trace()
-            if not captured:
-                pp.capture()
-                captured = True
+            pp.capture()  # after every decode build (model.l1_layout)
             phase(f"{run} traces")
 
             def prefill(prompt):

@@ -71,7 +71,6 @@ def main():
         prompt = ids[:P]
         feed = [int(ids[P - 1 + k]) for k in range(S + 1)]  # step k's input, at position P - 1 + k
         text = [int(ids[P + k]) for k in range(S + 1)]  # what step k should predict
-        captured = [False]
 
         def l1_addrs(m):
             """the model's persistent L1 tensors' addresses (a later build placed lower means L1 still held)"""
@@ -106,9 +105,7 @@ def main():
             ttnn.synchronize_device(mesh)
             m.reset()
             m.capture_trace()
-            if not captured[0]:
-                pp.capture()
-                captured[0] = True
+            pp.capture()  # after every decode build: the prefill traces replay L1 placed around its buffers
             pp.reset()
             pp.run(prompt[: P - 1])
             pp.handoff(m, P - 1)
@@ -143,6 +140,7 @@ def main():
         )
         print(f"rows build L1 addresses {l1_addrs(m)}", flush=True)
         m.capture_trace()
+        pp.capture()
         phase("rows model")
 
         def rows_logits(slot):

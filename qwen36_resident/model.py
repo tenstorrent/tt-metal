@@ -21,6 +21,7 @@ bf16 rounding points.
 
 import math
 import os
+import weakref
 
 import numpy as np
 import torch
@@ -104,6 +105,19 @@ KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]
 
 def bf16(t):
     return t.bfloat16().float()
+
+
+# Live decode models, for the persistent-L1 layout check of traces captured beside them (see l1_layout)
+_LIVE_MODELS = weakref.WeakSet()
+
+
+def l1_layout():
+    """the persistent L1 buffers of every live ResidentModel, as a sorted tuple of addresses. A trace replays the CB
+    and intermediate addresses its programs got at capture, which were placed around the L1 buffers live then and
+    are not checked again: a decode model built after a trace (e.g. PPPrefill's) with another L1 layout can be
+    overwritten by the trace's replays (seen 2026-10-30: a B = 8 rows model built after the PP traces were captured
+    beside a B = 1 model decoded garbage, and vice versa). Compare it with the layout at capture."""
+    return tuple(sorted(a for m in list(_LIVE_MODELS) for a in m.l1_addrs))
 
 
 def rmsnorm(x, w=None):
@@ -574,8 +588,12 @@ class ResidentModel:
             ttnn.synchronize_device(mesh)
             return t
 
+        self.l1_addrs = []  # persistent L1 buffers (see l1_layout)
+
         def l1(t, grid_, shard, dtype=ttnn.bfloat16, tile=tiny, mapper=rep, layout=ttnn.TILE_LAYOUT):
-            return settled(_l1(t, grid_, shard, dtype, tile, mapper, layout))
+            out = settled(_l1(t, grid_, shard, dtype, tile, mapper, layout))
+            self.l1_addrs.append(out.buffer_address())
+            return out
 
         def _l1(t, grid_, shard, dtype=ttnn.bfloat16, tile=tiny, mapper=rep, layout=ttnn.TILE_LAYOUT):
             return ttnn.from_torch(
@@ -885,6 +903,7 @@ class ResidentModel:
 
         self.ts_t = ts_buf(grid, S, layers * 32) if timeline else None
         ts_addr = self.ts_t.buffer_address() if timeline else 0
+        self.l1_addrs += [ts_addr] if timeline else []
 
         # ---- per sub-batch decode state (sub-batch 0's is above)
         subs = [
@@ -1502,6 +1521,9 @@ class ResidentModel:
         self.nv_split, self.v_bank = nv_split, v_bank
         if self.kv_paged:
             self.set_page_table(self.block_tables)
+        sems = self.ccl_sems + (self.feed_sems if self.feed else [])
+        self.l1_addrs += [ttnn.get_global_semaphore_address(g) for g in sems]
+        _LIVE_MODELS.add(self)
 
     @staticmethod
     def tok_tensor(mesh, d, batch, fc=False):
