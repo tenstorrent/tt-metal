@@ -907,18 +907,18 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         kMaxBuildBitset);
 
     std::bitset<kMaxBuildBitset> compiled;
-    std::vector<std::function<void()>> compiles;
+    std::vector<std::function<void()>> compile_jobs;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (state_changed || need_compile(out_dir, this->objs_[i])) {
             compiled.set(i);
-            compiles.emplace_back([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); });
+            compile_jobs.emplace_back([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); });
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
             BuildCacheTelemetry::inst().record_cache_hit();
         }
     }
 
-    detail::run_all(compiles);
+    detail::run_all(compile_jobs);
 
     BuildCacheTelemetry::inst().record_compile(
         static_cast<uint32_t>(this->srcs_.size()), static_cast<uint32_t>(compiled.count()));
@@ -1263,14 +1263,13 @@ void jit_build_for_processors(std::span<const JitBuildState* const> targets, con
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
-    // A compute kernel's builds start from an executor worker. Queued with launch_build_step while every worker is
-    // busy, they would all run on that worker one after another, even once other workers free up.
-    // JitBuildState::compile runs a target's sources the same way.
-    std::vector<std::function<void()>> builds;
+    std::vector<std::function<void()>> build_jobs;
     for (const auto& build : build_subset) {
-        builds.emplace_back([&build, settings] { build.build(settings); });
+        // Capture the necessary objects by reference
+        build_jobs.emplace_back([&build, settings] { build.build(settings); });
     }
-    detail::run_all(builds);
+
+    detail::run_all(build_jobs);
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {

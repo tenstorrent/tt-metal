@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <future>
 #include <stdexcept>
 #include <thread>
@@ -29,7 +30,7 @@ TEST(ExecutorTest, RunAllLetsWorkersThatFreeUpTakeQueuedJobs) {
     if (workers < kJobs) {
         GTEST_SKIP() << "needs " << kJobs << " executor workers, has " << workers;
     }
-    // Hold every worker but one, so run_all starts on a worker while the pool counts as full. Executor::async always
+    // Hold every worker but one, and call run_all from that one, as a kernel's build step does. Executor::async always
     // queues: detail::async could run a holder on this thread, which would then wait for the gate forever.
     std::promise<void> gate;
     std::shared_future<void> released = gate.get_future().share();
@@ -44,34 +45,34 @@ TEST(ExecutorTest, RunAllLetsWorkersThatFreeUpTakeQueuedJobs) {
     while (held.load() < workers - 1) {
         std::this_thread::yield();
     }
-    // The first job frees the held workers, then every job waits until all of them are running at once.
+    // The first job frees the held workers, then each job waits until all kJobs jobs are running at once.
+    constexpr auto kTimeout = std::chrono::seconds(10);
     std::atomic<size_t> started{0};
-    std::atomic<bool> ran_at_once{true};
+    std::atomic<bool> timed_out{false};
     auto job = [&] {
         if (started.fetch_add(1) == 0) {
             gate.set_value();
         }
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto deadline = std::chrono::steady_clock::now() + kTimeout;
         while (started.load() < kJobs) {
             if (std::chrono::steady_clock::now() > deadline) {
-                ran_at_once.store(false);
+                timed_out.store(true);
                 return;
             }
             std::this_thread::yield();
         }
     };
-    detail::GetExecutor().async([&] { detail::run_all({job, job, job}); }).get();
+    detail::GetExecutor().async([&] { detail::run_all(std::vector<std::function<void()>>(kJobs, job)); }).get();
     for (auto& holder : holders) {
         holder.get();
     }
-    EXPECT_TRUE(ran_at_once.load());
+    EXPECT_FALSE(timed_out.load()) << "the queued jobs never ran at the same time";
 }
 
-TEST(ExecutorTest, RunAllFinishesOnEveryWorkerWhenWorkersBusy) {
+TEST(ExecutorTest, RunAllFromEveryWorkerDoesNotDeadlock) {
     const size_t workers = detail::GetExecutor().num_workers();
     std::atomic<size_t> started{0};
     std::atomic<size_t> inner_done{0};
-    // Executor::async always queues: detail::async could run one on this thread, which would then wait forever.
     std::vector<std::future<void>> outer;
     for (size_t i = 0; i < workers; ++i) {
         outer.push_back(detail::GetExecutor().async([&] {
