@@ -134,6 +134,7 @@ class ServingGeometry:
     wave_rows: int = DEFAULT_WAVE_ROWS
     wave_affinity: str = "user"
     sp_fallback: bool = True
+    sp_first: bool = True  # eager prompts take a slot index live on no row first (SP-eligible); False = wave-affine
     traced_wave_lengths: tuple[int, ...] = ()  # the per-row lengths the mesh model captures waves at
     # multimodal serving (image + video prompts through the vision tower, tt/multimodal.py::VisionRuntime): off =
     # the text-only engine, bit for bit; vision_resident = the tower's weights stay on every chip (planner static
@@ -334,7 +335,7 @@ class SlotTable:
                 raise ValueError(f"physical slot {(row, user)} outside the {self.g.rows}x{self.g.users_per_row} slots")
             best = (None, row, user)
         elif self.g.rows_independent and self.g.wave_affinity == "user":
-            if prefer_sp and self.g.sp_fallback:
+            if prefer_sp and self.g.sp_fallback and self.g.sp_first:
                 # sequence-parallel first: a slot index live on NO row keeps the new request SP-eligible (its chunks
                 # run alone over every row). An eager 2048-row wave costs what a 16 K sequence-parallel chunk costs
                 # (45 layers, 2026-10-29: ~7 s each), so an eager wave pays only near full occupancy: r5's four 64 K

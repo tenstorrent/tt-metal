@@ -256,6 +256,7 @@ DEFAULT_WAVE_TRACE_LENGTHS = (
     "256,512"  # 256 = the smallest: the 45-layer wave gate validated it; a 128-token prompt pads to it
 )
 SP_TRACES_ENV = "GLM53_VLLM_SP_TRACES"  # "1": keep the sequence-parallel prefill traces under per-row ownership
+SP_FIRST_ENV = "GLM53_VLLM_SP_FIRST"  # 0 = wave-affine placement for every prompt (the A/B of the placement policy)
 
 
 def _dram_line(device) -> str:
@@ -824,6 +825,7 @@ class GLM53FlashForCausalLM:
             pad_token_id=cfg.pad_token_id,
             wave_rows=int(os.environ.get("GLM53_VLLM_WAVE_ROWS", str(DEFAULT_WAVE_ROWS))),
             wave_affinity="row" if getattr(GLM53MeshModel, "wave_per_row_users", False) else "user",
+            sp_first=os.environ.get(SP_FIRST_ENV, "1") == "1",
             sp_fallback=_env_flag("GLM53_VLLM_SP_FALLBACK", "1"),
             multimodal=multimodal,
             vision_resident=vision_resident,

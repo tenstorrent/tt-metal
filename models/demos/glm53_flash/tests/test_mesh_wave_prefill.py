@@ -402,6 +402,8 @@ def test_served_waves_vs_sequence_parallel(mesh_device, monkeypatch, profile):
     monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
     # the adapter's launcher sets the prefix bucket (max(chunk, max_seq_len / 8 to the chunk)); a direct build must
     monkeypatch.setenv("GLM53_PREFIX_BUCKET", str(max(chunk, -(-(max_seq_len // 8) // chunk) * chunk)))
+    if long:  # r5's placement: the four long prompts on slot index 0 of rows 0-3 (waves), not the SP-first diagonal
+        monkeypatch.setenv("GLM53_VLLM_SP_FIRST", "0")
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
     layers = _layers()
     model = GLM53MeshModel(mesh_device, cfg, layers, max_batch=B, max_seq_len=max_seq_len, weight_cache_path=CACHE_ROOT)

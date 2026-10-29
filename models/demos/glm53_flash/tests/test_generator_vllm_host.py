@@ -167,11 +167,13 @@ def test_slot_table_rows_independent_placement():
     assert [(s.row, s.user) for s in (t8.allocate(i, prefer_sp=True) for i in range(9))] == [
         (r, r) for r in range(4)
     ] + [(r, 0) for r in range(1, 6)]
-    # without the SP fallback the diagonal buys nothing: the wave-affine order from the first eager arrival
-    t8w = SlotTable(dataclasses.replace(g8, sp_fallback=False))
-    assert [(s.row, s.user) for s in (t8w.allocate(i, prefer_sp=True) for i in range(9))] == [
-        (r, 0) for r in range(8)
-    ] + [(0, 1)]
+    # without the SP fallback the diagonal buys nothing, and sp_first=False (GLM53_VLLM_SP_FIRST=0, the policy A/B)
+    # switches it off: the wave-affine order from the first eager arrival
+    for g_off in (dataclasses.replace(g8, sp_fallback=False), dataclasses.replace(g8, sp_first=False)):
+        t8w = SlotTable(g_off)
+        assert [(s.row, s.user) for s in (t8w.allocate(i, prefer_sp=True) for i in range(9))] == [
+            (r, 0) for r in range(8)
+        ] + [(0, 1)]
     # the non-partitioned layout: plain index order
     assert ServingGeometry(rows=2, cols=4, users_per_row=3, max_seq_len=64, partitioned=False).wave_user_order() == [
         0,
