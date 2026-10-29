@@ -8,12 +8,14 @@
 #include <sys/random.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <random>
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -152,6 +154,169 @@ TEST_F(UnaryOpsTest, LogSoftmax) {
         EXPECT_NEAR(tensor_grad[idx], expected_grad[idx], 2e-2F);
     }
 }
+
+class LogSoftmaxTest : public UnaryOpsTest, public ::testing::WithParamInterface<std::tuple<ttnn::DataType, int>> {
+protected:
+    void TearDown() override {
+        autograd::ctx().reset_graph();
+    }
+
+    ttnn::Tensor from_data(const std::vector<float>& data, const ttnn::Shape& shape) {
+        auto* device = &autograd::ctx().get_device();
+        return std::get<0>(GetParam()) == ttnn::DataType::FLOAT32
+                   ? core::from_vector<float, ttnn::DataType::FLOAT32>(data, shape, device)
+                   : core::from_vector(data, shape, device);
+    }
+
+    void check_reference(
+        const ttnn::Shape& shape,
+        const std::vector<float>& logits,
+        const std::vector<float>& upstream,
+        bool expect_nonzero_max = false) {
+        const int dim = std::get<1>(GetParam());
+        const auto axis = dim < 0 ? dim + static_cast<int>(shape.rank()) : dim;
+        size_t inner = 1;
+        for (size_t d = axis + 1; d < shape.rank(); ++d) {
+            inner *= shape[d];
+        }
+        const size_t width = shape[axis];
+        auto input = autograd::create_tensor(from_data(logits, shape), /* requires_grad */ true);
+        auto upstream_tensor = from_data(upstream, shape);
+        // The oracle uses the actual quantized inputs, not the pre-conversion host data.
+        auto x = core::to_vector(input->get_value(autograd::PreferredPrecision::NATIVE));
+        auto dy = core::to_vector(upstream_tensor);
+        auto output = log_softmax(input, dim);
+        EXPECT_EQ(output->get_value(autograd::PreferredPrecision::NATIVE).dtype(), std::get<0>(GetParam()));
+        auto y = core::to_vector(output->get_value(autograd::PreferredPrecision::NATIVE));
+        output->set_grad(upstream_tensor);
+        output->backward();
+        auto dx = core::to_vector(input->get_grad());
+        ASSERT_EQ(y.size(), x.size());
+        ASSERT_EQ(dx.size(), x.size());
+        EXPECT_EQ(input->get_grad().dtype(), std::get<0>(GetParam()));
+        const double rtol = std::get<0>(GetParam()) == ttnn::DataType::FLOAT32 ? 3e-5 : 1e-2;
+        const double atol = expect_nonzero_max ? 0.0 : 1e-7;
+        for (size_t outer = 0; outer < x.size() / (width * inner); ++outer) {
+            for (size_t in = 0; in < inner; ++in) {
+                const auto index = [=](size_t k) { return (outer * width + k) * inner + in; };
+                size_t pivot = 0;
+                double sum_dy = 0;
+                for (size_t k = 0; k < width; ++k) {
+                    if (x[index(k)] > x[index(pivot)]) {
+                        pivot = k;
+                    }
+                    sum_dy += dy[index(k)];
+                }
+                double tail = 0;
+                for (size_t k = 0; k < width; ++k) {
+                    if (k != pivot) {
+                        tail += std::exp(static_cast<double>(x[index(k)]) - x[index(pivot)]);
+                    }
+                }
+                const double normalizer = std::log1p(tail);
+                double sum_others = 0;
+                double sum_dx = 0;
+                double norm_dx = 0;
+                for (size_t k = 0; k < width; ++k) {
+                    const double expected_y = static_cast<double>(x[index(k)]) - x[index(pivot)] - normalizer;
+                    EXPECT_NEAR(y[index(k)], expected_y, std::abs(expected_y) * rtol);
+                    if (k != pivot) {
+                        const double expected_dx = dy[index(k)] - std::exp(expected_y) * sum_dy;
+                        EXPECT_NEAR(dx[index(k)], expected_dx, std::abs(expected_dx) * rtol + atol);
+                        sum_others += expected_dx;
+                    }
+                    sum_dx += dx[index(k)];
+                    norm_dx += std::abs(dx[index(k)]);
+                }
+                EXPECT_NEAR(dx[index(pivot)], -sum_others, std::abs(sum_others) * rtol + atol);
+                EXPECT_LE(std::abs(sum_dx), norm_dx * rtol + atol);
+                if (expect_nonzero_max) {
+                    EXPECT_LT(y[index(pivot)], 0.F);
+                    EXPECT_LT(dx[index(pivot)], 0.F);
+                }
+            }
+        }
+    }
+};
+
+TEST_P(LogSoftmaxTest, PreservesConfidentLogProbabilitiesAndGradients) {
+    // Cross both BF16 and FP32 precision cliffs, with tile padding on H and W.
+    const ttnn::Shape shape({3, 3, 5, 35});
+    const int dim = std::get<1>(GetParam());
+    const auto axis = dim < 0 ? dim + 4 : dim;
+    size_t inner = 1;
+    for (int d = axis + 1; d < 4; ++d) {
+        inner *= shape[d];
+    }
+    const size_t width = shape[axis];
+    for (float gap : {8.F, 18.F, 24.F}) {
+        SCOPED_TRACE(gap);
+        std::vector<float> logits(shape.volume());
+        std::vector<float> upstream(shape.volume(), 0.F);
+        for (size_t outer = 0; outer < logits.size() / (width * inner); ++outer) {
+            for (size_t in = 0; in < inner; ++in) {
+                const size_t pivot = (outer + in) % width;
+                // Negative maxima also catch accidental inclusion of zero tile padding.
+                const float offset = (outer + in) % 2 == 0 ? -32.F : 32.F;
+                for (size_t k = 0; k < width; ++k) {
+                    logits[(outer * width + k) * inner + in] = offset - (k == pivot ? 0.F : gap);
+                }
+                upstream[(outer * width + pivot) * inner + in] = -1.F;
+            }
+        }
+        check_reference(shape, logits, upstream, /* expect_nonzero_max */ true);
+        autograd::ctx().reset_graph();
+    }
+}
+
+TEST_P(LogSoftmaxTest, TiesAndGeneralUpstream) {
+    const ttnn::Shape shape({3, 3, 5, 35});
+    std::vector<float> logits(shape.volume());
+    std::vector<float> upstream(shape.volume());
+    for (size_t i = 0; i < logits.size(); ++i) {
+        logits[i] = -static_cast<float>(i % 3);  // Includes tied maxima on several reduction axes.
+        upstream[i] = static_cast<float>(static_cast<int>(i % 7) - 3) / 8.F;
+    }
+    check_reference(shape, logits, upstream);
+}
+
+TEST_P(LogSoftmaxTest, SingletonAxis) {
+    std::vector<uint32_t> dimensions{2, 3, 5, 7};
+    const int dim = std::get<1>(GetParam());
+    dimensions[dim < 0 ? dim + 4 : dim] = 1;
+    const ttnn::Shape shape(dimensions);
+    check_reference(shape, std::vector<float>(shape.volume(), -3.F), std::vector<float>(shape.volume(), 0.25F));
+}
+
+TEST_F(UnaryOpsTest, LogSoftmaxLargeClassIndexAndGradientAccumulation) {
+    const ttnn::Shape shape({1, 1, 1, 513});
+    std::vector<float> logits(shape.volume(), -18.F);
+    std::vector<float> upstream(shape.volume(), 0.F);
+    logits[511] = 0.F;
+    upstream[511] = -1.F;
+    auto* device = &autograd::ctx().get_device();
+    auto input = autograd::create_tensor(core::from_vector(logits, shape, device), /* requires_grad */ true);
+    auto output = log_softmax(input, -1);
+    auto y = core::to_vector(output->get_value());
+    const double tail = 512.0 * std::exp(-18.0);
+    EXPECT_NEAR(y[511], -std::log1p(tail), std::log1p(tail) * 1e-2);
+    output->set_grad(core::from_vector(upstream, shape, device));
+    output->backward(/* retain_graph */ true);
+    auto first = core::to_vector(input->get_grad());
+    EXPECT_NEAR(first[511], -tail / (1.0 + tail), tail * 1e-2);
+    output->backward();
+    auto accumulated = core::to_vector(input->get_grad());
+    for (size_t i = 0; i < first.size(); ++i) {
+        EXPECT_FLOAT_EQ(accumulated[i], 2.F * first[i]);
+    }
+    autograd::ctx().reset_graph();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PrecisionAndAxes,
+    LogSoftmaxTest,
+    ::testing::Combine(
+        ::testing::Values(ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32), ::testing::Values(0, 1, 2, 3, -1)));
 
 TEST_F(UnaryOpsTest, Exp) {
     auto* device = &autograd::ctx().get_device();

@@ -11,6 +11,12 @@ namespace ttml::ttnn_fixed {
 
 ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim);
 ttnn::Tensor sum_over_batch(const ttnn::Tensor& t);
+// FP32 intermediates retained by the autograd wrapper, before output rounding.
+struct LogSoftmaxContext {
+    ttnn::Tensor log_probabilities;
+    ttnn::Tensor max_mask;
+};
+LogSoftmaxContext log_softmax_with_context(const ttnn::Tensor& t, int dim);
 ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor divide(const ttnn::Tensor& a, const ttnn::Tensor& b);
