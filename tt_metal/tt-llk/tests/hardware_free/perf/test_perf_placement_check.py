@@ -31,7 +31,7 @@ _BASE = 2000.0
 _NODE = "perf_x.py::test_perf_x[4]"
 
 
-def _side(root, tile_loop, window="aaa", skip=()):
+def _side(root, tile_loop, window="aaa", skip=(), init=900.0):
     """One side measured at every position: tile_loop is a value per position."""
     for pos, value in zip(POSITIONS, tile_loop):
         if pos in skip:
@@ -43,7 +43,7 @@ def _side(root, tile_loop, window="aaa", skip=()):
                 "marker": ["INIT", "TILE_LOOP"],
                 "tile_cnt": [4, 4],
                 "dest_acc": [False, False],
-                "mean(L1_TO_L1)": [900.0, value],
+                "mean(L1_TO_L1)": [init, value],
             }
         ).to_csv(path, index=False)
     pd.DataFrame(
@@ -59,9 +59,9 @@ def _side(root, tile_loop, window="aaa", skip=()):
     return root
 
 
-def _candidates(tmp_path, delta_pct=20.0):
+def _candidates(tmp_path, delta_pct=20.0, init=False):
     path = tmp_path / "s1.regressions.csv"
-    pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "marker": ["TILE_LOOP", "INIT"],
             "run_type": ["L1_TO_L1", "L1_TO_L1"],
@@ -73,7 +73,8 @@ def _candidates(tmp_path, delta_pct=20.0):
             "tile_cnt": ["4.0", "4.0"],
             "dest_acc": ["False", "False"],
         }
-    ).to_csv(path, index=False)
+    )
+    (frame if init else frame[frame["marker"] == "TILE_LOOP"]).to_csv(path, index=False)
     return read_candidates(path)
 
 
@@ -94,8 +95,11 @@ def test_values_match_across_csv_and_typed_forms():
     assert _value(4.0) == _value("4.0") == _value(4) == "4"
 
 
-def test_only_tile_loop_rows_are_candidates(tmp_path):
-    assert [c["run_type"] for c in _candidates(tmp_path)] == ["L1_TO_L1"]
+def test_every_marker_is_a_candidate(tmp_path):
+    assert [c["marker"] for c in _candidates(tmp_path, init=True)] == [
+        "TILE_LOOP",
+        "INIT",
+    ]
 
 
 def test_slower_everywhere_with_changed_loop_code_is_confirmed(tmp_path):
@@ -138,13 +142,13 @@ def test_unchanged_loop_code_is_for_review(tmp_path):
     assert result["outcome"] == "review"
 
 
-def test_missing_fingerprint_is_unmeasured(tmp_path):
+def test_missing_fingerprint_is_judged_by_the_positions(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5, window="no-window")
     cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
 
     [result] = _decide(tmp_path, base, cur)
 
-    assert (result["outcome"], result["why"]) == ("unmeasured", "no window fingerprint")
+    assert result["outcome"] == "regression"
 
 
 def test_position_not_measured_is_unmeasured(tmp_path):
@@ -299,24 +303,21 @@ def test_what_blocks(tmp_path):
         assert blocks([dict(row, outcome=outcome)]) is blocking
 
 
-def test_other_markers_are_not_re_measured(tmp_path):
+def test_other_markers_are_judged_by_the_positions(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
-    cur = _side(tmp_path / "cur", [_BASE] * 5, window="aaa")
-    candidates = _candidates(tmp_path)
-    others = read_candidates(tmp_path / "s1.regressions.csv", tile_loop=False)
+    cur = _side(tmp_path / "cur", [_BASE] * 5, window="aaa", init=1000.0)
 
     results = decide(
-        candidates,
+        _candidates(tmp_path, init=True),
         base,
         cur,
         threshold=0.05,
         min_cycles=30,
         module_thresholds={},
-        others=others,
     )
 
-    assert [(r["outcome"], r["why"]) for r in results] == [
-        ("not-reproduced", ""),
-        ("unmeasured", "not a TILE_LOOP point"),
+    assert [(r["marker"], r["outcome"]) for r in results] == [
+        ("TILE_LOOP", "not-reproduced"),
+        ("INIT", "regression"),
     ]
     assert blocks(results)

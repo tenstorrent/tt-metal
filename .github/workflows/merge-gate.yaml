@@ -698,6 +698,8 @@ jobs:
       module_thresholds: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].module_thresholds }}
       min_cycles: "30"
       measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
+      # Stage 2 and the gate compare against the same baseline read; without it, the gate reads the warehouse.
+      stage2_baseline_artifact: llk-perf-stage2-baseline
       # Wormhole is report-only until same-code Wormhole runs are repeatable (#62044).
       fail_on_regression: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].blocking }}
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
@@ -723,6 +725,8 @@ jobs:
       - name: Check the blocking arches
         env:
           THRESHOLDS: ${{ needs.llk-perf-merge-gate-changes.outputs.thresholds }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           FAIL=0
           for ARCH in $(python3 -c 'import json, os; print(*[a for a, t in json.loads(os.environ["THRESHOLDS"]).items() if t["blocking"]])'); do
@@ -730,6 +734,14 @@ jobs:
             echo "${ARCH}: ${CODE}"
             [ "$CODE" = 0 ] || FAIL=1
           done
+          # An accepted slowdown: the PR in this queue entry carries the llk-perf-accepted label.
+          if [ "$FAIL" = 1 ] && [[ "$HEAD_REF" =~ /pr-([0-9]+)- ]]; then
+            PR=${BASH_REMATCH[1]}
+            if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" --jq '.[].name' | grep -qx llk-perf-accepted; then
+              echo "::notice::#${PR} has the llk-perf-accepted label, so its LLK perf slowdown is accepted."
+              FAIL=0
+            fi
+          fi
           exit "$FAIL"
 
   # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
