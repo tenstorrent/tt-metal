@@ -119,10 +119,6 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
         return ttnn::CoreCoord{index % device_grid.x, first_comm_row + (index / device_grid.x)};
     };
     TT_FATAL(
-        operation_attributes.num_workers_per_link >= 1,
-        "num_workers_per_link must be >= 1, got {}.",
-        operation_attributes.num_workers_per_link);
-    TT_FATAL(
         grid_size.y <= first_comm_row,
         "num_links={} with num_workers_per_link={} needs {} fabric cores, i.e. the last {} core row(s); the matmul "
         "grid ({}x{}) must stay above row {}",

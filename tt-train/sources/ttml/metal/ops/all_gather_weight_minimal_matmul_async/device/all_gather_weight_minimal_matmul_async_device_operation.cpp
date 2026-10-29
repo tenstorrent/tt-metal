@@ -128,8 +128,29 @@ void AllGatherWeightMinimalMatmulAsyncDeviceOperation::validate_on_program_cache
         "multi_device_global_semaphore must hold one semaphore per ring device ({}), got {}",
         attrs.ring_size,
         attrs.semaphores.size());
+    const ttnn::CoreCoord device_grid = x.device()->compute_with_storage_grid_size();
+    const ttnn::CoreRange all_cores({0, 0}, {device_grid.x - 1, device_grid.y - 1});
+    for (const auto& sem : attrs.semaphores) {
+        TT_FATAL(
+            std::get<0>(sem.attribute_values()).contains(all_cores),
+            "multi_device_global_semaphore must be created on the whole compute grid {}",
+            all_cores.str());
+    }
     TT_FATAL(attrs.num_links >= 1, "num_links must be >= 1, got {}.", attrs.num_links);
+    TT_FATAL(
+        attrs.num_workers_per_link >= 1 && attrs.num_workers_per_link <= 255,
+        "num_workers_per_link must be in [1, 255], got {}",
+        attrs.num_workers_per_link);
+    TT_FATAL(
+        attrs.num_buffers_per_channel >= 1 && attrs.num_buffers_per_channel <= 255,
+        "num_buffers_per_channel must be in [1, 255], got {}",
+        attrs.num_buffers_per_channel);
     const auto& mesh_shape = x.device()->shape();
+    TT_FATAL(
+        !attrs.cluster_axis.has_value() || attrs.cluster_axis.value() < mesh_shape.dims(),
+        "cluster_axis ({}) must be < the mesh rank ({})",
+        attrs.cluster_axis.value_or(0),
+        mesh_shape.dims());
     const uint32_t axis_size = attrs.cluster_axis.has_value() ? mesh_shape[attrs.cluster_axis.value()]
                                                               : static_cast<uint32_t>(x.device()->num_devices());
     TT_FATAL(
