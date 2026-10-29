@@ -107,7 +107,9 @@ inline void expect_new_buffers(
 // What a launch must do to the program cache: compile a program, reuse a cached one, or either.
 enum class CacheExpectation { Miss, Hit, Unchecked };
 
-// A non-fatal check of what the launch run since `entries_before` was read did to the program cache.
+// A non-fatal check of what the launch run since `entries_before` was read did to the program cache. Read
+// `entries_before` after making every tensor of the launch: a bf16 upload tilizes on the device and a large fill runs a
+// fill program, and either adds an entry of its own the first time.
 inline void expect_cache(std::size_t entries_before, CacheExpectation expectation, const std::string& label) {
     const auto entries = ttml::autograd::ctx().get_device().num_program_cache_entries();
     if (expectation == CacheExpectation::Miss) {
