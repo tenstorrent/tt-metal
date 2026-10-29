@@ -2599,7 +2599,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Two chunkings on the same tensors are two cached programs; the first one again is a hit, also on a
     // second set of inputs at other addresses. The first chunking splits, so the hit reuses the cached
-    // program's scratch tensor, its semaphores (reset by every merger) and its slots.
+    // program's scratch tensor, its semaphores (reset by every merger) and its slots; the second does not
+    // cut, so the two agree to the uncut cross-chunking bound.
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     device->enable_program_cache();
@@ -2638,7 +2639,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     };
     const metal::SDPAForwardProgramConfig a{.q_chunk_size = 64U, .k_chunk_size = 128U};
     const metal::SDPAForwardProgramConfig a_unsplit{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U};
-    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 128U, .k_chunk_size = 256U};
+    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 128U, .k_chunk_size = 256U, .max_pieces = 1U};
     SDPATestConfig split_config = shape_config;
     split_config.program_config = a;
     const auto split_schedule = host_schedule(split_config);
