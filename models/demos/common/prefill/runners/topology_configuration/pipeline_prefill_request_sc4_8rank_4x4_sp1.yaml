@@ -2,7 +2,9 @@
 # rank 2k on host k's top tray half (rows 0-3) and rank 2k+1 on its bottom half (rows 4-7), chained
 # top(H) -> bottom(H) -> top(H+1) along the hosts' cabling ring h0 -> h1 -> h2 -> h3.
 #
-# The rank binding has no host field: placement comes from mpirun, two slots per host in ring order
+# CI (run_multirank_pcc.sh sc4_4x4) binds by tt-run discovery against the descriptor below and reads
+# only global_env from here. The rank_bindings are the template for an explicit binding, for a manual
+# run: it has no host field, so placement comes from mpirun, two slots per host in ring order
 # (`--host h0:2,h1:2,h2:2,h3:2 --map-by slot`), which assemble_pipeline_binding.py prints. Under a
 # Slurm allocation use a rankfile instead (rank 2k and 2k+1 on host k): --map-by slot there alternates
 # ranks across the nodes. TT_VISIBLE_DEVICES is per galaxy and a wrong map does not error, so fill this
