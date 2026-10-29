@@ -2639,7 +2639,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
     # a new request's trial: declined otherwise, a fresh step replays the cheapest record (entry plus step) once
     # when the prior's gain clears trial_gain, whatever the retry cadence says; never held, reason "trial"
-    fresh = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    fresh = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0, trial_steps=1), 5)
     trial = fresh.decide(_cands(_COSTS), [row], _PLAIN, 5, fresh=True)
     assert (trial.shape, trial.reason, trial.gain) == ((16, 1), "trial", pytest.approx(1.4 * 20 / 30)) and fresh.trial
     assert fresh.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
