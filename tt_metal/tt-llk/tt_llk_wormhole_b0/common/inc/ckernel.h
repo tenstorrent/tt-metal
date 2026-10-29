@@ -169,11 +169,7 @@ inline T load_blocking(volatile T *ptr)
         asm volatile(
             "lhu %[raw], (%[ptr])\n\t"
             "and %[raw], %[raw], %[raw]"
-            // "=&r" is only for this 16-bit load. With -mcpu=tt-wh, the compiler (-mtt-fix-whraw) inserts a throwaway 2-byte load
-            // from the address register after every 16-bit store, and it can land after this asm. "=r" lets the loaded value reuse
-            // that register, so the throwaway load uses the data as the address and the Wormhole simulator aborts.
-            // A 32-bit store and Blackhole do not get that extra load, so they keep "=r".
-            : [raw] "=&r"(raw)
+            : [raw] "=r"(raw)
             : [ptr] "r"(ptr)
             : "memory");
     }
