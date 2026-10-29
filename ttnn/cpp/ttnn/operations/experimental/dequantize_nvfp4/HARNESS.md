@@ -36,9 +36,12 @@ hashes did not change during evaluation.
    streaming, API validation, and ordinary output layout remain checked.
    The six documented UINT8/BF16-DEST exclusions are the only permitted skips.
 2. **Production L1-to-L1 timing.** Run the actual TTNN operation through Tracy,
-   without watcher instrumentation. The fixed workload has BF16 DEST/output,
-   UINT16 packed input, tiled I/O, interleaved L1, tensor scale 0.8125, and
-   2048x4096 decoded values. There are eight calls; discard the first two.
+   without watcher instrumentation. BF16 DEST/output, UINT16 packed input,
+   tiled I/O, interleaved L1, and tensor scale 0.8125 are fixed. By default,
+   size the workload against free L1, reserving 64 KiB per bank for CBs,
+   alignment, and runtime headroom. On the measured 130-core Blackhole this
+   gives 16640x4096 values: every core handles 128 packed input tiles and
+   512 output tiles. There are eight calls; discard the first two.
 3. **Optional isolated-math diagnostic.** In a private source overlay, repeat
    the complete four-plane/four-face decode sweep 128 times after one scale
    expansion. This preserves scale-register state carried between faces;
@@ -50,6 +53,21 @@ hashes did not change during evaluation.
    staging, scale expansion, transpose and packing are amortized, not absent.
    Repetition can change compiler constant-hoisting/scheduling; only the
    production L1-to-L1 measurement ranks candidates.
+
+Capacity is queried before allocation; peak tensor allocation/free space is
+recorded with the first output live. Each packed tile requires 2,048 B of input,
+512 B of prepared scales, and 8,192 B of output. The measured tensor footprint
+is 1,376,256 of 1,460,864 bytes per bank (94.2%), leaving 84,608 B. Current CBs
+use 25,664 B per core. Work remains four output tiles per DEST acquire/init;
+the larger workload increases the number of these batches per invocation.
+
+Use `NVFP4_BENCH_PACKED_TILES_PER_CORE=64` for a smaller balanced workload, or
+`NVFP4_BENCH_LEGACY=1` for the historical 2048x4096 workload. Explicit sizes
+exceeding the budget fail before allocation. Shape, assignment, capacity, and
+peak allocation are recorded as workload metadata, so unlike workloads cannot
+be compared silently. The changed default requires fresh baseline measurements.
+See [capacity measurements](BENCHMARK_L1_CAPACITY.md) for the size sweep and
+variability. Sampled output checks/download happen after converter timing.
 
 All tests use the trusted checkout. JUnit XML must show actual successful
 execution, because Tracy can mask a pytest failure with exit code zero.
@@ -100,7 +118,7 @@ packing contract/tests; the retained implementation uses ordinary nibbles.
 Pipeline cycles are derived from the profiler-reported clock and divided by
 the largest per-core **output-tile** assignment. Four 32x32 BF16 output tiles
 come from each packed UINT16 tile. The full pipeline includes reader/writer
-NoC transfers, scale-row broadcasts, format changes, output transpose, pack,
+NoC transfers, compact-scale expansion, format changes, output transpose, pack,
 and synchronization. Offline host preparation and JIT compilation are outside
 the reported kernel duration.
 

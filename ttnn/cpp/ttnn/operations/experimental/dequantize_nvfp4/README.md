@@ -396,6 +396,13 @@ gates. The tested ordinary-L1 linear projection improves about 3.2%; there is no
 established DRAM gain. The harness now exposes screen/full modes, repeated timing,
 per-stage/test counts, and device-lock/JIT overhead accounting.
 
+The figures above use the historical 2048x4096 benchmark. The default now
+[nearly fills available L1](BENCHMARK_L1_CAPACITY.md): on this board every one
+of 130 cores processes 128 packed tiles and produces 512 output tiles, for
+16640x4096 BF16 values. The unchanged converter measures about 479–480 cycles
+per output tile on that larger workload. Workload metadata prevents silently
+comparing it against the old size; future optimization requires fresh baselines.
+
 ### Transposed output for a linear consumer
 
 `transpose_output=True` is an opt-in mode requiring `experimental_fast=True`
