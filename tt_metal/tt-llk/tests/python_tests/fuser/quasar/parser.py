@@ -154,6 +154,7 @@ _eltwise_checks = [
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
 
 _matmul_checks = [
+    NO_UNPACK_TO_DEST,
     NO_REUSE_DEST,
     NO_BROADCAST,
     MATMUL_OPERAND_DIMS,
@@ -316,6 +317,7 @@ FPU_MAP = {
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
+            NO_UNPACK_TO_DEST,
             IN0_REQUIRED,
             IN1_REQUIRED,
             NO_REUSE_DEST,
@@ -435,6 +437,7 @@ UNARY_SFPU_OPS = {
     MathOperation.Tanhshrink,
     MathOperation.Xielu,
     MathOperation.Neg,
+    MathOperation.Dropout,
     MathOperation.Add1,
     MathOperation.Cbrt,
     MathOperation.Exp2,
@@ -537,6 +540,7 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
+    MathOperation.SfpuReshuffleRows,
 }
 
 
@@ -554,6 +558,7 @@ class FpuMathSchema(FpuMathSchemaBase):
 class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
     _sfpu_cls: ClassVar = UnarySfpu
     _sfpu_ops: ClassVar = UNARY_SFPU_OPS
+    _dropout_ops: ClassVar = {"Dropout"}
 
 
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):

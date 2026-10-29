@@ -26,8 +26,8 @@
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "tt_target_device.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -245,6 +245,7 @@ class RunTimeOptions {
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     bool streaming_profiler_sync_events_enabled = false;
+    bool streaming_profiler_sync_check_enabled = false;
     bool streaming_profiler_inline_enabled = true;
     // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
@@ -392,8 +393,8 @@ class RunTimeOptions {
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
-    // Timeout duration for operations
-    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
+    // Timeout duration for operations in seconds (0 = off)
+    std::atomic<float> timeout_duration_for_operations = 0.0f;
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
     // Dispatch kernel progress update period in milliseconds (default 100ms)
@@ -423,10 +424,6 @@ class RunTimeOptions {
 
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
-
-    // Quasar IP variant from QUASAR_ARCH_VARIANT: a directory under tt_metal/tt-llk/tt_llk_quasar/arch/ whose
-    // headers shadow the base Quasar ones. Empty means the base Quasar part.
-    std::string quasar_arch_variant;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -689,7 +686,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -697,8 +694,7 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace(),
-            get_quasar_arch_variant());
+            get_eth_ptp_trace());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -740,6 +736,7 @@ public:
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     bool get_streaming_profiler_sync_events_enabled() const { return streaming_profiler_sync_events_enabled; }
+    bool get_streaming_profiler_sync_check_enabled() const { return streaming_profiler_sync_check_enabled; }
     bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
@@ -1011,7 +1008,12 @@ public:
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
-    std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    std::chrono::duration<float> get_timeout_duration_for_operations() const {
+        return std::chrono::duration<float>(timeout_duration_for_operations.load(std::memory_order_relaxed));
+    }
+    void set_timeout_duration_for_operations(std::chrono::duration<float> timeout) {
+        timeout_duration_for_operations.store(timeout.count(), std::memory_order_relaxed);
+    }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
 
@@ -1035,7 +1037,6 @@ public:
     void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
-    const std::string& get_quasar_arch_variant() const { return quasar_arch_variant; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

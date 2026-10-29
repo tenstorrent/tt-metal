@@ -1,0 +1,10 @@
+{
+  "Base": {
+    "capture": "cuda-Base-1024-50",
+    "manifest_sha256": "f9d8aac71a6120fa4c3a5cfcdfc501d4c9879bd88e3dfe1093a00ac9cef63280"
+  },
+  "SFT": {
+    "capture": "cuda-SFT-1024-50",
+    "manifest_sha256": "f18fa34c6f6d507c1ca9d21206c2286982598f201f8f622d77994c053103e5ff"
+  }
+}

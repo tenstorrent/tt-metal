@@ -73,7 +73,7 @@ inline void llk_unpack_A_init(
     const std::uint32_t within_face_16x16_transpose,
     const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    // Unused on the unpack_to_dest path: UNP_DEST does not support tiny tiles, so the primitive takes no shape.
+    // The unpack_to_dest primitive takes no shape: it supports full 32x32 tiles only, asserted below.
     [[maybe_unused]] const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     constexpr ckernel::trisc::BfdResource engine = unpack_a_bfd_resource<BType, binary_reuse_dest, unpack_to_dest>();
@@ -101,6 +101,13 @@ inline void llk_unpack_A_init(
             // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
             // operand is unpacked to DEST here too when the op writer requested it.
             if constexpr (unpack_to_dest) {
+                // The to-dest placers add the SyncHalf bank offset to the UNP_DEST tile index with a fixed 32x32-tile
+                // stride (_llk_unpack_dest_bank_tile_offset_), while the descriptor of a tiny-tile operand steps in
+                // one-face tiles, so bank 1 would land at the wrong rows. Full tiles only.
+                LLK_ASSERT(
+                    tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+                        tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
+                    "unpack-to-dest supports only 32x32 tiles (face_r_dim=16, 2x2 faces)");
                 // Transpose is not supported on UNP_DEST and is forced off inside the primitive.
                 _llk_unpack_unary_operand_to_dest_init_(bfd_id);
             } else {
@@ -165,7 +172,7 @@ inline void llk_unpack_A(
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
-    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx +
+    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx +
                                       tile_index * local_dfb_interface.stride_size_tiles;
 
     if constexpr (BType == BroadcastType::NONE) {
@@ -232,7 +239,7 @@ inline void llk_unpack_A_block(
 
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
-    const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
+    const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx;
     const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
     if constexpr (BType == BroadcastType::NONE && unpack_to_dest) {
         WAYPOINT("UPAW");

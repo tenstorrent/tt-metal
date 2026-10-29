@@ -19,9 +19,11 @@
 #pragma once
 
 #include <cstddef>
+#include <set>
 #include <string>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>            // tt::tt_metal::experimental::PhysicalNodeId
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>  // tt::tt_metal::PhysicalSystemDescriptor
 
 // The generated proto headers are private (not part of the installed public API), so they are not included here.
@@ -44,7 +46,8 @@ namespace tt::tt_metal::experimental::tt_fabric {
 struct FilterReport {
     std::size_t fsd_host_count = 0;            // hosts in the descriptor before filtering
     std::size_t retained_host_count = 0;       // hosts kept
-    std::size_t dropped_connection_count = 0;  // cables with an endpoint on a dropped host
+    std::size_t dropped_connection_count = 0;  // cables with an endpoint on a dropped host or outside the allocation
+    std::size_t dropped_asic_count = 0;        // ASICs on retained hosts left out by the allocation filter
 };
 
 // Convenience, proto-free entry point: parse an FSD textproto file and return the ready-to-use C++
@@ -55,8 +58,14 @@ struct FilterReport {
 // covers a whole superpod (e.g. SC36) or an aggregated datacenter (exabox), so a consumer wanting a single pod
 // passes just that pod's hostnames. Empty = no filter (use the whole FSD). Throws if a requested hostname is
 // absent from the FSD. Names are matched canonically — see filter_factory_descriptor.
+//
+// allocation (optional): after the host filter, keep only the ASICs at these addresses -- see
+// filter_factory_descriptor_to_allocation. Empty = keep every ASIC of the retained hosts.
 ::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(
-    const std::string& fsd_path, const std::vector<std::string>& host_filter = {}, FilterReport* report = nullptr);
+    const std::string& fsd_path,
+    const std::vector<std::string>& host_filter = {},
+    FilterReport* report = nullptr,
+    const std::set<::tt::tt_metal::experimental::PhysicalNodeId>& allocation = {});
 
 // Parse a Factory System Descriptor textproto file from disk.
 // Throws std::runtime_error if the file cannot be read or parsed.
@@ -78,6 +87,20 @@ struct FilterReport {
 ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor filter_factory_descriptor(
     const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
     const std::vector<std::string>& hostnames,
+    FilterReport* report = nullptr);
+
+// Restrict an FSD to an allocation of ASICs: every cable with an endpoint whose address (canonical host
+// name, tray, asic location) is not in `allocation` is dropped. ASICs are enumerated from cable endpoints,
+// so an ASIC outside the allocation disappears with its cables, and so does an allocated ASIC whose every
+// cable led outside (the mapper could not have placed on it anyway).
+//
+// Addresses rather than host names because a job on TT_VISIBLE_DEVICES owns a chip subset of its hosts:
+// the host filter alone hands the mapper every chip on those hosts, and every cable to a chip the job does
+// not own reads as downed. Apply the host filter first; hosts absent from the FSD are not checked here.
+// Adds the dropped cables to report->dropped_connection_count and sets report->dropped_asic_count.
+::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor filter_factory_descriptor_to_allocation(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
+    const std::set<::tt::tt_metal::experimental::PhysicalNodeId>& allocation,
     FilterReport* report = nullptr);
 
 // Run filter_factory_descriptor's checks without building the filtered copy.

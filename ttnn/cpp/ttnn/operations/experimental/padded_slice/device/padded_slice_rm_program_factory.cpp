@@ -22,7 +22,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
 #include <tt-metalium/tt_align.hpp>
 
@@ -34,9 +34,18 @@ namespace {
 
 constexpr uint32_t kPaddedSliceRmReaderKernelIdx = 0;
 constexpr uint32_t kPaddedSliceRmReaderAddressArgIdx = 0;
+constexpr uint32_t kPaddedSliceRmReaderSrcOffsetArgIdx = 9;
+constexpr uint32_t kPaddedSliceRmReaderMisalignmentArgIdx = 10;
 constexpr uint32_t kPaddedSliceRmOutputCbIndex = 0;
 
-uint32_t padded_slice_rm_reader_address(
+// The reader builds its TensorAccessor on the input buffer's base address and applies this core's
+// read-window offset to every read, so the address it receives is a plain buffer base.
+struct PaddedSliceRmReaderOffset {
+    uint32_t src_offset_bytes;  // W-begin plus this core's width offset, rounded down to the source alignment
+    uint32_t misalignment;      // bytes between that aligned offset and the exact start
+};
+
+PaddedSliceRmReaderOffset padded_slice_rm_reader_offset(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
@@ -53,6 +62,8 @@ uint32_t padded_slice_rm_reader_address(
     const bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     const uint32_t output_row_size_bytes = output_shard_spec.shape[1] * input_tensor.element_size();
 
+    const auto src_buffer_alignment =
+        input_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
     const auto dst_buffer_alignment =
         output_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
     const uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
@@ -64,12 +75,12 @@ uint32_t padded_slice_rm_reader_address(
     } else if (is_width_sharded) {
         core_w_index = core_index;
     }
-    const int width_offset = static_cast<int>(core_w_index * output_row_size_bytes_offset);
-    // Pass the exact start. When it isn't aligned to the source buffer, create_descriptor enables the
-    // reader's non-aligned path, which reads from the aligned address below it and skips the difference.
-    uint32_t read_address = input_buffer->address() + begins_bytes;
-    read_address += static_cast<uint32_t>(width_offset);
-    return read_address;
+    const uint32_t width_offset = core_w_index * output_row_size_bytes_offset;
+    // When the exact start isn't aligned to the source buffer, create_descriptor enables the reader's
+    // non-aligned path, which reads from the aligned offset below it and skips `misalignment` bytes.
+    const uint32_t exact_offset = begins_bytes + width_offset;
+    const uint32_t misalignment = exact_offset % src_buffer_alignment;
+    return {.src_offset_bytes = exact_offset - misalignment, .misalignment = misalignment};
 }
 
 void update_padded_slice_rm_output_cb(Program& program, Buffer& output_buffer) {
@@ -155,7 +166,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     std::vector<uint32_t> common_reader_kernel_args = {
-        0u,  // exact start address, set per core
+        0u,  // input buffer base address, set per core
         input_page_size,
         output_row_size_bytes,
         output_row_size_bytes_offset,
@@ -163,7 +174,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
         0,
         0,
         0,
-        0};
+        0,
+        0u,  // src_offset_bytes, set per core
+        0u,  // misalignment, set per core
+    };
 
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_output_sticks_per_dim.begin(), num_output_sticks_per_dim.end());
@@ -209,23 +223,27 @@ get_padded_slice_runtime_args_rm_sharded_output(
             this_core_num_sticks = 0;
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[0] =
-            padded_slice_rm_reader_address(input_tensor, output_tensor, output_tensor_start, core, core_index);
+        reader_kernel_args[kPaddedSliceRmReaderAddressArgIdx] = input_tensor.buffer()->address();
         reader_kernel_args[2] = this_input_row_size_bytes;
         uint32_t addr_offset = 5;
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
         reader_kernel_args[addr_offset] = this_core_num_sticks;
+        const auto reader_offset =
+            padded_slice_rm_reader_offset(input_tensor, output_tensor, output_tensor_start, core, core_index);
+        reader_kernel_args[kPaddedSliceRmReaderSrcOffsetArgIdx] = reader_offset.src_offset_bytes;
+        reader_kernel_args[kPaddedSliceRmReaderMisalignmentArgIdx] = reader_offset.misalignment;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
         log_trace(
             tt::LogOp,
-            "For Core {}, start_id : {}, start_addr : {}, width_offset : {}, this_core_num_sticks : {}, "
-            "this_input_row_size_bytes : {}",
+            "For Core {}, start_id : {}, src_offset_bytes : {}, misalignment : {}, width_offset : {}, "
+            "this_core_num_sticks : {}, this_input_row_size_bytes : {}",
             core,
             start_id,
-            reader_kernel_args[0],
+            reader_offset.src_offset_bytes,
+            reader_offset.misalignment,
             width_offset,
             this_core_num_sticks,
             this_input_row_size_bytes);
@@ -303,8 +321,8 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
         dst_buffer_alignment);
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
-    // A start that isn't aligned to the source buffer needs the non-aligned path too: the reader gets the
-    // exact start address and skips the bytes between the aligned address below it and the start.
+    // A start that isn't aligned to the source buffer needs the non-aligned path too: the reader reads from
+    // the aligned offset below the start and skips the misalignment on-device.
     const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
     auto is_non_aligned = false;
     if (output_row_size_bytes % alignment || begins_bytes % src_buffer_alignment) {
@@ -339,7 +357,7 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)output_cb_index};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {
-        (uint32_t)is_non_aligned, non_aligned_temp_cb_index, src_buffer_alignment, num_trids};
+        (uint32_t)is_non_aligned, non_aligned_temp_cb_index, num_trids};
     tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
 
     KernelDescriptor reader_kernel;
@@ -392,13 +410,15 @@ ProgramDescriptor PaddedSliceRMProgramFactory::create_descriptor(
 
 void PaddedSliceRMProgramFactory::override_runtime_arguments(
     Program& program,
-    const PaddedSliceParams& operation_attributes,
+    const PaddedSliceParams& /*operation_attributes*/,
     const PaddedSliceInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = output;
     TT_FATAL(dst_tensor.is_sharded(), "Output tensor must be sharded");
+    auto* src_buffer = src_tensor.buffer();
+    TT_FATAL(src_buffer != nullptr, "Input buffer should be allocated on device");
     auto* dst_buffer = dst_tensor.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     update_padded_slice_rm_output_cb(program, *dst_buffer);
@@ -407,12 +427,11 @@ void PaddedSliceRMProgramFactory::override_runtime_arguments(
     const bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     const auto iter_cores = corerange_to_cores(output_shard_spec.grid, std::nullopt, rm_orientation);
 
-    uint32_t core_index = 0;
+    // The read-window offsets follow from the slice bounds and the output sharding, both part of the
+    // program-cache key; only the input buffer's base can differ between dispatches.
     for (const auto& core : iter_cores) {
         auto& reader_args = GetRuntimeArgs(program, kPaddedSliceRmReaderKernelIdx, core);
-        reader_args[kPaddedSliceRmReaderAddressArgIdx] = padded_slice_rm_reader_address(
-            src_tensor, dst_tensor, operation_attributes.padded_slice_start, core, core_index);
-        ++core_index;
+        reader_args[kPaddedSliceRmReaderAddressArgIdx] = src_buffer->address();
     }
 }
 

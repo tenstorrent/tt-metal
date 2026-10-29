@@ -44,10 +44,10 @@ void kernel_main() {
         const auto lock = dfb_in1.scoped_write_lock(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
         const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
-        FILL_WITH_VALUE_FLOAT(static_cast<uint32_t>(lock.get_ptr().get_address()), *float_ptr);
+        FILL_WITH_VALUE_FLOAT(lock.get_ptr(), *float_ptr);
 #endif
 #ifdef FILL_WITH_VALUE
-        FILL_WITH_VALUE(static_cast<uint32_t>(lock.get_ptr().get_address()), packed_scalar);
+        FILL_WITH_VALUE(lock.get_ptr(), packed_scalar);
 #endif
     }  // lock released before the credit post
     dfb_in1.push_back(onetile);

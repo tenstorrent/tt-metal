@@ -1037,6 +1037,10 @@ def test_tilize_with_val_padding_width_sharded_dram_and_wide(device, in_buffer, 
     height_in, height_out = 50, 64
     input_shape = [1, height_in, width]
     output_padded_shape = [1, height_out, width]
+    if DRAM in (in_buffer, out_buffer):
+        num_cores = min(num_cores, device.dram_grid_size().x)
+    while width % (num_cores * ttnn.TILE_SIZE) != 0:
+        num_cores -= 1
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
 
     def width_sharded(buffer_type, height):

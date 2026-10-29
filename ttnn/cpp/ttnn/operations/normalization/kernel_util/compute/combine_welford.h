@@ -78,8 +78,10 @@ inline void combine_welford_partials(
         // Wait for 1 mean tile and 1 var tile
         dfb_partials.wait_front(2);
 
-        const float n_a = acc_n;
-        const float n_b = next_set_size_fn(b);
+        // Keep the set size integral so acc_n does not round through float past 2^24
+        const auto set_size = static_cast<uint32_t>(next_set_size_fn(b));
+        const float n_a = static_cast<float>(acc_n);
+        const float n_b = static_cast<float>(set_size);
 
         const float n_a_norm = static_cast<float>(n_a) / (n_a + n_b);
         const float n_b_norm = static_cast<float>(n_b) / (n_a + n_b);
@@ -128,13 +130,13 @@ inline void combine_welford_partials(
         add_binary_tile_init();
         add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
-        acc_n += n_b;
+        acc_n += set_size;
         dfb_partials.pop_front(2);
     }
 
     // Convert final M2 to var
     binop_with_scalar_tile_init();
-    mul_unary_tile(m2_acc_dst, generic::bit_cast<uint32_t>(1.f / acc_n));
+    mul_unary_tile(m2_acc_dst, generic::bit_cast<uint32_t>(1.f / static_cast<float>(acc_n)));
 
     // Compute 1/sqrt(Var[x] + eps) if enabled
     if (rsqrt_policy.compute) {
