@@ -57,11 +57,12 @@ inline BlockTilingParams compute_block_tiling_params(
     // Inter-writer L1 output stride (bytes) between consecutive tiles written by a single writer.
     // If a block is only one tile tall, only one writer is active, so no stride is needed.
     const uint32_t output_addr_stride =
-        (block_size_width != TILE_HEIGHT) ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
-                                          : 0;
+        (block_size_width != TILE_HEIGHT)
+            ? output_stride_sticks * config.output_shard_width * config.output_element_size_bytes
+            : 0;
     // Output shard bytes covered by one block. Writers rebase L1 write addresses
     // from this at the start of each block.
-    const uint32_t block_size_bytes = block_size_width * config.output_shard_width * config.element_size_bytes;
+    const uint32_t block_size_bytes = block_size_width * config.output_shard_width * config.output_element_size_bytes;
     return {
         total_tiles_per_block,
         total_tiles_per_core,
@@ -87,7 +88,7 @@ inline std::vector<uint32_t> make_writer_compile_args(
         config.output_shard_width,
         tiles_per_block_for_writer,
         initial_write_stick_offset,
-        config.element_size_bytes,
+        config.output_element_size_bytes,
         static_cast<uint32_t>(config.is_input_in_dram),
         static_cast<uint32_t>(is_reader),
         is_reader ? config.gather_l1_output_shard_height : 0u,
@@ -206,9 +207,11 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.hw_total = input.logical_shape()[3];
     config.input_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     config.element_size_bytes = tt::datum_size(config.input_format);
+    config.output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    config.output_element_size_bytes = tt::datum_size(config.output_format);
 
     // DRAM/L1 configuration
-    TT_FATAL(input.buffer() != nullptr, "Input buffer must be allocated on device");
+    TT_FATAL(input.is_allocated(), "Input buffer must be allocated on device");
     config.is_input_in_dram = input.buffer()->core_type() == tt::CoreType::DRAM;
     config.remote_buffer_type = input.buffer()->buffer_type();
     config.remote_core_type = input.buffer()->core_type();
@@ -248,7 +251,7 @@ ConvertToHwcConfig ConvertToHwcConfig::create_from_tensors(const Tensor& input, 
     config.gather_l1_output_shard_width = config.output_shard_height;
 
     // Alignment requirements
-    config.alignment_elements = compute_alignment_requirement_in_elements(output);
+    config.alignment_elements = compute_alignment_requirement_in_elements(output.dtype());
 
     log_debug(
         tt::LogType::LogOp,
@@ -327,33 +330,34 @@ void setup_circular_buffers(
     desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid, CBIndex::CB_IN_TILED, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format, nullptr));
 
-    // CB_IN_TRANSPOSE_[0/1]
-    const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
-    const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * intermediary_tile_size;
+    // CB_IN_TRANSPOSE_[0/1]: pack_untilize writes these, so they are in the output format
+    const uint32_t output_tile_size = tt::tile_size(config.output_format);
+    const uint32_t cb_in_transpose_page_size = output_tile_size;
+    const uint32_t cb_in_transpose_total_size = tt::div_up(block_size_width, TILE_WIDTH) * output_tile_size;
     desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid,
         CBIndex::CB_IN_TRANSPOSE_0,
         cb_in_transpose_total_size,
         cb_in_transpose_page_size,
-        intermediary_format,
+        config.output_format,
         nullptr));
     desc.cbs.push_back(make_cnn_circular_buffer(
         core_grid,
         CBIndex::CB_IN_TRANSPOSE_1,
         cb_in_transpose_total_size,
         cb_in_transpose_page_size,
-        intermediary_format,
+        config.output_format,
         nullptr));
 
     // CB_OUT: output shard per core
-    const uint32_t cb_out_page_size = config.output_shard_width * config.element_size_bytes;
+    const uint32_t cb_out_page_size = config.output_shard_width * config.output_element_size_bytes;
     const uint32_t cb_out_total_size = cb_out_page_size * config.output_shard_height;  // same size as input
     desc.cbs.push_back(make_cnn_circular_buffer(
-        core_grid, CBIndex::CB_OUT, cb_out_total_size, cb_out_page_size, config.input_format, output.buffer()));
+        core_grid, CBIndex::CB_OUT, cb_out_total_size, cb_out_page_size, config.output_format, output.buffer()));
 }
 
-uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
-    const uint32_t element_size_bytes = input_tensor.element_size();
+uint32_t compute_alignment_requirement_in_elements(tt::tt_metal::DataType output_dtype) {
+    const uint32_t element_size_bytes = tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
     const uint32_t l1_alignment_bytes = tt::tt_metal::hal::get_l1_alignment();
     return l1_alignment_bytes / element_size_bytes;
 }
@@ -395,7 +399,7 @@ tt::tt_metal::ProgramDescriptor ConvertToHWCProgramFactory::create_descriptor(
 
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
-    TT_FATAL(output.buffer() != nullptr, "Output buffer must be allocated on device");
+    TT_FATAL(output.is_allocated(), "Output buffer must be allocated on device");
 
     // Create configuration from input tensors
     auto config = ConvertToHwcConfig::create_from_tensors(a, output);

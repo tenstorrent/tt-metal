@@ -12,7 +12,9 @@ cache. Every test carries both weight options.
 from __future__ import annotations
 
 import copy
+import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -46,6 +48,8 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
 )
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtFusedMTP, TtMTPModule, TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import (
+    MTP_CACHE_ENV,
+    MTP_CACHE_PREFIX,
     eh_proj_expected_chip_shard,
     eh_proj_to_tt_layout,
     enable_mtp_indexer_slot,
@@ -57,6 +61,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
@@ -206,6 +211,35 @@ def _glm_layer_weights(variant, config, layer_state_dict=None):
     return mla_weights, attn_norm_w, ffn_norm_w, moe_weights, layer_state_dict
 
 
+def _mtp_device_weights(variant, mesh_device, layer_idx: int, use_pretrained: bool, mtp_sd: dict, layer_sd: dict):
+    """``(state_dict, weight_cache_path)`` for an MTP constructor: cache-only, as the runner builds it, when
+    ``$TT_GLM53_MTP_TTNN_CACHE`` holds a complete cache for this mesh. Otherwise the weights are converted and
+    nothing is written, so a read-only shared tree stays untouched."""
+    state_dict = {"mtp": mtp_sd, "layer": layer_sd}
+    root = os.environ.get(MTP_CACHE_ENV)
+    if not (use_pretrained and root):
+        return state_dict, None
+    mesh_shape = list(mesh_device.shape)
+    path = (
+        Path(root)
+        / f"{variant.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
+        / f"{mesh_shape[SP_AXIS]}x{mesh_shape[TP_AXIS]}"
+    )
+    if path.is_dir():
+        init_checker(path)
+        if TtMTPPredictor.check_cache_complete(
+            path,
+            layer_idx,
+            cache_name_prefix=MTP_CACHE_PREFIX,
+            experts_per_chip=GLM53Config.NUM_ROUTED_EXPERTS // mesh_device.get_num_devices(),
+            model_cfg=GLM53Config,
+        ):
+            logger.info(f"MTP layer {layer_idx} weights: from the cache at {path}")
+            return {"mtp": {}, "layer": {}}, path
+    logger.warning(f"MTP layer {layer_idx} weights: no complete cache at {path}, converting the checkpoint's")
+    return state_dict, None
+
+
 def _mtp_device_caches(config, mesh_device, seq_len: int, num_cache_slots: int, chunk_size: int | None = None):
     """``(kvpe_cache, rope_tensors, index_kv_cache)`` for a stack of ``num_cache_slots`` MTP levels.
     ``chunk_size`` makes ``seq_len`` a cache that chunked forwards fill, roped as the transformer does."""
@@ -330,11 +364,14 @@ def test_mtp_module_pcc(
         f"[mtp module] use_pretrained={use_pretrained} module_pcc={module_pcc} "
         f"building TtMTPModule layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
     )
+    device_weights, weight_cache_path = _mtp_device_weights(
+        variant, mesh_device, layer_idx, use_pretrained, mtp_state_dict, layer_state_dict
+    )
     module = TtMTPModule(
         mesh_device,
         config,
         GLM53Config,
-        {"mtp": mtp_state_dict, "layer": layer_state_dict},
+        device_weights,
         mtp_cfg,
         seq_len=seq_len,
         layer_idx=layer_idx,
@@ -343,6 +380,8 @@ def test_mtp_module_pcc(
         topology=topology,
         sp_axis=SP_AXIS,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=weight_cache_path,
+        cache_name_prefix=MTP_CACHE_PREFIX,
         layer_num=1,
     )
 
@@ -425,11 +464,14 @@ def test_mtp_predictor_pcc(
         f"[mtp predictor] use_pretrained={use_pretrained} module_pcc={module_pcc} "
         f"building TtMTPPredictor K={num_levels} layer_idx={layer_idx} mesh={mesh_shape}"
     )
+    device_weights, weight_cache_path = _mtp_device_weights(
+        variant, mesh_device, layer_idx, use_pretrained, mtp_state_dict, layer_state_dict
+    )
     predictor = TtMTPPredictor(
         mesh_device,
         config,
         GLM53Config,
-        {"mtp": mtp_state_dict, "layer": layer_state_dict},
+        device_weights,
         mtp_cfg,
         seq_len=seq_len,
         num_levels=num_levels,
@@ -439,6 +481,8 @@ def test_mtp_predictor_pcc(
         topology=topology,
         sp_axis=SP_AXIS,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        weight_cache_path=weight_cache_path,
+        cache_name_prefix=MTP_CACHE_PREFIX,
         layer_num=num_levels,
     )
 
@@ -584,6 +628,9 @@ def test_mtp_multiturn_pcc(
     )
     module_pcc = MTP_MODULE_OUTPUT_PCC[use_pretrained]
     logger.info(f"[mtp multiturn] use_pretrained={use_pretrained} K={num_levels} turns={turns} chunks={chunks}")
+    device_weights, weight_cache_path = _mtp_device_weights(
+        variant, mesh_device, layer_idx, use_pretrained, mtp_state_dict, layer_state_dict
+    )
     # The turn schedule is the only axis the predictor does not depend on, so its cases share one build.
     predictor = acquire_module(
         mesh_device,
@@ -592,7 +639,7 @@ def test_mtp_multiturn_pcc(
             mesh_device,
             config,
             GLM53Config,
-            {"mtp": mtp_state_dict, "layer": layer_state_dict},
+            device_weights,
             mtp_cfg,
             seq_len=CHUNK,
             num_levels=num_levels,
@@ -604,6 +651,8 @@ def test_mtp_multiturn_pcc(
             gate_fallback_mode=GateComputeMode.DEVICE_FP32,
             # Every padding row is identical, so all of them can route to one chip's experts.
             dispatch_buffer_capacity_factor=8,
+            weight_cache_path=weight_cache_path,
+            cache_name_prefix=MTP_CACHE_PREFIX,
             is_chunked=True,
             max_seq_len=CACHE_LEN,
             slot_num=1,

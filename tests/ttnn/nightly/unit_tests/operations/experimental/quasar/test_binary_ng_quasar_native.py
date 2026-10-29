@@ -1025,8 +1025,8 @@ finally:
 sources = [ln.split("source:", 1)[1].strip()
            for ln in (root / "generated" / "inspector" / "kernels.yaml").read_text().splitlines()
            if "source:" in ln]
-# Every binary_ng kernel tree counts: the descriptor binds kernels/ and kernels_ng/, which neither the
-# native nor the Metal 2.0 factory uses.
+# Every binary_ng kernel tree counts, so a kernel source from any tree but kernels_qsr/ and kernels_dfb/
+# fails the check.
 binary_ng = [s for s in sources if "/binary_ng/device/kernels" in s]
 qsr = [s for s in binary_ng if "kernels_qsr/" in s]
 dfb = [s for s in binary_ng if "kernels_dfb/" in s]

@@ -433,6 +433,55 @@ def _tensor_row_from_params(tensor_id, params: dict, rank: int) -> _TensorRow:
     )
 
 
+# Tensors whose buffers are live during an import: (device_id, address) -> [(buffer_type, tensor_id), ...].
+_LiveTensors = dict[tuple[Optional[int], int], list[tuple[Optional[int], int]]]
+
+
+def _add_live_tensor(
+    live_tensors: _LiveTensors,
+    device_id: Optional[int],
+    address: int,
+    buffer_type: Optional[int],
+    tensor_id: int,
+) -> None:
+    """Record that ``tensor_id`` now lives at ``address`` on ``device_id``.
+
+    ``live_tensors`` maps (device_id, address) to [(buffer_type, tensor_id), ...], most recent last. DRAM and L1
+    addresses overlap, so an address can hold one live tensor per buffer type; ``buffer_type`` is None when the
+    capture didn't record it. A tensor seen at a slot another tensor still holds replaces it, as the earlier one's
+    buffer must have been freed without the capture seeing it.
+    """
+    entries = live_tensors.setdefault((device_id, address), [])
+    entries[:] = [entry for entry in entries if entry[0] != buffer_type]
+    entries.append((buffer_type, tensor_id))
+
+
+def _take_live_tensor(
+    live_tensors: _LiveTensors, device_id: Optional[int], address: int, buffer_type: Optional[int]
+) -> Optional[int]:
+    """Return the tensor whose buffer at ``address`` on ``device_id`` is being freed, and forget it, or None.
+
+    Each owning buffer records one deallocation, so once freed the tensor can't own a later buffer at that address,
+    such as a scratch buffer that no tensor names. Prefers a tensor of the freed buffer's type, then one whose type
+    wasn't recorded; a deallocation with no buffer type takes the most recent tensor at the address.
+    """
+    entries = live_tensors.get((device_id, address))
+    if not entries:
+        return None
+    if buffer_type is None:
+        index = len(entries) - 1
+    else:
+        index = next((i for i, entry in enumerate(entries) if entry[0] == buffer_type), None)
+        if index is None:
+            index = next((i for i, entry in enumerate(entries) if entry[0] is None), None)
+        if index is None:
+            return None
+    tensor_id = entries.pop(index)[1]
+    if not entries:
+        del live_tensors[(device_id, address)]
+    return tensor_id
+
+
 def _tid_int(tid):
     """Coerce a tensor ID (possibly a string) to int."""
     return int(tid) if isinstance(tid, str) else tid
@@ -1290,6 +1339,9 @@ def import_graph(
     operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
+    # Tensors whose buffers are live, so a buffer_deallocate is credited to the tensor living at the freed address,
+    # not to whichever one first used it. See _take_live_tensor.
+    live_tensors: _LiveTensors = {}
     current_op_nodes = []
     op_nesting_depth = 0
     # Counts only non-filtered, non-nested ops so filtered wrappers are transparent
@@ -1714,7 +1766,16 @@ def import_graph(
             tensor_id = params.get("tensor_id", "")
             if tensor_id and tensor_id not in tensor_ids_seen:
                 tensor_ids_seen.add(tensor_id)
-                tensors_batch.append(_tensor_row_from_params(tensor_id, params, rank))
+                tensor_row = _tensor_row_from_params(tensor_id, params, rank)
+                tensors_batch.append(tensor_row)
+                if tensor_row.address is not None:
+                    _add_live_tensor(
+                        live_tensors,
+                        tensor_row.device_id,
+                        tensor_row.address,
+                        tensor_row.buffer_type,
+                        _tid_int(tensor_id),
+                    )
 
                 device_tensors_str = params.get("device_tensors")
                 if device_tensors_str:
@@ -1752,23 +1813,35 @@ def import_graph(
         elif node_type == "buffer_deallocate":
             # Resolve address: prefer direct param, fall back to connected buffer_allocate
             dealloc_address = None
+            dealloc_params = params
             if "address" in params:
                 dealloc_address = int(params["address"])
             else:
                 for conn_id in node.get("connections", []):
                     if conn_id < len(graph) and graph[conn_id].get("node_type") == "buffer_allocate":
-                        dealloc_address = int(graph[conn_id].get("params", {}).get("address", 0))
+                        dealloc_params = graph[conn_id].get("params", {})
+                        dealloc_address = int(dealloc_params.get("address", 0))
                         break
-            if dealloc_address is not None:
-                active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
+            dealloc_device_id = _int_param(dealloc_params, "device_id")
+            dealloc_buffer_type = _int_param(dealloc_params, "buffer_type")
 
-            # Find the tensor that owns the deallocated address
             dealloc_tensor_id = None
             if dealloc_address is not None:
-                for t in tensors_batch:
-                    if t.address == dealloc_address:
-                        dealloc_tensor_id = _tid_int(t.tensor_id)
-                        break
+                # Only the freed buffer: not a buffer of another type, or on another device, at the same address. A
+                # free that doesn't say which device or type matches any.
+                active_buffers = [
+                    b
+                    for b in active_buffers
+                    if not (
+                        b[1] == dealloc_address
+                        and dealloc_device_id in (None, b[0])
+                        and dealloc_buffer_type in (None, b[3])
+                    )
+                ]
+                # The tensor that owns the deallocated address
+                dealloc_tensor_id = _take_live_tensor(
+                    live_tensors, dealloc_device_id, dealloc_address, dealloc_buffer_type
+                )
 
             if not function_stack:
                 # Synthesize a deallocate operation if not inside a function_start/end pair

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -143,7 +143,7 @@ struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
-    uint32_t addr_crta_offset;          // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+    uint32_t addr_crta_offset = 0;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
     // Count of runtime accessor field words that immediately follow the address slot
     // in this binding's CRTA section.
     // Non-zero when the TensorParameter opts into a CRTA-resident dynamic field.
@@ -158,6 +158,11 @@ struct TensorBindingHandle {
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
     LLKMetadata llk_metadata;
+    // A per-node allocated tensor has its own base address on every node, so the address lives in each node's
+    // RTA buffer at addr_rta_offset, and the binding takes no CRTA words (addr_crta_offset and
+    // num_runtime_field_crta_words are unused).
+    bool is_per_node = false;
+    uint32_t addr_rta_offset = 0;  // byte offset of this binding's base-address slot within each node's RTA buffer
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
@@ -325,7 +330,8 @@ public:
     void process_tensor_binding_handles(const std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
-                                            uint32_t addr_crta_offset,
+                                            bool is_per_node,
+                                            uint32_t addr_offset,
                                             uint32_t num_runtime_field_crta_words,
                                             const LLKMetadata&)>&) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
@@ -365,6 +371,7 @@ public:
     const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
     const std::vector<std::string>& get_common_runtime_arg_names() const override { return common_runtime_arg_names_; }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
+    KernelRtaLayout get_rta_layout() const override { return rta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
@@ -449,7 +456,8 @@ protected:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {});
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {});
 
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     HalProgrammableCoreType programmable_core_type_;
@@ -471,6 +479,7 @@ protected:
     const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
+    const KernelRtaLayout rta_layout_;
     // Non-const (unlike tensor_binding_handles_): set post-construction via set_scratchpad_binding_handles,
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
@@ -530,7 +539,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -546,7 +556,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config) {
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
@@ -736,7 +747,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -752,7 +764,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config) {
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
@@ -779,6 +792,8 @@ public:
     std::string_view get_linker_opt_level() const override;
 
     bool get_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
+
+    bool get_sfpu_replay_optimization_disabled() const override;
 
 private:
     const ComputeConfig config_;
@@ -826,7 +841,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -842,7 +858,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -900,7 +917,8 @@ public:
         const std::vector<std::string>& runtime_arg_names = {},
         const std::vector<std::string>& common_runtime_arg_names = {},
         const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
-        const KernelCrtaLayout& crta_layout = {}) :
+        const KernelCrtaLayout& crta_layout = {},
+        const KernelRtaLayout& rta_layout = {}) :
         Kernel(
             context_id,
             HalProgrammableCoreType::TENSIX,
@@ -916,7 +934,8 @@ public:
             runtime_arg_names,
             common_runtime_arg_names,
             tensor_binding_handles,
-            crta_layout),
+            crta_layout,
+            rta_layout),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(

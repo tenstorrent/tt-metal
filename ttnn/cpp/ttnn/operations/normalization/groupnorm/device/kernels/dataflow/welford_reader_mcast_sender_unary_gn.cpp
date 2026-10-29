@@ -75,11 +75,11 @@ void kernel_main() {
     const bool has_mcast_last_group = get_arg_val<std::uint32_t>(6) == 1;
 
     // mid mcast group
-    const std::uint32_t mcast_dest_noc_start_x = get_arg_val<std::uint32_t>(7);
-    const std::uint32_t mcast_dest_noc_start_y = get_arg_val<std::uint32_t>(8);
-    const std::uint32_t mcast_dest_noc_end_x = get_arg_val<std::uint32_t>(9);
-    const std::uint32_t mcast_dest_noc_end_y = get_arg_val<std::uint32_t>(10);
-    const std::uint32_t num_mcast_cores_mid_group = get_arg_val<std::uint32_t>(11);
+    const auto mcast_dest_noc_start_x = get_arg_val<std::uint32_t>(7);
+    const auto mcast_dest_noc_start_y = get_arg_val<std::uint32_t>(8);
+    const auto mcast_dest_noc_end_x = get_arg_val<std::uint32_t>(9);
+    const auto mcast_dest_noc_end_y = get_arg_val<std::uint32_t>(10);
+    const auto num_mcast_cores_mid_group = get_arg_val<std::uint32_t>(11);
 
     // first mcast group
     std::uint32_t mcast_first_group_dest_noc_start_x = 0;
