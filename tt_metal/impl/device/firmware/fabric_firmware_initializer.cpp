@@ -18,6 +18,12 @@
 #include "device/device_impl.hpp"
 #include "common/executor.hpp"
 #include "impl/context/context_descriptor.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
+#include "llrt.hpp"
+#include "program/program_impl.hpp"
+#include "program/slow_dispatch.hpp"
+#include "tt_metal/fabric/fabric_init.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -336,8 +342,10 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Fabric Initialized with config {}", fabric_config);
     } else if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
-        for (auto* dev : devices_) {
-            dev->compile_fabric();
+        fabric_programs_.clear();
+        fabric_programs_.resize(devices_.size());
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            fabric_programs_[i] = compile_fabric(devices_[i]);
         }
     } else {
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
@@ -363,20 +371,18 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
     if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule(cluster_)) {
         log_info(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
+        // Free any compiled fabric programs, but leave devices_/initialized_ as they were.
+        fabric_programs_.clear();
         init_done.erase(key);
         return;
     }
     if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
-        devices_.clear();
-        initialized_.clear();
-        init_done.erase(key);
+        reset_state(init_done);
         return;
     }
 
     if (devices_.empty()) {
-        devices_.clear();
-        initialized_.clear();
-        init_done.erase(key);
+        reset_state(init_done);
         return;
     }
 
@@ -425,6 +431,12 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
     }
 
+    reset_state(init_done);
+}
+
+void FabricFirmwareInitializer::reset_state(std::unordered_set<InitializerKey>& init_done) {
+    // Release fabric programs before the devices they were compiled for are closed.
+    fabric_programs_.clear();
     devices_.clear();
     initialized_.clear();
     init_done.erase(key);
@@ -437,29 +449,79 @@ void FabricFirmwareInitializer::post_teardown() {
 
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }
 
+std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) const {
+    auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
+        descriptor_->env_impl(),
+        descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
+        dev);
+    if (!fabric_program) {
+        // Compile failure mostly comes from Nebula (TG)
+        log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+    }
+    return fabric_program;
+}
+
+void FabricFirmwareInitializer::configure_fabric(Device* dev, Program& fabric_program) const {
+    MetalEnvImpl& env_impl = descriptor_->env_impl();
+    tt::tt_fabric::configure_fabric_cores(env_impl, dev);
+
+    fabric_program.impl().finalize_offsets(dev);
+
+    const bool using_fast_dispatch = rtoptions_.get_fast_dispatch();
+    slow_dispatch::WriteRuntimeArgsToDevice(*dev, fabric_program, /*force_slow_dispatch=*/using_fast_dispatch);
+    slow_dispatch::ConfigureDeviceWithProgram(*dev, fabric_program, /*force_slow_dispatch=*/using_fast_dispatch);
+
+    // Note: the l1_barrier below is needed to be sure writes to cores that
+    // don't get the GO mailbox have all landed
+    cluster_.l1_barrier(dev->id());
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program.impl().logical_cores();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal_.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = fabric_program.impl().kernels_on_core(logical_core, programmable_core_type_index);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program.get_runtime_id();
+
+            auto physical_core = dev->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                env_impl,
+                dev->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal_.get_dev_addr(dev->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+        }
+    }
+    log_debug(tt::LogMetal, "Fabric initialized on Device {}", dev->id());
+}
+
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
-    std::vector<std::shared_future<Device*>> events;
+    // Each task writes only its own slot, and the vector is not resized while tasks are running.
+    fabric_programs_.clear();
+    fabric_programs_.resize(devices_.size());
+
+    std::vector<std::shared_future<void>> events;
     events.reserve(devices_.size());
-    for (auto* dev : devices_) {
-        events.emplace_back(detail::async([dev]() {
-            if (dev->compile_fabric()) {
-                return dev;
-            }
-            // Compile failure mostly comes from Nebula (TG)
-            log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-            return static_cast<Device*>(nullptr);
-        }));
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        events.emplace_back(detail::async([this, i]() { fabric_programs_[i] = compile_fabric(devices_[i]); }));
     }
 
     if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
+        // Tasks write into fabric_programs_, so they must finish before we return.
+        for (const auto& event : events) {
+            event.get();
+        }
         return;
     }
 
+    // Serial on purpose: configuring in parallel hangs Galaxy.
     size_t configured_count = 0;
-    for (const auto& event : events) {
-        auto* dev = event.get();
-        if (dev) {
-            dev->configure_fabric();
+    for (size_t i = 0; i < events.size(); ++i) {
+        events[i].get();
+        if (fabric_programs_[i]) {
+            configure_fabric(devices_[i], *fabric_programs_[i]);
             configured_count++;
         }
     }
@@ -477,10 +539,10 @@ void FabricFirmwareInitializer::compile_fabric_only() {
 
     // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
     // races when devices compile in parallel.
-    for (auto* dev : devices_) {
-        if (!dev->compile_fabric()) {
-            log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-        }
+    fabric_programs_.clear();
+    fabric_programs_.resize(devices_.size());
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        fabric_programs_[i] = compile_fabric(devices_[i]);
     }
 }
 
