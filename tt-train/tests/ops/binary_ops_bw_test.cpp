@@ -5,11 +5,14 @@
 #include <gtest/gtest.h>
 
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/binary_ops.hpp"
+#include "test_utils/random_data.hpp"
 
 namespace ttml::ops::tests {
 
@@ -299,6 +302,7 @@ INSTANTIATE_TEST_SUITE_P(CrossRank, SubBroadcastBackwardTest, ::testing::ValuesI
 INSTANTIATE_TEST_SUITE_P(SameRank, MulBroadcastBackwardTest, ::testing::ValuesIn(kSameRankCases), BroadcastCaseName);
 INSTANTIATE_TEST_SUITE_P(CrossRank, MulBroadcastBackwardTest, ::testing::ValuesIn(kCrossRankCases), BroadcastCaseName);
 
+// A trainable broadcast operand is still rejected: division backward does not reduce its grad back to its shape.
 TEST_F(BinaryOpsBackwardTest, DivBroadcastThrows) {
     auto* device = &autograd::ctx().get_device();
     xt::xarray<float> data_a = {4.F, 6.F, 8.F, 10.F, 12.F, 14.F, 16.F, 18.F};
@@ -311,5 +315,72 @@ TEST_F(BinaryOpsBackwardTest, DivBroadcastThrows) {
     auto out = a / b;
     EXPECT_THROW(out->backward(), std::runtime_error);
 }
+
+// A frozen broadcast operand is accepted, since its grad is never computed. The trainable operand's grad must match a
+// host reference and the frozen one must get none.
+struct DivFrozenBroadcastCase {
+    std::string name;
+    bool frozen_numerator = false;  // otherwise the frozen broadcast operand is the denominator
+    // Relative error bound on the grad in units of 2^-8, half a bf16 ULP: each bf16 multiply rounds once (1 unit) and
+    // each use of 1 / b, which the SFPU computes to within a bf16 ULP, adds 2.
+    float rtol_units = 0.F;
+};
+
+void PrintTo(const DivFrozenBroadcastCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+class DivFrozenBroadcastBackwardTest : public BinaryOpsBackwardTest,
+                                       public ::testing::WithParamInterface<DivFrozenBroadcastCase> {};
+
+TEST_P(DivFrozenBroadcastBackwardTest, TrainableGradMatchesReference) {
+    auto* device = &autograd::ctx().get_device();
+    const auto& c = GetParam();
+    // The broadcast operand is shared across the batch and the rows.
+    const std::vector<uint32_t> full_shape{2U, 1U, 32U, 64U};
+    const std::vector<uint32_t> broadcast_shape{1U, 1U, 1U, 64U};
+
+    // b in [1, 3] keeps 1 / b well away from overflow.
+    const auto a_value = core::from_xtensor(
+        test_utils::make_uniform_xarray<float>(c.frozen_numerator ? broadcast_shape : full_shape, -1.F, 1.F, 1U),
+        device);
+    const auto b_value = core::from_xtensor(
+        test_utils::make_uniform_xarray<float>(c.frozen_numerator ? full_shape : broadcast_shape, 1.F, 3.F, 2U),
+        device);
+    const auto dout_value =
+        core::from_xtensor(test_utils::make_uniform_xarray<float>(full_shape, -1.F, 1.F, 3U), device);
+
+    auto a = autograd::create_tensor(a_value, /* requires_grad */ !c.frozen_numerator);
+    auto b = autograd::create_tensor(b_value, /* requires_grad */ c.frozen_numerator);
+    auto out = a / b;
+    out->set_grad(dout_value);
+    out->backward();
+
+    const auto& frozen = c.frozen_numerator ? a : b;
+    const auto& trainable = c.frozen_numerator ? b : a;
+    EXPECT_FALSE(frozen->is_grad_initialized()) << "the frozen broadcast operand got a grad";
+    ASSERT_TRUE(trainable->is_grad_initialized());
+
+    // The reference starts from the bf16 values on device, so it measures div_bw's arithmetic, not input rounding.
+    // dL/da = dout / b and dL/db = -dout * a / b^2.
+    const xt::xarray<float> va = core::to_xtensor(a_value);
+    const xt::xarray<float> vb = core::to_xtensor(b_value);
+    const xt::xarray<float> dout = core::to_xtensor(dout_value);
+    const xt::xarray<float> expected =
+        c.frozen_numerator ? xt::xarray<float>(-dout * va / (vb * vb)) : xt::xarray<float>(dout / vb);
+    const xt::xarray<float> got = core::to_xtensor(trainable->get_grad());
+    ASSERT_EQ(got.shape(), expected.shape());
+    EXPECT_TRUE(xt::allclose(got, expected, c.rtol_units / 256.F, 0.F));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    DivFrozenBroadcast,
+    DivFrozenBroadcastBackwardTest,
+    ::testing::Values(
+        // dL/db = -dout * ((a * (1 / b)) * (1 / b)): two uses of 1 / b and three multiplies.
+        DivFrozenBroadcastCase{.name = "FrozenBroadcastNumerator", .frozen_numerator = true, .rtol_units = 7.F},
+        // dL/da = dout * (1 / b): one use of 1 / b and one multiply.
+        DivFrozenBroadcastCase{.name = "FrozenBroadcastDenominator", .frozen_numerator = false, .rtol_units = 3.F}),
+    [](const ::testing::TestParamInfo<DivFrozenBroadcastCase>& info) { return info.param.name; });
 
 }  // namespace ttml::ops::tests

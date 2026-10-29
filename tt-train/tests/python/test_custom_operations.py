@@ -683,6 +683,37 @@ class TestCustomOperationsWithDevice:
         )
         assert not b_tensor.is_grad_initialized(), "Frozen input should have no gradient"
 
+    @pytest.mark.parametrize("reads_needs_input_grad", [True, False], ids=["reads", "does_not_read"])
+    def test_needs_input_grad_after_non_tensor_input(self, expect_error, reads_needs_input_grad):
+        """With a tensor input after a non-tensor one, needs_input_grad's indices no longer match backward()'s grads,
+        so reading it raises; a backward() that never reads it still works."""
+
+        class ScaleFirstOp(Function):
+            @staticmethod
+            def forward(ctx, scale, x):
+                ctx.scale = scale
+                return ttnn.multiply(x.get_value(), scale)
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                if reads_needs_input_grad:
+                    ctx.needs_input_grad
+                return ttnn.multiply(grad_output, ctx.scale)
+
+        x_data = np.ones((1, 1, 32, 32), dtype=np.float32)
+        x_tensor = ttml.autograd.Tensor.from_numpy(x_data)
+        x_tensor.set_requires_grad(True)
+        output = ScaleFirstOp.apply(2.0, x_tensor)
+
+        if reads_needs_input_grad:
+            with expect_error(RuntimeError, "got a tensor input at position 1 after a non-tensor input"):
+                output.backward(retain_graph=False)
+        else:
+            output.backward(retain_graph=False)
+            np.testing.assert_array_almost_equal(
+                x_tensor.get_grad_tensor().to_numpy(), np.full_like(x_data, 2.0), decimal=5
+            )
+
     def test_auto_wrap_ttnn_tensor(self):
         """Test that ttnn tensors returned from forward are auto-wrapped."""
 

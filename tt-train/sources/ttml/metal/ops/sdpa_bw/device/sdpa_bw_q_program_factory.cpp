@@ -193,10 +193,10 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const q::operation_attributes_t& args, const q::tensor_args_t& tensor_args, q::tensor_return_value_t& output) {
     // Which outputs to produce. Without grad_Q there is no K/V loop: Q, K, V, the mask, the intermediates and the
     // dP/dS/dQ chain are all unused, and u_scaler and the gate outputs only need dY, Y and G.
-    const bool compute_grad_query = args.compute_grad_query;
-    const bool compute_u_scaler = args.compute_u_scaler;
-    const bool compute_grad_gate = args.compute_grad_gate;
-    const bool compute_gated_grad_output = args.compute_gated_grad_output;
+    const bool compute_grad_query = args.outputs.grad_query;
+    const bool compute_u_scaler = args.outputs.u_scaler;
+    const bool compute_grad_gate = args.outputs.grad_gate;
+    const bool compute_gated_grad_output = args.outputs.gated_grad_output;
     // Derived once here and passed to the kernels as defines, so the CBs and the kernels agree on them:
     // u = rowsum(dY * Y) feeds grad_Q's dS and the u_scaler output; Y feeds u and grad_gate (the gated dO alone
     // doesn't read it); G feeds the gate helper, which produces grad_gate, the gated dO output and grad_Q's dP operand.

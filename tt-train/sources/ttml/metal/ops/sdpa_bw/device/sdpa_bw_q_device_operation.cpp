@@ -217,22 +217,22 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
 
     // Requested outputs.
     TT_FATAL(
-        operation_attributes.compute_grad_query || operation_attributes.compute_u_scaler ||
-            operation_attributes.compute_grad_gate || operation_attributes.compute_gated_grad_output,
+        operation_attributes.outputs.grad_query || operation_attributes.outputs.u_scaler ||
+            operation_attributes.outputs.grad_gate || operation_attributes.outputs.gated_grad_output,
         "SDPABackwardQ: at least one output must be requested");
     TT_FATAL(
         operation_attributes.has_gate ||
-            (!operation_attributes.compute_grad_gate && !operation_attributes.compute_gated_grad_output),
-        "SDPABackwardQ: compute_grad_gate and compute_gated_grad_output require a gate tensor");
+            (!operation_attributes.outputs.grad_gate && !operation_attributes.outputs.gated_grad_output),
+        "SDPABackwardQ: outputs.grad_gate and outputs.gated_grad_output require a gate tensor");
     TT_FATAL(
-        operation_attributes.compute_grad_query || !tensor_args.preallocated_grad_query.has_value(),
-        "SDPABackwardQ: preallocated_grad_query given but compute_grad_query is false");
+        operation_attributes.outputs.grad_query || !tensor_args.preallocated_grad_query.has_value(),
+        "SDPABackwardQ: preallocated_grad_query given but outputs.grad_query is false");
     TT_FATAL(
-        operation_attributes.compute_u_scaler || !tensor_args.preallocated_u_scaler.has_value(),
-        "SDPABackwardQ: preallocated_u_scaler given but compute_u_scaler is false");
+        operation_attributes.outputs.u_scaler || !tensor_args.preallocated_u_scaler.has_value(),
+        "SDPABackwardQ: preallocated_u_scaler given but outputs.u_scaler is false");
     TT_FATAL(
-        operation_attributes.compute_grad_gate || !tensor_args.preallocated_grad_gate.has_value(),
-        "SDPABackwardQ: preallocated_grad_gate given but compute_grad_gate is false");
+        operation_attributes.outputs.grad_gate || !tensor_args.preallocated_grad_gate.has_value(),
+        "SDPABackwardQ: preallocated_grad_gate given but outputs.grad_gate is false");
 
     // The writer fills grad_gate with (B, H, S, vE) BFLOAT16 tiles, so a caller-provided buffer of another shape
     // or dtype would be overrun or misread.
@@ -253,7 +253,7 @@ SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // grad_query spec
     std::optional<tt::tt_metal::TensorSpec> grad_query_spec = std::nullopt;
-    if (operation_attributes.compute_grad_query) {
+    if (operation_attributes.outputs.grad_query) {
         grad_query_spec =
             tensor_args.preallocated_grad_query.has_value()
                 ? tensor_args.preallocated_grad_query->tensor_spec()
@@ -266,7 +266,7 @@ SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::
     // u_scaler spec: one tile per query row, shape = (B*NH*St, 1) in tiles = (B*NH*S, 32) in elements
     // stored as Float32 DRAM interleaved
     std::optional<tt::tt_metal::TensorSpec> u_scaler_spec = std::nullopt;
-    if (operation_attributes.compute_u_scaler) {
+    if (operation_attributes.outputs.u_scaler) {
         u_scaler_spec =
             tensor_args.preallocated_u_scaler.has_value() ? tensor_args.preallocated_u_scaler->tensor_spec() : [&]() {
                 const auto [B, NH, S, E] = tensor_args.query.padded_shape().to_array_4D();
@@ -291,12 +291,12 @@ SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::
             grad_output.logical_shape(),
             tt::tt_metal::TensorLayout(grad_output.dtype(), tt::tt_metal::Layout::TILE, grad_output.memory_config()));
 
-        if (operation_attributes.compute_grad_gate) {
+        if (operation_attributes.outputs.grad_gate) {
             grad_gate_spec = tensor_args.preallocated_grad_gate.has_value()
                                  ? tensor_args.preallocated_grad_gate->tensor_spec()
                                  : grad_output_like_spec;
         }
-        if (operation_attributes.compute_gated_grad_output) {
+        if (operation_attributes.outputs.gated_grad_output) {
             gated_grad_output_spec = grad_output_like_spec;
         }
     }
@@ -354,25 +354,19 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& attn_mask,
     const ttnn::Tensor& intermediates,
     const float dropout_probability,
+    const ttml::metal::ops::sdpa_bw::device::q::SDPABackwardQOutputs& outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_u_scaler,
     const std::optional<ttnn::Tensor>& gate,
-    const std::optional<ttnn::Tensor>& preallocated_grad_gate,
-    bool compute_grad_query,
-    bool compute_u_scaler,
-    bool compute_grad_gate,
-    bool compute_gated_grad_output) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_gate) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
 
-    // A gate flag without a gate is rejected by validation rather than dropped.
+    // A gate output requested without a gate is rejected by validation rather than dropped.
     auto operation_attributes = OperationType::operation_attributes_t{
         .mask_type = mask_type,
         .dropout_probability = dropout_probability,
         .has_gate = gate.has_value(),
-        .compute_grad_query = compute_grad_query,
-        .compute_u_scaler = compute_u_scaler,
-        .compute_grad_gate = compute_grad_gate,
-        .compute_gated_grad_output = compute_gated_grad_output};
+        .outputs = outputs};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

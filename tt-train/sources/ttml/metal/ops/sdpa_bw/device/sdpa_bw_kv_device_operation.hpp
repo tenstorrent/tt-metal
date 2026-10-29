@@ -39,9 +39,8 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const ttnn::Tensor& intermediates,
     const std::optional<ttnn::Tensor>& u_scaler,
     const float dropout_probability = 0.0F,
+    const ttml::metal::ops::sdpa_bw::device::kv::SDPABackwardKVOutputs& outputs = {},
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
-    bool compute_grad_key = true,
-    bool compute_grad_value = true);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
 
 }  // namespace ttnn::prim

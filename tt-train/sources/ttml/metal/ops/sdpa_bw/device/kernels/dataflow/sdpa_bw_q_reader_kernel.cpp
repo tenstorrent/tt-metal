@@ -50,7 +50,9 @@ void kernel_main() {
 #ifdef USE_ATTN_MASK
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_5;
 #endif
+#ifdef COMPUTE_GRAD_QUERY
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;
+#endif
 #ifdef HAS_GATE
     constexpr uint32_t cb_gate = tt::CBIndex::c_15;
 #endif
@@ -69,7 +71,8 @@ void kernel_main() {
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
-    constexpr auto intermediates_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto intermediates_args =
+        TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
 #ifdef HAS_GATE
     constexpr auto gate_args = TensorAccessorArgs<intermediates_args.next_compile_time_args_offset()>();
 #endif
@@ -84,8 +87,10 @@ void kernel_main() {
     const auto value_addr_generator = TensorAccessor(value_args, value_addr, tile_bytes);
     const auto mask_addr_generator = TensorAccessor(mask_args, mask_addr, tile_bytes);
 
+#ifdef COMPUTE_GRAD_QUERY
     const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
     const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
+#endif
 #ifdef HAS_GATE
     const auto gate_addr_generator = TensorAccessor(gate_args, gate_addr, tile_bytes);
 #endif
@@ -203,6 +208,7 @@ void kernel_main() {
         const uint32_t mask_offset = q_row_tile * Ht;
 #endif
 
+#ifdef COMPUTE_GRAD_QUERY
         // read intermediates for current row of Q
         // intermediates shape: (B, qNH, S, 32) -> (batch, heads, seq_len, 1 FP32 tile)
         const uint32_t intermediates_idx = global_row_idx * num_of_interm_tiles;
@@ -213,6 +219,7 @@ void kernel_main() {
             num_of_interm_tiles,
             interm_tile_bytes,
             num_of_interm_tiles);
+#endif
 
         for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
             // Read one row of K (Q/K-dim width)

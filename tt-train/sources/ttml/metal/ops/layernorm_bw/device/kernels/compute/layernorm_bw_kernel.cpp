@@ -34,7 +34,6 @@ constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_8;  // broadcasted mean (t
 // CBs with output data
 constexpr uint32_t cb_dx_idx = tt::CBIndex::c_9;              // dx (input gradient)
 constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_10;  // dgamma components
-constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_11;   // dbeta components
 constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;     // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
@@ -59,12 +58,6 @@ constexpr bool compute_grad_input = false;
 constexpr bool compute_grad_gamma = true;
 #else
 constexpr bool compute_grad_gamma = false;
-#endif
-
-#ifdef COMPUTE_GRAD_BETA
-constexpr bool compute_grad_beta = true;
-#else
-constexpr bool compute_grad_beta = false;
 #endif
 
 // Compute x_hat = (input - mean) * rstd
@@ -493,15 +486,6 @@ inline void compute_dgamma_components(
     mul_tiles(cb_dL_out_idx, cb_x_hat_idx, input_tile_idx, input_tile_idx, dgamma_register);
 }
 
-// Computes dbeta_components = dy (simple copy)
-// result is in dbeta_register
-// acquire in the inner loop, push after block is processed
-inline void compute_dbeta_components(
-    const uint32_t dy_tile_idx, const uint32_t dbeta_register, const uint32_t global_col) {
-    copy_init(cb_dL_out_idx);
-    copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
-}
-
 void kernel_main() {
     if constexpr (compute_grad_input) {
         if constexpr (do_mask_w) {
@@ -618,24 +602,6 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 pack_and_push_block(cb_dgamma_components, block_size);
-            }
-
-            // Compute dbeta_components
-            if constexpr (compute_grad_beta) {
-                uint32_t dbeta_register;
-                tile_regs_acquire();
-
-                for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
-#ifdef EVERYTHING_FITS_IN_L1
-                    const uint32_t dy_tile_idx = col + block_idx;
-#else
-                    const uint32_t dy_tile_idx = block_idx;
-#endif
-                    dbeta_register = block_idx;
-                    compute_dbeta_components(dy_tile_idx, dbeta_register, col + block_idx);
-                }
-                tile_regs_commit();
-                pack_and_push_block(cb_dbeta_components, block_size);
             }
 #ifndef EVERYTHING_FITS_IN_L1
             if constexpr (compute_grad_input) {

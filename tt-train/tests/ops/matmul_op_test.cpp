@@ -106,27 +106,28 @@ protected:
 class MatmulOpFrozenInputTest : public MatmulOpTest, public ::testing::WithParamInterface<MatmulFrozenCase> {};
 
 // ttnn's matmul rejects a batched transpose_a forward unless op(a)'s M fits in one tile, so M = 32 is the shape that
-// would reach matmul_op's backward. There, flattening a [batch, K, M] a misaligns its rows with dL/dout's, so matmul_op
-// must refuse it at the call site.
-TEST_F(MatmulOpTest, BatchedTransposeARejectedInForward) {
+// reaches matmul_op's backward. There, flattening a [batch, K, M] a misaligns its rows with dL/dout's, so backward must
+// refuse it. The forward alone must still run, as inference does.
+TEST_F(MatmulOpTest, BatchedTransposeARejectedInBackward) {
+    MatmulFrozenGraph g;
+    ASSERT_NO_THROW(
+        g = build_graph(MatmulFrozenCase{
+            .name = "BatchedTransposeA",
+            .M = 32,
+            .K = 64,
+            .N = 32,
+            .transpose_a = true,
+            .b_requires_grad = false,
+            .batch = 2}));
     EXPECT_THAT(
-        [] {
-            build_graph(MatmulFrozenCase{
-                .name = "BatchedTransposeA",
-                .M = 32,
-                .K = 64,
-                .N = 32,
-                .transpose_a = true,
-                .b_requires_grad = false,
-                .batch = 2});
-        },
+        [&g] { g.out->backward(); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("does not support transpose_a with a batched a")));
 }
 
-// Backward reduces dB over a's flattened batch, so a per-batch b must be refused at the call site. With gradients
-// disabled no backward node is recorded, so the same forward must run.
-TEST_F(MatmulOpTest, BatchedBRejectedOnlyWhenRecordingGrad) {
+// Backward reduces dB over a's flattened batch, so it must refuse a per-batch b. The forward alone must still run, as
+// inference does, even with grads recorded.
+TEST_F(MatmulOpTest, BatchedBRejectedInBackward) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto a = ttml::autograd::create_tensor(
         ttml::core::from_xtensor(make_small_ints({2U, 1U, 32U, 64U}, /*bound=*/2.4F, /*seed=*/1U), device),
@@ -134,16 +135,11 @@ TEST_F(MatmulOpTest, BatchedBRejectedOnlyWhenRecordingGrad) {
     const auto b = ttml::autograd::create_tensor(
         ttml::core::from_xtensor(make_small_ints({2U, 1U, 64U, 96U}, /*bound=*/2.4F, /*seed=*/2U), device),
         /*requires_grad=*/false);
-    EXPECT_THAT(
-        [&] { ttml::ops::matmul_op(a, b, /*transpose_a=*/false, /*transpose_b=*/false); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not support a batched b")));
-
-    ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::DISABLED);
     ttml::autograd::TensorPtr out;
-    EXPECT_NO_THROW(out = ttml::ops::matmul_op(a, b, /*transpose_a=*/false, /*transpose_b=*/false));
-    ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::ENABLED);
-    ASSERT_NE(out, nullptr);
-    EXPECT_FALSE(out->get_node().has_value());
+    ASSERT_NO_THROW(out = ttml::ops::matmul_op(a, b, /*transpose_a=*/false, /*transpose_b=*/false));
+    EXPECT_THAT(
+        [&out] { out->backward(); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not support a batched b")));
 }
 
 // add_grad drops a frozen tensor's grad, so the grads alone cannot show that a frozen side's matmul was skipped.

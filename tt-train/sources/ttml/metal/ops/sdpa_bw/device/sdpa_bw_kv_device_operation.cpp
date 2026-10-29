@@ -65,17 +65,17 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
 
     // Requested outputs. Only grad_K consumes u_scaler (through dS).
     TT_FATAL(
-        operation_attributes.compute_grad_key || operation_attributes.compute_grad_value,
-        "SDPABackwardKV: at least one of compute_grad_key and compute_grad_value must be set");
+        operation_attributes.outputs.grad_key || operation_attributes.outputs.grad_value,
+        "SDPABackwardKV: at least one of outputs.grad_key and outputs.grad_value must be set");
     TT_FATAL(
-        operation_attributes.compute_grad_key || !tensor_args.preallocated_grad_key.has_value(),
-        "SDPABackwardKV: preallocated_grad_key given but compute_grad_key is false");
+        operation_attributes.outputs.grad_key || !tensor_args.preallocated_grad_key.has_value(),
+        "SDPABackwardKV: preallocated_grad_key given but outputs.grad_key is false");
     TT_FATAL(
-        operation_attributes.compute_grad_value || !tensor_args.preallocated_grad_value.has_value(),
-        "SDPABackwardKV: preallocated_grad_value given but compute_grad_value is false");
+        operation_attributes.outputs.grad_value || !tensor_args.preallocated_grad_value.has_value(),
+        "SDPABackwardKV: preallocated_grad_value given but outputs.grad_value is false");
     TT_FATAL(
-        !operation_attributes.compute_grad_key || tensor_args.u_scaler.has_value(),
-        "SDPABackwardKV: u_scaler is required when compute_grad_key is set");
+        !operation_attributes.outputs.grad_key || tensor_args.u_scaler.has_value(),
+        "SDPABackwardKV: u_scaler is required when outputs.grad_key is set");
 
     const auto [qB, qH, qS, qE] = query_shape.to_array_4D();
 
@@ -216,7 +216,7 @@ SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Handle grad_key spec
     std::optional<tt::tt_metal::TensorSpec> grad_key_spec = std::nullopt;
-    if (operation_attributes.compute_grad_key) {
+    if (operation_attributes.outputs.grad_key) {
         grad_key_spec =
             tensor_args.preallocated_grad_key.has_value()
                 ? tensor_args.preallocated_grad_key->tensor_spec()
@@ -228,7 +228,7 @@ SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation
 
     // Handle grad_value spec
     std::optional<tt::tt_metal::TensorSpec> grad_value_spec = std::nullopt;
-    if (operation_attributes.compute_grad_value) {
+    if (operation_attributes.outputs.grad_value) {
         grad_value_spec =
             tensor_args.preallocated_grad_value.has_value()
                 ? tensor_args.preallocated_grad_value->tensor_spec()
@@ -278,17 +278,13 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const ttnn::Tensor& intermediates,
     const std::optional<ttnn::Tensor>& u_scaler,
     const float dropout_probability,
+    const ttml::metal::ops::sdpa_bw::device::kv::SDPABackwardKVOutputs& outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value,
-    bool compute_grad_key,
-    bool compute_grad_value) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .mask_type = mask_type,
-        .dropout_probability = dropout_probability,
-        .compute_grad_key = compute_grad_key,
-        .compute_grad_value = compute_grad_value};
+        .mask_type = mask_type, .dropout_probability = dropout_probability, .outputs = outputs};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
