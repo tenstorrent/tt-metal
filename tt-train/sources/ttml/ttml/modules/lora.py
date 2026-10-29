@@ -191,6 +191,14 @@ class LoraLinear(AbstractModuleBase):
 
     def forward(self, x):
         bias = self.bias.tensor if self.bias is not None else None
+        if getattr(self, "lora_fused", False) and not (
+            self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0
+        ):
+            from .fused_lora import fused_lora_linear_t
+
+            return fused_lora_linear_t(
+                x, self.weight.tensor, self.lora_A.tensor, self.lora_B.tensor, self.scaling, self.frozen_shape
+            )
         base = _base_linear(self, x, bias)
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
@@ -232,6 +240,21 @@ class LoraColumnParallelLinear(AbstractModuleBase):
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+        if getattr(self, "lora_fused", False) and not (
+            self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0
+        ):
+            from .fused_lora import fused_lora_linear_t
+
+            # B is column-sharded: the tail is the local shard; dA needs the all-reduced dh.
+            return fused_lora_linear_t(
+                x,
+                self.weight.tensor,
+                self.lora_A.tensor,
+                self.lora_B.tensor,
+                self.scaling,
+                self.frozen_shape,
+                reduce_axis=self.cluster_axis,
+            )
         base = _base_linear(self, x, bias_t)
         if self.gather_output:
             base = ttml.ops.distributed.all_gather(
@@ -290,6 +313,29 @@ class LoraRowParallelLinear(AbstractModuleBase):
     def forward(self, x):
         if not self.input_is_parallel:
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
+        if getattr(self, "lora_fused", False) and not (
+            self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0
+        ):
+            from .fused_lora import fused_lora_linear_t
+
+            # A is row-sharded (h partial, all-reduced inside), B replicated: the tail carries s/tp * B^T so the
+            # output all-reduce sums the update once, and the tail gradient is scaled back by tp.
+            tp = ttml.mesh().axis_size(self.axis_name)
+            out = fused_lora_linear_t(
+                x,
+                self.weight.tensor,
+                self.lora_A.tensor,
+                self.lora_B.tensor,
+                self.scaling,
+                self.frozen_shape,
+                tail_scale=1.0 / tp,
+                dh_scale=float(tp),
+                h_reduce_axis=self.cluster_axis,
+            )
+            out = ttml.ops.distributed.all_reduce(out, self.input_is_parallel, self.cluster_axis)
+            if self.bias is not None:
+                out = ttml.ops.binary.add(out, self.bias.tensor)
+            return out
         base = _base_linear(self, x, None)
         base = ttml.ops.distributed.all_reduce(base, self.input_is_parallel, self.cluster_axis)
         if self.bias is not None:

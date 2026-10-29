@@ -1,0 +1,20 @@
+depth 1: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     101567708 |         89.89 |        1.130 |         101101049 |   101202472 |           0.1 |     0.32
+mean effective clock 1130 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.195x too short
+control, step 1 (mostly idle: compiles and untilize): 1.3495 GHz
+depth 2: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     145844662 |        135.05 |        1.080 |         144875690 |   145257046 |           0.3 |     0.54
+mean effective clock 1080 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.250x too short
+control, step 1 (mostly idle: compiles and untilize): 1.3490 GHz
+depth 4: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     233517433 |        219.88 |        1.062 |         232333570 |   232869021 |           0.2 |     0.61
+mean effective clock 1062 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.271x too short
+control, step 1 (mostly idle: compiles and untilize): 1.3487 GHz
+depth 8: 4 steps in the CSV; steady steps from 3
+step | period cycles | host period ms | effective GHz | kernel cycles | span cycles | idle in span % | inter-step idle ms@eff
+   3 |     409015835 |        392.93 |        1.041 |         407241876 |   408116935 |           0.2 |     0.86
+mean effective clock 1041 MHz: Tracy's ns columns (converted at 1350 MHz) are 1.297x too short
+control, step 1 (mostly idle: compiles and untilize): 1.3482 GHz

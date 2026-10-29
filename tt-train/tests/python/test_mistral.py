@@ -34,7 +34,15 @@ from ttml.models.llama.transformer import LlamaBlock, LlamaMLP, RMSNormLayer
 from ttml.models.llama.gqattn import GroupedQueryAttention
 from ttml.models.mistral import Mistral, MistralConfig, load_from_safetensors, useful_flops_per_step
 from ttml.models.mistral.frozen_embedding import embed_tokens
-from ttml.modules import Embedding, LinearLayer, LoraConfig, LoraLinear, LoraModel, transpose_frozen_weights
+from ttml.modules import (
+    Embedding,
+    LinearLayer,
+    LoraConfig,
+    LoraLinear,
+    LoraModel,
+    fuse_lora_into_frozen_weights,
+    transpose_frozen_weights,
+)
 
 pytestmark = pytest.mark.requires_device
 
@@ -344,7 +352,11 @@ def test_lora_linear_forward_and_gradients_frozen_base():
     assert not layer.weight.tensor.is_grad_initialized(), "frozen base weight received a gradient"
 
 
-@pytest.mark.parametrize("transposed", [False, True], ids=["weights [out,in]", "frozen weights transposed"])
+@pytest.mark.parametrize(
+    "transposed",
+    ["plain", "transposed", "fused"],
+    ids=["weights [out,in]", "frozen weights transposed", "transposed + LoRA fused into the base matmul"],
+)
 def test_block_forward_and_gradients_under_lora(transposed):
     """A whole decoder block at real shapes with LoRA on its four linears: output, dx, every adapter gradient;
     base weights and gammas frozen and gradient-free. ``transposed`` runs the base projections through the
@@ -398,7 +410,7 @@ def test_block_forward_and_gradients_under_lora(transposed):
         assert isinstance(layer, LoraLinear), name
         assign(layer.lora_A.tensor, adapters[name][0])
         assign(layer.lora_B.tensor, adapters[name][1])
-    if transposed:
+    if transposed != "plain":
         # qkv, out and gate_up have a measured win and are stored [in, out]; w2 (32768 -> 5120) does not and stays.
         converted = transpose_frozen_weights(lora)
         assert sorted(converted) == [
@@ -408,6 +420,10 @@ def test_block_forward_and_gradients_under_lora(transposed):
         ], converted
         assert tuple(block.mlp.w_gate_up.weight.tensor.shape()) == (1, 1, HIDDEN, 2 * INTER)
         assert tuple(block.mlp.w2.weight.tensor.shape()) == (1, 1, HIDDEN, INTER)
+    if transposed == "fused":
+        fused = fuse_lora_into_frozen_weights(lora)
+        assert sorted(fused) == sorted(converted), fused
+        assert tuple(block.mlp.w_gate_up.weight.tensor.shape()) == (1, 1, HIDDEN + 64, 2 * INTER)
     x = to_device(x_np, requires_grad=True)
     out = lora(x, None)
     out_val = to_host(out)
