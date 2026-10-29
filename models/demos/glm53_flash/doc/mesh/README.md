@@ -1581,6 +1581,17 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 18:30: served parity, measured
+
+The same 48 ms device step at 32 users shows as 61 ms per step in the adapter (host wall: the packed token / position
+upload, the per-row ids readback and the event sync, all synchronous under the version-1 reload contract) and as 91 ms
+inter-token in the vLLM bench (the engine loop per step with no-async-scheduling, plus decode steps held while a burst's
+later arrivals still prefill). TTFT follows the same shape: 120 ms for one 128-token prompt, 5.2 s mean for a burst of 32.
+The levers, in order: resident decode in the adapter (the plugin's reload-plan contract: device-sampled ids fed back and
+positions advanced on device, host reloads only on transitions; plan A12), which also unlocks vLLM's async scheduling;
+then a decode step between prefill chunks (the traced decode must tolerate a mid-prompt slot); the engine's own
+streaming cost at 32 requests is vLLM-side.
+
 ### 2026-10-29 17:50: the full-tile speculative defect was the MoE decode glue's path at 32 rows
 
 The per-row verify diagnostic (`GLM53_SPEC_DEBUG_ROWS=1`, `tt/spec_decode.py`): at 16 verify rows the verify's top-2
