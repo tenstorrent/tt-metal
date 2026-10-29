@@ -47,12 +47,11 @@ ProfilerNoopOperation::tensor_return_value_t ProfilerNoopOperation::create_outpu
     return output_tensor;
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor, which optional tensors are
+// passed). It is custom only to skip the canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    return tt::tt_metal::operation::hash_operation<ProfilerNoopOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
+    return tt::tt_metal::operation::hash_operation<ProfilerNoopOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::profiler_no_op::device
