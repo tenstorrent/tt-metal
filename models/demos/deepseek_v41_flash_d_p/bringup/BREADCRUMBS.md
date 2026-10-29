@@ -4015,3 +4015,42 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   weights_proj +0.23 MiB x 8: ~+0.32 GiB a chip (loaded and ran on the 8x4). Not checked against plan_memory.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.10`; old path
   `DS41_ATTN_SP32=off`.
+
+## FIX.12 (overseer fix, attempt 1): the 2x2's lowbit phase 1 at full size. No code change
+
+- Request (OWNER 2026-10-29, was P.12): confirm on the 8x4 that the merged defaults (7f55821f579: sparse_sdpa
+  ROW_BFP4 one DRAM read a 320 B record + two local copies; SFPU round |x| + 2^23 LSB - 2^23 LSB) leave outputs
+  unchanged, and measure them against P.10. Opt-in options (ckv_bfp4 bfloat8_b / blocks, ROW_BFP8, bfp_round,
+  indexer_score bfp4 q / k) left off. Nothing in tt/ or the forks changed: nothing broke at 8x4 sizes.
+- Outputs unchanged: test_ladder (last) passed, and all 207 accuracy metrics of FIX.12's ladder units equal P.10's
+  to the bit (err_layer_*, err_state_*, overlaps, err_final_hidden 0.1923, top5 1.0). test_ladder s56320,
+  test_contract, test_kv_layout passed.
+- Measured (gate unit P.10#test_profile, chunk [51200, 56320), DS41_ENGRAM_TABLE=resident, same 71584 programs;
+  before = P.10's stamp df1aab02c2dab74b, after c0c693795d1c5b12):
+  - sparse_sdpa, compressed layers (38 calls): 368.0 -> 308.9 us a call (-16 %; 13.98 -> 11.74 ms a chunk). The 2x2
+    single card predicted 352 -> 293 us at 160 q (-17 %). Window-only layers (2 calls): 136.7 -> 135.7 us (no change, as
+    expected: they read no 4-bit rows).
+  - ckv_bfp4 (the 4-bit compressed-KV write, 4 calls): 52.3 -> 40.3 us a call (-23 %; the 2x2 said ~-30 %).
+  - attention section 69.31 -> 67.35 ms; compressor 2.09 -> 2.04; device total 206.04 -> 203.81 ms (-1.1 %); other
+    sections within 0.25 ms.
+  - warm wall (clean, median of 10): 370.7 -> 381.1 ms (spread 161.3 / 57.3, loadavg 16.4 / 15.1); host_overhead_ms
+    164.7 -> 177.3. The 2.2 ms device gain is under the wall's run-to-run noise; the host path is unchanged (same ops,
+    same programs), so the wall change is noise, not the merge.
+- Gate: FAIL on one unit, test_adapter_acks: `chunk 0: ack slot 0 [0, 2536) (last-window 128 rows): 0_window_kv layer
+  20 nope pcc 0.98855 < 0.98957`. Not the merge (bit-identical above). DS41-141: the unit last passed at FIX.9; P.7-P.10
+  ran quick A/Bs only. Bisection: DS41_ATTN_SP32=off 0.98828 FAIL; DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off PASS.
+  So P.9 (ATTN_SP32_PROJ) tipped it. P.9 is not narrower anywhere (wo_b: one fp32-DEST sum then bf16, the reference's
+  output dtype, vs 4 bf16 partials in a bf16 reduce-scatter). The ladder's window_kv L20 went 0.090 -> 0.106 (limit
+  0.151) while err_layer_L19 stayed 0.167. That is DS41-125's gap (the limit is the ring drift at s10240 positions
+  10112-10239, applied to positions 2408-2535) tipped by a rounding reshuffle, not a bug. Per rule 14 I stopped:
+  no test, limit or precision changed. Owner: a waiver for this check, or a per-position drift for the contract's
+  window-KV limit (golden generation). Then run one unit at a time: test_runner_contract FAIL on the same check
+  through the tt-d-gen engine (`slot 0 turn 1 (last-window 128 rows): 0_window_kv layer 20 nope pcc 0.98855 <
+  0.98957`, the same bytes as acks); test_runner_smoke PASS; test_profile PASS (device 203.81 <= 230, wall 381.1 < 434).
+  Units status on this code: PASS ladder last, ladder s56320, contract, kv_layout, runner_smoke, profile; FAIL
+  adapter_acks, runner_contract (both DS41-141).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.12 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; bisection:
+  `DS41_ATTN_SP32=off DS41_ATTN_SP32_PROJ=off scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py`. sparse_sdpa per call:
+  /scratch/dnijemcevic/fix12/sdpa_sum.py <stamp dir>/_ops.json.gz.

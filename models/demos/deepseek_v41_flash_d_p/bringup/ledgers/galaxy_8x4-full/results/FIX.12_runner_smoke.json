@@ -1,0 +1,28 @@
+{
+ "task": "FIX.12",
+ "t": "2026-10-29T15:33:14",
+ "mode": "runner",
+ "prompt": "What is the capital of France? Answer in one word.",
+ "expected": "Paris",
+ "answer": "We need answer one word. Capital of France = Paris",
+ "token_ids": [
+  2581,
+  1309,
+  3287,
+  834,
+  2004,
+  16,
+  18904,
+  294,
+  8760,
+  438,
+  11111
+ ],
+ "ok": true,
+ "seconds": 1221.5,
+ "prompt_len": 160,
+ "boundary": 128,
+ "records": 192,
+ "prompt_variant": "padded smoke prompt (PAD_SYSTEM + smoke prompt)",
+ "feeder": "tt-d-gen engine (/scratch/dnijemcevic/tt-d-gen @ a9701ce6675, /scratch/dnijemcevic/tt-d-gen-build/venv312/bin/python)"
+}
