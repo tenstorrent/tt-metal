@@ -30,6 +30,8 @@ MODEL_ID = "MiniMaxAI/MiniMax-H3"
 MODEL_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
 VAE_SPATIAL_COMPRESSION = 16
 PATCH_SIZE = (1, 2, 2)
+# The tt_dit pipeline rejects longer prompts (MINIMAX_H3_MAX_TEXT_TOKENS).
+MAX_TEXT_TOKENS = 3008
 
 # Stable-Diffusion prompt boilerplate that says nothing about the picture; stripped from plain captions.
 _CAPTION_JUNK = re.compile(
@@ -111,7 +113,9 @@ def load_tokenizer(spec: str | None, model: str, revision: str):
 
 def tokenize(tokenizer, caption: str, max_tokens: int) -> np.ndarray:
     """H3's t2va presentation: the verbatim prompt, no chat template, no special tokens."""
-    ids = tokenizer.encode(caption, add_special_tokens=False).ids[:max_tokens]
+    ids = tokenizer.encode(caption, add_special_tokens=False).ids
+    if len(ids) > max_tokens:
+        raise SystemExit(f"caption is {len(ids)} tokens, over --max-tokens {max_tokens}: {caption[:80]!r}")
     return np.asarray(ids, dtype=np.int32)
 
 
@@ -130,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         default=True,
         help="strip SD boilerplate from plain captions (never from ir-prompts)",
     )
-    p.add_argument("--max-tokens", type=int, default=512)
+    p.add_argument("--max-tokens", type=int, default=MAX_TEXT_TOKENS)
     p.add_argument("--tokenizer", default=None, help="tokenizer.json or its folder; default: download from --model")
     p.add_argument("--model", default=MODEL_ID)
     p.add_argument("--revision", default=MODEL_REVISION)

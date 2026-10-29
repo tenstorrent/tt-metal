@@ -27,6 +27,7 @@ import ttnn
 import ttml
 from ttml.common.utils import build_causal_mask, no_grad
 
+from prepare import MAX_TEXT_TOKENS
 from text_encoder import TEXT_ENCODER_LAYER, TextTower, TextTowerConfig, load_text_tower
 
 log = logging.getLogger("minimax_h3.encode_text")
@@ -80,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--layers", type=int, default=TEXT_ENCODER_LAYER, help="decoder layers to run; the output is pre-norm"
     )
-    p.add_argument("--max-tokens", type=int, default=512)
+    p.add_argument("--max-tokens", type=int, default=MAX_TEXT_TOKENS)
     p.add_argument(
         "--pad-to",
         type=int,
@@ -115,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     load_text_tower(model, weights)
     log.info("weights loaded in %.0f s", time.perf_counter() - t0)
 
-    longest = max(min(manifest[k]["num_tokens"], args.max_tokens) for k in keys)
+    longest = max(manifest[k]["num_tokens"] for k in keys)
     padded = args.pad_to or (longest + TILE - 1) // TILE * TILE
     if padded < longest or padded % TILE or padded > config.max_seq_len:
         raise SystemExit(f"--pad-to {padded} must be a multiple of {TILE} in [{longest}, {config.max_seq_len}]")
@@ -128,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         out_path = cache / "embeds" / f"{key}.npy"
         if out_path.exists() and not args.overwrite and not args.reference_dir:
             continue
-        tokens = np.load(cache / "tokens" / f"{key}.npy")[: args.max_tokens]
+        tokens = np.load(cache / "tokens" / f"{key}.npy")
         length = int(tokens.shape[0])
         with no_grad():
             hidden = model(ids_tensor(tokens, padded), mask)
