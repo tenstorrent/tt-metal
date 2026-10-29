@@ -94,10 +94,13 @@ TABLE = {
         "rounding the device does not compute in). bfp8 (default) = the attention input projection [wq_a | wkv] "
         "(tt/q_a.py, tt/kv.py), wq_b (the softmax scale's multiply writes bfp8), wo_a (its input heads, one typecast "
         "after the head concat), wo_b (wo_a writes bfp8), the indexer's wq_b (tt/indexer.py) and the engram wkv "
-        "(tt/engram_kv.py) read bfloat8_b; the routed experts' x / h were bfp8 already (EXPERTS_PRECISION=glm). Not "
-        "covered: the shared expert's x / h in the block MoE's fused head (MOE_HEAD=fused: bf16 tiles inside "
-        "models/demos/moe_block/tt/se_engine3.py, outside the model). Weights, fidelities (ATTN_FIDELITY HiFi2) and "
-        "fp32 accumulation unchanged. bf16 = the path before FIX.7 (bf16 matmul inputs)",
+        "(tt/engram_kv.py) read bfloat8_b; the routed experts' x / h were bfp8 already (EXPERTS_PRECISION=glm). The "
+        "shared expert's x / h on MOE_IMPL=block (FIX.9, DS41-132): MoEDtypes.shared_activations (tt/"
+        "moe_block_adapter.py:block_dtypes) - MOE_HEAD=fused: the engine's x / h tiles bfloat8_b "
+        "(models/demos/moe_block/tt/se_engine3.py x_dtype / h_dtype; one typecast of x a layer for the engine and "
+        "the x gather, the router keeps bf16 x); MOE_HEAD=ops: x cast for gate / up, h cast for down. Weights, "
+        "fidelities (ATTN_FIDELITY HiFi2) and fp32 accumulation unchanged. bf16 = the path before FIX.7 (bf16 matmul "
+        "inputs; the shared expert's as before FIX.9)",
     ),
     "ATTN_FIDELITY": Setting(
         "HiFi2",
@@ -432,6 +435,17 @@ TABLE = {
         "the combine planner and dispatch prep; its planner has no fixed combine order, so the combine snaps each term to "
         "2^-19 (owner decision 2026-10-27: keep the snap - it supersedes D7 for the fused head; order-independent fp32 "
         "sums: bit-identical runs; DS41's routed sums peak at 5.4, under 2^24 x 2^-19 = 32)",
+    ),
+    "SE_PACK_PRECISE": Setting(
+        "on",
+        ("on", "off"),
+        "MOE_HEAD=fused, GEMM_INPUTS=bfp8 (FIX.9, DS41-132): the fused head's shared expert packs its bfp8 h with "
+        "bfp8_pack_precise - one rounding from fp32 DEST at the 16-value group's shared exponent, as ttnn.typecast "
+        "packs its bfp8 x and as the reference casts h to fp8 once (models/demos/moe_block/tt/se_engine3.py "
+        "pack_precise; MoEDtypes.shared_pack_precise). off = the packer's default: first to 7 bits at each value's own "
+        "exponent, then at the shared one (ties away twice, tests/test_bfp_packer_rounding.py). Same format and "
+        "speed. 8x4, layer 0, fused head's shared expert vs float64 native (tt/perf_se_activations.py): off rel 0.01704 "
+        "bias +0.0074, on 0.01647 / +0.0063 (bf16 x / h: 0.01158 / -0.0085); head 462.2 vs 463.9 us a call",
     ),
     "MOE_TAIL": Setting(
         "fused",

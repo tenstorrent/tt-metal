@@ -43,6 +43,7 @@ PREP_CB = dict(pu=14, po=15, lrdy=16)
 RTR_CB = dict(
     rx=17, rw=18, ro=19
 )  # (the router logits on the engine: x rows [KTO][MT], W_r^T [ETC][KTO], out fp32)  # (dispatch prep: the units' source view, the untilized rows, latent ready)
+TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}  # (a 32 x 32 tile's bytes)
 ARENA_MAX = (
     1344 * 1024
 )  # (L1 a core the arena may take: Blackhole's 1461248-byte bank less the movers' static CBs (~177 KB
@@ -116,7 +117,7 @@ void kernel_main() {
     // my steps' x-own slot: [chunk][family 0 slots, then family 1][MT][KB]
     auto own_addr = [&](uint32_t m, uint32_t j) {
         const uint32_t slot = (j & 1) ? (i0 < GX ? NOWN0 : 0) + own_slot(j) : own_slot(j);
-        return xown + ((m * nown + slot) * MT) * KB * 2048;
+        return xown + ((m * nown + slot) * MT) * KB * SE_XTB;
     };
 #ifdef SE_RTR
     if (cx == 0) {  // the router's x: the row's first core reads the row's x (MT row tiles, the chip's K slice) a K chunk
@@ -149,7 +150,7 @@ void kernel_main() {
 #endif
     if (x_ct) {  // (alone) my steps of every chunk from DRAM x [rows, x_ct]: columns x_k0 ..
         DeviceZoneScopedN("SE-XLOAD");
-        const auto xg = TensorAccessor(x_args, x_addr, 2048);
+        const auto xg = TensorAccessor(x_args, x_addr, SE_XTB);
         for (uint32_t m = 0; m < NCH; ++m)
             for (uint32_t j = 0; j < NSG; ++j) {
                 const uint32_t s = step_of(j);
@@ -157,7 +158,7 @@ void kernel_main() {
                     for (uint32_t r = 0; r < MT; ++r)
                         for (uint32_t kk = 0; kk < KB; ++kk)
                             noc_async_read(xg.get_noc_addr(GROW(m, cy * MT + r) * x_ct + s * KB + kk - x_k0),
-                                           own_addr(m, j) + (r * KB + kk) * 2048, 2048);
+                                           own_addr(m, j) + (r * KB + kk) * SE_XTB, SE_XTB);
             }
         noc_async_read_barrier();
     }
@@ -193,7 +194,7 @@ void kernel_main() {
                 const uint32_t j = k * sps + st;  // (position; its family j % 2 = st % 2: a block's rounds are even)
                 const uint32_t round = ((m * g + k) * NPG + pg) * (sps / 2) + st / 2;  // (the family's)
                 cb_reserve_back(CB_XIN, MT * KB);
-                const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
+                const uint32_t dst = xin + (j & 1) * MT * KB * SE_XTB;
                 if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
 #ifndef SE_PROBE_NOXWAIT
                     if (j >= sps) noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
@@ -201,7 +202,7 @@ void kernel_main() {
 #ifdef SE_PROBE_NOX
                     constexpr uint32_t XBYTES = 16;  // (timing probe: no x data)
 #else
-                    constexpr uint32_t XBYTES = MT * KB * 2048;
+                    constexpr uint32_t XBYTES = MT * KB * SE_XTB;
 #endif
                     if (j & 1) s1->send(own_addr(m, j), dst, XBYTES); else s0->send(own_addr(m, j), dst, XBYTES);
                 } else {
@@ -225,11 +226,11 @@ void kernel_main() {
         {  // (no down here: my h block [MT][po] to DRAM h [rows, HT] - the down + reduce-scatter reads it)
         DeviceZoneScopedN("SE-HOUT");
         const uint32_t np0 = ord0 + g, nports = get_arg_val<uint32_t>(np0);
-        const auto hg = TensorAccessor(h_args, get_arg_val<uint32_t>(np0 + 3 + 2 * nports), 2048);
+        const auto hg = TensorAccessor(h_args, get_arg_val<uint32_t>(np0 + 3 + 2 * nports), SE_HTB);
         cb_wait_front(CB_HOWN, MT * POMAX);
         for (uint32_t r = 0; r < MT; ++r)
             for (uint32_t t = 0; t < po; ++t)
-                noc_async_write(hown + (r * POMAX + t) * 2048, hg.get_noc_addr(GROW(m, cy * MT + r) * HT + h0 + t), 2048);
+                noc_async_write(hown + (r * POMAX + t) * SE_HTB, hg.get_noc_addr(GROW(m, cy * MT + r) * HT + h0 + t), SE_HTB);
         noc_async_write_barrier();
         cb_pop_front(CB_HOWN, MT * POMAX);
         }
@@ -241,9 +242,9 @@ void kernel_main() {
         constexpr uint32_t HA = GX * MT * POMAX;
         cb_wait_front(CB_HOWN, MT * POMAX);
         cb_reserve_back(CB_HALL, HA);
-        const uint32_t hs = hall + (SE_HSL > 1 ? (m & 1) : 0) * HA * 2048;  // (h-all slots: SE_HSL)
+        const uint32_t hs = hall + (SE_HSL > 1 ? (m & 1) : 0) * HA * SE_HTB;  // (h-all slots: SE_HSL)
         for (uint32_t c = 0; c < GX; ++c) {
-            if (c == cx) sh->send(hown, hs + c * MT * POMAX * 2048, MT * POMAX * 2048);
+            if (c == cx) sh->send(hown, hs + c * MT * POMAX * SE_HTB, MT * POMAX * SE_HTB);
             else rh->receive(m * GX + c);
 #ifdef SE_RS
             cb_push_back(CB_HALL, MT * POMAX);  // (column c's block: the down's first pass starts on its K tiles)
@@ -1066,7 +1067,7 @@ void kernel_main() {
 #endif
                     cb_reserve_back(SE_PO, SE_PREP_FULL);
                     for (uint32_t c = 0; c * SE_PREP_BCT < n; ++c) {
-                        UNPACK((get_local_cb_interface(SE_PU).fifo_rd_ptr = pu0 + (off + c * SE_PREP_BCT * 2048) / 16));
+                        UNPACK((get_local_cb_interface(SE_PU).fifo_rd_ptr = pu0 + (off + c * SE_PREP_BCT * SE_PREP_TB) / 16));
                         pack_untilize_block<SE_PREP_BCT, SE_PREP_FULL>(SE_PU, 1, SE_PO, c);
                     }
                     cb_push_back(SE_PO, SE_PREP_FULL);
@@ -1156,6 +1157,7 @@ void kernel_main() {
             tile_regs_commit();
             cb_reserve_back(OUT, MT * PWDMAX);
             tile_regs_wait();
+            pack_reconfig_data_format(OUT);  // (h may be packed in another format: SE_HTB)
             for (uint32_t r = 0; r < MT; ++r)
                 for (uint32_t t = 0; t < pw; ++t) pack_tile<true>(r * pw + t, OUT, r * PWDMAX + t);
             tile_regs_release();
@@ -1253,8 +1255,18 @@ class SeEngine3:
         prep=False,
         router=None,
         arena_max=None,
+        x_dtype=ttnn.bfloat16,
+        h_dtype=ttnn.bfloat16,
+        pack_precise=False,
     ):
-        """arena_max: host planning (mesh_device None) - size the arena against this cap and stop (no device state).
+        """x_dtype / h_dtype: the format of the shared expert's matmul inputs in L1 - x (x own, the x rounds, the gather's
+        packets, the engine's own-shard load: the DRAM x it is given must be in it) and h (h own, h all, the down's
+        input) - bfloat16 (default) or bfloat8_b (DeepSeek-V4.1: the reference quantizes both to fp8; MoEDtypes.
+        shared_activations). The dispatch prep untilizes x own as stored (bf16 rows of bfp8-rounded x when x is bfp8).
+        pack_precise: the compute packs bfp8 (h) with bfp8_pack_precise - one rounding from fp32 DEST at the shared
+        exponent (as ttnn.typecast packs x), not first to 7 bits at each value's own exponent (two roundings, ties away
+        twice: a positive bias). Only bfp8 packs change.
+        arena_max: host planning (mesh_device None) - size the arena against this cap and stop (no device state).
         prep: the dispatch prep's owned rows (pieces(prep=...)): x own's rows of the chip's owned tokens (or, with a
         latent, their latent) untilized by the compute after its last pass, written row-major by the NCRISC.
         latent (tiles): K3's latent down on the gathered x - the chip's column slice [H, latent tiles], extra plain
@@ -1264,6 +1276,13 @@ class SeEngine3:
         shards: the K shards gate / up walks shard-major (the TP size in the fused head: the gather's shards)."""
         self.mesh = mesh_device
         self.shards = shards
+        assert x_dtype in (ttnn.bfloat16, ttnn.bfloat8_b) and h_dtype in (ttnn.bfloat16, ttnn.bfloat8_b), (
+            x_dtype,
+            h_dtype,
+        )
+        assert down or h_dtype == ttnn.bfloat16, "no down here: h goes to DRAM as bf16 (the down + RS op's input)"
+        self.x_dtype, self.h_dtype, self.pack_precise = x_dtype, h_dtype, bool(pack_precise)
+        self.xtb, self.htb = TILE_BYTES[x_dtype], TILE_BYTES[h_dtype]  # (bytes a tile of x / of h in L1)
         self.rows, self.H, self.I, self.glu = rows, H, I, glu
         self.cx0, self.GX, self.GY, self.MT = cx0, GX, GY, MT
         self.CR = GY * MT
@@ -1367,12 +1386,12 @@ class SeEngine3:
             rsr = rsr[1:] if ovh else rsr
             for k, v in (
                 [
-                    ("xown", self.xown_t * 2048),
+                    ("xown", self.xown_t * self.xtb),
                     ("wown", (self.WRING * self.WSLOT if self.WRING else self.wown_t) * self.wtb),
                     ("win", NWS * self.WSLOT * self.wtb),
-                    ("hown", MT * self.POMAX * 2048),
-                    ("hall", self.HSL * GX * MT * self.POMAX * 2048 if down else 0),
-                    ("xin", 2 * MT * self.KB * 2048),
+                    ("hown", MT * self.POMAX * self.htb),
+                    ("hall", self.HSL * GX * MT * self.POMAX * self.htb if down else 0),
+                    ("xin", 2 * MT * self.KB * self.xtb),
                     # (ACC: a FIFO of fp32 pass partials, MT x pw tiles a block - the pass widths differ (K3's latent-
                     # down passes): its straddle room (without it the tail overwrote the W stream's ready words: a W
                     # round taken before it landed, a hang)
@@ -1563,7 +1582,7 @@ class SeEngine3:
 
     def dram_bytes(self):
         w = (self.KT * 2 * self.HT + self.HT * self.NTH) * self.wtb
-        return dict(w=w, x=self.rows * self.H * 2, y=self.rows * self.H * 2)
+        return dict(w=w, x=self.rows // 32 * self.KT * self.xtb, y=self.rows * self.H * 2)
 
     def upload(self, w_gu, w_down, pos=None, w_lat=None):
         """Per device (row-major mesh order): w_gu [H, 2 I] (glu_weight tile pairs), w_down [I, H] -> one bf8 tensor
@@ -1666,11 +1685,14 @@ class SeEngine3:
             d.format_descriptors = [ttnn.CBFormatDescriptor(i, dt, page)]
             cbs.append(d)
 
-        cb(XIN, "xin", 2 * MT * self.KB * 2048, ttnn.bfloat16, 2048)
+        xdt, xtb, hdt, htb = self.x_dtype, self.xtb, self.h_dtype, self.htb
+        if x_ct:  # (the engine loads its own shard from x: its tiles are copied as they are)
+            assert x.dtype == xdt, f"se_engine3: x in DRAM is {x.dtype}, the engine's x {xdt}"
+        cb(XIN, "xin", 2 * MT * self.KB * xtb, xdt, xtb)
         cb(WIN, "win", NWS * self.WSLOT * self.wtb, self.w_dtype, self.wtb)
-        cb(HOWN, "hown", MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
+        cb(HOWN, "hown", MT * self.POMAX * htb, hdt, htb)
         if self.down:
-            cb(HALL, "hall", self.HSL * GX * MT * self.POMAX * 2048, ttnn.bfloat16, 2048)
+            cb(HALL, "hall", self.HSL * GX * MT * self.POMAX * htb, hdt, htb)
         if self.down and self.rs is None:
             cb(OUT, "out", NOUT * MT * self.PWDMAX * 2048, ttnn.bfloat16, 2048)
         if self.rs is not None:
@@ -1688,9 +1710,10 @@ class SeEngine3:
             pend = (
                 off["latz"] + (self.shards - 1) * MT * self.LWMAX * 2048 + (self.NCH - 1) * self.LATP * 2048
                 if self.LT
-                else off["xown"] + self.xown_t * 2048
+                else off["xown"] + self.xown_t * xtb
             )
-            cb(PREP_CB["pu"], pk, pend - off[pk], ttnn.bfloat16, 2048)
+            pdt, ptb = (ttnn.bfloat16, 2048) if self.LT else (xdt, xtb)  # (the units' source: the latent, or x own)
+            cb(PREP_CB["pu"], pk, pend - off[pk], pdt, ptb)
             cb(PREP_CB["po"], "po", 2 * self.PFULL * 2048, ttnn.bfloat16, 2048)
             if self.LT:
                 cb(PREP_CB["lrdy"], "lrdy", self._lrdy_bytes(), ttnn.bfloat16, 16)
@@ -1803,6 +1826,7 @@ class SeEngine3:
         ]
         nd = "" if self.down else "#define SE_NODOWN\n"
         nd += f"#define SE_HSL {self.HSL}\n"
+        nd += f"#define SE_XTB {self.xtb}u\n#define SE_HTB {self.htb}u\n"  # (x / h tile bytes: x_dtype / h_dtype)
         if self.NCH > 1 and self.shards > 1:  # (chunk m = block m of every owner: the owners' rows stay contiguous)
             nd += f"#define GROW(m, lr) (((lr) / {self.CR // self.shards}) * {self.rows // 32 // self.shards} + (m) * {self.CR // self.shards} + (lr) % {self.CR // self.shards})\n"
         else:
@@ -1847,6 +1871,7 @@ class SeEngine3:
                 f"#define SE_{k.upper()} {v}\n" for k, v in PREP_CB.items() if k != "lrdy"
             )
             nd += f"#define SE_PREP_FULL {self.PFULL}\n#define SE_PREP_BCT {self.PBCT}\n"
+            nd += f"#define SE_PREP_TB {2048 if self.LT else self.xtb}u\n"  # (the units' source tile bytes)
             nd += f"#define SE_PREP_ROW {int(prep['xbuf'].buffer_aligned_page_size())}\n"
             nd += f"#define SE_PREP_CT0 {len(nct + w_ct + y_ct) + (len(ttnn.TensorAccessorArgs(la['out']).get_compile_time_args()) if self.LT else 0)}\n"
             if self.LT:
@@ -1884,6 +1909,8 @@ class SeEngine3:
             ),
         ]
         glu_code = {"silu": 1, "situ": 2, "clamped_silu": 3}[self.glu]
+        # (the compute kernel's binary cache key leaves bfp8_pack_precise out: a define keeps the two binaries apart)
+        pdef = "#define SE_PACK_PRECISE\n" if self.pack_precise else ""
         for (wg, wd), cols in self.groups.items():
             crs = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(cx0 + c, 0), ttnn.CoreCoord(cx0 + c, GY - 1)) for c in cols]
@@ -1893,6 +1920,7 @@ class SeEngine3:
             comp.fp32_dest_acc_en = True
             comp.dst_full_sync_en = True
             comp.math_approx_mode = False
+            comp.bfp8_pack_precise = self.pack_precise  # (h packed to bfp8 in one rounding: pack_precise)
             modes = [ttnn.UnpackToDestMode.Default] * 64  # (NUM_CIRCULAR_BUFFERS)
             modes[ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
             comp.unpack_to_dest_mode = modes
@@ -1917,7 +1945,7 @@ class SeEngine3:
                 c_rt[cx0 + c][cy] = ra[shared:] if len(ra) > shared else [0]
             kernels.append(
                 ttnn.KernelDescriptor(
-                    kernel_source=f"#define SE_GLU {glu_code}\n" + nd + _probes() + _COMPUTE,  # noqa
+                    kernel_source=f"#define SE_GLU {glu_code}\n" + pdef + nd + _probes() + _COMPUTE,  # noqa
                     source_type=st,
                     core_ranges=crs,
                     compile_time_args=[
@@ -2085,7 +2113,9 @@ class SeEngine3:
                     continue
                 h = pos // 2
                 slot = n0 + h // self.S1 if f else h // self.S0
-                out.append((((m * nown + slot) * MT + r) * KB * 2048, KB, 0, row0 + (R - p * RBo) * 32, j * KB * 64))
+                out.append(
+                    (((m * nown + slot) * MT + r) * KB * self.xtb, KB, 0, row0 + (R - p * RBo) * 32, j * KB * 64)
+                )
         return out
 
     def _prep_compute(self, ra, n_pre, p, prep, cx, cy):

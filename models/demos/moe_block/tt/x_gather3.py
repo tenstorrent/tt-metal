@@ -66,7 +66,7 @@ FORCE_INLINE Dst dst_of(uint32_t T, uint32_t xown, uint32_t m, uint32_t R, uint3
     const uint32_t nown = get_arg_val<uint32_t>(t + 2 * col), b1 = get_arg_val<uint32_t>(t + 2 * col + 1);
     const uint32_t slot = f ? b1 + h / S1 : h / S0;
     const uint32_t lr = R - m * CR;
-    const uint32_t addr = xown + (((m * nown + slot) * MT + lr % MT) * KB + kk0) * 2048;
+    const uint32_t addr = xown + (((m * nown + slot) * MT + lr % MT) * KB + kk0) * XTB;  // (XTB: x's tile bytes)
     return {get_arg_val<uint32_t>(t + 2 * GX + col), get_arg_val<uint32_t>(t + 3 * GX + lr / MT), addr};
 }
 """
@@ -410,11 +410,11 @@ void kernel_main() {
                         xl = true;
                     }
                     const Dst d = dst_of(T, xown, m, R, j, kk0);
-                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * XTB);
                 } else {  // relay: upstream's packet idx of (chunk m, its entry k - 1) landed here
                     noc_semaphore_wait_min(arrived, m * up_ipc + up_base + idx / INC + 1);
                     const Dst d = dst_of(T, xown, m, R, j, kk0);
-                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * 2048);
+                    noc_async_read(get_noc_addr(d.x, d.y, d.addr), dst, np * XTB);
                 }
                 ++batch;
                 ++done;
@@ -577,12 +577,12 @@ void kernel_main() {
                     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
                     h = h + 1 == GROUP ? 0 : h + 1;
                     if ((++sent % INC) == 0 || sent == npk) {
-                        hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, arr_noc, 1, true}, np * 2048);
+                        hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, arr_noc, 1, true}, np * XTB);
                     } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, np * 2048);
+                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, np * XTB);
                     }
                     conn.wait_for_empty_write_slot();
-                    conn.send_current_slot_non_blocking(src, np * 2048, reinterpret_cast<uint32_t>(hdr));
+                    conn.send_current_slot_non_blocking(src, np * XTB, reinterpret_cast<uint32_t>(hdr));
                     if (++unflushed == GROUP || sent == npk) {
                         noc_async_writes_flushed();
                         cb_pop_front(0, RP * GROUP);
@@ -1059,6 +1059,7 @@ class XGather3:
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
+                + f"#define XTB {getattr(e, 'xtb', 2048)}u\n"  # (x's tile bytes: the engine's x_dtype; the CB keeps 2048 B slots)
                 + _probes()
                 + _READER,
                 source_type=st,
@@ -1070,6 +1071,7 @@ class XGather3:
             ttnn.KernelDescriptor(
                 kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n"
                 + f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
+                + f"#define XTB {getattr(e, 'xtb', 2048)}u\n"
                 + (routing.defines(coord) if routing is not None else "")
                 + _probes()
                 + _SENDER,
