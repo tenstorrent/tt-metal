@@ -245,7 +245,7 @@ def test_streaming_profiler_zones_capture(gx, gy, iters):
     assert lanes >= gx * gy * RISCS_PER_CORE, f"expected >= {gx * gy * RISCS_PER_CORE} lanes with zones, got {lanes}"
 
     # Names must come back resolved, not blank or hashed: the ids on the wire are structural (tu-id + local
-    # id) and the host resolves them per ELF from .tt_zone_meta, so an empty or missing name means that
+    # id) and the host resolves them per ELF from .tt_observability_event_meta, so an empty or missing name means that
     # resolution broke even though zones still arrived.
     names = {row["name"] for row in rows}
     assert "" not in names, "a device zone came back unnamed -- ELF zone-name resolution failed"
