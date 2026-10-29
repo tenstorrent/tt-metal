@@ -18,7 +18,7 @@ pytestmark = run_for_blackhole()
 
 # (dtype, layout, entry shape past dim 0, ND shard of the multi-entry table or None for interleaved): the forms
 # the KDA staging uses, an ND-sharded FP32 tile slab with [1, 1, D, 32] shards and an interleaved BF16 row slab. The
-# K3 shape (384 tiles, about 13 per worker) runs every worker through more than one staging round.
+# K3 shape (384 tiles, 17-18 per worker) runs every worker through three staging batches, so staging wraps around.
 FORMS = [
     pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (3, 64, 64), None, id="fp32-tile"),
     pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (3, 64, 64), [1, 1, 64, 32], id="fp32-tile-nd"),
@@ -259,7 +259,7 @@ _PRODUCTION_CASES = (
         (24, 128, 128),
         [1, 1, 128, 32],
         False,
-        9_300,
+        8_900,
         _RECURRENT_PERF_MARGIN,
     ),
     _ProductionCase(
@@ -269,11 +269,11 @@ _PRODUCTION_CASES = (
         (24, 128, 128),
         [1, 1, 128, 32],
         True,
-        9_350,
+        8_700,
         _RECURRENT_PERF_MARGIN,
     ),
-    _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 2_030),
-    _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 2_020),
+    _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 1_860),
+    _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 1_840),
 )
 
 
@@ -301,7 +301,7 @@ def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
     *_, (runtime_id, perf_record) = [
         (runtime_id, program)
         for runtime_id, program in programs.items()
-        if any("indexed_entry_copy.cpp" in source for source in program["kernel_sources"])
+        if any("indexed_entry_copy_reader.cpp" in source for source in program["kernel_sources"])
     ]
     duration_ns = perf_record["duration_ns"]
     entry = _K3_LAYERS + _K3_POSITION

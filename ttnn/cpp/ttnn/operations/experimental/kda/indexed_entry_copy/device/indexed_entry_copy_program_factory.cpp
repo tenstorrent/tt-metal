@@ -18,22 +18,15 @@ using namespace tt::tt_metal::experimental;
 
 namespace {
 
-// Pages in flight per core per read/write round: covers a DRAM round trip at the K3 copy sizes, and holds a core's
-// whole share of the 54 KiB tail in one round.
+// Pages per reader push / writer pop: covers a DRAM round trip at the K3 copy sizes, and holds a core's whole share of
+// the 54 KiB tail in one batch.
 constexpr uint32_t kBatchPages = 8;
+// Staging holds two batches so the reader fills one while the writer drains the other.
+constexpr uint32_t kStagingBatches = 2;
 // Workers fill the first full-width rows of the grid as one core range. Dispatch sends a program's binary, config
 // and launch message once per range, so scattered single-core ranges add microseconds per launch under trace; full
 // rows also measured faster than taller blocks of as many cores.
 constexpr uint32_t kWorkerRows = 2;
-
-// Reads go out on NOC_0 and writes on NOC_1 so the two directions do not share links; dynamic NoC mode lets the one
-// kernel drive both.
-DataMovementHardwareConfig copier_hw_config() {
-    auto hw = ttnn::create_reader_datamovement_config();
-    hw.config_1xx->noc = NOC::NOC_0;
-    hw.config_1xx->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
-    return hw;
-}
 
 // Pages of one dim-0 entry: tiles for TILE layout, rows for ROW_MAJOR.
 uint32_t pages_per_entry(const Tensor& single_entry) {
@@ -73,61 +66,96 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
     const TensorParamName SOURCE{"source"};
     const TensorParamName DESTINATION{"destination"};
     const TensorParamName INDEX{"index"};
-    const ScratchpadSpecName STAGING{"staging"};
-    const KernelSpecName COPIER{"copier"};
+    const DFBSpecName STAGING{"staging"};
+    const ScratchpadSpecName READER_INDEX_WORD{"reader_index_word"};
+    const ScratchpadSpecName WRITER_INDEX_WORD{"writer_index_word"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
 
-    KernelSpec copier{
-        .unique_id = COPIER,
-        .source = "ttnn/cpp/ttnn/operations/experimental/kda/indexed_entry_copy/device/kernels/indexed_entry_copy.cpp",
-        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = STAGING, .accessor_name = "staging"}},
+    const KernelSpec::CompileTimeArgs compile_time_args = {
+        {"page_size", page_size},
+        {"page_stride", page_stride},
+        {"batch_pages", kBatchPages},
+        {"pages_per_entry", entry_pages},
+        {"index_limit", index_limit},
+        {"index_scale", params.index_scale},
+        {"index_offset", params.index_offset},
+        {"indexed_is_source", static_cast<uint32_t>(indexed_is_source)},
+    };
+    const KernelSpec::RuntimeArgSchema runtime_arg_schema{.runtime_arg_names = {"first_page", "num_pages"}};
+
+    // Each kernel resolves the entry from `index` into its own word.
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/indexed_entry_copy/device/kernels/"
+            "indexed_entry_copy_reader.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = STAGING, .accessor_name = "staging", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .scratchpad_bindings = {ScratchpadBinding{
+            .scratchpad_spec_name = READER_INDEX_WORD, .accessor_name = "index_word"}},
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = SOURCE, .accessor_name = "source"},
+                TensorBinding{.tensor_parameter_name = INDEX, .accessor_name = "index"},
+            },
+        .compile_time_args = compile_time_args,
+        .runtime_arg_schema = runtime_arg_schema,
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/kda/indexed_entry_copy/device/kernels/"
+            "indexed_entry_copy_writer.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = STAGING, .accessor_name = "staging", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .scratchpad_bindings = {ScratchpadBinding{
+            .scratchpad_spec_name = WRITER_INDEX_WORD, .accessor_name = "index_word"}},
+        .tensor_bindings =
+            {
                 TensorBinding{.tensor_parameter_name = DESTINATION, .accessor_name = "destination"},
                 TensorBinding{.tensor_parameter_name = INDEX, .accessor_name = "index"},
             },
-        .compile_time_args =
-            {
-                {"page_size", page_size},
-                {"page_stride", page_stride},
-                {"batch_pages", kBatchPages},
-                {"pages_per_entry", entry_pages},
-                {"index_limit", index_limit},
-                {"index_scale", params.index_scale},
-                {"index_offset", params.index_offset},
-                {"indexed_is_source", static_cast<uint32_t>(indexed_is_source)},
-            },
-        .runtime_arg_schema = {.runtime_arg_names = {"first_page", "num_pages"}},
-        .hw_config = copier_hw_config(),
+        .compile_time_args = compile_time_args,
+        .runtime_arg_schema = runtime_arg_schema,
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Page ranges depend only on shapes, so they are invariant across cache hits; only tensor addresses are
     // rebound, and the entry is resolved on device from `index` on every dispatch.
-    KernelRunArgs copier_run_args{.kernel = COPIER};
+    KernelRunArgs reader_run_args{.kernel = READER};
     uint32_t first_page = 0;
     for (const auto& core : corerange_to_cores(all_cores)) {
         const uint32_t num_pages = core_group_1.contains(core) ? pages_per_core_1 : pages_per_core_2;
         AddRuntimeArgsForNode(
-            copier_run_args.runtime_arg_values, core, {{"first_page", first_page}, {"num_pages", num_pages}});
+            reader_run_args.runtime_arg_values, core, {{"first_page", first_page}, {"num_pages", num_pages}});
         first_page += num_pages;
     }
+    KernelRunArgs writer_run_args{.kernel = WRITER, .runtime_arg_values = reader_run_args.runtime_arg_values};
 
+    const uint32_t index_word_size = index.buffer()->aligned_page_size();
     ProgramSpec spec{
         .name = "indexed_entry_copy",
-        .kernels = {std::move(copier)},
-        // The index word is read into the staging area first, then the area is reused for the entry's pages.
-        .scratchpads = {ScratchpadSpec{.unique_id = STAGING, .size_per_node = kBatchPages * page_stride}},
+        .kernels = {std::move(reader), std::move(writer)},
+        .dataflow_buffers = {DataflowBufferSpec{
+            .unique_id = STAGING, .entry_size = page_stride, .num_entries = kStagingBatches * kBatchPages}},
+        .scratchpads =
+            {
+                ScratchpadSpec{.unique_id = READER_INDEX_WORD, .size_per_node = index_word_size},
+                ScratchpadSpec{.unique_id = WRITER_INDEX_WORD, .size_per_node = index_word_size},
+            },
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = SOURCE, .spec = source.tensor_spec()},
                 TensorParameter{.unique_id = DESTINATION, .spec = destination.tensor_spec()},
                 TensorParameter{.unique_id = INDEX, .spec = index.tensor_spec()},
             },
-        .work_units = {WorkUnitSpec{.name = "main", .kernels = {COPIER}, .target_nodes = all_cores}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}},
     };
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(copier_run_args)};
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
     run_args.tensor_args = {
         {SOURCE, source.mesh_tensor()},
         {DESTINATION, destination.mesh_tensor()},
