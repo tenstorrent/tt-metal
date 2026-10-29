@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::DEFAULT_TENSOR_SHAPE,
         ckernel::DEFAULT_TENSOR_SHAPE);
 
-    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, FACE_R_DIM, false /* narrow_tile */);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, ckernel::DEFAULT_TENSOR_SHAPE);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_unpack_tilize_wrapper_(
@@ -68,12 +68,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats_array[run].unpack_A_src,
             formats_array[run].unpack_A_dst,
             block_ct_dim,
-            FACE_R_DIM,
-            4 /* num_faces */,
-            false /* narrow_tile */);
+            ckernel::DEFAULT_TENSOR_SHAPE);
     }
 
-    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, 1 /* ct_dim */, FACE_R_DIM, false /* narrow_tile */);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, 1 /* ct_dim */, ckernel::DEFAULT_TENSOR_SHAPE);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_unpack_tilize_wrapper_(
@@ -82,9 +80,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats_array[run].unpack_B_src,
             formats_array[run].unpack_B_dst,
             block_ct_dim,
-            FACE_R_DIM,
-            4 /* num_faces */,
-            false /* narrow_tile */);
+            ckernel::DEFAULT_TENSOR_SHAPE);
     }
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(
@@ -99,7 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tile_size); // have to reconfigure unpack kernel data formats_array if they change in this run
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, 4 /* num_faces */);
+    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_unpack_AB_matmul_init_<>();
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {

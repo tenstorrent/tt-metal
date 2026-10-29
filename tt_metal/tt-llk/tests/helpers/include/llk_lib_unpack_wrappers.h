@@ -15,14 +15,12 @@
 #ifdef ARCH_WORMHOLE
 
 inline void _llk_unpack_tilize_init_wrapper_(
-    const std::uint32_t unpack_src_format = 0,
-    const std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t ct_dim            = 0,
-    const std::uint32_t face_r_dim        = ckernel::FACE_R_DIM,
-    const bool narrow_tile                = false,
-    const std::uint32_t num_faces         = 4)
+    const std::uint32_t unpack_src_format   = 0,
+    const std::uint32_t unpack_dst_format   = 0,
+    const std::uint32_t ct_dim              = 0,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_tilize_init_(unpack_src_format, unpack_dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
+    _llk_unpack_tilize_init_(unpack_src_format, unpack_dst_format, ct_dim, tensor_shape);
 }
 
 inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_(const std::uint32_t block_ct_dim)
@@ -40,14 +38,12 @@ inline std::uint32_t _llk_unpack_tilize_num_dvalids_wrapper_(const std::uint32_t
 inline void _llk_unpack_tilize_wrapper_(
     const std::uint32_t base_address,
     const std::uint32_t tile_index,
-    const std::uint32_t unpack_src_format = 0,
-    const std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t block_ct_dim      = 0,
-    const std::uint32_t face_r_dim        = FACE_R_DIM,
-    const std::uint32_t num_faces         = 4,
-    const bool narrow_tile                = false)
+    const std::uint32_t unpack_src_format   = 0,
+    const std::uint32_t unpack_dst_format   = 0,
+    const std::uint32_t block_ct_dim        = 0,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, block_ct_dim, face_r_dim, num_faces, narrow_tile);
+    _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, block_ct_dim, tensor_shape);
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
@@ -55,44 +51,35 @@ inline void _llk_unpack_tilizeA_B_init_wrapper_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
     const std::uint32_t ct_dim,
-    const std::uint32_t num_faces  = 4,
-    const std::uint32_t face_r_dim = FACE_R_DIM)
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    // The tests give operand B the same tile shape as operand A.
     _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        unpack_src_format, unpack_dst_format, false /* narrow_tile */, ct_dim, num_faces, face_r_dim, face_r_dim);
+        unpack_src_format, unpack_dst_format, ct_dim, tensor_shape, tensor_shape);
 }
 
 // Wormhole bakes neginf_srcA / reload_srcB / zero_srcA_reduce into the MOP at init; only zero_srcA is an execute template.
 template <bool /*neginf_srcA*/ = false, std::uint32_t /*reload_srcB*/ = false, bool zero_srcA = false, bool /*zero_srcA_reduce*/ = false>
 inline void _llk_unpack_tilizeA_B_wrapper_(
     const std::uint32_t unpack_src_format,
-    const std::uint32_t face_r_dim,
     const std::uint32_t base_address_a,
     const std::uint32_t address_b,
     const std::uint32_t tile_index_a,
     const std::uint32_t block_ct_dim,
-    const std::uint32_t num_faces = 4)
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_tilizeA_B_<zero_srcA>(unpack_src_format, face_r_dim, false /* narrow_tile */, base_address_a, address_b, tile_index_a, block_ct_dim, num_faces);
-}
-
-inline void _llk_unpack_tilizeA_B_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM)
-{
-    _llk_unpack_tilizeA_B_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
+    _llk_unpack_tilizeA_B_<zero_srcA>(unpack_src_format, base_address_a, address_b, tile_index_a, block_ct_dim, tensor_shape);
 }
 
 #elif defined(ARCH_BLACKHOLE)
 
 inline void _llk_unpack_tilize_init_wrapper_(
-    const std::uint32_t unpack_src_format = 0,
-    const std::uint32_t unpack_dst_format = 0,
-    const std::uint32_t ct_dim            = 0,
-    const std::uint32_t face_r_dim        = ckernel::FACE_R_DIM,
-    const bool narrow_tile                = false,
-    const std::uint32_t num_faces         = 4)
+    const std::uint32_t unpack_src_format   = 0,
+    const std::uint32_t unpack_dst_format   = 0,
+    const std::uint32_t ct_dim              = 0,
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_tilize_init_(unpack_src_format, unpack_dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
+    _llk_unpack_tilize_init_(unpack_src_format, unpack_dst_format, ct_dim, tensor_shape);
 }
 
 inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_([[maybe_unused]] const std::uint32_t block_ct_dim)
@@ -114,11 +101,9 @@ inline void _llk_unpack_tilize_wrapper_(
     const std::uint32_t unpack_src_format             = 0,
     const std::uint32_t unpack_dst_format             = 0,
     [[maybe_unused]] const std::uint32_t block_ct_dim = 0,
-    const std::uint32_t face_r_dim                    = ckernel::FACE_R_DIM,
-    const std::uint32_t num_faces                     = 4,
-    const bool narrow_tile                            = false)
+    const ckernel::TensorShape tensor_shape           = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, face_r_dim, num_faces, narrow_tile);
+    _llk_unpack_tilize_(base_address, tile_index, unpack_src_format, unpack_dst_format, tensor_shape);
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
@@ -126,42 +111,39 @@ inline void _llk_unpack_tilizeA_B_init_wrapper_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
     const std::uint32_t ct_dim,
-    const std::uint32_t num_faces  = 4,
-    const std::uint32_t face_r_dim = ckernel::FACE_R_DIM)
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(unpack_src_format, unpack_dst_format, ct_dim, num_faces, face_r_dim);
+    // The tests give operand B the same tile shape as operand A.
+    _llk_unpack_tilizeA_B_init_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+        unpack_src_format, unpack_dst_format, ct_dim, tensor_shape, tensor_shape);
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_wrapper_(
     const std::uint32_t unpack_src_format,
-    const std::uint32_t face_r_dim,
     const std::uint32_t base_address_a,
     const std::uint32_t address_b,
     const std::uint32_t tile_index_a,
     const std::uint32_t block_ct_dim,
-    const std::uint32_t num_faces = 4)
+    const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     _llk_unpack_tilizeA_B_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
-        unpack_src_format, face_r_dim, base_address_a, address_b, tile_index_a, block_ct_dim, num_faces);
-}
-
-inline void _llk_unpack_tilizeA_B_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format,
-    [[maybe_unused]] const std::uint32_t num_faces  = 4,
-    [[maybe_unused]] const std::uint32_t face_r_dim = ckernel::FACE_R_DIM)
-{
-    _llk_unpack_tilizeA_B_uninit_(unpack_dst_format);
+        unpack_src_format, base_address_a, address_b, tile_index_a, block_ct_dim, tensor_shape);
 }
 
 #else
 #error "Unsupported architecture for LLK unpack tilize wrappers"
 #endif
 
-inline void _llk_unpack_tilize_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = ckernel::MAX_FACE_R_DIM)
+inline void _llk_unpack_tilize_uninit_wrapper_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
+    _llk_unpack_tilize_uninit_(unpack_dst_format, tensor_shape);
+}
+
+inline void _llk_unpack_tilizeA_B_uninit_wrapper_(
+    const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+{
+    _llk_unpack_tilizeA_B_uninit_(unpack_dst_format, tensor_shape);
 }
 
 // Isolate handshake count shared by unpack and math. The two TRISC threads deadlock

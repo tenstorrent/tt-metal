@@ -72,14 +72,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t pre_desc_word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
 
-    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, 1 /* ct_dim */, face_r_dim, false /* narrow_tile */, tilize_num_faces);
+    // num_faces 4 is 32x32, 2 is face_r_dim x 32, 1 is 16x16.
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(face_r_dim, tilize_num_faces);
+    _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, 1 /* ct_dim */, tensor_shape);
 
     drain_cfg_writes();
 
     // Init must leave the bit set, so a clear bit after uninit is the uninit's doing.
     LLK_ASSERT(read_tileize_mode(cfg) == 1, "tilize init must set tileize_mode");
 
-    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tilize_num_faces, face_r_dim);
+    _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, tensor_shape);
 
     drain_cfg_writes();
 

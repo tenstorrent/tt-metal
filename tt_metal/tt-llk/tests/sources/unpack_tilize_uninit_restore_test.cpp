@@ -74,20 +74,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces),
         ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces));
 
-    const std::uint32_t tilize_num_faces = num_faces;
-    const std::uint32_t block_ct_dim     = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
+    // num_faces 4 is 32x32, 2 is face_r_dim x 32, 1 is 16x16.
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces);
+    const std::uint32_t block_ct_dim        = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
 
-    _llk_unpack_tilize_init_wrapper_(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, face_r_dim, false /* narrow_tile */, tilize_num_faces);
+    _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, tensor_shape);
     _llk_unpack_tilize_wrapper_(
-        L1_ADDRESS(params.buffer_A[0]),
-        0 /* tile_index */,
-        formats_array[run].unpack_A_src,
-        formats_array[run].unpack_A_dst,
-        block_ct_dim,
-        face_r_dim,
-        tilize_num_faces,
-        false /* narrow_tile */);
+        L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index */, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, block_ct_dim, tensor_shape);
 
     // Wait until the packer has written the tilized tile to the scratch buffer.
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
@@ -97,12 +90,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Restore the SrcA operand baseline this op mutated. NOTE: intentionally NO
     // `_llk_unpack_reconfig_data_format_srca_impl_` here, so this uninit is the
     // sole reset of the unpacker state before the next op.
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces, face_r_dim);
+    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, tensor_shape);
 
     // ---- Run 1: plain datacopy of the tilized tile (same format, no reconfig) ----
     run = 1;
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
+        0, 0, tensor_shape, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(buffer_A_tilized), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
 }
