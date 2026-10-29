@@ -767,19 +767,24 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // The values this program runs with. Where both inputs are borrowed the reader runs one thread, and where
     // the output is borrowed the writer does; a borrowed ring's stride is then max(R, C) or max(C, W), which the
-    // anchor's tile count divides. Beside a DRAM operand the rule batches only as below.
+    // anchor's tile count divides.
+    // The share batch needs a, b and c interleaved over the NoC (beside DRAM, with an input there) or all borrowed.
+    // Other mixes stay at 1: a batched sharded operand moving over the NoC aborts on ttsim (H.I.I, W.I.I).
     const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
-    const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
-    // Batching beside DRAM needs interleaved a, b, c and nothing borrowed. A sharded operand that moves over the NoC
-    // stays at batch 1: batched, it aborts on ttsim (H.I.I and W.I.I).
     const auto interleaved = [](const Tensor& tensor) { return !tensor.memory_config().is_sharded(); };
+    const bool input_in_dram = in_dram(a) || in_dram(*b_opt);
+    const bool any_dram = input_in_dram || in_dram(c);
     uint32_t tiles_per_compute_thread = 0;
     if (anchor.kind == AnchorKind::kNone && interleaved(a) && interleaved(*b_opt) && interleaved(c) &&
-        (in_dram(a) || in_dram(*b_opt))) {
-        // The most tiles split_work_to_cores gives a cluster.
-        const uint32_t tiles_per_cluster =
-            tt::div_up(c_num_tiles, std::min<uint32_t>(op.worker_grid.num_cores(), c_num_tiles));
-        tiles_per_compute_thread = tt::div_up(tiles_per_cluster, compute_threads);
+        (input_in_dram || !any_dram)) {
+        // A cluster gets this many tiles or one fewer. Beside DRAM a batch pays even for one fewer, so round up;
+        // in L1 it does not, so round down.
+        const uint32_t clusters = std::min<uint32_t>(op.worker_grid.num_cores(), c_num_tiles);
+        tiles_per_compute_thread = any_dram ? tt::div_up(tt::div_up(c_num_tiles, clusters), compute_threads)
+                                            : c_num_tiles / clusters / compute_threads;
+    } else if (borrow_all) {
+        // The borrowed ring's share; the tail rings run one tile at a time.
+        tiles_per_compute_thread = borrowed_tiles / compute_threads;
     }
     const NativeConfig cfg = resolve_native_config(
         t,
@@ -795,9 +800,10 @@ ProgramArtifacts create_no_bcast_artifacts(
     if (tiles_per_compute_thread > 0) {
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native: {} tiles beside DRAM, {} per compute thread: dm_batch={} tiles_per_cycle={} "
+            "binary_ng Quasar-native: {} tiles {}, {} per compute thread: dm_batch={} tiles_per_cycle={} "
             "entries_per_thread={}",
             c_num_tiles,
+            any_dram ? "beside DRAM" : "in L1",
             tiles_per_compute_thread,
             describe_native_value(t.dm_batch, cfg.dm_batch),
             describe_native_value(t.tiles_per_cycle, cfg.tiles_per_cycle),
