@@ -1581,6 +1581,14 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 14:58: the 128 K profile served at 192 requests (A7's second half)
+
+224 requests (7 slots per chip) run out of DRAM at boot under per-row ownership (162 MiB per bank after the prefix walk, a
+256 MiB MoE reduce-scatter buffer fails on fragmentation); 192 (6 per chip) boots with 370 MiB per bank to spare: 4 x 65 514
+needles 4/4 (TTFT 49 / 64 / 106 / 113 s), `vllm bench` 128 x 128 at 192 requests TTFT 27.0 s / 6.3 tok/s per user / 522
+aggregate by the bench's wall, the adapter's step 116.3 ms = 8.6 / 1651 over 192 live users, 0 program-cache misses, boot
+29 min (the wave ladder over 24 warm-up slots). The catalog's 128 K profile goes to 192 (from 28 replicated requests).
+
 ### 2026-10-29 13:48: the 1 M profile served at 32 requests as catalogued (A7)
 
 The catalogued 1 M profile (32 requests, `GLM53_VLLM_ROWS_INDEPENDENT=1`, prefix cache off) boots through the exact wave ladder

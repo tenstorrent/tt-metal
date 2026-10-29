@@ -136,6 +136,12 @@ waves the same four take 180 / 237 / 408 / 464 s and still answer 4/4). Eager wa
 wave costs a 16 K SP chunk), so eager prompts take a free slot index first (`SlotTable.allocate(prefer_sp)`,
 `doc/mesh/row_ownership.md` 2.4) and the waves serve the fifth concurrent long prompt on and every short burst.
 
+The 128 K profile served the same way (192 distinct requests = 6 slots per chip under per-row prefill ownership, prefix
+cache off; 2026-10-29 14:58, one smoke run, 0 program-cache misses; 224 = 7 per chip runs out of DRAM at boot): 4 concurrent
+65 514-token prompts 4/4 (TTFT 49 / 64 / 106 / 113 s), `vllm bench` 128 x 128 at 192 concurrent requests TTFT 27.0 s mean,
+6.3 tok/s per user, 522 tok/s output by the bench's wall; the adapter's decode step 116.3 ms = 8.6 tok/s per user, 1651 tok/s
+aggregate over the 192 live users. Boot is ~29 min on a warm cache (the wave ladder walks 24 warm-up slots).
+
 Served decode (2026-10-27, today's defaults, `vllm bench` 128 x 128 tokens): 1 M profile 94.2 ms per token = 10.6 tok/s per user at
 concurrency 1 (TTFT 272 ms) and 103.4 ms = 9.7 tok/s per user at 4 (37 tok/s output); 128 K profile (28 users per row, 224 traced
 slots) 150.9 ms = 6.6 tok/s per user at 1 and 172.8 ms = 5.8 tok/s per user at 28 (142 tok/s output); boot ~10 min on a warm cache.
