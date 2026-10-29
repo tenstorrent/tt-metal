@@ -50,11 +50,20 @@ CUDA only), einops, and blobfile for the remote tiktoken tokenizer. Run through 
 
 What is model-specific, and why it is handled here:
 
-  * Remote code written for transformers 4.56+, run on 5.12 with three shims (_patch_remote): OutputRecorder is
+  * Remote code written for transformers 4.56+, run on 5.12 with shims: OutputRecorder is
     aliased where it used to live (utils.generic); KimiLinearModel.__init__ forces flash_attention_2 whatever was
     asked, so the requested --attn is put back after every build (only the forced FA2 path pads V from 128 to 192);
     and create_causal_mask, which the remote model calls with 4.x arguments, is a plain causal mask (only the
-    --selftest reference's whole-model forward calls it: the layer-by-layer run builds its masks itself).
+    --selftest reference's whole-model forward calls it: the layer-by-layer run builds its masks itself) (these
+    two in _patch_remote); and KimiK3ForConditionalGeneration.tie_weights(), which 5.12's post_init calls with
+    recompute_mapping=, takes 5.12's arguments and forwards them to language_model.tie_weights as upstream's override
+    does (tie_word_embeddings is false), and KimiLinearForCausalLM's 4.x _tied_weights_keys list ["lm_head.weight"]
+    becomes 5.x's {target: source} dict, {"lm_head.weight": "model.embed_tokens.weight"} (save_pretrained reads it).
+    KimiK3PreTrainedModel declares _supports_sdpa = False (from the LLaVA port it was written from) and
+    KimiPreTrainedModel (the text model's) declares only flash_attention_2, which 5.12 enforces at construction; the
+    text model's MLA calls ALL_ATTENTION_FUNCTIONS[_attn_implementation], so both are set True for the default
+    --attn sdpa. These run in the constructor, so they go on the classes as transformers loads them
+    (_shim_remote_classes), before any build.
   * KDA in torch (HF_GOLDEN_KDA=torch, the default): the remote layer calls fla's Triton chunk_kda; torch_chunk_kda
     replaces it with fla's own pure-torch references, the ones fla's tests grade chunk_kda against in this exact
     configuration (tests/ops/test_kda.py: gate in kernel, lower bound -5, qk L2 norm): l2-normalized q / k, sigmoid
@@ -192,7 +201,32 @@ def _alias_output_recorder() -> None:
         generic.OutputRecorder = OutputRecorder
 
 
+def _shim_remote_classes() -> None:
+    """Wrap transformers' loader of remote classes for the tie_weights / _tied_weights_keys / sdpa shims (header);
+    every remote import, the hub's and --selftest's tiny checkpoint's, goes through it."""
+    from transformers import dynamic_module_utils as dmu
+
+    load = dmu.get_class_in_module
+
+    def get_class_in_module(*args, **kwargs):
+        cls = load(*args, **kwargs)
+        module = sys.modules.get(cls.__module__)
+        wrapper = getattr(module, "KimiK3ForConditionalGeneration", None)
+        if wrapper is not None:
+            wrapper.tie_weights = lambda self, *a, **kw: self.language_model.tie_weights(*a, **kw)
+            module.KimiK3PreTrainedModel._supports_sdpa = True
+        linear = sys.modules.get(module.__name__.rsplit(".", 1)[0] + ".modeling_kimi_linear")
+        lm = getattr(linear, "KimiLinearForCausalLM", None)
+        if lm is not None and isinstance(lm._tied_weights_keys, list):
+            lm._tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
+            sys.modules[lm.__module__].KimiPreTrainedModel._supports_sdpa = True
+        return cls
+
+    dmu.get_class_in_module = get_class_in_module
+
+
 _alias_output_recorder()
+_shim_remote_classes()
 
 
 def dequantize_mxfp4(packed: torch.Tensor, scale: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
