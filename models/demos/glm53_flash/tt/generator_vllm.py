@@ -935,12 +935,14 @@ class GLM53FlashForCausalLM:
         entries = None
         if cls.model_capabilities.get("supports_prefix_caching"):
             free = getattr(model, "dram_free", None)
-            entries, store = cls._prefix_cache_plan(
-                plan, users_per_row, int(max_seq_len), free_bytes=free() if callable(free) else None
-            )
+            free_bytes = free() if callable(free) else None
+            entries, store = cls._prefix_cache_plan(plan, users_per_row, int(max_seq_len), free_bytes=free_bytes)
             if entries:
                 model.allocate_kda_snapshots(entries, store)  # before any capture: a persistent ring
-            if store == "device" and entries:
+            if store == "device" and entries and free_bytes is None:
+                # the planner's envelope gates the ring only when no live measurement sized it: the live free DRAM
+                # minus the planner's reserve already proved the fit, and the envelope refuses the 1 M profile's
+                # 141 MiB ring (it counts the partitioned cache's scratch slot at full length; 2026-10-29 apc_r1)
                 geometry.check_memory_plan(dataclasses.replace(plan, snapshot_entries=entries))
         vision = None
         if multimodal:
