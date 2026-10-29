@@ -1399,13 +1399,14 @@
     export TARGET_CHUNKS=240
     export CHUNK=2048
     export LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4
+    export MATRIX_CI_EXPECT_14KW=1
     exec bash models/demos/minimax_m3/scripts/prefill_matrix/ci/run_matrix_ci.sh
   test_type: minimax_prefill_matrix
   test_tags: [minimax_m3, runner]
   test_group: weekly # Saturday only, not daily
   artifact_subdir: m3_prefill_matrix
   skus:
-    bh_sc4:
+    bh_sc4_high_power: # TEMPORARY: probe the 14 kW SC4 pool
       timeout: 60 # ~20-22 min expected
       tier: 2
       release_ready: false
