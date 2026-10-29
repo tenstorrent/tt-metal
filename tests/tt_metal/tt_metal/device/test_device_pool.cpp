@@ -15,6 +15,7 @@
 #include "impl/allocator/allocator.hpp"
 #include "tt_metal.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 
 namespace tt::tt_metal {
 
@@ -136,6 +137,23 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
     ASSERT_TRUE(dev->is_initialized());
     CloseDevicesInPool();
+}
+
+TEST(DevicePool, HostTransferStatsCountFirmwareLoads) {
+    auto& context = MetalContext::instance();
+    if (context.get_cluster().is_mock_or_emulated() || context.rtoptions().get_skip_loading_fw()) {
+        GTEST_SKIP() << "Firmware is not loaded on this target";
+    }
+    std::vector<ChipId> device_ids{*context.get_cluster().all_chip_ids().begin()};
+    test::HostTransferStatsScope transfer_stats;
+    context.initialize_device_manager(
+        device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, context.resolve_dispatch_core_config());
+    const auto firmware = transfer_stats.totals(HostTransfer::Firmware);
+    CloseDevicesInPool();
+
+    EXPECT_GT(firmware.bytes, 0u);
+    EXPECT_GT(firmware.transfers, 0u);
+    EXPECT_GT(firmware.busy, HostTransferStats::Clock::duration::zero());
 }
 
 }  // namespace tt::tt_metal

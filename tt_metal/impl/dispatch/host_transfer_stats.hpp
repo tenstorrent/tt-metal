@@ -28,6 +28,7 @@ enum class HostTransfer : uint8_t {
     // Program commands copied into the issue queue, which the device reads later. Staged like SocketPull.
     ProgramConfigFastDispatch,
     ProgramConfigSlowDispatch,
+    Firmware,
     SocketPush,
     // Bytes copied into host memory that the device reads later, so they have bytes but no transfer time.
     SocketPull,
