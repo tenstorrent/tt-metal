@@ -47,37 +47,60 @@ _KERNEL = "models/demos/deepseek_v3_d_p/tt/v41/kernels/scatter_rows.cpp"
 BLOCK_ROWS = 8  # logical rows per block page (CANDIDATE_BLOCK_SIZE: the candidate scorer reads a block as one page)
 
 
-def _dst_mode(dst, src_width: int) -> int:
-    """How ``dst`` stores a logical row of ``src_width`` elements: 0 row-major rows, 1 tiled bf16, 2 block pages."""
+def _dst_mode(dst, src_width: int, row_bytes: int) -> int:
+    """How ``dst`` stores a logical row of ``src_width`` elements (``row_bytes``): 0 row-major rows, 1 tiled bf16,
+    2 block pages (``BLOCK_ROWS`` rows a page, compared in bytes: a page tensor may carry another dtype)."""
     if dst.layout == ttnn.TILE_LAYOUT:
         assert dst.dtype == ttnn.bfloat16 and dst.shape[3] == src_width, (dst.dtype, tuple(dst.shape), src_width)
         return 1
     if dst.shape[3] == src_width:
         return 0
-    assert dst.shape[3] == BLOCK_ROWS * src_width, (tuple(dst.shape), src_width)
+    assert dst.shape[3] * dst.element_size() == BLOCK_ROWS * row_bytes, (tuple(dst.shape), dst.dtype, row_bytes)
     return 2
 
 
-def scatter_rows(src, dst, idx, src_base: int = 0, dst_base: int = 0, stride: int = 0, rows: int | None = None):
+def scatter_rows(
+    src,
+    dst,
+    idx,
+    src_base: int = 0,
+    dst_base: int = 0,
+    stride: int = 0,
+    rows: int | None = None,
+    src_pages: bool = False,
+):
     """Copy row ``src_base + i`` of ``src`` to logical row ``dst_base + i * stride + idx[i]`` of ``dst`` for ``i``
     below ``rows`` (default: ``idx``'s length), skipping the rows whose ``idx`` is the sentinel; in place on ``dst``.
     ``src`` row-major DRAM-interleaved; ``idx`` ``[1, 1, 1, n]`` uint32 row-major (per chip: a sharded index tensor
     scatters differently on each chip). ``dst`` DRAM-interleaved in one of three forms of the same logical rows
     (``kernels/scatter_rows.cpp``): row-major rows of ``src``'s width; tiled bf16 of that width (the row lands in
     its tile's faces); or row-major block pages of ``BLOCK_ROWS * width`` (row ``r`` at page ``r // BLOCK_ROWS``,
-    the layout ``candidate_scores`` reads). One data-movement op."""
+    the layout ``candidate_scores`` reads). ``src_pages``: ``src`` holds its rows as block pages of ``BLOCK_ROWS``
+    rows too (``[1, 1, n / BLOCK_ROWS, BLOCK_ROWS * width]``; ``dst`` then row-major rows: the restore of a parked
+    prefix). One data-movement op."""
     for t, what in ((src, "src"), (dst, "dst"), (idx, "idx")):
         memory = t.memory_config()
         assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), f"scatter_rows {what}: DRAM"
         if what != "dst":
             assert t.layout == ttnn.ROW_MAJOR_LAYOUT, f"scatter_rows {what}: row-major, got {t.layout}"
     assert idx.dtype == ttnn.uint32 and idx.shape[2] == 1, tuple(idx.shape)
-    assert dst.dtype == src.dtype, (src.dtype, dst.dtype)
-    row_bytes = src.shape[3] * src.element_size()
-    mode = _dst_mode(dst, src.shape[3])
+    if src_pages:
+        width, row_bytes = dst.shape[3], dst.shape[3] * dst.element_size()
+        assert dst.layout == ttnn.ROW_MAJOR_LAYOUT and src.shape[3] * src.element_size() == BLOCK_ROWS * row_bytes, (
+            tuple(src.shape),
+            src.dtype,
+            tuple(dst.shape),
+            dst.dtype,
+        )
+        src_rows = src.shape[2] * BLOCK_ROWS
+    else:
+        width, row_bytes = src.shape[3], src.shape[3] * src.element_size()
+        src_rows = src.shape[2]
+    mode = _dst_mode(dst, width, row_bytes)
+    assert mode == 2 or src_pages or dst.dtype == src.dtype, (src.dtype, dst.dtype)  # pages carry bytes
     assert mode != 1 or row_bytes % 64 == 0, row_bytes  # whole tiles across
     n = idx.shape[3] if rows is None else rows
-    assert 0 < n <= idx.shape[3] and src_base + n <= src.shape[2], (n, tuple(idx.shape), src_base, tuple(src.shape))
+    assert 0 < n <= idx.shape[3] and src_base + n <= src_rows, (n, tuple(idx.shape), src_base, tuple(src.shape))
     coords, cores = _cores(src.device(), min(n, 64))
     args = ttnn.RuntimeArgs()
     for (cx, cy), (first, count) in zip(coords, _split(n, len(coords))):
@@ -100,12 +123,13 @@ def scatter_rows(src, dst, idx, src_base: int = 0, dst_base: int = 0, stride: in
     kernel = ttnn.KernelDescriptor(
         kernel_source=_KERNEL,
         core_ranges=cores,
-        compile_time_args=[0, row_bytes, mode, BLOCK_ROWS] + accessors,
+        compile_time_args=[0, row_bytes, mode, BLOCK_ROWS, 2 if src_pages else 0] + accessors,
         runtime_args=args,
         config=ttnn.ReaderConfigDescriptor(),
     )
     per_core = max(count for _, count in _split(n, len(coords))) + 16  # a core's index window, line-aligned
-    scratch = 64 + (per_core * 4 + 63) // 64 * 64 + 2 * ((row_bytes + 63) // 64 * 64)
+    buffers = max(2 * ((row_bytes + 63) // 64 * 64), (BLOCK_ROWS * row_bytes + 63) // 64 * 64 if src_pages else 0)
+    scratch = 64 + (per_core * 4 + 63) // 64 * 64 + buffers
     page = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=scratch)
     cbs = [ttnn.CBDescriptor(total_size=scratch, core_ranges=cores, format_descriptors=[page])]
     return ttnn.generic_op([src, idx, dst], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
@@ -141,12 +165,17 @@ class V41DecodePool:
         users_per_rank: int,
         kv_format,
         ring_slots: int = RING,
+        parking: bool = False,
     ):
         """The pool of ``users_per_rank`` slots per mesh row for the layer schedule ``layers`` (all of a model's
         layers in serving) up to ``max_seq_len`` positions per user, compressed rows in ``kv_format``.
         ``ring_slots`` (>= RING): the window ring's slots per layer; with ``position_rings`` set, a position's slot is
         ``position % ring_slots`` (the join places the carry there) instead of the global step's (speculative
-        decode's verify rows, ``tt/v41/spec_verify.py``: rows of one slot at consecutive positions in one step)."""
+        decode's verify rows, ``tt/v41/spec_verify.py``: rows of one slot at consecutive positions in one step).
+        ``parking`` (``TT_V41_DEFER_FINAL``): one replicated copy of the 40 window carries per
+        slot, the state a parked request's final chunk restores from (``park_carries`` / ``unpark_carries``),
+        allocated here, before any capture; the slot's rings are not a durable copy, since every decode step writes
+        every slot's ring at ``step % RING``, live or idle."""
         assert 0 < users_per_rank <= ROWS, users_per_rank
         assert config.SLIDING_WINDOW <= RING and WINDOW_SLOT == RING
         assert ring_slots >= RING, ring_slots
@@ -200,6 +229,17 @@ class V41DecodePool:
         self._offsets = {src: self._user_offsets(src) for src in sources}
         self._init_ccl(mesh_device)
         self.step = 0  # the global step: the ring slot every user's next window row goes to is step % RING
+        # the parking buffers: per slot, per layer, the carry's shape and format (as V41PrefillState.window_carry)
+        self.parked: dict[int, dict[int, ttnn.Tensor]] = {}
+        if parking:
+            for slot in range(self.sp * users_per_rank):
+                self.parked[slot] = {}
+                for l in self.layers:
+                    fmt = kv_format if config.compress_ratio(l) else MlaKvCacheFormat.BF16_RM
+                    self.parked[slot][l] = replicated_zeros(
+                        mesh_device, WINDOW_SLOT, fmt.storage_width(self.kv_geometry), fmt.storage_dtype
+                    )
+        self._iota: dict[int, ttnn.Tensor] = {}  # the restore's identity index pages, by length
 
     def _replicated(self, host, dtype, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(
@@ -349,6 +389,109 @@ class V41DecodePool:
                 ttnn.copy(ttnn.to_layout(dst_rows, ttnn.TILE_LAYOUT), dst)
                 ttnn.deallocate(src_rows)
                 ttnn.deallocate(dst_rows)
+
+    # --- parking and restoring (TT_V41_DEFER_FINAL) ----------------------------------------
+    def park_carries(self, slot: int, state: V41PrefillState) -> None:
+        """Copy ``state``'s window carries into ``slot``'s parking buffers (after the slot's join)."""
+        for layer, dst in self.parked[slot].items():
+            ttnn.copy(state.window_carry[layer], dst)
+
+    def unpark_carries(self, slot: int, state: V41PrefillState) -> None:
+        for layer, src in self.parked[slot].items():
+            ttnn.copy(src, state.window_carry[layer])
+
+    def iota(self, n: int):
+        """``[1, 1, 1, n]`` uint32 row-major ``0 .. n - 1`` on every chip (the restore's destination index)."""
+        t = self._iota.get(n)
+        if t is None:
+            host = torch.arange(n, dtype=torch.int32).view(1, 1, 1, n)
+            t = self._replicated(host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            self._iota[n] = t
+        return t
+
+    def restore_ops(self, slot: int, state: V41PrefillState, length: int, piece: int = 65536, probe=None) -> dict:
+        """The device ops of a restore: ``slot``'s first ``length`` tokens of compressed KV and index keys (the
+        bulk chunks of a parked request, a multiple of the chunk) back into ``state``'s caches on every chip, in
+        pieces of at most ``piece`` tokens. Per source and piece: the slot's rows sliced on every rank (each rank
+        its own slot ``u``), gathered over the SP axis (``[1, 1, sp * n, W]``: the owning rank's segment is at
+        ``rank * n``), and the owner's segment scattered into the state (KV: row-major into row-major; index keys:
+        the tiled rows into ``index_k_tiled`` and, untilized, into the row-major ``index_k``). Then the window
+        carries from the parking buffers. ``state.start`` is set; the compressor carry is ``None`` (a bulk ends on
+        a chunk boundary). ``probe(tag)`` is called after each gather (a memory probe). Returns the op counts."""
+        assert state.compressed_kv_format == self.kv_format, (state.compressed_kv_format, self.kv_format)
+        assert state.geometry.max_seq_len <= self.max_seq_len, (state.geometry.max_seq_len, self.max_seq_len)
+        assert length % state.geometry.chunk == 0 and 0 < length <= state.geometry.max_seq_len, length
+        cfg, g = self.config, state.geometry
+        rank, u = divmod(slot, self.users)
+        counts = {"gathers": 0, "scatters": 0, "layouts": 0, "pieces": 0}
+        for src in state.kv:
+            ratio = cfg.compress_ratio(src)
+            n_rows = length // ratio
+            step_rows = piece // ratio
+            assert step_rows % 32 == 0 and n_rows % 32 == 0, (step_rows, n_rows)
+            kv, cap = self.kv[src], self.slots[src].cap
+            w = kv.shape[3]
+            idim = cfg.INDEX_HEAD_DIM
+            base = u * self.slots[src].rows + self.comp_row(src)
+            assert n_rows <= cap, (n_rows, cap)
+            for a in range(0, n_rows, step_rows):
+                b = min(a + step_rows, n_rows)
+                n = b - a
+                counts["pieces"] += 1
+                # the compressed KV rows: 528-byte FP8 pages, which the gather refuses (a DRAM page must be a
+                # multiple of 64 bytes on Blackhole), so the slot's rows are packed eight to a 4,224-byte page
+                # (``scatter_rows`` into block pages), the pages gathered, and the owner's rows unpacked into the
+                # state (``scatter_rows`` from block pages, ``src_pages``)
+                assert n % BLOCK_ROWS == 0 and (BLOCK_ROWS * w * kv.element_size()) % 2 == 0, (n, w)
+                pages = ttnn.allocate_tensor_on_device(  # bf16 pages of the FP8 rows' bytes: a dtype the CCL moves
+                    ttnn.Shape([1, 1, n // BLOCK_ROWS, BLOCK_ROWS * w * kv.element_size() // 2]),
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    self.mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
+                scatter_rows(kv, pages, self.iota(n), src_base=base + a, rows=n)
+                gathered = self.gather_sp(pages, dim=2)
+                ttnn.deallocate(pages)
+                if probe is not None:
+                    probe(f"kv[{src}] {a}:{b}")
+                scatter_rows(
+                    gathered,
+                    state.kv[src],
+                    self.iota(n),
+                    src_base=rank * n,
+                    dst_base=g.kv_row_of_compressed(a),
+                    rows=n,
+                    src_pages=True,
+                )
+                ttnn.deallocate(gathered)
+                counts["gathers"] += 1
+                counts["scatters"] += 2
+                # the index keys: tiled in the pool, both forms in the state
+                tiles = ttnn.slice(self.index_k[src], [u, 0, a, 0], [u + 1, 1, b, idim])
+                gathered = self.gather_sp(tiles, dim=2)
+                ttnn.deallocate(tiles)
+                if probe is not None:
+                    probe(f"index_k[{src}] {a}:{b}")
+                part = ttnn.slice(gathered, [0, 0, rank * n, 0], [1, 1, (rank + 1) * n, idim])
+                ttnn.deallocate(gathered)
+                if src in state.index_k_tiled:
+                    ttnn.experimental.slice_write(
+                        part, state.index_k_tiled[src], [0, 0, a, 0], [1, 1, b, idim], [1, 1, 1, 1]
+                    )
+                rm = ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(part)
+                ttnn.experimental.slice_write(rm, state.index_k[src], [0, 0, a, 0], [1, 1, b, idim], [1, 1, 1, 1])
+                ttnn.deallocate(rm)
+                counts["gathers"] += 1
+                counts["layouts"] += 1
+        self.unpark_carries(slot, state)
+        state.start = length
+        state.selection = {}
+        state.engram_history = None
+        for src in state.compressor_carry:
+            state.compressor_carry[src] = None
+        return counts
 
     def join(self, slot: int, state: V41PrefillState) -> None:
         """Copy ``state`` (a prefill's caches, replicated on every chip) into pool slot ``slot`` (rank ``slot //

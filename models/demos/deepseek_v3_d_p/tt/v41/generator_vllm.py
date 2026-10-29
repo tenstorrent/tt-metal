@@ -92,6 +92,14 @@ TRACE_PREFILL_SLACK = "TT_V41_TRACE_PREFILL_SLACK"  # also capture each listed l
 # are captured on the smallest one that holds them instead of the full-chunk states, and a whole prompt of such a
 # length prefills there (a 1,028-token prompt paid a 5,120-row chunk's padded rows).
 SHORT_CHUNK = "TT_V41_SHORT_CHUNK"
+# deferred final chunks: a request parked after its bulk chunks
+# (joined into its slot, its carries in the slot's parking buffers) has its prefix restored into a prefill state when
+# its final chunk is called; off (unset or "0") is the serial path, bit for bit.
+DEFER_FINAL = "TT_V41_DEFER_FINAL"
+
+
+def defer_final() -> bool:
+    return os.environ.get(DEFER_FINAL, "0") == "1"
 
 
 def _round_up(x: int, m: int) -> int:
@@ -298,10 +306,16 @@ class DeepseekV41ForCausalLM:
                 trace=True,
                 sample_on_device=cls.SAMPLE_ON_DEVICE,
                 real_rows=users * (1 + spec_k) if rings_per_slot else None,
+                parking=defer_final(),
             )
         else:
             decoder = TtV41BatchDecoder(
-                model, root, users_per_rank=users, trace=True, sample_on_device=cls.SAMPLE_ON_DEVICE
+                model,
+                root,
+                users_per_rank=users,
+                trace=True,
+                sample_on_device=cls.SAMPLE_ON_DEVICE,
+                parking=defer_final(),
             )
         drafter = None
         if spec_k:
@@ -448,9 +462,32 @@ class DeepseekV41ForCausalLM:
                     self._join_pending(old_key)
                     return state
             raise AssertionError(f"no prefill state for request {key}")
+        if key not in self.pending and defer_final() and key in self.slots:
+            return self._restore(key, start)
         assert key in self.pending, f"request {key}: a chunk at {start} without its earlier chunks"
         state, _, _ = self.pending[key]
         assert state.start == start, f"request {key}: chunk at {start}, its state is at {state.start}"
+        return state
+
+    def _restore(self, key: int, start: int) -> V41PrefillState:
+        """TT_V41_DEFER_FINAL: request ``key``, parked (joined into its slot after its bulk chunks), gets a free
+        prefill state with its ``start``-token prefix restored from the slot; the caller
+        re-creates the pending entry."""
+        slot = self.slots[key]
+        owned = {id(st) for st, _, _ in self.pending.values()}
+        free = [st for st in self.prefill_states if id(st) not in owned]
+        if not free:
+            old_key = next(iter(self.pending))  # the oldest pending request holding a state: parked now
+            self._join_pending(old_key)
+            owned = {id(st) for st, _, _ in self.pending.values()}
+            free = [st for st in self.prefill_states if id(st) not in owned]
+        state = free[0]
+        t0 = time.time()
+        self.decoder.restore(slot, state, start)
+        logger.info(
+            f"DeepSeek-V4.1-Flash: request restored from slot {slot} ({start} tokens) in {time.time() - t0:.3f} s "
+            f"(issued {self.decoder.last_restore.get('issue_s')} s, {self.decoder.last_restore.get('pieces')} pieces)"
+        )
         return state
 
     def prefill_forward(self, **kwargs) -> torch.Tensor:
@@ -485,6 +522,8 @@ class DeepseekV41ForCausalLM:
             state = self._state_for(key, start, n if start == 0 and n == total else None)
             model = self.models[id(state)]  # the full-chunk model, or a short chunk's view
             resume = self.pending[key][2] if key in self.pending else {}
+            if key not in self.pending and start > 0:  # restored (TT_V41_DEFER_FINAL): the host pipeline rebuilt
+                self.pending[key] = (state, prompt, resume)
             t0 = time.time()
             trace = self.prefill_traces.get((id(state), n)) if start == 0 and n == total else None
             if trace is None and start == 0 and n == total and self.trace_on_miss:
@@ -537,6 +576,8 @@ class DeepseekV41ForCausalLM:
             self.next_drafts.pop(slot, None)
             self.buffered.pop(slot, None)
             self.handed.pop(slot, None)
+        if defer_final() and state.start < prompt.numel():  # a bulk's join: the request is parked, its carries kept
+            self.decoder.park(slot, state)
         logger.info(
             f"DeepSeek-V4.1-Flash: request of {prompt.numel()} tokens joined slot {slot} in {time.time() - t0:.3f} s "
             f"({self.decoder.last_join.get('mode')} width {self.decoder.last_join.get('width')})"

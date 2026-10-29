@@ -391,6 +391,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         warmup: int = 2,
         max_seq_len: int | None = None,
         sample_on_device: bool = False,
+        parking: bool = False,
     ):
         """``users_per_rank`` slots per mesh row (``sp * users_per_rank`` users); ``max_seq_len`` of the pool
         (default the model's). ``trace``: capture the step once after ``warmup`` eager steps and replay it.
@@ -408,8 +409,10 @@ class TtV41BatchDecoder(TtV41Decoder):
             users_per_rank,
             model.kv_format,
             ring_slots=self.POOL_RING_SLOTS,
+            parking=parking,
         )
         self.slots: dict[int, _User] = {}
+        self.last_restore: dict = {}
         # the MoE's per-rank [real rows, right padding]: the slots' rows of every rank (``moe_real_rows``: a
         # subclass with verify rows takes more)
         self.padding_config = (
@@ -618,6 +621,21 @@ class TtV41BatchDecoder(TtV41Decoder):
         finally:
             controller.end_capture()
         self.join_traces[key] = controller
+
+    def park(self, slot: int, state: V41PrefillState) -> None:
+        """After ``join(slot, ...)`` of a request's bulk chunks (TT_V41_DEFER_FINAL): keep the
+        state's window carries in the slot's parking buffers, so ``restore`` can put the prefix back into a state
+        after decode steps have written the slot's rings."""
+        self.pool.park_carries(slot, state)
+
+    def restore(self, slot: int, state: V41PrefillState, length: int, piece: int = 65536, probe=None) -> None:
+        """The parked prefix of ``length`` tokens in ``slot`` back into ``state`` (``V41DecodePool.restore_ops``),
+        eagerly; ``last_restore`` records the host issue time and the op counts (the device time is the caller's
+        to measure with a synchronize)."""
+        assert slot in self.slots and self.slots[slot].position == length, (slot, self.slots.get(slot), length)
+        t0 = time.time()
+        counts = self.pool.restore_ops(slot, state, length, piece=piece, probe=probe)
+        self.last_restore = dict(counts, issue_s=round(time.time() - t0, 4), length=length, slot=slot)
 
     def leave(self, slot: int) -> None:
         self.slots.pop(slot, None)
