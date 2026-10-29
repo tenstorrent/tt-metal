@@ -29,4 +29,8 @@ pgm_dispatch_no_trace:
   # Host-bound, so it runs on a pinned host whose CPU matches its golden.
   args: ["--benchmark_filter=no_trace"]
   repetitions: 2
-  policy: {regression_pct: 5, improvement_pct: 5}
+  policy:
+    regression_pct: 5
+    improvement_pct: 5
+    # On the same Wormhole host and commit, these cases move up to about 15% between runs.
+    environments: {wh_n300_perf: {regression_pct: 15, improvement_pct: 15}}
