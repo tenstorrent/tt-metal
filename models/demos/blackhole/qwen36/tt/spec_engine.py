@@ -146,7 +146,9 @@ _WARM_PROMPT_LENS = (100, 128, 200, 256, 400, 512, 900, 1024, 1900, 2048, 2148, 
 PLACEHOLDER_TOKEN_ID = -1
 # Phase 3 (work/research_1026/85): a split step whose second half is enqueued later than this after its first half counts in
 # ``mask_late_finish`` (the forward takes about 31 ms: the mask is "late" when the device may have gone idle). A counter only.
-MASK_LATE_MS = 30.0
+# A CHAINED split step (work/research_1026/92): the forward starts when the previous step ends, so the time runs from
+# max(first half enqueued, previous step done); with the previous step's end time unknown the step is not counted.
+MASK_LATE_MS = 31.0
 # "topk" (QWEN36_VERIFY_DEVICE_TOPK): the exact per-position top-M candidates instead of the full logits, with the
 # full logits fetched lazily when a row cannot be served from them (note 26).
 SPEC_MODES = ("argmax_ids", "logits", "topk", "fused_sample")
@@ -845,6 +847,7 @@ class FusedHandle:
         # not (no event, no reads: nobody may wait on the handle); ``post`` = the closure the finish runs; ``mask_keep`` = the host
         # buffers of the mask write, alive until the event
         self.pending, self.post, self.mask_keep, self.sync_tail = False, None, None, None
+        self.t_done = None  # perf_counter() right after the event wait returned (_def_data); None until read (or for a ready handle)
 
     def wait(self):
         """Block on the step's event (reader thread). A handle of a split step that is still ``pending`` has no event: this raises
@@ -855,6 +858,12 @@ class FusedHandle:
         """The logprob payload (spec_logprobs.DeviceCandidates, runner slots) of this step, or None when no row asked for logprobs.
         Call after ``wait()``; no device call (the data is cached by then)."""
         return self._eng._def_cands(self)
+
+    def drafts(self):
+        """The drafts this step proposed, int32 [B, K] in runner slots: what the NEXT chained step verifies as columns 1..K (before the
+        trim by its host hint). Pure host view of the cached step data: call after ``wait()``; raises while the handle is pending or
+        not read yet. No device call."""
+        return self._eng._def_drafts(self)
 
 
 class _ProposePlan:
@@ -885,7 +894,7 @@ class MTPSpecEngine:
     # phase 3 defaults (class level: a test stub built without __init__ has them too)
     _split_begin = False  # True inside decode_forward_begin
     _split_pending = None  # the FusedHandle whose second half (decode_forward_finish) is due
-    mask_steps = mask_rows = mask_late_finish = mask_fallback_rows = 0
+    mask_steps = mask_rows = mask_late_finish = mask_fallback_rows = mask_chain_steps = 0
 
     _dr_hostset = False  # class default (engines built without __init__ in tests); set by _alloc_drafter_inputs
 
@@ -984,7 +993,7 @@ class MTPSpecEngine:
         # phase 3 (work/research_1026/85): packed token masks inside the fused sampled step: the permuted staging ring of the device
         # input, the counters (steps with a mask trace, constrained engine rows, split steps finished late), the split-step state
         self._mask_ring = PermMaskStagingRing()
-        self.mask_steps = self.mask_rows = self.mask_late_finish = self.mask_fallback_rows = 0
+        self.mask_steps = self.mask_rows = self.mask_late_finish = self.mask_fallback_rows = self.mask_chain_steps = 0
         self._split_begin = False
         self._split_pending = None
         # phase 3 part 2: the penalty state / bodies (PenaltyDevice), the pen update trace, and the counters of the steps that carried a
@@ -3973,11 +3982,17 @@ class MTPSpecEngine:
         slot_remap=None,
         spec_sampling=None,
         defer_read=False,
+        chain_rows=None,
+        chain_tip=None,
         finishing_slots=None,
     ):
         """First half of a split fused step (phase 3 stage P3a, work/research_1026/85): the same arguments as ``decode_forward``
-        (``spec_mode`` must be "fused_sample"; no ``chain_rows`` / ``chain_tip``: a split step is not chained; ``spec_sampling`` is
-        required and has NO ``mask`` key). Does all the host pre-work and enqueues the MAIN verify trace only; returns
+        (``spec_mode`` must be "fused_sample"; ``spec_sampling`` is required and has NO ``mask`` key). ``chain_rows`` / ``chain_tip``
+        (phase 3 stage P6, part of ``supports_spec_device_mask``; need ``defer_read=True``) have the meaning they have in
+        ``decode_forward``: the begin then enqueues the chain trace, the audit reads and the forward-only main trace, so the forward
+        starts when the previous step ends and only the mask is late. A chain that breaks (bucket change, host row, ...) makes the
+        begin a host-staged split step; ``QWEN36_SPEC_DEVICE_MASK=0`` makes a begin with a chain row raise ValueError. Does all the host
+        pre-work and enqueues the MAIN verify trace only; returns
         VerifyResult(spec_mode, None, handle=FusedHandle) with ``handle.pending`` True. The step is the S2 sampled step. The mask
         arrives in ``decode_forward_finish(handle, mask)``, which enqueues the rest. One split step at a time: nothing else may run
         on the engine (decode_forward, prefill) until the finish. The reader thread must not wait on the handle before the finish
@@ -3993,6 +4008,13 @@ class MTPSpecEngine:
             raise ValueError("decode_forward_begin needs spec_sampling: a masked step is a sampled (S2) step")
         if spec_sampling.get("mask") is not None:
             raise ValueError("decode_forward_begin takes the mask later: decode_forward_finish(handle, mask)")
+        if chain_rows is not None or chain_tip is not None:
+            if not defer_read:
+                raise ValueError("decode_forward_begin: chain_rows / chain_tip need defer_read=True")
+            if chain_rows is not None and bool(torch.as_tensor(chain_rows).any()) and not self._mask_ok():
+                raise ValueError(
+                    "decode_forward_begin: a chained split step needs the mask traces (QWEN36_SPEC_DEVICE_MASK on, built and captured)"
+                )
         self._split_begin = True
         try:
             res = self.decode_forward(
@@ -4005,6 +4027,8 @@ class MTPSpecEngine:
                 slot_remap=slot_remap,
                 spec_sampling=spec_sampling,
                 defer_read=defer_read,
+                chain_rows=chain_rows,
+                chain_tip=chain_tip,
                 finishing_slots=finishing_slots,
             )
         finally:
@@ -4552,6 +4576,10 @@ class MTPSpecEngine:
                 f"chain_tip {chain_tip} is not the newest fused step of the engine "
                 f"({None if prev is None else prev.tip_id}); a chained step must follow its tip"
             )
+        if prev.pending:
+            raise RuntimeError(
+                f"chain_tip {chain_tip}: that split step has no decode_forward_finish yet; a chained step must follow a finished step"
+            )
         return cr
 
     def _def_pre_reason(self, prev):
@@ -4785,6 +4813,10 @@ class MTPSpecEngine:
                 chain = dict(prev=prev, cmask=cmask, lo=lo, hi=hi, aux=aux)
         if chain is not None:
             h = self._def_chain_step(chain, clean, start0, active, acc_rows, nv_rows, pt_rows, sampling)
+            if (
+                self._split_begin
+            ):  # decode_forward_begin with a chain: the finish needs the same tail as a host-staged begin
+                h.sync_tail = dict(defer=True, start0=start0, active=active)
             return VerifyResult("fused_sample", None, handle=h)
         self._def_ctx = {"sampling": sampling}
         try:
@@ -4902,13 +4934,31 @@ class MTPSpecEngine:
         )
         read = lambda t: ttnn.from_device(ttnn.get_device_tensors(t)[0], blocking=False)
         h = FusedHandle(self, self._def_next_tip(), kind) if split else None
-        vh = None
-        if split:  # the first half: the host-staged main trace, no chain (the mask is not known yet)
+        vh = audit = None
+        if split and chain is None:  # the first half: the host-staged main trace (the mask is not known yet)
             vh = model.verify_stage_and_enqueue(*args, **kw, forward_only=True, flip_parity=True)
+        elif (
+            split
+        ):  # a chained first half (P6): chain trace, audit reads, the main trace only; the post half does not chain again
+            ttnn.execute_trace(
+                self.mesh, self._ch_trace_g if prev.kind == "g" else self._ch_trace_s, cq_id=0, blocking=False
+            )
+            model._vfy_aux_staged = None
+            if do_audit:
+                audit = dict(tok=read(model._vfy_token_buf), aux=read(model._vfy_aux_buf), fa=read(fa.aux_in))
+            vh = model.verify_stage_and_enqueue(
+                *args,
+                **kw,
+                forward_only=True,
+                skip_tokens_h2d=True,
+                skip_aux_h2d=True,
+                skip_kv_check=True,
+                flip_parity=True,
+            )
         t_begin = time.perf_counter()
 
         def post(mask=None):
-            nonlocal vh, h
+            nonlocal vh, h, audit
             midx, mask_buf, ex = [], None, dict(extra)
             if split:
                 self._finish_sampling_mask(sampling, mask)
@@ -4929,9 +4979,15 @@ class MTPSpecEngine:
                     )
                 mask_buf = self._mask_stage(sampling, midx)
                 ex.update(execute_mask=True, mask_host=mask_buf)
-                if split and (time.perf_counter() - t_begin) * 1e3 > MASK_LATE_MS:
+                if split and chain is not None:
+                    self.mask_chain_steps += 1
+                    # the forward starts when the previous step ends, not at the begin: count from the later of the two
+                    t_prev = prev.t_done
+                    t0 = None if t_prev is None else max(t_begin, t_prev)
+                else:
+                    t0 = t_begin
+                if split and t0 is not None and (time.perf_counter() - t0) * 1e3 > MASK_LATE_MS:
                     self.mask_late_finish += 1  # the forward may have ended: the device waited for the mask
-            audit = None
             if split:
                 model.verify_enqueue_post(vh, **ex)
             elif chain is None:
@@ -5055,6 +5111,18 @@ class MTPSpecEngine:
         self._def_data(h)
         return h._readout
 
+    def _def_drafts(self, h):
+        """FusedHandle.drafts(): the K draft ids of the step per runner slot, int32 [B, K]. Pure: reads the cached step data."""
+        if h.pending:
+            raise RuntimeError(f"step {h.tip_id}: drafts() before decode_forward_finish")
+        d = h._data
+        if d is None:
+            raise RuntimeError(f"step {h.tip_id}: drafts() before the handle was read (wait())")
+        if d["steps"] is None:  # a ready (fallback) step made no drafts
+            return torch.zeros(self.B, self.K, dtype=torch.int32)
+        rows = torch.tensor(d["steps"], dtype=torch.int64).T.reshape(self.B, self.K)
+        return self._perm_slots(rows.to(torch.int32), h.perm)
+
     def _def_cands(self, h):
         """The handle's payload in runner slots (None = no logprobs row). Pure host work on the cached step data."""
         c = self._def_data(h).get("candidates")
@@ -5079,6 +5147,7 @@ class MTPSpecEngine:
                 ttnn.synchronize_device(self.mesh)
             else:
                 ttnn.event_synchronize(h.event)
+            h.t_done = time.perf_counter()
             d = self._def_parse(h)
             self._def_check(h, d)
             h._data = d
@@ -5368,6 +5437,11 @@ class MTPSpecEngine:
         buf = ring.stage(mask_rows_flat(sampling["mask"], self.B, self.T), rows)
         self.mask_steps += 1
         self.mask_rows += len(rows)
+        if self.mask_steps == 1 or self.mask_steps % 256 == 0:
+            logger.info(
+                f"[spec_engine] device masks: {self.mask_steps} steps, {self.mask_rows} rows, {self.mask_chain_steps} chained, "
+                f"{self.mask_late_finish} late, {self.mask_fallback_rows} fallback rows"
+            )
         return buf
 
     @staticmethod

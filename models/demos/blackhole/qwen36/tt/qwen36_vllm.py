@@ -1441,7 +1441,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def decode_forward_begin(self, *args, **kwargs):
         """First half of a split fused step (phase 3 stage P3a; needs the capability supports_spec_device_mask). The arguments are those
         of ``decode_forward`` for spec_mode "fused_sample", by keyword, with these differences: ``spec_sampling`` is REQUIRED and has
-        no ``mask`` key (the mask comes in the finish); ``chain_rows`` / ``chain_tip`` must be absent (a split step is not chained);
+        no ``mask`` key (the mask comes in the finish); ``chain_rows`` / ``chain_tip`` (phase 3 stage P6, part of the same capability)
+        have the meaning they have in ``decode_forward`` and need ``defer_read=True``: the begin then enqueues the chain trace and the
+        forward-only main trace, so the forward starts when the previous step ends (the previous step must be finished; a chain that
+        breaks makes this a host-staged split step; QWEN36_SPEC_DEVICE_MASK=0 raises ValueError for a chained begin).
         ``defer_read`` as for decode_forward (True: the step is read by the reader thread; False: the finish synchronizes and returns
         the result; a top-p certificate row needs False). Does the host pre-work and enqueues the main verify trace only. Returns
         VerifyOutput(spec_mode, handle=pending FusedHandle): ``handle.pending`` is True, ``handle.wait()`` raises, so the reader thread
@@ -1500,8 +1503,6 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if split:
             if narrow or kwargs["spec_mode"] != "fused_sample":
                 raise ValueError("decode_forward_begin needs spec_mode 'fused_sample'")
-            if kwargs.get("chain_rows") is not None or kwargs.get("chain_tip") is not None:
-                raise ValueError("a split step is not chained: decode_forward_begin takes no chain_rows / chain_tip")
             if not self.model_capabilities.get("supports_spec_device_mask", False):
                 raise ValueError("decode_forward_begin needs the supports_spec_device_mask capability")
             if kwargs.get("spec_sampling") is None:
@@ -1595,7 +1596,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     def read_decode_output(self, tt_out, async_read=False, **kwargs):
         """Reader-thread read of a deferred fused verify (stage S4b): ``read_decode_output(handle)`` blocks on the step's device event
         and returns FusedReadout(accepted_token_ids [B,1+K] int32, accepted_counts [B] int32, p0 [B] int32). It makes no other device
-        call and changes no engine state (the handle's own result cache only). Any other ``tt_out`` takes the Generator's path.
+        call and changes no engine state (the handle's own result cache only). With ``supports_spec_device_mask`` the readout also
+        carries ``drafts`` (int32 [B, K], runner slots: the drafts the next chained step verifies as columns 1..K, from
+        ``FusedHandle.drafts()``) when the plugin's FusedReadout has that field. Any other ``tt_out`` takes the Generator's path.
         """
         from models.demos.blackhole.qwen36.tt.spec_engine import FusedHandle
 
@@ -1604,11 +1607,14 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
 
             ids, counts, p0 = tt_out.wait()
             cand = tt_out.candidates()  # None unless a row of the step asked for logprobs (phase 2)
+            # phase 3 stage P6: the drafts of the step (pure host view); an older plugin's FusedReadout has no such field
+            has_drafts = "drafts" in getattr(FusedReadout, "__dataclass_fields__", {})
             return FusedReadout(
                 accepted_token_ids=ids,
                 accepted_counts=counts,
                 p0=p0,
                 **({} if cand is None else {"candidates": _plugin_candidates(cand)}),
+                **({"drafts": tt_out.drafts()} if has_drafts else {}),
             )
         if async_read and hasattr(tt_out, "spec_mode") and getattr(tt_out, "handle", None) is None:
             # Non-deferred VerifyOutput (sampled fused_sample, topk): already host when every present tensor field is.
