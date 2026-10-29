@@ -2375,3 +2375,158 @@ scratchpad soak/: results.log, NOTES.md, run.sh / cycle.sh / tally*.py). Profile
   0.4535 and x 0.1 sparse 0.975 (F4, snap range). GLM draws at 1280 / 2048 / 5120 all ran the fused head.
 - Before c888fc73612 the fused head never built at GLM 2x4 chunk 1280 (host TT_FATAL mcast.cpp:66, rotating
   senders) and the block silently took the ops head (morning d201 / d203 too); now it builds, or raises.
+
+## Fused head generality: a host plan that matches the build, refusals with numbers (2026-10-29, bh-lb-09)
+Why: `FusedHead.fits` was a coarse filter (layouts exist, activation / router / links / bf8). Shapes it accepted failed
+at build (GLM-Flash 2x4 1280 yesterday; the HEAD mock sweep below shows more), and a refusal said little. Marko: "fits"
+must mean "builds", say why otherwise, keep the fast path where it fits.
+- `head_plan.fit(shape, arena_max)` = every requirement the build checks, no device: the matmul cores' arena per (layout, K
+  step, W ring, row chunks), the RS plan (counts word: TP <= 4, P < 256), the mover column (ports, the watcher, router
+  cores - or free rows under the matmul cores), the router cores' arena / logits sub-blocks / runtime args, the routing
+  exchange (RoutingStream's own paths on a host ring plan: X / Y senders, forwards, port and watcher buffers, the
+  planner regions at the most instances that fit), packet headers. Ranked by the cost model as before. `FusedHead.plan`
+  adds the model checks and runs it on the machine (grid, payload, free L1 - measured 1424 KB at the plan, 1383 KB at
+  the build: the plan assumes the free L1 less 56 KB less an 8 KB margin) and the combine's real accumulator count
+  (planned before the head now). HeadSE3 builds from fit() on the device's own cap (>= the plan's), so an accepted
+  shape has a layout there; a build failure after an accepted plan raises HeadBuildError ("a planner gap").
+- Refusals: e.g. "L1: the least arena any layout needs is 1431 KB (engine 11x8 MT 1, 10 row chunks, K step 7, router on
+  the engine), a core has 1326 KB; tried K steps [1, 2, 4, 7, 14], row chunks [5, 10, 20], W rings off / 5 / 4 / 3;
+  ... the largest rows a mesh row that fit: 1280 (chunk 1280)". What L1 forced in an accepted plan is logged against
+  the cost model's unlimited-L1 pick ("L1-limited: K step 16 -> 8, row chunks 5 -> 10 ... +462 us").
+- Generalized (commit a9d8ec234c7): SE activation constants are kernel defines from the model (SiTU betas, clamp limit)
+  and SwiGLU-OAI (MiniMax M3, moe_gpt's swiglu_sfpu.h) is SE_GLU 4; shared weights bf4 / bf8 / bf16 plumbed from
+  MoEDtypes; the NCRISC's W-block tables are sized NB / GY + 1 (the "> 64 blocks a core" refusal at small K steps is
+  gone, NB <= 1024); one router core (logits on the router cores) reads W_r itself (RT_RW_SOLO - the unified Mcast
+  refuses a rotating family of one). Every assert in SeEngine3's sizing names its values.
+- Fixed at HEAD (a99fa23e9f8): the head's port cores hold a static packet CB from the L1 base (2 x 4 x rp pages); in the
+  one-arena forward the exchange's arena could start below its end - MiniMax M3 (6-page packets, CB end 210304, arena
+  at 192000) and K2.7 2x4 / 4x4 (HEAD mock sweep) TT_FATAL'd "static circular buffers clash". The head now runs in its
+  own arena when the exchange's would start below `static_top`.
+- Chunk padding (4f1b2d272f2): a chunk that is not whole tiles a chip runs at the next that is (zero rows at the end of
+  each mesh row / chip, sliced off the output). One ttnn.pad where the zeros are whole tiles past the last; through
+  row-major where they fall inside the last tile (ttnn.pad's tile path throws there, then segfaults). K3 ring 600,
+  K3 2x4 2000, GLM-Flash 2x4 2000 (sp_tp) / 1000 (owners): PCC as unpadded, bitwise stable; pad + slice ~25-45 us.
+- Checked (snap 2^-14, traced, every replay vs the host on the device's routing): K3 ring / line 640 / 1280, GLM-Flash
+  2x4 5120 / 2560 / 1280 - layouts, PCC, 0 bitwise-differing same-x replays as before; heads within noise (K3 ring 640
+  interleaved A/B: HEAD 392.1 / 389.2 / 391.1 us, new 390.4 / 391.7 / 390.2). MiniMax M3 ring 640 now fused: PCC
+  0.98874 (its usual), head 264.5 us.
+- Harness notes: the device profiler throws "Source location hashes are colliding" (16-bit FNV of zone name, file,
+  line) as kernels change lines: zone_src_locations.log keeps stale entries (pruned of ../chlkc_ zones before each run)
+  and two live zones can collide (SE-RPWAIT vs SE-GU at one config) - the scratch harness shifts the SE compute's lines
+  (GEN_ZSHIFT) when it happens. Not a code issue.
+
+## The fused head's DRAM fallback (4d93bf0ce6c, 2026-10-29, bh-lb-09)
+Why: at large rows a mesh row no resident layout fits L1 - x own holds every chunk's x (K3 2560 rows: 560-1120 KB a
+core). Marko: fall back to DRAM only where needed, keep the resident path where it fits.
+- Only when no resident layout fits (MoEOptions.head_dram_fallback, default on): x all-gathered over TP into a [rows, H]
+  DRAM buffer ahead of the program; x own a ring of 2 chunk slots reloaded from it (chunk m + 2 into chunk m's slot at
+  the end of chunk m, behind its rounds and - no latent - its dispatch prep: XFREE credits); the ports carry no x but
+  keep the call fence; router cores may take a rectangle of the free rows. The plan logs it with its cost ("x from DRAM
+  (the fallback: L1 ...)").
+- K3 2x4 chunk 5120 (2560 rows a mesh row - the quarter Galaxy; resident: 1455 KB > 1332): replay 6491 us vs the ops
+  head 6734, PCC 0.99626; K3 ring 2560: 5063 vs 5392; DeepSeek-V4.1 2x4 5120: 3998 vs 4450. Soak: 300 eager + 20000
+  replays each (K3 2x4 5120, ring / line 2560), PCC 0.9962-0.9963, 0 of 228 same-x replays differ, no hang.
+- Refused, with the reason: K3 past 3200 rows a mesh row (LATZ and the router cores grow with the rows). GLM-5.3-Flash
+  2x4 10240 / ring 4096 stop in the combine ("landing pool"), the ops head too - not the head's.
+
+## Routing exchange: more than 16 forwards a port (2026-10-29)
+- A forwarding port's slots were a fixed 16 (RAFwd sent[16], the flags + landed count at word 16 x 16 in the mailbox).
+  The 8x4 torus on one link needs 22 (8x4 line with the SP ring: 30). RoutingStream(fslots) sizes them by the mesh's
+  routing paths (head_plan.routing_paths, >= 16): the kernel's RA_NF_, the mailbox (lw_off), the args check; the plan
+  refuses past 64.
+- Checked: mock 8x4 torus links 1 (Galaxy cluster descriptor) build GLM-5.3-Flash 5120 / 10240 and K3 5120 and run a forward, fused;
+  the LoudBox meshes (<= 12 forwards) unchanged (regression set below).
+
+## TP 8: the reduce-scatter's counts word, the LoudBox 1x8 ring / line (2026-10-29, bh-lb-09)
+- se_rs.counts_word packed a byte a block (TP <= 4). Past TP 4 a core's rows fall in at most two blocks (rows scatter,
+  MT <= 2): two (block, count) byte pairs, x_gather3's cnt_of reads either form. The latent's all-to-all (K3) still
+  needs TP <= 4 (3 destination headers a port) - refused with that reason; TP > 8 refused.
+- MGDs p150_x8_ring_1x8 / p150_x8_line_1x8 (flat_combine_tools) for the 8 P150s as one TP axis.
+- 1x8 chunk 1024 (2048 for GLM-Flash), fused vs ops head (traced replay us; PCC same as ops): GLM-5.3-Flash ring 1645 vs
+  2038, line 1881 vs 2140, ring 2048 2288 vs 2365; DeepSeek-V4.1 ring 2616 vs 2785; GLM-5.3 ring 2294 vs 2390; K2.7
+  ring 3605 vs 3710. MiniMax M3 1x8: the flat expert op's arena does not fit (1288 KB > 1284) - not the head's.
+- Open: with the router's logits on the router cores at TP 8, the picks of one x differed call to call (200-360 of 1024
+  tokens; same x, snap on); on the matmul cores bit-identical (0 of 20). Not narrowed; the plan takes the matmul cores
+  at TP > 4 ("the router's logits on the router cores differ call to call") - GLM-5.3 ring 8 1024: 2289 vs 2294 us.
+- Not lifted (#3b): more than 2048 tokens a chip - the routing planner's S bound, shared by the ops head and the
+  exchange; the refusal names it ("chunk <= 2048 x N").
+
+## The router's buffers over the reduce-scatter's zones: a cross-chip race, fixed with a "router done" credit (2026-10-29, bh-lb-09)
+Why: the DRAM fallback (4d93bf0ce6c) ran in its own arena because inside the exchange's one GLM-5.3-Flash 2x4 call gave
+wrong rows and a router-rectangle run hung. Two arenas hid both without a cause. Narrowed on the repro until the overlap
+showed.
+- Repro (scratch harness zz_scratch_head_gen.py, uncommitted; scratchpad gen/run.sh): `run.sh oa_samex 2x4
+  GEN_MODEL=glm53_flash GEN_CHUNK=2560 GEN_XDRAM=1 GEN_XDRAM_ON=1 MOE_TRACE_REPLAYS=2 NOPROF=1 GEN_SAMEX=1` (GEN_XDRAM
+  forces the fallback, GEN_XDRAM_ON=1 its layout with the router's logits on the matmul cores, GEN_SAMEX the same x
+  every call; before the fix with the head in the exchange's arena). The first eager call was wrong: PCC 0.964-0.970,
+  192-224 of 2560 rows (owner tiles 0 / 1 / 10 / 40 / 41 / 50 / 51); every later call 0.98685.
+- One variable at a time: the arena zeroed before the call - same (not stale contents); a device sync after the x
+  all-gather, or x gathered before the first call - same (not the gather); the ports' x streams kept (x still from
+  DRAM) - fixed; two arenas - fixed. DPRINT on chip 0's matmul cores: the router's x rows and W_r^T rounds read the same
+  in the bad and the good call, the partial logits (RO) of rows 0-3 differed - the inputs changed under the compute.
+  The router's RX / RW / RO moved past the arena, one arena otherwise unchanged - fixed, PCC 0.98674 every call.
+- Cause: SeEngine3 puts the router-on-the-matmul-cores buffers (RX / RW / RO) in the arena's tail over the
+  reduce-scatter's arrival zones (ARRF / ARRB), the latent's LATZ and the prep's buffers: "written only after gate / up,
+  the router's phase is over before it". True of this chip's own writes; ARRF / ARRB / LATZ are written by other chips'
+  ports, which wait only for "the chip started this call". In the resident head a chip's reduce-scatter needs every
+  chip's x, which a chip sends only behind its own router phase: forced skew (2 ms before TP position 0's router phase,
+  GLM 2x4 5120, old protocol) - PCC right, every chip waited (replay 3044 -> 4953 us). In the fallback no chip waits for
+  another's x: on the first call (program load skew) an upstream's chunk-0 units land in the zones while the router
+  compute still reads RX / RW there. Forced skew in the fallback (GLM 2560, the same 2 ms, old protocol): every eager
+  call wrong (PCC 0.965, the same owner tiles), no hang. Two arenas moved the router region off the zones; x streams
+  kept re-coupled the chips.
+- The router-rectangle hang (01:28 that night, router on 10 router cores, nothing over the zones): its triage had the
+  BRISCs in cb_wait_front(SE_XFREE), the x loads behind them - the x ring's per-chunk credits left over from the previous
+  call, fixed 8 minutes later (the XFREE drain at the end of a call, in 4d93bf0ce6c) and never re-run in one arena. Now:
+  4 runs in one arena (8-16 traced replays + eager each), PCC 0.98674, bitwise stable. Not an arena bug.
+- Fix, a protocol (a layout keeping RX / RW / RO off the zones would take K3 640's router ~600 KB it does not have):
+  SeEngine3 marks a layout whose router buffers overlap ARRF / ARRB (rtr_zones) or LATZ (rtr_latz). Then every matmul
+  core, its router phase over (RO written out, RX / RW consumed), adds 1 on every port core's "router done" word
+  (SE_RDONE; the head's mailbox, zw_off + 8). A port, once all GX x GY are in, sends its upstream peer chunk 0's zone
+  credit (the credits that gated chunks 1 .. NCH-1 now also gate chunk 0: rs_send waits m + 1, zexp + 1) and/or the
+  latent's "started" messages (LATZ's fence moves from "started" to "router done"); every port re-arms the word at the
+  end. With row chunks the port also polls it between its x gather's packets (the upstream's chunk 0 comes before the
+  gather's last chunk ends - without it GLM 2x4 5120 / 2560 lost 1.3%); with one chunk it does not (a blocking header
+  between x packets cost K3 640 ~3 us of gather). No overlap: nothing changes.
+- The RS protocol model (test_rs_protocol_model) runs every chunked case with the router phase too (1-3 chunks) and
+  catches a zone write during a router phase without the credit (the device's first-call rows).
+- One arena again for the fallback (MoEBlock.forward takes the exchange's arena for every head).
+- Checked (snap 2^-14): the repro in one arena PCC 0.98674 every call, 0 of 21 same-x replays differ; forced skew in the
+  fallback with the fix: eager 0.98682 / 0.98685, 0 of 20 differ. Heads, A/B interleaved against the HEAD tree (device
+  us, slowest chip, median of 40): GLM-Flash 2x4 5120 960.1 / 960.8 vs 960.6 / 960.6, 2560 526.6 / 528.4 vs 525.4 /
+  526.8, K3 ring 640 393.1 / 393.5 vs 394.6 / 393.4. Soak (300 eager +
+  20000 replays, 232 checks, 0 of 228 same-x replays differ, no hang): the fallback GLM-Flash 2x4 2560 (router on the
+  matmul cores) PCC 0.98683, GLM-Flash 2x4 5120 0.98688, K3 ring 640 0.99616; 4 fresh-process starts of the repro clean.
+- F2 (the GLM 2x4 first-call hang, d103): not this race. d103's layout overlays (RX over ARRF / ARRB), but what its
+  triage waits on is outside the overlap - arrival counters (global semaphores), zone credits / mailboxes, CB counts;
+  the overlap holds the zones' data tiles only, so the race gives wrong values, never a missing increment (the forced
+  skew above: wrong rows, no hang). And d103 hung before any RS reached devs 0-5: their matmul cores in gate / up waiting
+  for x shards (xready), router cores waiting for other chips' logit partials, port NCRISCs in
+  wait_for_empty_write_slot (EDM full); only devs 6 / 7 (SP row 1, TP 2 / 3) were in the RS. F2 stays open: a fabric
+  flow stall in the x gather + the logits stream.
+
+## Fused head device matrix after the generalization (2026-10-29, bh-lb-09 - 12x10 grid, 200G, snap 2^-14)
+Every model on the 1x4 ring / 1x4 line at chunk 640 / 1280 / 2048 and the 2x4 line at 1280 / 2560 / 5120 (5120: the
+8x4 Galaxy's per-chip load, 640 rows a mesh row), traced, every replay checked against the host on the device's routing
+(scratch harness zz_scratch_head_gen.py; scratchpad gen/matrix.sh, mx_table.py). Traced replay us of the whole block;
+the ops head where it was run (MiniMax M3, K2.7 everywhere, every 2x4 5120). 0 of 20 same-x replays differed in every
+run that built; no hang.
+- K3: ring 1727 / 3216 / 4070 (2048: x from DRAM), line 1901 / 3550 / 4883 (x from DRAM), 2x4 1949 / 3649 / 6512 (x
+  from DRAM) vs ops 6733; PCC 0.9961-0.9963.
+- K2.7: ring 3168 / 3697 / 4812 vs ops 3414 / 3902 / 4570, line 3413 / 3990 / 5493 vs 3626 / 4306 / 5200, 2x4 3453 /
+  4053 vs 3684 / 4390; PCC 0.9856-0.9860. At 2048 rows the fused head is 5-6% slower than the ops head: the plan is
+  L1-limited (K step 14 -> 2, compact zones, W streamed); the cost model ranks it above the DRAM fallback (1021 vs 1098
+  us predicted) and has no ops-head estimate to compare - open. 2x4 5120: the combine does not fit, either head.
+- GLM-5.3-Flash: ring 1473 / 1829 / 2116, line 1585 / 2013 / 2390, 2x4 (owners) 1666 / 2126 / 3042 vs ops 3972.
+- GLM-5.3: ring 3511 / 3941 / 4399, line 3674 / 4248 / 4802, 2x4 2127 / 2737; 2x4 5120: the exchange does not fit
+  beside the fused head (the combine at A 12: landing pool -15 < 7) - the ops head runs it, 5873 us (a28131dc614 now
+  raises HeadBuildError naming it).
+- DeepSeek-V4.1: ring 2279 / 2667 / 3070, line 2400 / 2872 / 3418, 2x4 2436 / 2906 / 4000 (x from DRAM) vs ops 4449;
+  PCC 0.9908-0.9911.
+- MiniMax M3 (fused for the first time): ring 640 2467 vs ops 2719, 1280 2975 vs 3225; line 640 2603 vs 2860; 2x4 1280
+  1630 vs 1901; PCC 0.9887-0.9890. Ring 2048 / line 1280: the flat op's arena (1288 KB) does not fit the L1 left
+  beside the fused head (1276 / 1278 KB) - the ops head runs them (3744 / 3520 us); line 2048, 2x4 2560 / 5120: not
+  with either head.
+- Open from this: the head plan does not size the exchange next to it (its kept L1, the combine at its pinned
+  accumulators) - three configurations where the ops head builds and the fused one does not; and a crossover check
+  against the ops head for L1-limited plans (K2.7 2048 rows).
