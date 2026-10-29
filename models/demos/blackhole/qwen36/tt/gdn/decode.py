@@ -8,6 +8,10 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
 import ttnn
+from models.demos.blackhole.qwen36.tt.gdn.stateless_prefill import (
+    stateless_prefill_forward,
+    stateless_prefill_supported,
+)
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
 
 
@@ -21,6 +25,8 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None,
 
     stateless: prefill from a zero state and leave gdn's state untouched. x may then hold several
     right-padded sequences [B, T, dim], with valid_len a per-row list."""
+    if stateless_prefill_supported(gdn, mode, stateless):
+        return stateless_prefill_forward(gdn, x)
     w = gdn.weights
     if chunk_size is None:
         chunk_size = gdn.long_prefill_chunk_size if mode == "chunk" else 64
