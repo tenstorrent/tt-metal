@@ -8,7 +8,10 @@ identity: the prompts of prompts.py decoded (a) one at a time, (b) all at once b
     its neighbours, its row or its launch). The fillers of (c) are aborted mid-stream.
 churn: N requests of mixed prompt lengths (an instruction plus the start of a text file) arriving staggered, some
     aborted mid-stream by closing the connection; then every completed one again alone: its tokens must equal the
-    concurrent run's. A request that does not finish within the timeout fails the check (hang).
+    concurrent run's. A request that does not finish within the timeout fails the check (hang). The mix always holds
+    LONG prompts over the PP chunk unit: arriving while others decode they are split (the server logs each "split
+    prefill"), alone they run whole, so equal tokens are the end-to-end check that a split prompt computes what it
+    would whole (one PP chunk per sequence); the run script counts the split prompts.
 
 usage: python -m qwen36_resident.serve.mu_checks identity --port 8000 --out identity.json
        python -m qwen36_resident.serve.mu_checks churn --port 8000 --out churn.json --doc FILE [--n 16] [--aborts 2]
@@ -23,6 +26,9 @@ import urllib.request
 
 from qwen36_resident.serve.chat_client import model_name
 from qwen36_resident.serve.prompts import PROMPTS, messages
+
+# churn: prompt lengths over the PP chunk unit (1024) in every mix, none a multiple of it
+LONG = [1100, 2100, 3333, 5000, 6000, 8000]
 
 
 def stream(port, model, msgs, max_tokens, thinking=True, abort_after=None, timeout=1800):
@@ -124,7 +130,8 @@ def run_churn(a):
     model = model_name(a.port)
     rng = random.Random(a.seed)
     text = tok(open(a.doc).read(), add_special_tokens=False)["input_ids"]
-    lengths = [rng.choice([16, 100, 500, 1000, 2000, 3000, 6000, 8000]) for _ in range(a.n)]
+    lengths = LONG[: a.n] + [rng.choice([16, 100, 500, 1000, 2000, 3000, 6000, 8000]) for _ in range(a.n - len(LONG))]
+    rng.shuffle(lengths)
     reqs = []
     for i, n in enumerate(lengths):
         start = rng.randrange(0, max(1, len(text) - n))
