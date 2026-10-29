@@ -48,10 +48,14 @@ inline void calculate_sfpu_binary_bitwise(
     };
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() =
-            apply(dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>(),
-                  dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>());
-        sfpi::dst_reg++;
+        // The store advances the destination by one SFPU row through ADDR_MOD_6 (dest += 2,
+        // what dst_reg++ does), set up by eltwise_binary_sfpu_configure_addrmod for the bitwise
+        // SfpuTypes; it replaces the separate TTINCRWC per row. Wormhole's SFPU load and store
+        // pick ADDR_MOD_4..7 with a two-bit field, so ADDR_MOD_6 is selected as 2, as in
+        // binary max/min and logaddexp.
+        dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_2) = apply(
+            dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>(),
+            dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>());
     }
 }
 
