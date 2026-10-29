@@ -511,8 +511,7 @@ private:
         for_each_child(node, [this](size_t child) { wake_subtree(child); });
     }
 
-    // Holds the last use that claimed the participant, so a new use starts unclaimed. 64-bit, unlike the published
-    // generation, so that it never wraps.
+    // Last use to claim the participant, so a new use starts unclaimed; 64-bit, so it never wraps.
     struct alignas(64) Claim {
         std::atomic<uint64_t> use = 0;
     };
