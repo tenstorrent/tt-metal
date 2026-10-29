@@ -144,8 +144,19 @@ class Qwen36MTP:
         }
         # Dedicated cache root (.../mtp/) so the reused layer's sharded weights never collide with
         # the real layer L's cache.
+        # QWEN36_MTP_FOLLOW_BFP4 (default "0"): the drafter layer's MLP stays bfloat8_b even when the base model's MLP
+        # runs BFP4 (QWEN36_MLP_GATEUP_BFP8=0 / QWEN36_BFP4_MLP_DOWN=1 / QWEN36_GPTQ_BFP4=1). The GPTQ checkpoint does
+        # not calibrate mtp.*, and an RTN-BFP4 drafter lowers acceptance (RTN BFP4 arm: plain step -9%, spec t/s -6%).
+        # "1" = previous behaviour (drafter MLP follows the flags). With the BFP4 flags off both are BFP8, so identical.
+        _mtp_mlp_dtype = None if os.environ.get("QWEN36_MTP_FOLLOW_BFP4", "0") == "1" else ttnn.bfloat8_b
         self.decoder = Qwen36DecoderLayer(
-            mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl
+            mesh_device,
+            args,
+            mtp_layer_sd,
+            layer_num=L,
+            tensor_cache_path=mtp_cache,
+            tt_ccl=tt_ccl,
+            mlp_dtype_override=_mtp_mlp_dtype,
         )
         # KV accessor for allocate_kv_caches / rollback.
         self.attention = self.decoder.attention

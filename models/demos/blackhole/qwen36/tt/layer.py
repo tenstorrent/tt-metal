@@ -22,7 +22,11 @@ class Qwen36DecoderLayer:
     Attention is either GatedAttention (full, with RoPE) or GatedDeltaNet (linear).
     """
 
-    def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None):
+    def __init__(
+        self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None, mlp_dtype_override=None
+    ):
+        # mlp_dtype_override: dense-MLP weight dtype forced for gate/up/down regardless of the BFP4 flags
+        # (the MTP drafter passes bfloat8_b; see mtp.py). None = today's flag-driven dtypes.
         self.layer_num = layer_num
         self.device = mesh_device
         self.args = args
@@ -124,7 +128,15 @@ class Qwen36DecoderLayer:
                 mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
             )
         else:
-            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+            self.feed_forward = Qwen36MLP(
+                mesh_device,
+                mlp_state,
+                mlp_cache,
+                args=args,
+                tt_ccl=tt_ccl,
+                down_dtype=mlp_dtype_override,
+                gateup_dtype=mlp_dtype_override,
+            )
 
     def _make_norm(
         self,
