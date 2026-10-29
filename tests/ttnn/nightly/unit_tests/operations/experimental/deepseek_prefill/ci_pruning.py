@@ -37,7 +37,3 @@ bh_scales_not_from_metadata = _ci_only(lambda **params: params["is_bh"] and not 
 
 # The routed expert is always fed a row-major activation in production.
 tiled_x_input = _ci_only(lambda **params: not params["x_row_major"])
-
-# The hybrid op is not wired into any model, so its cases in a file shared with the other routed-expert
-# ops prune as its own modules do.
-hybrid_op = _ci_only(lambda **params: params["op"] == "hybrid")
