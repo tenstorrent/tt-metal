@@ -14,6 +14,9 @@
 # and no history. Put --work somewhere local: a home directory over quota is what
 # this script was written around.
 #
+# The sfpi binaries need glibc 2.34 or later (Ubuntu 22.04 and later). On an
+# older host, run this inside a container. The script checks and says so.
+#
 # Usage:
 #   sfpi_disasm.sh --work <dir> --python <venv python>
 #                  --commit <sha> --other-sfpi <sha>
@@ -45,6 +48,18 @@ done
 
 say() { echo "[$(date -u +%H:%M:%S)] $*"; }
 N() { nice -n 19 "$@"; }
+
+# The toolchain is built against glibc 2.34. An older host links it and fails
+# per kernel, deep in a pytest error, so say it once and up front.
+glibc_check() {
+    local have; have=$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$')
+    [ -n "$have" ] || return 0
+    if [ "$(printf '%s\n2.34\n' "$have" | sort -V | head -1)" != "2.34" ]; then
+        echo "[ERROR] glibc $have is too old for sfpi, which needs 2.34." >&2
+        echo "        Run this inside a container with Ubuntu 22.04 or later." >&2
+        exit 1
+    fi
+}
 
 mkdir -p "$WORK"
 
@@ -92,18 +107,23 @@ sfpi() {
 
 # --- compile -----------------------------------------------------------------
 # --compile-producer only builds. It never opens a device.
+# The kernels land in $RUNNER_TEMP/tt-llk-build, not in the tree, so each tag
+# gets its own root. Without that the two toolchains overwrite each other.
+art() { echo "$WORK/art-$1/tt-llk-build"; }
+
 build() {
     local tests=$1 tag=$2
     say "compiling $tag (jobs $JOBS) ..."
+    rm -rf "$WORK/art-$tag"; mkdir -p "$WORK/art-$tag"
     ( cd "$tests"
       set +e
-      CHIP_ARCH=blackhole TT_LLK_DISABLE_ASSERTS=1 \
+      CHIP_ARCH=blackhole TT_LLK_DISABLE_ASSERTS=1 RUNNER_TEMP="$WORK/art-$tag" \
         N "$PY" -m pytest --compile-producer -n "$JOBS" -q \
           ${SELECT:+-k "$SELECT"} "python_tests/$TEST" > "$WORK/build-$tag.log" 2>&1
       say "  pytest exit $?"
       set -e
     )
-    say "  math ELFs: $(find "$tests" -name 'trisc1.elf' 2>/dev/null | wc -l)"
+    say "  math ELFs: $(find "$(art "$tag")" -name 'trisc1.elf' 2>/dev/null | wc -l)"
 }
 
 # --- disassemble -------------------------------------------------------------
@@ -113,17 +133,20 @@ dump() {
     local out="$WORK/dis-$tag"; rm -rf "$out"; mkdir -p "$out"
     local n=0
     while IFS= read -r elf; do
-        local variant; variant=$(basename "$(dirname "$(dirname "$elf")")")
+        # Name each dump by its path under the build root, so the two trees
+        # produce the same names and a missing one is visible.
+        local variant; variant=${elf#"$(art "$tag")"/}; variant=${variant//\//_}
         # Drop addresses and the header: only the instruction stream is compared.
         "$objdump" -d --no-show-raw-insn "$elf" \
           | sed -e '1,/Disassembly of section/d' -e 's/^[[:space:]]*[0-9a-f]*:[[:space:]]*//' \
           > "$out/$variant.asm"
         n=$((n+1))
-    done < <(find "$tests" -name 'trisc1.elf' | sort)
+    done < <(find "$(art "$tag")" -name 'trisc1.elf' | sort)
     say "  dumped $n ELFs for $tag (objdump: $objdump)"
 }
 
 main() {
+    glibc_check
     tree "$WORK/t_a" ""        # the commit's own sfpi
     tree "$WORK/t_b" "$OTHER"  # the same commit, other sfpi
 
