@@ -31,6 +31,8 @@ Constraints (first cut):
     a circular-buffer modulo (the assistant attention config doesn't carry one).
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -150,19 +152,22 @@ class Gemma4AssistantModel:
         # all-gathered, mirroring the target.
         col_mapper = mesh_config.column_parallel(mesh_device) if tp > 1 else None
 
-        def _linear(key, mapper, transpose=True):
+        def _linear(key, mapper, transpose=True, weight_dtype=None):
             w = state_dict.get(key)
             if w is None:
                 return None
             wt = w.transpose(-2, -1) if transpose else w
             wt = wt.unsqueeze(0).unsqueeze(0)
+            cache_key = key.replace(".", "_")
+            if weight_dtype is not None and weight_dtype != dtype:
+                cache_key += f"_{str(weight_dtype).split('.')[-1]}"  # its own cache entry: never the other dtype's
             return ttnn.as_tensor(
                 wt,
                 device=mesh_device,
-                dtype=dtype,
+                dtype=weight_dtype or dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mapper if mapper is not None else (replicate if is_mesh else None),
-                cache_file_name=get_cache_file_name(tensor_cache_path, key.replace(".", "_")),
+                cache_file_name=get_cache_file_name(tensor_cache_path, cache_key),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -171,7 +176,11 @@ class Gemma4AssistantModel:
         # lm_head tied to the assistant's own embed_tokens when a separate
         # lm_head.weight isn't stored.
         lm_key = "lm_head.weight" if "lm_head.weight" in state_dict else "model.embed_tokens.weight"
-        self.lm_head = _linear(lm_key, col_mapper)
+        # The drafter's lm_head is the largest read of a draft step (the vocab projection, 500 MB per chip on the
+        # 12B at TP4): GEMMA4_ASSISTANT_LM_HEAD_BFP8=1 keeps it in bfloat8_b (half the bytes; the drafts are
+        # proposals the verify checks, so only the acceptance can move, which the parity test measures).
+        lm_head_bfp8 = os.environ.get("GEMMA4_ASSISTANT_LM_HEAD_BFP8", "0") == "1"
+        self.lm_head = _linear(lm_key, col_mapper, weight_dtype=ttnn.bfloat8_b if lm_head_bfp8 else None)
         if self.pre_projection is None or self.post_projection is None or self.lm_head is None:
             raise ValueError("Assistant checkpoint missing pre_projection / post_projection / lm_head weights")
 
