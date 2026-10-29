@@ -312,12 +312,14 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> ChunkGdnDeviceOperation::get_dynami
     const FusedPlacement layout = fused_placement(grid.x, grid.y, attrs.BH, attrs.nv, attrs.np, attrs.placement);
     const uint32_t h0 = attrs.head_offset;
     const uint32_t NV = attrs.nv;
-    args.reserve(layout.producers.size() + 2 * attrs.BH * NV);
-    // Every producer of the pool reads items of every head it serves at head_offset + h.
-    for (const CoreCoord& pc : layout.producers) {
+    args.reserve(layout.producers.size() + 3 * attrs.BH * NV);
+    // Every producer of the pool reads items of every head it serves at head_offset + h. The producers that hand
+    // off on the other NoC run the flipped prep reader (a separate kernel, the same args).
+    const std::vector<bool> flip_noc = fused_flip_noc(layout, grid.y, attrs.BH);
+    for (uint32_t p = 0; p < layout.producers.size(); p++) {
         args.push_back(
-            {.kernel_idx = fused_rt::kPrepReaderKernel,
-             .core = pc,
+            {.kernel_idx = flip_noc[p] ? fused_rt::kPrepReaderFlipKernel : fused_rt::kPrepReaderKernel,
+             .core = layout.producers[p],
              .arg_idx = fused_rt::kPrepReaderHeadOffsetArg,
              .value = h0});
     }
@@ -329,6 +331,12 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> ChunkGdnDeviceOperation::get_dynami
                  .core = rc,
                  .arg_idx = fused_rt::kReceiverHeadOffsetArg,
                  .value = h0});
+            // The receiver reader writes o: its output row follows the scan writer's rule below.
+            args.push_back(
+                {.kernel_idx = fused_rt::kReceiverReaderKernel,
+                 .core = rc,
+                 .arg_idx = fused_rt::kReceiverORowArg,
+                 .value = in.o_out.has_value() ? h0 + h : h});
             args.push_back(
                 {.kernel_idx = fused_rt::kScanWriterKernel,
                  .core = rc,
@@ -557,10 +565,28 @@ FusedPlacement fused_placement(
                 rem,
                 rem * block_h,
                 grid_y);
+            // A receiver row wider than one column puts receivers east of producers in the columns below them:
+            // NOC_1 has no +x route, so those writes wrap around the whole torus row through other heads' links.
+            // Column form, whenever it fits the same block height: the NV receivers stacked in the block's first
+            // column, producers east of the bottom receiver, then row-major below — every producer east of / in
+            // and below / in its receivers, all routes inside the block.
+            const uint32_t beside = wl - 1;
+            const bool column_form = rw >= 2 && NV + (np > beside ? (np - beside + wl - 1) / wl : 0) <= block_h;
             for (uint32_t kk = 0; kk < rem; kk++) {
                 const uint32_t h = n_row_heads + kk;
                 const uint32_t y_base = kk * block_h;
                 const uint32_t xl = k_per_row * L;  // first leftover column
+                if (column_form) {
+                    for (uint32_t v = 0; v < NV; v++) {
+                        rcv_cores[h * NV + v] = CoreCoord{xl, y_base + v};
+                    }
+                    for (uint32_t j = 0; j < np; j++) {
+                        prod_cores.push_back(
+                            j < beside ? CoreCoord{xl + 1 + j, y_base + NV - 1}
+                                       : CoreCoord{xl + ((j - beside) % wl), y_base + NV + (j - beside) / wl});
+                    }
+                    continue;
+                }
                 for (uint32_t v = 0; v < NV; v++) {
                     rcv_cores[h * NV + v] = CoreCoord{xl + (v % rw), y_base + v / rw};
                 }
@@ -628,6 +654,19 @@ FusedPlacement fused_placement(
     return {std::move(rcv_cores), std::move(prod_cores), NPH};
 }
 
+std::vector<bool> fused_flip_noc(const FusedPlacement& layout, uint32_t grid_y, uint32_t BH) {
+    std::vector<bool> rcv_row(grid_y, false);
+    for (const CoreCoord& c : layout.receivers) {
+        rcv_row[c.y] = true;
+    }
+    const uint32_t first_extra = BH * layout.home_per_head;
+    std::vector<bool> flip(layout.producers.size(), false);
+    for (uint32_t p = first_extra; p < layout.producers.size(); p++) {
+        flip[p] = rcv_row[layout.producers[p].y];
+    }
+    return flip;
+}
+
 FusedGeometryChoice choose_fused_geometry(
     uint32_t grid_x,
     uint32_t grid_y,
@@ -644,9 +683,19 @@ FusedGeometryChoice choose_fused_geometry(
     best.t_phased_us = t_phased_us(BH, NC);
     bool have = false;
     uint32_t best_cores = 0;
-    // Hand-off depths the model chooses between (deeper measured no better); a pinned depth is taken as is.
-    const uint32_t depths[2] = {fixed_nbuf ? fixed_nbuf : 2u, fixed_nbuf ? fixed_nbuf : 3u};
-    const uint32_t n_depths = fixed_nbuf ? 1u : 2u;
+    // Hand-off depths the model chooses between; a pinned depth is taken as is. The model times depths >= 3 alike;
+    // its ties go by the slice width (see `consider`). At Vtl <= 2 the deepest ring that fits L1: a receiver credits
+    // chunk c + depth - 1 when chunk c arrives, so depth - 1 steps (~2 us each) cover the credit -> write -> VALID
+    // delivery, whose NoC tail (5-8 us under the hand-off and o traffic of a full grid) stalls the chain at depth 3
+    // once the producers have slack (p150, T = 2048: BH 12 depth 5 / 4 / 3 = 149.8 / 149.9 / 152.9 us, BH 16 183.1 /
+    // 186.2 / 192.2). At Vtl = 4 the shallowest: one 4.5 us step already covers the delivery and every extra slot
+    // measured slower (BH 24 depth 2 / 3 / 4 / 5 = 269 / 275 / 281 / 293 us, BH 32 333 / 358 / 369 / 373).
+    const uint32_t depths[4] = {
+        fixed_nbuf ? fixed_nbuf : 2u,
+        fixed_nbuf ? fixed_nbuf : 3u,
+        fixed_nbuf ? fixed_nbuf : 4u,
+        fixed_nbuf ? fixed_nbuf : 5u};
+    const uint32_t n_depths = fixed_nbuf ? 1u : 4u;
     // One candidate: NP producers per head (placements 0/1) or a pool of NP serving every head (placement 2)
     // with the extras' share num/den; a pool with no extras (NP = BH*NPH) is the per-head geometry it is.
     auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement, uint32_t depth, uint32_t num, uint32_t den) {
@@ -660,11 +709,17 @@ FusedGeometryChoice choose_fused_geometry(
         const uint32_t nx = placement == 2 ? np - BH * nph : 0;
         const PoolLoad load = nx ? pool_load(BH, NC, nph, nx, num, den) : PoolLoad{(NC + nph - 1) / nph, 0};
         const float t = t_fused_us(BH, NC, Vtl, depth, placement, producers, load, nx > 0);
-        // ties -> fewer cores, then smaller NV, then the shallower ring
+        // ties -> fewer cores, then smaller NV, then the ring by slice width: the deeper one at Vtl <= 2, where a
+        // step (~2 us) is shorter than the credit -> VALID delivery and depth 2 exposes the round trip to the chain
+        // (a pool's receivers wait ~2.3 us per step for VALID at depth 2); the shallower one at Vtl = 4, where one
+        // step covers the delivery and the deeper rings measured slower (the comment above the depth list).
+        const bool deeper_wins = Vtl <= 2;
         const bool better =
             !have || t < best.t_fused_us ||
             (t == best.t_fused_us &&
-             (cores < best_cores || (cores == best_cores && (nv < best.nv || (nv == best.nv && depth < best.nbuf)))));
+             (cores < best_cores ||
+              (cores == best_cores &&
+               (nv < best.nv || (nv == best.nv && (deeper_wins ? depth > best.nbuf : depth < best.nbuf))))));
         if (better) {
             best.nv = nv;
             best.np = np;

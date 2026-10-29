@@ -47,6 +47,7 @@
 #include "api/debug/ring_buffer.h"
 #include "api/debug/waypoint.h"
 #include "chunk_gdn_handoff.hpp"
+#include "chunk_gdn_prep_constants.hpp"
 
 // Runtime checks of the protocol's invariants (chunk_gdn_handoff_protocol.md, "Runtime checks"): compiled only
 // where the watcher's ASSERT is, so release kernels are unchanged.
@@ -199,6 +200,17 @@ void kernel_main() {
             init.up(noc, rx[v], ry[v], 1);
         }
     }
+
+    // The prep compute's constants (chunk_gdn_prep_constants.hpp): built here, while the reader's first DRAM reads are
+    // in flight, instead of by the reader (in front of a staggered producer's first read, or inside an unstaggered
+    // one's read barrier). This RISC has nothing else to do until the first item is computed. The eye first, on its
+    // own barrier: the q/k norm, the item's first block, needs it; tril / ones / masks are first read at pp_decay.
+    gdn_const::issue_eye<Ct>(noc);
+    noc.async_read_barrier();
+    gdn_const::finish_eye<Ct>();
+    gdn_const::issue_rest<Ct>(noc);
+    noc.async_read_barrier();
+    gdn_const::finish_rest<Ct>();
 
     // Hand-off CB base addresses, captured BEFORE any pop (read_ptr starts at the CB base, and
     // the union declaration makes each base identical on every receiver).

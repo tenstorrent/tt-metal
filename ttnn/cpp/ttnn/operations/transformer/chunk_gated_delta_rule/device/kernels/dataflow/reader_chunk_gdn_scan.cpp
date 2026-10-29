@@ -85,12 +85,16 @@ void kernel_main() {
     static_assert(Vt >= 1 && Vt_full % Vt == 0, "the V-block width must tile the full V width");
 
 #if defined(GDN_FUSED_RECEIVER)
-    // Fused receivers touch DRAM only for s0; the accessor chain is a single block.
+    // Fused receivers read only s0 from DRAM, and write o: this RISC's NoC (NOC_0) keeps the o traffic off the
+    // producers' hand-off NoC. The accessor chain is s0 then o.
     constexpr auto s0_a = TensorAccessorArgs<4>();
+    constexpr auto o_a = TensorAccessorArgs<s0_a.next_compile_time_args_offset()>();
+    constexpr uint32_t TRAIL = o_a.next_compile_time_args_offset();
 #elif defined(GDN_MCAST_RECEIVER)
     // Receivers only access their private V-sliced tensors; the accessor chain has two blocks.
     constexpr auto vb_a = TensorAccessorArgs<4>();
     constexpr auto s0_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr uint32_t TRAIL = s0_a.next_compile_time_args_offset();
 #else
     constexpr auto vb_a = TensorAccessorArgs<4>();
     constexpr auto nkd_a = TensorAccessorArgs<vb_a.next_compile_time_args_offset()>();
@@ -100,30 +104,30 @@ void kernel_main() {
     constexpr auto dl_a = TensorAccessorArgs<kc_a.next_compile_time_args_offset()>();
     constexpr auto ti_a = TensorAccessorArgs<dl_a.next_compile_time_args_offset()>();
     constexpr auto s0_a = TensorAccessorArgs<ti_a.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr uint32_t TRAIL = s0_a.next_compile_time_args_offset();
 #endif
 
 #if defined(GDN_MCAST_SENDER) || defined(GDN_MCAST_RECEIVER) || defined(GDN_FUSED_RECEIVER)
     // Handshake semaphore ids: the two trailing compile-time args the factory appends AFTER the
     // TensorAccessorArgs chain (unconditionally, on every variant, so the offsets stay uniform;
-    // the plain reader has no semaphores and simply doesn't read them). s0_a is the LAST accessor
-    // on the sender's 8-accessor chain, the mcast receiver's 2-accessor chain, and the fused
-    // receiver's 1-accessor chain alike, so the same offset expression is correct everywhere.
+    // the plain reader has no semaphores and simply doesn't read them). TRAIL is the end of the chain:
+    // after s0 on the sender's 8-accessor chain and the mcast receiver's 2-accessor chain, after o on the
+    // fused receiver's 2-accessor chain.
     // SEM_READY: receivers -> sender: "my CB space for this chunk is reserved"
     // SEM_VALID: sender -> receivers: "this chunk's shared data is in your CBs"
-    constexpr uint32_t SEM_READY = get_compile_time_arg_val(s0_a.next_compile_time_args_offset());
-    constexpr uint32_t SEM_VALID = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 1);
+    constexpr uint32_t SEM_READY = get_compile_time_arg_val(TRAIL);
+    constexpr uint32_t SEM_VALID = get_compile_time_arg_val(TRAIL + 1);
 #if defined(GDN_FUSED_RECEIVER)
     // Fused-receiver extras (trailing CT args after the semaphore ids): the init-barrier semaphore,
     // and the union-declared CB + byte offset holding the producers' per-head credit words.
-    constexpr uint32_t SEM_INIT = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 2);
-    constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 3);
-    constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 4);
-    constexpr uint32_t NBUF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 5);  // hand-off slots
+    constexpr uint32_t SEM_INIT = get_compile_time_arg_val(TRAIL + 2);
+    constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(TRAIL + 3);
+    constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(TRAIL + 4);
+    constexpr uint32_t NBUF = get_compile_time_arg_val(TRAIL + 5);  // hand-off slots
     (void)SEM_READY;  // superseded by the credit words on this variant
     // The protocol tag is the LAST compile-time arg: a trailing-arg drift against the factory fails here.
     static_assert(
-        s0_a.next_compile_time_args_offset() + 7 == kernel_compile_time_args.size() &&
-            get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 6) == gdn_handoff::kHandoffTag,
+        TRAIL + 7 == kernel_compile_time_args.size() && get_compile_time_arg_val(TRAIL + 6) == gdn_handoff::kHandoffTag,
         "reader_chunk_gdn_scan (fused receiver): compile-time arg layout drifted from "
         "chunk_gdn_fused_program_factory.cpp");
     // The producer's slot addressing assumes one tile size across the seven hand-off CBs (all fp32).
@@ -164,8 +168,10 @@ void kernel_main() {
     // the VALIDs of different chunks cannot interleave.
     // N_INIT = init-barrier increments to expect before the first credit: the distinct producers that
     // serve this head. kickoff_wait_cycles holds the initial-state read back, out of chunk 0's
-    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp, then the DRAM row
-    // offset of this program's head 0 in initial_state (the protocol's head indices start at 0). Common args:
+    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp, then o's address (this
+    // reader writes its o slices on NOC_0) and the DRAM row offset of this program's head 0 in initial_state (the
+    // protocol's head indices start at 0) and this head's output row of o (the scan writer's rule: the shared
+    // outputs' row, or row h of the wave's own). Common args:
     // the producers' virtual worker coords x | y << 8, two per word, producer p in word p / 2.
     const uint32_t N_INIT = get_arg_val<uint32_t>(4);
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(5);
@@ -177,7 +183,9 @@ void kernel_main() {
         get_arg_val<uint32_t>(9),
         get_arg_val<uint32_t>(10)};
     auto producer_word = [](uint32_t p) { return (get_common_arg_val<uint32_t>(p / 2) >> (16 * (p % 2))) & 0xFFFFu; };
+    const uint32_t o_addr = get_arg_val<uint32_t>(fused_rt::kReceiverOArg);
     const uint32_t s0_row = h + get_arg_val<uint32_t>(fused_rt::kReceiverHeadOffsetArg);
+    const uint32_t o_row = get_arg_val<uint32_t>(fused_rt::kReceiverORowArg);  // of o: a wave's own rows
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -207,6 +215,11 @@ void kernel_main() {
     const auto vb_acc = TensorAccessor(vb_a, vb_addr, tb);
 #endif
     const auto s0_acc = TensorAccessor(s0_a, s0_addr, tb);
+#if defined(GDN_FUSED_RECEIVER)
+    constexpr uint32_t cb_out = 16;  // scan compute's o slab [C, Vt] per chunk (fp32), drained here
+    const uint32_t tb_o = get_tile_size(cb_out);
+    const auto o_acc = TensorAccessor(o_a, o_addr, tb_o);
+#endif
 #if !defined(GDN_MCAST_RECEIVER) && !defined(GDN_FUSED_RECEIVER)
     const auto nkd_acc = TensorAccessor(nkd_a, nkd_addr, tb);
     const auto qd_acc = TensorAccessor(qd_a, qd_addr, tb);
@@ -415,6 +428,32 @@ void kernel_main() {
     // address on every core of the program — so this receiver can name head h's words on any
     // producer without being told an address. Word (h, slot) is at CREDIT_OFF + 4*(h*NBUF + slot).
     const uint32_t credit_base = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + 4 * h * NBUF;
+
+    // o [BH, NC, C, V]: this receiver's V-slice of chunk oc, row stride Vt_full, column offset vb*Vt (the phased scan
+    // writer's scatter). Written from here, on NOC_0: on the writer RISC's NOC_1 the o tiles would climb to the DRAM
+    // endpoint rows and run west along them, over the hand-off links of the heads placed in those rows. Each chunk is
+    // flushed (its L1 source read out) before its pop; the final barrier is at the end of the kernel.
+    CircularBuffer cbout(cb_out);
+    uint32_t oc = 0;  // next o chunk to write
+    auto write_o = [&]() {
+        const uint32_t row_base = (o_row * NC + oc) * Ct * Vt_full;
+        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
+        for (uint32_t r = 0; r < Ct; r++) {
+            const uint32_t dst = row_base + r * Vt_full + vb * Vt;
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                noc.async_write(src, o_acc, tb_o, {.offset_bytes = (r * Vt + vt) * tb_o}, {.page_id = dst + vt});
+            }
+        }
+        noc.async_writes_flushed();
+        cbout.pop_front(cv);
+        oc++;
+    };
+    // Non-blocking: write one o chunk if compute has pushed it.
+    auto try_write_o = [&]() {
+        if (oc < NC && cbout.pages_available_at_front(cv)) {
+            write_o();
+        }
+    };
 #ifdef GDN_HANDOFF_CHECKS
     // C8 canary words (this core's, written remotely by the producers): the tile behind the credit tile.
     constexpr uint32_t CANARY_OFF = CREDIT_OFF + get_tile_size(CB_CREDIT);
@@ -473,6 +512,16 @@ void kernel_main() {
         WAYPOINT("RXRS");
         {
             DeviceZoneScopedN("rx_reserve");
+            // Compute frees the slot only once it could push its o slab: keep draining o while the slot is busy.
+            while (!CircularBuffer(cb_vbeta).pages_reservable_at_back(D * cv) ||
+                   !CircularBuffer(cb_nkd).pages_reservable_at_back(D * ck) ||
+                   !CircularBuffer(cb_qdecay).pages_reservable_at_back(D * ck) ||
+                   !CircularBuffer(cb_intra).pages_reservable_at_back(D * cc) ||
+                   !CircularBuffer(cb_kdec_t).pages_reservable_at_back(D * kc) ||
+                   !CircularBuffer(cb_dl).pages_reservable_at_back(D * 1) ||
+                   !CircularBuffer(cb_Tinv).pages_reservable_at_back(D * cc)) {
+                try_write_o();
+            }
             CircularBuffer(cb_vbeta).reserve_back(D * cv);
             CircularBuffer(cb_nkd).reserve_back(D * ck);
             CircularBuffer(cb_qdecay).reserve_back(D * ck);
@@ -538,6 +587,9 @@ void kernel_main() {
                 uint32_t seen;
                 do {
                     seen = flag.value();
+                    if (seen != c + 1) {
+                        try_write_o();
+                    }
                     if (seen != c + 1 && ++polls > gdn_handoff::kHandoffSpinLimit) {
                         WATCHER_RING_BUFFER_PUSH(
                             gdn_handoff::handoff_trace_word(gdn_handoff::kRxValidTimeout, c, slot, seen));
@@ -548,7 +600,11 @@ void kernel_main() {
                 WATCHER_RING_BUFFER_PUSH(gdn_handoff::handoff_trace_word(gdn_handoff::kRxValidSeen, c, slot, seen));
             }
 #else
-            Semaphore<>(SEM_VALID + (c % NBUF)).wait(VALID);
+            // Poll the flag first, then write at most one o chunk, so a landed VALID waits behind one o write at most.
+            const Semaphore<> flag(SEM_VALID + (c % NBUF));
+            while (flag.value() != VALID) {
+                try_write_o();
+            }
 #endif
         }
 #ifdef GDN_HANDOFF_CHECKS
@@ -591,7 +647,14 @@ void kernel_main() {
             issue(next);
             next++;
         }
+        try_write_o();
     }
+    // The o chunks compute has not pushed yet (at least the last one).
+    while (oc < NC) {
+        cbout.wait_front(cv);
+        write_o();
+    }
+    noc.async_write_barrier();
 
 #if GDN_HANDOFF_WATCHER_CHECKS
     // C5: every chunk was issued and consumed, and each used slot's flag still shows its last chunk's VALID.

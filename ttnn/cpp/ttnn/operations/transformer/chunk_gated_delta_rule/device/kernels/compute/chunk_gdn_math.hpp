@@ -24,6 +24,8 @@
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
+#include "chunk_gdn_sfpu.hpp"
+#include "chunk_gdn_mm_faces.hpp"
 
 // GDN_HOIST_RECONFIG (a per-kernel define, set by the fused factory on the producer compute
 // kernel only): hoist the packer/unpacker format reconfigs out of the WY hot path (invert16 /
@@ -46,6 +48,9 @@ inline constexpr bool kGdnHoistReconfig = false;
 
 #if defined(GDN_TINV_SFPU)
 #include "api/compute/triangle_solve.h"
+#ifdef TRISC_MATH
+#include "llk_math_gdn_inv_rms_diag_entry.h"
+#endif
 inline constexpr bool kGdnTinvSfpu = true;
 #else
 inline constexpr bool kGdnTinvSfpu = false;
@@ -188,6 +193,7 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, EwOp op, bool ski
 [[gnu::noinline]] inline void sfpu_sub_dst(uint32_t a, uint32_t b, uint32_t o) { sub_binary_tile(a, b, o); }
 [[gnu::noinline]] inline void sfpu_mul_dst(uint32_t a, uint32_t b, uint32_t o) { mul_binary_tile(a, b, o); }
 // Mode selects the faces the exp runs on: RC all four, C faces 0 and 2 (columns 0..15).
+// The fused Ct == 1 solve build runs its exp / rsqrt chains as region-restricted passes instead (chunk_gdn_sfpu.hpp).
 template <VectorMode Mode = VectorMode::RC>
 [[gnu::noinline]] inline void sfpu_exp_dst(uint32_t d) {
     exp_tile(d, Mode);
@@ -204,8 +210,9 @@ template <VectorMode Mode = VectorMode::RC>
 // rounded factors cost ~1e-3 on the value that decays the state every chunk. Packs: decay -> o_decay[i],
 // decay_exp -> o_exp[i], decayfac -> o_fac[i], dl -> o_fac[Ct] (from the last tile's window; every row of every
 // window holds g_sum).
-// ColExp: exp faces 0 and 2 only; every reader of decay_exp and decayfac broadcasts column 0 (bcast_cols_mul*,
-// dl_tile), so faces 1 and 3 of o_exp / o_fac are never read.
+// ColExp: every reader of decay_exp and decayfac broadcasts column 0 (bcast_cols_mul*, dl_tile), so the SFPU tail
+// runs as one fused pass over the column-0 vectors only (gdn_sfpu_decay_exps, which takes the exp of decay from DST0:
+// no DST3 matmul); the other columns of o_exp / o_fac are never read. Ct == 1 only.
 // EarlyPush: publish o_decay right after its pack instead of after the release; Ct == 1 only (one tile is the
 // whole block).
 template <bool ColExp = false, bool EarlyPush = false>
@@ -221,18 +228,30 @@ inline void decay_all(
         tile_regs_acquire();
         for (uint32_t j = 0; j < Ct; j++) {
             matmul_tiles(tril, g, i * Ct + j, j, 0);  // DST0 = decay_i
-            matmul_tiles(tril, g, i * Ct + j, j, 3);  // DST3 = decay_i (exp'd below)
+            if constexpr (!ColExp) {
+                matmul_tiles(tril, g, i * Ct + j, j, 3);  // DST3 = decay_i (exp'd below)
+            }
             matmul_tiles(ones, g, i * Ct + j, j, 1);  // DST1 = g_sum
         }
-        sub_binary_tile_init();
-        sfpu_sub_dst(1, 0, 1);  // g_sum - decay_i
-        constexpr VectorMode kExpMode = ColExp ? VectorMode::C : VectorMode::RC;
-        exp_tile_init();
-        sfpu_exp_dst<kExpMode>(1);  // decayfac_i
-        sfpu_exp_dst<kExpMode>(3);  // decay_exp_i
-        if (i + 1 == Ct) {
-            mul_binary_tile_init();
-            sfpu_mul_dst(1, 3, 2);  // dl = decayfac_i * decay_exp_i = exp(g_sum)
+        if constexpr (ColExp) {
+            // One SFPU pass over the column-0 vectors only: decayfac -> DST1, decay_exp -> DST3 (from DST0), and dl
+            // -> DST2 on the last tile. The other columns of DST1..3 are packed but never read.
+            exp_tile_init();
+            if (i + 1 == Ct) {
+                gdn_sfpu_decay_exps<0, 1, 2, 3, true>();
+            } else {
+                gdn_sfpu_decay_exps<0, 1, 2, 3, false>();
+            }
+        } else {
+            sub_binary_tile_init();
+            sfpu_sub_dst(1, 0, 1);  // g_sum - decay_i
+            exp_tile_init();
+            sfpu_exp_dst(1);  // decayfac_i
+            sfpu_exp_dst(3);  // decay_exp_i
+            if (i + 1 == Ct) {
+                mul_binary_tile_init();
+                sfpu_mul_dst(1, 3, 2);  // dl = decayfac_i * decay_exp_i = exp(g_sum)
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -289,8 +308,9 @@ inline void lmask_fused(uint32_t ones, uint32_t decay, uint32_t decay_row, uint3
 }
 
 // lmask_fused for one tile (Ct == 1) that also forms the nkd column in the same DST pass: the front tile of `dexp`
-// is copied to DST2, negated and packed as the one tile of `o_neg`. A separate function so the Ct == 2 build's
-// lmask_fused instantiation stays as it was.
+// is copied to DST2, negated (column 0, its only read column) and packed as the one tile of `o_neg`. The SFPU chain
+// is one region-restricted pass (gdn_sfpu_lmask: tril in DST3, face 1 never exp'd). A separate function so the
+// Ct == 2 build's lmask_fused instantiation stays as it was.
 inline void lmask_negexp_fused(
     uint32_t ones, uint32_t decay, uint32_t decay_row, uint32_t tril, uint32_t o, uint32_t dexp, uint32_t o_neg) {
     CircularBuffer(o).reserve_back(1);
@@ -302,19 +322,14 @@ inline void lmask_negexp_fused(
     mul_tiles_bcast_cols(ones, decay, 0, 0, 0);  // DST0[i,j] = decay_i
     mul_bcast_rows_init(ones, decay_row);
     mul_tiles_bcast_rows(ones, decay_row, 0, 0, 1);  // DST1[i,j] = decay_j
-    sub_binary_tile_init();
-    sfpu_sub_dst(0, 1, 0);  // DST0 = decay_i - decay_j
     copy_init(tril);
-    copy_tile(tril, 0, 1);  // DST1 = tril tile
+    copy_tile(tril, 0, 3);  // DST3 = tril tile
     copy_init(dexp);
     copy_tile(dexp, 0, 2);  // DST2 = decay_exp
-    mul_binary_tile_init();
-    sfpu_mul_dst(0, 1, 0);  // zero the upper triangle before the exp
+    // One SFPU pass: DST0 = tril * exp(tril * (decay_i - decay_j)) on faces 0, 2, 3 (face 1 is strictly upper: 0),
+    // and DST2 = -decay_exp on its column-0 faces (the nkd column; only column 0 is read).
     exp_tile_init();
-    sfpu_exp_dst(0);
-    sfpu_mul_dst(0, 1, 0);  // * tril -> L_mask
-    negative_tile_init();
-    negative_tile(2);  // -decay_exp
+    gdn_sfpu_lmask<0, 1, 3, 2, true>();
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, o, 0);
@@ -431,6 +446,7 @@ inline void intra_fused(uint32_t q, uint32_t k, uint32_t lmask, uint32_t o, uint
 // the Kt products x[mi,ki] @ x[mi,ki]^T accumulate the row sums of squares on the diagonal of DST0 (the
 // off-diagonal x_i.x_j are discarded); the identity is copied to DST1 and applied before and after the SFPU chain
 // (+eps, rsqrt, *scale), so the off-diagonal rsqrt(eps) never leaves DST.
+template <bool FusedSfpu = false>
 inline void inv_rms_diag(
     uint32_t x,
     uint32_t eye,
@@ -452,18 +468,28 @@ inline void inv_rms_diag(
         reconfig_data_format_srca(eye);
         copy_init(eye);
         copy_tile(eye, 0, 1);  // the identity block (cb.eye tile 0)
-        mul_binary_tile_init();
-        sfpu_mul_dst(0, 1, 0);  // diag(rowsum)
-        binop_with_scalar_tile_init();
-        add_unary_tile(0, eps_bits);  // + eps (off-diagonal: eps)
-        rsqrt_tile_init();
-        rsqrt_tile(0);  // off-diagonal: rsqrt(eps), finite
-        if (do_scale) {
+        if constexpr (FusedSfpu) {
+            // The chain below as one SFPU pass over the diagonal faces 0 and 3; faces 1 and 2 stored as 0.
+            rsqrt_tile_init();
+            if (do_scale) {
+                gdn_sfpu_inv_rms<0, 1, true>(eps_bits, scale_bits);
+            } else {
+                gdn_sfpu_inv_rms<0, 1, false>(eps_bits, scale_bits);
+            }
+        } else {
+            mul_binary_tile_init();
+            sfpu_mul_dst(0, 1, 0);  // diag(rowsum)
             binop_with_scalar_tile_init();
-            mul_unary_tile(0, scale_bits);  // * scale (q only)
+            add_unary_tile(0, eps_bits);  // + eps (off-diagonal: eps)
+            rsqrt_tile_init();
+            rsqrt_tile(0);  // off-diagonal: rsqrt(eps), finite
+            if (do_scale) {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(0, scale_bits);  // * scale (q only)
+            }
+            mul_binary_tile_init();
+            sfpu_mul_dst(0, 1, 0);  // off-diagonal -> 0
         }
-        mul_binary_tile_init();
-        sfpu_mul_dst(0, 1, 0);  // off-diagonal -> 0
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, o, mi);
@@ -471,6 +497,68 @@ inline void inv_rms_diag(
     }
     CircularBuffer(o).push_back(Ct);
 }
+
+#if defined(GDN_TINV_SFPU)
+// Both inverse-RMS diagonals of the Ct == 1 qk-norm (the solve build) in ONE DST window: q @ q^T -> DST0 and
+// k @ k^T -> DST1 (Kt products each), the identity -> DST2, then one op-private SFPU pass per tile
+// (calculate_gdn_inv_rms_diag: mask, + eps, rsqrt, [* scale], mask, on the two diagonal faces only; +0 on the two
+// off-diagonal faces). The same fp32 ops in the same order as inv_rms_diag's five SFPU calls, so Dq / Dk are
+// bit-identical to it. Dq -> o_q (scaled), Dk -> o_k.
+inline void inv_rms_diag_qk(
+    uint32_t q,
+    uint32_t k,
+    uint32_t eye,
+    uint32_t o_q,
+    uint32_t o_k,
+    uint32_t Kt,
+    uint32_t eps_bits,
+    uint32_t scale_bits) {
+    CircularBuffer(o_q).reserve_back(1);
+    CircularBuffer(o_k).reserve_back(1);
+    pack_reconfig_data_format(o_q);  // o_q / o_k both fp32
+    tile_regs_acquire();
+    reconfig_data_format(q, q);  // matmul(x, x^T): x on both srcA and srcB; q and k share the (bf16) format
+    matmul_init(q, q, 1);
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        matmul_tiles(q, q, ki, ki, 0);  // DST0 = q @ q^T
+    }
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        matmul_tiles(k, k, ki, ki, 1);  // DST1 = k @ k^T
+    }
+    reconfig_data_format_srca(eye);
+    copy_init(eye);
+    copy_tile(eye, 0, 2);  // the identity block (cb.eye tile 0)
+    MATH((ckernel::llk_math_gdn_inv_rms_diag_init<APPROX>()));
+    MATH((ckernel::llk_math_gdn_inv_rms_diag<APPROX, true>(0, 2, eps_bits, scale_bits)));
+    MATH((ckernel::llk_math_gdn_inv_rms_diag<APPROX, false>(1, 2, eps_bits, scale_bits)));
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, o_q, 0);
+    pack_tile(1, o_k, 0);
+    tile_regs_release();
+    CircularBuffer(o_q).push_back(1);
+    CircularBuffer(o_k).push_back(1);
+}
+
+// mm_diag for one row-tile (Ct == 1) with all Kt <= 4 output tiles in one DST window.
+inline void mm_diag_ct1(uint32_t d, uint32_t x, uint32_t o, uint32_t Kt) {
+    CircularBuffer(o).reserve_back(Kt);
+    pack_reconfig_data_format(o);
+    reconfig_data_format(x, d);  // matmul(d, x): d->srcB, x->srcA
+    matmul_init(d, x, 0);
+    tile_regs_acquire();
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        matmul_tiles(d, x, 0, ki, ki);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        pack_tile(ki, o, ki);
+    }
+    tile_regs_release();
+    CircularBuffer(o).push_back(Kt);
+}
+#endif
 
 // out[mi, ki] = D[mi] @ x[mi, ki]: block-diagonal left multiply (D holds Ct diagonal tiles), one product per tile.
 inline void mm_diag(uint32_t d, uint32_t x, uint32_t o, uint32_t Ct, uint32_t Kt) {
@@ -770,6 +858,141 @@ struct GdnScanCbs {
     uint32_t eye;  // one 32x32 identity tile (fp32), written by the reader at kernel start
 };
 
+#if defined(GDN_TINV_SFPU)
+// k_dec_t = transpose(k * decayfac) for one row-tile (Ct == 1) in ONE DST window: k_dec_t[k][i] = k[i][k] * decayfac[i]
+// is k^T times the ROW broadcast of decayfac's column transposed into a row (fac_row, row 0). srcA is unpacked
+// transposed (the LLK's transposed-srcA binary unpack: within-face transpose + faces 0,2,1,3), srcB row-broadcast. The
+// same two values meet in the same ELWMUL as in bcast_cols_mul + transpose_tile, so the products are identical, without
+// the packed k_dec, its drain and the Kt unpack-to-DEST transposes. Every later unpack init rewrites the transpose
+// mode.
+inline void kdec_t_ct1(uint32_t k, uint32_t fac_row, uint32_t o, uint32_t Kt) {
+    CircularBuffer(o).reserve_back(Kt);
+    pack_reconfig_data_format(o);
+    reconfig_data_format(k, fac_row);  // bcast(a, b): a->srcA, b->srcB
+    mul_bcast_rows_init(k, fac_row);
+    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(k, fac_row, ckernel::Transpose::Both)));
+    tile_regs_acquire();
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        mul_tiles_bcast_rows(k, fac_row, ki, 0, ki);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t ki = 0; ki < Kt; ki++) {
+        pack_tile(ki, o, ki);
+    }
+    tile_regs_release();
+    CircularBuffer(o).push_back(Kt);
+}
+
+// prep_chunk's body for the fused / phased Ct == 1 solve build with the in-kernel qk-norm (Kt <= 4). The same blocks
+// on the same operands as the generic body below (bit-identical outputs), in an order where no block reads the output
+// of the block right before it: a CB wait sits on the UNPACK thread, so a block that consumes the previous block's
+// result idles the math thread until that block is packed and pushed (the unpack -> math -> pack drain). Here the
+// unpacker always has an independent block to start while the packer drains:
+//   norm (Gram -> D, D @ q, D @ k) | decay_all | v_beta | decay_row, decayfac_row | k_beta | k_dec_t | L_mask |
+//   q_decay, dl | negN | intra | solve | nkd
+// k_dec_t is one transposed-unpack pass (kdec_t_ct1) instead of a broadcast block, a drain and Kt transposes.
+// The writers wait for every output before any hand-off, so the push order does not matter to them.
+template <uint32_t Kt, uint32_t Vt>
+inline void prep_chunk_ct1(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits) {
+    constexpr uint32_t ck = Kt;
+    constexpr uint32_t cv = Vt;
+    const uint32_t Q = cb.supd, Kk = cb.stmp;
+    // decayfac's column as a row (fac_row): cb.ointer is the Horner / Ct == 2 scratch, free in this build.
+    const uint32_t fac_row = cb.ointer;
+
+    WAIT(cb.q, ck);
+    WAIT(cb.k, ck);
+    {
+        GDN_ZONE("pp_norm");
+        inv_rms_diag_qk(cb.q, cb.k, cb.eye, cb.scr3, cb.scr2, Kt, eps_bits, scale_bits);
+        WAIT(cb.scr3, 1);
+        WAIT(cb.scr2, 1);
+        mm_diag_ct1(cb.scr3, cb.q, Q, Kt);
+        mm_diag_ct1(cb.scr2, cb.k, Kk, Kt);
+        POP(cb.scr3, 1);  // the pops are ordered after this thread's in-flight unpacks by the CB protocol
+        POP(cb.scr2, 1);
+        POP(cb.q, ck);
+        POP(cb.k, ck);
+    }
+    {
+        GDN_ZONE("pp_decay");
+        // The gates (and v, beta) are published together after q/k; the constants beyond the eye after the first
+        // item's gates (waited for every item, a no-op after the first).
+        WAIT(cb.g, 1);
+        WAIT(cb.tril, 1);
+        WAIT(cb.ones, 1);
+        WAIT(cb.mask, 3);  // Qtl, Qbr, Q10 (gdn_handoff::kMaskTiles)
+        decay_all<true, true>(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, 1);
+    }
+    {
+        GDN_ZONE("pp_p1");
+        WAIT(cb.v, cv);
+        WAIT(cb.beta, 1);
+        bcast_cols_mul(cb.v, cb.beta, cb.vbeta, 1, Vt);  // output, no wait
+        POP(cb.v, cv);
+        POP(cb.g, 1);
+        // decay_row and decayfac_row: single-tile transposes, one window each (as transpose_col).
+        WAIT(cb.decay, 1);
+        WAIT(cb.decayfac, 2);
+        transpose_col(cb.decay, cb.scr1, 1);
+        transpose_col(cb.decayfac, fac_row, 1);
+        WAIT(Kk, ck);
+        bcast_cols_mul(Kk, cb.beta, cb.kbeta, 1, Kt);
+        POP(cb.beta, 1);
+    }
+    {
+        GDN_ZONE("pp_kdec");
+        WAIT(fac_row, 1);
+        kdec_t_ct1(Kk, fac_row, cb.kdec_t, Kt);  // output, no wait
+        POP(fac_row, 1);
+    }
+    {
+        GDN_ZONE("pp_lmask");
+        WAIT(cb.scr1, 1);
+        WAIT(cb.decay_exp, 1);
+        lmask_negexp_fused(cb.ones, cb.decay, cb.scr1, cb.tril, cb.lmask, cb.decay_exp, cb.scr2);
+        POP(cb.scr1, 1);
+        POP(cb.decay, 1);
+    }
+    {
+        GDN_ZONE("pp_qdecay");
+        WAIT(Q, ck);
+        bcast_cols_mul(Q, cb.decay_exp, cb.qdecay, 1, Kt);  // output, no wait
+        dl_tile(cb.eye, cb.decayfac, 1, cb.dl);             // output, no wait
+        POP(cb.decayfac, 2);
+        POP(cb.decay_exp, 1);
+    }
+    {
+        GDN_ZONE("pp_negn");
+        WAIT(cb.lmask, 1);
+        WAIT(cb.kbeta, ck);
+        negn_fused(cb.kbeta, Kk, cb.lmask, cb.eye, cb.scr3, 1, Kt);
+    }
+    {
+        GDN_ZONE("pp_intra");
+        intra_fused(Q, Kk, cb.lmask, cb.intra, 1, Kt);  // output, no wait
+        POP(cb.lmask, 1);
+        POP(Q, ck);
+        POP(Kk, ck);
+    }
+    // The solve reads negN, packed two blocks ago (intra ran in between); nkd, independent of T_inv, follows it.
+    {
+        GDN_ZONE("pp_tinv");
+        WAIT(cb.scr3, 1);
+        sfpu_tinv(cb.scr3, cb.eye, cb.Tinv);
+        POP(cb.scr3, 1);
+    }
+    {
+        GDN_ZONE("pp_kd");
+        WAIT(cb.scr2, 1);
+        bcast_cols_mul(cb.kbeta, cb.scr2, cb.w, 1, Kt);  // nkd -> cb.w (output, no wait)
+        POP(cb.scr2, 1);
+        POP(cb.kbeta, ck);
+    }
+}
+#endif
+
 // PHASE A (prep): one state-independent (head, chunk) work-item. No recurrent state here; the
 // sequential state scan lives in scan_step. Outputs (per chunk) v_beta, nkd(->cb.w), T_inv,
 // k_dec_t, q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
@@ -777,7 +1000,7 @@ struct GdnScanCbs {
 // out exactly as the monolithic kernel's `if constexpr` did, or the Ct==2 prep program overflows the
 // 70 KB kernel-config buffer (found on QB2 at chunk_size=64: 73344 > 70656 bytes).
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool qk_norm>
-inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits) {
+inline void prep_chunk_generic(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits) {
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
@@ -788,11 +1011,10 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     const uint32_t cc_rt = ct * ct;
     const uint32_t ck_rt = ct * Kt;
 
+    // q/k now; v and beta at pp_p1, g at pp_decay (their first readers): the reader publishes the gates after
+    // settling them, which then overlaps the q/k norm.
     WAIT(cb.q, ck);
     WAIT(cb.k, ck);
-    WAIT(cb.v, cv);
-    WAIT(cb.g, Ct);
-    WAIT(cb.beta, Ct);
 
     // In-kernel L2-norm of q,k over K (fold q's scale). Consumes the raw reader q/k
     // and produces normalized q->cb.supd, k->cb.stmp (both free in Ct==1). The rest of the chunk
@@ -805,10 +1027,26 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     constexpr bool kCt1Sfpu = kGdnTinvSfpu && Ct == 1;
     {
         GDN_ZONE("pp_norm");
-        if constexpr (qk_norm) {
+        if constexpr (qk_norm && kCt1Sfpu && Kt <= 4) {
+#if defined(GDN_TINV_SFPU)
+            // Both diagonals in one window and one SFPU pass each (inv_rms_diag_qk), then each D @ x as one
+            // Kt-tile window: the same values as the per-tensor path below.
+            inv_rms_diag_qk(cb.q, cb.k, cb.eye, cb.scr3, cb.scr2, Kt, eps_bits, scale_bits);
+            WAIT(cb.scr3, 1);
+            WAIT(cb.scr2, 1);
+            mm_diag_ct1(cb.scr3, cb.q, cb.supd, Kt);
+            mm_diag_ct1(cb.scr2, cb.k, cb.stmp, Kt);
+            POP(cb.scr3, 1);  // the pops are ordered after this thread's in-flight unpacks by the CB protocol
+            POP(cb.scr2, 1);
+            POP(cb.q, ck);
+            POP(cb.k, ck);
+            Q = cb.supd;
+            Kk = cb.stmp;
+#endif
+        } else if constexpr (qk_norm) {
             // q: D = diag(rsqrt(rowsum(q^2) + eps) * scale) from q @ q^T in one DST pass, then q_normed = D @ q
             // (cb.supd)
-            inv_rms_diag(cb.q, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/true);
+            inv_rms_diag<kCt1Sfpu>(cb.q, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/true);
             WAIT(cb.scr3, Ct);
             mm_diag(cb.scr3, cb.q, cb.supd, ct, Kt);
             if constexpr (!kLateNormWaits) {
@@ -817,7 +1055,7 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
             POP(cb.scr3, Ct);  // the pops are ordered after this thread's in-flight unpacks by the CB protocol
             POP(cb.q, ck);
             // k: same, no scale -> k_normed (cb.stmp)
-            inv_rms_diag(cb.k, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/false);
+            inv_rms_diag<kCt1Sfpu>(cb.k, cb.eye, cb.scr3, ct, Kt, eps_bits, scale_bits, /*do_scale=*/false);
             WAIT(cb.scr3, Ct);
             mm_diag(cb.scr3, cb.k, cb.stmp, ct, Kt);
             if constexpr (!kLateNormWaits) {
@@ -837,6 +1075,8 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // (pp_negn); the pops are ordered after this thread's unpacks by the CB protocol. Every block below follows
         // the same rule -- a WAIT right after a producing block drains the unpack->math->pack pipeline (~0.2-0.3 us
         // on a one-tile block), so it is placed only where the next block reads the result.
+        WAIT(cb.v, cv);
+        WAIT(cb.beta, Ct);
         bcast_cols_mul(cb.v, cb.beta, cb.vbeta, ct, Vt);
         if constexpr (kLateNormWaits) {
             WAIT(Kk, ck);  // the normalized k's first reader
@@ -850,6 +1090,12 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         GDN_ZONE("pp_decay");
         // ---- P2: decay = tril@g, decay_exp, decayfac = exp(g_sum - decay), dl = exp(g_sum): one DST pass;
         // then decay_row ----
+        WAIT(cb.g, Ct);
+        // The constants beyond the eye (published by the reader after the first item's inputs; waited for every
+        // item, a no-op after the first).
+        WAIT(cb.tril, cc);
+        WAIT(cb.ones, cc);
+        WAIT(cb.mask, 3);  // Qtl, Qbr, Q10 (gdn_handoff::kMaskTiles)
         decay_all<kCt1Sfpu, kCt1Sfpu>(cb.tril, cb.ones, cb.g, cb.decay, cb.decay_exp, cb.decayfac, ct);
         WAIT(cb.decay, Ct);  // decay_exp / decayfac are waited for at pp_kd / pp_kdec
         POP(cb.g, Ct);
@@ -1039,21 +1285,45 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
     // (They are NOT popped here; the writer drains them per chunk.)
 }
 
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool qk_norm>
+inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits) {
+#if defined(GDN_TINV_SFPU)
+    if constexpr (qk_norm && Ct == 1 && Kt <= 4) {
+        prep_chunk_ct1<Kt, Vt>(cb, scale_bits, eps_bits);
+    } else
+#endif
+    {
+        prep_chunk_generic<Ct, Kt, Vt, qk_norm>(cb, scale_bits, eps_bits);
+    }
+}
+
 // PHASE B (scan): one chunk of the sequential recurrence. cur_S = the state input CB for this
 // chunk (reader-fed cb_S at chunk 0, then the compute-only ping-pong), dst = where the updated
 // state goes (the other ping-pong CB, or the final-state CB on the last chunk).
+//
+// Column pipeline. The recurrence is separable over the V columns of the state: v_new[:,n] and S_new[:,n] read only
+// S[:,n]. The step therefore runs each block one V-tile column at a time and publishes the column as soon as it is
+// packed, so the packer drains column n while the math computes column n+1, and the next block (or the next step)
+// starts on column 0 without waiting for the whole block's pack. To make "one column" a contiguous CB prefix, the
+// compute-only CBs hold their tiles COLUMN-major (tile (r, n) at n*R + r): the state ping-pong (R = Kt), the diff
+// scratch cb.ointer and v_new (R = Ct). The reader's initial state (cb_S) and the writer's final state (cb_final) are
+// row-major: s_in_cm / s_out_cm say which layout cur_S / dst have. Each tile is still the same matmul sequence
+// accumulated in DST in the same order as the block form, so the results are bit-identical.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
+inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst, bool s_in_cm, bool s_out_cm) {
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
     constexpr uint32_t kv = Kt * Vt;
     constexpr uint32_t kc = Kt * Ct;
+    static_assert(Ct <= kDstTiles, "one V column of diff / v_new must fit one DST window");
     // Every CB the scan touches is fp32 (hand-off intermediates, state, scratch, o), so the
     // unpacker/packer formats set once at kernel start (compute_kernel_hw_startup on fp32 CBs) hold
     // for the whole step: skip the per-call reconfigs (the producer does the same under
     // GDN_HOIST_RECONFIG). Formats are identical either way => bit-exact.
-    constexpr bool H = true;
+    //
+    // State tile (k, n) of cur_S / dst in its layout.
+    auto s_in = [&](uint32_t k, uint32_t n) { return s_in_cm ? n * Kt + k : k * Vt + n; };
 
     // v_new = T_inv @ (v_beta + nkd@S), nkd = -(k_beta*decay_exp) from prep -- apply the inverse
     // after the subtraction so the WY inverse's fp error is not amplified by the cancellation (vs the
@@ -1062,116 +1332,169 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     // the packed kd@S, its re-unpack and the eltwise block of the two-block form; the identity matmul
     // keeps the window inside one op class (no eltwise init or reconfig between the products). One
     // rounding moves: v_beta enters the sum through srcA like every other matmul operand instead of
-    // through the eltwise add. diff itself must be packed: it is the in1 operand of T_inv @ diff, and
-    // the WAIT on cb.ointer below is what keeps that block's unpacker behind this block's packer.
+    // through the eltwise add. diff itself must be packed: it is the in1 operand of T_inv @ diff.
+    // Column n waits only for its own state column (a column-major cur_S is published per column).
     {
         GDN_ZONE("st_diff");
         WAIT(cb.nkd, ck);
         WAIT(cb.vbeta, cv);
-        WAIT(cur_S, kv);
         CircularBuffer(cb.ointer).reserve_back(cv);
         matmul_init(cb.nkd, cur_S, 0);  // one init serves both products: matmul_tiles binds its CBs per call
-        for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
-            const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
+        // Matmuls whose in0 has zero faces skip those face products (chunk_gdn_mm_faces.hpp; bit-identical): the
+        // identity and dl*I (Diag), and the diagonal tiles of the lower-triangular T_inv and intra (Lower).
+        gdn_mm_faces_init();
+        for (uint32_t ni = 0; ni < Vt; ni++) {
+            WAIT(cur_S, s_in_cm ? (ni + 1) * Kt : kv);
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
+            for (uint32_t mi = 0; mi < Ct; mi++) {
                 for (uint32_t ki = 0; ki < Kt; ki++) {
-                    matmul_tiles(cb.nkd, cur_S, mi * Kt + ki, ki * Vt + ni, j);  // DST[j]  = nkd @ S
+                    matmul_tiles(cb.nkd, cur_S, mi * Kt + ki, s_in(ki, ni), mi);  // DST[mi]  = nkd @ S
                 }
-                matmul_tiles(cb.eye, cb.vbeta, 0, t, j);  // DST[j] += I @ v_beta
+                gdn_matmul_tiles_faces<gdn_mmf::In0::Diag>(
+                    cb.eye, cb.vbeta, 0, mi * Vt + ni, mi);  // DST[mi] += I @ v_beta
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t j = 0; j < nb; j++) {
-                pack_tile(j, cb.ointer, t0 + j);
+            for (uint32_t mi = 0; mi < Ct; mi++) {
+                pack_tile(mi, cb.ointer);  // column-major: diff (mi, ni) at ni*Ct + mi
             }
             tile_regs_release();
+            CircularBuffer(cb.ointer).push_back(Ct);
         }
-        CircularBuffer(cb.ointer).push_back(cv);
         POP(cb.nkd, ck);
-        WAIT(cb.ointer, cv);  // the next block's unpacker must not run ahead of this block's packer
         POP(cb.vbeta, cv);
     }
+    // The rest of the step runs per V column in the order V0 O0 V1 O1 ... V(Vt-1), N0 .. N(Vt-1), O(Vt-1)
+    // (V = v_new, O = o, N = S_new). Every packed operand crosses a pack -> unpack round trip before its consumer can
+    // read it; this order puts independent matmuls in each of those gaps on the chain diff -> v_new -> S_new -> diff:
+    //   - O_n opens with its Kt q_decay@S matmuls (no new input), hiding V_n's pack, and then covers V_(n+1)'s wait for
+    //     diff column n+1;
+    //   - N_n opens with its dl*I@S matmuls, as before;
+    //   - the last column's O runs after S_new, so it covers the pack of the last S_new column that the next step's
+    //     diff reads first thing.
+    // Each output tile is the same matmul sequence accumulated in DST in the same order as the block form => bit-exact.
+    // All scan operands are 32x32 fp32 tiles and matmul_tiles binds its CBs per call, so the one init above
+    // (st_diff) serves every block of the step.
+    //
+    // v_new column n = T_inv @ diff column n (column-major in and out).
+    auto vnew_col = [&](uint32_t ni) {
+        WAIT(cb.ointer, (ni + 1) * Ct);
+        tile_regs_acquire();
+        for (uint32_t mi = 0; mi < Ct; mi++) {
+            for (uint32_t ki = 0; ki < Ct; ki++) {
+                if (ki == mi) {
+                    gdn_matmul_tiles_faces<gdn_mmf::In0::Lower>(cb.Tinv, cb.ointer, mi * Ct + ki, ni * Ct + ki, mi);
+                } else {
+                    matmul_tiles(cb.Tinv, cb.ointer, mi * Ct + ki, ni * Ct + ki, mi);
+                }
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t mi = 0; mi < Ct; mi++) {
+            pack_tile(mi, cb.vnew);
+        }
+        tile_regs_release();
+        CircularBuffer(cb.vnew).push_back(Ct);
+    };
+    // o column n = q_decay @ S[:,n] + intra @ v_new[:,n], both sums in one DST window (MVMUL adds into DST, which only
+    // the packer zeroes at release). cb_out stays row-major for the writer: tile (mi, n) is packed out of order at
+    // mi*Vt + n, and the whole block is pushed after the last column.
+    auto o_col = [&](uint32_t ni) {
+        tile_regs_acquire();
+        for (uint32_t mi = 0; mi < Ct; mi++) {
+            for (uint32_t ki = 0; ki < Kt; ki++) {
+                matmul_tiles(cb.qdecay, cur_S, mi * Kt + ki, s_in(ki, ni), mi);
+            }
+        }
+        WAIT(cb.vnew, (ni + 1) * Ct);
+        for (uint32_t mi = 0; mi < Ct; mi++) {
+            for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
+                if (kc_ == mi) {
+                    gdn_matmul_tiles_faces<gdn_mmf::In0::Lower>(cb.intra, cb.vnew, mi * Ct + kc_, ni * Ct + kc_, mi);
+                } else {
+                    matmul_tiles(cb.intra, cb.vnew, mi * Ct + kc_, ni * Ct + kc_, mi);
+                }
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t mi = 0; mi < Ct; mi++) {
+            pack_tile<true>(mi, cb.out, mi * Vt + ni);
+        }
+        tile_regs_release();
+    };
+
     {
-        GDN_ZONE("st_vnew");
+        GDN_ZONE("st_vnew");  // v_new for every column + o for all but the last
         WAIT(cb.Tinv, cc);
-        mm(cb.Tinv, cb.ointer, cb.vnew, Ct, Ct, Vt, false, H);  // v_new = T_inv @ diff -> vnew
-        WAIT(cb.vnew, cv);
+        WAIT(cb.qdecay, ck);
+        WAIT(cb.intra, cc);
+        CircularBuffer(cb.vnew).reserve_back(cv);
+        CircularBuffer(cb.out).reserve_back(cv);
+        for (uint32_t ni = 0; ni < Vt; ni++) {
+            vnew_col(ni);
+            if (ni + 1 < Vt) {
+                o_col(ni);
+            }
+        }
         POP(cb.Tinv, cc);
         POP(cb.ointer, cv);
     }
 
-    // The two outputs are each a sum of two matmuls; both sums stay in DST: the second matmul
-    // accumulates onto the first (MVMUL adds into DST, which only the packer zeroes at release), so
-    // there is no packed intermediate, no re-unpack and no eltwise block. matmul_tiles binds its
-    // operand CBs per call, so one matmul_init serves both products of a block.
-    // o = q_decay @ S + intra @ v_new -> cb_out (drained by the writer)
-    {
-        GDN_ZONE("st_o");
-        WAIT(cb.qdecay, ck);
-        WAIT(cb.intra, cc);
-        CircularBuffer(cb.out).reserve_back(cv);
-        matmul_init(cb.qdecay, cur_S, 0);
-        for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
-            const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
-                for (uint32_t ki = 0; ki < Kt; ki++) {
-                    matmul_tiles(cb.qdecay, cur_S, mi * Kt + ki, ki * Vt + ni, j);
-                }
-                for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
-                    matmul_tiles(cb.intra, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
-                }
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < nb; j++) {
-                pack_tile(j, cb.out, t0 + j);
-            }
-            tile_regs_release();
-        }
-        CircularBuffer(cb.out).push_back(cv);
-        POP(cb.qdecay, ck);
-        POP(cb.intra, cc);
-    }
     // S_new = (dl*I) @ S + k_dec_t @ v_new -> dst (the next chunk's cur_S, or the final state).
     // The decay is block-diagonal, so every state tile (i,j) uses the single dl*I tile as in0.
+    // One column (Kt tiles) per DST window; a column-major dst publishes it right away for the next step's diff.
     {
         GDN_ZONE("st_snew");
         WAIT(cb.kdec_t, kc);
         WAIT(cb.dl, 1);
+        // v_new is waited per column, after the window's dl*I@S products: column 0 is long packed, so the unpacker
+        // streams N0's state tiles while the packer still drains the last v_new column (V(Vt-1) runs right before).
         CircularBuffer(dst).reserve_back(kv);
-        matmul_init(cb.dl, cur_S, 0);
-        for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
-            const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                matmul_tiles(cb.dl, cur_S, 0, t0 + j, j);
-            }
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
-                for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
-                    matmul_tiles(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
+        for (uint32_t ni = 0; ni < Vt; ni++) {
+            for (uint32_t k0 = 0; k0 < Kt; k0 += kDstTiles) {  // one window per column at Kt <= kDstTiles
+                const uint32_t nb = (Kt - k0 < kDstTiles) ? (Kt - k0) : kDstTiles;
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < nb; j++) {
+                    gdn_matmul_tiles_faces<gdn_mmf::In0::Diag>(cb.dl, cur_S, 0, s_in(k0 + j, ni), j);
                 }
+                WAIT(cb.vnew, (ni + 1) * Ct);
+                for (uint32_t j = 0; j < nb; j++) {
+                    for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
+                        matmul_tiles(cb.kdec_t, cb.vnew, (k0 + j) * Ct + kc_, ni * Ct + kc_, j);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                if (s_out_cm) {
+                    for (uint32_t j = 0; j < nb; j++) {
+                        pack_tile(j, dst);
+                    }
+                } else {
+                    for (uint32_t j = 0; j < nb; j++) {
+                        pack_tile<true>(j, dst, (k0 + j) * Vt + ni);
+                    }
+                }
+                tile_regs_release();
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < nb; j++) {
-                pack_tile(j, dst, t0 + j);
+            if (s_out_cm) {
+                CircularBuffer(dst).push_back(Kt);
             }
-            tile_regs_release();
         }
-        CircularBuffer(dst).push_back(kv);
+        if (!s_out_cm) {
+            CircularBuffer(dst).push_back(kv);
+        }
         POP(cb.kdec_t, kc);
         POP(cb.dl, 1);
+    }
+    // The last o column (after S_new: it covers the pack of the last state column).
+    {
+        GDN_ZONE("st_o");
+        o_col(Vt - 1);
+        CircularBuffer(cb.out).push_back(cv);
+        POP(cb.qdecay, ck);
+        POP(cb.intra, cc);
     }
     // v_new and the input state fed both blocks; release them once everything is packed.
     POP(cb.vnew, cv);
