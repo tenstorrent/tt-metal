@@ -215,3 +215,25 @@ def test_reshard_output(mesh_cache, mesh_shape, cluster_axis, case):
     else:
         out = _run(mesh, shape, cluster_axis=cluster_axis, memory_layout=ML.WIDTH_SHARDED, out_mc=ttnn.L1_MEMORY_CONFIG)
         assert out.memory_config().memory_layout == ML.INTERLEAVED
+
+
+@pytest.mark.parametrize("mesh_shape,cluster_axis", _MESH, ids=lambda v: str(v))
+@pytest.mark.parametrize(
+    "memory_layout,shape",
+    [
+        (ML.WIDTH_SHARDED, (1, 1, 640, 1792)),
+        (ML.INTERLEAVED, (1, 1, 2048, 1280)),
+        (ML.HEIGHT_SHARDED, (1, 1, 1024, 512)),
+    ],
+    ids=["ws", "interleaved", "hs"],
+)
+def test_pass_regime_more_waves(mesh_cache, monkeypatch, mesh_shape, cluster_axis, memory_layout, shape):
+    """The last ladder rung: up to WAVES_MAX_PASSES (> WAVES_MAX) smaller waves, one wave per pass (port own_stats
+    semaphore ids beyond the Phase 0 count, next to the fabric connection's)."""
+    mesh = mesh_cache.get(mesh_shape)
+    monkeypatch.setattr(
+        pd,
+        "first_fit",
+        lambda base, sz, budget: (0, replace(pd.rewave(base, pd.WAVES_MAX_PASSES), PW=1, combine_depth=1)),
+    )
+    _run(mesh, shape, cluster_axis=cluster_axis, memory_layout=memory_layout, gamma_layout=ttnn.TILE_LAYOUT)

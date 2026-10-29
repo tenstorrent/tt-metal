@@ -51,6 +51,10 @@ SCALE_BLOCK_TILES = 8
 MIN_SLICE_TILES = 4
 MAX_GROUP_CORES = 24
 WAVES_MAX = 8
+FABRIC_PORT_SEMAPHORES = 3  # ids setup_fabric_connection appends on a port core (teardown, buffer index, flow control)
+WAVES_MAX_PASSES = 12  # wave cap of the pass regime (smaller waves shrink every per-wave CB); port own_stats ids
+#                        0..num_waves-1 plus the fabric's ids must fit NUM_SEMAPHORES
+NUM_SEMAPHORES = 16
 COMBINE_DEPTH = 2  # cb_partial_col depth in waves: compute collapses wave w+1 while the reader still sends wave w
 LANDING_MIN_WORDS = 1024  # landing scratch floor (4 KiB): most plans then share one allocation
 READ_LOOKAHEAD_WAVES = 1  # x-read waves in flight beyond the oldest unlanded one (wave-ordered DRAM traffic)
@@ -233,15 +237,20 @@ def max_owned_waves(num_waves: int, owners: int, G_w: int) -> int:
     return math.ceil(num_waves * owners / G_w) if G_w > 1 else 0
 
 
-def wave_params(rows_max: int, G_w: int):
-    """(num_waves, q_w, owners, q). Waves shrink until every member's owned waves fit SEM_GATHER's 32 bits."""
-    waves = max(1, min(rows_max, WAVES_MAX))
+def wave_params(rows_max: int, G_w: int, waves_max: int = WAVES_MAX):
+    """(num_waves, q_w, owners, q). Waves shrink until every member's owned waves fit SEM_GATHER's 32 bits (for the
+    pass regime's larger wave cap the bound is per pass: first_fit checks it per option)."""
+    waves = max(1, min(rows_max, waves_max))
     while True:
         q_w = math.ceil(rows_max / waves)
         num_waves = math.ceil(rows_max / q_w)
         owners = max(1, min(G_w, q_w))
         q = math.ceil(q_w / owners)
-        if waves == 1 or max_owned_waves(num_waves, owners, G_w) * gather_field_bits(G_w) <= 32:
+        if (
+            waves == 1
+            or waves_max > WAVES_MAX
+            or max_owned_waves(num_waves, owners, G_w) * gather_field_bits(G_w) <= 32
+        ):
             return num_waves, q_w, owners, q
         waves -= 1
 
@@ -334,12 +343,29 @@ def blocking_options(num_waves: int, has_gamma: bool, sharded: bool, combine: bo
                         yield dict(PW=pw, cap=cap, gamma_mode=gm, gamma_stream=gs, x_depth=xd, combine_depth=depth)
 
 
+def rewave(base: LocalPlan, waves_max: int) -> LocalPlan:
+    nw, q_w, owners, q = wave_params(base.rows_max, base.G_w, waves_max)
+    return replace(base, num_waves=nw, q_w=q_w, owners=owners, q=q, PW=nw)
+
+
 def first_fit(base: LocalPlan, sz: Sizes, budget: int):
-    """(option rank, plan) of the first ladder option whose footprint fits, or None."""
-    for rank, opt in enumerate(blocking_options(base.num_waves, sz.has_gamma, base.sharded, base.G_w > 1)):
-        p = replace(base, **opt)
-        if footprint(sz, p) <= budget:
-            return rank, p
+    """(option rank, plan) of the first ladder option whose footprint fits, or None. The whole ladder at the Phase 0
+    wave count first; then, as the last resort, the pass rungs at up to WAVES_MAX_PASSES smaller waves."""
+    rank = 0
+    bases = [base]
+    more = rewave(base, WAVES_MAX_PASSES)
+    if more.num_waves > base.num_waves:
+        bases.append(more)
+    for b in bases:
+        for opt in blocking_options(b.num_waves, sz.has_gamma, b.sharded, b.G_w > 1):
+            rank += 1
+            p = replace(b, **opt)
+            if b is not base and p.PW >= p.num_waves:
+                continue  # beyond the Phase 0 wave count only the pass regime is used
+            if p.regions * gather_field_bits(p.G_w) > 32 and p.G_w > 1:
+                continue  # SEM_GATHER holds one field per owned wave of a pass
+            if footprint(sz, p) <= budget:
+                return rank, p
     return None
 
 
@@ -472,7 +498,7 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_resident=None)
     fit = first_fit(base_plan, sz, budget)
     if fit is None:
         smallest = replace(
-            base_plan,
+            rewave(base_plan, WAVES_MAX_PASSES),
             PW=1,
             cap=1,
             combine_depth=1,
@@ -867,9 +893,12 @@ def create_mesh_program_descriptor(
     SEM_INV = 1
     SEM_PASS = 2  # workers: members done with a pass (row-group barrier before the next pass reuses gather / inv slots)
     SEM_LANDED_BASE = 3  # + 2*l + d (workers: landed notifies per link and direction)
-    SEM_OWN_STATS_BASE = 3 + 2 * L  # + w (ports: publishers of wave w announced)
-    n_sems = SEM_OWN_STATS_BASE + plan.num_waves
-    assert n_sems <= 16, "NUM_SEMAPHORES"
+    n_worker_sems = SEM_LANDED_BASE + 2 * L
+    # Port cores carry only the per-wave own_stats semaphores; worker and port cores are disjoint, so the ids start
+    # at 0 there (semaphore ids are per core) and the wave count is bounded by NUM_SEMAPHORES alone.
+    SEM_OWN_STATS_BASE = 0  # + w (ports: publishers of wave w announced)
+    n_port_sems = SEM_OWN_STATS_BASE + plan.num_waves
+    assert max(n_worker_sems, n_port_sems + FABRIC_PORT_SEMAPHORES) <= NUM_SEMAPHORES, "NUM_SEMAPHORES"
 
     worker_crs = _crs([m.core for m in plan.members])
     port_crs = _crs(used_ports)
@@ -997,6 +1026,11 @@ def create_mesh_program_descriptor(
             n_in = {d: len(info["entries"][d]) for d in (FWD, BWD)}
 
             program = ttnn.ProgramDescriptor()
+            # Our semaphores first: setup_fabric_connection (below) appends the port's fabric teardown / buffer-index
+            # semaphores at the next free ids, which must not alias the per-wave own_stats ids.
+            program.semaphores = [
+                ttnn.SemaphoreDescriptor(id=i, core_ranges=worker_crs, initial_value=0) for i in range(n_worker_sems)
+            ] + [ttnn.SemaphoreDescriptor(id=i, core_ranges=port_crs, initial_value=0) for i in range(n_port_sems)]
             reader_rt = ttnn.RuntimeArgs()
             writer_rt = ttnn.RuntimeArgs()
             compute_rt = ttnn.RuntimeArgs()
@@ -1117,9 +1151,6 @@ def create_mesh_program_descriptor(
             ]
             program.kernels = kernels
             program.cbs = cbs
-            program.semaphores = [
-                ttnn.SemaphoreDescriptor(id=i, core_ranges=all_crs, initial_value=0) for i in range(n_sems)
-            ]
             key = "|".join(
                 str(v)
                 for v in (
