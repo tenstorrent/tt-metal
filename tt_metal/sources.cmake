@@ -73,23 +73,23 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
     api/tt-metalium/experimental/command_list.hpp
-    api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
-    api/tt-metalium/experimental/metal2_host_api/arg_value.hpp
-    api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
-    api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
-    api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/node_coord.hpp
-    api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
+    api/tt-metalium/workload/program_spec/advanced_options.hpp
+    api/tt-metalium/workload/program_spec/arg_value.hpp
+    api/tt-metalium/workload/program_spec/compute_hardware_config.hpp
+    api/tt-metalium/workload/program_spec/data_movement_hardware_config.hpp
+    api/tt-metalium/workload/program_spec/dataflow_buffer_spec.hpp
+    api/tt-metalium/workload/program_spec/kernel_spec.hpp
+    api/tt-metalium/vocabulary/node_coord.hpp
+    api/tt-metalium/workload/program_spec/prefetcher_pipe_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/program.hpp
-    api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
-    api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
-    api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
-    api/tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp
-    api/tt-metalium/experimental/metal2_host_api/utility/group.hpp
-    api/tt-metalium/experimental/metal2_host_api/utility/table.hpp
+    api/tt-metalium/workload/program_spec/program_run_args.hpp
+    api/tt-metalium/workload/program_spec/program_spec.hpp
+    api/tt-metalium/workload/program_spec/scratchpad_spec.hpp
+    api/tt-metalium/workload/program_spec/semaphore_spec.hpp
+    api/tt-metalium/workload/program_spec/tensor_parameter.hpp
+    api/tt-metalium/workload/program_spec/tensor_spec_relaxations.hpp
+    api/tt-metalium/workload/program_spec/utility/group.hpp
+    api/tt-metalium/workload/program_spec/utility/table.hpp
     api/tt-metalium/experimental/mock_device/mock_allocator.hpp
     api/tt-metalium/experimental/mock_device/mock_device.hpp
     api/tt-metalium/experimental/noc_estimator/noc_estimator.hpp
