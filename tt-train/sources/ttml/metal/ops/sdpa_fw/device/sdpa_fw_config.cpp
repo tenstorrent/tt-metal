@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <tt-metalium/kernel_types.hpp>
 
@@ -630,24 +631,52 @@ SDPAForwardChunks resolve_chunks(
     // four K/V tiles do better once the inner dim reaches 128 tiles-wide traffic or with a mask tensor
     // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
     // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
-    // while they do not fit L1 or would leave cores idle.
+    // while they do not fit L1 or would leave cores idle; when the schedule may cut items, fewer and
+    // heavier items can keep the cores busy as pieces, so the query chunk is the one of four, two or one
+    // rows whose schedule the cost model rates fastest (8 heads at S=2048 on 130 cores: 128 four-row
+    // items cut beat 256 two-row items uncut).
     constexpr uint32_t kDefaultSqChunkT = 4U;
     const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
     SDPAForwardChunks chunks{
         .Sq_chunk_t = user.Sq_chunk_t,
         .Sk_chunk_t = user.Sk_chunk_t,
         .heads_per_item = std::max(user.heads_per_item, 1U)};
-    if (chunks.Sq_chunk_t == 0U) {
-        chunks.Sq_chunk_t = kDefaultSqChunkT;
-        while (chunks.Sq_chunk_t > 1U &&
-               (shape.St % chunks.Sq_chunk_t != 0U || num_work_items(shape, chunks) < num_available_cores)) {
-            chunks.Sq_chunk_t /= 2U;
-        }
-    }
     if (chunks.Sk_chunk_t == 0U) {
         chunks.Sk_chunk_t = default_sk_chunk_t;
         while (chunks.Sk_chunk_t > 1U && shape.St % chunks.Sk_chunk_t != 0U) {
             chunks.Sk_chunk_t /= 2U;
+        }
+    }
+    if (chunks.Sq_chunk_t == 0U) {
+        chunks.Sq_chunk_t = kDefaultSqChunkT;
+        while (chunks.Sq_chunk_t > 1U && shape.St % chunks.Sq_chunk_t != 0U) {
+            chunks.Sq_chunk_t /= 2U;
+        }
+        if (with_partials) {
+            // Every candidate is scheduled on the same core count, the model's DRAM share being per core
+            // count. The model over-predicts a cut schedule against an uncut one by about a tenth (p150b
+            // calibration), so a smaller chunk, whose schedule cuts less, must win by that much; the
+            // larger chunk also reads K/V fewer times, which the model only approximates.
+            constexpr double kSmallerChunkMustWinBy = 0.9;
+            const uint32_t max_pieces = effective_max_pieces(config);
+            SDPAForwardChunks best = chunks;
+            double best_us = std::numeric_limits<double>::infinity();
+            for (SDPAForwardChunks candidate = chunks; candidate.Sq_chunk_t >= 1U; candidate.Sq_chunk_t /= 2U) {
+                if (shape.St % candidate.Sq_chunk_t != 0U ||
+                    l1_bytes(cb_tiles(shape, candidate, with_partials)) > l1_budget_bytes) {
+                    continue;  // the L1 shrink below only makes chunks smaller: one that does not fit is out
+                }
+                const double us = make_schedule(shape, candidate, num_available_cores, max_pieces).predicted_us;
+                if (us < best_us * kSmallerChunkMustWinBy) {
+                    best = candidate;
+                    best_us = us;
+                }
+            }
+            chunks = best;
+        } else {
+            while (chunks.Sq_chunk_t > 1U && num_work_items(shape, chunks) < num_available_cores) {
+                chunks.Sq_chunk_t /= 2U;
+            }
         }
     }
     // Shrink the picked (not the pinned) chunks until the circular buffers fit.

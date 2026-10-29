@@ -2139,15 +2139,19 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     EXPECT_EQ(pinned.Sk_chunk_t, 1U);
     EXPECT_GE(pinned.rows(), 4U);
 
-    // Few causal sequences (8 heads, S=2048): four-row chunks give 128 items for 130 cores, so the pick
-    // shrinks to two rows per chunk (256 items) and keeps every core busy.
+    // Few causal sequences (8 heads, S=2048): four-row chunks give 128 items for 130 cores. The scheduler
+    // keeps the cores busy by cutting the heavy ones, which beats two-row chunks (256 items) uncut, so the
+    // pick stays at four rows and the schedule cuts; with cutting off the pick shrinks to two rows.
     SDPAForwardShape few_seqs = tinyllama;
     few_seqs.q_heads = 8U;
     few_seqs.kv_heads = 8U;
     const auto picked_few = resolve_chunks({}, few_seqs, kBudget, kCores);
-    EXPECT_EQ(picked_few.Sq_chunk_t, 2U);
-    EXPECT_GE(num_work_items(few_seqs, picked_few), kCores);
+    EXPECT_EQ(picked_few.Sq_chunk_t, 4U);
+    EXPECT_GT(schedule_for({}, few_seqs, picked_few, kCores).num_slots, 0U) << "the pick must let the cut engage";
     EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
+    const auto picked_few_uncut = resolve_chunks({.max_pieces = 1U}, few_seqs, kBudget, kCores);
+    EXPECT_EQ(picked_few_uncut.Sq_chunk_t, 2U);
+    EXPECT_GE(num_work_items(few_seqs, picked_few_uncut), kCores);
 }
 
 namespace {
