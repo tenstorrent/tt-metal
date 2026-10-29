@@ -64,11 +64,13 @@ SPEC_MASK_KEY_CHUNK = 32768
 SPEC_WIDTH_RUNG_SMALLEST = 2048
 SPEC_WIDTH_RUNG_FACTOR = 4
 SPEC_WIDTH_RUNGS_ENV = "GEMMA4_SPEC_WIDTH_RUNGS"
-# GEMMA4_SPEC_VERIFY_CHECK=N (default 0): the first N replays of every shape also run a plain target forward of
-# each live row's anchor at its position and compare its argmax with the packed verify's row-0 argmax (the same
-# keys in both: a disagreement past a bf16 near-tie means the packed verify read the wrong keys -- a mask pitch,
-# table width or KV write-slot defect -- and is logged as a WARNING with the rows). One eager forward per checked
-# replay; the forward rewrites the anchor's K/V in place with the same values.
+# GEMMA4_SPEC_VERIFY_CHECK=N (default 0): the first N SERVED replays of every (shape, rung) also run a plain target
+# forward of each live row's anchor at its position and compare its argmax with the packed verify's row-0 argmax
+# (the same keys in both: a disagreement past a bf16 near-tie means the packed verify read the wrong keys -- a
+# mask pitch, table width or KV write-slot defect -- and is logged as a WARNING with the rows). One eager forward
+# per checked replay; the forward rewrites the anchor's K/V in place with the same values. The zero-table replays
+# of serving_measure_costs are never checked: with every key on block 0 the rows' own draft K/V alias into every
+# earlier block, so the packed verify and a plain forward see different degenerate contexts and near-flat logits.
 SPEC_VERIFY_CHECK_ENV = "GEMMA4_SPEC_VERIFY_CHECK"
 # Measured 12B TP8 (3 GB region): 21.9-31.9 MB per captured record, width-independent.
 SPEC_RECORD_MB_DEFAULT = 32.0
@@ -782,7 +784,8 @@ class SpeculativeDecoder:
         # the bucket rolls.
         self._pv_sk_bucket = 1024
         self._srv_check_steps = 0  # GEMMA4_SPEC_VERIFY_CHECK, read by serving_prepare
-        self._srv_checked = {}  # shape -> replays checked so far
+        self._srv_checked = {}  # (shape, rung) -> served replays checked so far
+        self._srv_measuring = False  # serving_measure_costs is replaying (zero tables): no verify check
         self._srv_check_last = []  # the last check's disagreements (row, position, plain id, packed id)
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
@@ -2695,6 +2698,7 @@ class SpeculativeDecoder:
                 best = dt if best is None else min(best, dt)
             return best, out
 
+        self._srv_measuring = True  # the zero-table measurement replays are not served verifies (no check)
         for shape in self._srv_shapes:
             B, K = shape
             table = torch.zeros((B, self._srv_blocks), dtype=torch.int32)
@@ -2719,6 +2723,7 @@ class SpeculativeDecoder:
                 if len(line) == 1:
                     line.append(line[0])
                 costs[("step", shape, int(width))] = (line[0][0], line[0][1], line[1][0], line[1][1])
+        self._srv_measuring = False
         self._srv_last = None
         self._srv_seeded = {}
         _lg.info(
@@ -2847,8 +2852,13 @@ class SpeculativeDecoder:
         vx = ttnn.get_device_tensors(rec["verify_x"])[0] if self._tp > 1 else rec["verify_x"]
         vx = ttnn.to_torch(vx).to(torch.int64).reshape(B, P)
         gids = torch.tensor(self._ids_to_host(rec["vidx"], B * P), dtype=torch.int64).reshape(B, P)
-        if self._srv_check_steps > 0 and self._srv_checked.get(shape, 0) < self._srv_check_steps:
-            self._srv_verify_check(shape, rec, rows, live, anchors, positions, gids)
+        if (
+            self._srv_check_steps > 0
+            and not self._srv_measuring
+            and self._srv_checked.get((shape, int(width)), 0) < self._srv_check_steps
+        ):
+            zero_tables = not bool(torch.as_tensor(page_tables).any())
+            self._srv_verify_check(shape, rec, rows, live, anchors, positions, gids, zero_tables=zero_tables)
         self._srv_last = {"shape": shape, "rows": [int(r) for r in rows], "K": K}
         return ServingStepResult(
             shape=shape,
@@ -3026,10 +3036,12 @@ class SpeculativeDecoder:
             page_tables_per_layer=S["d_ptl_list"],
         )
 
-    def _srv_verify_check(self, shape, rec, rows, live, anchors, positions, gids):
+    def _srv_verify_check(self, shape, rec, rows, live, anchors, positions, gids, zero_tables=False):
         """GEMMA4_SPEC_VERIFY_CHECK: the packed verify's row-0 argmax of every live row against the plain forward
         of the same anchor at the same position (keys <= position in both; the forward rewrites the anchor's K/V
-        with the same values). Returns the disagreements ``(row, position, plain id, packed id)``; logs them."""
+        with the same values), counted per (shape, rung) over served replays. Returns the disagreements
+        ``(row, position, plain id, packed id)``; logs them (a zero-table replay is named as such: every key on
+        block 0 makes the rows' own draft K/V alias into every earlier block, no evidence either way)."""
         S = self._srv_shape_bufs[shape]
         B = S["B"]
         logits, hidden = self._srv_eager_forward(
@@ -3044,13 +3056,16 @@ class SpeculativeDecoder:
         bad = [(int(rows[r]), int(positions[r]), plain[r], packed[r]) for r in range(live) if plain[r] != packed[r]]
         from loguru import logger as _lg
 
-        n = self._srv_checked.get(shape, 0) + 1
-        self._srv_checked[shape] = n
+        key = (shape, int(rec["S_k"]))
+        n = self._srv_checked.get(key, 0) + 1
+        self._srv_checked[key] = n
         self._srv_check_last = bad
         line = (
-            f"[spec-check] shape {shape} S_k={rec['S_k']} replay {n} of {self._srv_check_steps}: the packed verify's "
-            f"row-0 argmax agrees with the plain forward on {live - len(bad)} of {live} rows"
+            f"[spec-check] shape {shape} S_k={rec['S_k']} served replay {n} of {self._srv_check_steps}: the packed "
+            f"verify's row-0 argmax agrees with the plain forward on {live - len(bad)} of {live} rows"
         )
+        if zero_tables:
+            line += " on a zero-table replay (every key on block 0, the rows' own draft K/V alias into every earlier block: no evidence either way)"
         if bad:
             _lg.warning(line + "; disagreements (row, position, plain, packed): " + ", ".join(map(str, bad)))
         else:

@@ -487,11 +487,26 @@ class RecordChoice:
         return self.expected_tokens / self.rows
 
 
-def rank_records(candidates, rows, plain_ms):
-    """Every candidate scored: ``[RecordChoice]`` sorted best gain first (ties: the cheaper record)."""
+def fresh_indices(fresh, n):
+    """The rows a step's ``fresh`` names: ``True`` is every row (a batch that is all new), ``False``/``None``
+    none, else the indices of the rows that are new requests without a trial behind them."""
+    if fresh is True:
+        return tuple(range(int(n)))
+    if not fresh:
+        return ()
+    idx = tuple(sorted({int(i) for i in fresh}))
+    if idx and (idx[0] < 0 or idx[-1] >= int(n)):
+        raise ValueError(f"fresh rows {idx} outside the {n} rows")
+    return idx
+
+
+def rank_records(candidates, rows, plain_ms, optimistic=()):
+    """Every candidate scored: ``[RecordChoice]`` sorted best gain first (ties: the cheaper record). Rows in
+    ``optimistic`` are credited every draft (``k + 1`` tokens a step): the trial's hypothesis for new rows."""
     n = len(rows)
     if n < 1:
         raise ValueError("rank_records needs at least one drafting row")
+    optimistic = frozenset(fresh_indices(optimistic, n))
     plain_ms = float(plain_ms)
     if plain_ms <= 0.0:
         raise ValueError(f"rank_records needs a positive plain step cost, got {plain_ms}")
@@ -507,10 +522,12 @@ def rank_records(candidates, rows, plain_ms):
         if members is not None and (not members or any(i < 0 or i >= n for i in members)):
             raise ValueError(f"record {cand.shape} names members {members} outside the {n} rows")
         inside = range(n) if members is None else members
+        hoped = sum(1 for i in inside if i in optimistic)
         if cand.tokens_per_row is not None:
-            tokens = float(cand.tokens_per_row) * len(inside) + (n - len(inside))
+            tokens = float(cand.tokens_per_row) * (len(inside) - hoped) + (n - len(inside))
         else:
-            tokens = sum(rows[i].expected_tokens(k_v) for i in inside) + (n - len(inside))
+            tokens = sum(rows[i].expected_tokens(k_v) for i in inside if i not in optimistic) + (n - len(inside))
+        tokens += hoped * (k_v + 1)
         gain = (tokens / n) / (cost / plain_ms)
         ranked.append(
             RecordChoice(
@@ -923,13 +940,30 @@ class SpecPolicy:
             return None
         return dataclasses.replace(cheapest, reason="retry")
 
-    def trial_choice(self, ranked):
-        """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate
-        is at least ``trial_gain``; independent of the retry cadence, the reseed is its only extra cost."""
+    def trial_choice(self, ranked, plain_ms=None, hypothetical=None, remaining=None):
+        """A new request's one trial, or None: the cheapest candidate (entry plus step) when its gain estimate is
+        at least ``trial_gain`` and, for a batch that is not all new, its hypothesis holds: ``hypothetical`` (the
+        same candidates ranked with the new rows accepting every draft) clears ``min_gain`` and its entry pays
+        over the horizon. A batch of informed rows a new row cannot lift above the entry bar has nothing to learn
+        from a trial that reseeds the whole batch; independent of the retry cadence, the reseed is its only extra
+        cost."""
         cheapest = min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
         if cheapest.gain < self.config.trial_gain:
             return None
+        if hypothetical is not None:
+            same = (cheapest.shape, cheapest.width, cheapest.members)
+            hoped = next(c for c in hypothetical if (c.shape, c.width, c.members) == same)
+            if hoped.gain < self.config.min_gain or not self.entry_pays(hoped, plain_ms, remaining):
+                return None
         return dataclasses.replace(cheapest, reason="trial")
+
+    @staticmethod
+    def _hypothetical(candidates, rows, plain_ms, fresh):
+        """The trial's hypothesis ranking for a batch some of whose rows are new (None when none or all are)."""
+        idx = fresh_indices(fresh, len(rows))
+        if not idx or len(idx) == len(rows):
+            return None
+        return rank_records(candidates, rows, plain_ms, optimistic=idx)
 
     def plain_probe_due(self, choice, plain_ms):
         """Whether a speculating batch should serve one plain step to refresh the plain estimate: at least
@@ -946,7 +980,7 @@ class SpecPolicy:
 
     def would_speculate(self, candidates, rows, plain_ms, remaining=None, fresh=False):
         """Whether ``decide`` would replay a record now, without changing any counter (the dFlash bootstrap gate);
-        ``fresh`` says the rows include a new request that has had no trial yet."""
+        ``fresh`` names the rows that are new requests without a trial yet (``True``: every row)."""
         ranked = rank_records(candidates, rows, plain_ms)
         if self.admissible(ranked, plain_ms, remaining) is not None:
             return True
@@ -955,7 +989,10 @@ class SpecPolicy:
             return True
         if self.retry_choice(ranked, plain_ms) is not None:
             return True
-        return fresh and self.trial_choice(ranked) is not None
+        if not fresh_indices(fresh, len(rows)):
+            return False
+        hypothetical = self._hypothetical(candidates, rows, plain_ms, fresh)
+        return self.trial_choice(ranked, plain_ms, hypothetical, remaining) is not None
 
     def admissible(self, ranked, plain_ms, remaining=None):
         """The best candidate that clears the entry gain and whose entry (if any) pays over the horizon."""
@@ -978,9 +1015,11 @@ class SpecPolicy:
         ``k_cap`` is the largest draft length the step may use (the rows-based
         cap); a choice below it counts toward the probe. ``remaining`` caps the
         entry horizon by the steps the entering rows are expected to live.
-        ``fresh`` says the rows include a new request that has had no trial
-        yet: declined otherwise, the step is its trial when the prior's gain
-        clears ``trial_gain`` (reason "trial", never held).
+        ``fresh`` names the rows that are new requests without a trial yet
+        (``True``: every row): declined otherwise, the step is their trial
+        when the prior's gain clears ``trial_gain`` and, with other rows in the
+        batch, the hypothesis that the new rows accept every draft clears the
+        entry bar (reason "trial", never held).
         """
         cfg = self.config
         candidates = list(candidates)
@@ -1008,8 +1047,9 @@ class SpecPolicy:
                     reason = "exit"
         else:
             choice = self.retry_choice(ranked, plain_ms)
-            if choice is None and fresh:
-                choice = self.trial_choice(ranked)
+            if choice is None and fresh_indices(fresh, len(rows)):
+                hypothetical = self._hypothetical(candidates, rows, plain_ms, fresh)
+                choice = self.trial_choice(ranked, plain_ms, hypothetical, remaining)
         if choice is not None and choice.reason in ("gain", "hold") and self.plain_probe_due(choice, plain_ms):
             choice, reason = None, "calibrate"
         if choice is None:

@@ -6459,10 +6459,14 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #   GEMMA4_SPEC_RETRY_OVERHEAD=0.03  ...whose cost over those plain steps is at most this fraction of them
 #   GEMMA4_SPEC_TRIAL_GAIN=0.6    a new request's first proposal replays the cheapest record once (its trial, no
 #                                 hold) when the prior's gain is at least this, whatever the retry cadence says;
-#                                 below it the request runs plain until the retry
+#                                 below it the request runs plain until the retry. In a batch with informed rows
+#                                 the trial also needs its hypothesis (the new rows accept every draft) to clear
+#                                 GEMMA4_SPEC_MIN_GAIN with the reseed paying over the horizon: the trial reseeds
+#                                 every row, and a row joining a batch that measured below plain cannot lift it
 #   GEMMA4_SPEC_PROBE_STEPS=32    after this many steps below the cap, one step at the next larger draft length (0 = off)
-#   GEMMA4_SPEC_VERIFY_CHECK=0    the first N replays of every shape also run a plain forward of each row's anchor and
-#                                 log whether its argmax matches the packed verify's row 0 (a wrong-keys detector)
+#   GEMMA4_SPEC_VERIFY_CHECK=0    the first N served replays of every (shape, rung) also run a plain forward of each
+#                                 row's anchor and log whether its argmax matches the packed verify's row 0 (a
+#                                 wrong-keys detector; the zero-table warmup measurement replays are never checked)
 #   GEMMA4_SPEC_EWMA=0.1          the acceptance EWMA weight of one verify
 #   GEMMA4_SPEC_PLAIN_STEP_MS     the plain decode step cost (``ms`` flat, or ``ms_at_0,ms_at_top``); unset = timed
 #                                 at warmup at position 0 and at the top position, per warmed decode bucket (every
@@ -7468,9 +7472,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         over the continuing rows alone is a candidate too: the rows left out
         take one token per step from the plain decode the verify runs beside
         the replay, which the candidate's cost carries. A joining row that
-        has no verify of its own yet and no trial behind it makes the step
-        ``fresh``: declined otherwise, the policy replays the cheapest
-        record once as the request's trial (``GEMMA4_SPEC_TRIAL_GAIN``).
+        has no verify of its own yet and no trial behind it is ``fresh``:
+        declined otherwise, the policy replays the cheapest record once as
+        the request's trial (``GEMMA4_SPEC_TRIAL_GAIN``) -- in a batch with
+        informed rows only when the new rows accepting every draft would
+        lift the batch over the entry bar, since the trial reseeds every row
+        (an (8, 3) reseed is ~230 ms against a 128-token request).
         Without the cost
         table (the fixed policy, or warmup measured nothing) the default
         serves for every row; a candidate whose rung has no measured cost is
@@ -7519,15 +7526,17 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         previous = policy.last_k
         stats = [session.stats for _r, session, *_ in drafting]
         fresh_rows = [
-            session
+            (i, session)
             for i, (_r, session, *_) in enumerate(drafting)
             if i not in continuing and session.stats.spec_steps == 0 and not session.trialed
         ]
-        choice = policy.decide(candidates, stats, plain_ms, cap, remaining, fresh=bool(fresh_rows))
+        choice = policy.decide(
+            candidates, stats, plain_ms, cap, remaining, fresh=tuple(i for i, _session in fresh_rows)
+        )
         self._spec_policy_note("Gemma4MTP", choice, previous, n, str(default), stats, plain_ms)
         if choice is None:
             return None, None
-        for session in fresh_rows:
+        for _i, session in fresh_rows:
             session.trialed = True  # one trial per request, whatever reason the step replays for
         return choice.shape, choice.members
 

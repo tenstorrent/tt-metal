@@ -1683,6 +1683,7 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
     spec._srv_flat_type = "full_attention"
     spec._srv_per_layer, spec._srv_uploaded, spec._srv_last, spec._srv_seeded = None, {}, None, {}
     spec._srv_check_steps, spec._srv_checked, spec._srv_check_last = 1, {}, []  # GEMMA4_SPEC_VERIFY_CHECK=1
+    spec._srv_measuring = False
     spec._srv_pool_v = spec._srv_pool_s = spec._srv_logits = spec._srv_backbone = None
     spec._srv_iota, spec._srv_records, spec._srv_shape_bufs = {}, {}, {}
     spec._srv_widths, spec._srv_shapes = {shape: list(ladder) for shape in shapes}, shapes
@@ -1775,11 +1776,17 @@ def _rail_allocates_nothing_after_capture(monkeypatch, expect_error):
                 used.extend([rec["id"], rec["id"]])
     assert allocated == [], [buf.shape for buf in allocated]
     assert all(gone(ref) for ref in ops) and set(h2d) <= prepared and replays == used and copies == []
-    # the verify check (one replay per shape here) ran its plain forward on the shape's persistent seed inputs
-    # and compared row 0 of every live row: the recording argmax answers arange(rows), so the plain ids are
-    # 0..live-1 and the packed row-0 ids r * P -- rows past the first disagree, the first agrees
-    assert spec._srv_checked == {shape: 1 for shape in shapes}
+    # the verify check (one served replay per shape and rung here) ran its plain forward on the shape's persistent
+    # seed inputs and compared row 0 of every live row: the recording argmax answers arange(rows), so the plain
+    # ids are 0..live-1 and the packed row-0 ids r * P -- rows past the first disagree, the first agrees
+    assert spec._srv_checked == {(shape, w): 1 for shape in shapes for w in ladder}
     assert spec._srv_check_last == [] or all(plain != packed for _r, _p, plain, packed in spec._srv_check_last)
+    # a measurement replay (serving_measure_costs raises the flag around its zero-table steps) is never checked
+    spec._srv_measuring = True
+    spec.serving_step(shape, rows, [3 + i for i in range(live)], positions, table, cols)
+    spec._srv_measuring = False
+    used.append(rec["id"])
+    assert spec._srv_checked == {(shape, w): 1 for shape in shapes for w in ladder}
     assert {key: (id(rec["verify_x"]), id(rec["vidx"])) for key, rec in spec._srv_records.items()} == outputs
     assert all(
         buf.address in prepared and not buf.freed
@@ -2556,6 +2563,34 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert SpecPolicy(SpecPolicyConfig(trial_gain=0.5), 5).decide(dear, [row], _PLAIN, 5, fresh=True).reason == "trial"
     with_entry = [RecordCandidate((1, 5), 2048, 50.0, 170.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
     assert fresh.decide(with_entry, [row], _PLAIN, 5, fresh=True).shape == (1, 5), "cheapest entry plus step"
+    # a batch that is not all new: its trial needs the hypothesis that the new rows accept every draft to clear
+    # the entry bar, since the trial reseeds every row. Eight rows at a 0.3 conditional (1.42 tokens a step at
+    # K=3) on the (8,3) at 35 ms (1.75x plain): the prior's gain 0.81 clears trial_gain, but one new row at 4
+    # tokens makes 1.74 tokens/row = 0.99x < min_gain (declined); three new rows make 2.39 = 1.36x (trial), and
+    # the (8,3)'s 230 ms reseed must pay over the joining rows' horizon (not over 10 steps: 12.8 ms x 10)
+    batch = [_row([0.3] * 5) for _ in range(8)]
+    eight = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    only83 = [c for c in _cands(_COSTS, n=8) if c.shape == (8, 3)]
+    assert rank_records(only83, batch, _PLAIN)[0].gain == pytest.approx(1.417 * 20 / 35, abs=1e-3)
+    hyped = rank_records(only83, batch, _PLAIN, optimistic=(0,))
+    assert hyped[0].expected_tokens == pytest.approx(7 * 1.417 + 4, abs=1e-2)
+    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0,)) is None and eight.last_reason == "declined"
+    assert not eight.would_speculate(only83, batch, _PLAIN, fresh=(0,))
+    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
+    assert eight.would_speculate(only83, batch, _PLAIN, fresh=(0, 1, 2))
+    # with the (16,1) at 30 ms beside it (1.3 tokens at 1.5x: 0.87x, the cheapest) one new row makes 0.93x and
+    # three 1.04x: still declined; five new rows of eight make 1.14x
+    both = _cands(_COSTS, n=8)
+    assert rank_records(both, batch, _PLAIN)[0].shape == (16, 1)
+    assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None
+    assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2, 3, 4)).shape == (16, 1)
+    reseeding8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
+    eight = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
+    assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
+    assert eight.decide(reseeding8, batch, _PLAIN, 3, remaining=10, fresh=(0, 1, 2)) is None
+    assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=True).reason == "trial", "a batch all new: the floor"
+    with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)
+        eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(8,))
     # the calibration probe: a speculating batch serves one plain step once calib_probe_steps passed without
     # a clean plain sample and the probe's cost (the reseed to resume, the tokens forgone) is amortized
     probing = SpecPolicy(SpecPolicyConfig(calib_probe_steps=3, retry_overhead=2.0, probe_steps=0), 5)
