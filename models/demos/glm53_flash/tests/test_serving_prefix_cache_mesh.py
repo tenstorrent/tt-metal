@@ -295,7 +295,7 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
     2048-token prefix. While A is mid-prefill vLLM reports the shared blocks computed for B (``num_computed_tokens``
     2048) and splits the step's token budget, so B's first scheduled chunk ends at 2112 (64 new tokens). The adapter
     holds no snapshot of that prefix in a retained slot (A's slot is live), recomputes ``[0, 2112)`` in B's own slot
-    (device chunks 1024, 1024, 64) and then continues B from the chunk-UNALIGNED 2112 while A continues from 2048.
+    (device chunks 1024, 1024, 128) and then continues B from the chunk-UNALIGNED 2176 while A continues from 2048.
     Both decode greedily and must agree with their from-scratch prefills (the layer-level chunk plans are
     bit-identical -- ``test_chunked_prefill``; this is the adapter's miss + continuation + decode path)."""
     if B % MESH[1]:
@@ -339,7 +339,7 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
     A = torch.cat([shared, _ids(300, 12, vocab)])
     Bp = torch.cat([shared, _ids(300, 13, vocab)])
     n = int(A.numel())
-    split_end = 2 * CHUNK + 64
+    split_end = 2 * CHUNK + 128  # a 128-aligned odd end: the served r3 shape (36736 = 287 x 128), the static index path
     # A's first two device chunks (two vLLM steps), then B joins with the shared prefix "computed" and 64 tokens of budget
     srv.prefill(0, A[:CHUNK], 0)
     srv.prefill(0, A[: 2 * CHUNK], CHUNK)
@@ -371,5 +371,5 @@ def test_served_vllm_cached_prefix_miss_with_budget_split(mesh_device, monkeypat
         f"B tokens {toks_b} ref {rtoks_b} (same slot {same_b}, equal {torch.equal(lb, rb)}); apc {a.apc.stats}"
     )
     _assert_agree("A continued at 2048 vs from scratch", [la] + outs_a, [ra] + routs_a)
-    _assert_agree("B: vLLM-cached 2048 miss, chunk end 2112, continued vs from scratch", [lb] + outs_b, [rb] + routs_b)
+    _assert_agree("B: vLLM-cached 2048 miss, chunk end 2176, continued vs from scratch", [lb] + outs_b, [rb] + routs_b)
     a.release_persistent_capture()
