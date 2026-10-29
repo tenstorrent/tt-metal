@@ -429,28 +429,16 @@ jobs:
           ARCH: ${{ inputs.arch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BLOCKS=false
-          python3 ${{ env.LLK_PATH }}/perf/placement_check.py render \
-            --results 'stage2/**/stage2.json' --arch "$ARCH" --report stage2.md || BLOCKS=true
-          # Every leg writes a stage-2 result, empty when it had nothing to re-measure. A leg without one
-          # (stage 2 failed, crashed or could not measure the base) leaves the stage-1 verdict.
           # --jq runs once per page, so count lines rather than taking a length per page.
           LEGS=$(gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
-          RESULTS=$(find stage2 -name stage2.json | wc -l)
-          if [ "$RESULTS" -lt "$LEGS" ] || [ "$LEGS" -eq 0 ]; then
-            BLOCKS=true
-            printf '\n> ⚠️ %s of %s %s leg(s) left a stage-2 result, so the gate keeps the stage-1 verdict.\n' \
-              "$RESULTS" "$LEGS" "$ARCH" >> stage2.md
-          fi
-          # Stage 2 counts only when every leg compared against the gate's own baseline.
           GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
-          if find stage2 -name stage2.base -exec cat {} + | grep -qvx "$GATE_BASE"; then
-            BLOCKS=true
-            printf '\n> ⚠️ A leg re-measured against another baseline than the gate (%s), so the gate keeps the stage-1 verdict.\n' \
-              "$GATE_BASE" >> stage2.md
-          fi
+          BLOCKS=false
+          python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
+            --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
+            --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
+            --arch "$ARCH" --report stage2.md || BLOCKS=true
           echo "blocks=$BLOCKS" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md

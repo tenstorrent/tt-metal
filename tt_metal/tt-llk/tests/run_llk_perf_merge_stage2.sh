@@ -3,7 +3,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 # Merge gate stage 2, in a leg after stage 1: re-measure this leg's regressions on both commits at 5 code positions.
-# Usage: CHIP_ARCH=<arch> THRESHOLD=<x> [MODULE_THRESHOLDS=<m=x,...>] LLK_STAGE2_DEADLINE=<epoch s> run_llk_perf_merge_stage2.sh <baseline dir> <out dir>
+# Usage: CHIP_ARCH=<arch> THRESHOLD=<x> [MODULE_THRESHOLDS=<m=x,...>] LLK_STAGE2_DEADLINE=<epoch s>
+#        [LLK_STAGE2_BASE_REF=<sha>] run_llk_perf_merge_stage2.sh <baseline dir> <out dir>
 set -euo pipefail
 
 BASELINE="$(realpath -m "${1:?usage: run_llk_perf_merge_stage2.sh <baseline dir> <out dir>}")"
@@ -17,16 +18,22 @@ if [[ ! -f "$BASELINE/baseline.csv" ]]; then
   exit 0
 fi
 
-# The gate checks this against its own baseline: a leg that read another one (the queue entry ahead
-# uploaded in between) does not count.
-BASE_SHA="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha", ""))' "$BASELINE/baseline_metadata.json")"
-echo "$BASE_SHA" > "$OUT/stage2.base"
+# The gate checks this against its own baseline: a leg that read another one does not count.
+python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha", ""))' \
+  "$BASELINE/baseline_metadata.json" > "$OUT/stage2.base"
+# Stage 2 measures the queue base, the commit this PR merges onto. A stale warehouse baseline then only adds
+# candidates, which stage 2 does not reproduce.
+BASE_SHA="${LLK_STAGE2_BASE_REF:-$(cat "$OUT/stage2.base")}"
 
 COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles 30 --module-threshold "${MODULE_THRESHOLDS:-}")
 
 python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
   --current "$LLK/perf_data/runs/**/*.csv" --baseline "$BASELINE/**/*.csv" \
   --run-types L1_TO_L1 --arch "$CHIP_ARCH" --report "$OUT/stage1.md" > /dev/null || true
+if [[ ! -f "$OUT/stage1.verdict.json" ]]; then
+  echo "::warning::The stage-1 comparison of this leg did not finish; no stage 2."
+  exit 0
+fi
 if [[ ! -s "$OUT/stage1.regressions.csv" ]]; then
   echo "No stage-1 regression in this leg."
   # An empty result still tells the gate this leg's stage 2 ran.
@@ -48,6 +55,15 @@ measure() {
   for d in "$2"/perf_data/runs/p{0,4,20,36,52}; do
     [[ -d $d ]] && mv "$d" "$d-$4"
   done
+  # Both sides run the PR's node ids; a test the base does not have (renamed, new) is skipped there.
+  local listed found
+  listed=$(wc -l < "$OUT/nodes.$4")
+  found=$(python3 -c 'import csv, glob, sys
+print(len({r["nodeid"] for f in glob.glob(sys.argv[1] + "/**/*.windowhash", recursive=True) for r in csv.DictReader(open(f))}))' \
+    "$2/perf_data/runs/p0-$4" 2>/dev/null || echo 0)
+  if [[ $1 == base ]] && (( found < listed )); then
+    echo "::warning::The base ran ${found} of ${listed} listed tests in part $4 (renamed or new tests?); the rest show as not measured on the base."
+  fi
 }
 
 BASE="$OUT/base"
