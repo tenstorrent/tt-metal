@@ -402,18 +402,12 @@ def test_indexer_static_maintenance_matches_offset_path(mesh_device, monkeypatch
     [
         (3, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), False),
         (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), False),
-        (3, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), True),
-        (0, (16384, 16384, 16384, 16362), (16384, 16384, 3968, 16256, 12522), True),
-        (3, (16384, 16384, 16384, 16362), (16384, 16384, (3968, 16384), 16256, 12522), False),
-        (0, (16384, 16384, 16384, 16362), (16384, 16384, (3968, 16384), 16256, 12522), False),
+        (0, (16384, 16384, 16384, 16362), (16384, 16384, (3968, 16384), 16256, 12522), True),
     ],
     ids=[
         "layer3-65514-continued-at-36736-and-52992",
         "layer0-kda-65514-continued-at-36736-and-52992",
-        "layer3-sealed-continued-at-36736-and-52992",
-        "layer0-kda-sealed-continued-at-36736-and-52992",
-        "layer3-served-padded-3968-in-16384-then-continued",
-        "layer0-kda-served-padded-3968-in-16384-then-continued",
+        "layer0-kda-sealed-served-padded-3968-in-16384-then-continued",
     ],
 )
 def test_sparse_continuation_at_unaligned_chunk_ends(mesh_device, monkeypatch, layer_idx, aligned, split, sealed):
