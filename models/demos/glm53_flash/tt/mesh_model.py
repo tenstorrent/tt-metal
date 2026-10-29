@@ -488,17 +488,15 @@ class GLM53MeshModel:
             ids_dev = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         streams = self.embedding(ids_dev)  # [1,1,T,16384] per row: its own chunk
         ttnn.deallocate(ids_dev)
-        kda = next((dec for dec in self.layers if dec.is_kda), None)
-        if kda is None:
-            raise NotImplementedError("a wave takes its chronology scalars from a KDA layer; none in this model")
-        attn = kda._require_weights().attn
+        kda = next((dec for dec in self.layers if dec.is_kda), None)  # the chronology scalars live on a KDA layer
+        attn = kda._require_weights().attn if kda is not None else None
         ends = tuple(s0 + n for s0, n in zip(starts, valids))
         info = WaveInfo(
             T=T,
             starts=starts,
             valids=valids,
-            start_t=attn.scalar_rows(starts, "wave_start"),
-            end_t=attn.scalar_rows(ends, "wave_end"),
+            start_t=attn.scalar_rows(starts, "wave_start") if attn is not None else None,
+            end_t=attn.scalar_rows(ends, "wave_end") if attn is not None else None,
         )
         for dec in self.layers:
             out = dec.prefill_wave_forward(streams, user=int(call.user), wave=info)
