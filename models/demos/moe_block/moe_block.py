@@ -617,7 +617,24 @@ class MoEBlock(LightweightModule):
                 self._head_ops_fallback(weights, dtypes, options)
         else:
             self._warm_up()
-        self.exchange.build()
+        try:
+            self.exchange.build()
+        except AssertionError as e:
+            # (the exchange in the L1 the fused head leaves - the flat op's arena, the combine at the head planner's
+            # accumulators (ports apart, A pinned): head_plan.fit does not size the exchange; the ops head keeps less
+            # L1 and plans its combine itself. Not a fallback: the head's L1 freed part way left the exchange less
+            # than an ops-head block has - GLM-5.3 2x4 5120 and MiniMax M3 ring 2048 failed again)
+            if self.fused is None or not any(k in str(e) for k in ("combine: does not fit", "the flat op's arena")):
+                raise
+            from loguru import logger
+
+            msg = (
+                f"MoEBlock: the exchange does not build beside the fused head (mesh {g.sp}x{g.tp}, chunk "
+                f"{g.chunk_tokens}): {' '.join(str(e).split())[:400]}; the head's plan does not size the exchange yet "
+                f"- MoEOptions.head='ops' builds this block"
+            )
+            logger.error(msg)
+            raise HeadBuildError(msg) from e
         if self.fused is not None:
             self.fused.attach(self.exchange)
             if layer is not None:  # (the layer's weights as this head laid them out)
