@@ -187,6 +187,18 @@
   budget_type: unit
   category: kernel_lib
 
+# Runs every eltwise op several times on identical inputs: each run must be bit-identical to the first,
+# and the first must match the golden. One process covers the whole op table, so it is not split.
+- name: ttnn nightly eltwise determinism tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise_determinism -v -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  team: ttnn
+  budget_type: unit
+  category: eltwise_determinism
+
 - name: ttnn nightly eltwise tests group 1
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
