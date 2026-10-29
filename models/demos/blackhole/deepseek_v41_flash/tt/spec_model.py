@@ -331,6 +331,19 @@ class SpecRunner:
             v = torch.cat(
                 [ttnn.to_torch(ttnn.get_device_tensors(pk)[r * cols]).reshape(1, -1) for r in range(rows)]
             ).long()
+        return self._rb_unpack(v)
+
+    def _rb_issue(self, pack=None):
+        """DSV41_HOSTOPT_READBACK=1: enqueue the row-leader reads behind the trace (non-blocking): they run on the device queue right after the last op, hidden under the device time."""
+        pk = pack if pack is not None else (self.pack_mono if self.pack_mono is not None else self.dec.pack)
+        devs = ttnn.get_device_tensors(pk)
+        return [ttnn.from_device(devs[r * self.cols], blocking=False) for r in range(self.rows)]
+
+    def _rb_finish(self, hs):
+        return self._rb_unpack(torch.cat([h.to_torch().reshape(1, -1) for h in hs]).long())  # (tensor method: ~0.05 ms per round cheaper than ttnn.to_torch's wrapper, same values)
+
+    def _rb_unpack(self, v):
+        U, n, rows = self.U, self.n, self.rows
         T_loc = U * n
         a = v[:, :T_loc].reshape(self.B, n)
         mm = v[:, T_loc : T_loc + U].reshape(self.B)
@@ -369,10 +382,19 @@ class SpecRunner:
             ttnn.execute_trace(self.md, self.tid_a, cq_id=0, blocking=False)
             self.tid_s.replay()
             ttnn.execute_trace(self.md, self.tid_b, cq_id=0, blocking=False)
+            if hostopt.on("READBACK"):
+                hs = self._rb_issue(self.pack_b)
+                ttnn.synchronize_device(self.md)
+                self.sample_stats["rows"] += 1
+                return self._rb_finish(hs)
             ttnn.synchronize_device(self.md)
             self.sample_stats["rows"] += 1
             return self._readback(self.pack_b)
         ttnn.execute_trace(self.md, self.tid, cq_id=0, blocking=False)
+        if hostopt.on("READBACK"):
+            hs = self._rb_issue()
+            ttnn.synchronize_device(self.md)
+            return self._rb_finish(hs)
         ttnn.synchronize_device(self.md)
         return self._readback()
 

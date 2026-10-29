@@ -287,6 +287,7 @@ def install():
         (DSV41Decoder, "upload_packed_inputs", "upload"),
         (RaggedNgramHash, "__call__", "hash"),
         (HostEngramRows, "rows_all", "rows"),
+        (SR, "_rb_finish", "rb_parse2"),
     ):
         setattr(cls, attr, _wrap(getattr(cls, attr), name))
     ttnn.execute_trace = _wrap(ttnn.execute_trace, "enqueue")
@@ -358,7 +359,7 @@ def install():
         cur["gap_before"] = gap
         cur["bucket"] = self.cur_bucket
         cur["amax_base"] = int(base.max())
-        cur["rb_parse"] = cur.get("readback", 0.0) - cur.get("rb_issue", 0.0) - cur.get("rb_sync", 0.0)
+        cur["rb_parse"] = cur["rb_parse2"] if "rb_parse2" in cur else cur.get("readback", 0.0) - cur.get("rb_issue", 0.0) - cur.get("rb_sync", 0.0)
         cur["feed_other"] = cur.get("feed", 0.0) - cur.get("hash", 0.0) - cur.get("rows", 0.0) - cur.get("pack_prep", 0.0) - cur.get("upload", 0.0)
         self._tl_last_bucket = self.cur_bucket
         _STATE["last_end"] = t1
