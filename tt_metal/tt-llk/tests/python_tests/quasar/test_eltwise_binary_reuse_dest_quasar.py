@@ -59,19 +59,18 @@ REUSE_DEST_FORMATS = input_output_formats(
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
-# Tile shapes swept on the reuse_dest path. BASELINE_TILE_DIMENSIONS is the pre-existing shape and
-# doubles as the no-regression guard. (16, 32) and (16, 16) keep face_r_dim at 16 but shrink the dest
-# tile stride to 32 and 16 rows; (8, 32) halves the face stride and the MOV* count; (4, 32) drives the
-# sparse 8-row face slot: one 8-row MOV and a single-iteration MOP per face.
-# (32, 16) is excluded: the kernel builds its TensorShape with tensor_shape_from_num_faces, which
-# maps num_faces == 2 to a 1x2 (wide) face grid and cannot express the 2x1 (narrow) one.
+# 32x32 is the pre-existing shape and the no-regression guard.
 BASELINE_TILE_DIMENSIONS = (32, 32)
-TILE_DIMENSIONS = [BASELINE_TILE_DIMENSIONS, (16, 32), (16, 16), (8, 32), (4, 32)]
-# HiFi4 runs on this short-face shape too, where the MOP outer loop is 1.
-HIFI_TILE_DIMENSIONS = (4, 32)
+TILE_DIMENSIONS = [
+    BASELINE_TILE_DIMENSIONS,
+    (16, 32),
+    (32, 16),
+    (16, 16),
+    (8, 32),
+    (4, 32),
+]
+HIFI_TILE_DIMENSIONS = [(32, 16), (4, 32)]
 
-# Tiles per input and output matrix, held constant across tile shapes so every shape runs the same
-# 4-deep accumulation into 4 output tiles that the 32x32 baseline ran.
 INPUT_TILE_COUNT = 16
 OUTPUT_TILE_COUNT = 4
 assert (
@@ -81,23 +80,16 @@ assert (
 
 
 def reuse_dest_tile_dimensions(formats, math_fidelity, dest_sync_mode):
-    """Tile shapes swept for a given format pair, fidelity and dest sync mode.
-
-    Neither packer format conversion nor DestSync changes the MOV* count or the dest stride, so
-    only same-format pairs in DestSync.Half carry the sweep, at LoFi on every shape and at HiFi4
-    on HIFI_TILE_DIMENSIONS. Every other variant stays on BASELINE_TILE_DIMENSIONS.
-    """
     if formats.input_format != formats.output_format or dest_sync_mode != DestSync.Half:
         return [BASELINE_TILE_DIMENSIONS]
     if math_fidelity == MathFidelity.LoFi:
         return TILE_DIMENSIONS
     if math_fidelity == MathFidelity.HiFi4:
-        return [BASELINE_TILE_DIMENSIONS, HIFI_TILE_DIMENSIONS]
+        return [BASELINE_TILE_DIMENSIONS, *HIFI_TILE_DIMENSIONS]
     return [BASELINE_TILE_DIMENSIONS]
 
 
 def reuse_dest_input_dimensions(tile_dimensions) -> list:
-    """Input matrix holding INPUT_TILE_COUNT tiles of the given tile shape, one tile wide."""
     tile_rows, tile_cols = tile_dimensions
     return [[INPUT_TILE_COUNT * tile_rows, tile_cols]]
 
@@ -122,12 +114,7 @@ def reuse_dest_mathops(formats, *, is_perf=False):
 
 
 def valid_output_dimensions(formats, dest_sync_mode, tile_dimensions) -> list:
-    """Output matrix of OUTPUT_TILE_COUNT tiles of the given tile shape, one tile wide.
-
-    Returns no dims when the output does not fit in a single block for the format and dest_sync,
-    so that combination is never generated: the Quasar reuse_dest kernel uses block-relative
-    indexing, and multi-block accumulates wrongly.
-    """
+    # Multi-block output accumulates wrongly: the kernel uses block-relative indexing.
     tile_rows, tile_cols = tile_dimensions
     out_dims = [OUTPUT_TILE_COUNT * tile_rows, tile_cols]
     try:
