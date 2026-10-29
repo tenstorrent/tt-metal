@@ -6695,7 +6695,11 @@ class MTPRetainedRow:
     rewritten by its next reseed or step, which ``serial`` identifies.
     ``verified`` is how many of ``drafts`` the verify that consumed this row
     carried (0 until consumed, or when it carried none): the next proposal
-    reads the accepted count against it.
+    reads the accepted count against it. ``overtaken`` marks a proposal no
+    verify consumed because an ordinary decode the runner had submitted
+    before it was published committed the row past it (contract s.4d) with
+    exactly the drafter's first draft: the replay's verify hidden at column 1
+    then seeds the next proposal, as column ``count - 1`` would after a verify.
     """
 
     replay: object
@@ -6709,6 +6713,7 @@ class MTPRetainedRow:
     logits: object = None
     consumed: bool = False
     verified: int = 0
+    overtaken: bool = False
 
 
 class MTPRowNeedsLogits:
@@ -7340,6 +7345,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 retained.consumed = True
                 answered[r] = retained.argmax_ids[0]
             else:
+                if session.retained is not None and not session.retained.consumed:
+                    # The plain decode moves the row past its proposal: dropped, never verified (s.4d).
+                    self._mtp_dropped_proposals += 1
+                    session.dropped += 1
                 session.retained = None
         if not answered:
             return self._spec_plain_decode(args, kwargs, page_tables_per_layer)
@@ -7679,7 +7688,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             and retained.row_id == int(row)
         )
 
-    def _mtp_choose_record(self, default, drafting, k, last, live_rows):
+    def _mtp_choose_record(self, default, drafting, k, last, live_rows, overtaken=False):
         """``(shape, members)`` to replay for ``drafting`` rows, or ``(None, None)`` for a plain step
         (``spec_policy.SpecPolicy``).
 
@@ -7706,10 +7715,15 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         table (the fixed policy, or warmup measured nothing) the default
         serves for every row; a candidate whose rung has no measured cost is
         skipped, and when that leaves none the default serves too.
+        ``overtaken``: the last proposal was never verified (an ordinary
+        decode the runner had in flight committed past it, s.4d), so it does
+        not age a trial.
         """
         if not self._spec_cost_table_ready("Gemma4MTP"):
             return default, None
         policy = self._spec_policy
+        if overtaken:
+            policy.note_overtaken()
         n = len(drafting)
         cap = min(int(default[1]), int(k))
         top = max(int(target[3]) for target in drafting)
@@ -7834,6 +7848,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             pos_rows = positions.reshape(int(rows), -1).tolist()
         committed_rows = committed.reshape(int(rows), -1).tolist()
         targets = []  # (row, session, anchor, position)
+        overtaken = 0  # live rows whose last proposal an in-flight ordinary decode committed past (s.4d)
         for r in live:
             block = [int(x) for x in committed_rows[r]]
             n = int(counts_rows[r]) if counts_rows is not None else 1
@@ -7852,6 +7867,34 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 # The count answers the verify that consumed the proposal: n - 1 of its ``verified``
                 # drafts were accepted (the plugin's accept walk commits a prefix plus one token).
                 self._spec_policy.observe(session.stats, n - 1, retained.verified)
+            elif retained is not None and not retained.consumed:
+                # Nothing answered from this proposal: the runner committed the row through a step it had
+                # submitted before the proposal was published (an ordinary decode overlapped under
+                # asynchronous scheduling, which the runner drains before asking again) and never sends its
+                # drafts, so it is dropped rather than verified (contract s.4d). Seen here, before the policy
+                # decides, so the decision knows the row was overtaken rather than finding no proposal. The
+                # overlapped step committed one token after the anchor: that token against the first draft is
+                # one position of acceptance evidence, and when they agree the replay's verify hidden at
+                # column 1 seeds the next proposal (``overtaken``); otherwise the row reseeds at it.
+                self._mtp_dropped_proposals += 1
+                session.dropped += 1
+                overtaken += 1
+                one_past = n == 1 and position == retained.anchor_position + 1
+                matched = one_past and bool(retained.drafts) and int(anchor) == int(retained.drafts[0])
+                if one_past:
+                    self._spec_policy.observe(session.stats, 1 if matched else 0, 1)
+                if self._mtp_dropped_proposals <= 200:
+                    logger.debug(
+                        f"Gemma4MTP speculative contract: proposal dropped unverified for row {r} (anchor "
+                        f"{retained.anchor_token} at {retained.anchor_position}, the runner committed {n} to "
+                        f"{position}, first draft {'matched' if matched else 'missed'}); "
+                        f"{self._mtp_dropped_proposals} so far"
+                    )
+                if matched:
+                    retained.consumed = True
+                    retained.overtaken = True
+                else:
+                    session.retained = None
             targets.append((r, session, anchor, position, n))
         if self._mtp_decoder is None or not self._mtp_captured:
             return self._mtp_decline_step(rows, k, live, "the verify records are not captured (warmup incomplete)")
@@ -7900,7 +7943,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 f"({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})",
             )
         last = self._mtp_last_replay
-        shape, members = self._mtp_choose_record(shape, drafting, k, last, len(live))
+        shape, members = self._mtp_choose_record(shape, drafting, k, last, len(live), overtaken=overtaken > 0)
         if shape is None:
             return self._mtp_decline_step(rows, k, live, "the adaptive policy chose the plain step", log=False)
         if members is not None:
@@ -7920,21 +7963,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             retained = session.retained
             seed = None
             if retained is not None and not retained.consumed:
-                # Nothing answered from this proposal: the runner committed the
-                # row through a step it had submitted before the proposal was
-                # published (an ordinary decode overlapped under asynchronous
-                # scheduling) and never sends its drafts, so it is dropped
-                # rather than verified (contract s.4d) and the row reseeds at
-                # the anchor the runner committed.
-                self._mtp_dropped_proposals += 1
-                session.dropped += 1
-                if self._mtp_dropped_proposals <= 200:
-                    logger.debug(
-                        f"Gemma4MTP speculative contract: proposal dropped unverified for row {r} (anchor "
-                        f"{retained.anchor_token} at {retained.anchor_position}, the runner committed {n} to "
-                        f"{position}); {self._mtp_dropped_proposals} so far"
-                    )
-                session.retained = retained = None
+                raise RuntimeError(
+                    f"Gemma4MTP speculative contract: row {r} reached the replay with an unconsumed proposal "
+                    "(the propose loop above drops or marks every overtaken proposal)"
+                )
             if retained is not None:
                 expected = retained.anchor_position + n
                 if position != expected:
@@ -7945,9 +7977,11 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                     )
                 # The decoder gathers the seed from the LAST replay's verify
                 # hidden by row id, so only a row that kept its id since that
-                # replay can take column n - 1 there; a moved slot reseeds.
+                # replay can take column n - 1 there (column 1 after an
+                # overtaken proposal whose first draft the overlapped step
+                # committed); a moved slot reseeds.
                 if retained.replay is last and last is not None and retained.row_id == r:
-                    seed = n - 1
+                    seed = n if retained.overtaken else n - 1
             if seed is None:
                 reseed.append(r)
             anchors.append(int(anchor))

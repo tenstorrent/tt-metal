@@ -915,6 +915,11 @@ def _smallest_k(choices, above=None):
     return min(pool, key=lambda c: (int(c.shape[1]), float(c.cost_ms), tuple(c.shape)))
 
 
+def _cheapest(ranked):
+    """The candidate with the lowest entry plus step cost (ties by shape): what a retry or a trial replays."""
+    return min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
+
+
 class SpecPolicy:
     """The step-level decision with its exploration counters and the batch prior.
 
@@ -961,6 +966,12 @@ class SpecPolicy:
         self.below_exit = 0
         self.last_k = 0
         self.trial = False
+
+    def note_overtaken(self):
+        """The last decision's replay was never verified: an ordinary decode the runner had in flight committed
+        past it (contract s.4d). A trial does not age on such a step; the next decision is its first step."""
+        if self.trial and self.trial_age > 0:
+            self.trial_age -= 1
 
     def cooling(self):
         """Whether the batch left a record fewer than ``retry_steps`` plain steps ago: no reseeding entry yet."""
@@ -1010,7 +1021,7 @@ class SpecPolicy:
         cfg = self.config
         if cfg.retry_steps <= 0 or self.declined < cfg.retry_steps:
             return None
-        cheapest = min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
+        cheapest = _cheapest(ranked)
         if cheapest.gain < cfg.min_gain * RETRY_MIN_GAIN_FRACTION:
             return None
         overhead = (cheapest.entry_ms + cheapest.cost_ms - float(plain_ms)) / (self.declined * float(plain_ms))
@@ -1030,7 +1041,7 @@ class SpecPolicy:
         independent of the retry cadence, the reseed is its only extra cost."""
         if self.cooling():
             return None
-        cheapest = min(ranked, key=lambda c: (c.entry_ms + c.cost_ms, c.shape))
+        cheapest = _cheapest(ranked)
         bar = max(self.config.trial_gain, self.config.min_gain) if cheapest.measured else self.config.trial_gain
         if cheapest.gain < bar:
             return None
@@ -1125,11 +1136,15 @@ class SpecPolicy:
         if best is not None:
             choice = dataclasses.replace(best, reason="enter" if best.entry_ms > 0.0 else "gain")
             self.below_exit = 0
-        elif self.speculating and self.trial and held is not None and self.trial_age < cfg.trial_steps:
+        elif self.speculating and self.trial and self.trial_age < cfg.trial_steps:
             # A trial (a retry, or a new request's first proposal) holds its record for ``trial_steps`` steps
             # before the gain decides: its first step follows the reseed and accepts few drafts, and a one-step
             # trial judged on it never refreshes the acceptance pool it is judged by (the 12B rows sweeps).
-            choice = dataclasses.replace(held, reason="trial")
+            # A trial whose rows must reseed again (its replay was overtaken by a plain step the runner had in
+            # flight, or a slot moved) holds the cheapest candidate, entry included: under asynchronous
+            # scheduling a retry from the plain regime is ALWAYS overtaken once (the runner drains and asks
+            # again), and a trial that could not reseed never got verified.
+            choice = dataclasses.replace(held if held is not None else _cheapest(ranked), reason="trial")
         elif self.speculating and not self.trial and held is not None:
             # Hysteresis: a speculating batch holds its best entry-free record above the exit gain, and
             # leaves only after EXIT_STEPS consecutive decisions below it. A retry is a trial and gets no hold.

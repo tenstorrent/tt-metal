@@ -2622,6 +2622,21 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert kinds == [None, None, None, ((16, 1), "retry"), None, None, None, ((16, 1), "retry")]
     assert policy.declined == 0 and policy.last_k == 1 and policy.trial
     assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
+    # a longer trial holds its record for trial_steps steps; a step whose rows must reseed (every candidate
+    # carries an entry: the replay was overtaken by a plain step the runner had in flight, contract s.4d) holds
+    # the cheapest candidate, entry included, and an overtaken step does not age the trial
+    held = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=1.0, probe_steps=0, trial_steps=2), 5)
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry" and held.trial_age == 1
+    held.note_overtaken()
+    assert held.trial_age == 0
+    reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
+    again = held.decide(reseeding, [row], _PLAIN, 5)
+    assert (again.shape, again.reason, again.entry_ms) == ((16, 1), "trial", 30.0) and held.trial_age == 1
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "trial" and held.trial_age == 2
+    assert held.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "trial_steps held: the gain decides"
+    held.note_overtaken()
+    assert held.trial_age == 0 and not held.trial, "nothing to un-age once declined"
     # the overhead gate: (30 - 20) / (N x 20) <= 0.03 needs 17 plain steps, whatever retry_steps says, so the
     # retry is the 18th decision
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)

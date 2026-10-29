@@ -1517,6 +1517,32 @@ def test_an_ordinary_step_without_drafts_for_an_outstanding_proposal_answers_its
     mtp.release_persistent_capture()
     assert "Gemma4MTP speculative contract: 1 proposals dropped unverified over the engine's life" in messages
     assert mtp._mtp_dropped_proposals == 0
+    # -- the MTP rail: an overtaken proposal whose first draft the overlapped step committed seeds the next
+    # The overlapped step's token against the dropped proposal's first draft is one position of acceptance
+    # evidence (observed on the row), and when they agree the replay's verify hidden at column 1 is the seed of
+    # the next proposal (no reseed): the row continues exactly as after a verify that accepted one draft.
+    mtp = mh.build_mtp_model(adapter, monkeypatch)
+    mh._prefill(mtp)
+    mh._ordinary(mtp, [3], [2], [10], result=_tensor([150]))
+    mh._ordinary(mtp, [150], [3], [10], result=_tensor([101]), **steady)
+    first = mh._propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert first.draft_token_ids[0].tolist() == [101, 102, 103, 104, 105]
+    stats = mtp._mtp_sessions[0].stats
+    assert stats.ewma_accepted is None
+    second = mh._propose(mtp, [[101] + [-1] * 5], [[4] + [-1] * 5])
+    assert second.draft_token_ids[0].tolist() == [201, 202, 203, 204, 205] and mtp._mtp_dropped_proposals == 1
+    assert mtp._mtp_sessions[0].dropped == 1 and stats.ewma_accepted is not None
+    assert _names(mtp, "reseed") == [("reseed", (1, 5), [0], [150], [3])], "the first proposal reseeded; column 1 seeds"
+    assert mh._steps(mtp)[-1][1:6] == ((1, 5), [0], [101], [4], [1])
+    out = mh._verify(mtp, [mh._block(101, [201, 202, 203, 204, 205])], [mh._positions(4, 6)], [5], [10])
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]
+    # a rule-2 ordinary decode (a non-speculable peer) drops the proposal the same way, counted
+    mh._prefill(mtp, slot=1, key=20)
+    third = mh._propose(mtp, [[250] + [-1] * 5], [[5] + [-1] * 5], counts=[1])
+    assert third.num_valid.tolist() == [5] and mtp._mtp_sessions[0].retained is not None
+    mh._ordinary(mtp, [250, 3], [5, 2], [10, 20], result=_tensor([260, 40]))  # reloaded: first plain after a verify
+    assert mtp._mtp_sessions[0].retained is None and mtp._mtp_sessions[0].dropped == 2
+    assert mtp._mtp_dropped_proposals == 2
 
 
 def test_a_peer_joining_on_an_ordinary_step_ends_speculation_for_good(model, mtp):
