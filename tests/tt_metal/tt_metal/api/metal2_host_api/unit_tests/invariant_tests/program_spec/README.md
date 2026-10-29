@@ -53,6 +53,7 @@ struct ProgramSpec {
     // - Each dataflow buffer is bound by at least one kernel.
     // - Each scratchpad is bound by at least one kernel.
     // - Each tensor parameter is bound by a kernel, or by a dataflow buffer's borrowed_from.
+    // - Each SRAM arena parameter is used by a DFB or scratchpad allocation override.
     // - (Semaphores are exempt here)
     //
     // Data-movement core assignment:

@@ -1,8 +1,8 @@
 # sram_arena_parameter invariant tests
 
 Local invariants of `SRAMArenaParameter` (`sram_arena_parameter.hpp`) and its contained allocation
-properties (`experimental/sram_arena/sram_arena_properties.hpp`). Borrower name resolution is structural
-and is listed in `../program_spec/`. Borrower coverage and capacity constraints are listed in
+properties (`experimental/sram_arena/sram_arena_properties.hpp`). Borrower name resolution and the
+requirement that every arena parameter is used are structural and are listed in `../program_spec/`. Borrower coverage and capacity constraints are listed in
 `../dataflow_buffer_spec/` and `../scratchpad_spec/`.
 
 ## Listed invariants

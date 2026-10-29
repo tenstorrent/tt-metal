@@ -69,5 +69,57 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadUndeclaredName) {
             ::testing::HasSubstr("ScratchpadSpec 'scratch' allocates from unknown SRAMArenaParameter 'missing'.")));
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedLockstepParameterFails) {
+    // Program construction rejects an unused lockstep arena parameter.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"unused"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("SRAMArenaParameter 'unused' is not used by any DFB or scratchpad")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedRangeLockstepParameterFails) {
+    // Program construction rejects an unused range-lockstep arena parameter.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    const RangeLockstepSRAMArenaProperties properties{
+        .banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {0, 0})}, .per_bank_size = 4096};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"unused"}, .properties = properties}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("SRAMArenaParameter 'unused' is not used by any DFB or scratchpad")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUsedOnlyByDFBSucceeds) {
+    // A DFB allocation is sufficient to use an arena parameter.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaUnusedParameterBesideUsedParameterFails) {
+    // Using one arena does not permit another arena parameter to remain unused.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"used"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}},
+        {.unique_id = SRAMArenaParamName{"unused"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"used"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("SRAMArenaParameter 'unused' is not used by any DFB or scratchpad")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

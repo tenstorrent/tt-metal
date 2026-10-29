@@ -196,6 +196,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsUseSameArena) {
     // Aliased DFBs can allocate from the same arena parameter.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.advanced_options.sram_arena_parameters.resize(1);
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
     spec.dataflow_buffers[1].advanced_options.allocation_override =
@@ -207,6 +208,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaAliasedDFBsUseSameNonzeroOffset) {
     // Aliased DFBs can allocate at the same nonzero offset in an arena.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.advanced_options.sram_arena_parameters.resize(1);
     spec.dataflow_buffers[0].advanced_options.allocation_override =
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}, .offset = 4096};
     spec.dataflow_buffers[1].advanced_options.allocation_override =

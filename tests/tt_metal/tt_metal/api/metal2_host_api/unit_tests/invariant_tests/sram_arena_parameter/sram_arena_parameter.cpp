@@ -21,32 +21,37 @@ namespace {
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::ProgramSpecTestQuasar;
 
-TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidLockstep) {
-    // A positive per-bank size is accepted.
-    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
+ProgramSpec MakeProgramSpecWithArenaScratchpadForTest() {
     auto spec = MakeMinimalValidProgramSpec();
-    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
-        .unique_id = SRAMArenaParamName{"arena"},
-        .properties = LockstepSRAMArenaProperties{.per_bank_size = alignment},
-    }};
+    spec.scratchpads = {{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 16}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    spec.kernels[0].scratchpad_bindings = {
+        {.scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
+    return spec;
+}
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidLockstep) {
+    // A scratchpad can use a lockstep arena parameter with a positive per-bank size.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const uint32_t alignment = fixture_device.allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeProgramSpecWithArenaScratchpadForTest();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"},
+         .properties = LockstepSRAMArenaProperties{.per_bank_size = alignment}}};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterValidRangeLockstep) {
-    // A positive per-bank size and nonempty node set are accepted.
-    const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
-    auto spec = MakeMinimalValidProgramSpec();
-    spec.advanced_options.sram_arena_parameters = {SRAMArenaParameter{
-        .unique_id = SRAMArenaParamName{"arena"},
-        .properties =
-            RangeLockstepSRAMArenaProperties{
-                .banks_to_be_allocated_on = NodeRangeSet{NodeRange{NodeCoord{0, 0}, NodeCoord{0, 0}}},
-                .per_bank_size = alignment,
-            },
-    }};
-
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    // A scratchpad can use a range-lockstep arena parameter covering its node.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    const uint32_t alignment = fixture_device.allocator()->get_alignment(BufferType::L1);
+    auto spec = MakeProgramSpecWithArenaScratchpadForTest();
+    const RangeLockstepSRAMArenaProperties properties{
+        .banks_to_be_allocated_on = NodeRangeSet{NodeRange({0, 0}, {0, 0})}, .per_bank_size = alignment};
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaParameterZeroLockstepSize) {
