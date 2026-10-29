@@ -3,7 +3,9 @@
 # Wormhole, _bh.yaml on Blackhole (ulp_table.TABLE_PATHS, by CHIP_ARCH).
 #
 # Run nightly by .github/workflows/llk-sfpu-ulp-sweep.yaml, which llk-e2e.yaml calls;
-# dispatch that workflow to sweep a branch. Every finite bfloat16 and float16 value (and
+# dispatch that workflow to sweep a branch. PR Gate runs only the Wormhole cells a change
+# can move (llk_sfpu_ulp_pr_gate_tests.yaml); this is the run over every cell, on both
+# cards. Every finite bfloat16 and float16 value (and
 # a stride of float32) through every enrolled unary op, per format pair, approximation
 # mode and dest accumulator.
 #

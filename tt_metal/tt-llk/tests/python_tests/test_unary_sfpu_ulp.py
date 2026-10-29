@@ -7,12 +7,13 @@ entry for a ``domains`` list); a tolerance cell is measured and skipped, and the
 headroom report (``python -m helpers.ulp_budget_diff headroom`` over ``--ulp-measure``)
 holds it to its row's recorded figure. ``--ulp-emit`` writes the table instead of gating
 against it. Marked ``accuracy``, which every LLK workflow deselects; llk-e2e runs it by
-path every night on a Wormhole and a Blackhole card (llk-sfpu-ulp-sweep.yaml). See
-SFPU_ULP.md for the commands."""
+path every night on a Wormhole and a Blackhole card (llk-sfpu-ulp-sweep.yaml), and PR
+Gate runs the Wormhole cells a change can move (llk-sfpu-ulp-pr-check.yaml), which
+``--ulp-variants`` records the builds of. See SFPU_ULP.md for the commands."""
 
 import pytest
 import torch
-from helpers import ulp_sweep
+from helpers import ulp_affected, ulp_sweep
 from helpers.chip_architecture import get_chip_architecture
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import InputOutputFormat
@@ -51,9 +52,9 @@ SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * SWEEP_TILE_COUNT]
 _LOG_TAIL = ". The failing lanes are in the ULP-budget log above."
 
 
-def run_sweep(mathop, formats, approx_mode, dest_acc):
+def run_sweep(mathop, formats, approx_mode, dest_acc, node):
     """One variant on hardware over the whole swept input. Returns ``(src, golden,
-    result)``."""
+    result)``. Under ``--ulp-variants`` it records the build as *node*'s first."""
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=SWEEP_DIMENSIONS,
@@ -91,6 +92,16 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
         f"{mathop.name}: asked for dest_acc={dest_acc.name}, TestConfig built "
         f"{configuration.dest_acc.name}; sweep_cells() is out of step with it"
     )
+    # Built before run(), which a --compile-producer session skips out of.
+    configuration.prepare()
+    ulp_affected.record_built(
+        node,
+        mathop,
+        ulp_sweep.cell_key(
+            formats.input_format, formats.output_format, approx_mode, dest_acc
+        ),
+        f"{configuration.test_name}/{configuration.variant_id}",
+    )
     result = configuration.run().result
     assert len(result) == len(
         golden
@@ -120,7 +131,7 @@ def _skip_measured(cell, why):
     ],
 )
 @pytest.mark.parametrize("mathop", _sweep_ops(), ids=lambda op: op.name)
-def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
+def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc, request):
     formats = InputOutputFormat(in_fmt, out_fmt)
     cell = (
         f"{mathop.name} {in_fmt.name}->{out_fmt.name} approx={approx_mode.name} "
@@ -141,7 +152,9 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
         d.ulp is not None and d.ulp <= ceiling for d in domains
     )
 
-    src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
+    src, golden, result = run_sweep(
+        mathop, formats, approx_mode, dest_acc, request.node.nodeid
+    )
 
     mask = ulp_sweep.ranked_mask(mathop, src, golden, result, in_fmt, out_fmt, dest_acc)
     lanes_kw = dict(approx_mode=approx_mode, dest_acc=dest_acc)
