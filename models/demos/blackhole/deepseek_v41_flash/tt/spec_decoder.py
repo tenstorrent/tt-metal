@@ -12,6 +12,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import hostopt
 from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 
 
@@ -151,12 +152,23 @@ class SpecDecoder(SpecVerifier):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self._row_map,
         )
+        self._force_key = (
+            torch.full((rows * U,), -1.0).numpy().tobytes()
+        )  # (DSV41_HOSTOPT_FORCE) what the device buffer holds
 
     def set_force(self, value):
         """Host: force m (accepted drafts) for the next replays; ``value`` a scalar (all users) or a [B] tensor (one per user, global order). value < 0 = normal operation."""
         rows = self.md.shape[0]
         v = torch.as_tensor(value, dtype=torch.float32).reshape(-1)
         v = v.expand(rows * self.U) if v.numel() == 1 else v
+        if hostopt.on("FORCE"):
+            # DSV41_HOSTOPT_FORCE=1: the device buffer is only READ by the trace, so an unchanged value needs no host->device copy (the value is -1 in nearly every round)
+            key = v.numpy().tobytes()
+            if key == self._force_key:
+                return
+            self._force_key = key
+        else:
+            self._force_key = None  # (a copy the switch does not track: the next tracked call must upload)
         host = ttnn.from_torch(
             v.reshape(rows * self.U, 1).contiguous(),
             dtype=ttnn.float32,
