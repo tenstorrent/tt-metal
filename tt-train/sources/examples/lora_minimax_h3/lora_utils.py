@@ -212,17 +212,23 @@ def clip_grad_norm(lora: LoraModel, max_norm: float) -> float:
 
 
 class Ema:
-    """Shadow copies of the LoRA weights on device; `decay = min(max_decay, (1 + step) / (10 + step))`."""
+    """fp32 shadow copies of the LoRA weights on device; `decay = min(max_decay, (1 + step) / (10 + step))`.
+
+    The shadows must not be bf16: near decay 0.999 the update `(1 - decay) * (p - s)` is below half a bf16 ulp
+    of `s` for any realistic step-to-step change, so a bf16 shadow rounds back to itself and freezes."""
 
     def __init__(self, lora: LoraModel, max_decay: float) -> None:
         self.max_decay = max_decay
-        self.shadows = {name: ttnn.clone(tensor.get_value()) for name, tensor in named_lora(lora)}
+        self.shadows = {
+            name: ttnn.typecast(tensor.get_value(), ttnn.DataType.FLOAT32) for name, tensor in named_lora(lora)
+        }
         self._lora = lora
 
     def update(self, step: int) -> float:
         decay = min(self.max_decay, (1 + step) / (10 + step))
         for name, tensor in named_lora(self._lora):
-            s, p = self.shadows[name], tensor.get_value()
+            s = self.shadows[name]
+            p = ttnn.typecast(tensor.get_value(), ttnn.DataType.FLOAT32)
             self.shadows[name] = ttnn.add(s, ttnn.multiply(ttnn.subtract(p, s), 1.0 - decay))
         return decay
 
