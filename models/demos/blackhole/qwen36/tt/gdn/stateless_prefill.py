@@ -25,6 +25,30 @@ def _pinned_fused_config():
     return _PINNED_FUSED_CONFIG
 
 
+_ZERO_STATES = {}
+
+
+def prebuild_zero_states(device, nv, dk, dv, bps=(1, 2)):
+    """Persistent fp32 zero initial states [Bp, Nv, Dk, Dv] for the chunk op (it only reads them): build before any
+    trace capture and never free, so the op does not run a zeros fill per layer."""
+    for bp in bps:
+        _zero_state(device, bp, nv, dk, dv)
+
+
+def _zero_state(device, bp, nv, dk, dv):
+    key = (device.id(), bp)
+    z = _ZERO_STATES.get(key)
+    if z is None:  # lazy (eager path) for a Bp that was not prebuilt
+        z = _ZERO_STATES[key] = ttnn.zeros(
+            [bp, nv, dk, dv],
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    return z
+
+
 def stateless_prefill_supported(gdn, mode, stateless):
     """True when recurrent_forward may take this path: stateless chunk prefill on one device, fused chunk op,
     and no conv bias (the KDA conv has none)."""
@@ -205,7 +229,7 @@ def stateless_prefill_forward(gdn, x):
         beta,
         g,
         scale=Dk**-0.5,
-        initial_state=None,
+        initial_state=_zero_state(gdn.device, Bp, Nv, Dk, Dv),
         device=gdn.device,
         qkv_head_dims=(Nk, Dk, Nv, Dv),
         return_o_bh=True,

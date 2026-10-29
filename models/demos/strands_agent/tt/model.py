@@ -10,7 +10,7 @@ from ttnn.tools import trace_allocation_tracker
 import ttnn
 from models.demos.blackhole.qwen36.tt.attention.stateless_prefill import stateless_attention_prefill
 from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
-from models.demos.blackhole.qwen36.tt.gdn.stateless_prefill import stateless_prefill_supported
+from models.demos.blackhole.qwen36.tt.gdn.stateless_prefill import prebuild_zero_states, stateless_prefill_supported
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.blackhole.qwen36.tt.prefill_matmul import swiglu_enabled
 from models.demos.strands_agent.tt.answers import build_answer
@@ -148,6 +148,9 @@ class StrandsDecider:
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Zero initial states of the GDN chunk op (persistent, read only): allocated before any trace.
+        gdn = next(l.attention for l in model.layers if not l.is_full_attention)
+        prebuild_zero_states(mesh_device, gdn.num_v_heads, gdn.head_k_dim, gdn.head_v_dim)
         for S in TRACED_S:
             self._rope_cache[S] = self._build_rope(S)
 
