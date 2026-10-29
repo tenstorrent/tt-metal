@@ -1581,6 +1581,15 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-29 10:51: the SP-first placement served (4 x 64 K needles)
+
+r5's stage c again (4 x 65514 needles, 4 concurrent, APC off) with `GLM53_VLLM_SP_FIRST=1`: the four eager prompts took
+distinct slot indices, every chunk ran sequence-parallel (16 SP chunks at 7.4-7.6 s, no wave), 4/4 needles found, TTFT
+59.8 / 59.8 / 119.3 / 119.3 s (vLLM advances two 16 K chunks per step under the 32768 budget) against r5's 179 / 236 /
+405 / 461 s in paired waves: mean 90 s vs 321 s. Up to `users_per_row` concurrent long prompts now never touch the wave
+path; the wave path (and its idle-row carry poisoning, fixed in 25d7f77df4a, validation queued) serves the fifth long
+prompt on and every short burst.
+
 ### 2026-10-29 10:40: the rows-2/3 NaN reproduced in the harness; the KDA carry blends keep NaN
 
 The 45-layer harness replay of r5's schedule (long profile, 65514 x 4, 1 M profile, the wave placement pinned) reproduces
