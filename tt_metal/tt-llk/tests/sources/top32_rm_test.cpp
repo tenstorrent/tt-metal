@@ -8,7 +8,7 @@
 //   llk_lib/experimental/llk_unpack_A_top32_rm.h      _llk_unpack_A_top32_rm_init_ / _
 //   llk_lib/experimental/llk_math_top32_rm.h          _llk_math_top32_rm_init_ / _
 //   sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h
-//       _top32_rm_init_ (and _top32_rm_configure_addrmod_ through it),
+//       _top32_rm_init_,
 //       _bitonic_top32_phases_steps_, _bitonic_top32_merge_, _bitonic_top32_rebuild_
 // Before this file every one of them was uncalled from tests/sources -- the only occurrence
 // of _top32_rm_init_ in the test tree was inside a comment in sort_headers_coexist_test.cpp.
