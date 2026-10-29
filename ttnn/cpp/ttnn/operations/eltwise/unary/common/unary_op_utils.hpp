@@ -142,4 +142,8 @@ struct RuntimeScalarDefines {
 };
 std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
+// Memoized form for the per-call paths (program hash and runtime args): nullptr when the op keeps its
+// parameters compiled in. The pointer stays valid until the calling thread's next lookup.
+const RuntimeScalarDefines* get_runtime_scalar_defines_cached(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
 }  // namespace ttnn::operations::unary::utils

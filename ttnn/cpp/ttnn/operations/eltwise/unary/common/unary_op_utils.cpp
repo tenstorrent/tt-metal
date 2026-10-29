@@ -4,7 +4,11 @@
 
 #include "unary_op_utils.hpp"
 
+#include <array>
 #include <cctype>
+#include <algorithm>
+#include <cstddef>
+#include <cstring>
 #include <optional>
 #include <type_traits>
 #include <tt_stl/assert.hpp>
@@ -1335,5 +1339,61 @@ std::optional<RuntimeScalarDefines> get_runtime_scalar_defines(
     }
     out.defines["UNARY_RUNTIME_SCALARS"] = "1";
     return out;
+}
+
+const RuntimeScalarDefines* get_runtime_scalar_defines_cached(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    // Rebuilding the defines formats every SFPU string, which costs more than the rest of a cache-hit dispatch,
+    // so the per-call paths look the result up by op type, dtype and the raw parameter bytes. Chains that can
+    // never take runtime scalars return before building a key.
+    if (op_chain.size() != 1 || op_chain[0].empty()) {
+        return nullptr;
+    }
+    struct Key {
+        std::array<std::byte, 64> bytes{};
+        size_t size = 0;
+        bool operator==(const Key& other) const {
+            return size == other.size && std::equal(bytes.begin(), bytes.begin() + size, other.bytes.begin());
+        }
+    };
+    Key key;
+    bool fits = true;
+    const auto append = [&](const void* data, size_t size) {
+        if (key.size + size > key.bytes.size()) {
+            fits = false;
+            return;
+        }
+        std::memcpy(key.bytes.data() + key.size, data, size);
+        key.size += size;
+    };
+    const auto type = op_chain[0].type();
+    const size_t variant_index = op_chain[0].base.index();
+    append(&type, sizeof(type));
+    append(&input_dtype, sizeof(input_dtype));
+    append(&variant_index, sizeof(variant_index));
+    std::visit([&](const auto& params) { append(params.data(), params.size_bytes()); }, op_chain[0].get_params());
+
+    struct Entry {
+        Key key;
+        std::optional<RuntimeScalarDefines> value;
+    };
+    constexpr size_t kEntries = 8;
+    thread_local std::array<Entry, kEntries> cache;
+    thread_local size_t next = 0;
+    thread_local std::optional<RuntimeScalarDefines> uncached;
+    if (!fits) {
+        uncached = get_runtime_scalar_defines(op_chain, input_dtype);
+        return uncached.has_value() ? &*uncached : nullptr;
+    }
+    for (auto& entry : cache) {
+        if (entry.key.size != 0 && entry.key == key) {
+            return entry.value.has_value() ? &*entry.value : nullptr;
+        }
+    }
+    auto& entry = cache[next];
+    next = (next + 1) % kEntries;
+    entry.key = key;
+    entry.value = get_runtime_scalar_defines(op_chain, input_dtype);
+    return entry.value.has_value() ? &*entry.value : nullptr;
 }
 }  // namespace ttnn::operations::unary::utils

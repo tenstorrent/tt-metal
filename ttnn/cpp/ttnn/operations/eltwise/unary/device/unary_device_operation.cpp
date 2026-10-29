@@ -380,16 +380,16 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     };
 
     // Parameters the compute kernel takes as runtime args leave the key; the renamed source stays in it.
-    const auto runtime_scalars = utils::get_runtime_scalar_defines(attributes.op_chain, input_tensor.dtype());
+    const auto* runtime_scalars = utils::get_runtime_scalar_defines_cached(attributes.op_chain, input_tensor.dtype());
     std::optional<operation_attributes_t> keyed_attributes;
-    if (runtime_scalars.has_value()) {
+    if (runtime_scalars != nullptr) {
         keyed_attributes.emplace(attributes);
         keyed_attributes->op_chain = {unary::EltwiseUnaryWithParam(attributes.op_chain[0].type())};
     }
 
     return operation::hash_operation<UnaryDeviceOperation>(
         keyed_attributes.has_value() ? *keyed_attributes : attributes,
-        runtime_scalars.has_value() ? std::optional{runtime_scalars->key} : std::nullopt,
+        runtime_scalars != nullptr ? std::optional{runtime_scalars->key} : std::nullopt,
         input_tensor.tensor_spec().tensor_layout(),
         output_spec.tensor_layout(),
         // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
