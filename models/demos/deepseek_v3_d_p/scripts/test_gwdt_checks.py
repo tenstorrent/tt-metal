@@ -155,3 +155,19 @@ def test_collected_node_ids_flat_format():
 
 def test_collected_node_ids_ignores_not_found_error():
     assert collected_node_ids("collecting ... ERROR: not found: /x/a.py::test_y\n") == []
+
+
+def test_screen_has_no_ansi_when_not_tty(tmp_path, monkeypatch, capsys):
+    from galaxy_workload_deployment_test import Screen
+    from gwdt_checks import Result
+    from gwdt_steps import Step
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    step = Step("didt", "didt", "gate", None, True, lambda ctx, state: Result(Status.PASS))
+    step.state.result = Result(Status.FAIL, "device 17: 2 non-deterministic outputs")
+    screen = Screen([step], ["hdr"], tmp_path / "status.json")
+    screen.update(step)
+    screen.done = True
+    text = capsys.readouterr().out + "\n".join(screen.lines())
+    assert "\x1b[" not in text
+    assert "FAIL" in text
