@@ -50,6 +50,24 @@ def _consts(gdn):
     return c
 
 
+_PAD = 32
+
+
+def _zero_pad(gdn, B, C):
+    """Zero [B, 32, C] bf16 TILE DRAM pad block for the batch fold; cached per (B, C) on the layer."""
+    cache = gdn.__dict__.setdefault("_stateless_pads", {})
+    z = cache.get((B, C))
+    if z is None:
+        z = cache[(B, C)] = ttnn.zeros(
+            (B, _PAD, C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=gdn.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    return z
+
+
 def stateless_prefill_forward(gdn, x):
     """x [B, S, dim] bf16 TILE DRAM, S a multiple of 32 -> [B, S, dim]. Weights and compute config as the
     mega-fused branch of gated_deltanet_forward_ttnn."""
@@ -79,36 +97,34 @@ def stateless_prefill_forward(gdn, x):
     z = ttnn.to_layout(mega[:, :, g_off:], ttnn.TILE_LAYOUT)
     ttnn.deallocate(mega)
 
-    # Conv + SiLU + q/k/v split from a zero history. The op takes one [1, S, C] row: batch rows never mix.
+    # Conv + SiLU + q/k/v split from a zero history. The op takes one [1, T, C] row, so for B > 1 each batch row
+    # gets 32 zero rows in front (>= K-1, tile aligned) and the rows fold into time: they never mix.
     start, hist = _consts(gdn)
     cfg = ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=kda_channel_chunk_size(C))
-    qs, ks, vs = [], [], []
-    for r in range(B):
-        row = qkv if B == 1 else ttnn.slice(qkv, (r, 0, 0), (r + 1, S, C), memory_config=_dram)
-        qr, kr, vr = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            row,
-            hist,
-            *w.fused_conv_weight_taps,
-            q_dim,
-            k_dim,
-            v_dim,
-            program_config=cfg,
-            actual_start=start,
-            predecessor_carry=hist,
-            memory_config=_dram,
-        )
-        if row is not qkv:
-            ttnn.deallocate(row)
-        qs.append(qr)
-        ks.append(kr)
-        vs.append(vr)
+    if B > 1:
+        xp = ttnn.concat([_zero_pad(gdn, B, C), qkv], dim=1, memory_config=_dram)
+        ttnn.deallocate(qkv)
+        qkv = ttnn.reshape(xp, (1, B * (_PAD + S), C))
+    q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+        qkv,
+        hist,
+        *w.fused_conv_weight_taps,
+        q_dim,
+        k_dim,
+        v_dim,
+        program_config=cfg,
+        actual_start=start,
+        predecessor_carry=hist,
+        memory_config=_dram,
+    )
     ttnn.deallocate(qkv)
-    if B == 1:
-        q, k, v = qs[0], ks[0], vs[0]
-    else:
-        q, k, v = (ttnn.concat(t, dim=0, memory_config=_dram) for t in (qs, ks, vs))
-        for t in qs + ks + vs:
+    if B > 1:
+        outs = []
+        for t, width in ((q, q_dim), (k, k_dim), (v, v_dim)):
+            t = ttnn.reshape(t, (B, _PAD + S, width))
+            outs.append(ttnn.slice(t, (0, _PAD, 0), (B, _PAD + S, width), memory_config=_dram))
             ttnn.deallocate(t)
+        q, k, v = outs
 
     # Gates (fp32, the chunk op's contract; the values are the bf16 ones the masked path multiplied up to fp32).
     beta = ttnn.typecast(ttnn.sigmoid(b), ttnn.float32)
