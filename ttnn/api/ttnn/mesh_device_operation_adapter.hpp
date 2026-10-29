@@ -275,7 +275,7 @@ public:
         bool tracing = false;
         ttsl::reflection::visit_object_of_type<Tensor>(
             [&](const Tensor& tensor) {
-                if (tracing || tensor.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+                if (tracing || tensor.storage_type() != StorageType::DEVICE) {
                     return;
                 }
                 tracing = tensor.device()->mesh_command_queue().trace_id().has_value();
