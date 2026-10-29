@@ -54,9 +54,9 @@ class MistralSmall4Config:
     # Pages one of combine_fabric2d's forwarding channels holds. The region is split by movement class,
     # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
     # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
-    # length. Carried over from what the reduction factor it replaces produced at ring8 / 5k; not yet
-    # swept on its own axis.
-    COMBINE_FWD_VC_PAGES = 67
+    # length. The depth dispatch settled on for this model, which the combine sweep at ring8 / 5k holds
+    # within noise of the deeper channel it replaces.
+    COMBINE_FWD_VC_PAGES = 48
     # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
     # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
     # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
