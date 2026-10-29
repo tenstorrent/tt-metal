@@ -94,14 +94,14 @@ void kernel_main() {
         const uint32_t key_offset = (w.batch * num_of_groups + kv_group_idx) * qWt * Ht;
         const uint32_t value_offset = (w.batch * num_of_groups + kv_group_idx) * vWt * Ht;
 
-        // Each step issues all its reads (K, the step's mask tiles, V), then waits once and pushes them in
-        // the order the compute kernel waits for them.
+        // Each step pushes K as soon as it lands, so the compute kernel starts QK^T while the step's mask
+        // tiles and V are still in flight; those are issued together and waited for once.
         for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
             const uint32_t h_start = k_step * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
             // K lands feature-major in cb_key (all Sk_chunk_t tiles of feature 0, then feature 1, ...),
             // the order matmul_block walks when it multiplies by K^T.
-            read_tile_block_transposed</* UseBarrier */ false>(
+            read_tile_block_transposed</* UseBarrier */ true>(
                 cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK
@@ -123,7 +123,6 @@ void kernel_main() {
                 cb_value, value_address_generator, value_start_idx, v_tiles, tile_bytes, v_tiles);
 
             noc_async_read_barrier();
-            cb_push_back(cb_key, k_tiles);
 #ifdef USE_ATTN_MASK
             cb_push_back(cb_attn_mask, mask_tiles);
 #endif
