@@ -3917,10 +3917,21 @@ def _mtp_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         r"\(1,5\)@1024: 3 steps, 18 tokens, 2 clean, \d+\.\d ms/step, 6\.00 tokens/step, \d+\.\d ms/token, "
         r"total \d+\.\d ms/step \d+\.\d ms/token, ratio \d+\.\d\dx \| reseeds 1 at \d+\.\d ms \| "
         r"dirty 1 steps, \d+ ms: reseed 1/\d+ \| total 3 steps, "
-        r"\d+ ms, 18 tokens, \d+\.\d ms/token \| phases ms/call: tables \d+\.\d, refresh \d+\.\d, "
-        r"reseed \d+\.\d, replay \d+\.\d, host \d+\.\d \| prefills 1 \| calibrated: none$",
+        r"\d+ ms, 18 tokens, \d+\.\d ms/token \| phases ms/call: (?:[a-z_]+ \d+\.\d(?:, )?)+ \| prefills 1 \| "
+        r"calibrated: none$",
         lines[0],
     )
+    phases = lines[0].split("phases ms/call: ")[1].split(" | prefills")[0]
+    assert {name for name, _ms in (p.split(" ") for p in phases.split(", "))} == {
+        "tables",
+        "refresh",
+        "reseed",
+        "replay",
+        "host",
+        "gap_pv_v",
+        "verify",
+        "gap_vp_v",
+    }, phases  # the proposal's own phases and the runner's boundaries around the verify step
     assert lines[1].startswith("Gemma4MTP adaptive stats: window 4 steps | (1,5)@1024: 4 steps, 24 tokens, 4 clean")
     assert "| reseeds 0 | total 4 steps, " in lines[1] and "| phases ms/call: tables" in lines[1]
     assert "| prefills 0 | calibrated: none" in lines[1] and "dirty" not in lines[1]
