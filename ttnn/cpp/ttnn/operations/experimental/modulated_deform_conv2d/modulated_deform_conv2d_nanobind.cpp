@@ -33,16 +33,19 @@ void bind_modulated_deform_conv2d(nb::module_& mod) {
             out[m, :] = column[m, :] @ weight + bias
 
         Corners outside the input contribute zero, as in mmcv and torchvision. The columns
-        never leave L1. They are bfloat16 and the products run at HiFi2 fidelity; each kernel
-        position's reduction accumulates in fp32, the sum over positions in bfloat16.
+        never leave L1. They are bfloat16 and the products run at HiFi2 fidelity; each pass's
+        reduction, over at most 256 channels of one kernel position, accumulates in fp32, the sum
+        across passes and positions in bfloat16.
 
         Each core keeps the outputs of all its 32-row blocks and two weight slices in L1, and
-        the op fails with the L1 it needs when they do not fit; C over 256 takes several passes
+        the op fails with the L1 it needs when they do not fit. The buffers are sized from the L1
+        left free by the tensors allocated at the call, so other L1 tensors can change the program
+        or make it fail; C over 256 takes several passes
         per kernel position to keep the slices small, each over the largest chunk of at most 8
         channel tiles that divides C / 32.
 
-        Limits: K_h*K_w at most 32; H, W, the padding and the dilated kernel span each at most
-        4096. Offsets and mask logits saturate at +-4096, so a non-finite offset samples zero
+        Limits: K_h*K_w at most 32; H plus its padding, W plus its padding, and the dilated
+        kernel span each at most 4096. Offsets and mask logits saturate at +-4096, so a non-finite offset samples zero
         where mmcv and torchvision would give NaN.
 
         Args:

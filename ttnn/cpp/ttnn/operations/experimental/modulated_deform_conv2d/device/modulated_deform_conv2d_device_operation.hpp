@@ -17,18 +17,18 @@
 
 namespace ttnn::operations::experimental::modulated_deform_conv2d {
 
-// The reader saturates offsets at this many pixels. Input sizes, padding and the kernel span are
-// validated below it, so every sample coordinate stays exact in fp32 and a saturated offset still
-// lands outside the input.
+// The reader saturates offsets at this many pixels. Each input size plus its padding, and the
+// kernel span, are validated to be at most this, so every sample coordinate stays exact in fp32 and
+// a saturated offset lands where all four of its corners are outside the input.
 constexpr uint32_t kOffsetClampPixels = 4096;
 
 inline constexpr std::string_view kKernelDir =
     "ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/device/kernels/";
 // The widest margin, in input rows, a core's input band takes beyond the kernel's span on each side.
 constexpr uint32_t kMaxBandMargin = 4;
-// The program sizes its buffers from the L1 free at the call, rounded down to this, and keeps that
-// budget in its attributes, so a cached program never assumes more free L1 than its call had while
-// small shifts in occupancy still find it.
+// The program sizes its buffers from the L1 its CBs can reach at the call, rounded down to this. The
+// budget is an attribute, so it keys the program cache: a cached program never assumes more L1
+// than its call had, while small shifts in occupancy still find it.
 constexpr uint32_t kL1BudgetGranule = 32 * 1024;
 // The most input channels, in tiles, the conv samples and multiplies per pass. Wider inputs
 // take several passes per kernel position, each with its own slice of the weight, so the corner
@@ -58,7 +58,8 @@ struct ModulatedDeformConv2dOperation {
         std::array<uint32_t, 2> dilation;
         // A ReLU on the conv's output, after the bias.
         bool relu = false;
-        // Bytes of L1 per core the program's circular buffers may take (kL1BudgetGranule).
+        // Bytes of L1 per core the program's circular buffers may take, rounded down to
+        // kL1BudgetGranule; part of the program-cache key.
         uint32_t l1_budget = 0;
     };
 

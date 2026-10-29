@@ -4,11 +4,14 @@
 
 #include "modulated_deform_conv2d_device_operation.hpp"
 
+#include <algorithm>
 #include <string_view>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_align.hpp>
 
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::modulated_deform_conv2d {
@@ -83,9 +86,9 @@ DeformConvShapes derive_shapes(
     TT_FATAL(padded_h >= span_h && padded_w >= span_w, "{}: the kernel does not fit the padded input", op);
     const uint32_t span_limit = kOffsetClampPixels;
     TT_FATAL(
-        s.in_h <= span_limit && s.in_w <= span_limit && attrs.padding[0] <= span_limit &&
-            attrs.padding[1] <= span_limit && span_h <= span_limit && span_w <= span_limit,
-        "{}: input size, padding and dilated kernel span must each be at most {}, got input "
+        s.in_h + attrs.padding[0] <= span_limit && s.in_w + attrs.padding[1] <= span_limit && span_h <= span_limit &&
+            span_w <= span_limit,
+        "{}: each input size plus its padding, and the dilated kernel span, must be at most {}, got input "
         "{}x{}, padding {}x{}, span {}x{}",
         op,
         span_limit,
@@ -210,6 +213,20 @@ ModulatedDeformConv2dOperation::tensor_return_value_t ModulatedDeformConv2dOpera
 
 }  // namespace ttnn::operations::experimental::modulated_deform_conv2d
 
+namespace {
+
+// Bytes `spec` takes in its fullest L1 bank. The L1 free lists hand out blocks in DRAM-alignment
+// granules, so even a small tensor costs a whole granule.
+uint64_t l1_bytes_per_bank(const tt::tt_metal::TensorSpec& spec, const tt::tt_metal::Allocator& allocator) {
+    using tt::tt_metal::BufferType;
+    const uint64_t granule = allocator.get_alignment(BufferType::DRAM);
+    const uint64_t page_bytes = spec.compute_consumed_memory_bytes_per_bank(
+        allocator.get_alignment(BufferType::L1), allocator.get_num_banks(BufferType::L1));
+    return tt::align(std::max(page_bytes, granule), granule);
+}
+
+}  // namespace
+
 namespace ttnn::prim {
 
 ttnn::Tensor modulated_deform_conv2d(
@@ -225,12 +242,6 @@ ttnn::Tensor modulated_deform_conv2d(
     const std::optional<MemoryConfig>& memory_config) {
     using namespace ttnn::operations::experimental::modulated_deform_conv2d;
     using OperationType = ModulatedDeformConv2dOperation;
-    // The program's buffers fill the L1 free now; the budget is an attribute, so it keys the program
-    // cache along with the shapes.
-    const auto* device = input.device();
-    const uint64_t l1_top = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
-    const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint64_t l1_free = l1_top > l1_base ? l1_top - l1_base : 0;
     auto attrs = OperationType::operation_attributes_t{
         // The output is interleaved; a sharded input's would not be, so its default is DRAM.
         .output_memory_config = memory_config.value_or(
@@ -240,10 +251,21 @@ ttnn::Tensor modulated_deform_conv2d(
         .padding = padding,
         .dilation = dilation,
         .relu = relu,
-        .l1_budget = static_cast<uint32_t>(l1_free / kL1BudgetGranule * kL1BudgetGranule),
     };
     auto args =
         OperationType::tensor_args_t{.input = input, .offset_mask = offset_mask, .weight = weight, .bias = bias};
+    // The CBs may take the L1 they can reach at this call, short of the output, which is allocated
+    // after this and below the current frontier when it goes to L1. Without a device input the
+    // budget stays 0 and validation reports it.
+    if (const auto* device = input.device(); device != nullptr) {
+        uint64_t l1_free = ttnn::operations::core::available_program_l1_capacity(device);
+        if (attrs.output_memory_config.buffer_type() == tt::tt_metal::BufferType::L1) {
+            const uint64_t output_bytes =
+                l1_bytes_per_bank(OperationType::compute_output_specs(attrs, args), *device->allocator());
+            l1_free = l1_free > output_bytes ? l1_free - output_bytes : 0;
+        }
+        attrs.l1_budget = static_cast<uint32_t>(l1_free / kL1BudgetGranule * kL1BudgetGranule);
+    }
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
 

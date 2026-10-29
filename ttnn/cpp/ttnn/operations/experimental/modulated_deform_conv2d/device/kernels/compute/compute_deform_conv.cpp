@@ -427,7 +427,8 @@ void kernel_main() {
 
             // The block's output += its columns times the pass's weight slice: fp32 in dest over the
             // slice's rows, and in L1 across passes; the first pass overwrites. In the last pass
-            // the blocks before this one have left acc_cb, so this one's tiles are at its front.
+            // each earlier block's push_back has moved the write pointer to this block's tiles, so
+            // they pack at offset 0.
             column_cb.wait_front(CHUNK_TILES);
             reconfig_data_format(conv_weight_cb_index, column_cb_index);
             pack_reconfig_data_format(acc_cb_index);
