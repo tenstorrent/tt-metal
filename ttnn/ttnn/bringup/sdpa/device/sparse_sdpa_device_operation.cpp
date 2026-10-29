@@ -65,8 +65,11 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
                                        : attrs.has_row_bfp4() ? ::sparse_sdpa::row_bfp4_bytes(K_DIM)
                                        : attrs.has_row_bfp8() ? ::sparse_sdpa::row_bfp8_bytes(K_DIM)
                                                               : K_DIM;
+    // ROW_BFP8 also takes the window as blocks of 32 rows a page ([n / 32, window_block_bytes])
+    const bool kv_blocks =
+        attrs.has_row_bfp8() && kvs.rank() == 4 && kvs[3] == ::sparse_sdpa::window_block_bytes(K_DIM);
     TT_FATAL(
-        kvs.rank() == 4 && kvs[1] == 1 && kvs[3] == expected_kv_width,
+        kvs.rank() == 4 && kvs[1] == 1 && (kvs[3] == expected_kv_width || kv_blocks),
         "kv must be [B,1,T,{}] (got {})",
         expected_kv_width,
         kvs);
@@ -98,9 +101,11 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
         const auto ws = w.logical_shape();
         TT_FATAL(
             ws.rank() == 4 && ws[0] == 1 && ws[1] == 1 && ws[2] > 0 &&
-                ws[3] == (rec8 ? ::sparse_sdpa::row_bfp8_bytes(K_DIM) : K_DIM),
-            "sparse_sdpa: kv_window must be [1,1,Tw,{}] (got {})",
+                (ws[3] == (rec8 ? ::sparse_sdpa::row_bfp8_bytes(K_DIM) : K_DIM) ||
+                 (rec8 && ws[3] == ::sparse_sdpa::window_block_bytes(K_DIM))),
+            "sparse_sdpa: kv_window must be [1,1,Tw,{}] (or bfloat8_b blocks [1,1,Tw/32,{}]) (got {})",
             rec8 ? ::sparse_sdpa::row_bfp8_bytes(K_DIM) : K_DIM,
+            ::sparse_sdpa::window_block_bytes(K_DIM),
             ws);
     }
 }
@@ -345,7 +350,11 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.kv_window.has_value() ? std::optional<tt::tt_metal::MemoryConfig>(t.kv_window->memory_config())
                                 : std::nullopt,
         // the window's dtype (bf16 rows or bfloat8_b records: SPARSE_SDPA_WINDOW_BFP8)
-        t.kv_window.has_value() ? std::optional<DataType>(t.kv_window->dtype()) : std::nullopt);
+        t.kv_window.has_value() ? std::optional<DataType>(t.kv_window->dtype()) : std::nullopt,
+        // the window's row width: records or blocks (SPARSE_SDPA_WINDOW_BLOCKS)
+        t.kv_window.has_value() ? t.kv_window->logical_shape()[-1]
+        : attrs.has_row_bfp8()  ? t.kv.logical_shape()[-1]
+                                : 0u);
 }
 
 Tensor sparse_sdpa(

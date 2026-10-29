@@ -41,9 +41,13 @@ void kernel_main() {
 #endif
         cb_wait_front(cb_rows, 1);
         const uint32_t rows_l1 = get_read_ptr(cb_rows);
+#ifdef CKV_BLOCKS
+        noc_async_write(rows_l1, rows_acc.get_noc_addr(row0 / 32 + b), row_bytes);  // one page a band
+#else
         for (uint32_t r = 0; r < 32; r++) {
             noc_async_write(rows_l1 + r * row_bytes, rows_acc.get_noc_addr(row0 + b * 32 + r), row_bytes);
         }
+#endif
         noc_async_write_barrier();
         cb_pop_front(cb_rows, 1);
 #ifdef CKV_ROUNDED_OUT

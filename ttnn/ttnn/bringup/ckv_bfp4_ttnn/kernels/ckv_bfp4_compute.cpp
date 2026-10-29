@@ -87,16 +87,73 @@ inline void init(uint32_t src_bytes) {  // src_bytes: the packer's input datum s
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
+#ifdef CKV_BLOCKS
+// blocks: one stream for the whole band (exponents of all 32 rows, then their values): a row steps only the face row
+inline void program_mop(bool close_at_end) {
+    const uint32_t pacr = TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_STRIDED_MODE,
+        ADDR_MOD_0,
+        p_pacr::ADDR_CNT_CTXT_0,
+        0,
+        p_pacr::TWO_INTFS_ACTIVE,
+        0,
+        0,
+        p_pacr::NO_CTXT_CTRL,
+        0,
+        0);
+    const uint32_t step = TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_STRIDED_MODE,
+        ADDR_MOD_1,
+        p_pacr::ADDR_CNT_CTXT_0,
+        0,
+        p_pacr::TWO_INTFS_ACTIVE,
+        0,
+        0,
+        p_pacr::NO_CTXT_CTRL,
+        0,
+        0);
+    const uint32_t close = TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_STRIDED_MODE,
+        ADDR_MOD_1,
+        p_pacr::ADDR_CNT_CTXT_0,
+        0,
+        p_pacr::TWO_INTFS_ACTIVE,
+        0,
+        0,
+        p_pacr::NO_CTXT_CTRL,
+        0,
+        1);
+    ckernel_template mop(FACE_R_DIM, TILES, pacr);
+    mop.set_last_inner_loop_instr(step);
+    mop.set_last_outer_loop_instr(close_at_end ? close : step);
+    mop.program();
+}
+#endif
+
 // one stream over the band's 32 rows: address byte_addr, exponent section exp16 x 16 B
 inline void pass(uint32_t byte_addr, uint32_t exp16) {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>(exp16);
     program_packer_destination(byte_addr / 16 - 1);
+#ifdef CKV_BLOCKS
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(0);
+    program_mop(false);
+#else
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(ROW_BYTES);
+#endif
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);  // ch0 / ch1 Z
     TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 0);
     TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b1011);  // ch0 X Y, ch1 Y
     ckernel_template::run();                          // rows 0..15 (faces 0 / 1)
+#ifdef CKV_BLOCKS
+    program_mop(true);
+#endif
     TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 2 * FACE_R_DIM);
     TTI_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_Y, FACE_R_DIM);
     ckernel_template::run();  // rows 16..31 (faces 2 / 3)
@@ -154,8 +211,14 @@ void kernel_main() {
             const uint32_t rows_addr = get_local_cb_interface(cb_rows).fifo_wr_ptr << 4;
             const uint32_t src_bytes = ckernel::datum_size_in_bytes(pack_src_format[cb_rows]);
             ckv_rows_pack::init(src_bytes);
+#ifdef CKV_BLOCKS
+            // [32 rows' exponents | 32 B | the same | to 64 B | 32 rows' values] (sparse_sdpa window_block_*)
+            ckv_rows_pack::pass(rows_addr, CKV_BLOCK_DATA / 16);
+            ckv_rows_pack::pass(rows_addr + CKV_BLOCK_EXP2, (CKV_BLOCK_DATA - CKV_BLOCK_EXP2) / 16);
+#else
             ckv_rows_pack::pass(rows_addr, 4);       // exponents at +0, values at +64
             ckv_rows_pack::pass(rows_addr + 32, 2);  // exponents at +32, values at +64 again
+#endif
             ckv_rows_pack::uninit(src_bytes);
         }));
         cb_push_back(cb_rows, 1);

@@ -44,3 +44,13 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
 - Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit phase 1)
 - Files: ckv_bfp4.py, __init__.py, kernels/ckv_round_bfp4.hpp, kernels/ckv_bfp4_compute.cpp, kernels/bfp_round_*.cpp,
   tests/reference.py, tests/unit/*
+
+### ckv_bfp4 blocks=True: bfloat8_b window blocks of 32 rows a page
+- What: `ckv_bfp4(..., dtype=bfloat8_b, blocks=True)` writes [1, 1, R / 32, 18496] pages: a band's 32 rows'
+  exponents at 0, again at 1056, their values at 2112 (sparse_sdpa's window blocks). The packer writes a band as one
+  stream (two passes, as the records); the writer one NoC write a band. Default (blocks=False) unchanged.
+- Why: sparse_sdpa reads a consecutive window in two reads a block instead of two a row (see the sdpa CHANGELOG).
+- Exactness: byte-equal to the host rule on the written bytes (tests/unit/test_ckv_bfp4.py::test_ckv_bfp8_blocks),
+  other pages untouched, deterministic. Time: 28 us for 2176 rows, as the records.
+- Needed by: deepseek_v41_flash_d_p DS41-150 (lowbit)
+- Files: ckv_bfp4.py, kernels/ckv_bfp4_{compute,writer}.cpp, tests/reference.py, tests/unit/test_ckv_bfp4.py

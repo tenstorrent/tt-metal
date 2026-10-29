@@ -85,6 +85,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const bool row_bfp4 = attrs.has_row_bfp4() || attrs.has_row_bfp8();
     const Tensor* window = attrs.has_row_bfp8() ? &t.kv : (t.kv_window.has_value() ? &t.kv_window.value() : nullptr);
     const bool window_bfp8 = window != nullptr && window->dtype() == DataType::UINT8;
+    // bfloat8_b window blocks (32 consecutive rows a page): two NoC reads a block instead of two a row
+    const bool window_blocks = window_bfp8 && window->logical_shape()[-1] == ::sparse_sdpa::window_block_bytes(k_dim);
     const uint32_t kv_elem_bytes = window_bfp8 ? 2u : row_bfp4 ? window->element_size() : t.kv.element_size();
 
     const uint32_t idx_elem_bytes = t.indices.element_size();  // uint32 -> 4
@@ -404,6 +406,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             k->defines.emplace_back("SPARSE_SDPA_ROW_BFP4", "1");
             if (window_bfp8) {
                 k->defines.emplace_back("SPARSE_SDPA_WINDOW_BFP8", "1");
+                if (window_blocks) {
+                    k->defines.emplace_back("SPARSE_SDPA_WINDOW_BLOCKS", "1");
+                }
             }
         }
     }

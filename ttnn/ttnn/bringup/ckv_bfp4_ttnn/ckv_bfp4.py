@@ -26,6 +26,11 @@ import ttnn
 KERNELS = Path(__file__).parent / "kernels"
 _RD = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
 WIDTH, ROW_BYTES, GROUP = 512, 320, 16
+# bfloat8_b window blocks (blocks=True; sparse_sdpa window_block_*): 32 rows a page, [their exponents | 32 B | the same
+# | to 64 B | their values]
+BLOCK_EXP2 = 32 * 32 + 32
+BLOCK_DATA = (BLOCK_EXP2 + 32 * 32 + 63) // 64 * 64
+BLOCK_BYTES = BLOCK_DATA + 32 * WIDTH
 CB_IN, CB_ROWS, CB_ROUNDED = 0, 16, 17
 K_WRITER, WR_ROW0 = 1, 3  # (program(): the writer's kernel index and row0's runtime-arg index)
 _PREPARED_CAP = 64
@@ -47,10 +52,11 @@ def _cores(device, bands: int):
 
 
 def program(
-    ckv: ttnn.Tensor, rows: ttnn.Tensor, row0: int, rounded: ttnn.Tensor | None, dtype=None
+    ckv: ttnn.Tensor, rows: ttnn.Tensor, row0: int, rounded: ttnn.Tensor | None, dtype=None, blocks: bool = False
 ) -> ttnn.ProgramDescriptor:
     dtype = dtype or ttnn.bfloat4_b
     row_bytes, mbits = _fmt(dtype)
+    page_bytes = BLOCK_BYTES if blocks else 32 * row_bytes
     n = ckv.shape[-2]
     bands, tpb = n // 32, WIDTH // 32
     cores = _cores(ckv.device(), bands)
@@ -75,13 +81,16 @@ def program(
 
     # a band's 16 input tiles at once (full-sync DEST holds them), double-buffered; the packer writes a band's 32
     # records into one cb_rows page (its format is the packer's output format, bfloat4_b)
-    cbs = [cb(CB_IN, ttnn.bfloat16, t_bf16, 2 * tpb), cb(CB_ROWS, dtype, 32 * row_bytes, 2)]
-    defines = []
+    cbs = [cb(CB_IN, ttnn.bfloat16, t_bf16, 2 * tpb), cb(CB_ROWS, dtype, page_bytes, 2)]
+    defines = [("CKV_BLOCKS", "1")] if blocks else []
+    block_defines = [("CKV_BLOCK_EXP2", str(BLOCK_EXP2)), ("CKV_BLOCK_DATA", str(BLOCK_DATA))] if blocks else []
     fmt_defines = [] if dtype == ttnn.bfloat4_b else [("CKV_MBITS", str(mbits)), ("CKV_ROW_BYTES", str(row_bytes))]
     if rounded is not None:
         cbs.append(cb(CB_ROUNDED, ttnn.bfloat16, t_bf16, 2 * tpb))
         defines = [("CKV_ROUNDED_OUT", "1")]
-    wr_ct = [CB_ROWS, CB_ROUNDED, tpb, row_bytes] + list(ttnn.TensorAccessorArgs(rows).get_compile_time_args())
+    wr_ct = [CB_ROWS, CB_ROUNDED, tpb, BLOCK_BYTES if blocks else row_bytes] + list(
+        ttnn.TensorAccessorArgs(rows).get_compile_time_args()
+    )
     if rounded is not None:
         wr_ct += list(ttnn.TensorAccessorArgs(rounded).get_compile_time_args())
     kernels = [
@@ -104,7 +113,7 @@ def program(
             kernel_source=str(KERNELS / "ckv_bfp4_compute.cpp"),
             core_ranges=crs,
             compile_time_args=[CB_IN, CB_ROWS, CB_ROUNDED],
-            defines=defines + fmt_defines + [("CKV_PACK_PRECISE", "1")],
+            defines=defines + block_defines + fmt_defines + [("CKV_PACK_PRECISE", "1")],
             runtime_args=cp,
             # full-sync DEST holds a band's 16 tiles; precise pack: the packer reads DEST as bf16, the format the row
             # pack's strides are set for (no bfloat8_b step). CKV_PACK_PRECISE only gives the binary its own cache key:
@@ -122,18 +131,23 @@ def ckv_bfp4(
     *,
     rounded: bool = False,
     dtype=None,
+    blocks: bool = False,
     memory_config=None,
     prepared: bool = False,
 ) -> ttnn.Tensor | None:
     """ckv [1, 1, n, 512] bf16 TILE (n % 32 == 0; on a mesh, the same program on every chip) -> rows [row0, row0 + n)
     of ``rows`` ([1, 1, R, 320] uint8 ROW_MAJOR, written in place). ``rounded``: also return the rounded values as a new
     [1, 1, n, 512] bf16 TILE tensor (else None). ``dtype``: bfloat4_b (default, 320 B records) or bfloat8_b (576 B
-    records: [32 exponents | the same 32 | 512 sign-magnitude bytes]). ``prepared`` (default False: a fresh descriptor
-    through generic_op every call): the program is built once per (mesh, n, rounded, dtype, memory configs) and
-    dispatched as a prepared program (ttnn.bringup.run_prepared, row0 a value slot): the same program and bytes without
-    the per-call descriptor build."""
+    records: [32 exponents | the same 32 | 512 sign-magnitude bytes]). ``blocks`` (bfloat8_b only): ``rows`` is
+    [1, 1, R / 32, BLOCK_BYTES], 32 consecutive rows a page (the sparse_sdpa window: two NoC reads a block), row0 % 32
+    == 0. ``prepared`` (default False: a fresh descriptor through generic_op every call): the program is built once per
+    (mesh, n, rounded, dtype, blocks, memory configs) and dispatched as a prepared program (ttnn.bringup.run_prepared,
+    row0 a value slot): the same program and bytes without the per-call descriptor build."""
     n = ckv.shape[-2]
     row_bytes = _fmt(dtype or ttnn.bfloat4_b)[0]
+    if blocks:
+        assert dtype == ttnn.bfloat8_b and row0 % 32 == 0, (dtype, row0)
+        row_bytes = BLOCK_BYTES
     assert ckv.dtype == ttnn.bfloat16 and ckv.layout == ttnn.TILE_LAYOUT, (ckv.dtype, ckv.layout)
     assert ckv.shape[-1] == WIDTH and n % 32 == 0, ckv.shape
     assert rows.dtype == ttnn.uint8 and rows.layout == ttnn.ROW_MAJOR_LAYOUT and rows.shape[-1] == row_bytes, (
@@ -141,7 +155,7 @@ def ckv_bfp4(
         rows.layout,
         rows.shape,
     )
-    assert 0 <= row0 and row0 + n <= rows.shape[-2], (row0, n, rows.shape)
+    assert 0 <= row0 and row0 + n <= rows.shape[-2] * (32 if blocks else 1), (row0, n, rows.shape)
     out = None
     if rounded:
         out = ttnn.allocate_tensor_on_device(
@@ -152,12 +166,12 @@ def ckv_bfp4(
             memory_config or ttnn.DRAM_MEMORY_CONFIG,
         )
     io = [ckv, rows] + ([out] if out is not None else [])
-    pp = _prepared(ckv, rows, out, row0, io, dtype) if prepared else None
+    pp = _prepared(ckv, rows, out, row0, io, dtype, blocks) if prepared else None
     if pp is not None:
         # (looked up on ttnn.bringup at each call: the bring-up capture wraps run_prepared, F201)
         ttnn.bringup.run_prepared(pp, io, [row0])
     else:
-        ttnn.generic_op(io, program(ckv, rows, row0, out, dtype))
+        ttnn.generic_op(io, program(ckv, rows, row0, out, dtype, blocks))
     return out
 
 
@@ -250,8 +264,8 @@ def bfp_round(
     return out
 
 
-def _prepared(ckv, rows, out, row0, io, dtype=None):
-    """prepared=True: the program for this (mesh, n, rounded, dtype, memory configs), built and prepared once (row0 a
+def _prepared(ckv, rows, out, row0, io, dtype=None, blocks=False):
+    """prepared=True: the program for this (mesh, n, rounded, dtype, blocks, memory configs), built and prepared once (row0 a
     value slot, every tensor address patched), or None when it cannot be prepared (a frozen runtime arg equal to an io
     address: the patch count says so) - the caller then takes the plain generic_op path."""
     mesh = ckv.device()
@@ -260,6 +274,7 @@ def _prepared(ckv, rows, out, row0, io, dtype=None):
         ckv.shape[-2],
         out is not None,
         str(dtype or ttnn.bfloat4_b),
+        blocks,
         str(ckv.memory_config()),
         str(rows.memory_config()),
         str(out.memory_config()) if out is not None else None,
@@ -268,7 +283,7 @@ def _prepared(ckv, rows, out, row0, io, dtype=None):
     if hit is not None:
         _PREPARED.move_to_end(key)
         return hit[1]
-    desc = program(ckv, rows, row0, out, dtype)
+    desc = program(ckv, rows, row0, out, dtype, blocks)
     shape = mesh.shape
     md = ttnn.MeshProgramDescriptor()
     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc

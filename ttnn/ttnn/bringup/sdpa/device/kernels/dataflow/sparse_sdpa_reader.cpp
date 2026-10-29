@@ -247,8 +247,12 @@ void kernel_main() {
                     request[sparse_sdpa::gather_request::KIND] = sparse_sdpa::gather_request::KIND_WINDOW;
                 }
                 kreq_cb.push_back(1);
+#ifdef SPARSE_SDPA_WINDOW_BLOCKS
+                sparse_sdpa::gather_bfp8_window_blocks<k_dim, k_chunk>(noc, kvw, block_l1, idx_ptr[base], half, valid);
+#else
                 sparse_sdpa::gather_bfp4_rows<k_dim, k_chunk, sparse_sdpa::SCALED_K_TRID_RING, k_dim>(
                     noc, kvw, block_l1, idx_ptr, base, half, valid, 0);
+#endif
                 if (valid < k_chunk) {
                     noc.async_write_zeros(
                         k8_rm_cb, (k_chunk - valid) * k4_eb, {.offset_bytes = block_off + valid * k4_eb});

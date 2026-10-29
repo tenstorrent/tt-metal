@@ -126,3 +126,31 @@ def test_ckv_bfp8_rows(device, n, row0, table_rows):
         return [rows]
 
     determinism.assert_deterministic(lambda: run(ckv), lambda: run(other), first=[rows], label=f"bfp8 n{n}")
+
+
+@pytest.mark.parametrize("n, row0, blocks", [(32, 0, 1), (64, 96, 8), (2176, 0, 68)])
+def test_ckv_bfp8_blocks(device, n, row0, blocks):
+    """blocks=True: 32 rows a page ([exponents | the same, 32 B on | values]), host rule, RNE; other pages untouched."""
+    x = _inputs(n, n + row0 + 13)
+    ckv = ttnn.from_torch(x.reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    table = ttnn.from_torch(
+        torch.full((1, 1, blocks, ref.BLOCK_BYTES), FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device
+    )
+    ttnn.bringup.ckv_bfp4(ckv, table, row0, dtype=ttnn.bfloat8_b, blocks=True)
+    got = ttnn.to_torch(table).view(torch.uint8).reshape(blocks, ref.BLOCK_BYTES)
+    exp, mask = ref.encode_blocks(x)
+    b0 = row0 // 32
+    mine = got[b0 : b0 + n // 32]
+    bad = ((mine != exp) & mask).any(-1).nonzero().flatten()
+    assert not len(bad), f"{len(bad)} blocks differ, first {bad[:5].tolist()}"
+    assert (got[:b0] == FILL).all() and (got[b0 + n // 32 :] == FILL).all(), "pages outside the rows written"
+
+    other = ttnn.from_torch(
+        _inputs(n, n + 1).reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    def run(inp):
+        ttnn.bringup.ckv_bfp4(inp, table, row0, dtype=ttnn.bfloat8_b, blocks=True)
+        return [table]
+
+    determinism.assert_deterministic(lambda: run(ckv), lambda: run(other), first=[table], label=f"blocks n{n}")

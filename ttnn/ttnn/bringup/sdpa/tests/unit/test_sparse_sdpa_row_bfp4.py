@@ -299,3 +299,92 @@ def test_bfp8_refusals(device, expect_error):
             kv_format=ttnn.bringup.SparseKVFormat.ROW_BFP8,
             scale=1.0,
         )
+
+
+# ------------------------------------------------------------------------------- the bfloat8_b window as blocks
+def _blocks(rec8):
+    """576 B records [Tw, 576] (Tw % 32 == 0) -> window blocks [Tw / 32, BLOCK_BYTES] (gaps zero)."""
+    e, d = rec8[:, :32].reshape(-1, 32 * 32), rec8[:, 64:].reshape(-1, 32 * 512)
+    out = torch.zeros(e.shape[0], ref.BLOCK_BYTES, dtype=torch.uint8)
+    out[:, : e.shape[1]] = e
+    out[:, ref.BLOCK_EXP2 : ref.BLOCK_EXP2 + e.shape[1]] = e
+    out[:, ref.BLOCK_DATA :] = d
+    return out
+
+
+def _consecutive(idx, S, Tw, n_win, g):
+    """Window ids of each query: n_win(s) consecutive rows from a random start (odd and even, across blocks)."""
+    for s in range(S):
+        w = n_win(s)
+        idx[0, 0, s, :WIN] = MASKED
+        idx[0, 0, s, :w] = int(torch.randint(0, Tw - w + 1, (1,), generator=g)) + torch.arange(w)
+    return idx
+
+
+@pytest.mark.parametrize("fp32", [False, True], ids=["dest16", "dest32"])
+def test_bfp8_window_blocks_equal_records(device, fp32):
+    """kv_window as blocks (32 rows a page) equals the 576 B records holding the same values, bit for bit, with full
+    and partial windows of consecutive rows and top-k parts of 0 / 37 / 512."""
+    H, S, Tw = 64, 2 * len(WIN_COUNTS) * 3, 256
+    nw = lambda s: [WIN, *WIN_COUNTS][s % (len(WIN_COUNTS) + 1)]
+    nt = lambda s: [0, 37, 512][(s // (len(WIN_COUNTS) + 1)) % 3]
+    q, win, rows, vals, idx, sink = _inputs(H, S, Tw, 4096, nw, nt, seed=6)
+    idx = _consecutive(idx, S, Tw, nw, torch.Generator().manual_seed(7))
+    rec8 = _rec8(win)[1]
+    tq, ti = _dev(q, device, ttnn.bfloat16), _dev(idx.to(torch.int32), device, ttnn.uint32)
+    ts = _dev(sink.view(1, 1, 1, -1), device, ttnn.bfloat16)
+    tr = _dev(rows.view(1, 1, -1, rows.shape[-1]), device, ttnn.uint8)
+    common = dict(scale=1.0, k_chunk_size=KC, compute_kernel_config=_ckc(fp32), attention_sink=ts)
+    F = ttnn.bringup.SparseKVFormat.ROW_BFP4
+    exp = ttnn.to_torch(
+        ttnn.bringup.sparse_sdpa(
+            tq, tr, ti, K_DIM, kv_format=F, kv_window=_dev(rec8.view(1, 1, Tw, 576), device, ttnn.uint8), **common
+        )
+    )
+    tb = _dev(_blocks(rec8).view(1, 1, Tw // 32, -1), device, ttnn.uint8)
+
+    def run(tw=tb):
+        return ttnn.bringup.sparse_sdpa(tq, tr, ti, K_DIM, kv_format=F, kv_window=tw, **common)
+
+    out = run()
+    got = ttnn.to_torch(out)
+    diff = (got.float() != exp.float()).any(-1)[0]
+    assert not diff.any(), f"{int(diff.sum())} head-rows differ; rel {_rel(got, exp):.4f}"
+    other = _blocks(_rec8(torch.randn(Tw, K_DIM, generator=torch.Generator().manual_seed(8)).bfloat16())[1])
+    determinism.assert_deterministic(
+        run, lambda: run(_dev(other.view(1, 1, Tw // 32, -1), device, ttnn.uint8)), first=out, label="blocks"
+    )
+
+
+@pytest.mark.parametrize("H", [32, 64])
+def test_row_bfp8_window_only_blocks_equal_records(device, H):
+    """ROW_BFP8 with kv as blocks equals kv as records, consecutive windows (full and partial)."""
+    S, Tw = 3 * len(WIN_COUNTS), 2176
+    g = torch.Generator().manual_seed(9)
+    q = (torch.randn(1, H, S, K_DIM, generator=g) * K_DIM**-0.5).to(torch.bfloat16)
+    rec8 = _rec8(torch.randn(Tw, K_DIM, generator=g).to(torch.bfloat16))[1]
+    nw = lambda s: [WIN, *WIN_COUNTS][s % (len(WIN_COUNTS) + 1)]
+    idx = _consecutive(torch.full((1, 1, S, WIN), MASKED, dtype=torch.int64), S, Tw, nw, g)
+    sink = (torch.randn(H, generator=g) * 0.5).to(torch.bfloat16)
+    ti, ts = _dev(idx.to(torch.int32), device, ttnn.uint32), _dev(sink.view(1, 1, 1, -1), device, ttnn.bfloat16)
+    tq = _dev(q, device, ttnn.bfloat16)
+    common = dict(scale=1.0, k_chunk_size=KC, compute_kernel_config=_ckc(), attention_sink=ts)
+    F = ttnn.bringup.SparseKVFormat.ROW_BFP8
+    exp = ttnn.to_torch(
+        ttnn.bringup.sparse_sdpa(
+            tq, _dev(rec8.view(1, 1, Tw, 576), device, ttnn.uint8), ti, K_DIM, kv_format=F, **common
+        )
+    )
+    tb = _dev(_blocks(rec8).view(1, 1, Tw // 32, -1), device, ttnn.uint8)
+
+    def run(kv=tb):
+        return ttnn.bringup.sparse_sdpa(tq, kv, ti, K_DIM, kv_format=F, **common)
+
+    out = run()
+    got = ttnn.to_torch(out)
+    diff = (got.float() != exp.float()).any(-1)[0]
+    assert not diff.any(), f"{int(diff.sum())} head-rows differ; rel {_rel(got, exp):.4f}"
+    other = _blocks(_rec8(torch.randn(Tw, K_DIM, generator=g).bfloat16())[1])
+    determinism.assert_deterministic(
+        run, lambda: run(_dev(other.view(1, 1, Tw // 32, -1), device, ttnn.uint8)), first=out, label="row_bfp8 blocks"
+    )
