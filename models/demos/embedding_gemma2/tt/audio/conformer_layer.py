@@ -105,12 +105,13 @@ class AudioConformerLayer(LightweightModule):
             norm("norm_out"),
         )
 
-    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, shift_idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """`shift_idx`: the attention's rel-shift gather index, built once per forward (AudioModel)."""
         # E5c: the residual stream in L1 when it fits (config.audio_act_memory_config)
         mc = audio_act_memory_config(x.device(), x.shape, x.dtype)
         h1 = self.ffn1(x)
         a_in = self.norm_pre_attn(h1, memory_config=mc)
-        a = self.attn(a_in, mask)
+        a = self.attn(a_in, mask, shift_idx)
         ttnn.deallocate(a_in)
         a_n = self.norm_post_attn(a, memory_config=mc)
         ttnn.deallocate(a)

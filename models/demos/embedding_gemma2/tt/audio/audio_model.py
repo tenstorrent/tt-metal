@@ -19,6 +19,7 @@ Contract (forward)
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,8 @@ from models.demos.embedding_gemma2.tt.audio.light_conv import load_causal_shifts
 from models.demos.embedding_gemma2.tt.audio.subsample import AudioSubsample
 from models.demos.embedding_gemma2.tt.precision import PrecisionConfig, resolve_precision
 from models.demos.embedding_gemma2.tt.weights import substate
+
+SHIFT_IDX_ONCE = os.environ.get("EG2_AUDIO_SHIFT_IDX_ONCE", "1") == "1"
 
 
 @dataclass
@@ -132,10 +135,17 @@ class AudioModel(LightweightModule):
     def forward_hidden(self, x: AudioDeviceInputs) -> ttnn.Tensor:
         """Subsampling + conformer stack. [B,1,S,1024] act_dtype (padding rows not meaningful)."""
         h = self.subsample(x)
+        # the rel-shift gather index is the same in every layer: one repeat per forward instead of one per
+        # layer (E10.1 topology; EG2_AUDIO_SHIFT_IDX_ONCE=0 restores the per-layer build for A/B)
+        idx = None
+        if SHIFT_IDX_ONCE and self.layers:
+            idx = self.layers[0].attn.shift_index_for(h.shape[0], h.shape[2])
         for layer in self.layers:
-            h_next = layer(h, x.attn_mask)
+            h_next = layer(h, x.attn_mask, idx)
             ttnn.deallocate(h)
             h = h_next
+        if idx is not None:
+            ttnn.deallocate(idx)
         return h
 
     def forward(self, x: AudioDeviceInputs) -> tuple[ttnn.Tensor, ttnn.Tensor]:

@@ -64,6 +64,24 @@ from models.demos.embedding_gemma2.tt.weights import as_weight, linear_weight, s
 CTX = 2 * ATTN_BLOCK  # keys per query block: previous block + own block
 REL_WIDTH = ATTN_BLOCK  # columns of Q E^T before the shift (column c = max_past_horizon - d)
 
+# per_core_M (32-row blocks per work unit) of the rel-pos Q E^T block matmul: E5c rule = the largest of
+# 1 / 2 / 4 dividing the block count. Per-grid tuned entries REL_PM_TUNED[grid][S] (batch 1, E10.1,
+# gated with the audio matmul table: EG2_AUDIO_MM_TUNED); REL_PM_OVERRIDES[S] (in-process, config search).
+REL_PM_TUNED: dict[tuple[int, int], dict[int, int]] = {(12, 10): {256: 2}}  # -0.19 % at 1 x 256, bit-identical
+REL_PM_OVERRIDES: dict[int, int] = {}
+
+
+def rel_per_core_m(device, nb: int, S: int, batch: int) -> int:
+    from models.demos.embedding_gemma2.tt.audio import linear as alin
+
+    if batch == 1:
+        if S in REL_PM_OVERRIDES:
+            return REL_PM_OVERRIDES[S]
+        g = device.compute_with_storage_grid_size()
+        if alin.AUDIO_TUNED_ON and S in REL_PM_TUNED.get((g.x, g.y), {}):
+            return REL_PM_TUNED[(g.x, g.y)][S]
+    return max(d for d in (1, 2, 4) if nb % d == 0)
+
 
 def rel_position_table(cfg: AudioAttentionConfig) -> torch.Tensor:
     """HF `Gemma4AudioRelPositionalEncoding` output [13, hidden] in fp32: rows are distances 12 .. 0."""
@@ -284,20 +302,31 @@ class AudioAttention(LightweightModule):
         ttnn.deallocate(v_r)
         return q, k, v
 
-    def _rel_shift(self, X: ttnn.Tensor) -> ttnn.Tensor:
-        """X [B, M, 32, 32] -> [B, M, 32, 64] with out[i, j] = X[i, j - i - 20] (rel_shift_index): one
-        tile-layout gather (E5c; was a row-major reshape / slice view trick on a 96-wide X)."""
-        B, M = X.shape[0], X.shape[1]
-        dev = X.device()
-        idx = ttnn.repeat(
+    def shift_index_for(self, B: int, S: int) -> ttnn.Tensor:
+        """The gather index of `_rel_shift` for a [B, 1, S, *] input: rel_shift_index repeated over the
+        B x (heads x S / 32) blocks, [B, M, 32, 64] uint16. The same in every layer (the index is a
+        function of max_past_horizon only), so AudioModel builds it once per forward (E10.1)."""
+        M = self.config.num_heads * (S // ATTN_BLOCK)
+        return ttnn.repeat(
             self.shift_index,
             ttnn.Shape([B, M, 1, 1]),
-            memory_config=audio_act_memory_config(dev, (B, M, ATTN_BLOCK, CTX), ttnn.bfloat16),
+            memory_config=audio_act_memory_config(self.shift_index.device(), (B, M, ATTN_BLOCK, CTX), ttnn.bfloat16),
         )
+
+    def _rel_shift(self, X: ttnn.Tensor, idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """X [B, M, 32, 32] -> [B, M, 32, 64] with out[i, j] = X[i, j - i - 20] (rel_shift_index): one
+        tile-layout gather (E5c; was a row-major reshape / slice view trick on a 96-wide X). `idx`: the
+        index from `shift_index_for` (None: built here and freed)."""
+        B, M = X.shape[0], X.shape[1]
+        dev = X.device()
+        own = idx is None
+        if own:
+            idx = self.shift_index_for(B, M // self.config.num_heads * ATTN_BLOCK)
         out = ttnn.gather(
             X, dim=-1, index=idx, memory_config=audio_act_memory_config(dev, (B, M, ATTN_BLOCK, CTX), ttnn.float32)
         )
-        ttnn.deallocate(idx)
+        if own:
+            ttnn.deallocate(idx)
         return out
 
     def _softmax(self, s: ttnn.Tensor) -> ttnn.Tensor:
@@ -320,7 +349,9 @@ class AudioAttention(LightweightModule):
         return p
 
     # ------------------------------------------------------------------ forward
-    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, shift_idx: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """`shift_idx`: the rel-shift gather index (`shift_index_for(B, S)`), shared by the layers of one
+        forward; None builds it here."""
         cfg = self.config
         ckc = self.compute_kernel_config
         B, _, S, _ = x.shape
@@ -337,7 +368,7 @@ class AudioAttention(LightweightModule):
         # relative-position term on the [S, 32] layout (one column per distance), then shifted into
         # the 64-key context
         rel_t = self.rel_keys_t if B == 1 else ttnn.repeat(self.rel_keys_t, ttnn.Shape([B, 1, 1, 1]))
-        pm = max(d for d in (1, 2, 4) if nb % d == 0)
+        pm = rel_per_core_m(dev, nb, S, B)
         X = ttnn.matmul(
             q,
             rel_t,
@@ -348,7 +379,7 @@ class AudioAttention(LightweightModule):
         if B != 1:
             ttnn.deallocate(rel_t)
         Xb = ttnn.reshape(X, (B, H * nb, ATTN_BLOCK, REL_WIDTH))
-        bd = self._rel_shift(Xb)
+        bd = self._rel_shift(Xb, shift_idx)
         ttnn.deallocate(X)
 
         qb = ttnn.reshape(q, (B, H * nb, ATTN_BLOCK, hd))

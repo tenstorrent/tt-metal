@@ -225,6 +225,7 @@ class VisionAttention(LightweightModule):
             self.wqkv,
             memory_config=vision_act_memory_config(dev, B, S, 3 * cfg.width, wide="qkv"),
             policy=self.qkv_policy,
+            role="qkv",
         )
         if windows is not None:  # one [1, H, B*S, 64] sequence; cos/sin are [1, 1, B*S, 64]
             xqkv = ttnn.reshape(xqkv, (1, 1, B * S, 3 * cfg.width))
@@ -266,6 +267,8 @@ class VisionAttention(LightweightModule):
         if windows is not None:
             o = ttnn.reshape(o, (B, 1, S, cfg.width))
 
-        out = vision_linear(o, self.wo, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG, policy=self.o_policy)
+        out = vision_linear(
+            o, self.wo, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG, policy=self.o_policy, role="o"
+        )
         ttnn.deallocate(o)
         return out

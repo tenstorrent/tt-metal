@@ -44,16 +44,32 @@ VISION_L1_MAX_TOKENS = 4096
 # (CB region end 1160576 B vs an L1 buffer at 1142784 B); naming the tensors keeps the rest in DRAM.
 # Batches above the "mlp" cap run the MLP one image at a time to reuse this path (VisionMLP).
 VISION_L1_WIDE_MAX_TOKENS = {"mlp": 2560, "qkv": 2560}
+# Per-grid additions to the named wide caps (E10.1, doc/prefill_towers/; "h": the MLP gelu(gate) * up
+# product), batch 1 only, gated like the tuned matmul table (tt/vision/linear.py, EG2_VISION_MM_TUNED).
+# VISION_L1_WIDE_OVERRIDES (in-process, empty by default) takes precedence on every grid (config search).
+VISION_L1_WIDE_TUNED: dict[tuple[int, int], dict[str, int]] = {(12, 10): {"h": 2560}}  # with the 2D down config
+VISION_L1_WIDE_OVERRIDES: dict[str, int] = {}
+
+
+def _wide_cap(grid, wide: str, batch: int) -> int:
+    from models.demos.embedding_gemma2.tt.vision import linear as vlinear
+
+    if batch == 1 and wide in VISION_L1_WIDE_OVERRIDES:
+        return VISION_L1_WIDE_OVERRIDES[wide]
+    cap = VISION_L1_WIDE_MAX_TOKENS.get(wide, 0)
+    if batch == 1 and vlinear.VISION_TUNED_ON:
+        cap = VISION_L1_WIDE_TUNED.get((grid.x, grid.y), {}).get(wide, cap)
+    return cap
 
 
 def vision_act_memory_config(device, batch: int, seq_len: int, width: int, wide: str | None = None):
     """L1 interleaved for a bf16 [batch, 1, seq_len, width] TILE tensor when it fits the rule, else DRAM."""
     import ttnn
 
-    if wide is not None and batch * seq_len <= VISION_L1_WIDE_MAX_TOKENS.get(wide, 0):
+    grid = device.compute_with_storage_grid_size()
+    if wide is not None and batch * seq_len <= _wide_cap(grid, wide, batch):
         return ttnn.L1_MEMORY_CONFIG
     per_bank, max_tokens = VISION_L1_BYTES_PER_BANK, VISION_L1_MAX_TOKENS
-    grid = device.compute_with_storage_grid_size()
     n = 2 * int(batch) * int(seq_len) * int(width)
     if batch * seq_len <= max_tokens and n <= per_bank * grid.x * grid.y:
         return ttnn.L1_MEMORY_CONFIG

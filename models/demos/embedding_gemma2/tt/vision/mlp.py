@@ -104,27 +104,40 @@ class VisionMLP(LightweightModule):
         outs = []
         for b in range(B):
             xb = ttnn.slice(x, [b, 0, 0, 0], [b + 1, 1, S, D], memory_config=one)
-            outs.append(self._forward(xb, memory_config=one))
+            # tuned=False: batched forwards keep the E5b configs (the E10.1 tuned table is batch 1 only)
+            outs.append(self._forward(xb, memory_config=one, tuned=False))
             ttnn.deallocate(xb)
         out = ttnn.concat(outs, dim=0, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)
         for t in outs:
             ttnn.deallocate(t)
         return out
 
-    def _forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
+    def _forward(self, x: ttnn.Tensor, memory_config=None, tuned: bool = True) -> ttnn.Tensor:
+        """`tuned`: use the per-grid tuned entries (roles, the "h" placement); False for the per-image
+        slices of a batched forward."""
         B, S = x.shape[0], x.shape[2]
         I = self.config.intermediate_size
         dev = x.device()
         # up / gate outputs in L1 for one image (-1.3 ms at 1 x 2560); h in L1 gave nothing (E5b screen)
         mem_ug = vision_act_memory_config(dev, B, S, I, wide="mlp")
-        mem = vision_act_memory_config(dev, B, S, I)
-        up = vision_linear(x, self.w_up, memory_config=mem_ug, policy=self.gate_up_policy)
-        gate = vision_linear(x, self.w_gate, memory_config=mem_ug, policy=self.gate_up_policy)
+        # h: the "h" wide cap is a per-grid tuned entry (VISION_L1_WIDE_TUNED, with the 2D down config of
+        # VISION_TUNED); without one the plain rule (DRAM at 2560 patches)
+        mem = vision_act_memory_config(dev, B, S, I, wide="h" if tuned else None)
+
+        def role(name):
+            return name if tuned else None
+
+        up = vision_linear(x, self.w_up, memory_config=mem_ug, policy=self.gate_up_policy, role=role("up"))
+        gate = vision_linear(x, self.w_gate, memory_config=mem_ug, policy=self.gate_up_policy, role=role("gate"))
         h = ttnn.multiply(gate, up, memory_config=mem, input_tensor_a_activations=_GELU)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
         out = vision_linear(
-            h, self.w_down, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG, policy=self.down_policy
+            h,
+            self.w_down,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            policy=self.down_policy,
+            role=role("down"),
         )
         ttnn.deallocate(h)
         return out

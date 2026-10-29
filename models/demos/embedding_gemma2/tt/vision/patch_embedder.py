@@ -21,6 +21,7 @@ Contract
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
@@ -28,8 +29,18 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.embedding_gemma2.tt.precision import VisionPrecision, resolve_precision
-from models.demos.embedding_gemma2.tt.vision.config import VisionConfig
+from models.demos.embedding_gemma2.tt.vision.config import VisionConfig, vision_act_memory_config
 from models.demos.embedding_gemma2.tt.weights import as_weight, linear_weight
+
+# E10.1 topology (doc/prefill_towers/, bit-identical, every grid): 2 * px - 1 as one op (-0.35 % at 1 x 2560
+# on 12 x 10) and the [B, 1, S, 768] outputs in L1 (-0.24 %; both -0.62 %, burst, same-session control).
+# EG2_VISION_PATCH_ONE_OP=0 / EG2_VISION_PATCH_L1=0 restore the E5b forms (A/B switches).
+AFFINE_ONE_OP = os.environ.get("EG2_VISION_PATCH_ONE_OP", "1") == "1"
+PATCH_L1 = os.environ.get("EG2_VISION_PATCH_L1", "1") == "1"
+_AFFINE = [
+    ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 2.0),
+    ttnn.UnaryWithParam(ttnn.UnaryOpType.SUB_UNARY_SFPU, 1.0),
+]
 
 
 class VisionPatchEmbedder(LightweightModule):
@@ -92,32 +103,39 @@ class VisionPatchEmbedder(LightweightModule):
             )
         return cls(config, w_in, *tables, precision=precision)
 
-    def lookup(self, idx: ttnn.Tensor, table: ttnn.Tensor) -> ttnn.Tensor:
+    def lookup(self, idx: ttnn.Tensor, table: ttnn.Tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
         B, S = idx.shape[0], idx.shape[1]
-        e = ttnn.embedding(
-            idx, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        e = ttnn.embedding(idx, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=memory_config)
         return ttnn.reshape(e, (B, 1, S, self.config.hidden_size))
 
     def forward(self, pixel_values: ttnn.Tensor, pos_x: ttnn.Tensor, pos_y: ttnn.Tensor) -> ttnn.Tensor:
         dram = ttnn.DRAM_MEMORY_CONFIG
-        px = ttnn.multiply(pixel_values, 2.0, memory_config=dram)
-        px1 = ttnn.subtract(px, 1.0, memory_config=dram)
-        ttnn.deallocate(px)
+        # EG2_VISION_PATCH_L1=1: the [B, 1, S, 768] bf16 outputs (projection, lookups, sums) in L1 when they
+        # fit the vision rule (vision_act_memory_config), as the encoder layers' activations
+        B, S = pixel_values.shape[0], pixel_values.shape[2]
+        act = vision_act_memory_config(pixel_values.device(), B, S, self.config.hidden_size) if PATCH_L1 else dram
+        if AFFINE_ONE_OP:
+            # E10.1 topology: 2 * px - 1 as one fp32 SFPU chain (was multiply + subtract, 55 us each at
+            # 1 x 2560 on 12 x 10); same fp32 operations in the same order
+            px1 = ttnn.unary_chain(pixel_values, _AFFINE, memory_config=dram)
+        else:
+            px = ttnn.multiply(pixel_values, 2.0, memory_config=dram)
+            px1 = ttnn.subtract(px, 1.0, memory_config=dram)
+            ttnn.deallocate(px)
         h = ttnn.linear(
             px1,
             self.w_in,
             dtype=self.policy.out_ttnn_dtype,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=dram,
+            memory_config=act,
         )
         ttnn.deallocate(px1)
-        ex = self.lookup(pos_x, self.table_x)
-        ey = self.lookup(pos_y, self.table_y)
-        pe = ttnn.add(ex, ey, memory_config=dram)
+        ex = self.lookup(pos_x, self.table_x, act)
+        ey = self.lookup(pos_y, self.table_y, act)
+        pe = ttnn.add(ex, ey, memory_config=act)
         ttnn.deallocate(ex)
         ttnn.deallocate(ey)
-        out = ttnn.add(h, pe, memory_config=dram)
+        out = ttnn.add(h, pe, memory_config=act)
         ttnn.deallocate(h)
         ttnn.deallocate(pe)
         return out

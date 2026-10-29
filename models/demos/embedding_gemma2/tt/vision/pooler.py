@@ -27,7 +27,9 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.embedding_gemma2.tt.config import compute_kernel_config_hifi4
+from models.demos.embedding_gemma2.tt.linear import spec_program_config
 from models.demos.embedding_gemma2.tt.vision.config import VisionConfig
+from models.demos.embedding_gemma2.tt.vision.linear import vision_spec
 
 
 def pooling_matrix(position_ids: torch.Tensor, k: int, out_rows: int, seq_len: int) -> tuple[torch.Tensor, list[int]]:
@@ -73,8 +75,19 @@ class VisionPooler(LightweightModule):
 
     def forward(self, h: ttnn.Tensor, pool: ttnn.Tensor) -> ttnn.Tensor:
         dram = ttnn.DRAM_MEMORY_CONFIG
+        # role "pool" (M = S_out) in the per-grid tuned table (tt/vision/linear.py VISION_TUNED); without an
+        # entry ttnn picks the config (6 cores at 1 x 2560: 279 us at 12 x 10, E10.1 Tracy)
+        B, S_out, S, D = pool.shape[0], pool.shape[-2], pool.shape[-1], h.shape[-1]
+        grid = h.device().compute_with_storage_grid_size()
+        spec = vision_spec("pool", S_out, grid, batch=B)
+        pc = None if spec is None else spec_program_config(spec, S_out, S, D, grid.x, grid.y, None, True)
         summed = ttnn.matmul(
-            pool, h, dtype=ttnn.float32, compute_kernel_config=self.compute_kernel_config, memory_config=dram
+            pool,
+            h,
+            dtype=ttnn.float32,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=dram,
+            program_config=pc,
         )
         out = ttnn.multiply(summed, self.scale, memory_config=dram)
         ttnn.deallocate(summed)
