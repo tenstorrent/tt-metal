@@ -58,7 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        unpack_block<false>(bfd_unpack_A, block * tiles_in_block, tiles_in_block);
+        unpack_block<false /*acc_to_dest*/>(bfd_unpack_A, block * tiles_in_block, tiles_in_block);
         unpack_block<ACC_TO_DEST>(bfd_unpack_B, block * tiles_in_block, tiles_in_block);
     }
 }
@@ -99,7 +99,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        broadcast_block<false>(tensor_shape, tiles_in_block);
+        broadcast_block<false /*acc_to_dest*/>(tensor_shape, tiles_in_block);
         broadcast_block<ACC_TO_DEST>(tensor_shape, tiles_in_block);
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }

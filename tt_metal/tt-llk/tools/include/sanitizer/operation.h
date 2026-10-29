@@ -505,12 +505,17 @@ struct OperationFpuEltwiseUnaryDatacopy : Operation<Exu::Fpu, Hoistable::Yes>
     {
     };
 
+    struct AccumulateToDest : Field<std::uint32_t>
+    {
+    };
+
     using Struct = StateStruct<
         OperationFpuEltwiseUnaryDatacopy,
         /* Fields */
         DataCopyType,
         BroadcastType,
-        NumFaces>;
+        NumFaces,
+        AccumulateToDest>;
 };
 
 // ---------------------------------

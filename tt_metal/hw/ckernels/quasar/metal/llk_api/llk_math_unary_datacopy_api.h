@@ -62,6 +62,13 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
             tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
                 tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
             "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
+        if constexpr (acc_to_dest) {
+            // acc_to_dest broadcasts through ELWADD: the FPU runs Int16 as MOV only, and INT8 math needs a 32-bit dest.
+            LLK_ASSERT(
+                srcB_format != DataFormat::Int16 &&
+                    (EN_32BIT_DEST || (srcB_format != DataFormat::Int8 && srcB_format != DataFormat::UInt8)),
+                "acc_to_dest broadcast does not support Int16, or Int8/UInt8 with a 16-bit dest");
+        }
 
         _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, EN_32BIT_DEST, false /*unpack_to_dest*/, acc_to_dest>(
             tensor_shape);

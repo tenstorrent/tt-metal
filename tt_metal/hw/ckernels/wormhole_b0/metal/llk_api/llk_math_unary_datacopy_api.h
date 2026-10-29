@@ -28,6 +28,7 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(get_operand_num_faces(operand_id)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::AccumulateToDest>(acc_to_dest),
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
         StateDiscard<std::uint32_t>(dst_index)));
 
@@ -54,6 +55,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(get_operand_num_faces(operand_id)),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::AccumulateToDest>(acc_to_dest),
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
         StateDiscard<std::uint32_t>(start_dst_index),
         StateDiscard<std::uint32_t>(ntiles)));
@@ -91,6 +93,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(num_faces),
+        StateVal<OperationFpuEltwiseUnaryDatacopy::AccumulateToDest>(acc_to_dest),
         StateVal<Operand<Exu::Fpu>::Format>(dst_format)));
 
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, acc_to_dest>(

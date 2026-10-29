@@ -97,6 +97,15 @@ def get_valid_perf_tile_dimensions_bcast(formats):
     return _bfp8_b_tile_filter(formats, BCAST_PERF_TILE_DIMENSIONS)
 
 
+def _is_wh_row_dest_acc(dest_acc, broadcast_type):
+    """WH plain (MOVB2D) row broadcast with dest accumulation is a known issue (TODO: pgardner)."""
+    return (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and broadcast_type == BroadcastType.Row
+        and dest_acc == DestAccumulation.Yes
+    )
+
+
 def get_valid_broadcast_types(formats, dest_acc, tile_dimensions):
     broadcast_types = []
     for broadcast_type in BCAST_TYPES:
@@ -110,12 +119,9 @@ def get_valid_broadcast_types(formats, dest_acc, tile_dimensions):
         # TODO(#47328): Column broadcast for tiny tiles needs kernel support
         if broadcast_type == BroadcastType.Column and tile_dimensions != [32, 32]:
             continue
-        # TODO: pgardner - known WH issue with row broadcast + dest accumulation
-        if (
-            get_chip_architecture() == ChipArchitecture.WORMHOLE
-            and broadcast_type == BroadcastType.Row
-            and dest_acc == DestAccumulation.Yes
-            and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
+        if _is_wh_row_dest_acc(dest_acc, broadcast_type) and formats.input_format in (
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
         ):
             continue
         broadcast_types.append(broadcast_type)
@@ -325,21 +331,12 @@ BCAST_ACC_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
 )
 BCAST_ACC_TILE_DIMENSIONS = [32, 32]
-BCAST_ACC_INPUT_DIMENSIONS = [[128, 64]]
+BCAST_ACC_INPUT_DIMENSIONS = [128, 64]
 BCAST_ACC_TYPES = [BroadcastType.Column, BroadcastType.Row, BroadcastType.Scalar]
 
 
-def _is_wh_row_dest_acc(dest_acc, broadcast_type):
-    """The known WH row broadcast + dest accumulation issue is in the plain (MOVB2D) row broadcast."""
-    return (
-        get_chip_architecture() == ChipArchitecture.WORMHOLE
-        and broadcast_type == BroadcastType.Row
-        and dest_acc == DestAccumulation.Yes
-    )
-
-
 def get_valid_acc_to_dest(dest_acc, broadcast_type):
-    # The acc_to_dest=False control ends with a plain row broadcast; the accumulating ELWADD row broadcast runs.
+    # No acc_to_dest=False control here: it ends with the plain row broadcast excluded in get_valid_broadcast_types.
     if _is_wh_row_dest_acc(dest_acc, broadcast_type):
         return [True]
     return [False, True]
@@ -350,14 +347,12 @@ def get_valid_acc_to_dest(dest_acc, broadcast_type):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     broadcast_type=BCAST_ACC_TYPES,
     acc_to_dest=get_valid_acc_to_dest,
-    input_dimensions=BCAST_ACC_INPUT_DIMENSIONS,
 )
 def test_unpack_bcast_acc_to_dest(
     formats,
     dest_acc,
     broadcast_type,
     acc_to_dest,
-    input_dimensions,
 ):
     """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
 
@@ -374,7 +369,7 @@ def test_unpack_bcast_acc_to_dest(
         dest_acc,
         BCAST_ACC_TILE_DIMENSIONS,
         broadcast_type,
-        input_dimensions,
+        BCAST_ACC_INPUT_DIMENSIONS,
         acc_to_dest=acc_to_dest,
         seed_broadcast_type=seed_broadcast_type,
     )

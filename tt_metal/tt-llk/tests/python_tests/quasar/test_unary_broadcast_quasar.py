@@ -271,7 +271,7 @@ def test_unary_broadcast_quasar(
 
 # acc_to_dest broadcasts through ELWADD with dest accumulation; 32-bit inputs unpack straight to Dest instead.
 UNARY_BROADCAST_ACC_FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
-UNARY_BROADCAST_ACC_INPUT_DIMENSIONS = [[256, 32]]
+UNARY_BROADCAST_ACC_INPUT_DIMENSIONS = [256, 32]
 
 
 @pytest.mark.quasar
@@ -281,7 +281,6 @@ UNARY_BROADCAST_ACC_INPUT_DIMENSIONS = [[256, 32]]
     broadcast_type=BROADCAST_TYPES,
     acc_to_dest=[False, True],
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
-    input_dimensions=UNARY_BROADCAST_ACC_INPUT_DIMENSIONS,
 )
 def test_unary_broadcast_acc_to_dest_quasar(
     formats,
@@ -289,7 +288,6 @@ def test_unary_broadcast_acc_to_dest_quasar(
     broadcast_type,
     acc_to_dest,
     dest_sync_mode,
-    input_dimensions,
 ):
     """Seed Dest with a plain broadcast of A, then broadcast B with acc_to_dest.
 
@@ -300,7 +298,7 @@ def test_unary_broadcast_acc_to_dest_quasar(
         dest_acc,
         broadcast_type,
         dest_sync_mode,
-        input_dimensions,
+        UNARY_BROADCAST_ACC_INPUT_DIMENSIONS,
         run_types=[PerfRunType.L1_TO_L1],
         loop_factor=1,
         acc_to_dest=acc_to_dest,

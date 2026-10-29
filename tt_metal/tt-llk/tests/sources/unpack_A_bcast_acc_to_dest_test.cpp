@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(params.NUM_BLOCKS); ++block)
     {
-        unpack_block<SEED_BROADCAST_TYPE, false>(params, tensor_shape, block, params.buffer_A);
+        unpack_block<SEED_BROADCAST_TYPE, false /*acc_to_dest*/>(params, tensor_shape, block, params.buffer_A);
         unpack_block<BROADCAST_TYPE, ACC_TO_DEST>(params, tensor_shape, block, params.buffer_B);
     }
     _llk_unpack_A_uninit_<BROADCAST_TYPE>();
@@ -101,7 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(params.NUM_BLOCKS); ++block)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
-        broadcast_block<SEED_BROADCAST_TYPE, false>(params);
+        broadcast_block<SEED_BROADCAST_TYPE, false /*acc_to_dest*/>(params);
         broadcast_block<BROADCAST_TYPE, ACC_TO_DEST>(params);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
