@@ -25,8 +25,9 @@
 //                                   operand once and moves its address on
 //   unpack_execute<P>(a, b, step)   one step of the walk: for each run, point the unpackers at that run's tiles,
 //                                   unpack the held operand, and run the MOP tiles_per_run times
-//   unpack<On, Plan>(in0, in1)      the per-thread call the Compute API makes: plans on every thread, configures
-//                                   and executes only when this build is for thread On (the unpack thread)
+//   unpack<On, Plan>(in0[, in1])    the per-thread call the Compute API makes: plans on every thread, configures
+//                                   and executes only when this build is for thread On (the unpack thread); one
+//                                   address for a one-input op
 //
 // Unpack to Dest. A stream whose Plan says Where::Dest goes through unpacker 0 to Dest instead of SrcA (32-bit
 // formats with a 32-bit Dest; see unpack_tile_to_dest and dest_write_begin below). Its tiles land one after another
@@ -257,7 +258,7 @@ inline __attribute__((always_inline)) void set_unpack_context(std::uint32_t cont
 /// unpacker's THCON section: S0 for unpacker 0, S1 for unpacker 1. Every field of the two config words is named,
 /// so the write replaces them whole.
 template <cfg::Sec S, unpack_stream St, std::uint32_t XDim>
-inline __attribute__((always_inline)) void configure_unpacker()
+inline __attribute__((always_inline)) void write_descriptor_and_config()
 {
     static_assert(St.layout == Layout::Tilized, "row-major (tilize) streams are not ported yet");
     static_assert(!St.to_dest || S == cfg::Sec::S0, "only unpacker 0 writes Dest");
@@ -412,8 +413,8 @@ inline __attribute__((always_inline)) void unpack_configure()
     // Descriptors and configs. Unpacker 0 takes its X dim from the per-context Tile_x_dim below, so 0 here.
     constexpr std::uint32_t src_a_face_datums = P.src_a.face_r_dim * face_cols;
     constexpr std::uint32_t src_b_face_datums = P.src_b.face_r_dim * face_cols;
-    configure_unpacker<cfg::Sec::S0, P.src_a, 0>();
-    configure_unpacker<cfg::Sec::S1, P.src_b, src_b_face_datums>();
+    write_descriptor_and_config<cfg::Sec::S0, P.src_a, 0>();
+    write_descriptor_and_config<cfg::Sec::S1, P.src_b, src_b_face_datums>();
 
     // Src write base for both contexts, and unpacker 0's face size per context.
     cfg::write<cfg::Access::MMIO>(
@@ -544,13 +545,15 @@ inline __attribute__((always_inline)) void dest_write_end()
     hal::sync::semaphore::post<hal::sync::Access::Tensix, unpack_to_dest_sync>();
 }
 
-/// The unpack thread's part of a Compute API call. in0_address and in1_address are the byte addresses of the
-/// call's input tensors (in1_address is ignored when the op has one input).
+/// The unpack thread's part of a two-input Compute API call. in0_address and in1_address are the byte addresses of
+/// the call's input tensors.
 template <Thread On, Plan Pl>
 inline __attribute__((always_inline)) void unpack(std::uint32_t in0_address, std::uint32_t in1_address)
 {
     static_assert(On == Thread::Unpack, "the unpackers are driven from the unpack thread");
     constexpr unpack_params p = unpack_params_from(Pl);
+    // Every TRISC compiles this call (the static_assert checks the call names the right thread); only the unpack
+    // thread's build keeps its body. On math and pack this branch is discarded, so their builds carry no unpack code.
     if constexpr (runs_on<On>)
     {
         const std::uint32_t src_a_address = on_unpacker0(Pl.in0.to) ? in0_address : in1_address;
@@ -569,6 +572,14 @@ inline __attribute__((always_inline)) void unpack(std::uint32_t in0_address, std
             dest_write_end();
         }
     }
+}
+
+/// The unpack thread's part of a one-input Compute API call (copy): unpacker 1 idles, so there is no second address.
+template <Thread On, Plan Pl>
+inline __attribute__((always_inline)) void unpack(std::uint32_t in0_address)
+{
+    static_assert(Pl.in1.to == Where::None, "this op's Plan has a second input: pass its address");
+    unpack<On, Pl>(in0_address, in0_address /* read by no unpacker: unpacker 1 idles */);
 }
 
 } // namespace llk2::llk_lib

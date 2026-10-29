@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API test: llk2::matmul on Tensors, one kernel body for all three threads. Only Tensors, the Compute API
-// (matmul, pack) and the Dest sync API: no LLK, init or per-thread code.
+// (matmul, pack) and a Dest ring: no LLK, init or per-thread code.
 
 #include <cstdint>
 
@@ -47,9 +47,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto w   = llk2::Tensor<in1_spec>(params.buffer_B[0]);
     const auto out = llk2::Tensor<out_spec>(params.buffer_Res[0]);
 
-    const auto acc = llk2::dest_acquire<acc_spec>();
-    llk2::matmul(x, w, acc); // acc += x * w
-    llk2::dest_commit(acc);
-    llk2::pack(acc, out);
-    llk2::dest_release(acc);
+    using AccRing  = llk2::DestRing<acc_spec>;
+    const auto y   = llk2::matmul(x, w, llk2::reserve_back<AccRing>()); // y = 0 + x * w, math's
+    llk2::pack(y, out);                                                  // pack takes y from math
+    llk2::release(y);
 }

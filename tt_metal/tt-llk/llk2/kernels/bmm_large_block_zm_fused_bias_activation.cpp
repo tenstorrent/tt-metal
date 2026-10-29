@@ -2,40 +2,82 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ttnn's bmm_large_block_zm_fused_bias_activation compute kernel on LLK 2.0, as tt-metal would build it. NOT compiled
-// by the tt-llk harness: tests/sources/llk2_bmm_fused_compute_api_test.cpp runs the same body
-// (bmm_large_block_zm_fused_bias_activation.h) there.
+// ttnn's bmm_large_block_zm_fused_bias_activation compute kernel (matmul/device/kernels/compute/) on LLK 2.0:
+// Tensors, the Compute API and owners for every sync. One body for all three threads; no LLK calls, no init /
+// uninit / reconfig, no tile_regs_* and no per-thread code.
 //
-// The dataflow buffers are tt-metal's own DataflowBuffer (api/dataflow/dataflow_buffer.h), used as 1.0 uses them:
-// wait_front / pop_front run on unpack, reserve_back / push_back on pack, and each pointer is valid only there (0 on
-// math). The body makes Tensors at those pointers (dataflow_tensor.h); llk2 itself knows nothing of buffers.
+// Syncs, and where each one is (compute_api/sync.h):
+//   in0, in1, partials, bias, out   the kernel's dataflow buffers, through Tensors: wait_front / reserve_back return
+//                                   the Tensor, release() pops or pushes its pages (compute_api/dataflow.h)
+//   Dest                            a ring of two sections (compute_api/dest.h): reserve_back<AccRing>() waits for a
+//                                   free one on math; release() frees it once the packer has read it. Math works on
+//                                   the next block while pack reads the last one
+//   math -> pack                    inside pack (or inside the activation, when it runs on the pack thread): each op
+//                                   returns what it wrote, owned by its unit, and the next op hands it over
 //
-// What this file still assumes from tt-metal that does not exist today:
+// Flow, per output block (the 1.0 kernel's bh / bw loop; one batch):
+//   for each K block:
+//     x, w = wait_front(in0), wait_front(in1)                  [RT, KB] and [KB, CT] tiles at the read pointers
+//     acc = reserve_back<AccRing>()                            a zeroed Dest section
+//     reload: copy(wait_front(partials), acc)                  the previous blocks' sum back into Dest
+//     y = matmul(x, w, acc)                                    y = acc + x * w
+//     last block: pack(activation(y), reserve_back(out))       the activation runs on the pack thread; PACK_RELU
+//                 (FUSE_BIAS: pack into the partials instead)
+//     else:       pack(y, reserve_back(partials))              spill, or with L1 acc add into the partials
+//     release everything
+//   FUSE_BIAS:
+//     y = add<Row>(wait_front(partials), peek_front(bias), reserve_back<AccRing>())
+//     pack<relu>(activation(y), reserve_back(out))
+//   the bias stays for every output block and is popped once at the end, as 1.0.
+//
+// Accumulating over K blocks, two ways (as the 1.0 kernel):
+//   spill (default)  each block but the last packs its sum to the partials buffer, and the next block copies it back
+//                    into Dest before its matmul adds to it
+//   L1 acc           the packer adds into the partials buffer in L1 (pack<{.l1_acc = Toggle::Runtime}>, on from the
+//                    second block). The partials buffer must hold exactly one output block, so popping it and
+//                    reserving again gives the same pages back. Without FUSE_BIAS the last block still reloads the sum
+//                    (one copy) and packs to the output; with FUSE_BIAS every block packs into the partials buffer
+//                    and the bias stage reads it
+//
+// What this file assumes from tt-metal that does not exist today:
 //   - Each CB's data format is a named compile-time arg (<cb>_format), the same on all three TRISCs: the Tensors'
 //     specs (and through them the Resolver) need it at compile time on every thread. Today each TRISC sees only its
 //     own generated table (unpack_src_format[] on unpack, pack_dst_format[] on pack).
 //   - Every CB has pages of one tile (the Tensors are counted in tiles, as 1.0 counts them).
 //   - The partials CB (cb_intermed0) holds exactly one output block, so L1 acc reserves the same pages again (true
 //     of the 1.0 host setup for this kernel; nothing here can check it at compile time).
+//   - llk2/inc on the include path.
 // And as today: the firmware sets up each TRISC's CB pointers and zeroes the stream counters before the kernel
 // starts, and the Dest mode and math fidelity come from DST_ACCUM_MODE and MATH_FIDELITY.
 //
+// The tt-llk harness runs this same file (tests/sources/llk2_bmm_fused_compute_api_test.cpp includes it), with its
+// own stand-ins for the tt-metal pieces above (tests/helpers/tt_metal_kernel.h).
+//
 // What the 1.0 kernel does that this one does not (yet): subblocks smaller than the per-core block, in0 transpose,
 // in1 transpose, untilize_out, batch from the reader (sparsity), BIAS_FULL_BLOCK / element-wise bias,
-// MATMUL_DRAM_SHARDED padding, SKIP_COMPUTE, and the activations other than silu, relu_max and hardtanh.
+// MATMUL_DRAM_SHARDED padding, SKIP_COMPUTE, and the activations other than silu, relu6 and hardtanh.
 
 #include <cstdint>
 
 #define LLK2_DEST_FP32     DST_ACCUM_MODE
-#define LLK2_MATH_FIDELITY MATH_FIDELITY
+#define LLK2_MATH_FIDELITY static_cast<std::uint32_t>(MATH_FIDELITY)
 #include "api/dataflow/dataflow_buffer.h"
-#include "bmm_large_block_zm_fused_bias_activation.h"
+#include "compute_api/add.h"
+#include "compute_api/copy.h"
+#include "compute_api/dataflow.h"
+#include "compute_api/dest.h"
+#include "compute_api/matmul.h"
+#include "compute_api/pack.h"
+#include "compute_api/sync.h"
+#include "compute_api/vec.h"
 #ifdef SFPU_ACTIVATION
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 #endif
 
 namespace
 {
+
+using namespace llk2;
 
 /// CB name's data format, from the host's named compile-time arg <name>_format.
 #define LLK2_CB_FORMAT(name) static_cast<DataFormat>(get_named_compile_time_arg_val(name "_format"))
@@ -53,23 +95,27 @@ constexpr std::uint32_t batch             = get_compile_time_arg_val(13); // com
 
 static_assert(in0_num_subblocks == 1 && in1_num_subblocks == 1, "LLK 2.0: one output subblock per block (out_subblock = the per-core block)");
 
+constexpr std::uint32_t rt_dim     = out_subblock_h * in0_num_subblocks; // output block height in tiles
+constexpr std::uint32_t ct_dim     = out_subblock_w * in1_num_subblocks; // output block width in tiles
+constexpr std::uint32_t out_blocks = batch * num_blocks_h_dim * num_blocks_w_dim;
+
 #ifdef SFPU_ACTIVATION
 using ttnn::operations::matmul::KernelActivation;
 constexpr KernelActivation kernel_activation = static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
 static_assert(
     kernel_activation == KernelActivation::SILU || kernel_activation == KernelActivation::RELU6 || kernel_activation == KernelActivation::HARDTANH,
-    "LLK 2.0 kernel: only silu, relu6 and hardtanh are wired up (bmm_fused_activation)");
-constexpr llk2::VecFunction activation = kernel_activation == KernelActivation::SILU    ? llk2::VecFunction::Silu
-                                         : kernel_activation == KernelActivation::RELU6 ? llk2::VecFunction::ReluMax
-                                                                                        : llk2::VecFunction::Hardtanh;
-constexpr std::uint32_t relu6_max      = 0x40c00000u; // 6.0, the 1.0 kernel's RELU6 default when param0 is 0
-constexpr std::uint32_t param0         = get_named_compile_time_arg_val("activation_param0");
-constexpr std::uint32_t activation_p0  = kernel_activation == KernelActivation::RELU6 && param0 == 0 ? relu6_max : param0;
-constexpr std::uint32_t activation_p1  = get_named_compile_time_arg_val("activation_param1");
+    "LLK 2.0 kernel: only silu, relu6 and hardtanh are wired up (activation below)");
+constexpr VecFunction activation_function = kernel_activation == KernelActivation::SILU    ? VecFunction::Silu
+                                            : kernel_activation == KernelActivation::RELU6 ? VecFunction::ReluMax
+                                                                                           : VecFunction::Hardtanh;
+constexpr std::uint32_t relu6_max     = 0x40c00000u; // 6.0, the 1.0 kernel's RELU6 default when param0 is 0
+constexpr std::uint32_t param0        = get_named_compile_time_arg_val("activation_param0");
+constexpr std::uint32_t activation_p0 = kernel_activation == KernelActivation::RELU6 && param0 == 0 ? relu6_max : param0;
+constexpr std::uint32_t activation_p1 = get_named_compile_time_arg_val("activation_param1");
 #else
-constexpr llk2::VecFunction activation = llk2::VecFunction::None;
-constexpr std::uint32_t activation_p0  = 0;
-constexpr std::uint32_t activation_p1  = 0;
+constexpr VecFunction activation_function = VecFunction::None;
+constexpr std::uint32_t activation_p0     = 0;
+constexpr std::uint32_t activation_p1     = 0;
 #endif
 
 #ifdef PACKER_L1_ACC
@@ -93,24 +139,43 @@ constexpr bool pack_relu = true;
 constexpr bool pack_relu = false;
 #endif
 
-inline constexpr llk2::bmm_fused_config config {
-    .rt_dim          = out_subblock_h * in0_num_subblocks,
-    .ct_dim          = out_subblock_w * in1_num_subblocks,
-    .kb_dim          = in0_block_w,
-    .k_blocks        = k_blocks,
-    .out_blocks      = batch * num_blocks_h_dim * num_blocks_w_dim,
-    .l1_acc          = l1_acc,
-    .fuse_bias       = fuse_bias,
-    .pack_relu       = pack_relu,
-    .activation      = activation,
-    .activation_p0   = activation_p0,
-    .activation_p1   = activation_p1,
-    .in0_format      = LLK2_CB_FORMAT("cb_in0"),
-    .in1_format      = LLK2_CB_FORMAT("cb_in1"),
-    .bias_format     = bias_format,
-    .partials_format = LLK2_CB_FORMAT("cb_intermed0"),
-    .out_format      = LLK2_CB_FORMAT("cb_out"),
-};
+constexpr std::uint32_t tile_rows = rt_dim * default_tile_dim, tile_cols = ct_dim * default_tile_dim, k_cols = in0_block_w * default_tile_dim;
+constexpr const auto& x_spec        = l1_spec<tile_rows, k_cols, LLK2_CB_FORMAT("cb_in0")>;           // [RT, KB] tiles
+constexpr const auto& w_spec        = l1_spec<k_cols, tile_cols, LLK2_CB_FORMAT("cb_in1")>;           // [KB, CT] tiles
+constexpr const auto& bias_spec     = l1_spec<default_tile_dim, tile_cols, bias_format>;              // one tile row
+constexpr const auto& partials_spec = l1_spec<tile_rows, tile_cols, LLK2_CB_FORMAT("cb_intermed0")>; // [RT, CT] tiles
+constexpr const auto& out_spec      = l1_spec<tile_rows, tile_cols, LLK2_CB_FORMAT("cb_out")>;        // [RT, CT] tiles
+constexpr const auto& acc_spec      = dst_spec<tile_rows, tile_cols, kernel_dest_format>;             // [RT, CT] tiles in Dest
+// The last K block packs to the output, or with FUSE_BIAS to the partials the bias stage reads (1.0's mm_out_dfb).
+constexpr const auto& mm_out_spec = fuse_bias ? partials_spec : out_spec;
+constexpr bool relu_on_matmul_out = pack_relu && !fuse_bias;
+
+/// Two Dest sections: math writes one block while pack reads the other.
+using AccRing = DestRing<acc_spec>;
+
+/// The activation on y, driven from the pack thread (the 1.0 kernel's apply_activation_from_pack). Without one, y.
+template <const TensorSpec<tensor_rank>& D, class R>
+inline __attribute__((always_inline)) auto activation(const Tensor<D, R>& y)
+{
+    constexpr vec_modifiers on_pack {.thread = Thread::Pack};
+    if constexpr (activation_function == VecFunction::Silu)
+    {
+        return vec_silu<on_pack>(y);
+    }
+    else if constexpr (activation_function == VecFunction::ReluMax)
+    {
+        return vec_relu_max<on_pack>(y, activation_p0);
+    }
+    else if constexpr (activation_function == VecFunction::Hardtanh)
+    {
+        return vec_hardtanh<on_pack>(y, activation_p0, activation_p1);
+    }
+    else
+    {
+        static_assert(activation_function == VecFunction::None, "only silu, relu_max and hardtanh are wired up here; add the other vec_ calls the same way");
+        return y;
+    }
+}
 
 } // namespace
 
@@ -121,5 +186,81 @@ void kernel_main()
     DataflowBuffer bias(bias_cb);
     DataflowBuffer partials(get_named_compile_time_arg_val("cb_intermed0"));
     DataflowBuffer out(get_named_compile_time_arg_val("cb_out"));
-    llk2::bmm_large_block_zm_fused_bias_activation<config, llk2::kernel_dest_format>(in0, in1, bias, partials, out);
+    DataflowBuffer& mm_out = fuse_bias ? partials : out;
+
+    for (std::uint32_t block_out = 0; block_out < out_blocks; ++block_out)
+    {
+        bool reload = false;
+        for (std::uint32_t block = 0; block < k_blocks; ++block)
+        {
+            const bool last_k_block = block == k_blocks - 1;
+            const auto x            = wait_front<x_spec>(in0);
+            const auto w            = wait_front<w_spec>(in1);
+            const auto acc          = reserve_back<AccRing>();
+            if (reload)
+            {
+                const auto partial = wait_front<partials_spec>(partials);
+                copy(partial, acc); // acc = the sum of the earlier K blocks
+                release(partial);
+            }
+            const auto y = matmul(x, w, acc); // y = acc + x * w
+            release(x);
+            release(w);
+
+            if (last_k_block)
+            {
+                const auto slot = reserve_back<mm_out_spec>(mm_out);
+                if constexpr (fuse_bias)
+                {
+                    // kernel_main is not a template, so this branch is compiled even without FUSE_BIAS: its modifiers
+                    // must be valid for the output buffer too (l1_acc only into the partials' format).
+                    release(pack<pack_modifiers {.l1_acc = l1_acc && fuse_bias ? Toggle::Runtime : Toggle::Off}>(y, slot, block > 0));
+                }
+                else
+                {
+                    release(pack<pack_modifiers {.relu = relu_on_matmul_out}>(activation(y), slot));
+                }
+            }
+            else
+            {
+                const auto slot = reserve_back<partials_spec>(partials);
+                release(pack<pack_modifiers {.l1_acc = l1_acc ? Toggle::Runtime : Toggle::Off}>(y, slot, block > 0)); // add from the second K block on
+            }
+            release(y); // the Dest section back to the ring
+
+            if constexpr (l1_acc)
+            {
+                const std::uint32_t next_block = block + 1;
+                const bool next_to_last        = next_block == k_blocks - 1; // the next block is the last
+                const bool before_next_to_last = next_block < k_blocks - 1;  // the next block is not the last either
+                // Pop the partials so the next block reserves the same pages and accumulates into them. Without
+                // FUSE_BIAS the one before last keeps them for the last block's reload.
+                const bool pop = fuse_bias ? !last_k_block : before_next_to_last;
+                if (pop)
+                {
+                    release(wait_front<partials_spec>(partials));
+                }
+                reload = !fuse_bias && next_to_last;
+            }
+            else
+            {
+                reload = k_blocks > 1;
+            }
+        }
+
+        if constexpr (fuse_bias)
+        {
+            // The reader pushes the bias once; the kernel keeps it for every output block and pops it at the end.
+            const auto bias_row = peek_front<bias_spec>(bias);
+            const auto partial  = wait_front<partials_spec>(partials);
+            const auto y        = add<add_modifiers {.bcast = Broadcast::Row}>(partial, bias_row, reserve_back<AccRing>()); // y = partial + bias's row 0
+            release(partial);
+            release(pack<pack_modifiers {.relu = pack_relu}>(activation(y), reserve_back<out_spec>(out)));
+            release(y);
+        }
+    }
+    if constexpr (fuse_bias)
+    {
+        pop_front<bias_spec>(bias); // balance the one push of the bias (1.0, num_blocks_w_dim == 1)
+    }
 }

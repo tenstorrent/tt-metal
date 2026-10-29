@@ -36,6 +36,7 @@ def include_dirs() -> list[str]:
 
 
 def kernel_test_include_dirs() -> list[str]:
-    """include_dirs() plus the kernel-side helpers (kernels/) and the test-only helpers (tests/helpers/), for tests
-    whose kernels use dataflow buffers."""
-    return include_dirs() + [str(LLK2_ROOT / "kernels"), str(LLK2_ROOT / "tests" / "helpers")]
+    """include_dirs() plus the kernels (kernels/), the test-only helpers (tests/helpers/, which also stand in for
+    tt-metal's api/dataflow/dataflow_buffer.h), and ttnn's sources (shared host/kernel headers), for tests that run a
+    tt-metal kernel file or use dataflow buffers."""
+    return include_dirs() + [str(LLK2_ROOT / "kernels"), str(LLK2_ROOT / "tests" / "helpers"), str(LLK2_ROOT.parents[2] / "ttnn" / "cpp")]

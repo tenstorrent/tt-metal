@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API test: llk2::add and llk2::sub on Tensors, plain and with a row broadcast, one kernel body for all three
-// threads. Only Tensors, the Compute API (add, sub, pack) and the Dest sync API: no LLK, init or per-thread code.
+// threads. Only Tensors, the Compute API (add, sub, pack) and a Dest ring: no LLK, init or per-thread code.
 //
 // a is [RT_DIM, CT_DIM] tiles. b has a's shape, or with BCAST_ROW is one row of CT_DIM tiles (a bias) whose row 0 is
 // added to every row of a's matching tile column.
@@ -50,16 +50,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto b   = llk2::Tensor<in1_spec>(params.buffer_B[0]);
     const auto out = llk2::Tensor<out_spec>(params.buffer_Res[0]);
 
-    const auto acc = llk2::dest_acquire<acc_spec>();
-    if constexpr (IS_SUB)
+    using AccRing  = llk2::DestRing<acc_spec>;
+    const auto acc = llk2::reserve_back<AccRing>();
+    const auto y   = [&]
     {
-        llk2::sub<llk2::sub_modifiers {.bcast = bcast}>(a, b, acc); // acc = a - b
-    }
-    else
-    {
-        llk2::add<llk2::add_modifiers {.bcast = bcast}>(a, b, acc); // acc = a + b
-    }
-    llk2::dest_commit(acc);
-    llk2::pack(acc, out);
-    llk2::dest_release(acc);
+        if constexpr (IS_SUB)
+        {
+            return llk2::sub<llk2::sub_modifiers {.bcast = bcast}>(a, b, acc); // y = a - b
+        }
+        else
+        {
+            return llk2::add<llk2::add_modifiers {.bcast = bcast}>(a, b, acc); // y = a + b
+        }
+    }();
+    llk2::pack(y, out); // pack takes y from math
+    llk2::release(y);
 }

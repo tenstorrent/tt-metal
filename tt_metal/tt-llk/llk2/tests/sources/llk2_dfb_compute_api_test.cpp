@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API test: Tensors at dataflow buffer pointers feeding llk2::matmul, one kernel body for all three threads.
-// The buffers are the harness's stand-in for tt-metal's DataflowBuffer (tests/helpers/test_dataflow_buffer.h); the
-// kernel waits, pops, reserves and pushes itself, as in 1.0, and makes Tensors at the pointers with
-// kernels/dataflow_tensor.h. A pointer is valid only on its owner (read: unpack, write: pack), which is where llk2
-// reads the Tensors' addresses.
+// The buffers are the harness's stand-in for tt-metal's DataflowBuffer (tests/helpers/test_dataflow_buffer.h). The
+// kernel gets Tensors from them with compute_api/dataflow.h (wait_front, reserve_back) and gives the pages back with
+// release(). A pointer is valid only on its owner (read: unpack, write: pack), which is where llk2 reads the Tensors'
+// addresses.
 //
 // The kernel walks OUT_BLOCKS output blocks of [RT, CT] tiles; each sums K_BLOCKS products of an in0 block [RT, KB]
 // and an in1 block [KB, CT] into Dest, then packs it into a block of the output buffer. The host laid the blocks out
@@ -33,10 +33,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #define LLK2_DEST_FP32     is_fp32_dest_acc_en
 #define LLK2_MATH_FIDELITY static_cast<std::uint32_t>(MATH_FIDELITY)
+#include "compute_api/dataflow.h"
 #include "compute_api/dest.h"
 #include "compute_api/matmul.h"
 #include "compute_api/pack.h"
-#include "dataflow_tensor.h"
 #include "test_dataflow_buffer.h" // TEST ONLY: tt-metal's DataflowBuffer, emulated
 
 constexpr DataFormat in0_format = static_cast<DataFormat>(UNPACK_A_IN);
@@ -63,22 +63,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     in1.preload(OUT_BLOCKS * K_BLOCKS * in1_block_tiles);
     out.zero_counters();
 
+    using AccRing = llk2::DestRing<acc_spec>;
     for (std::uint32_t block = 0; block < OUT_BLOCKS; ++block)
     {
-        const auto acc = llk2::dest_acquire<acc_spec>(); // a zeroed Dest section
+        const auto acc = llk2::reserve_back<AccRing>(); // a zeroed Dest section, math's
         for (std::uint32_t k = 0; k < K_BLOCKS; ++k)
         {
-            in0.wait_front(in0_block_tiles);
-            in1.wait_front(in1_block_tiles);
-            llk2::matmul(llk2::front<x_spec>(in0), llk2::front<w_spec>(in1), acc); // acc += x * w
-            in0.pop_front(in0_block_tiles);
-            in1.pop_front(in1_block_tiles);
+            const auto x = llk2::wait_front<x_spec>(in0);
+            const auto w = llk2::wait_front<w_spec>(in1);
+            llk2::matmul(x, w, acc); // acc += x * w; still math's
+            llk2::release(x);
+            llk2::release(w);
         }
-        llk2::dest_commit(acc);
-
-        out.reserve_back(out_block_tiles);
-        llk2::pack(acc, llk2::back<out_spec>(out));
-        out.push_back(out_block_tiles);
-        llk2::dest_release(acc);
+        llk2::release(llk2::pack(acc, llk2::reserve_back<out_spec>(out))); // pack takes acc from math, then pushes
+        llk2::release(acc);                                                 // the section back to the ring
     }
 }

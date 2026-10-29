@@ -9,8 +9,17 @@
 //   TensorShape  sizes and strides over tensor_rank (6) dims, outermost first, strides in datums, plus an offset in
 //                datums: tile y/x, face y/x, datum y/x
 //   TensorSpec   the shape, the data format, the storage (L1 or Dest) and the owner (thread, unit). Compile time
-//   Tensor       a spec by reference in its type, and a run-time address (L1: the byte address of datum 0; Dest:
-//                the first row)
+//   Tensor       a spec by reference and a release action, both in its type, and a run-time address (L1: the byte
+//                address of datum 0; Dest: the first row)
+//
+// The owner is the (thread, unit) that last wrote the tensor, or nobody's (Thread::None) for a tensor nothing in the
+// kernel has produced. Every op returns what it wrote as a Tensor of its own unit, so the owner travels with the
+// type, and the next op that touches it hands it over (compute_api/sync.h). owned_by names the same tensor under
+// another owner; it is one object per spec value, so the same tensor under the same owner is always the same type.
+//
+// The release action is what release(t) does: pop or push a dataflow buffer's pages (compute_api/dataflow.h), or give
+// a Dest section back to its ring (compute_api/dest.h). NoRelease does nothing. An op's result keeps the release of
+// the tensor it wrote, so releasing the result releases that storage.
 //
 // An L1 Tensor's address is valid only on the thread that uses it: the unpack thread for inputs (it reads them), the
 // pack thread for outputs (it writes them); on other threads it may be anything (a kernel's buffer pointer is 0 on
@@ -110,19 +119,36 @@ struct TensorSpec
     Exu exu;                 ///< the owner: its unit
 };
 
-/// A tensor: spec S in its type, the address at run time. An L1 address is valid only on the thread that reads or
-/// writes the tensor (see the top of this file).
-template <const auto& S>
-struct Tensor
+/// The release action of a tensor that owns no storage: release() does nothing.
+struct NoRelease
+{
+    /// Nothing to give back.
+    constexpr void operator()() const
+    {
+    }
+};
+
+/// A tensor: spec S and release action R in its type, the address at run time. An L1 address is valid only on the
+/// thread that reads or writes the tensor (see the top of this file). R is a base, so an empty one costs nothing.
+template <const auto& S, class R = NoRelease>
+struct Tensor : R
 {
     static constexpr const auto& spec = S; ///< the tensor's spec
     std::uint32_t address;                 ///< L1: byte address of datum 0; Dest: the absolute first row
 
-    /// A tensor at address a.
-    constexpr explicit Tensor(std::uint32_t a) : address(a)
+    /// A tensor at address a, released by r.
+    constexpr explicit Tensor(std::uint32_t a, R r = R {}) : R(r), address(a)
     {
     }
 };
+
+/// Gives t's storage back: pops or pushes its buffer pages, or frees its Dest section. Call it once per storage, on
+/// any of the tensors that share it (an op's result shares its output's release).
+template <const auto& S, class R>
+inline __attribute__((always_inline)) void release(const Tensor<S, R>& t)
+{
+    static_cast<const R&>(t)();
+}
 
 // ---- helpers over tensor_rank shapes and specs ---------------------------------------------------------------------
 
@@ -289,14 +315,20 @@ constexpr TensorSpec<tensor_rank> with_owner(TensorSpec<tensor_rank> t, Thread t
     return t;
 }
 
-/// The same tensor as S under owner (T, E), as a compile-time object a Tensor can name.
-template <const auto& S, Thread T, Exu E>
-inline constexpr auto owned_by = with_owner(S, T, E);
+/// The compile-time object for spec value V: one per value, so equal specs are one object and one Tensor type.
+template <TensorSpec<tensor_rank> V>
+inline constexpr TensorSpec<tensor_rank> spec_object = V;
 
-/// d is nobody's, or already the writer's (t, e).
-constexpr bool free_or(const TensorSpec<tensor_rank>& d, Thread t, Exu e)
+/// The same tensor as S under owner (T, E), as a compile-time object a Tensor can name. Changing the owner twice
+/// gives the same object as changing it once.
+template <const auto& S, Thread T, Exu E>
+inline constexpr const TensorSpec<tensor_rank>& owned_by = spec_object<with_owner(S, T, E)>;
+
+/// t under owner (T, E): the same address and release, the owner changed in the type.
+template <Thread T, Exu E, const auto& S, class R>
+constexpr Tensor<owned_by<S, T, E>, R> as_owned(const Tensor<S, R>& t)
 {
-    return d.thread == Thread::None || (d.thread == t && d.exu == e);
+    return Tensor<owned_by<S, T, E>, R>(t.address, t);
 }
 
 // ---- constructing: the tile is named, or min(dim, 32) per axis -------------------------------------------------
