@@ -39,6 +39,7 @@ with safe_open(str(args.ckpt / index[args.lm_head_key]), "pt", device=DEV) as f:
     w = f.get_tensor(args.lm_head_key).to(torch.bfloat16)
 
 h = load_file(str(args.trace / "hidden/final.safetensors"), device=DEV)["model.last_hidden_state"][0]
+w = w.to(h.dtype)  # fp32 final states (DeepSeek-V4.1's head upcasts its bf16 weight) score in fp32; bf16 unchanged
 count = args.count or (len(text) - args.skip)
 # wikitext token j sits at position p + j; it is predicted from position p + j - 1
 targets = text[args.skip : args.skip + count].to(DEV)
