@@ -526,6 +526,19 @@ void kernel_main() {
     if constexpr (fuse_op) {
         noc_obj.async_atomic_barrier();
     }
+#if defined(WATCHER_DEBUG_DELAY)
+    // TEST-ONLY (tt-metal #62923 race-point repro): spin here, just before this reader releases its out_ready credits,
+    // on the one chip/core the watcher's atomic debug-delay mask selects (TT_METAL_ATOMIC_DEBUG_DELAY_CHIPS/_CORES,
+    // _RISCVS=TR0: TRISC0 issues no NOC atomics). Spin length: TT_METAL_WATCHER_DEBUG_DELAY cycles. Off by default:
+    // without TT_METAL_WATCHER + TT_METAL_WATCHER_DEBUG_DELAY this compiles out, and with an empty mask it never spins.
+    {
+        debug_insert_delays_msg_t tt_l1_ptr* race_delay = GET_MAILBOX_ADDRESS_DEV(watcher.debug_insert_delays);
+        if (race_delay[0].atomic_delay_processor_mask != 0) {
+            riscv_wait(WATCHER_DEBUG_DELAY);
+            race_delay[0].feedback |= (1u << 7);
+        }
+    }
+#endif
     // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
