@@ -26,12 +26,18 @@ struct Ctx {
     uint32_t sem_expected;
 };
 
+#if (defined(COMPILE_FOR_BRISC) && ZONES_BRISC == 0) || (defined(COMPILE_FOR_NCRISC) && ZONES_NCRISC == 0)
+#define MF_ZONE(name)
+#else
+#define MF_ZONE(name) DeviceZoneScopedN(name)
+#endif
+
 // One shared, out-of-line body: inlined into 128 zone blocks it made the kernel 434 KB (job 162391), far over the
 // kernel config buffer; the per-op code is now only the zone enter/exit and a call.
 template <typename Accessor>
 __attribute__((noinline)) void micro_op(Ctx& c, const Accessor& dram) {
     for (uint32_t k = 0; k < NEST; k++) {
-        DeviceZoneScopedN("SUBOP");
+        MF_ZONE("SUBOP");
         for (uint32_t r = 0; r < READS; r++) {
             const uint32_t page = (c.core_index * 131u + c.op_counter * 7u + k * 3u + r) % c.num_pages;
             noc_async_read_page(page, dram, c.l1_read_dst);
@@ -77,11 +83,34 @@ __attribute__((noinline)) void micro_op(Ctx& c, const Accessor& dram) {
     c.op_counter++;
 }
 
+// Round-8 knobs (which zone is open when a NoC event flushes the ring decides the spill: blaze every-zone captures
+// have no outer zone and abort, zone-subset captures and this test keep an ITERATION zone open and only misread the
+// header): ITER_ZONE (1) = outer ITERATION zone; GAP_READS (0) = DRAM page reads between micro-ops outside any zone;
+// PRE_READS (0) = reads before the loop; ZONES_BRISC / ZONES_NCRISC (1) = 0 compiles every zone of this kernel out
+// on that RISC (the analogue of blaze's BLAZE_MICROOP_ZONE_RISCS), the NoC traffic stays. MF_ZONE is defined above
+// micro_op.
+template <typename Accessor>
+__attribute__((noinline)) void gap_reads(Ctx& c, const Accessor& dram, uint32_t count) {
+    for (uint32_t r = 0; r < count; r++) {
+        const uint32_t page = (c.core_index * 17u + c.op_counter * 5u + r) % c.num_pages;
+        noc_async_read_page(page, dram, c.l1_read_dst);
+    }
+    noc_async_read_barrier();
+}
+
 // One zone name per micro-op, like the generated blaze kernel (125 distinct names).
+#if GAP_READS > 0
+#define OP_GAP() gap_reads(c, dram, GAP_READS);
+#else
+#define OP_GAP()
+#endif
 #define OP(n)                                      \
     if constexpr ((n) < NUM_OPS) {                 \
-        DeviceZoneScopedN("MICROOP_" #n);          \
-        micro_op(c, dram);                         \
+        {                                          \
+            MF_ZONE("MICROOP_" #n);                \
+            micro_op(c, dram);                     \
+        }                                          \
+        OP_GAP()                                   \
     }
 
 // Kernel-size knobs: the blaze raw dumps (job 162153) show the first bad quick push issued at ring index 0, i.e. with
@@ -140,8 +169,13 @@ void kernel_main() {
     c.mcast_noc_addr = (noc_index == 0) ? get_noc_multicast_addr(x_lo, my_noc_y, x_hi, my_noc_y, l1_mcast_dst)
                                         : get_noc_multicast_addr(x_hi, my_noc_y, x_lo, my_noc_y, l1_mcast_dst);
 
+#if PRE_READS > 0
+    gap_reads(c, dram, PRE_READS);
+#endif
     for (uint32_t it = 0; it < ITERS; it++) {
-        DeviceZoneScopedN("ITERATION");
+#if ITER_ZONE
+        MF_ZONE("ITERATION");
+#endif
         OP(0) OP(1) OP(2) OP(3) OP(4) OP(5) OP(6) OP(7) OP(8) OP(9) OP(10) OP(11) OP(12) OP(13) OP(14) OP(15)
         OP(16) OP(17) OP(18) OP(19) OP(20) OP(21) OP(22) OP(23) OP(24) OP(25) OP(26) OP(27) OP(28) OP(29) OP(30) OP(31)
         OP(32) OP(33) OP(34) OP(35) OP(36) OP(37) OP(38) OP(39) OP(40) OP(41) OP(42) OP(43) OP(44) OP(45) OP(46) OP(47)

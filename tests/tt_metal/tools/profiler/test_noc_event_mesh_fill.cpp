@@ -70,6 +70,12 @@ int main() {
         const uint32_t bloat_bss = env_u32("MESH_FILL_BLOAT_BSS", 0);
         const uint32_t bloat_data = env_u32("MESH_FILL_BLOAT_DATA", 0);
         const uint32_t bloat_code = env_u32("MESH_FILL_BLOAT_CODE", 0);
+        // Round 8: which zone is open around the NoC traffic (see the DM kernel).
+        const uint32_t iter_zone = env_u32("MESH_FILL_ITER_ZONE", 1);
+        const uint32_t gap_reads = env_u32("MESH_FILL_GAP_READS", 0);
+        const uint32_t pre_reads = env_u32("MESH_FILL_PRE_READS", 0);
+        const uint32_t zones_brisc = env_u32("MESH_FILL_ZONES_BRISC", 1);
+        const uint32_t zones_ncrisc = env_u32("MESH_FILL_ZONES_NCRISC", 1);
         // blaze runs the failing layer with worker_l1_size 1373312 (MINIMAX_M3_WORKER_L1_SIZE); the kernel config
         // buffer is what is left of L1 above it, 70656 B at the default (job 162391: a 125-op kernel did not fit).
         const size_t worker_l1 = env_u32("MESH_FILL_WORKER_L1", 1373312);
@@ -90,10 +96,12 @@ int main() {
         fmt::print(
             "noc_event_mesh_fill: mesh {}x{} ({} devices) cores {}x{} iters={} ops={} nest={} reads={} writes={} sems={} "
             "mcast_every={} mcast_linked={} delay_nops={} page_size={} num_pages={} programs={} blocking={} skip_read={} "
-            "trisc={} bloat_bss={} bloat_data={} bloat_code={} worker_l1={}\n",
+            "trisc={} bloat_bss={} bloat_data={} bloat_code={} worker_l1={} iter_zone={} gap_reads={} pre_reads={} "
+            "zones_brisc={} zones_ncrisc={}\n",
             mesh_device->num_rows(), mesh_device->num_cols(), mesh_device->num_devices(), grid_w, grid_h, iters, ops,
             nest, reads, writes, sems, mcast_every, mcast_linked, delay_nops, page_size, num_pages, programs, blocking,
-            skip_read, with_trisc, bloat_bss, bloat_data, bloat_code, worker_l1);
+            skip_read, with_trisc, bloat_bss, bloat_data, bloat_code, worker_l1, iter_zone, gap_reads, pre_reads,
+            zones_brisc, zones_ncrisc);
 
         // One DRAM page buffer per device (replicated), read by every core.
         const distributed::DeviceLocalBufferConfig local_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
@@ -121,7 +129,12 @@ int main() {
             {"WAIT_SPINS", std::to_string(wait_spins)},
             {"BLOAT_BSS_WORDS", std::to_string(bloat_bss)},
             {"BLOAT_DATA_WORDS", std::to_string(bloat_data)},
-            {"BLOAT_CODE", std::to_string(bloat_code)}};
+            {"BLOAT_CODE", std::to_string(bloat_code)},
+            {"ITER_ZONE", std::to_string(iter_zone)},
+            {"GAP_READS", std::to_string(gap_reads)},
+            {"PRE_READS", std::to_string(pre_reads)},
+            {"ZONES_BRISC", std::to_string(zones_brisc)},
+            {"ZONES_NCRISC", std::to_string(zones_ncrisc)}};
         std::vector<uint32_t> compile_args;
         TensorAccessorArgs(*dram_buffer->get_reference_buffer()).append_to(compile_args);
 

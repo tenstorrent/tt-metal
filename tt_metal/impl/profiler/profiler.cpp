@@ -1823,7 +1823,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                         words_around(index));
                                 }
                                 // tmp-diag (39900 = Hash16 of "PROFILER-NOC-QUICK-PUSH")
-                                if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == 39900) {
+                                if (const uint32_t qp_id = timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK; qp_id == 39900 || qp_id == 11147) {  // 11147 on this branch (PR 60773 moved the line)
                                     if (qp_time_h.has_value() && *qp_time_h != time_H) {
                                         const std::string words = words_around(index);
                                         log_warning(
