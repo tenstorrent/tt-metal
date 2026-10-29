@@ -76,7 +76,6 @@ thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS] __attribute__((us
 // For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
 // returns immediately for any DFB math TRISC is not a participant in (expected_signal == 0).
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
-thread_local uint32_t g_dfb_bound_mask __attribute__((used));
 
 #ifdef ENABLE_LLK_ASSERT
 namespace llk_tdma_guard {

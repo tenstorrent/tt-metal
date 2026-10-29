@@ -683,7 +683,7 @@ FORCE_INLINE void dfb_program_intra_tensix_alias(
 FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
     DfbPackerRemapperRange packer_rmp{};
     if (num_dfbs == 0) {
-        g_dfb_bound_mask = 0;
+        g_dfb_config_base_addr = 0;
         return packer_rmp;
     }
 
@@ -702,8 +702,6 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     g_dfb_config_base_addr = config_cached;
 
     const uint32_t participation_mask = dfb_read_participation_mask(config_cached, hart_u8);
-    // The kernel-exit finish walks this hart's DFBs (dataflow_buffer_finish.h).
-    g_dfb_bound_mask = participation_mask;
     const uint32_t dfb_signal_region_off =
         *dfb_l1_uncached_u32_ptr(config_cached + offsetof(dfb_global_header_t, dfb_signal_region_off));
     // Hoist uncached signal-region base; per-entry publish adds dfb_id×stride + signal_bit only.

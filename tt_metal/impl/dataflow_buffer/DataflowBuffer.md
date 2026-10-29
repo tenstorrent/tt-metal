@@ -586,7 +586,7 @@ Several DMs can share a txn id's batch, so a DM's own share can be complete whil
 
 The host only accepts batches that cover whole round-robin rounds of a DM's counters, so every batch starts back at counter 0. `loop` and `pos` therefore fix what each of the DM's counters is owed (`dfb_dm0_flush_side`).
 
-**Kernel DM (DM2–7), `dfb_dm_kernel_exit`.** The DFBs it is bound to come from `g_dfb_bound_mask`.
+**Kernel DM (DM2–7), `dfb_dm_kernel_exit`.** The DFBs it is bound to come from the kernel's bindings at compile time (`KERNEL_BOUND_DFB_MASK` in `kernel_bindings_generated.h`), or for a legacy kernel from this hart's participation mask in the DFB config.
 
 1. For each implicit-sync DFB, wait until its reads and writes on the DFB's txn ids have completed (`TR_ACK` and `WR_SENT` 0 on every txn id), so tiles-to-process counts all of them. Then zero the progress for the next launch.
 2. Write `loop`/`pos`/`share` for each such DFB to its exit record (`g_dfb_exit_record[hart][lowest txn id of the side]`), then set its run state (its `subordinate_sync` byte) to `RUN_SYNC_MSG_DFB_DRAINING` (watcher shows `E`).
