@@ -86,12 +86,14 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: When true, record MOVD2B reads from dest followed by MOVB2D broadcast writes in the replay buffer.
+ * @tparam acc_to_dest: Accumulate the broadcast into dest (ELWADD with dest accumulate against a zeroed SrcA); not supported with unpack_to_dest.
  * @param tensor_shape: Tile shape for loop counts and row dimensions
  */
-template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
+template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest, bool acc_to_dest = false>
 inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& tensor_shape)
 {
     static_assert(BROADCAST_TYPE != BroadcastType::NONE, "Broadcast type cannot be NONE");
+    static_assert(!(acc_to_dest && unpack_to_dest), "acc_to_dest is not supported when unpacking to dest");
 
     if constexpr (unpack_to_dest)
     {
@@ -191,20 +193,22 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
     }
     else
     {
-        // ELWADD (32-bit dest) or MOVB2D
+        // ELWADD (32-bit dest or acc_to_dest) or MOVB2D; MOVB2D cannot accumulate.
+        constexpr bool use_elwadd         = EN_32BIT_DEST || acc_to_dest;
         const std::uint32_t num_faces     = static_cast<std::uint32_t>(tensor_shape.total_num_faces());
         const std::uint32_t rows_per_face = tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS);
-        const std::uint32_t outer         = (EN_32BIT_DEST || BROADCAST_TYPE != BroadcastType::SCALAR) ? num_faces : 1U;
-        const std::uint32_t inner         = (EN_32BIT_DEST || BROADCAST_TYPE != BroadcastType::SCALAR) ? rows_per_face : num_faces * rows_per_face;
+        const std::uint32_t outer         = (use_elwadd || BROADCAST_TYPE != BroadcastType::SCALAR) ? num_faces : 1U;
+        const std::uint32_t inner         = (use_elwadd || BROADCAST_TYPE != BroadcastType::SCALAR) ? rows_per_face : num_faces * rows_per_face;
 
-        if constexpr (EN_32BIT_DEST)
+        if constexpr (use_elwadd)
         {
             constexpr auto srcb_bcast                   = (BROADCAST_TYPE == BroadcastType::COL)   ? p_elwise::SRCB_BCAST_COL
                                                           : (BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW
                                                                                                    : p_elwise::SRCB_BCAST_ALL;
             constexpr std::uint32_t last_inner_addr_mod = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_1 : ADDR_MOD_0;
+            constexpr std::uint32_t dest_accum          = acc_to_dest ? p_elwise::ENABLE_ACCUM : p_elwise::DISABLE_ACCUM;
             const auto elwadd_bcast_instr               = [srcb_bcast](std::uint32_t clr, std::uint32_t addr_mod)
-            { return TT_OP_ELWADD(clr, p_elwise::DISABLE_ACCUM, srcb_bcast, addr_mod, 0); };
+            { return TT_OP_ELWADD(clr, dest_accum, srcb_bcast, addr_mod, 0); };
 
             ckernel_template temp(outer, inner, elwadd_bcast_instr(p_elwise::CLR_NONE, ADDR_MOD_0));
             if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
@@ -242,11 +246,13 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: UNP path wrote to dest
+ * @tparam acc_to_dest: Accumulate the broadcast into dest instead of overwriting it; not supported with unpack_to_dest.
  * @param tensor_shape: Passed to addrmod / MOP setup
- * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE/unpack_to_dest.
+ * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0) with matching
+ *       BROADCAST_TYPE/unpack_to_dest/acc_to_dest.
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
  */
-template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
+template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest, bool acc_to_dest = false>
 inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape)
 {
     LLK_ASSERT(
@@ -254,7 +260,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
         "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
 
     _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
-    _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest>(tensor_shape);
+    _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest, acc_to_dest>(tensor_shape);
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }

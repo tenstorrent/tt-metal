@@ -29,7 +29,9 @@ from helpers.param_config import (
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
     LOOP_FACTOR,
@@ -286,3 +288,133 @@ def test_unpack_bcast(
     _run_unpack_bcast_test(
         formats, dest_acc, tile_dimensions, broadcast_type, input_dimensions
     )
+
+
+# acc_to_dest broadcasts through ELWADD with dest accumulation, which needs 16-bit float inputs:
+# 32-bit inputs unpack straight to Dest and UInt16 broadcasts through MOVB2D, neither of which accumulates.
+BCAST_ACC_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Bfp8_b], same=True
+)
+BCAST_ACC_TILE_DIMENSIONS = [32, 32]
+BCAST_ACC_INPUT_DIMENSIONS = [[128, 64]]
+
+
+def get_valid_broadcast_types_acc_to_dest(dest_acc):
+    broadcast_types = [
+        BroadcastType.Column,
+        BroadcastType.Row,
+        BroadcastType.Scalar,
+    ]
+    # The plain pass under the accumulating one has the known WH row broadcast + dest accumulation issue.
+    if (
+        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        and dest_acc == DestAccumulation.Yes
+    ):
+        broadcast_types.remove(BroadcastType.Row)
+    return broadcast_types
+
+
+@parametrize(
+    formats=BCAST_ACC_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    broadcast_type=get_valid_broadcast_types_acc_to_dest,
+    acc_to_dest=[False, True],
+    input_dimensions=BCAST_ACC_INPUT_DIMENSIONS,
+)
+def test_unpack_bcast_acc_to_dest(
+    formats,
+    dest_acc,
+    broadcast_type,
+    acc_to_dest,
+    input_dimensions,
+):
+    """Broadcast each tile into Dest, then broadcast it again with acc_to_dest.
+
+    Accumulating doubles the plain result; acc_to_dest=False is the matched overwrite control.
+    """
+    tile_dimensions = BCAST_ACC_TILE_DIMENSIONS
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        tile_dimensions=tile_dimensions,
+    )
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    generate_broadcast_golden = get_golden_generator(BroadcastGolden)
+    golden_tensor = generate_broadcast_golden(
+        broadcast_type,
+        src_A,
+        formats.output_format,
+        num_faces=num_faces,
+        tile_cnt=tile_cnt_A,
+        face_r_dim=face_r_dim,
+    )
+    if acc_to_dest:
+        golden_tensor = golden_tensor * 2
+
+    configuration = TestConfig(
+        "sources/unpack_A_bcast_acc_to_dest_test.cpp",
+        formats,
+        templates=[
+            BROADCAST_TYPE(broadcast_type),
+            ACC_TO_DEST(acc_to_dest),
+        ],
+        runtimes=[
+            NUM_FACES(num_faces, num_faces, num_faces),
+            NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+            NUM_FACES_C_DIM(num_faces_c_dim, num_faces_c_dim),
+            TILE_COUNT(tile_cnt_A),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            NUM_BLOCKS(num_blocks),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+
+    res_from_L1 = configuration.run().result
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    assert passed_test(
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        tile_shape=construct_tile_shape(tile_dimensions),
+    )
+
+    # Doubling only bumps the exponent, so Float16_b stays bit-exact.
+    if formats.input_format == DataFormat.Float16_b:
+        assert torch.equal(
+            golden_tensor, res_tensor
+        ), "Broadcast accumulation should be exact for Float16_b"
