@@ -53,7 +53,7 @@ _PERF_MARGIN = 0.03
 # through device synchronization.
 _PERF_REFERENCE_MS = {
     _LOUDBOX_PERF_SKU: {
-        "SP8xTP1": 1.483,
+        "SP8xTP1": 1.432,
         "TP4-linear": 0.188,
     },
     _QUIETBOX_PERF_SKU: {

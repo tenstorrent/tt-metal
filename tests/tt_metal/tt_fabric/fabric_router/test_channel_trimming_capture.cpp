@@ -211,6 +211,7 @@ void verify_capture_roundtrip(const std::vector<EthCoreCaptureResult>& pre_expor
 // Uses mesh coordinates to scan all positions.
 // ============================================================================
 bool find_pair_for_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     RoutingDirection target_direction,
     FabricNodeId& src_node,
     FabricNodeId& dst_node) {
@@ -226,7 +227,7 @@ bool find_pair_for_direction(
         }
 
         FabricNodeId neighbor_node(MeshId{0}, neighbors[0]);
-        auto links = get_forwarding_link_indices(candidate, neighbor_node);
+        auto links = get_forwarding_link_indices(mesh_device, candidate, neighbor_node);
         if (links.empty()) {
             continue;
         }
@@ -742,7 +743,7 @@ TEST_F(ChannelTrimming2DFixture, DirectionalChannelLiveness) {
         FabricNodeId src_node(MeshId{0}, 0);
         FabricNodeId dst_node(MeshId{0}, 0);
 
-        if (!find_pair_for_direction(direction, src_node, dst_node)) {
+        if (!find_pair_for_direction(*devices_.front(), direction, src_node, dst_node)) {
             log_info(
                 tt::LogTest,
                 "No device pair found for direction {} — skipping this direction",

@@ -13,6 +13,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <internal/fabric.hpp>
@@ -395,12 +396,14 @@ void bind_fabric_api(nb::module_& mod) {
     mod.def(
         "get_forwarding_link_indices",
         &tt::tt_fabric::get_forwarding_link_indices,
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         R"(
             Return the fabric link indices that can forward packets from src to dst.
 
-            The returned indices are valid inputs to setup_routing_plane_connection.
+            ``mesh_device`` selects the context the fabric is resolved in; src and dst do not have to
+            belong to it. The returned indices are valid inputs to setup_routing_plane_connection.
         )");
 
     mod.def(
