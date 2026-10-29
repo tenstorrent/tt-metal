@@ -855,6 +855,17 @@ class DeepseekV41ForCausalLM:
             logger.info(
                 f"DeepSeek-V4.1-Flash warm-up: {len(self.decoder.join_traces)} joins captured in {time.time() - t0:.1f} s"
             )
+            if defer_final() and self.decoder.restore_traced:
+                # TT_V41_RESTORE_TRACE=1: the restores captured per (state, slot, width) beside the joins, on the
+                # states before the prefill captures (the eager compile runs and the captures write the states)
+                t0 = time.time()
+                for state in self.prefill_states:
+                    for slot in range(self.max_batch_size):
+                        self.decoder.capture_restore(state, slot)
+                logger.info(
+                    f"DeepSeek-V4.1-Flash warm-up: {len(self.decoder.restore_traces)} restores captured"
+                    f" in {time.time() - t0:.1f} s"
+                )
             chunk = self.model.chunk
             for n in self.trace_lengths:
                 if self.generic and n > chunk:

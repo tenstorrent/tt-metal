@@ -531,6 +531,11 @@ class TtV41BatchDecoder(TtV41Decoder):
         self.join_traces: dict[tuple[int, int, int], SubDeviceTraceController] = {}
         self.join_buffers: dict[int, dict] = {}  # width -> the index buffers
         self.last_join: dict = {}
+        # TT_V41_RESTORE_TRACE=1: a restore replays a capture per (state, slot, width bucket)
+        # as the join does, the whole bucket restored (its rows past the prefix are stale and unread), so no
+        # eager collective runs between the captured steps' replays; 0: every restore eager
+        self.restore_traced = os.environ.get("TT_V41_RESTORE_TRACE", "0") == "1"
+        self.restore_traces: dict[tuple[int, int, int], SubDeviceTraceController] = {}
 
     @property
     def capture(self):
@@ -629,13 +634,47 @@ class TtV41BatchDecoder(TtV41Decoder):
         self.pool.park_carries(slot, state)
 
     def restore(self, slot: int, state: V41PrefillState, length: int, piece: int = 65536, probe=None) -> None:
-        """The parked prefix of ``length`` tokens in ``slot`` back into ``state`` (``V41DecodePool.restore_ops``),
-        eagerly; ``last_restore`` records the host issue time and the op counts (the device time is the caller's
+        """The parked prefix of ``length`` tokens in ``slot`` back into ``state`` (``V41DecodePool.restore_ops``):
+        the capture of ``(state, slot, join_width(length))`` replayed when ``capture_restore`` made it, else
+        eager; ``last_restore`` records the host issue time and the op counts (the device time is the caller's
         to measure with a synchronize)."""
         assert slot in self.slots and self.slots[slot].position == length, (slot, self.slots.get(slot), length)
         t0 = time.time()
-        counts = self.pool.restore_ops(slot, state, length, piece=piece, probe=probe)
-        self.last_restore = dict(counts, issue_s=round(time.time() - t0, 4), length=length, slot=slot)
+        width = self.join_width(length)
+        trace = self.restore_traces.get((id(state), slot, width))
+        if trace is None:
+            counts = self.pool.restore_ops(slot, state, length, piece=piece, probe=probe)
+            mode = "eager"
+        else:
+            trace.replay(blocking=False)
+            counts, mode = {}, "replay"
+        self.pool.restore_host(state, length)
+        self.last_restore = dict(
+            counts, mode=mode, width=width, issue_s=round(time.time() - t0, 4), length=length, slot=slot
+        )
+
+    def capture_restore(self, state: V41PrefillState, slot: int, width: int | None = None) -> None:
+        """Capture the restore of ``slot``'s first ``width`` tokens into ``state`` (default: every width of
+        ``join_widths``), so later restores of the triple replay it (``restore``). As ``capture_join``: one eager
+        run compiles the width's programs (a capture cannot load binaries), then the capture; the eager run and
+        the capture write ``state``'s caches, so this runs on a free state at warm-up, before the prefill
+        captures. Nothing is uploaded per restore: the ops read the slot and the parking buffers only."""
+        if width is None:
+            for w in self.join_widths:
+                self.capture_restore(state, slot, w)
+            return
+        key = (id(state), slot, width)
+        if key in self.restore_traces:
+            return
+        self.pool.restore_ops(slot, state, width)
+        controller = SubDeviceTraceController(self.mesh_device)
+        ttnn.synchronize_device(self.mesh_device)
+        controller.begin_capture()
+        try:
+            self.pool.restore_ops(slot, state, width)
+        finally:
+            controller.end_capture()
+        self.restore_traces[key] = controller
 
     def leave(self, slot: int) -> None:
         self.slots.pop(slot, None)
@@ -902,6 +941,9 @@ class TtV41BatchDecoder(TtV41Decoder):
         for controller in self.join_traces.values():
             controller.release()
         self.join_traces = {}
+        for controller in self.restore_traces.values():
+            controller.release()
+        self.restore_traces = {}
 
     @property
     def trace_segments(self) -> int:

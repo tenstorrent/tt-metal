@@ -26,6 +26,7 @@ scores stays tiled and is never converted again) or as block pages of ``BLOCK_RO
 scorer gathers); a user's rows are addressed as logical rows ``u * (cap + 32) + t`` in every form.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -46,6 +47,9 @@ _KERNEL = "models/demos/deepseek_v3_d_p/tt/v41/kernels/scatter_rows.cpp"
 
 BLOCK_ROWS = 8  # logical rows per block page (CANDIDATE_BLOCK_SIZE: the candidate scorer reads a block as one page)
 RESTORE_PIECE = 65536  # the restore's piece (tokens; at most this many rows a source per gather)
+# TT_V41_RESTORE_CCL=own: the restore's gathers on their own global semaphores, not the TT_CCL pool
+# used by the captured steps' gathers
+RESTORE_CCL = os.environ.get("TT_V41_RESTORE_CCL", "shared")
 
 
 def _dst_mode(dst, src_width: int, row_bytes: int) -> int:
@@ -275,16 +279,41 @@ class V41DecodePool:
         self._ccl = get_tt_ccl(mesh_device) if self.sp > 1 else None
         self._num_links = fabric_num_links()
         self._sp_topology = per_axis_topology()[SP_AXIS]
+        # TT_V41_RESTORE_CCL=own: the restore's own double-buffered gather and barrier semaphores (TT_CCL's form)
+        self._own_semaphores = None
+        self._own_idx = 0
+        if self._ccl is not None and RESTORE_CCL == "own":
+            crs = self._ccl.sub_device_crs
+            self._own_semaphores = [
+                (
+                    [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(2)],
+                    ttnn.create_global_semaphore(mesh_device, crs, 0),
+                )
+                for _ in range(2)
+            ]
+
+    def _semaphores(self):
+        """The (gather handles, barrier handle) of the next gather: the pool's own if ``TT_V41_RESTORE_CCL=own``,
+        else TT_CCL's cycled pair for the SP axis."""
+        if self._own_semaphores is not None:
+            pair = self._own_semaphores[self._own_idx]
+            self._own_idx = (self._own_idx + 1) % 2
+            return pair
+        return (
+            self._ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=SP_AXIS),
+            self._ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=SP_AXIS),
+        )
 
     def gather_sp(self, t, dim: int):
         """Concatenate ``t`` over the mesh rows along ``dim`` (rank order) on every chip."""
         if self._ccl is None:
             return t
+        ag, barrier = self._semaphores()
         return ttnn.experimental.all_gather_async(
             t,
             dim=dim,
-            multi_device_global_semaphore=self._ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=SP_AXIS),
-            barrier_semaphore=self._ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=SP_AXIS),
+            multi_device_global_semaphore=ag,
+            barrier_semaphore=barrier,
             num_links=self._num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self._sp_topology,
@@ -419,16 +448,19 @@ class V41DecodePool:
         self, slot: int, state: V41PrefillState, length: int, piece: int = RESTORE_PIECE, probe=None
     ) -> dict:
         """The device ops of a restore: ``slot``'s first ``length`` tokens of compressed KV and index keys (the
-        bulk chunks of a parked request, a multiple of the chunk) back into ``state``'s caches on every chip, in
-        pieces of at most ``piece`` tokens. Per source and piece: the slot's rows sliced on every rank (each rank
-        its own slot ``u``), gathered over the SP axis (``[1, 1, sp * n, W]``: the owning rank's segment is at
-        ``rank * n``), and the owner's segment scattered into the state (KV: row-major into row-major; index keys:
-        the tiled rows into ``index_k_tiled`` and, untilized, into the row-major ``index_k``). Then the window
-        carries from the parking buffers. ``state.start`` is set; the compressor carry is ``None`` (a bulk ends on
-        a chunk boundary). ``probe(tag)`` is called after each gather (a memory probe). Returns the op counts."""
+        bulk chunks of a parked request, or the width bucket holding them: the rows past the prefix are the
+        slot's stale rows, which nothing reads before the final chunk overwrites its own and attention masks the
+        rest, as the serial path's state keeps stale rows past ``start``) back into ``state``'s caches on every
+        chip, in pieces of at most ``piece`` tokens. Per source and piece: the slot's rows sliced on every rank
+        (each rank its own slot ``u``), gathered over the SP axis (``[1, 1, sp * n, W]``: the owning rank's
+        segment is at ``rank * n``), and the owner's segment scattered into the state (KV: row-major into
+        row-major; index keys: the tiled rows into ``index_k_tiled`` and, untilized, into the row-major
+        ``index_k``). Then the window carries from the parking buffers. The host fields are ``restore_host``'s
+        (so the ops can be captured per width and replayed for any prefix in the bucket). ``probe(tag)`` is called
+        after each gather (a memory probe). Returns the op counts."""
         assert state.compressed_kv_format == self.kv_format, (state.compressed_kv_format, self.kv_format)
         assert state.geometry.max_seq_len <= self.max_seq_len, (state.geometry.max_seq_len, self.max_seq_len)
-        assert length % state.geometry.chunk == 0 and 0 < length <= state.geometry.max_seq_len, length
+        assert length % 32 == 0 and 0 < length <= state.geometry.max_seq_len, length
         cfg, g = self.config, state.geometry
         rank, u = divmod(slot, self.users)
         assert 0 < piece <= self.restore_piece, (piece, self.restore_piece)
@@ -495,12 +527,19 @@ class V41DecodePool:
                 counts["gathers"] += 1
                 counts["layouts"] += 1
         self.unpark_carries(slot, state)
+        return counts
+
+    @staticmethod
+    def restore_host(state: V41PrefillState, length: int) -> None:
+        """The host side of a restore of a ``length``-token prefix (a multiple of the chunk): ``state.start``; no
+        selection, Engram history (re-seeded from the tokens by the final chunk's host pipeline) or compressor
+        carry (a bulk ends on a chunk boundary)."""
+        assert length % state.geometry.chunk == 0 and 0 < length <= state.geometry.max_seq_len, length
         state.start = length
         state.selection = {}
         state.engram_history = None
         for src in state.compressor_carry:
             state.compressor_carry[src] = None
-        return counts
 
     def join(self, slot: int, state: V41PrefillState) -> None:
         """Copy ``state`` (a prefill's caches, replicated on every chip) into pool slot ``slot`` (rank ``slot //
