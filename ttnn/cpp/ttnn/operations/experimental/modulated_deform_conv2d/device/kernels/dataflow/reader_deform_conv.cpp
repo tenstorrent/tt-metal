@@ -25,8 +25,9 @@
 // one scalar tile per corner whose column 0 holds the row's weight. After the last position it
 // writes its blocks' C_out-wide output.
 //
-// A corner is read only when its weight is nonzero. Every other row, and every row past the block's
-// end, is zeroed rather than skipped: a stale NaN or Inf times a zero scalar would still be NaN.
+// A corner is read only when its weight is nonzero. A corner of zero weight, which includes every
+// corner of a row past the block's end, is zeroed rather than skipped: a stale NaN or Inf times a
+// zero scalar would still be NaN.
 //
 // The geometry runs on compute because the data-movement RISC-Vs have no FPU; the reader only moves
 // bits. Offsets saturate at +-OFFSET_CLAMP pixels, which keeps every coordinate exact in fp32 and
@@ -77,7 +78,7 @@ constexpr int32_t DILATION_W = get_named_compile_time_arg_val("dilation_w");
 // Page strides of the two row-major tensors, as their buffers lay them out.
 constexpr uint32_t input_page_nbytes = get_named_compile_time_arg_val("input_page_nbytes");
 constexpr uint32_t offset_mask_page_nbytes = get_named_compile_time_arg_val("offset_mask_page_nbytes");
-// The host validates that the input size, padding and kernel span stay below this.
+// The host validates that each input size plus its padding, and the kernel span, are at most this.
 constexpr uint32_t OFFSET_CLAMP = get_named_compile_time_arg_val("offset_clamp");
 constexpr uint32_t tile_nbytes = get_named_compile_time_arg_val("tile_nbytes");
 constexpr uint32_t OUT_TILES = get_named_compile_time_arg_val("out_tiles");      // C_out / 32
@@ -238,10 +239,10 @@ void kernel_main() {
     }
 
     // Loads one pass's slice of the weight, tiles in row-major order, in two steps so the wait for
-    // it can trail the pass's corners: begin reserves the slot and, on a receiver, reports it free;
-    // finish reads or awaits the data and hands it to compute, which needs it only after the pass's
-    // last block. Every core reserves the same slot in the same
-    // order, so the slot's address matches on all of them.
+    // it can trail the previous pass's corners: begin reserves the slot and, on a receiver, reports
+    // it free; finish reads or awaits the data and hands it to compute, which needs it once it is
+    // through the previous pass's last block. Every core reserves the same slot in the same order, so
+    // the slot's address matches on all of them.
     uint32_t weight_slot_l1 = 0;
     auto begin_weight_slice = [&]() {
         conv_weight_cb.reserve_back(WEIGHT_SLICE_TILES);
