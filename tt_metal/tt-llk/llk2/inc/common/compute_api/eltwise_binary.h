@@ -9,22 +9,24 @@
 // checked at compile time, then the Plan drives llk-lib's unpack (TRISC0) and eltwise_binary (TRISC1). Unpack to
 // math is Src dvalid, inside the op. add and sub differ only in Api (add_op, sub_op: resolver/eltwise_binary.h).
 //
-// acc is a Dest tensor the caller holds (from the Dest sync API); the op overwrites it in place and returns nothing.
-// Which thread may touch acc when is the sync API's job, not the op's.
+// acc is a Dest tensor (compute_api/dest.h); the op overwrites it in place and returns it, the FPU's. The hand-offs
+// to the unpackers and the FPU are taken first (compute_api/sync.h).
 
 #pragma once
 
 #include "compute_api/modifiers.h"
 #include "llk_lib/eltwise_binary.h"
+#include "llk_lib/sync.h"
 #include "llk_lib/unpack.h"
 #include "resolver/eltwise_binary.h"
 
 namespace llk2
 {
 
-/// Runs one resolved eltwise binary op: checks acc against the Resolver's result, then unpack and math.
-template <const auto& Api, auto Mods, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, const TensorSpec<tensor_rank>& D>
-inline __attribute__((always_inline)) void eltwise_binary(const Tensor<A>& a, const Tensor<B>& b, const Tensor<D>& acc)
+/// Runs one resolved eltwise binary op: checks acc against the Resolver's result, takes the tensors over, then unpack
+/// and math. Returns acc as the FPU's.
+template <const auto& Api, auto Mods, const TensorSpec<tensor_rank>& A, class RA, const TensorSpec<tensor_rank>& B, class RB, const TensorSpec<tensor_rank>& D, class RD>
+inline __attribute__((always_inline)) auto eltwise_binary(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
 {
     static_assert(D.storage == Storage::Dest, "an eltwise binary op writes Dest");
     static_assert(
@@ -36,8 +38,12 @@ inline __attribute__((always_inline)) void eltwise_binary(const Tensor<A>& a, co
     static_assert(
         equal(r.config.result.shape.sizes, D.shape.sizes) && r.config.result.format == D.format, "acc must have a's shape and the kernel's Dest format");
 
+    llk_lib::acquire<Thread::Unpack, Exu::Unpacker, A>();
+    llk_lib::acquire<Thread::Unpack, Exu::Unpacker, B>();
+    llk_lib::acquire<Thread::Math, Exu::Fpu, D>();
     llk_lib::unpack<Thread::Unpack, r.plan>(a.address, b.address);
     llk_lib::eltwise_binary<Thread::Math, r.plan>(acc.address);
+    return as_owned<Thread::Math, Exu::Fpu>(acc);
 }
 
 } // namespace llk2

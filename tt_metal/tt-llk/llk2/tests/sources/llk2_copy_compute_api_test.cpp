@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API test: llk2::copy on Tensors, one kernel body for all three threads. Only Tensors, the Compute API
-// (copy, pack) and the Dest sync API: no LLK, init or per-thread code.
+// (copy, pack) and a Dest ring: no LLK, init or per-thread code.
 //
-// The input is copied SECTIONS times, each time into the next Dest section (the Dest sync API alternates them), and
+// The input is copied SECTIONS times, each time into the next Dest section (the Dest ring alternates them), and
 // each round is packed to its own copy of the output, so both sections are checked.
 
 #include <cstdint>
@@ -43,14 +43,13 @@ static_assert((plan.in0.to == llk2::Where::Dest) == unpack_to_dest);
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    using AccRing  = llk2::DestRing<acc_spec>;
     const auto src = llk2::Tensor<src_spec>(params.buffer_A[0]);
     for (std::uint32_t round = 0; round < SECTIONS; round++)
     {
         const auto out = llk2::Tensor<out_spec>(params.buffer_Res[round * TILES_Y * TILES_X]);
-        const auto acc = llk2::dest_acquire<acc_spec>();
-        llk2::copy<mods>(src, acc); // acc = src, or src with each tile transposed
-        llk2::dest_commit(acc);
-        llk2::pack(acc, out);
-        llk2::dest_release(acc);
+        const auto y   = llk2::copy<mods>(src, llk2::reserve_back<AccRing>()); // y = src, or src with each tile transposed
+        llk2::pack(y, out);                                                    // pack takes y from math
+        llk2::release(y);
     }
 }

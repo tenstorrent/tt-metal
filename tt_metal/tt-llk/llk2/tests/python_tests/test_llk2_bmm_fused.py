@@ -74,17 +74,27 @@ class LLK2_BMM_FUSED(TemplateParameter):
     activation: str
 
     def convert_to_cpp(self) -> str:
+        """The kernel's tt-metal inputs: its positional args as constants (tests/helpers/tt_metal_kernel.h maps them to
+        get_compile_time_arg_val), and its feature switches as the defines tt-metal sets."""
         function, _, p0, p1 = ACTIVATIONS[self.activation]
+        defines = [
+            name
+            for name, on in (
+                ("PACKER_L1_ACC", self.l1_acc),
+                ("FUSE_BIAS", self.fuse_bias),
+                ("PACK_RELU", self.pack_relu),
+                ("SFPU_ACTIVATION", function != "None"),
+            )
+            if on
+        ]
         return (
             f"constexpr std::uint32_t RT_DIM = {self.rt_dim};\n"
             f"constexpr std::uint32_t CT_DIM = {self.ct_dim};\n"
             f"constexpr std::uint32_t KB_DIM = {self.kb_dim};\n"
             f"constexpr std::uint32_t K_BLOCKS = {self.k_blocks};\n"
             f"constexpr std::uint32_t OUT_BLOCKS = {self.out_blocks};\n"
-            f"constexpr bool L1_ACC = {str(self.l1_acc).lower()};\n"
-            f"constexpr bool FUSE_BIAS = {str(self.fuse_bias).lower()};\n"
-            f"constexpr bool PACK_RELU = {str(self.pack_relu).lower()};\n"
-            '#include "resolver/vec_function.h"\n'
+            + "".join(f"#define {d}\n" for d in defines)
+            + '#include "resolver/vec_function.h"\n'
             f"constexpr auto ACTIVATION = llk2::VecFunction::{function};\n"
             f"constexpr std::uint32_t ACTIVATION_P0 = {hex(_fp32_bits(p0))};\n"
             f"constexpr std::uint32_t ACTIVATION_P1 = {hex(_fp32_bits(p1))};"
