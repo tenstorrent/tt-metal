@@ -193,6 +193,9 @@ def main():
             kv_pool_blocks=b1_blocks,
             block_tables=b1_tables,
         )
+        m1.step(m1.token_state(emb[0].float(), 0))  # compile before the trace
+        ttnn.synchronize_device(mesh)
+        m1.reset()
         m1.capture_trace()
         phase("B=1 decode model")
         m1.reset()
