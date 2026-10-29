@@ -26,9 +26,10 @@ MAX_BATCH_TOKENS = 8192
 # One forward on one chip costs about FWD_FIXED_MS + TOKEN_MS * batch * bucket (measured, S 128-4096, B 1-32).
 FWD_FIXED_MS = 11.0
 TOKEN_MS = 0.041
-# Forwards of these shapes run as traces: bucket S, rows padded up to one of TRACE_BATCHES, and at most TRACED_P
-# select positions (query + options). Everything else runs eagerly.
-TRACED_S = (128, 256, 512, 1024, 2048)
+# Buckets are powers of two from 128 to 2048, then multiples of 128; only the buckets in TRACED_S (128..4096, powers
+# of two) run as traces, the others run eagerly. A traced forward pads the rows up to one of TRACE_BATCHES and has at
+# most TRACED_P select positions (query + options). Everything else runs eagerly.
+TRACED_S = (128, 256, 512, 1024, 2048, 4096)
 TRACE_BATCHES = (1, 2, 4, 8, 16, 32)
 TRACED_P = 64
 
@@ -185,7 +186,7 @@ class StrandsDecider:
         """Post-final-norm hidden rows of the given token positions of each prompt, fp32 [len(positions), dim].
 
         Prompts run in the forwards that plan_batches picks; each forward pads to the bucket of its longest prompt
-        (128..2048, then multiples of 128)."""
+        (powers of two 128..2048, then multiples of 128)."""
         for ids, pos in zip(seqs, positions, strict=True):
             if not 1 <= len(ids) <= self.max_seq_len:
                 raise ValueError(f"Prompt has {len(ids)} tokens; supported range is 1..{self.max_seq_len}.")
