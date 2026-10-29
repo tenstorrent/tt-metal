@@ -56,6 +56,9 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
     dram_sharded_weight_memory_config,
     prefill_matmul_program_config,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mm_stream as fused_mm_stream
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import moe_experts as fused_moe_experts
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import router_tail_sc as fused_router_tail_sc
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense, prefill_linear
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
@@ -637,6 +640,15 @@ class Qwen38TTNNMoE:
         self.moe_post_fused = one_tile and fused.resolve("moe_post") is fused.kernel("moe_post").fused
         self.shared_expert_fused = one_tile and fused.resolve("shared_expert") is fused.kernel("shared_expert").fused
         self.routing_in_l1 = self.moe_post_fused and self._route_tail is fused.kernel("router_tail").fused
+        # QWEN38_MOE_EXPERTS (default on, "0" off): the routed experts of the decode step (fused post form, rows <= 2) as one program
+        self.moe_experts_on = (
+            fused_moe_experts.enabled()
+            and self.moe_post_fused
+            and self.routing_in_l1
+            and self.rows <= 2
+            and self.routed_calls == 1
+        )
+        self._experts_exclude = fused_moe_experts.model_exclude(mesh_device) if self.moe_experts_on else ()
         # The one-call slab's combine as one program per layer (ttnn/fused/moe_combine: the page's owned rows read
         # straight into tiles, the fused reduce's MAC in its slot order; bitwise the 512-row blocks), the default;
         # QWEN38_FUSED_OFF=moe_combine restores the blocks.  It takes device d's owner row (below) and the routing rows.
@@ -661,6 +673,16 @@ class Qwen38TTNNMoE:
                 # NoC differently, keeps the four programs (a production default never raises on such a mesh)
                 warnings.warn(f"MoE dense composite not placed on this mesh; the four programs serve: {error}")
                 self.moe_dense_fused = False
+        # QWEN38_MOE_FUSE=1 (default off): the routed experts run as kernel groups of the moe_dense program (one row, the
+        # two-core fast top-k), prefetching the hidden rows under the top-k and waiting for its indices on a semaphore
+        self.moe_fuse_on = (
+            os.environ.get("QWEN38_MOE_FUSE", "0") == "1"
+            and self.moe_experts_on
+            and self.moe_dense_fused
+            and self.rows == 1
+            and fused_router_tail_sc.enabled(1)
+            and "writer" in fused_router_tail_sc.fast_opts()
+        )
         # The slab's routed stream: the 128-row instance's call (moe_compute, tilize, weighted reduce) once per
         # 128-row block, through a worker instance sharing the combine buffer.
         self.block_instance: Qwen38TTNNMoE | None = None
@@ -877,9 +899,8 @@ class Qwen38TTNNMoE:
         # reads the same shard, so the tensor stays allocated through the layer
         # (32 KB per core).  The long chunk's four row tiles are gathered
         # interleaved and moved into that layout one tile at a time per linear.
-        full_hidden = ttnn.all_gather(
+        full_hidden = fused.resolve_admitted("row_gather")(
             hidden_sharded,
-            dim=3,
             cluster_axis=EP_AXIS,
             memory_config=self.hidden_gather_memory_config,
         )
@@ -909,7 +930,7 @@ class Qwen38TTNNMoE:
         phase_observer("before-router-logits")
         logits_tiles = []
         for hidden_tile in hidden_tiles:
-            logits_ws = ttnn.linear(
+            logits_ws = fused_mm_stream.linear(
                 hidden_tile,
                 self.weights.router,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -1293,6 +1314,7 @@ class Qwen38TTNNMoE:
         *,
         phase_observer,
         sparse_rows=None,
+        experts_done=False,
     ):
         """The fused post form (``QWEN38_FUSED=moe_post``): ``moe_compute`` on the routing rows (in the drain-core
         shards already when the fused tail wrote them there), then one program for the weighted reduce of the owned
@@ -1318,76 +1340,95 @@ class Qwen38TTNNMoE:
                 )
         if packed_w0_w1.dtype != ttnn.bfloat4_b or packed_w2.dtype != ttnn.bfloat4_b:
             raise RuntimeError("routed expert tensors must be BFLOAT4_B")
-        phase_observer("before-routed-dispatch")
-        # The untilize reads the width-sharded hidden at any row count as it does at one row; several rows then take
-        # the ROW_MAJOR view moe_compute counts (dims 0 x 1) -- no un-sharding of the tiles first (one program per
-        # layer at B > 1 in the 2026-09-25 lane census).
-        if sparse_rows is None:
-            sparse_input = ttnn.to_layout(full_hidden, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.moe_experts_on:
+            # QWEN38_MOE_EXPERTS=1: ONE program for the routed experts (ttnn/fused/moe_experts, bitwise moe_compute's local
+            # output): reads the gathered hidden's L1 shard and the drain-core indices as they are, writes only the owned
+            # pages of the combine buffer; no untilize view, no tilize cores, no ring.
+            phase_observer("before-moe-compute-launch")
+            if not experts_done:  # QWEN38_MOE_FUSE=1: the moe_dense program ran them
+                fused_moe_experts.moe_experts(
+                    full_hidden,
+                    routing.indices,
+                    self.expert_owner,
+                    packed_w0_w1,
+                    packed_w2,
+                    self.local_combine_output,
+                    exclude=self._experts_exclude,
+                )
+            phase_observer("after-moe-compute-launch")
+            combine = self.local_combine_output
         else:
-            sparse_input = sparse_rows  # the MoE dense composite's untilize (the same rows, one program earlier)
-        if self.rows != 1:
-            sparse_input = ttnn.reshape(sparse_input, self.row_contract.moe_sparse_input)
-        if _shape(sparse_input) != self.row_contract.moe_sparse_input:
-            raise RuntimeError(
-                f"moe_compute sparse input must be {self.row_contract.moe_sparse_input}, got {_shape(sparse_input)}"
+            phase_observer("before-routed-dispatch")
+            # The untilize reads the width-sharded hidden at any row count as it does at one row; several rows then take
+            # the ROW_MAJOR view moe_compute counts (dims 0 x 1) -- no un-sharding of the tiles first (one program per
+            # layer at B > 1 in the 2026-09-25 lane census).
+            if sparse_rows is None:
+                sparse_input = ttnn.to_layout(full_hidden, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                sparse_input = sparse_rows  # the MoE dense composite's untilize (the same rows, one program earlier)
+            if self.rows != 1:
+                sparse_input = ttnn.reshape(sparse_input, self.row_contract.moe_sparse_input)
+            if _shape(sparse_input) != self.row_contract.moe_sparse_input:
+                raise RuntimeError(
+                    f"moe_compute sparse input must be {self.row_contract.moe_sparse_input}, got {_shape(sparse_input)}"
+                )
+            self.mesh_contract.validate_tensor(sparse_input, placement=TensorPlacement.REPLICATED)
+            if self.routing_in_l1:
+                indices_l1, scores_l1 = routing.indices, routing.scores
+            else:
+                indices_l1 = ttnn.to_memory_config(
+                    ttnn.reshape(routing.indices, self.row_contract.moe_routing), self.routing_l1_memory_config
+                )
+                scores_l1 = ttnn.to_memory_config(
+                    ttnn.reshape(routing.scores, self.row_contract.moe_routing), self.routing_l1_memory_config
+                )
+            self._check_routing_shards(indices_l1, scores_l1)
+            phase_observer("after-routed-dispatch")
+            phase_observer("before-moe-compute-launch")
+            outputs = ttnn.experimental.moe_compute(
+                sparse_input,
+                indices_l1,
+                scores_l1,
+                self.expert_mapping,
+                packed_w0_w1,
+                packed_w2,
+                layer_id=0,
+                output_height_shard_dim=self.output_height_shard_dim,
+                intermediate_size=INTERMEDIATE_SIZE,
+                has_bias=False,
+                cluster_axis=LOCAL_COMBINE_AXIS,
+                topology=None,
+                num_links=None,
+                mux_core_range_set=None,
+                output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                optional_output_tensor=self.local_combine_output,
+                optional_cross_device_semaphore=None,
+                activation_type=MoEActivationFunction.SILU,
+                compute_only=False,
+                num_shared_experts_per_device=0,
             )
-        self.mesh_contract.validate_tensor(sparse_input, placement=TensorPlacement.REPLICATED)
-        if self.routing_in_l1:
-            indices_l1, scores_l1 = routing.indices, routing.scores
-        else:
-            indices_l1 = ttnn.to_memory_config(
-                ttnn.reshape(routing.indices, self.row_contract.moe_routing), self.routing_l1_memory_config
-            )
-            scores_l1 = ttnn.to_memory_config(
-                ttnn.reshape(routing.scores, self.row_contract.moe_routing), self.routing_l1_memory_config
-            )
-        self._check_routing_shards(indices_l1, scores_l1)
-        phase_observer("after-routed-dispatch")
-        phase_observer("before-moe-compute-launch")
-        outputs = ttnn.experimental.moe_compute(
-            sparse_input,
-            indices_l1,
-            scores_l1,
-            self.expert_mapping,
-            packed_w0_w1,
-            packed_w2,
-            layer_id=0,
-            output_height_shard_dim=self.output_height_shard_dim,
-            intermediate_size=INTERMEDIATE_SIZE,
-            has_bias=False,
-            cluster_axis=LOCAL_COMBINE_AXIS,
-            topology=None,
-            num_links=None,
-            mux_core_range_set=None,
-            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            optional_output_tensor=self.local_combine_output,
-            optional_cross_device_semaphore=None,
-            activation_type=MoEActivationFunction.SILU,
-            compute_only=False,
-            num_shared_experts_per_device=0,
-        )
-        phase_observer("after-moe-compute-launch")
-        if len(outputs) != 6 or outputs[5].tensor_id != self.local_combine_output.tensor_id:
-            raise RuntimeError("local moe_compute did not return the persistent six-slot output")
-        self.mesh_contract.validate_tensor(outputs[5], placement=TensorPlacement.LOCAL_PARTIAL)
-        if _shape(outputs[5]) != self.row_contract.local_combine:
-            raise RuntimeError(
-                f"local combine produced {_shape(outputs[5])}, expected {self.row_contract.local_combine}"
-            )
-        _deallocate(outputs[0], outputs[1], outputs[2], outputs[4])
-        if sparse_rows is None or not same_buffer(sparse_input, sparse_rows):
-            # own rows, or a reshape that copied; a VIEW of the caller's rows shares their buffer and the caller frees it
-            _deallocate(sparse_input)
-        if not self.routing_in_l1:
-            _deallocate(indices_l1, scores_l1)
+            phase_observer("after-moe-compute-launch")
+            if len(outputs) != 6 or outputs[5].tensor_id != self.local_combine_output.tensor_id:
+                raise RuntimeError("local moe_compute did not return the persistent six-slot output")
+            self.mesh_contract.validate_tensor(outputs[5], placement=TensorPlacement.LOCAL_PARTIAL)
+            if _shape(outputs[5]) != self.row_contract.local_combine:
+                raise RuntimeError(
+                    f"local combine produced {_shape(outputs[5])}, expected {self.row_contract.local_combine}"
+                )
+            _deallocate(outputs[0], outputs[1], outputs[2], outputs[4])
+            if sparse_rows is None or not same_buffer(sparse_input, sparse_rows):
+                # own rows, or a reshape that copied; a VIEW of the caller's rows shares their buffer and the caller frees it
+                _deallocate(sparse_input)
+            if not self.routing_in_l1:
+                _deallocate(indices_l1, scores_l1)
+            combine = outputs[5]
         phase_observer("before-selective-reduce")
         if isinstance(shared, Qwen38TTNNSharedPartial):
             shared_partial, sigmoid = shared.partial, shared.sigmoid
         else:
             shared_partial, sigmoid = shared, None
         local_sum = fused.moe_post.moe_post(
-            outputs[5],
+            combine,
             routing.scores,
             routing.indices,
             self.expert_owner,
@@ -1402,7 +1443,7 @@ class Qwen38TTNNMoE:
         phase_observer("after-selective-reduce")
         return local_sum
 
-    def _dense_composite(self, full_hidden, phase_observer):
+    def _dense_composite(self, full_hidden, phase_observer, experts=None):
         """The MoE dense composite (``moe_dense`` in the registry): the router linear and its fp32 drain, the shared
         ``[gate | up | scalar]`` linear, then ONE program for the top-k (into the drain-core shards), the shared
         eltwise + down linear and the routed dispatch untilize.  Returns the routing, the shared partial (ungated, with
@@ -1410,18 +1451,23 @@ class Qwen38TTNNMoE:
 
         l1_ws = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         phase_observer("before-router-logits")
-        logits_ws = ttnn.linear(
+        logits_ws = fused_mm_stream.linear(
             full_hidden,
             self.weights.router,
             memory_config=l1_ws,
             program_config=self.router_program_config,
             compute_kernel_config=self.compute_config,
         )
-        logits = ttnn.to_memory_config(logits_ws, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)  # the proven drain
-        _deallocate(logits_ws)
+        if os.environ.get("QWEN38_ROUTER_L1", "0") == "1":
+            # the router linear's bf16 L1 width shard goes to the top-k as it is (the same values the drain widens): one
+            # ShardedToInterleaved less per MoE layer
+            logits = logits_ws
+        else:
+            logits = ttnn.to_memory_config(logits_ws, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)  # the proven drain
+            _deallocate(logits_ws)
         phase_observer("after-router-logits")
         phase_observer("before-shared-partial")
-        gate_up_scalar_ws = ttnn.linear(
+        gate_up_scalar_ws = fused_mm_stream.linear(
             full_hidden,
             self.weights.shared_gate_up_scalar,
             memory_config=l1_ws,
@@ -1454,6 +1500,7 @@ class Qwen38TTNNMoE:
                 top_k=TOP_K,
                 compute_kernel_config=self.shared_compute_config,
                 partial_memory_config=self.hidden_act_memory_config,
+                **({} if experts is None else {"experts": experts}),
             )
         except BaseException:
             _deallocate(logits, gate_up_scalar_ws, scores_l1, indices_l1)
@@ -1915,6 +1962,7 @@ class Qwen38TTNNMoE:
             "routing_indices": None,
             "routing_tiles": None,
             "shared_partial": None,
+            "gated_shared_partial": None,
             "sparse_rows": None,
             "routed_partial": None,
             "local_sum": None,
@@ -1971,7 +2019,21 @@ class Qwen38TTNNMoE:
             if self.moe_dense_fused:
                 # the MoE dense composite: the router linear and drain, the shared [gate | up | scalar] linear, then
                 # one program for the top-k, the shared eltwise + down linear and the routed dispatch untilize
-                routing, shared, sparse_rows = self._dense_composite(temporaries["full_hidden"], observe)
+                routing, shared, sparse_rows = self._dense_composite(
+                    temporaries["full_hidden"],
+                    observe,
+                    experts=(
+                        dict(
+                            w0_w1=packed_w0_w1,
+                            w2=packed_w2,
+                            owner=self.expert_owner,
+                            out=self.local_combine_output,
+                            exclude=sorted(self._experts_exclude),
+                        )
+                        if self.moe_fuse_on
+                        else None
+                    ),
+                )
                 temporaries["shared_partial"], temporaries["sparse_rows"] = shared, sparse_rows
             else:
                 routing = self._route(
@@ -2007,6 +2069,7 @@ class Qwen38TTNNMoE:
                     sparse_rows=temporaries[
                         "sparse_rows"
                     ],  # the composite's rows: owned here until moe_compute has them
+                    experts_done=self.moe_fuse_on,
                 )
                 release("sparse_rows")
             else:
@@ -2025,12 +2088,20 @@ class Qwen38TTNNMoE:
             if self.moe_post_fused:
                 release("shared_partial")
             else:
+                shared = temporaries["shared_partial"]
+                if isinstance(shared, Qwen38TTNNSharedPartial):
+                    # the fused shared expert leaves the x sigmoid to moe_post: the composed sum gates it here
+                    temporaries["gated_shared_partial"] = fused.shared_expert.gate_partial(
+                        shared.partial, shared.sigmoid, self.rows
+                    )
+                    release("shared_partial")
+                    shared = temporaries["gated_shared_partial"]
                 temporaries["local_sum"] = ttnn.add(
                     temporaries["routed_partial"],
-                    temporaries["shared_partial"],
+                    shared,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                release_many("routed_partial", "shared_partial")
+                release_many("routed_partial", "shared_partial", "gated_shared_partial")
             self.mesh_contract.mark_local_partial(
                 temporaries["local_sum"],
                 replicated_reference=temporaries["full_hidden"],
@@ -2046,17 +2117,24 @@ class Qwen38TTNNMoE:
             # pool.
             observe("before-output-reduce-scatter")
             raise_deferred_phase_error()
-            temporaries["output"] = tt_all_reduce(
-                temporaries["local_sum"],
-                self.mesh_device,
-                self.tt_ccl,
-                cluster_axis=0,
-                dim=3,
-                num_reduce_scatter_links=self.allreduce_links,
-                num_all_gather_links=self.allreduce_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.collective_topology,
-            )
+            if fused.row_reduce.admits(temporaries["local_sum"], cluster_axis=_MOE_ALLREDUCE_TP_AXIS):
+                # QWEN38_ROW_REDUCE=1, bf16 rows <= 2: the row-packed reduce-scatter (bitwise the line reduce-scatter
+                # below); the local sum stays allocated (released with the layer's temporaries)
+                temporaries["output"] = fused.row_reduce.row_reduce(
+                    temporaries["local_sum"], cluster_axis=_MOE_ALLREDUCE_TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            else:
+                temporaries["output"] = tt_all_reduce(
+                    temporaries["local_sum"],
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=0,
+                    dim=3,
+                    num_reduce_scatter_links=self.allreduce_links,
+                    num_all_gather_links=self.allreduce_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=self.collective_topology,
+                )
             self.mesh_contract.mark_collective_shard(
                 temporaries["output"],
                 replicated_reference=temporaries["full_hidden"],

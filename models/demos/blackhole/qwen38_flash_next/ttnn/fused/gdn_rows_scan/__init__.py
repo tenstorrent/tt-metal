@@ -673,8 +673,8 @@ def rows_body_scan(gdn, full_hidden, rows_state, state, *, full_tile: bool = Fal
 
 def rows_body_fallback(gdn, full_hidden, rows_state, state, *, full_tile: bool = False):
     """Today's stream where the fold does not serve: the wrap on a rows state that carries its buffers, the chain
-    otherwise (the layer's resolved wrap-or-chain body); on a lane rows state, the lanes chain (one batched chunk
-    call from the lanes' states)."""
+    otherwise (the layer's resolved wrap-or-chain body); on a lane rows state, the lanes chain (the single stream's
+    recurrence once per lane)."""
 
     if is_lane_rows_state(rows_state):
         return gdn._rows_body_lanes_chain(full_hidden, rows_state, state)
@@ -844,9 +844,9 @@ register(
     FusedKernel(
         name=NAME,
         replaces="the GDN verify-rows body between the projection's sharded-to-interleaved and the out-projection "
-        "matmul (the wrap's six programs: gdn_pre_rows, chunk_gdn_prep, chunk_gdn_scan, post_cast, post_norm on the "
-        "chunk form; the chain's 53) as one serial-recurrence program with every prefix state, and the commit's masked "
-        "prep + scan re-run as one prefix-state pick",
+        "matmul (the wrap's gdn_pre_rows, the public chunk_gated_delta_rule, post_cast and post_norm, or the composed "
+        "chain) as one serial-recurrence program with every prefix state, and the commit's masked recurrence re-run "
+        "as one prefix-state pick",
         tolerance=COMPONENT,
         fused=rows_body_scan,
         composed=rows_body_fallback,

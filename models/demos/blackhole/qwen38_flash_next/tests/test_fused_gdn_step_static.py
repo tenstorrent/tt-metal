@@ -106,6 +106,17 @@ def test_admission_is_the_fused_steps_input_contract():
         is False
     )
     assert module.admits(None, projected, window[:3], state) is False
+    # the state's lane axis may exceed the rows (a 32-lane parent serves a trace of fewer lanes), never fall short
+    assert module.admits(None, *_served_call(rows=2)) is True
+    assert (
+        module.admits(
+            None,
+            _served_call(rows=2)[0],
+            window,
+            _State(_Fake((1, module.HEADS, module.HEAD_DIM, module.HEAD_DIM), dtype=module.FP32)),
+        )
+        is False
+    )
     assert (
         module.admits(
             None,
@@ -113,7 +124,7 @@ def test_admission_is_the_fused_steps_input_contract():
             window,
             _State(_Fake((2, module.HEADS, module.HEAD_DIM, module.HEAD_DIM), dtype=module.FP32)),
         )
-        is False
+        is True
     )
     assert (
         module.admits(

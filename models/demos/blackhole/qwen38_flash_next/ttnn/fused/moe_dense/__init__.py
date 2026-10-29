@@ -39,9 +39,10 @@ import torch
 
 import ttnn
 
-from .. import gr_read, placement
+from .. import gr_read, moe_experts, placement
 from .. import program as fp
 from .. import router_tail as rt
+from .. import router_tail_sc as rt_sc
 from .. import shared_expert as se
 from .. import untilize_rows as ur
 from ..registry import BITWISE, FusedKernel, GateSpec, register
@@ -72,6 +73,8 @@ CB_IN0, CB_IN1, CB_INTERM, CB_OUT = 8, 9, 10, 11
 UNTILIZE_CB = 0  # the stock interleaved reader and writer_rows.cpp pin cb 0
 TOPK_SEMAPHORES = 5  # ids reserved for G1 (the multi-core top-k's one semaphore, its fallback's four more)
 SEM_DOWN = TOPK_SEMAPHORES
+EXPERTS_SEM_BASE = SEM_DOWN + 1  # QWEN38_MOE_FUSE=1: the routed experts' 4 counters, then the indices-ready semaphore
+EXPERTS_WAIT_SEM = EXPERTS_SEM_BASE + 4
 _PLANS: dict[int, "DensePlan"] = {}
 
 
@@ -168,10 +171,44 @@ def moe_dense_program(
     top_k: int,
     plan: DensePlan,
     fidelity,
+    experts=None,
 ) -> "ttnn.ProgramDescriptor":
+    # G5 (QWEN38_MOE_FUSE=1, ``experts`` = dict(w0_w1, w2, owner, out)): the routed experts' 24 cores (moe_experts.program_parts,
+    # unchanged kernels but for the wait) in this program, off the other groups' cores; no untilize group (the experts read
+    # the hidden shard themselves); the top-k's writer raises the cores' semaphore when the indices are in the drain shard
+    expert_parts, index_signal = None, None
+    if experts is not None:
+        taken = set(experts["exclude"])
+        for rect in (plan.topk, plan.workers):
+            taken |= set(placement.rectangle_cores(placement.range_rect(rect)))
+        taken |= {(c, 0) for c in range(se.STORAGE_CORES)}
+        expert_parts = moe_experts.program_parts(
+            full_hidden,
+            indices,
+            experts["owner"],
+            experts["w0_w1"],
+            experts["w2"],
+            experts["out"],
+            rows=rows,
+            exclude=sorted(taken),
+            sem_base=EXPERTS_SEM_BASE,
+            wait_sem=EXPERTS_WAIT_SEM,
+        )
+        if {(c.x, c.y) for c in expert_parts[3]} & taken:
+            raise RuntimeError("the routed-expert cores overlap the composite's cores")
+        noc = gr_read.noc_map(scores.device())
+        index_signal = (EXPERTS_WAIT_SEM, [noc[(c.x, c.y)] for c in expert_parts[3]])
     # G1: the top-k on the rectangle's lane cores
-    topk_kernels, topk_cbs, topk_semaphores = rt.program_parts(
-        logits, index_template, scores, indices, rows=rows, top_k=top_k, rectangle=plan.topk, sem_base=0
+    topk_kernels, topk_cbs, topk_semaphores = rt_sc.program_parts(  # QWEN38_ROUTER_SORTCORE=1: two-core sort form
+        logits,
+        index_template,
+        scores,
+        indices,
+        rows=rows,
+        top_k=top_k,
+        rectangle=plan.topk,
+        sem_base=0,
+        index_signal=index_signal,
     )
     # G2: the shared eltwise on the storage cores, multicasting the intermediate into G3's in0 CB
     storage = [ttnn.CoreCoord(c, 0) for c in range(se.STORAGE_CORES)]
@@ -241,42 +278,46 @@ def moe_dense_program(
         [(core, [(N_PER_WORKER, w * N_PER_WORKER, 1, 1)]) for w, core in enumerate(workers)],
     )
     # G4: the routed dispatch untilize
-    untilize_cores = plan.untilize_cores()
-    untilize_set = ttnn.CoreRangeSet([plan.untilize])
-    per_core, extra = divmod(N_TILES, len(untilize_cores))
-    starts, start = [], 0
-    for i in range(len(untilize_cores)):
-        count = per_core + (1 if i < extra else 0)
-        starts.append((start, count))
-        start += count
-    untilize_cb = fp.cb_descriptor(UNTILIZE_CB, BF16, fp.TILE_BYTES[BF16], 2, untilize_set)
-    untilize_reader = fp.reader_kernel(
-        ur.READER,
-        untilize_set,
-        fp.accessor_args(full_hidden),
-        [(core, [full_hidden.buffer_address(), count, first]) for core, (first, count) in zip(untilize_cores, starts)],
-    )
-    untilize_writer = fp.writer_kernel(
-        ur.WRITER,
-        untilize_set,
-        [fp.ELEMENT_BYTES[BF16], rows, *fp.accessor_args(sparse_rows)],
-        [(core, [sparse_rows.buffer_address(), count, first]) for core, (first, count) in zip(untilize_cores, starts)],
-    )
-    return fp.program_descriptor(
-        [
-            *topk_kernels,
-            eltwise_reader,
-            eltwise_compute,
-            eltwise_writer,
-            down_reader,
-            down_compute,
-            down_writer,
-            untilize_reader,
-            untilize_writer,
-        ],
-        cbs=[*topk_cbs, *eltwise_cbs, in0_cb, *down_cbs, untilize_cb],
-        semaphores=[*topk_semaphores, fp.semaphore_descriptor(SEM_DOWN, all_set)],
-    )
+    untilize_cb = untilize_reader = untilize_writer = None
+    if experts is None:
+        untilize_cores = plan.untilize_cores()
+        untilize_set = ttnn.CoreRangeSet([plan.untilize])
+        per_core, extra = divmod(N_TILES, len(untilize_cores))
+        starts, start = [], 0
+        for i in range(len(untilize_cores)):
+            count = per_core + (1 if i < extra else 0)
+            starts.append((start, count))
+            start += count
+        untilize_cb = fp.cb_descriptor(UNTILIZE_CB, BF16, fp.TILE_BYTES[BF16], 2, untilize_set)
+        untilize_reader = fp.reader_kernel(
+            ur.READER,
+            untilize_set,
+            fp.accessor_args(full_hidden),
+            [
+                (core, [full_hidden.buffer_address(), count, first])
+                for core, (first, count) in zip(untilize_cores, starts)
+            ],
+        )
+        untilize_writer = fp.writer_kernel(
+            ur.WRITER,
+            untilize_set,
+            [fp.ELEMENT_BYTES[BF16], rows, *fp.accessor_args(sparse_rows)],
+            [
+                (core, [sparse_rows.buffer_address(), count, first])
+                for core, (first, count) in zip(untilize_cores, starts)
+            ],
+        )
+    kernels = [*topk_kernels, eltwise_reader, eltwise_compute, eltwise_writer, down_reader, down_compute, down_writer]
+    cbs = [*topk_cbs, *eltwise_cbs, in0_cb, *down_cbs]
+    semaphores = [*topk_semaphores, fp.semaphore_descriptor(SEM_DOWN, all_set)]
+    if expert_parts is None:
+        kernels += [untilize_reader, untilize_writer]
+        cbs.append(untilize_cb)
+    else:
+        kernels += expert_parts[0]
+        cbs += expert_parts[1]
+        semaphores += expert_parts[2]
+    return fp.program_descriptor(kernels, cbs=cbs, semaphores=semaphores)
 
 
 def _check(logits, gate_up_scalar_ws, down, full_hidden, scores, indices, top_k) -> int:
@@ -316,6 +357,7 @@ def moe_dense(
     top_k: int = TOP_K,
     compute_kernel_config,
     partial_memory_config,
+    experts=None,
     **_composed_only,
 ):
     """One program: the top-k of ``logits`` (fp32 TILE ``[1, 1, rows, 512]``) into the pre-allocated ROW_MAJOR
@@ -325,12 +367,18 @@ def moe_dense(
     as ``sparse_rows`` (ROW_MAJOR bf16, DRAM).  Returns ``(scores, indices, partial, sigmoid, sparse_rows)``."""
 
     rows = _check(logits, gate_up_scalar_ws, down, full_hidden, scores, indices, top_k)
+    if experts is not None:
+        moe_experts.CALLS["total"] += 1
     mesh = logits.device()
     plan = plan_for(mesh)
     index_template = rt.router_tail_prepare(mesh)
     partial = fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.TILE_LAYOUT, mesh, partial_memory_config)
     sigmoid = fp.allocate((1, 1, fp.TILE, fp.TILE), BF16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
-    sparse_rows = fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+    sparse_rows = (
+        None
+        if experts is not None
+        else fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+    )
     fidelity = _fidelity_of(compute_kernel_config)
     lanes = len(rt.lane_cores(plan.topk, len(rt._core_plan(rows)[0])))
     # G1 as router_tail states it (every lane core streams the logits and the index template); G2 the [gate | up |
@@ -342,7 +390,7 @@ def moe_dense(
         "composite",
         rows,
         reads=(gate_up_scalar_ws, down, full_hidden),
-        writes=(scores, indices, partial, sigmoid, sparse_rows),
+        writes=(scores, indices, partial, sigmoid, *((sparse_rows,) if experts is None else (experts["out"],))),
         dram_bytes=lanes * (fp.tensor_bytes(index_template) + fp.tensor_bytes(logits)),
         l1_bytes=DOWN_WORKERS * K_TILES * fp.TILE_BYTES[BF16],
         flops=rows * rt.EXPERTS * (5 + 2 * rt.WIDTH_TILES)
@@ -352,10 +400,30 @@ def moe_dense(
         + 2 * rows * se.LOCAL_INTERMEDIATE * HIDDEN,
         cores=lanes + se.STORAGE_CORES + DOWN_WORKERS + len(plan.untilize_cores()),
         # every output is per device the same shape as the chain's (replicated placements, as the caller stamped them)
-        outputs=((scores, None), (indices, None), (partial, None), (sigmoid, None), (sparse_rows, None)),
+        outputs=(
+            (scores, None),
+            (indices, None),
+            (partial, None),
+            (sigmoid, None),
+            (sparse_rows if experts is None else experts["out"], None),
+        ),
     )
+    io_tail = [sparse_rows] if experts is None else [experts["out"]]
+    io_head = [] if experts is None else [experts["owner"], experts["w0_w1"], experts["w2"]]
     fp.run_program(
-        [logits, index_template, gate_up_scalar_ws, down, full_hidden, scores, indices, partial, sigmoid, sparse_rows],
+        [
+            logits,
+            index_template,
+            gate_up_scalar_ws,
+            down,
+            full_hidden,
+            *io_head,
+            scores,
+            indices,
+            partial,
+            sigmoid,
+            *io_tail,
+        ],
         moe_dense_program(
             logits=logits,
             index_template=index_template,
@@ -371,13 +439,14 @@ def moe_dense(
             top_k=top_k,
             plan=plan,
             fidelity=fidelity,
+            experts=experts,
         ),
         meta=meta,
     )
     # generic_op rewrites the mesh topology of the io tensor it returns (the last one) from its inputs: with the
     # width-sharded down weight among them the rows came back [Replicate, Shard] and the served model's replicated
     # contract refused them (the first served run, 2026-09-26).  Every output keeps the gathered hidden's replicated topology.
-    for tensor in (scores, indices, partial, sigmoid, sparse_rows):
+    for tensor in (scores, indices, partial, sigmoid, *io_tail):
         fp.stamp_topology(tensor, full_hidden)
     return scores, indices, partial, sigmoid, sparse_rows
 

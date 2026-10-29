@@ -28,6 +28,7 @@ import torch.nn.functional as F
 from models.demos.blackhole.qwen36.tt.attention import rope_tp as rope_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import contracts as contracts_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul as decode_matmul_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn import model as model_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
@@ -793,6 +794,34 @@ def test_lane_body_rows_and_regions_are_bitwise_the_one_row_steps(fake, lanes: i
     lane_constants.deallocate()
 
 
+def test_the_fused_lane_body_takes_its_score_windows_from_qsa_score_merge(expect_error, fake, monkeypatch) -> None:
+    """The lanes' score-row windows are qsa_block's program exactly when qsa_score_merge is on, and the fused lane body
+    is bound only with them, under every subset of the six QSA lane switches the constructor admits (it refuses
+    qsa_post_attention without qsa_main_tail)."""
+
+    names = model_module.QSA_LANE_FUSED_KERNELS
+    weights = _weights(torch.Generator().manual_seed(7))
+    bodies = []
+    for mask in range(1 << len(names)):
+        off = [name for bit, name in enumerate(names) if mask >> bit & 1]
+        monkeypatch.setenv("QWEN38_FUSED_OFF", ",".join(off))
+        if "qsa_main_tail" in off and "qsa_post_attention" not in off:
+            with expect_error(ValueError, match="enable qsa_main_tail too"):  # allow-pytest.raises: the refusal
+                Qwen38TTNNQSA(
+                    FakeMesh(), FakeContract(), weights, layer_index=LAYER, allocated_context=ALLOCATED_CONTEXT
+                )
+            continue
+        layer = Qwen38TTNNQSA(
+            FakeMesh(), FakeContract(), weights, layer_index=LAYER, allocated_context=ALLOCATED_CONTEXT
+        )
+        windows = layer._lane_score_rows_of is fused.qsa_block.lane_score_rows_of
+        body = getattr(layer.forward_decode_lanes, "func", None) is Qwen38TTNNQSA._forward_decode_lanes_fused
+        assert windows == ("qsa_score_merge" not in off), off
+        assert windows or not body, off
+        bodies.append(body)
+    assert any(bodies) and not all(bodies), bodies
+
+
 def test_lane_state_contract_allocates_the_layout_and_refuses_foreign_states(expect_error, fake) -> None:
     layer = _Layer()
     qsa = layer.qsa
@@ -1008,4 +1037,5 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         "raw_key_ring",
         "kv_scratch_rows",  # the MTP lane verify's redirect region past the last lane (0 for the plain lanes)
         "pool_rows",  # the PAGED plain body's page pool rows (0: the flat per-lane cache)
+        "storage_lanes",  # a bucket view's parent lane extent (0: the state owns its lanes)
     )

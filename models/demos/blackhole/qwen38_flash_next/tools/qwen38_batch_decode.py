@@ -13,6 +13,12 @@ ring slots rotated into the canonical fixed-phase order by the choice of source 
 ``QWEN38_IMPORT_HOST=1``) through the host pager: evicted into the host slot, rotated, the lane reset and re-admitted;
 ``step`` replays the one lane trace and returns one new greedy token per lane.
 
+Decode-width buckets (W3; ``buckets=(R1, ..., 32)``, 32 paged lanes only): besides the full 32-lane trace the decoder
+captures one lane trace (and its sampling traces) per smaller width R over a bucket view of the lane state
+(``model.allocate_bucket_lane_state``).  Each step replays the smallest bucket holding every live lane; the invariant
+is that every live lane is below R (idle lanes inside the bucket run the warm token on the scratch page as today), and
+a step returns -1 for the lanes R and up.  Without ``buckets`` there is one bucket, the full one: today's behavior.
+
 Residue-free: the lanes sit at any positions (the GDN lane state keeps a per-lane conv shift register, see
 ``Qwen38TTNNGDNState.fixed_phase``).  No MTP.  ``Qwen38ContinuousBatch`` (host-only, below) is the continuous-batching policy over this decoder (P1d).
 
@@ -37,7 +43,7 @@ import os
 import random
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Iterable, Sequence
 
@@ -54,7 +60,7 @@ from models.demos.blackhole.qwen38_flash_next.tools import qwen38_pack_plan as p
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
 from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE, replicate_tensor_2d_mesh_mapper
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, TP_SIZE, replicate_tensor_2d_mesh_mapper
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, SAMPLING_CANDIDATE_ROW_SHAPE
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
     Qwen38LaneHostPool,
@@ -223,8 +229,32 @@ def chain_warm_hook(hook):
         Qwen38TracedChain.open = original
 
 
+@dataclass
+class Qwen38LaneBucket:
+    """Everything that depends on the lane count of one lane trace: the lane state (the parent's for the full bucket,
+    a bucket view otherwise), its capture and trace, and the sampling buffers and traces over that capture's logits."""
+
+    lanes: int
+    ls: Any = None
+    capture: Any = None
+    trace_id: int | None = None
+    candidate_buffer: Any = None
+    candidate_trace_id: int | None = None
+    candidate_scratch: Any = None
+    normalizer_inv_temperature: Any = None
+    normalizer_buffer: Any = None
+    normalizer_trace_id: int | None = None
+    normalizer_scratch: tuple | None = None
+    row_read_buckets: tuple[int, ...] = ()
+    row_read_indices: dict[int, Any] = field(default_factory=dict)
+    row_read_blocks: dict[int, Any] = field(default_factory=dict)
+    row_read_traces: dict[int, int] = field(default_factory=dict)
+
+
 class Qwen38PlainLaneDecoder:
-    """B lanes of the plain lane body over one adapter; see the module docstring."""
+    """B lanes of the plain lane body over one adapter; see the module docstring.  ``buckets``: the decode widths (each
+    1..lanes, the largest ``lanes``; more than one needs 32 paged lanes); ``step`` replays the smallest bucket that
+    holds every live lane (``bucket_for_step``), ``active`` is the last step's bucket and the reads follow it."""
 
     def __init__(
         self,
@@ -237,8 +267,16 @@ class Qwen38PlainLaneDecoder:
         candidates: bool = False,
         normalizer: bool = False,
         row_read: bool = False,
+        buckets: Sequence[int] | None = None,
     ) -> None:
         self.lanes = lanes
+        self.buckets: tuple[int, ...] = (lanes,) if buckets is None else tuple(sorted({int(r) for r in buckets}))
+        if not self.buckets or self.buckets[0] < 1 or self.buckets[-1] != lanes:
+            raise ValueError(f"buckets must be widths in 1..{lanes} whose largest is {lanes}, got {buckets!r}")
+        if len(self.buckets) > 1 and (lanes != CHUNK_ROWS or paging is None):
+            raise ValueError(f"more than one bucket needs {CHUNK_ROWS} paged lanes, got {lanes} lanes, paging {paging}")
+        self.force_bucket: int | None = None  # test hook: step replays this bucket (it must hold every live lane)
+        self.bucket_steps: dict[int, int] = {r: 0 for r in self.buckets}
         # QSA lane indexer form, "wide" or "per_lane"; the argument beats QWEN38_LANE_INDEXER_FORM (default "wide")
         self.indexer_form = indexer_form or os.environ.get("QWEN38_LANE_INDEXER_FORM", "wide")
         self.paging = paging
@@ -254,12 +292,14 @@ class Qwen38PlainLaneDecoder:
         # QWEN38_IMPORT_HOST=1: the host-pager import (evict, rotate, admit_lane reset, readmit) of P1 / P2: the
         # reference of the bitwise import test and the fallback
         self.host_import = os.environ.get("QWEN38_IMPORT_HOST", "0") == "1"
-        self.captures: list[Any] = []
+        self.captures: list[Any] = []  # over every bucket in capture order, the full bucket first
         self.trace_ids: list[int] = []
         self.timing: dict[str, Any] = {}
         self.released = False
         self.page_table_dirty = False  # a page row changed since the last table write (grow, release)
         self.last_admit: dict[str, float] = {}
+        self.lane_moves = 0  # W5: lanes moved down by ``move_lane`` (compaction)
+        self.last_move: dict[str, Any] = {}
         # P2a (vLLM adapter): compile the full-vocabulary gather of the lane logits in ``prepare`` (eager, misses allowed)
         # so ``read_full_logits`` runs under the closed miss guard; off for the P1 drivers (they read greedy ids only).
         self.warm_logits_gather = False
@@ -273,27 +313,21 @@ class Qwen38PlainLaneDecoder:
         # ROW_MAJOR) in a small second trace replayed after the lane replay, only on steps with a sampled row.  The buffer is
         # allocated and the programs compiled in ``prepare``; ``capture`` captures the trace after the lane trace.
         self.candidates = candidates
-        self.candidate_buffer = None
-        self.candidate_trace_id: int | None = None
-        self._candidate_scratch = None
         # P3g-2: the full-row normalizer of the sampled lanes (per shard LSE of logits / T over the real vocabulary, one fp32 per
         # lane and shard), for top-k-off rows.  Its trace is the candidate trace plus the normalizer ops (one replay, two
         # buffers), chosen per step; the inverse temperatures are a persistent input the host writes before the replay.
         self.normalizer = bool(candidates and normalizer)
-        self.normalizer_inv_temperature = None
-        self.normalizer_mask = None
-        self.normalizer_buffer = None
-        self.normalizer_trace_id: int | None = None
-        self._normalizer_scratch: tuple | None = None
+        self.normalizer_mask = None  # lane independent: one for every bucket
         # P3g-3: the logits rows of chosen lanes for the host's fallback draws.  One small trace per bucket size
         # (``row_read_buckets``) selects the rows into a bf16 block per shard; its lane indices are a persistent input
         # the host writes before the replay.  Only the sampled path uses it, so it needs the candidate rows (the step
         # that found a fallback row).
         self.row_read = bool(candidates and row_read)
-        self.row_read_buckets: tuple[int, ...] = row_read_buckets(lanes) if self.row_read else ()
-        self.row_read_indices: dict[int, Any] = {}
-        self.row_read_blocks: dict[int, Any] = {}
-        self.row_read_traces: dict[int, int] = {}
+        # W3: one bucket per decode width; the full one holds the parent lane state (``self.ls``, set in ``prepare``)
+        self.bucket_sets: dict[int, Qwen38LaneBucket] = {
+            r: Qwen38LaneBucket(r, row_read_buckets=row_read_buckets(r) if self.row_read else ()) for r in self.buckets
+        }
+        self.active: Qwen38LaneBucket = self.bucket_sets[lanes]
         self.pack_state = None
         self.pack_traces: dict[int, tuple[int, Any]] = {}
         self.lander: Qwen38TTNNPackLander | None = None
@@ -314,6 +348,8 @@ class Qwen38PlainLaneDecoder:
         started = time.perf_counter()
         paging = self.paging
         self.ls = ls = model.allocate_lane_state(lanes, indexer_form=self.indexer_form, residue_free=True, paged=paging)
+        full = self.bucket_sets[lanes]
+        full.ls = ls
         gl = model.generic_lane_layout(chain.state, exclude_kv=paging is not None)
         ll = model.lane_layout(ls)
         self.pager_g = Qwen38TTNNLanePager(mesh, model.mesh_contract, gl)
@@ -355,7 +391,41 @@ class Qwen38PlainLaneDecoder:
         if self.warm_logits_gather:
             chain.sampling.read_full_logits_rows(output.logits)
         if self.candidates:
-            self._prepare_candidates(chain, output.logits)
+            self._prepare_candidates(chain, output.logits, full)
+        self._release_warm_pass(output, token_row, candidates)
+        model.reset_lane_state_inplace(ls, zeros)
+        ttnn.synchronize_device(mesh)
+        self.timing["warm_s"] = time.perf_counter() - started
+        # W3: one eager pass per smaller bucket over its view (compiles the view's programs, builds its sampling
+        # buffers); the passes wrote lanes 0..R-1 of the parent, so the parent is reset after them
+        small = [r for r in self.buckets if r < lanes]
+        for r in small:
+            started, before = time.perf_counter(), self._dram_free()
+            view = model.allocate_bucket_lane_state(ls, r)
+            bucket = self.bucket_sets[r]
+            bucket.ls = view
+            self.timing.setdefault("bucket_alloc_bytes", {})[r] = before - self._dram_free()
+            tokens = [WARM_TOKEN_ID] * r
+            model.write_lane_ple_rows(view, tokens, [None] * r)
+            model.write_lane_tokens(view, tokens)
+            output = model.forward_decode_lanes(view)
+            candidates, token_row = model.resolve_lane_tokens(output, view)
+            ttnn.synchronize_device(mesh)
+            if self.warm_logits_gather:
+                chain.sampling.read_full_logits_rows(output.logits)
+            if self.candidates:
+                self._prepare_candidates(chain, output.logits, bucket)
+            self._release_warm_pass(output, token_row, candidates)
+            ttnn.synchronize_device(mesh)
+            self.timing.setdefault("bucket_warm_s", {})[r] = time.perf_counter() - started
+        if small:
+            model.reset_lane_state_inplace(ls, zeros)
+            ttnn.synchronize_device(mesh)
+        if self.pack_enabled:
+            self._prepare_pack(chain)
+
+    @staticmethod
+    def _release_warm_pass(output: Any, token_row: Any, candidates: Any) -> None:
         output.release_tensors()
         for tensor in (
             token_row,
@@ -366,20 +436,15 @@ class Qwen38PlainLaneDecoder:
         ):
             if isinstance(tensor, ttnn.Tensor):
                 ttnn.deallocate(tensor)
-        model.reset_lane_state_inplace(ls, zeros)
-        ttnn.synchronize_device(mesh)
-        self.timing["warm_s"] = time.perf_counter() - started
-        if self.pack_enabled:
-            self._prepare_pack(chain)
 
-    def _prepare_candidates(self, chain: Any, logits: Any) -> None:
-        """The candidate buffer (before any capture, like the pack state) and one eager ``sampling_candidates`` over the
-        warm pass's lane logits: every program of the candidate trace compiles here, and the host reads the row once to
-        compile its readback."""
+    def _prepare_candidates(self, chain: Any, logits: Any, bucket: Qwen38LaneBucket) -> None:
+        """The bucket's candidate buffer (before any capture, like the pack state) and one eager ``sampling_candidates``
+        over the warm pass's lane logits: every program of the candidate trace compiles here, and the host reads the row
+        once to compile its readback."""
 
-        mesh, lanes = self.mesh, self.lanes
+        mesh, lanes = self.mesh, bucket.lanes
         shape = (1, 1, lanes, SAMPLING_CANDIDATE_ROW_SHAPE[3])
-        self.candidate_buffer = ttnn.from_torch(
+        bucket.candidate_buffer = ttnn.from_torch(
             torch.zeros(shape, dtype=torch.float32),
             dtype=ttnn.float32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -388,12 +453,12 @@ class Qwen38PlainLaneDecoder:
             mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
         )
         lm_head = self.model.model_io.lm_head
-        row = lm_head.sampling_candidates(logits, chain.sampling.constants, into=self.candidate_buffer)
+        row = lm_head.sampling_candidates(logits, chain.sampling.constants, into=bucket.candidate_buffer)
         ttnn.synchronize_device(mesh)
         ttnn.deallocate(row)
-        self._read_candidate_buffer()
+        self._read_candidate_buffer(bucket)
         if self.normalizer:
-            self.normalizer_inv_temperature = ttnn.from_torch(
+            bucket.normalizer_inv_temperature = ttnn.from_torch(
                 torch.ones(1, 1, lanes, 1, dtype=torch.float32),
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
@@ -401,8 +466,9 @@ class Qwen38PlainLaneDecoder:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
             )
-            self.normalizer_mask = lm_head.sampling_normalizer_mask()
-            self.normalizer_buffer = ttnn.from_torch(
+            if self.normalizer_mask is None:
+                self.normalizer_mask = lm_head.sampling_normalizer_mask()
+            bucket.normalizer_buffer = ttnn.from_torch(
                 torch.zeros(1, 1, lanes, TP_SIZE, dtype=torch.float32),
                 dtype=ttnn.float32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -411,22 +477,21 @@ class Qwen38PlainLaneDecoder:
                 mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
             )
             lse = lm_head.sampling_normalizer(
-                logits, self.normalizer_inv_temperature, self.normalizer_mask, into=self.normalizer_buffer
+                logits, bucket.normalizer_inv_temperature, self.normalizer_mask, into=bucket.normalizer_buffer
             )
             ttnn.synchronize_device(mesh)
             ttnn.deallocate(lse)
-            self._read_normalizer_buffer()
+            self._read_normalizer_buffer(bucket)
         if self.row_read:
-            self._prepare_row_reads(logits)
+            self._prepare_row_reads(logits, bucket)
 
-    def _prepare_row_reads(self, logits: Any) -> None:
-        """The index inputs and row blocks of every bucket (before any capture) and one eager selection and readback
-        each: every
-        program of the row-read traces compiles here."""
+    def _prepare_row_reads(self, logits: Any, bucket: Qwen38LaneBucket) -> None:
+        """The index inputs and row blocks of every row-read size of the bucket (before any capture) and one eager
+        selection and readback each: every program of the row-read traces compiles here."""
 
         mesh, lm_head = self.mesh, self.model.model_io.lm_head
-        for size in self.row_read_buckets:
-            self.row_read_indices[size] = ttnn.from_torch(
+        for size in bucket.row_read_buckets:
+            bucket.row_read_indices[size] = ttnn.from_torch(
                 torch.zeros(1, 1, size, dtype=torch.int32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -434,7 +499,7 @@ class Qwen38PlainLaneDecoder:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
             )
-            self.row_read_blocks[size] = ttnn.from_torch(
+            bucket.row_read_blocks[size] = ttnn.from_torch(
                 torch.zeros(1, size, LOCAL_VOCAB_SIZE, dtype=torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -442,33 +507,40 @@ class Qwen38PlainLaneDecoder:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
             )
-            lm_head.select_logits_rows(logits, self.row_read_indices[size], into=self.row_read_blocks[size])
+            lm_head.select_logits_rows(logits, bucket.row_read_indices[size], into=bucket.row_read_blocks[size])
             ttnn.synchronize_device(mesh)
-            self._read_row_block(size)
+            self._read_row_block(size, bucket)
 
-    def _read_row_block(self, size: int) -> torch.Tensor:
+    def _read_row_block(self, size: int, bucket: Qwen38LaneBucket) -> torch.Tensor:
         """The bucket's row block of the four shards, one readback: bf16 ``[size, VOCAB_SIZE]`` (slot j = the lane the
-        j-th
-        index named)."""
+        j-th index named)."""
 
-        host = ttnn.to_torch(self.row_read_blocks[size], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1))
+        host = ttnn.to_torch(bucket.row_read_blocks[size], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1))
         return host.reshape(size, -1)
 
-    def _read_candidate_buffer(self) -> torch.Tensor:
-        host = ttnn.to_torch(ttnn.get_device_tensors(self.candidate_buffer)[0])
-        return host.reshape(self.lanes, SAMPLING_CANDIDATE_ROW_SHAPE[3]).to(torch.float32)
+    def _read_candidate_buffer(self, bucket: Qwen38LaneBucket) -> torch.Tensor:
+        host = ttnn.to_torch(ttnn.get_device_tensors(bucket.candidate_buffer)[0])
+        return host.reshape(bucket.lanes, SAMPLING_CANDIDATE_ROW_SHAPE[3]).to(torch.float32)
 
-    def _read_normalizer_buffer(self) -> torch.Tensor:
-        host = ttnn.to_torch(ttnn.get_device_tensors(self.normalizer_buffer)[0])
-        return host.reshape(self.lanes, TP_SIZE).to(torch.float32)
+    def _read_normalizer_buffer(self, bucket: Qwen38LaneBucket) -> torch.Tensor:
+        host = ttnn.to_torch(ttnn.get_device_tensors(bucket.normalizer_buffer)[0])
+        return host.reshape(bucket.lanes, TP_SIZE).to(torch.float32)
 
-    def capture_candidates(self) -> None:
-        """The candidate trace, after the lane capture: ``sampling_candidates`` over the lane trace's persistent logits
-        into the persistent buffer (the programs compiled in :meth:`_prepare_candidates`; nothing allocates that lives
-        past the capture but the retained gather row)."""
+    def _bucket_timing(self, bucket: Qwen38LaneBucket, name: str, value: Any) -> None:
+        """The full bucket keeps the plain timing keys, a smaller one lands in ``bucket_<name>[lanes]``."""
+
+        if bucket.lanes == self.lanes:
+            self.timing[name] = value
+        else:
+            self.timing.setdefault(f"bucket_{name}", {})[bucket.lanes] = value
+
+    def capture_candidates(self, bucket: Qwen38LaneBucket) -> None:
+        """The bucket's candidate trace, after the lane capture: ``sampling_candidates`` over the lane trace's
+        persistent logits into the persistent buffer (the programs compiled in :meth:`_prepare_candidates`; nothing
+        allocates that lives past the capture but the retained gather row)."""
 
         chain, mesh, model = self.chain, self.mesh, self.model
-        logits = self.captures[0].output.logits
+        logits = bucket.capture.output.logits
         guard = lambda label: resident_decode.forbid_trace_body_host_io_and_sync(
             phase=f"candidates {label}"
         )  # noqa: E731
@@ -478,76 +550,120 @@ class Qwen38PlainLaneDecoder:
             trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
             with guard("capture"):
                 row = model.model_io.lm_head.sampling_candidates(
-                    logits, chain.sampling.constants, into=self.candidate_buffer
+                    logits, chain.sampling.constants, into=bucket.candidate_buffer
                 )
             ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh)
-        self.candidate_trace_id, self._candidate_scratch = trace_id, row
-        acknowledge_corruptible(self.candidate_buffer)
+        bucket.candidate_trace_id, bucket.candidate_scratch = trace_id, row
+        acknowledge_corruptible(bucket.candidate_buffer)
         acknowledge_corruptible(row)
-        self.timing["candidates_capture_s"] = time.perf_counter() - started
-        self.timing["candidates_trace_bytes"] = before - self._dram_free()
+        self._bucket_timing(bucket, "candidates_capture_s", time.perf_counter() - started)
+        self._bucket_timing(bucket, "candidates_trace_bytes", before - self._dram_free())
         if self.normalizer:
             started, before = time.perf_counter(), self._dram_free()
             with corruptible_allocation_scope(mesh):
                 trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
                 with guard("normalizer capture"):
                     row = model.model_io.lm_head.sampling_candidates(
-                        logits, chain.sampling.constants, into=self.candidate_buffer
+                        logits, chain.sampling.constants, into=bucket.candidate_buffer
                     )
                     lse = model.model_io.lm_head.sampling_normalizer(
-                        logits, self.normalizer_inv_temperature, self.normalizer_mask, into=self.normalizer_buffer
+                        logits, bucket.normalizer_inv_temperature, self.normalizer_mask, into=bucket.normalizer_buffer
                     )
                 ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
             ttnn.synchronize_device(mesh)
-            self.normalizer_trace_id, self._normalizer_scratch = trace_id, (row, lse)
-            for tensor in (self.normalizer_buffer, self.normalizer_inv_temperature, self.normalizer_mask, row, lse):
+            bucket.normalizer_trace_id, bucket.normalizer_scratch = trace_id, (row, lse)
+            for tensor in (
+                bucket.normalizer_buffer,
+                bucket.normalizer_inv_temperature,
+                self.normalizer_mask,
+                row,
+                lse,
+            ):
                 acknowledge_corruptible(tensor)
-            self.timing["normalizer_capture_s"] = time.perf_counter() - started
-            self.timing["normalizer_trace_bytes"] = before - self._dram_free()
+            self._bucket_timing(bucket, "normalizer_capture_s", time.perf_counter() - started)
+            self._bucket_timing(bucket, "normalizer_trace_bytes", before - self._dram_free())
         if self.row_read:
-            self.capture_row_reads(logits, guard)
+            self.capture_row_reads(logits, guard, bucket)
 
-    def capture_row_reads(self, logits: Any, guard: Any) -> None:
-        """One trace per row-read bucket, after the candidate traces: the row selection of :meth:`_prepare_row_reads`
-        over the
-        lane trace's persistent logits into the bucket's block (the programs compiled there)."""
+    def capture_row_reads(self, logits: Any, guard: Any, bucket: Qwen38LaneBucket) -> None:
+        """One trace per row-read size of the bucket, after the candidate traces: the row selection of
+        :meth:`_prepare_row_reads` over the lane trace's persistent logits into the size's block (the programs
+        compiled there)."""
 
         mesh, lm_head = self.mesh, self.model.model_io.lm_head
         started, before = time.perf_counter(), self._dram_free()
-        for size in self.row_read_buckets:
+        for size in bucket.row_read_buckets:
             with corruptible_allocation_scope(mesh):
                 trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
                 with guard(f"row read {size} capture"):
-                    lm_head.select_logits_rows(logits, self.row_read_indices[size], into=self.row_read_blocks[size])
+                    lm_head.select_logits_rows(logits, bucket.row_read_indices[size], into=bucket.row_read_blocks[size])
                 ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
             ttnn.synchronize_device(mesh)
-            self.row_read_traces[size] = trace_id
-            acknowledge_corruptible(self.row_read_indices[size])
-            acknowledge_corruptible(self.row_read_blocks[size])
-        self.timing["row_read_capture_s"] = time.perf_counter() - started
-        self.timing["row_read_trace_bytes"] = before - self._dram_free()
+            bucket.row_read_traces[size] = trace_id
+            acknowledge_corruptible(bucket.row_read_indices[size])
+            acknowledge_corruptible(bucket.row_read_blocks[size])
+        self._bucket_timing(bucket, "row_read_capture_s", time.perf_counter() - started)
+        self._bucket_timing(bucket, "row_read_trace_bytes", before - self._dram_free())
+
+    # The sampling state of the ACTIVE bucket (the last step's), read only.
+    @property
+    def candidate_buffer(self) -> Any:
+        return self.active.candidate_buffer
+
+    @property
+    def candidate_trace_id(self) -> int | None:
+        return self.active.candidate_trace_id
+
+    @property
+    def normalizer_trace_id(self) -> int | None:
+        return self.active.normalizer_trace_id
+
+    @property
+    def normalizer_buffer(self) -> Any:
+        return self.active.normalizer_buffer
+
+    @property
+    def normalizer_inv_temperature(self) -> Any:
+        return self.active.normalizer_inv_temperature
+
+    @property
+    def row_read_buckets(self) -> tuple[int, ...]:
+        return self.active.row_read_buckets
+
+    @property
+    def row_read_indices(self) -> dict[int, Any]:
+        return self.active.row_read_indices
+
+    @property
+    def row_read_blocks(self) -> dict[int, Any]:
+        return self.active.row_read_blocks
+
+    @property
+    def row_read_traces(self) -> dict[int, int]:
+        return self.active.row_read_traces
 
     @property
     def has_row_read(self) -> bool:
-        return bool(self.row_read_traces)
+        return bool(self.active.row_read_traces)
 
     def read_logits_rows(self, lanes: Sequence[int]) -> torch.Tensor:
-        """The last lane replay's logits of the given lanes (distinct lanes, in this order), fp32 ``[len(lanes),
-        VOCAB_SIZE]``: the rows :meth:`read_full_logits` returns for them, bit for bit (the LM head's padding columns
-        are not masked here either).  Writes the lane indices into the smallest bucket's input (unused slots repeat the
-        first lane), replays its trace and reads the row blocks.  More lanes than the largest bucket: ``ValueError``
-        (use the full gather).
+        """The last lane replay's logits of the given lanes (distinct lanes below the active bucket's width, in this
+        order), fp32 ``[len(lanes), VOCAB_SIZE]``: the rows :meth:`read_full_logits` returns for them, bit for bit (the
+        LM head's padding columns are not masked here either).  Writes the lane indices into the smallest row-read
+        bucket's input (unused slots repeat the first lane), replays its trace and reads the row blocks.  More lanes than
+        the largest bucket: ``ValueError`` (use the full gather).
         """
 
+        active = self.active
         lanes = [int(lane) for lane in lanes]
-        if not self.row_read_traces:
+        if not active.row_read_traces:
             raise RuntimeError("the row-read traces are not captured")
-        if not lanes or len(set(lanes)) != len(lanes) or not all(0 <= lane < self.lanes for lane in lanes):
-            raise ValueError(f"row read needs distinct lanes in 0..{self.lanes - 1}, got {lanes}")
-        size = row_read_bucket(len(lanes), self.row_read_buckets)
+        if not lanes or len(set(lanes)) != len(lanes) or not all(0 <= lane < active.lanes for lane in lanes):
+            raise ValueError(f"row read needs distinct lanes in 0..{active.lanes - 1}, got {lanes}")
+        size = row_read_bucket(len(lanes), active.row_read_buckets)
         if size is None:
-            raise ValueError(f"{len(lanes)} lanes are above the largest row-read bucket {self.row_read_buckets[-1]}")
+            raise ValueError(f"{len(lanes)} lanes are above the largest row-read bucket {active.row_read_buckets[-1]}")
         padded = lanes + [lanes[0]] * (size - len(lanes))
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
@@ -556,51 +672,74 @@ class Qwen38PlainLaneDecoder:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh),
             ),
-            self.row_read_indices[size],
+            active.row_read_indices[size],
         )
-        ttnn._ttnn_execute_trace(self.mesh, self.row_read_traces[size], cq_id=0, blocking=True)
-        return self._read_row_block(size)[: len(lanes)].to(torch.float32)
+        ttnn._ttnn_execute_trace(self.mesh, active.row_read_traces[size], cq_id=0, blocking=True)
+        return self._read_row_block(size, active)[: len(lanes)].to(torch.float32)
 
     @property
     def has_candidates(self) -> bool:
-        return self.candidate_trace_id is not None
+        return self.active.candidate_trace_id is not None
 
     @property
     def has_normalizer(self) -> bool:
-        return self.normalizer_trace_id is not None
+        return self.active.normalizer_trace_id is not None
 
     def read_candidates_normalized(self, inv_temperatures: Sequence[float]) -> tuple[torch.Tensor, torch.Tensor]:
-        """:meth:`read_candidates` plus the full-row normalizer: writes the lanes' inverse temperatures (one per lane; 1.0
-        for a lane that needs no normalizer), replays the candidate + normalizer trace and reads both buffers.  Returns
-        ``(candidate rows fp32 [lanes, 256], shard LSEs fp32 [lanes, 4])``: entry (u, d) = logsumexp over shard d's real
+        """:meth:`read_candidates` plus the full-row normalizer: writes the lanes' inverse temperatures (one per lane,
+        ``lanes`` or the active bucket's width of them, the first ``active.lanes`` are used; 1.0 for a lane that needs
+        no normalizer), replays the candidate + normalizer trace and reads both buffers.  Returns ``(candidate rows
+        fp32 [active.lanes, 256], shard LSEs fp32 [active.lanes, 4])``: entry (u, d) = logsumexp over shard d's real
         vocabulary columns of lane u's logits x ``inv_temperatures[u]``."""
 
-        if self.normalizer_trace_id is None:
+        active = self.active
+        if active.normalizer_trace_id is None:
             raise RuntimeError("the normalizer trace is not captured")
-        if len(inv_temperatures) != self.lanes:
+        if len(inv_temperatures) not in (self.lanes, active.lanes):
             raise ValueError(
-                f"need one inverse temperature per lane: got {len(inv_temperatures)}, expected {self.lanes}"
+                f"need one inverse temperature per lane: got {len(inv_temperatures)}, expected {self.lanes} "
+                f"or {active.lanes}"
             )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
-                torch.tensor([float(v) for v in inv_temperatures], dtype=torch.float32).reshape(1, 1, self.lanes, 1),
+                torch.tensor([float(v) for v in inv_temperatures[: active.lanes]], dtype=torch.float32).reshape(
+                    1, 1, active.lanes, 1
+                ),
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh),
             ),
-            self.normalizer_inv_temperature,
+            active.normalizer_inv_temperature,
         )
-        ttnn._ttnn_execute_trace(self.mesh, self.normalizer_trace_id, cq_id=0, blocking=True)
-        return self._read_candidate_buffer(), self._read_normalizer_buffer()
+        ttnn._ttnn_execute_trace(self.mesh, active.normalizer_trace_id, cq_id=0, blocking=True)
+        return self._read_candidate_buffer(active), self._read_normalizer_buffer(active)
 
     def read_candidates(self) -> torch.Tensor:
-        """Replay the candidate trace over the last lane replay's logits and read the buffer: fp32 ``[lanes, 256]``,
-        row u = lane u's ``[values | global ids]`` packs of the four shards (``Qwen38CandidateRows`` parses it)."""
+        """Replay the active bucket's candidate trace over the last lane replay's logits and read the buffer: fp32
+        ``[active.lanes, 256]``, row u = lane u's ``[values | global ids]`` packs of the four shards
+        (``Qwen38CandidateRows`` parses it)."""
 
-        if self.candidate_trace_id is None:
+        active = self.active
+        if active.candidate_trace_id is None:
             raise RuntimeError("the candidate trace is not captured")
-        ttnn._ttnn_execute_trace(self.mesh, self.candidate_trace_id, cq_id=0, blocking=True)
-        return self._read_candidate_buffer()
+        ttnn._ttnn_execute_trace(self.mesh, active.candidate_trace_id, cq_id=0, blocking=True)
+        return self._read_candidate_buffer(active)
+
+    def warm_bucket_reads(self) -> None:
+        """Replay every bucket's candidate trace, normalizer trace (inverse temperatures 1.0) and row-read traces once
+        with readback (the adapter's warmup), then restore the full bucket as active."""
+
+        try:
+            for r in self.buckets:
+                bucket = self.active = self.bucket_sets[r]
+                if bucket.candidate_trace_id is not None:
+                    self.read_candidates()
+                if bucket.normalizer_trace_id is not None:
+                    self.read_candidates_normalized([1.0] * bucket.lanes)
+                for size in bucket.row_read_traces:
+                    self.read_logits_rows(list(range(size)))
+        finally:
+            self.active = self.bucket_sets[self.lanes]
 
     def _prepare_pack(self, chain: Any) -> None:
         """The multi-user pack inside the chain's warm hook (before any capture: its persistent buffers must exist before
@@ -661,8 +800,9 @@ class Qwen38PlainLaneDecoder:
         logger.info(f"prefill pack traces captured: {self.pack_dram}")
 
     def capture(self, vm: Any) -> None:
-        """After the chain opened (its traces captured, the miss guard closed): the one capture of the lane body from
-        reset positions, the tracker over every trace, the lane mirrors back at position 0."""
+        """After the chain opened (its traces captured, the miss guard closed): the capture of the lane body from
+        reset positions (the full bucket first, then each smaller bucket over its view), the sampling traces of every
+        bucket, the tracker over every trace, the lane mirrors back at position 0."""
 
         self.vm = vm
         chain, mesh, model, ls = self.chain, self.mesh, self.model, self.ls
@@ -673,27 +813,39 @@ class Qwen38PlainLaneDecoder:
         started = time.perf_counter()
         ttnn.synchronize_device(mesh)
         guard = lambda label: resident_decode.forbid_trace_body_host_io_and_sync(phase=f"lanes {label}")  # noqa: E731
-        epilogue = lambda out: model.resolve_lane_tokens(out, ls)  # noqa: E731
-        cap = model.capture_decode_lanes(ls, guard=guard, epilogue=epilogue, phase_observer=None, cq_id=0)
-        self.captures.append(cap)
-        self.trace_ids.append(next(iter(cap.trace_ids.values())))
-        ttnn.synchronize_device(mesh)
-        for tensor in (
-            ls.token_row,
-            ls.ple_rows.embedding_rows,
-            ls.position.row,
-            ls.position.shift_row,
-            *self.pager_g.packs.values(),
-            *self.pager_g.kv_stagings,
-        ):
-            acknowledge_corruptible(tensor)
+        order = [self.bucket_sets[self.lanes]] + [self.bucket_sets[r] for r in self.buckets if r < self.lanes]
+        for bucket in order:
+            bucket_started, before = time.perf_counter(), self._dram_free()
+            epilogue = lambda out, s=bucket.ls: model.resolve_lane_tokens(out, s)  # noqa: E731
+            cap = model.capture_decode_lanes(bucket.ls, guard=guard, epilogue=epilogue, phase_observer=None, cq_id=0)
+            bucket.capture, bucket.trace_id = cap, next(iter(cap.trace_ids.values()))
+            self.captures.append(cap)
+            self.trace_ids.append(bucket.trace_id)
+            ttnn.synchronize_device(mesh)
+            if bucket.ls is ls:
+                for tensor in (
+                    ls.token_row,
+                    ls.ple_rows.embedding_rows,
+                    ls.position.row,
+                    ls.position.shift_row,
+                    *self.pager_g.packs.values(),
+                    *self.pager_g.kv_stagings,
+                ):
+                    acknowledge_corruptible(tensor)
+            else:  # the view's own persistent input; its token and position rows are the parent's
+                acknowledge_corruptible(bucket.ls.ple_rows.embedding_rows)
+            self.timing.setdefault("bucket_capture_s", {})[bucket.lanes] = time.perf_counter() - bucket_started
+            self.timing.setdefault("bucket_trace_bytes", {})[bucket.lanes] = before - self._dram_free()
         if self.candidates:
-            self.capture_candidates()
+            for bucket in order:
+                self.capture_candidates(bucket)
         if self.pack_enabled:
             self.capture_pack()
-        candidate_ids = [i for i in (self.candidate_trace_id, self.normalizer_trace_id) if i is not None]
-        candidate_ids += list(self.row_read_traces.values())
-        for trace_id in (*chain.trace_ids(), *self.trace_ids, *candidate_ids, *self.pack_trace_ids()):
+        sampling_ids = []
+        for bucket in order:
+            sampling_ids += [i for i in (bucket.candidate_trace_id, bucket.normalizer_trace_id) if i is not None]
+            sampling_ids += list(bucket.row_read_traces.values())
+        for trace_id in (*chain.trace_ids(), *self.trace_ids, *sampling_ids, *self.pack_trace_ids()):
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
         entries = resident_decode.program_cache_count(mesh)
         logger.info(f"program cache entries after the lane captures {entries} (chain {chain.program_cache_entries})")
@@ -701,6 +853,7 @@ class Qwen38PlainLaneDecoder:
             raise RuntimeError(f"lane captures compiled programs: {entries} vs {chain.program_cache_entries}")
         model.reset_lane_state_inplace(ls, [0] * self.lanes)  # the mirrors advanced during capture
         ttnn.synchronize_device(mesh)
+        self.active = self.bucket_sets[self.lanes]
         self.timing["capture_s"] = time.perf_counter() - started
         logger.info(f"plain lane decoder ready: {self.lanes} lanes, timing {self.timing}")
 
@@ -984,29 +1137,100 @@ class Qwen38PlainLaneDecoder:
         return was_live
 
     def read_full_logits(self) -> torch.Tensor:
-        """The last replay's logits of every lane, gathered over the vocabulary shards: fp32 ``[lanes, VOCAB]`` (the
-        LM head's padding columns are not masked here).  The capture retains the logits tensor."""
+        """The last replay's logits of every lane of the active bucket, gathered over the vocabulary shards: fp32
+        ``[active.lanes, VOCAB]`` (the LM head's padding columns are not masked here).  The capture retains the logits
+        tensor."""
 
-        logits = self.captures[0].output.logits
-        return self.chain.sampling.read_full_logits_rows(logits)[: self.lanes]
+        active = self.active
+        return self.chain.sampling.read_full_logits_rows(active.capture.output.logits)[: active.lanes]
 
     # -- decode ------------------------------------------------------------------------------------
 
+    def bucket_for_step(self) -> int:
+        """The width the next step replays: the smallest bucket above the highest live lane (the smallest bucket when
+        no lane is live); ``force_bucket`` overrides it and must still hold every live lane."""
+
+        live = [u for u in range(self.lanes) if self.positions[u] is not None]
+        need = max(live) + 1 if live else 1
+        if self.force_bucket is None:
+            return next(r for r in self.buckets if r >= need)
+        if self.force_bucket not in self.bucket_sets:
+            raise ValueError(f"force_bucket {self.force_bucket} is not one of the buckets {self.buckets}")
+        if self.force_bucket < need:
+            raise ValueError(f"force_bucket {self.force_bucket} does not hold live lane {need - 1}")
+        return self.force_bucket
+
+    def compaction_moves(self) -> list[tuple[int, int]]:
+        """The ``(src, dst)`` lane moves that let the next step replay the smallest bucket that holds the live lanes'
+        count: ``[]`` with one bucket or when every live lane is below that bucket ``b``; else each live lane >= ``b``
+        (highest first) is paired with the lowest free lane < ``b`` (no request, no page row), in order.  Enough free
+        lanes exist below ``b``: the live count is at most ``b``."""
+
+        if len(self.buckets) == 1:
+            return []
+        live = sorted(u for u in range(self.lanes) if self.positions[u] is not None)
+        b = next(r for r in self.buckets if r >= max(len(live), 1))
+        high = [u for u in reversed(live) if u >= b]
+        if not high:
+            return []
+        free = [u for u in range(b) if self.positions[u] is None and not self.page_rows[u]]
+        return list(zip(high, free))
+
+    def move_lane(self, src: int, dst: int) -> None:
+        """Move live lane ``src`` into the free lane ``dst`` (paged decoder): every per-lane device tensor through the
+        local pager's pack of ``src`` and unpack into ``dst`` (device only; the paged KV stays in its pages), the
+        position row and rope shift, the page-table row (the caller's ``sync_page_table`` uploads it) and the host
+        mirrors.  ``src`` is parked and free afterwards."""
+
+        if self.paging is None or self.pager_l is None:
+            raise RuntimeError("move_lane needs a prepared paged decoder")
+        for name, lane in (("src", src), ("dst", dst)):
+            if isinstance(lane, bool) or not isinstance(lane, int) or not 0 <= lane < self.lanes:
+                raise ValueError(f"move_lane {name} must be a lane in [0, {self.lanes}), got {lane!r}")
+        if src == dst:
+            raise ValueError(f"move_lane needs two lanes, got {src} twice")
+        if self.positions[src] is None:
+            raise ValueError(f"move_lane: lane {src} holds no request")
+        if self.positions[dst] is not None or self.page_rows[dst]:
+            raise ValueError(f"move_lane: lane {dst} is not free")
+        model, ls, mesh = self.model, self.ls, self.mesh
+        started = time.perf_counter()
+        with corruptible_allocation_scope(mesh):  # as the pager's evict and readmit: no transient outlives the move
+            self.pager_l._run_pack(src)
+            self.pager_l._fence()
+            self.pager_l._run_unpack(dst)
+            self.pager_l._fence()
+        position, shift = ls.position.positions[src], ls.position.shifts[src]
+        model.admit_lane_position(ls, dst, position, rope_shift=shift)
+        ls.position.park([src])
+        self.page_rows[dst], self.page_rows[src] = self.page_rows[src], []
+        self.page_table_dirty = True
+        self.positions[dst], self.positions[src] = self.positions[src], None
+        self.contexts[dst], self.contexts[src] = self.contexts[src], None
+        ttnn.synchronize_device(mesh)
+        self.lane_moves += 1
+        self.last_move = {"src": src, "dst": dst, "ms": (time.perf_counter() - started) * 1e3}
+
     def step(self, tokens: Sequence[int]) -> list[int]:
-        """One lane-body replay consuming ``tokens`` (one per lane); returns the lanes' next greedy tokens."""
+        """One lane-body replay of the smallest bucket holding every live lane, consuming ``tokens`` (one per lane; the
+        bucket reads the first R); returns the lanes' next greedy tokens, -1 for the lanes R and up."""
 
         model, ls, mesh = self.model, self.ls, self.mesh
+        r = self.bucket_for_step()
+        bucket = self.bucket_sets[r]
         idle = [u for u in range(self.lanes) if self.positions[u] is None]  # no request: PLE context None
         for u in idle:
             self.contexts[u] = None
-        self.contexts = list(model.write_lane_ple_rows(ls, tokens, self.contexts))
+        self.contexts[:r] = list(model.write_lane_ple_rows(bucket.ls, tokens[:r], self.contexts[:r]))
         for u in idle:
             self.contexts[u] = None
-        model.write_lane_tokens(ls, tokens)
-        ttnn._ttnn_execute_trace(mesh, self.trace_ids[0], cq_id=0, blocking=True)
-        ls.position.advance_replayed()
-        row = ttnn.to_torch(ttnn.get_device_tensors(ls.token_row)[0]).reshape(-1)[: self.lanes]
-        return [int(v) for v in row.to(torch.float32).round().to(torch.int64).tolist()]
+        model.write_lane_tokens(bucket.ls, tokens[:r])
+        ttnn._ttnn_execute_trace(mesh, bucket.trace_id, cq_id=0, blocking=True)
+        ls.position.advance_replayed()  # the shared position row: the trace added 1 to all 32 entries
+        self.active = bucket
+        self.bucket_steps[r] += 1
+        row = ttnn.to_torch(ttnn.get_device_tensors(ls.token_row)[0]).reshape(-1)[:r]
+        return [int(v) for v in row.to(torch.float32).round().to(torch.int64).tolist()] + [-1] * (self.lanes - r)
 
     # -- release -----------------------------------------------------------------------------------
 
@@ -1023,29 +1247,35 @@ class Qwen38PlainLaneDecoder:
             for trace_id in (*self.trace_ids, *self.pack_trace_ids()):
                 ttnn.release_trace(mesh, trace_id)
             self.trace_ids.clear()
-            for trace_id in self.row_read_traces.values():
-                ttnn.release_trace(mesh, trace_id)
-            self.row_read_traces.clear()
-            for attribute in ("candidate_trace_id", "normalizer_trace_id"):
-                if getattr(self, attribute) is not None:
-                    ttnn.release_trace(mesh, getattr(self, attribute))
-                    setattr(self, attribute, None)
-            for tensor in (
-                self._candidate_scratch,
-                *(self._normalizer_scratch or ()),
-                self.candidate_buffer,
-                self.normalizer_buffer,
-                self.normalizer_inv_temperature,
-                self.normalizer_mask,
-            ):
-                if tensor is not None:
-                    ttnn.deallocate(tensor)
-            for tensor in (*self.row_read_indices.values(), *self.row_read_blocks.values()):
-                ttnn.deallocate(tensor)
-            self.row_read_indices.clear()
-            self.row_read_blocks.clear()
-            self._candidate_scratch = self._normalizer_scratch = self.candidate_buffer = None
-            self.normalizer_buffer = self.normalizer_inv_temperature = self.normalizer_mask = None
+            for bucket in self.bucket_sets.values():
+                for trace_id in (
+                    *bucket.row_read_traces.values(),
+                    bucket.candidate_trace_id,
+                    bucket.normalizer_trace_id,
+                ):
+                    if trace_id is not None:
+                        ttnn.release_trace(mesh, trace_id)
+                bucket.row_read_traces.clear()
+                bucket.candidate_trace_id = bucket.normalizer_trace_id = None
+                for tensor in (
+                    bucket.candidate_scratch,
+                    *(bucket.normalizer_scratch or ()),
+                    bucket.candidate_buffer,
+                    bucket.normalizer_buffer,
+                    bucket.normalizer_inv_temperature,
+                    *bucket.row_read_indices.values(),
+                    *bucket.row_read_blocks.values(),
+                ):
+                    if tensor is not None:
+                        ttnn.deallocate(tensor)
+                bucket.row_read_indices.clear()
+                bucket.row_read_blocks.clear()
+                bucket.candidate_scratch = bucket.normalizer_scratch = bucket.candidate_buffer = None
+                bucket.normalizer_buffer = bucket.normalizer_inv_temperature = None
+                bucket.capture = None
+            if self.normalizer_mask is not None:
+                ttnn.deallocate(self.normalizer_mask)
+                self.normalizer_mask = None
             for _trace_id, output in self.pack_traces.values():
                 output.release_tensors()
             self.pack_traces.clear()
@@ -1058,6 +1288,11 @@ class Qwen38PlainLaneDecoder:
             for pager in (self.pager_l, self.pager_g):
                 if pager is not None:
                     pager.release()
+            for r in self.buckets:  # the views before their parent
+                bucket = self.bucket_sets[r]
+                if bucket.ls is not None and bucket.ls is not self.ls:
+                    self.model.release_bucket_lane_state(bucket.ls)
+                bucket.ls = None
             if self.ls is not None:
                 self.model.release_lane_state(self.ls)
                 self.ls = None

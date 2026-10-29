@@ -658,10 +658,9 @@ def test_builder_builds_the_plan_and_admits_only_for_a_build_that_runs_a_slab(ex
     # The term: the measured 2048-row band up to 2048 rows, rows-linear above it.
     assert pd.MEASURED_SLAB_ROWS == 2048
     assert pd.slab_working_set_bytes(2048) == pd.slab_working_set_bytes(256) == pd.SLAB_WORKING_SET_BYTES
-    assert pd.slab_working_set_bytes(4096) == 2 * pd.SLAB_WORKING_SET_BYTES
-    assert pd.slab_working_set_bytes(3072) == pd.SLAB_WORKING_SET_BYTES * 3072 // 2048
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        pd.slab_working_set_bytes(100)
+    for rows in (100, 3072, 4096):  # not a slab (the contract ends at 2048 rows)
+        with expect_error(ValueError):  # allow-pytest.raises: pure contract test
+            pd.slab_working_set_bytes(rows)
     # The chat chain tells the builder the slab before it builds the target (the other slab-building tools are
     # pinned by the development-side companion test).
     chain = (MODEL_DIR / "tools" / "qwen38_chat_session.py").read_text()

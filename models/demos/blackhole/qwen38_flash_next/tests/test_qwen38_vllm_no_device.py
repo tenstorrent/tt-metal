@@ -42,6 +42,15 @@ from models.demos.blackhole.qwen38_flash_next.tests import test_qwen38_sampling_
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_vllm as vllm_module
 from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic import MODE
+
+
+@pytest.fixture(autouse=True)
+def _write_token_row_path(monkeypatch):
+    """The op-order pins below were written for the token-row write; QWEN38_TOKEN_FEEDBACK is on by default (x53), so
+    pin the write path here and let the token-feedback tests set or delete the variable themselves."""
+    monkeypatch.setenv("QWEN38_TOKEN_FEEDBACK", "0")
+
+
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     CHUNK_PREFILL_MIN_ROWS,
     RESIDUE_CLASSES,
@@ -54,11 +63,16 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_prefill_driver import
     Qwen38ChunkPrefill,
     chunk_accepts,
 )
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import HF_REPO_ID, Qwen38ForCausalLM, Qwen38VLLMSlot
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
+    HF_REPO_ID,
+    Qwen38ForCausalLM,
+    Qwen38HostSamplingPolicy,
+    Qwen38VLLMSlot,
+)
 from models.demos.blackhole.qwen38_flash_next.tools.runtime_admission import RuntimeAdmissionError
 from models.demos.blackhole.qwen38_flash_next.ttnn import prefill_dense
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_CONTEXT_HEADROOM, Qwen38CacheRoots
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, DEFAULT_SLAB_ROWS
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, DEFAULT_SLAB_ROWS, MESH_SHAPE, TP_SIZE
 
 HF_ARCHITECTURE = "Qwen4ExpForConditionalGeneration"
 TT_ARCHITECTURE = "TT" + HF_ARCHITECTURE
@@ -69,6 +83,7 @@ MAX_MODEL_LEN = ALLOCATED_CONTEXT - RESIDENT_CONTEXT_HEADROOM
 PAGE_TABLE = torch.zeros((1, (MAX_MODEL_LEN + 63) // 64), dtype=torch.int32)  # the runner's width at block size 64
 TRACE_ID = 77
 DIGEST = "0123456789abcdef" * 4
+PHYSICAL_IDS = (1, 0, *range(2, TP_SIZE))  # the mesh's physical device ids: two swapped, so the order is checked
 
 
 class FakeChain(sampling_tests.FakeChain):
@@ -103,6 +118,21 @@ class FakeChain(sampling_tests.FakeChain):
         for token in ids:
             ple_context = (token, 0 if ple_context is None else ple_context[0])  # refresh_ple_row's rule
         return SimpleNamespace(position=start_position + len(ids), ple_context=ple_context, stopped=self.chunk_stopped)
+
+    def feed_token_row(self, token_id: int) -> bool:
+        self.log.append(f"feed:{token_id}")
+        self.write_token_row(token_id)
+        return True
+
+    def mark_ple_fenced(self) -> None:
+        self.fences = getattr(self, "fences", 0) + 1  # not logged: the op-order tests pin the log
+
+    def prepare_ple_row(self, token_id: int, context):
+        self.log.append(f"ple_prepare:{token_id}")
+        return f"row:{token_id}", (token_id, 0 if context is None else context[0])
+
+    def upload_ple_row(self, host_row) -> None:
+        self.log.append(f"ple_upload:{host_row}")
 
     def close(self) -> None:
         self.log.append("close")
@@ -238,6 +268,32 @@ def test_prefill_then_decode_op_order(length: int) -> None:
         assert logits.shape == (1, 1, VOCAB_SIZE) and torch.equal(logits[0, 0], _masked(chain.logits()))
         sampled.append(int(logits.argmax()))
     assert model.slot.committed == ids + sampled[:-1] and chain.inputs == ids + sampled[:-1]
+
+
+def test_ple_early_moves_the_lookup_before_head_and_keeps_the_rest(monkeypatch) -> None:
+    ids = [11, 12, 13]
+    base_model, base_chain = _adapter()
+    _prefill(base_model, ids)
+    base_chain.log.clear()
+    base = _decode(base_model, 14, 3)
+
+    monkeypatch.setenv("QWEN38_PLE_EARLY", "1")
+    model, chain = _adapter()
+    _prefill(model, ids)
+    chain.log.clear()
+    logits = _decode(model, 14, 3)
+    residue = 3 % RESIDUE_CLASSES
+    assert chain.log[:6] == [
+        "guard",
+        "ple_prepare:14",
+        "write:14",
+        f"head:{residue}",
+        "ple_upload:row:14",
+        f"tail:{residue}",
+    ]
+    assert chain.log[6:] == base_chain.log[5:]  # the readback after the tail is the flag-off one
+    assert torch.equal(logits, base) and model.slot.ple_context == base_model.slot.ple_context == (14, 13)
+    assert model.slot.committed == base_model.slot.committed
 
 
 def test_logits_are_the_full_row_with_the_lm_head_padding_masked() -> None:
@@ -402,6 +458,110 @@ def test_a_non_greedy_decode_samples_on_the_host_from_the_full_logits() -> None:
         output_tokens=torch.tensor([[5]], dtype=torch.int32),
     )
     assert "read_token_row" not in chain.log and chain.sampling.full_reads == reads + 2
+
+
+# -- logprobs under device sampling: the raw logprob of the sampled token, the token unchanged ---------------------------
+
+
+def test_from_contract_reads_enable_log_probs_and_refuses_a_top_n_request(expect_error) -> None:
+    policy = Qwen38HostSamplingPolicy.from_contract(_params(enable_log_probs=True, num_logprobs=0))
+    assert policy.logprobs is True
+    assert Qwen38HostSamplingPolicy.from_contract(_params()).logprobs is False
+    # the sentinel a row without logprobs carries is never read
+    assert Qwen38HostSamplingPolicy.from_contract(_params(num_logprobs=-2)).logprobs is False
+    with expect_error(ValueError, "num_logprobs"):
+        Qwen38HostSamplingPolicy.from_contract(_params(enable_log_probs=True, num_logprobs=1))
+    both = SimpleNamespace(**{name: [*value, *value] for name, value in vars(_params()).items()})
+    both.enable_log_probs = [False, True]
+    assert [Qwen38HostSamplingPolicy.from_contract(both, row).logprobs for row in (0, 1)] == [False, True]
+
+
+def _raw_logprob(row: torch.Tensor, token: int) -> float:
+    return float(torch.log_softmax(_masked(row.clone()).to(torch.float64), 0)[token])
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        dict(temperature=0.0, top_k=1, top_p=0.0),  # plain greedy: the device token
+        dict(temperature=0.7, top_k=8, top_p=0.9, seed=3),
+        dict(temperature=1.3, top_k=0, top_p=1.0, seed=4),  # no top-k, no top-p
+        dict(temperature=0.0, presence_penalty=0.5),  # a penalized greedy row: the logprob is not penalized
+        dict(temperature=0.9, repetition_penalty=1.4, frequency_penalty=0.3, seed=5),
+    ),
+    ids=("greedy", "top_k", "whole_row", "penalized_greedy", "penalized_sampled"),
+)
+def test_a_single_slot_logprobs_row_keeps_its_token_and_returns_the_raw_logprob(overrides) -> None:
+    ids = [1, 2, 3, 4]
+    history = dict(
+        prompt_tokens=torch.tensor([ids], dtype=torch.int32), output_tokens=torch.tensor([[5, 5, 6]], dtype=torch.int32)
+    )
+    outs, chains = [], []
+    for logprobs in (False, True):
+        model, chain = _adapter()
+        _prefill(model, ids)
+        chain.log.clear()
+        outs.append(
+            _decode(
+                model,
+                5,
+                len(ids),
+                sampling_params=_params(enable_log_probs=logprobs, **overrides),
+                reset_sampling_state=True,
+                **history,
+            )
+        )
+        chains.append(chain)
+    plain, packed = outs
+    assert isinstance(plain, torch.Tensor) and plain.shape == (1, 1)  # no logprobs: today's output
+    assert isinstance(packed, tuple) and len(packed) == 2
+    token, logprob = packed
+    assert token.shape == (1, 1) and token.dtype == torch.int32 and torch.equal(token, plain)
+    assert logprob.shape == (1,) and logprob.dtype == torch.float32
+    assert float(logprob[0]) == pytest.approx(_raw_logprob(chains[1].logits(), int(token)), abs=1e-5)
+    if overrides["temperature"] == 0.0 and "presence_penalty" not in overrides:
+        # the greedy token is still the device's token row, and the full row is read besides
+        assert "read_token_row" in chains[1].log and any(op.startswith("full_gather") for op in chains[1].log)
+        assert int(token) == chains[1].row
+
+
+def test_the_single_slot_logprob_ignores_temperature_and_the_penalty() -> None:
+    ids = [1, 2, 3, 4]
+    model, chain = _adapter()
+    _prefill(model, ids)
+    token, logprob = _decode(
+        model,
+        5,
+        len(ids),
+        sampling_params=_params(
+            enable_log_probs=True, temperature=0.5, top_k=4, top_p=0.5, seed=1, repetition_penalty=2.0
+        ),
+        prompt_tokens=torch.tensor([ids], dtype=torch.int32),
+        output_tokens=torch.tensor([[5]], dtype=torch.int32),
+        reset_sampling_state=True,
+    )
+    raw = _masked(chain.logits())
+    assert float(logprob[0]) == pytest.approx(float(raw[int(token)] - torch.logsumexp(raw, 0)), abs=1e-5)
+
+
+def test_the_adapters_tuple_feeds_the_plugins_device_logprob_packing() -> None:
+    logprobs_module = pytest.importorskip("vllm_tt_plugin.logprobs")
+    ids = [1, 2, 3, 4]
+    model, chain = _adapter()
+    _prefill(model, ids)
+    out = _decode(
+        model,
+        5,
+        len(ids),
+        sampling_params=_params(enable_log_probs=True, temperature=0.0, top_k=1, top_p=0.0),
+    )
+    tt_out, tt_log_probs = out  # what finalize_decode unpacks when enable_log_probs.any()
+    rows = torch.tensor([0])
+    sampled = tt_out[rows].reshape(1, 1).to(torch.int32).reshape(1)
+    packed = logprobs_module.build_device_logprobs(tt_log_probs, sampled, rows, 0)
+    assert packed.logprob_token_ids.tolist() == [[int(tt_out)]] and packed.logprobs.dtype == torch.float32
+    assert float(packed.logprobs[0, 0]) == pytest.approx(_raw_logprob(chain.logits(), int(tt_out)), abs=1e-5)
+    assert packed.selected_token_ranks.tolist() == [-1]
 
 
 def test_a_padded_greedy_token_falls_back_to_the_masked_host_argmax(monkeypatch) -> None:
@@ -629,7 +789,7 @@ def test_prefill_admits_the_context_limit_and_refuses_one_past_it(expect_error) 
         ({"tokens": torch.tensor([[TOKENIZER_SIZE]], dtype=torch.int32)}, ValueError, "decode token"),
         ({"start_pos": [3]}, Qwen38ChatChainError, "runner position 3 vs device position 4"),
         ({"sampling_params": SimpleNamespace(**{**vars(_params()), "top_k": [20, 20]})}, ValueError, "one row"),
-        ({"sampling_params": _params(enable_log_probs=True)}, ValueError, "logprobs"),
+        ({"sampling_params": _params(enable_log_probs=True, num_logprobs=1)}, ValueError, "num_logprobs"),
         ({"sampling_params": _params(top_p=1.5)}, ValueError, "out of range"),
         ({"sampling_params": _params(temperature=-1.0)}, ValueError, "out of range"),
         ({"sampling_params": _params(repetition_penalty=1.5)}, ValueError, "history"),
@@ -818,7 +978,7 @@ def _fake_ttnn(*, tracking: bool) -> SimpleNamespace:
     return SimpleNamespace(Arch=ttnn.Arch, Topology=ttnn.Topology, _ttnn=ttnn._ttnn, __file__=ttnn.__file__)
 
 
-def _mesh(shape=(1, 4), count: int = 4, arch=None, ids=(1, 0, 2, 3)) -> SimpleNamespace:
+def _mesh(shape=MESH_SHAPE, count: int = TP_SIZE, arch=None, ids=PHYSICAL_IDS) -> SimpleNamespace:
     return SimpleNamespace(
         shape=shape,
         get_num_devices=lambda: count,
@@ -953,7 +1113,7 @@ def test_construction_refuses_a_context_no_resident_build_fits(construction, exp
 def test_construction_order_and_forwarded_arguments(construction, monkeypatch) -> None:
     monkeypatch.setenv("QWEN38_BF4_CORPUS", "/corpus/root")
     monkeypatch.setenv("QWEN38_BF4_CORPUS_VERIFICATION", "/corpus/verification.json")
-    mesh = _mesh(ids=(1, 0, 2, 3))
+    mesh = _mesh(ids=PHYSICAL_IDS)
 
     model = _initialize(construction, mesh_device=mesh, optimizations="performance")
 
@@ -970,7 +1130,7 @@ def test_construction_order_and_forwarded_arguments(construction, monkeypatch) -
         "runtime_extension": extension,
         "runtime_sha256": "a" * 64,
         "allocated_context": ALLOCATED_CONTEXT,
-        "physical_ids": (1, 0, 2, 3),
+        "physical_ids": PHYSICAL_IDS,
         "bf4_corpus_root": Path("/corpus/root"),
         "bf4_corpus_verification": Path("/corpus/verification.json"),
         "marker": prepared["marker"],
@@ -1104,8 +1264,8 @@ def test_construction_requires_the_cache_root(construction, monkeypatch, expect_
         ({"max_batch_size": 33}, "max_num_seqs 1"),  # 2..32 is batch mode (P2a)
         ({"tt_data_parallel": 2}, "data parallelism"),
         ({"optimizations": "fast"}, "optimizations"),
-        ({"mesh_device": _mesh(shape=(4, 1))}, "mesh of 4 devices"),
-        ({"mesh_device": _mesh(count=3)}, "mesh of 4 devices"),
+        ({"mesh_device": _mesh(shape=(TP_SIZE, 1))}, f"mesh of {TP_SIZE} devices"),  # the transposed mesh
+        ({"mesh_device": _mesh(count=TP_SIZE - 1)}, f"mesh of {TP_SIZE} devices"),  # one device short
         ({"mesh_device": _mesh(arch="wormhole")}, "Blackhole"),
     ),
 )
@@ -1140,7 +1300,7 @@ def test_construction_requires_trace_allocation_tracking(construction, monkeypat
         ("0", " 1 ", (True, None)),
         ("1024", None, (True, 1024)),
         (" 256 ", "0", (True, 256)),
-        ("4096", "1", (True, 4096)),
+        ("2048", "1", (True, 2048)),
     ),
 )
 def test_construction_opens_the_chain_in_the_prefill_form_the_knobs_name(
@@ -1191,7 +1351,7 @@ def test_construction_refuses_an_unknown_prefill_plan_by_name(
 
 
 def test_prefill_form_admits_every_slab_row_count_of_the_contract() -> None:
-    for rows in range(256, 4096 + 1, 128):
+    for rows in range(256, 2048 + 1, 128):
         assert vllm_module.prefill_form({"QWEN38_PREFILL_SLAB": str(rows)}) == (True, rows)
     assert vllm_module.describe_prefill_form(True, 2048) == "2048-row slabs, then 128-row chunks, then 32-row chunks"
     assert vllm_module.describe_prefill_form(True, None) == "128-row chunks, then 32-row chunks"
@@ -1202,13 +1362,16 @@ def test_prefill_form_admits_every_slab_row_count_of_the_contract() -> None:
 
 
 @pytest.mark.parametrize(
-    "value", ("100", "abc", "32", "128", "4224", "-256", "1024.0", "2048 rows", "none", "1", "\uff11\uff10\uff12\uff14")
+    "value",
+    ("100", "abc", "32", "128", "2176", "4096", "-256", "1024.0", "2048 rows", "none", "1", "\uff11\uff10\uff12\uff14"),
 )  # the last: fullwidth digits 1024, str.isdigit() true, not ASCII
 def test_construction_refuses_a_slab_row_count_outside_the_contract(
     construction, monkeypatch, value: str, expect_error
 ) -> None:
     monkeypatch.setenv("QWEN38_PREFILL_SLAB", value)
-    with expect_error(ValueError, "QWEN38_PREFILL_SLAB must be the slab's rows, a multiple of 128 in 256..4096"):
+    with expect_error(
+        ValueError, re.escape("QWEN38_PREFILL_SLAB must be the slab's rows, a multiple of 128 in 256..2048 (")
+    ):
         _initialize(construction)
     assert construction.calls == []  # refused before any library call
     with expect_error(ValueError, "or 0 / off for no slab, got " + re.escape(repr(value))):
@@ -1338,7 +1501,7 @@ def test_class_surface_matches_the_plugin_contract(expect_error) -> None:
             NotImplementedError
         ):
             shim()
-    worker_keywords = dict(model_name="", num_devices=4, tt_data_parallel=1, max_model_len=32_704, max_num_seqs=1)
+    worker_keywords = dict(model_name="", num_devices=TP_SIZE, tt_data_parallel=1, max_model_len=32_704, max_num_seqs=1)
     assert cls.get_max_tokens_all_users(**worker_keywords) == 32_704
 
 
@@ -1360,10 +1523,10 @@ def test_plugin_applies_model_fabric_before_opening_mesh(monkeypatch, launch_ove
     capability = Qwen38ForCausalLM.model_capabilities["fabric_config"]
     original = dict(capability)
     steps = []
-    mesh = SimpleNamespace(get_num_devices=lambda: 4)
-    monkeypatch.setattr(worker, "get_mesh_grid", lambda: (1, 4))
+    mesh = SimpleNamespace(get_num_devices=lambda: TP_SIZE)
+    monkeypatch.setattr(worker, "get_mesh_grid", lambda: MESH_SHAPE)
     monkeypatch.setattr(worker, "get_dispatch_core_config", lambda _config: None)
-    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: ttnn.cluster.ClusterType.P150_X4)
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: getattr(ttnn.cluster.ClusterType, f"P150_X{TP_SIZE}"))
     monkeypatch.setattr(ttnn, "set_fabric_config", lambda **kwargs: steps.append(("fabric", kwargs)))
     monkeypatch.setattr(ttnn, "open_mesh_device", lambda *args, **kwargs: steps.append(("open", kwargs)) or mesh)
     launch = {"fabric_config": "FABRIC_2D", "fabric_reliability_mode": "RELAXED_INIT"} if launch_override else None
@@ -1396,10 +1559,12 @@ def test_plugin_routes_sampling_requirements(requirement) -> None:
 
     runner = SimpleNamespace(
         sample_on_device_mode="decode_only",
-        num_devices=4,
+        num_devices=TP_SIZE,
         tt_data_parallel_size=1,
+        seeded_sampling_policy="auto",  # the plugin's default (config.get_tt_seeded_sampling_policy)
         model=Qwen38ForCausalLM,
         supports_topk_logprobs=False,
+        supports_device_grammar=False,  # no grammar preload for this model: structured requests stay on the host
         model_config=SimpleNamespace(logits_processors=[object()] if requirement == "custom_processor" else []),
         input_batch=SimpleNamespace(
             no_penalties=requirement != "penalties",
@@ -1413,7 +1578,13 @@ def test_plugin_routes_sampling_requirements(requirement) -> None:
     )
     assert not TTModelRunner.check_perform_device_sampling(runner, False, False)
     actual = TTModelRunner.check_perform_device_sampling(runner, True, requirement == "structured")
-    assert actual is (requirement in ("ordinary", "penalties"))
+    on_device = ("ordinary", "penalties")
+    if TP_SIZE in (
+        8,
+        32,
+    ):  # the plugin keeps a logprob on device only from 8 devices; the top-k form needs the model's flag
+        on_device += ("logprobs_zero",)
+    assert actual is (requirement in on_device)
 
 
 def test_plugin_runner_prefill_and_decode_call_shape(monkeypatch) -> None:
@@ -1441,6 +1612,7 @@ def test_plugin_runner_prefill_and_decode_call_shape(monkeypatch) -> None:
         input_batch=SimpleNamespace(req_ids=["request-0"]),
         requests={"request-0": SimpleNamespace(mrope_position_delta=None)},
         tt_per_lane_max_num_seqs=1,
+        supports_stage_outputs=False,  # the plugin's default: no stage outputs collected after a decode
         previous_req_ids=set(),
         note_decode_layout_consumed=lambda: None,
         note_decode_state_slots_settled=lambda: None,
@@ -1458,6 +1630,7 @@ def test_plugin_runner_prefill_and_decode_call_shape(monkeypatch) -> None:
             block_tables=PAGE_TABLE,
             block_tables_per_layer=None,
             multi_modal_kwargs={},
+            stage_inputs=None,  # None unless the model declares supports_stage_inputs
             perform_device_sampling=False,
             prefill_empty_slots=[0],
         ),
@@ -1499,6 +1672,9 @@ def test_plugin_runner_prefill_and_decode_call_shape(monkeypatch) -> None:
             output_tokens=None,
             decode_layout_changed=layout_changed,
             slot_remap=None,  # the runner's value for the identity remap
+            spec_mode=None,  # an ordinary (non-speculative) decode carries no accept mode,
+            num_valid_drafts=None,  # no draft counts
+            accepted_counts=None,  # and no accepted counts
         )
 
     for step, layout_changed in enumerate((True, False, False)):
@@ -1595,3 +1771,142 @@ def test_vllm_config_resolution_in_the_serving_venv() -> None:
     assert engine_config.cache_config.enable_prefix_caching is False
     assert engine_config.parallel_config.worker_cls == "vllm_tt_plugin.worker.TTWorker"
     assert get_model_architecture(engine_config.model_config)[0] is Qwen38ForCausalLM
+
+
+# -- the persistent PLE host buffer (QWEN38_PLE_UPLOAD) ---------------------------------------------------------------
+
+
+def _ple_chain(monkeypatch):
+    from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
+    from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
+
+    uploads: list[bytes] = []
+    built: list[object] = []
+
+    def from_torch(tensor, **_kwargs):  # the mapper borrows the torch buffer: the "host tensor" views it
+        host = SimpleNamespace(source=tensor)
+        built.append(host)
+        return host
+
+    def copy(host, _device) -> None:
+        uploads.append(bytes(host.source.view(torch.uint8).flatten().tolist()))  # what the device would receive
+
+    fake_ttnn = SimpleNamespace(
+        from_torch=from_torch, copy_host_to_device_tensor=copy, bfloat16="bf16", ROW_MAJOR_LAYOUT="rm"
+    )
+    monkeypatch.setattr(session_module, "ttnn", fake_ttnn)
+    monkeypatch.setattr(resident_decode, "ttnn", fake_ttnn)
+    payloads = {}
+
+    def lookup(token_id, context):
+        payload = bytearray(
+            torch.full((resident_decode.PLE_EMBEDDING_WIDTH,), float(token_id), dtype=torch.bfloat16)
+            .view(torch.uint8)
+            .flatten()
+            .tolist()
+        )
+        payloads[token_id] = bytes(payload)
+        return payload, (token_id, 0)
+
+    chain = object.__new__(session_module.Qwen38TracedChain)
+    chain.ple_row_mapper = "mapper"
+    chain.built_target = SimpleNamespace(
+        model=SimpleNamespace(
+            layers=[None, SimpleNamespace(ple=SimpleNamespace(resident_lookup=SimpleNamespace(lookup_token=lookup)))]
+        )
+    )
+    chain.prepared = SimpleNamespace(ple=SimpleNamespace(embedding_sharded="device_row"))
+    return chain, uploads, built, payloads
+
+
+def test_ple_upload_reuses_the_buffer_only_when_fenced(monkeypatch) -> None:
+    monkeypatch.delenv("QWEN38_PLE_UPLOAD", raising=False)
+    chain, uploads, built, payloads = _ple_chain(monkeypatch)
+    ctx = None
+    ctx = chain.refresh_ple_row(1, ctx)  # first: builds the persistent host tensor
+    assert len(built) == 1
+    chain.mark_ple_fenced()
+    ctx = chain.refresh_ple_row(2, ctx)  # fenced: the same host tensor, rewritten
+    assert len(built) == 1
+    chain.mark_ple_fenced()
+    chain.refresh_ple_row(3, ctx)  # fenced again: reused
+    assert len(built) == 1
+    # not fenced: the previous upload may be in flight, so a fresh host tensor is built, the buffer is untouched
+    persistent = built[0].source.clone()
+    chain.refresh_ple_row(4, ctx)
+    assert len(built) == 2 and built[1] is not built[0] and torch.equal(built[0].source, persistent)
+    assert uploads == [payloads[1], payloads[2], payloads[3], payloads[4]]  # bytes as the fresh path sends them
+    chain.mark_ple_fenced()
+    chain.refresh_ple_row(5, ctx)
+    assert len(built) == 2 and uploads[-1] == payloads[5]
+
+
+@pytest.mark.parametrize("value", ("0", "fresh"))
+def test_ple_upload_off_always_builds_a_fresh_row(monkeypatch, value) -> None:
+    monkeypatch.setenv("QWEN38_PLE_UPLOAD", value)
+    chain, uploads, built, payloads = _ple_chain(monkeypatch)
+    for token in (1, 2, 3):
+        chain.refresh_ple_row(token, None)
+        chain.mark_ple_fenced()
+    assert len(built) == 3 and uploads == [payloads[token] for token in (1, 2, 3)]
+
+
+# -- QWEN38_TOKEN_FEEDBACK: skip the token-row write when the device row already holds the token ----------------------
+
+
+def _feed_chain(monkeypatch, *, mtp=None):
+    from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
+
+    writes: list[int] = []
+    monkeypatch.setattr(
+        session_module,
+        "ttnn",
+        SimpleNamespace(
+            copy_host_to_device_tensor=lambda host, _device: writes.append(host),
+            _ttnn_execute_trace=lambda *a, **k: None,
+        ),
+    )
+    monkeypatch.setattr(session_module.resident_decode, "device_token_row", lambda _mesh, token: token)
+    monkeypatch.setattr(session_module.resident_decode, "token_row_value", lambda _row: device_row[0])
+    device_row = [0]
+    chain = object.__new__(session_module.Qwen38TracedChain)
+    chain.mtp, chain.token_row_io, chain.head_trace_ids = mtp, "row", [1, 2, 3, 4]
+    chain.construction = SimpleNamespace(builder=SimpleNamespace(mesh_device="mesh"))
+    return chain, writes, device_row
+
+
+def test_feed_token_row_skips_only_after_a_read_of_the_same_token(monkeypatch) -> None:
+    chain, writes, device_row = _feed_chain(monkeypatch)
+    assert chain.feed_token_row(5) is True and writes == [5]  # nothing on record (first step, after a seed): write
+    device_row[0] = 9  # the TAIL resolved 9 into the row
+    assert chain.read_token_row() == 9
+    assert chain.feed_token_row(8) is True and writes == [5, 8]  # vLLM passed another token (sampling): write
+    assert chain.read_token_row() == 9
+    assert chain.feed_token_row(9) is False and writes == [5, 8]  # the row already holds 9: skipped
+    chain.execute_head(0)  # HEAD consumed it; TAIL changes the row, so the record is gone until the next read
+    assert chain.feed_token_row(9) is True and writes == [5, 8, 9]
+
+
+def test_feed_token_row_always_writes_with_an_mtp_chain_and_after_a_host_write(monkeypatch) -> None:
+    chain, writes, device_row = _feed_chain(monkeypatch, mtp=object())
+    device_row[0] = 4
+    chain.read_token_row()
+    assert chain.feed_token_row(4) is True and writes == [4]
+    chain, writes, device_row = _feed_chain(monkeypatch)
+    device_row[0] = 4
+    chain.read_token_row()
+    chain.write_token_row(7)  # a host write (reset_and_seed, a forced step) invalidates the record
+    assert chain.feed_token_row(4) is True and writes == [7, 4]
+
+
+def test_step_uses_feed_token_row_only_with_the_flag(monkeypatch) -> None:
+    for flag, name in (("0", "write"), ("1", "feed"), (None, "feed")):  # on by default
+        if flag is None:
+            monkeypatch.delenv("QWEN38_TOKEN_FEEDBACK", raising=False)
+        else:
+            monkeypatch.setenv("QWEN38_TOKEN_FEEDBACK", flag)
+        model, chain = _adapter()
+        _prefill(model, [11, 12, 13])
+        chain.log.clear()
+        _decode(model, 14, 3)
+        assert f"{name}:14" in chain.log and ("feed:14" in chain.log) == (flag != "0")

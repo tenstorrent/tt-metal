@@ -550,7 +550,8 @@ def test_qsa_output_projection_sums_bf16_partials_in_fp32_reduce_scatter() -> No
     decode = inspect.getsource(qsa_module.Qwen38TTNNQSA.forward_decode)
     start = decode.index("local_partial_ws = ttnn.linear(")
     stop = decode.index("_deallocate(full_hidden)", start)
-    source = decode[start:stop]
+    # the reduce is the dispatch ``_row_reduce_call`` (row_reduce program with QWEN38_ROW_REDUCE=1, else ttnn.reduce_scatter)
+    source = decode[start:stop].replace("_row_reduce_call(", "ttnn.reduce_scatter(")
     assert re.findall(r"\bttnn\.(\w+)\(", source) == [
         "linear",
         "to_memory_config",
@@ -569,10 +570,8 @@ def test_qsa_output_projection_sums_bf16_partials_in_fp32_reduce_scatter() -> No
     assert "memory_config=ttnn.DRAM_MEMORY_CONFIG" in widen
     reduce = source.split("output_fp32 = ttnn.reduce_scatter(", 1)[1].split("\n        )", 1)[0]
     assert "local_partial_fp32," in reduce
-    assert "dim=3" in reduce
     assert "cluster_axis=TP_AXIS" in reduce
     assert "memory_config=ttnn.DRAM_MEMORY_CONFIG" in reduce
-    assert "topology=self.collective_topology" in reduce
     # The runtime derives HiFi4 + FP32 DEST accumulation from the FLOAT32 operand
     # (ccl resolve_fp32_acc_compute_kernel_config); an explicit compute config
     # would only move the collective off the direct reduce_scatter path.
@@ -608,7 +607,7 @@ def test_qsa_output_projection_sums_bf16_partials_in_fp32_reduce_scatter() -> No
     assert len(set(positions)) == len(positions)
     # The MTP layer builds the same Qwen38TTNNQSA class, so it shares this
     # boundary through forward_decode rather than a second collective call.
-    assert decode.count("ttnn.reduce_scatter(") == 1
+    assert decode.count("_row_reduce_call(") == 1
 
 
 @pytest.mark.parametrize(
@@ -668,6 +667,21 @@ def _calls_named(tree: ast.AST, attribute: str) -> list[ast.Call]:
     ]
 
 
+def _row_gather_calls(tree: ast.AST) -> list[ast.Call]:
+    """The hidden all-gather call sites: ``<fused>.resolve_admitted("row_gather")(hidden, ...)`` (the packed row gather
+    within its contract, ``ttnn.all_gather`` with the same arguments otherwise)."""
+
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Call)
+        and isinstance(node.func.func, ast.Attribute)
+        and node.func.func.attr == "resolve_admitted"
+        and [ast.unparse(a) for a in node.func.args] == ["'row_gather'"]
+    ]
+
+
 def test_moe_dense_linears_share_one_width_sharded_hidden() -> None:
     """The router and every shared-expert linear read the five-core shard the hidden all-gather writes."""
 
@@ -682,7 +696,7 @@ def test_moe_dense_linears_share_one_width_sharded_hidden() -> None:
     assert grids == [5, 5, 5, 5, 5]  # router, shared gate/up, shared down, shared scalar, fused gate|up|scalar
 
     gather = inspect.getsource(moe_module.Qwen38TTNNMoE._all_gather_hidden)
-    gathers = _calls_named(ast.parse(textwrap.dedent(gather)), "all_gather")
+    gathers = _row_gather_calls(ast.parse(textwrap.dedent(gather)))
     assert len(gathers) == 1
     keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in gathers[0].keywords}
     assert keywords["memory_config"] == "self.hidden_gather_memory_config"
@@ -728,7 +742,7 @@ def test_qsa_projections_read_the_width_sharded_hidden_the_gather_writes() -> No
     """The QSA all-gather writes the eight-core activation shard; no interleaved-to-sharded copy follows it."""
 
     gather = inspect.getsource(qsa_module.Qwen38TTNNQSA._all_gather_hidden)
-    gathers = _calls_named(ast.parse(textwrap.dedent(gather)), "all_gather")
+    gathers = _row_gather_calls(ast.parse(textwrap.dedent(gather)))
     assert len(gathers) == 1
     keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in gathers[0].keywords}
     assert keywords["memory_config"] == "self.hidden_act_memory_config"

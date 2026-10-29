@@ -25,6 +25,8 @@ sample; ``docs/NUMERICS.md``); it needs ``gr_read``; ``QWEN38_FUSED_OFF=gr_recip
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 
 from ...contracts import TP_SIZE
@@ -54,6 +56,7 @@ CB_SSCALER, CB_X2, CB_SOUT, CB_SSCRATCH = gr_fold.FRONT_STATS_CBS  # 20-23: the 
 CB_IN0, CB_W, CB_INTERM, CB_OUT = 8, 9, 10, 17
 CB_RECIP_W = 12  # the four recip tiles landing (fp32)
 CB_PROD = 13  # the four scaled partials (fp32)
+CB_PACK_STATS, CB_PACK_PARTIALS = 24, 25  # the transport cores' packed-row landing/staging buffers (mode 3)
 CB_ZERO = 14  # the fold's zero tile (fp32)
 WEIGHT_BATCH = 8  # weight tiles per push, as gr_read.normalize_down
 U_BLOCK = gr_read.ROW_BATCH  # tiles per fp32 dest block on the norm cores
@@ -248,6 +251,8 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             semaphore_ids=(p_go, s_scratch, p_done),
             consumers=tuple(noc[(c.x, c.y)] for c in producers),
             consumer_sem=gr_fold.FRONT_STATS_READY,
+            rows=rows,
+            pack_cb=CB_PACK_STATS,
         ),
         gr_fold.Transport(
             gathered,
@@ -259,6 +264,8 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             transports,
             semaphore_ids=gr_fold.PARTIALS_SEMAPHORES,
             page_strides=(1, PT),
+            rows=rows,
+            pack_cb=CB_PACK_PARTIALS,
         ),
     ]
     # the residual once, gamma and the weight in, normalized' out, every device's stats and partial tiles landing in
@@ -290,7 +297,24 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
 def read_front(residual, gamma_rows, down_inject):
     """``gr_read_fused``'s ``read_front`` hook: the front above; the gathered stats stay internal."""
 
-    gathered_stats, normalized, gathered_partials = stats_recip_down_gather(residual, gamma_rows, down_inject)
+    if (
+        os.environ.get("QWEN38_GR_FRONT_V3") == "1"
+    ):  # front3.py: front v2 with the reader reordered and per-source token unpack (x62)
+        from . import front3
+
+        gathered_stats, normalized, gathered_partials = front3.stats_recip_down_gather(
+            residual, gamma_rows, down_inject
+        )
+    elif (
+        os.environ.get("QWEN38_GR_FRONT_V2", "1") == "1"
+    ):  # default on (x44 A/B -0.72 ms); front2.py: the cheaper exchanges, bit-identical valid rows (rows > 16: this front)
+        from . import front2
+
+        gathered_stats, normalized, gathered_partials = front2.stats_recip_down_gather(
+            residual, gamma_rows, down_inject
+        )
+    else:
+        gathered_stats, normalized, gathered_partials = stats_recip_down_gather(residual, gamma_rows, down_inject)
     ttnn.deallocate(gathered_stats)
     return normalized, gathered_partials
 

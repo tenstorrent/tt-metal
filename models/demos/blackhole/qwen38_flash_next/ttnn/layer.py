@@ -37,6 +37,7 @@ view owns reused complete-block indices would make rejection cleanup unsafe.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -373,6 +374,19 @@ class Qwen38TTNNDecoderLayer:
         self.attention_gr = attention_gr
         self.mlp = mlp
         self.mlp_gr = mlp_gr
+        from models.demos.blackhole.qwen38_flash_next.ttnn import fused as _fused_gg
+
+        if (
+            _fused_gg.row_gather3.enabled_by_env()
+        ):  # QWEN38_GATE_GATHER=1: the consumers' gather layouts for the GR gate programs
+            for gr_module, consumer, names in (
+                (attention_gr, attention, ("in_proj_act_memory_config", "hidden_act_memory_config")),
+                (mlp_gr, mlp, ("hidden_gather_memory_config",)),
+            ):
+                for name in names:
+                    if getattr(consumer, name, None) is not None:
+                        gr_module.gather_memory_config = getattr(consumer, name)
+                        break
         self.expert_streamer = expert_streamer
         self.ple = ple
         # QWEN38_FUSED=ple: the fused PLE body with the layer's output permute + residual add folded into its conv program.
@@ -1734,25 +1748,8 @@ class Qwen38TTNNDecoderLayer:
         attention_rows = None
         try:
             ple = None if self.ple is None else self.ple.allocate_lanes_state(lanes)
-            moe = Qwen38TTNNMoE(
-                self.mlp.mesh_device,
-                self.mlp.mesh_contract,
-                self.mlp.weights,
-                tt_ccl=self.mlp.tt_ccl,
-                collective_topology=self.mlp.collective_topology,
-                rows=lanes,
-                synchronization_policy=self.mlp.synchronization_policy,
-            )
-            if isinstance(self.attention, Qwen38TTNNQSA) and lanes < CHUNK_ROWS:
-                mesh_device = self.attention.mesh_device
-                attention_rows = ttnn.from_torch(
-                    torch.zeros((1, 1, lanes, HIDDEN_SIZE), dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
-                )
+            moe = self._allocate_lane_moe(lanes)
+            attention_rows = self._allocate_lane_attention_rows(lanes)
             result = Qwen38TTNNDecoderLayerLaneState(
                 self.namespace, self.layer_index, lanes, attention, ple, moe, attention_rows
             )
@@ -1770,14 +1767,97 @@ class Qwen38TTNNDecoderLayer:
             _run_cleanup_actions("decoder-layer lane state allocation", actions, primary=error)
             raise
 
+    def _allocate_lane_moe(self, lanes: int) -> Qwen38TTNNMoE:
+        """A rows-``lanes`` MoE instance over this layer's weights (it owns its buffers)."""
+
+        return Qwen38TTNNMoE(
+            self.mlp.mesh_device,
+            self.mlp.mesh_contract,
+            self.mlp.weights,
+            tt_ccl=self.mlp.tt_ccl,
+            collective_topology=self.mlp.collective_topology,
+            rows=lanes,
+            synchronization_policy=self.mlp.synchronization_policy,
+        )
+
+    def _allocate_lane_attention_rows(self, lanes: int):
+        """A QSA layer's persistent attention rows ``[1,1,lanes,2560]`` below 32 lanes (None otherwise)."""
+
+        if not isinstance(self.attention, Qwen38TTNNQSA) or lanes >= CHUNK_ROWS:
+            return None
+        mesh_device = self.attention.mesh_device
+        return ttnn.from_torch(
+            torch.zeros((1, 1, lanes, HIDDEN_SIZE), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
+        )
+
     def _release_lane_attention_state(self, attention_state) -> None:
         if isinstance(self.attention, Qwen38TTNNGDN):
             attention_state.deallocate()
         else:
             self.attention.release_lane_state(attention_state)
 
+    def allocate_bucket_lane_state(
+        self, parent: Qwen38TTNNDecoderLayerLaneState, lanes: int
+    ) -> Qwen38TTNNDecoderLayerLaneState:
+        """A ``lanes``-lane bucket view over the 32-lane ``parent``: the attention and PLE states are views of the
+        parent's tensors (lane extent 32); the rows-``lanes`` MoE and (a QSA layer) the attention rows are new and
+        owned by the view.  Allocate before any capture."""
+
+        self._validate_lane_state(parent)
+        if parent.lanes != CHUNK_ROWS:
+            raise ValueError(f"a bucket view needs the {CHUNK_ROWS}-lane parent, got {parent.lanes} lanes")
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < CHUNK_ROWS:
+            raise ValueError(f"bucket lanes must be an int in [1,{CHUNK_ROWS}), got {lanes!r}")
+        moe = None
+        attention_rows = None
+        try:
+            if isinstance(self.attention, Qwen38TTNNGDN):
+                attention = dataclasses.replace(parent.attention, batch_size=lanes, storage_lanes=parent.lanes)
+            else:
+                attention = dataclasses.replace(parent.attention, lanes=lanes, storage_lanes=parent.lanes)
+            ple = (
+                None
+                if parent.ple is None
+                else dataclasses.replace(
+                    parent.ple, lanes=lanes, storage_lanes=parent.lanes, token_contexts=(None,) * lanes
+                )
+            )
+            moe = self._allocate_lane_moe(lanes)
+            attention_rows = self._allocate_lane_attention_rows(lanes)
+            result = Qwen38TTNNDecoderLayerLaneState(
+                self.namespace, self.layer_index, lanes, attention, ple, moe, attention_rows
+            )
+            self._validate_lane_state(result)
+            return result
+        except BaseException as error:
+            actions = []
+            if attention_rows is not None:
+                actions.append(("QSA lane attention rows", lambda: _deallocate_unique(attention_rows)))
+            if moe is not None:
+                actions.append(("lane MoE buffers", moe.release_owned_buffers))
+            _run_cleanup_actions("decoder-layer bucket lane state allocation", actions, primary=error)
+            raise
+
+    def release_bucket_lane_state(self, state: Qwen38TTNNDecoderLayerLaneState) -> None:
+        """Free what the bucket view owns (its MoE buffers and attention rows); the parent's tensors stay."""
+
+        self._validate_lane_state(state)
+        if not state.attention.is_view:
+            raise ValueError("release_bucket_lane_state takes a bucket view; use release_lane_state")
+        actions = [("lane MoE buffers", state.moe.release_owned_buffers)]
+        if state.attention_rows is not None:
+            actions.append(("QSA lane attention rows", lambda: _deallocate_unique(state.attention_rows)))
+        _run_cleanup_actions("decoder-layer bucket lane state", actions)
+
     def release_lane_state(self, state: Qwen38TTNNDecoderLayerLaneState) -> None:
         self._validate_lane_state(state)
+        if state.attention.is_view:
+            raise ValueError("the lane state is a bucket view; use release_bucket_lane_state")
         actions = [
             ("lane MoE buffers", state.moe.release_owned_buffers),
             ("lane attention state", lambda: self._release_lane_attention_state(state.attention)),

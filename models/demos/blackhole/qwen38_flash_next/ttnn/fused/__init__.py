@@ -55,6 +55,9 @@ from . import (
 )
 from . import gr_fold  # after gr_read: it composes gr_read's programs
 from . import gr_recip_last  # after gr_fold: it composes gr_fold's transports over gr_read's programs
+from . import row_gather  # after gr_fold: it uses its line transport
+from . import row_gather3  # after row_gather2: the gate program with the gather folded in (opt-in)
+from . import row_reduce  # after gr_fold: it uses its line transport (opt-in: QWEN38_ROW_REDUCE=1)
 from . import moe_dense  # after router_tail, shared_expert, untilize_rows and gr_read: it hosts their kernels
 from . import gdn_prefill_rows  # after the two rows programs: it wires them together for the prefill slab
 from . import qsa_rows  # after qsa_block: it composes its score merge over the verify tile's rows

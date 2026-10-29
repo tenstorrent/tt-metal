@@ -68,7 +68,7 @@ def _full_accept(constants):
 def test_long_chunk_contract(expect_error) -> None:
     assert (CHUNK_ROWS, LONG_CHUNK_ROWS, CHUNK_ROW_COUNTS) == (32, 128, (32, 128))
     assert contracts_module.chunk_row_tiles(32) == 1 and contracts_module.chunk_row_tiles(128) == 4
-    for rows in (0, 31, 64, 96, 192):  # 256 .. 4096 in steps of 128 are the slab row counts
+    for rows in (0, 31, 64, 96, 192):  # 256 .. 2048 in steps of 128 are the slab row counts
         with expect_error(ValueError):  # allow-pytest.raises: pure contract test
             contracts_module.chunk_row_tiles(rows)
     assert (

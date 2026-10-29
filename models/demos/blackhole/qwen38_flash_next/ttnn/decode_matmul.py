@@ -66,6 +66,10 @@ TWO_WORKER_PROJECTIONS: dict[tuple[int, int], int] = {
 
 
 def validate_decode_dram_workers(value) -> int:
+    if (
+        type(value) is int and value == 3 and mm_readers_enabled()
+    ):  # QWEN38_MM_READERS (x58): three readers on QSA's merged projection
+        return value
     if type(value) is not int or value not in WORKERS_PER_DRAM_BANK:
         raise ValueError(f"decode DRAM workers per bank must be one of {WORKERS_PER_DRAM_BANK}, got {value!r}")
     return value
@@ -286,7 +290,9 @@ def bank_tiles(mesh_device, k: int, n: int, num_workers_per_dram_bank: int = 1) 
 
     validate_decode_dram_workers(num_workers_per_dram_bank)
     banks = _dram_bank_count(mesh_device)
-    if num_workers_per_dram_bank != 1 and (banks != 8 or (k, n) not in TWO_WORKER_PROJECTIONS):
+    if num_workers_per_dram_bank != 1 and (
+        banks != 8 or ((k, n) not in TWO_WORKER_PROJECTIONS and MM_READERS.get((k, n)) != num_workers_per_dram_bank)
+    ):
         raise ValueError(f"two readers per DRAM bank are not qualified for banks={banks}, K={k}, N={n}")
     return math.ceil(n / (ttnn.TILE_SIZE * banks * num_workers_per_dram_bank)) * num_workers_per_dram_bank
 
@@ -325,6 +331,45 @@ def validate_dram_sharded_weight(tensor, mesh_device, k: int, n: int, *, num_wor
             )
 
 
+# QWEN38_MM_WIDE_BLOCK (default on, "0" turns it off): wider in0_block_w for the TP=8 decode projections, keyed by the
+# per-device (K, N).  x24 single-device sweep: bitwise equal to the narrow block on 4 seeds, same activation cores and
+# readers; x31 end to end at TP=8 B=1: -0.79 ms per token, tokens unchanged.
+MM_WIDE_BLOCK_ENV = "QWEN38_MM_WIDE_BLOCK"
+MM_WIDE_BLOCKS: dict[tuple[int, int], int] = {
+    (2560, 2112): 10,  # GDN in-proj qkvzab
+    (768, 2560): 6,  # GDN / QSA out-proj
+    (2560, 2304): 20,  # QSA merged projection
+    (2560, 512): 16,  # MoE router
+    (2560, 352): 16,  # shared gate | up | scalar
+    (2560, 8000): 10,  # LM-head chunk
+    (2560, 7040): 16,  # LM-head chunk
+}
+_MM_WIDE_BLOCK_ON = os.environ.get(MM_WIDE_BLOCK_ENV, "1").strip() != "0"  # read once at import
+
+
+def mm_wide_block_enabled() -> bool:
+    return _MM_WIDE_BLOCK_ON
+
+
+# x58 (QWEN38_MM_READERS=1, default off): more DRAM readers per bank on TODAY's cached weight layout, for the shapes whose bank tile
+# count is unchanged by it (bank_tiles(N, readers) == bank_tiles(N, 1): the cached tensorbins stay valid) and whose stock program
+# accepts the reader count (<= 3 per bank, a divisor of the bank's tiles): QSA merged projection 9 tiles/bank -> 3 readers
+# (27.0 -> 22.9 us), shared gate | up | scalar and the router 2 tiles/bank -> 2 readers (8.25 -> 7.7, 12.2 -> 11.9 us).  Bitwise
+# equal to the one-reader program on random and real cached weights (tests/test_mm_readers_device.py).  The output L1 shard
+# lives on more worker cores; every consumer reads it through a TensorAccessor page id or an S2I / to_memory_config.
+MM_READERS_ENV = "QWEN38_MM_READERS"
+MM_READERS: dict[tuple[int, int], int] = {
+    (2560, 2304): 3,  # QSA merged projection
+    (2560, 512): 2,  # MoE router
+    (2560, 352): 2,  # shared expert gate | up | scalar
+}
+_MM_READERS_ON = os.environ.get(MM_READERS_ENV, "0").strip() == "1"  # read once at import
+
+
+def mm_readers_enabled() -> bool:
+    return _MM_READERS_ON
+
+
 def dram_sharded_matmul_configs(mesh_device, k: int, n: int, *, num_cores: int, num_workers_per_dram_bank: int = 1):
     """Activation memory config plus program config for one decode linear.
 
@@ -337,8 +382,18 @@ def dram_sharded_matmul_configs(mesh_device, k: int, n: int, *, num_cores: int, 
     two (the configuration the two-reader form was qualified with).
     """
 
+    if num_workers_per_dram_bank == 1 and _MM_READERS_ON and (k, n) in MM_READERS:
+        num_workers_per_dram_bank = MM_READERS[(k, n)]  # x58: same bank tiles as the one-reader layout
+        if bank_tiles(mesh_device, k, n, num_workers_per_dram_bank) != bank_tiles(mesh_device, k, n):
+            raise ValueError(
+                f"QWEN38_MM_READERS: {num_workers_per_dram_bank} readers change the bank layout of K={k}, N={n}"
+            )
     tiles = bank_tiles(mesh_device, k, n, num_workers_per_dram_bank)
-    if num_workers_per_dram_bank != 1 and num_cores != TWO_WORKER_PROJECTIONS[(k, n)]:
+    if (
+        num_workers_per_dram_bank != 1
+        and (k, n) in TWO_WORKER_PROJECTIONS
+        and num_cores != TWO_WORKER_PROJECTIONS[(k, n)]
+    ):
         raise ValueError(
             f"two readers per bank for K={k}, N={n} were qualified with {TWO_WORKER_PROJECTIONS[(k, n)]} activation "
             f"storage cores, got {num_cores}"
@@ -353,6 +408,11 @@ def dram_sharded_matmul_configs(mesh_device, k: int, n: int, *, num_cores: int, 
         raise ValueError(f"K={k} does not split into whole tiles over {num_cores} storage cores")
     k_tiles_per_core = k // (ttnn.TILE_SIZE * num_cores)
     in0_block_w = next(width for width in range(8, 0, -1) if k_tiles_per_core % width == 0)
+    if _MM_WIDE_BLOCK_ON and (k, n) in MM_WIDE_BLOCKS:
+        wide = MM_WIDE_BLOCKS[(k, n)]
+        if (k // ttnn.TILE_SIZE) % wide:
+            raise ValueError(f"wide in0_block_w {wide} does not divide the {k // ttnn.TILE_SIZE} K tiles of K={k}")
+        in0_block_w = wide
     activation_memory_config = ttnn.create_sharded_memory_config(
         (ttnn.TILE_SIZE, k // num_cores),
         storage_grid,

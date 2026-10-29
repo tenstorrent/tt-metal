@@ -178,7 +178,8 @@ class Qwen38TTNNPackLander:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_config,
             )
-            kept = ttnn.multiply(slot, self.conv_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # A select (not slot * keep) keeps NaN/Inf in the admitted lane's old rows out of its new state; bit-identical for finite values.
+            kept = ttnn.where(self.conv_keep, slot, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             _landed(ttnn.add(kept, placed, output_tensor=slot), slot, f"pack landing conv[{index}]")
             _deallocate(placed, kept)
 

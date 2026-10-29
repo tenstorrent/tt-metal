@@ -594,7 +594,8 @@ class Qwen38TTNNLanePager:
                 placed = ttnn.matmul(
                     hits[lane], row, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.compute_config
                 )
-                kept = ttnn.multiply(slot, keeps[lane], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # A select (not slot * keep) keeps NaN/Inf in the admitted lane's old rows out of its new state; bit-identical for finite values.
+                kept = ttnn.where(keeps[lane], slot, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 _landed(ttnn.add(kept, placed, output_tensor=slot), slot, f"lane unpack conv[{index}] write")
                 _deallocate(row, placed, kept)
             _deallocate(tiles)
@@ -607,7 +608,7 @@ class Qwen38TTNNLanePager:
         repeats[lane_axis] = self.layout.lanes
         expanded = ttnn.repeat(part, tuple(repeats), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         placed = ttnn.multiply(expanded, hits[lane], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kept = ttnn.multiply(target, keeps[lane], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kept = ttnn.where(keeps[lane], target, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _landed(ttnn.add(kept, placed, output_tensor=target), target, f"lane unpack {label} select write")
         _deallocate(expanded, placed, kept)
 
@@ -819,7 +820,7 @@ class Qwen38TTNNLaneImporter:
                 placed = ttnn.matmul(
                     hits[lane], row, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=pager.compute_config
                 )
-                kept = ttnn.multiply(slot, keeps[lane], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                kept = ttnn.where(keeps[lane], slot, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 _landed(ttnn.add(kept, placed, output_tensor=slot), slot, f"lane import conv[{index}] write")
                 _deallocate(placed, kept)
 

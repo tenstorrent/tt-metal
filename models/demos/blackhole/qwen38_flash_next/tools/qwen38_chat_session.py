@@ -64,6 +64,7 @@ test drives the session with a scripted chain.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -2347,7 +2348,19 @@ class Qwen38TracedChain:
     # -- the per-step primitives the session calls (the runner's loop, one call each) --------
 
     def write_token_row(self, token_id: int) -> None:
+        self._token_row_value = None  # the row is rewritten from the host: no device-produced value is on record
         ttnn.copy_host_to_device_tensor(resident_decode.device_token_row(self.mesh, token_id), self.token_row_io)
+
+    def feed_token_row(self, token_id: int) -> bool:
+        """write_token_row unless the persistent token row already holds ``token_id`` (QWEN38_TOKEN_FEEDBACK): the
+        greedy TAIL resolves its argmax into token_row_io, the same buffer and FP32 tile format HEAD reads, and the
+        blocking read_token_row recorded that value.  The record is valid only from that read to the next HEAD (or host
+        write); an MTP chain (HEAD also reads the MTP next-token input) always writes.  Returns True if it wrote."""
+
+        if self.mtp is None and getattr(self, "_token_row_value", None) == token_id:
+            return False
+        self.write_token_row(token_id)
+        return True
 
     def drafting_chains(self) -> list[Qwen38ChainMTP]:
         """Every drafting chain this chain captured (``mtp_chains`` when the per-request form opened them, else the
@@ -2365,6 +2378,7 @@ class Qwen38TracedChain:
         self.mtp.step_written = True
 
     def execute_head(self, residue: int) -> None:
+        self._token_row_value = None  # HEAD consumes the row; TAIL rewrites it, so only a later read re-records
         if self.mtp is not None and not self.mtp.step_written:
             self.write_mtp_next_token(None)  # a device-token step: the MTP row takes the resolved argmax
         ttnn._ttnn_execute_trace(self.mesh, self.head_trace_ids[residue], cq_id=0, blocking=False)
@@ -2377,11 +2391,49 @@ class Qwen38TracedChain:
     def refresh_ple_row(self, token_id: int, context: tuple[int, int] | None) -> tuple[int, int]:
         """Scalar n-gram hash of (x_t, context), 16 PLE rows by pread, 5,120 B ROW_MAJOR write behind HEAD(t)."""
 
+        host_row, next_context = self.prepare_ple_row(token_id, context)
+        self.upload_ple_row(host_row)
+        return next_context
+
+    def prepare_ple_row(self, token_id: int, context: tuple[int, int] | None) -> tuple[Any, tuple[int, int]]:
+        """The pure-host half of refresh_ple_row (lookup + host mesh tensor): no device access, so it can run before
+        HEAD(t) is enqueued (QWEN38_PLE_EARLY)."""
+
         ple_owner = self.built_target.model.layers[1].ple
         payload, next_context = ple_owner.resident_lookup.lookup_token(token_id, context)
+        if os.environ.get("QWEN38_PLE_UPLOAD", "reuse") not in ("0", "fresh") and not getattr(
+            self, "_ple_upload_pending", False
+        ):
+            # One host mesh tensor over a persistent torch buffer (the mapper borrows it, checked on device in
+            # x47): per token only the 5,120 B are copied in.  Only while no upload from the buffer can still be in
+            # flight: upload_ple_row sets _ple_upload_pending, and only a blocking readback of a later TAIL
+            # (mark_ple_fenced) clears it, so a caller without that fence gets the fresh from_torch row.
+            if len(payload) != resident_decode.PLE_EMBEDDING_UPLOAD_BYTES:
+                raise ValueError(f"host PLE lookup must return {resident_decode.PLE_EMBEDDING_UPLOAD_BYTES} B")
+            reuse = getattr(self, "_ple_reuse", None)
+            if reuse is None:
+                buffer = torch.zeros(1, 1, 1, resident_decode.PLE_EMBEDDING_WIDTH, dtype=torch.bfloat16)
+                host_row = ttnn.from_torch(
+                    buffer, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.ple_row_mapper
+                )
+                reuse = self._ple_reuse = (buffer, host_row)
+            buffer, host_row = reuse
+            buffer.copy_(torch.frombuffer(payload, dtype=torch.bfloat16).reshape(buffer.shape))
+            return host_row, next_context
         host_row, _row = resident_decode.ple_host_row(self.ple_row_mapper, payload)
+        return host_row, next_context
+
+    def upload_ple_row(self, host_row: Any) -> None:
         ttnn.copy_host_to_device_tensor(host_row, self.prepared.ple.embedding_sharded)
-        return next_context
+        reuse = getattr(self, "_ple_reuse", None)
+        if reuse is not None and host_row is reuse[1]:
+            self._ple_upload_pending = True  # the persistent buffer is not to be rewritten until a fence
+
+    def mark_ple_fenced(self) -> None:
+        """A blocking readback of a TAIL that ran after the last upload completed: the persistent PLE host buffer is
+        free again.  Called only by the blocking readback sites (read_token_row, the full-logits read)."""
+
+        self._ple_upload_pending = False
 
     def read_token_row_nonblocking(self) -> Any:
         return ttnn.from_device(ttnn.get_device_tensors(self.token_row_io)[0], blocking=False)
@@ -2398,7 +2450,15 @@ class Qwen38TracedChain:
         return resident_decode.token_row_host_value(ttnn.to_torch(pending))
 
     def read_token_row(self) -> int:
-        return resident_decode.token_row_value(self.token_row_io)
+        if os.environ.get("QWEN38_HOST_FAST") == "1":  # the same blocking read of device 0's replica, one call less
+            value = resident_decode.token_row_host_value(
+                ttnn.to_torch(ttnn.from_device(ttnn.get_device_tensors(self.token_row_io)[0], blocking=True))
+            )
+        else:
+            value = resident_decode.token_row_value(self.token_row_io)  # blocking: the TAIL after the upload is done
+        self._token_row_value = value  # what the device's token row holds now (nothing runs between read and HEAD)
+        self.mark_ple_fenced()
+        return value
 
     def position(self) -> int:
         return self.state.position.read()

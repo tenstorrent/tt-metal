@@ -432,13 +432,17 @@ def _body(module, residual_rows, prepared, state, *, inject_residual=None):
     key_norm = _group_norm(module, key, module.weights.norm_key)
     query_norm = _group_norm(module, residual_rows, module.weights.norm_query)
     ttnn.deallocate(key)
-    key_global = ttnn.all_gather(key_norm, dim=3, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    query_global = ttnn.all_gather(query_norm, dim=3, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    from .. import edge_trim  # QWEN38_EDGE_TRIM=1 (ple_gather): the hidden-width gathers on row_gather
+
+    key_global = edge_trim.hidden_gather(key_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    query_global = edge_trim.hidden_gather(query_norm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(key_norm)
     ttnn.deallocate(query_norm)
     for tensor in (key_global, query_global):
         module.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.REPLICATED)
-    gated = gate(key_global, query_global, value)
+    from . import split  # QWEN38_PLE_SPLIT=1: the gate as a products program over many cores + the one-core fold
+
+    gated = (split.gate if split.enabled() else gate)(key_global, query_global, value)
     ttnn.deallocate(key_global)
     ttnn.deallocate(query_global)
     ttnn.deallocate(value)
@@ -533,6 +537,23 @@ def _expect_lanes(tensor, lanes: int, width: int, dtype, label: str) -> None:
     if got != (1, lanes, BRANCHES, width) or tensor.dtype != dtype or tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError(
             f"{label} must be {dtype} TILE {(1, lanes, BRANCHES, width)}, got {tensor.dtype} {tensor.layout} {got}"
+        )
+
+
+def _expect_lane_state(tensor, lanes: int, width: int, dtype, label: str) -> None:
+    """As :func:`_expect_lanes` for a state row: the lane axis may exceed ``lanes`` (lane u is addressed from u alone)."""
+
+    got = tuple(int(v) for v in tensor.shape)
+    if (
+        len(got) != 4
+        or got[0] != 1
+        or got[1] < lanes
+        or got[2:] != (BRANCHES, width)
+        or tensor.dtype != dtype
+        or tensor.layout != ttnn.TILE_LAYOUT
+    ):
+        raise ValueError(
+            f"{label} must be {dtype} TILE {(1, f'>= {lanes}', BRANCHES, width)}, got {tensor.dtype} {tensor.layout} {got}"
         )
 
 
@@ -699,12 +720,10 @@ def conv_lanes(state_rows, normalized, taps, gated, lanes: int, *, mac_form: int
 
     if len(state_rows) != CONV_STATE_LENGTH or len(taps) != CONV_TAPS:
         raise ValueError("PLE conv takes nine state rows and four taps")
-    for label, t in (
-        ("normalized", normalized),
-        ("gated", gated),
-        *((f"state row {i}", r) for i, r in enumerate(state_rows)),
-    ):
+    for label, t in (("normalized", normalized), ("gated", gated)):
         _expect_lanes(t, lanes, LOCAL_HIDDEN, BF16, f"PLE lanes conv {label}")
+    for i, r in enumerate(state_rows):
+        _expect_lane_state(r, lanes, LOCAL_HIDDEN, BF16, f"PLE lanes conv state row {i}")
     for i, w in enumerate(taps):
         _expect(w, (1, 1, BRANCHES, LOCAL_HIDDEN), BF16, f"PLE conv tap {i}")
     mesh = normalized.device()

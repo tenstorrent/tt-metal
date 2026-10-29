@@ -41,20 +41,27 @@ CHUNK_ROWS = ttnn.TILE_SIZE
 # pinned runtime admits one row tile); every other op runs natively on the four tiles.
 LONG_CHUNK_ROWS = 4 * ttnn.TILE_SIZE
 CHUNK_ROW_COUNTS = (CHUNK_ROWS, LONG_CHUNK_ROWS)
-# Rows of one prefill slab (the opt-in layer-major form): a multiple of the long chunk, 256 .. 4096.  Every dense
-# linear runs as one 2D-multicast matmul on an interleaved copy of its weight; the routed experts run in 128-token
-# moe_compute calls; the GDN kernel carries the state through the slab in one call.
+# Rows of one prefill slab (the opt-in layer-major form): a multiple of the long chunk, 256 .. 2048; the MoE serves the
+# multiples of its 512-row reduce block.  Every dense linear runs as one 2D-multicast matmul on an interleaved copy of
+# its weight; the routed experts run in 128-token moe_compute calls (one call: QWEN38_MOE_SLAB_ONE_CALL); the GDN
+# kernel carries the state through the slab in one call.  2048 rows is the largest slab measured to serve: at 4096 rows
+# the first dense matmul's program needs 1,705,344 B of statically allocated circular buffers per core (its TT_THROW),
+# more than a core's 1,572,864 B of L1.
 SLAB_ROW_STEP = LONG_CHUNK_ROWS
 MIN_SLAB_ROWS = 2 * LONG_CHUNK_ROWS
-MAX_SLAB_ROWS = 32 * LONG_CHUNK_ROWS
-DEFAULT_SLAB_ROWS = 16 * LONG_CHUNK_ROWS
+MAX_SLAB_ROWS = 16 * LONG_CHUNK_ROWS
+DEFAULT_SLAB_ROWS = 16 * LONG_CHUNK_ROWS  # the vLLM adapter's default slab (kept; upstream dropped it)
+SLAB_ROWS_RULE = (
+    f"a multiple of {SLAB_ROW_STEP} in {MIN_SLAB_ROWS}..{MAX_SLAB_ROWS} (the MoE serves the multiples of 512; "
+    f"{MAX_SLAB_ROWS} rows is the largest slab measured to serve)"
+)
 # The fewest real rows of a padded 128-row chunk or slab: the PLE history is the nine normalized rows before the first pad
 # row (the GDN conv history needs three), so a pass with fewer real rows is a 32-row chunk's.
 PADDED_PASS_MIN_ROWS = 9
 
 
 def is_slab_rows(rows) -> bool:
-    """True for a prefill slab row count (a multiple of 128 in 256 .. 4096; never 32 or 128)."""
+    """True for a prefill slab row count (a multiple of 128 in 256 .. 2048; never 32 or 128)."""
 
     return (
         not isinstance(rows, bool)
@@ -65,12 +72,11 @@ def is_slab_rows(rows) -> bool:
 
 
 def chunk_row_tiles(rows: int) -> int:
-    """The row tiles of a chunk form (1 or 4) or of a slab (8 .. 128); rejects any other row count."""
+    """The row tiles of a chunk form (1 or 4) or of a slab (8 .. 64); rejects any other row count."""
 
     if rows not in CHUNK_ROW_COUNTS and not is_slab_rows(rows):
         raise ValueError(
-            f"prefill chunk rows must be one of {CHUNK_ROW_COUNTS} or a slab row count "
-            f"(a multiple of {SLAB_ROW_STEP} in {MIN_SLAB_ROWS}..{MAX_SLAB_ROWS}), got {rows!r}"
+            f"prefill chunk rows must be one of {CHUNK_ROW_COUNTS} or a slab row count ({SLAB_ROWS_RULE}), got {rows!r}"
         )
     return rows // ttnn.TILE_SIZE
 

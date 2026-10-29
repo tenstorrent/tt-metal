@@ -47,13 +47,13 @@ def test_slab_row_contract(expect_error, monkeypatch) -> None:
     monkeypatch.setenv(
         moe_module.MOE_SLAB_ONE_CALL_ENV, "0"
     )  # the 128-row blocks' contract; the default is tested below
-    assert (MIN_SLAB_ROWS, MAX_SLAB_ROWS, DEFAULT_SLAB_ROWS) == (256, 4096, 2048)
+    assert (MIN_SLAB_ROWS, MAX_SLAB_ROWS, DEFAULT_SLAB_ROWS) == (256, 2048, 2048)
     assert CHUNK_ROW_COUNTS == (32, 128)  # the chunk forms are untouched
-    for rows in (256, 512, 1024, 2048, 4096):
+    for rows in (256, 512, 1024, 2048):
         assert is_slab_rows(rows) and contracts_module.chunk_row_tiles(rows) == rows // 32
-    for rows in (32, 128, 0, 31, 64, 96, 192, 2000, 8192, True, 2048.0, "2048"):
+    for rows in (32, 128, 0, 31, 64, 96, 192, 2000, 2176, 4096, 8192, True, 2048.0, "2048"):
         assert not is_slab_rows(rows)
-    for rows in (0, 31, 64, 96, 192, 8192):
+    for rows in (0, 31, 64, 96, 192, 4096, 8192):
         with expect_error(ValueError):  # allow-pytest.raises: pure contract test
             contracts_module.chunk_row_tiles(rows)
     assert gdn_module.rows_tile_count(SLAB) == SLAB and gdn_module.rows_tile_count(128) == 128
@@ -74,7 +74,7 @@ def test_slab_one_call_switch(expect_error, monkeypatch) -> None:
     0 restores the 16 x 128-row blocks; the chunk forms are untouched either way."""
     monkeypatch.delenv(moe_module.MOE_SLAB_ONE_CALL_ENV, raising=False)
     assert moe_module.moe_slab_one_call_enabled()
-    assert moe_module.routed_tokens_per_call_for(SLAB) == SLAB and moe_module.routed_tokens_per_call_for(4096) == 4096
+    assert moe_module.routed_tokens_per_call_for(SLAB) == SLAB and moe_module.routed_tokens_per_call_for(256) == 256
     assert moe_module.routed_tokens_per_call_for(128) == 128 and moe_module.routed_tokens_per_call_for(32) == 32
     for ring in (7, 8):
         assert moe_module.moe_compute_output_height_shard_dim(SLAB, matmul_ring_size=ring) == 1
@@ -131,8 +131,8 @@ def test_slab_one_call_switch(expect_error, monkeypatch) -> None:
 class _AliasingTensor:
     """A stand-in device tensor: ttnn.slice over the full extent and ttnn.concat of one tensor return their input."""
 
-    def __init__(self, shape, name):
-        self.shape, self.name = tuple(shape), name
+    def __init__(self, shape, name, dtype=None, layout=None):
+        self.shape, self.name, self.dtype, self.layout = tuple(shape), name, dtype, layout
 
 
 def _slab_reduce_fakes(monkeypatch, rows: int):
@@ -420,6 +420,143 @@ def test_qsa_slab_emulation_is_the_one_row_rule_per_row(position: int) -> None:
         assert torch.equal(inputs["row_keep_bits"][0, 0, row], one["row_keep_bits"].reshape(-1))
         assert torch.equal(inputs["row_fill"][0, 0, row], one["row_fill"].reshape(-1))
     assert inputs["q_positions_row"].tolist() == [[[list(range(position, position + SLAB))]]]
+
+
+def _qsa_fake_ttnn(monkeypatch, blocks: int):
+    """A fake ttnn for the QSA slab selection whose slice/concat alias like the real ones (a full-extent slice and a
+    one-tensor concat return their input) and whose ops refuse a freed input, as a device op does; returns the freed
+    tensors and the top-k block-id parts in creation order."""
+    freed, parts = [], []
+    u32, rm = "uint32", "row_major"
+
+    def live(*tensors):
+        for tensor in tensors:
+            if any(tensor is gone for gone in freed):
+                raise RuntimeError(f"{tensor.name} is not device resident")
+
+    def made(shape, name, *inputs, dtype=u32, layout=rm):
+        live(*inputs)
+        return _AliasingTensor(shape, name, dtype, layout)
+
+    def slice_(tensor, start, end, memory_config):
+        live(tensor)
+        if not any(start) and tuple(end) == tensor.shape:
+            return tensor  # the alias the real op returns for a full-extent slice
+        shape = tuple(stop - begin for begin, stop in zip(start, end))
+        return _AliasingTensor(shape, f"{tensor.name}[{start[2]}]", tensor.dtype, tensor.layout)
+
+    def concat(tensors, dim, memory_config):
+        live(*tensors)
+        if len(tensors) == 1:
+            return tensors[0]  # the alias the real op returns for one tensor
+        shape = list(tensors[0].shape)
+        shape[dim] = sum(part.shape[dim] for part in tensors)
+        return _AliasingTensor(shape, "concat", tensors[0].dtype, tensors[0].layout)
+
+    def topk_large_indices(masked, k):
+        parts.append(made((1, 1, masked.shape[2], k), f"block_ids{len(parts)}", masked))
+        return parts[-1]
+
+    fake_ttnn = SimpleNamespace(
+        DRAM_MEMORY_CONFIG="dram",
+        ROW_MAJOR_LAYOUT=rm,
+        uint32=u32,
+        bfloat16="bfloat16",
+        slice=slice_,
+        concat=concat,
+        all_reduce=lambda tensor, **kwargs: made(tensor.shape, "scores", tensor),
+        add=lambda lhs, rhs, **kwargs: made(lhs.shape, "sum", lhs, rhs),
+        ge=lambda lhs, rhs, **kwargs: made((1, 1, rhs.shape[2], lhs.shape[3]), "invalid_bits", lhs, rhs),
+        typecast=lambda tensor, dtype, **kwargs: made(tensor.shape, "invalid", tensor),
+        multiply=lambda tensor, value, **kwargs: made(tensor.shape, "mask_tiled", tensor),
+        to_layout=lambda tensor, layout, **kwargs: made(tensor.shape, "mask", tensor),
+        bitwise_left_shift=lambda tensor, bits, **kwargs: made(tensor.shape, "starts", tensor),
+        repeat_interleave=lambda tensor, repeats, dim, **kwargs: made(
+            (*tensor.shape[:3], tensor.shape[3] * repeats), "repeated", tensor
+        ),
+        bitwise_and=lambda lhs, rhs, **kwargs: made(lhs.shape, "kept", lhs, rhs),
+        bitwise_or=lambda lhs, rhs, **kwargs: made(lhs.shape, "sparse_indices", lhs, rhs),
+        deallocate=freed.append,
+        experimental=SimpleNamespace(
+            indexer_score_dsa=lambda query, cache, gate, **kwargs: made(
+                (1, 1, CHUNK_ROWS, blocks + CHUNK_ROWS), "local_scores", query, cache
+            ),
+            topk_large_indices=topk_large_indices,
+        ),
+    )
+    monkeypatch.setattr(qsa_module, "ttnn", fake_ttnn)
+    return SimpleNamespace(freed=freed, parts=parts, live=live)
+
+
+@pytest.mark.parametrize("expand", [False, True])
+@pytest.mark.parametrize("rows", [512, 1024, 2048])
+def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, rows: int, expand: bool) -> None:
+    """The slab's block ids stay live until the caller frees them. A 512-row slab is one 512-row score block, so its
+    block ids are its one top-k part (ttnn.concat of one tensor returns that tensor) and that part is not freed;
+    larger slabs concatenate their parts and free each one once. Nothing the method did not create is freed."""
+    blocks, block_rows = 64, qsa_module.SLAB_SCORE_BLOCK_ROWS
+    fake = _qsa_fake_ttnn(monkeypatch, blocks)
+    owner = SimpleNamespace(
+        allocated_compressed_blocks=blocks,
+        index_gate="gate",
+        indexer_chunk_start=0,
+        indexer_compute_config="compute",
+        collective_topology="linear",
+        glue=SimpleNamespace(enabled=lambda name: False),  # the per-layer derivation, the chain's selection
+        mesh_contract=SimpleNamespace(
+            mark_local_partial=lambda tensor, **kwargs: fake.live(tensor),
+            validate_tensor=lambda tensor, **kwargs: fake.live(tensor),
+        ),
+    )
+    capacity, budget = qsa_module.SPARSE_INDEX_CAPACITY, qsa_module.TOKEN_BUDGET
+    inputs = {
+        "index_query": _AliasingTensor((1, 1, rows, qsa_module.INDEX_HEAD_DIM), "index_query"),
+        "cache": _AliasingTensor((1, 1, blocks, qsa_module.INDEX_HEAD_DIM), "cache"),
+        "keep": _AliasingTensor((1, 1, rows, capacity), "keep"),
+        "fill": _AliasingTensor((1, 1, rows, capacity), "fill"),
+        "offsets": _AliasingTensor((1, 1, rows, budget), "offsets"),
+        "pad": _AliasingTensor((1, 1, rows, capacity - budget), "pad"),
+    }
+    masks = tuple(_AliasingTensor((1, 1, block_rows, blocks), f"mask{i}") for i in range(rows // block_rows))
+    result = qsa_module.Qwen38TTNNQSA._sparse_indices_slab(
+        owner,
+        inputs["index_query"],
+        SimpleNamespace(compressed_index_cache=inputs["cache"]),
+        SimpleNamespace(block_masks=masks, row_keep_bits=inputs["keep"], row_fill=inputs["fill"]),
+        SimpleNamespace(rows=rows, block_offsets_rows=inputs["offsets"], sentinel_pad_rows=inputs["pad"]),
+        expand=expand,
+    )
+    fake.live(result)
+    assert result.shape == (1, 1, rows, capacity if expand else qsa_module.BLOCK_TOPK), result.shape
+    assert len(fake.parts) == rows // block_rows, [part.name for part in fake.parts]
+    for tensor in (*inputs.values(), *masks):
+        assert all(tensor is not gone for gone in fake.freed), tensor.name
+    one_block = len(fake.parts) == 1
+    if not expand:
+        assert (result is fake.parts[0]) == one_block, (result.name, one_block)
+    for part in fake.parts:
+        times = sum(part is gone for gone in fake.freed)
+        assert times == (0 if one_block and not expand else 1), (part.name, times)
+
+
+@pytest.mark.parametrize("rows", [512, 1024])
+def test_slab_block_mask_never_frees_the_complete_block_column(monkeypatch, rows: int) -> None:
+    """The mask of a one-block (512-row) slab reads the whole complete-block column: ttnn.slice over that full extent
+    returns the column itself, which the mask must not free (the next QSA layer reads it again when the masks are
+    not hoisted). Larger slabs slice each block's rows and free those slices."""
+    blocks, block_rows = 64, qsa_module.SLAB_SCORE_BLOCK_ROWS
+    fake = _qsa_fake_ttnn(monkeypatch, blocks)
+    column = _AliasingTensor((1, 1, rows, 1), "complete_blocks_col")
+    arange = _AliasingTensor((1, 1, 1, blocks), "arange_blocks_row")
+    masks = [
+        qsa_module.slab_block_mask(column, arange, start, qsa_module.INDEXER_MASK_VALUE)
+        for start in range(0, rows, block_rows)
+    ]
+    fake.live(column, arange, *masks)
+    assert all(mask.shape == (1, 1, block_rows, blocks) for mask in masks), [mask.shape for mask in masks]
+    sliced = [gone.name for gone in fake.freed if gone.name.startswith("complete_blocks_col[")]
+    expected = [f"complete_blocks_col[{start}]" for start in range(0, rows, block_rows)]
+    assert sliced == ([] if rows == block_rows else expected), sliced
 
 
 # --------------------------------------------------------------------------- the driver's plan
@@ -758,7 +895,7 @@ def test_slab_combine_buffer_admits_the_slab_rows(expect_error, monkeypatch) -> 
         assert buffer.shape == (moe_module.TOP_K, rows, moe_module.HIDDEN_SIZE)
     assert [shape[1] for shape, _ in fakes.validated] == [CHUNK_ROWS, LONG_CHUNK_ROWS, SLAB, MAX_SLAB_ROWS]
     # counts no form admits: not a lane count (the lanes lineage admits 1..MAX_LANES), not a chunk, not a slab
-    for rows in (100, LONG_CHUNK_ROWS + 1, 2050):
+    for rows in (100, LONG_CHUNK_ROWS + 1, 2050, 4096):
         with expect_error(ValueError):  # allow-pytest.raises: pure contract test
             moe_module.allocate_local_combine_output("mesh", fakes.contract, rows)
 
@@ -872,6 +1009,5 @@ def test_a_slab_record_replays_only_on_a_server_with_a_prefill_slab() -> None:
         "sky",
     ]
     assert chat_server.slab_records_admitted(records, slab_rows=2048) == records
-    assert chat_server.slab_records_admitted(records, slab_rows=4096) == records
     source = inspect.getsource(chat_server.main)
     assert "records = slab_records_admitted(records, slab_rows=args.prefill_slab)" in source

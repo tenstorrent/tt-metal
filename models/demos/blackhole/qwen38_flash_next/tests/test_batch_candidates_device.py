@@ -148,6 +148,10 @@ class Lanes:
             reset_sampling_state=False,
             **kwargs,
         )
+        self.last_return = out  # a step with a logprobs row returns (tokens, logprobs)
+        self.last_logprobs = None
+        if isinstance(out, tuple):
+            out, self.last_logprobs = out
         for slot in range(lanes):
             if self.positions[slot] is not None:
                 self.outputs[slot].append(int(out[slot, 0]))
@@ -236,6 +240,8 @@ def candidate_rows_equal_the_topk_of_the_full_logits(mesh_device, lanes: int, mo
         pytest.param("row_read", 8, id="row_read_b8", marks=pytest.mark.timeout(5400)),
         pytest.param("row_read", 32, id="row_read_b32", marks=pytest.mark.timeout(5400)),
         pytest.param("row_mixed", 8, id="row_mixed_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("logprobs_mixed", 8, id="logprobs_mixed_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("logprobs_all", 32, id="logprobs_b32", marks=pytest.mark.timeout(5400)),
     ],
 )
 def test_batch_candidates(mesh_device, kind, lanes, monkeypatch, record_property):
@@ -253,6 +259,10 @@ def test_batch_candidates(mesh_device, kind, lanes, monkeypatch, record_property
         row_read_equals_the_full_gather(mesh_device, lanes, monkeypatch)
     elif kind == "row_mixed":
         mixed_step(mesh_device, lanes, monkeypatch, row_read=True)
+    elif kind == "logprobs_mixed":
+        logprobs_step(mesh_device, lanes, monkeypatch, steps=STEPS, mixed=True)
+    elif kind == "logprobs_all":
+        logprobs_step(mesh_device, lanes, monkeypatch, steps=6, mixed=False)
     else:
         seeded_request_is_the_same_alone_and_in_a_batch(mesh_device, lanes, monkeypatch, normalizer=True)
 
@@ -388,6 +398,103 @@ def mixed_step(mesh_device, lanes: int, monkeypatch, row_read: bool = False) -> 
             f"counters {json.dumps(model.candidate_counters)}"
         )
         assert equal >= 0.97 * checked
+    finally:
+        model.release_persistent_capture()
+
+
+# -- logprobs=0 rows (the sampled token's raw logprob) -----------------------------------------------------------------
+
+
+def logprobs_step(mesh_device, lanes: int, monkeypatch, steps: int, mixed: bool) -> None:
+    """Rows with ``enable_log_probs`` (``num_logprobs`` 0) keep the token of their route and return
+    ``(tokens, logprobs)``.  A step advances the device, so only the logprobs contract runs; the tokens are checked against
+    what the step's full logits give for the same row without the request (the route's own rules, as in ``mixed_step``), and
+    the logprob against ``log_softmax`` of the raw fp32 row (padding at -inf)."""
+
+    prompts = make_prompts(lanes, 6)
+    model = open_model(mesh_device, lanes, monkeypatch)
+    try:
+        driver = Lanes(model, lanes)
+        driver.admit(list(range(lanes)), prompts)
+        if mixed:
+            # 0 greedy, 1 greedy + presence penalty, 2 top_k 20, 3 top_k off top_p 0.95, 4 top_k off top_p 1.0 (those five ask
+            # for logprobs); 5 top_k 20, 6 greedy, 7 top_k 50 (none)
+            fields = dict(
+                temperature=[0.0, 0.0, 1.0, 1.0, 0.9, 1.0, 0.0, 0.8],
+                top_k=[1, 1, 20, VOCAB_SIZE, VOCAB_SIZE, 20, 1, 50],
+                top_p=[0.0, 0.0, 0.95, 0.95, 1.0, 0.95, 0.0, 0.9],
+                seed=[None, None, 11, 22, 33, 44, None, 77],
+                presence_penalty=[0.0, 1.5] + [0.0] * 6,
+            )
+            asks = [True] * 5 + [False] * 3
+        else:  # half greedy, half sampled top_k 20, every row asks
+            half = lanes // 2
+            fields = dict(
+                temperature=[0.0] * half + [1.0] * (lanes - half),
+                top_k=[1] * half + [20] * (lanes - half),
+                top_p=[0.0] * half + [0.95] * (lanes - half),
+                seed=[None] * half + list(range(11, 11 + lanes - half)),
+            )
+            asks = [True] * lanes
+        contract_off = sampling(lanes, enable_log_probs=[False] * lanes, **fields)
+        contract_on = sampling(lanes, enable_log_probs=asks, **fields)
+        assert not any(contract_off.enable_log_probs) and all(
+            Qwen38HostSamplingPolicy.from_contract(contract_on, r).logprobs == asks[r] for r in range(lanes)
+        )
+        lp_rows = [r for r in range(lanes) if asks[r]]
+        penalized = [r for r in range(lanes) if Qwen38HostSamplingPolicy.from_contract(contract_off, r).penalized]
+        equal = checked = 0
+        max_error = 0.0
+        for step in range(steps):
+            histories = {r: (prompts[r], driver.outputs[r]) for r in penalized}
+            before = dict(model.candidate_counters)
+            positions = list(driver.positions)
+            out = driver.step(contract_on, histories)
+            full = model.decoder.read_full_logits()
+            assert isinstance(driver.last_return, tuple) and len(driver.last_return) == 2, type(
+                driver.last_return
+            )  # (d)
+            lp = driver.last_logprobs
+            assert tuple(lp.shape) == (lanes,) and lp.dtype == torch.float32, (lp.shape, lp.dtype)
+            assert model.candidate_counters["logprobs_rows"] - before["logprobs_rows"] == len(lp_rows), (
+                step,
+                len(lp_rows),
+            )  # (e)
+            for row in range(lanes):
+                policy = Qwen38HostSamplingPolicy.from_contract(contract_off, row)  # the route without the request
+                raw = full[row].clone()
+                raw[TOKENIZER_SIZE:] = float("-inf")
+                masked = raw.clone()
+                if policy.penalized:  # the step's own token is not history yet
+                    history = (
+                        torch.tensor(prompts[row], dtype=torch.long),
+                        torch.tensor(driver.outputs[row][:-1], dtype=torch.long),
+                    )
+                    apply_penalties(masked, *history, policy)
+                token = int(out[row, 0])
+                checked += 1
+                # (a) the token of the route without the request
+                expected = sample_from_row(masked.clone(), policy, position_generator(policy.seed, positions[row]))
+                equal += token == expected
+                if policy.greedy:  # device argmax vs host argmax: equal up to tied bf16 values
+                    assert masked[token] == masked.max(), (step, row, token, expected)
+                elif policy.top_k > 32 or policy.penalized:  # full-row draws (the fallback rows): bit for bit
+                    assert token == expected, (step, row, token, expected)
+                else:  # candidate rows: inside the support of the full-row law (a tripped guard draws over the full row)
+                    support = full_law(masked, Qwen38HostSamplingPolicy(policy.temperature, policy.top_k, policy.top_p))
+                    assert token in support, (step, row, token)
+                if asks[row]:  # (b)
+                    reference = float((raw - torch.logsumexp(raw, 0))[token])
+                    error = abs(float(lp[row]) - reference)
+                    max_error = max(max_error, error)
+                    assert error <= 1e-4, (step, row, token, float(lp[row]), reference)
+                else:  # (c)
+                    assert float(lp[row]) == 0.0, (step, row, float(lp[row]))
+        logger.info(
+            f"logprobs B={lanes}: {steps} steps, {checked} rows checked, max |lp error| {max_error:.3e}, token equal to "
+            f"the full-row draw in {equal} of {checked}; counters {json.dumps(model.candidate_counters)}"
+        )
+        assert equal >= 0.9 * checked
     finally:
         model.release_persistent_capture()
 

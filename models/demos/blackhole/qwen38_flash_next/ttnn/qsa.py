@@ -76,6 +76,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
     validate_decode_dram_workers,
     validate_dram_sharded_weight,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mm_stream as fused_mm_stream
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import (
     Qwen38TTNNPrefillDense,
     prefill_linear,
@@ -157,6 +158,15 @@ SLAB_SCORES_RS_MASK_VALUE = -(2.0**100)
 KV_ROW_MASK = CACHE_WRITE_ROWS - 1
 KV_BLOCK_START_MASK = 0xFFFFFFFF ^ KV_ROW_MASK
 ALL_ONES_U32 = 0xFFFFFFFF
+
+
+def _row_reduce_call(partial, *, cluster_axis, memory_config):
+    """The fp32 output reduce-scatter: the row-packed ``fused.row_reduce`` program (QWEN38_ROW_REDUCE=1, one row) or the
+    stock ``ttnn.reduce_scatter``."""
+
+    from models.demos.blackhole.qwen38_flash_next.ttnn.fused.row_reduce import row_reduce_or_reduce_scatter
+
+    return row_reduce_or_reduce_scatter(partial, cluster_axis=cluster_axis, memory_config=memory_config)
 
 
 def validate_qsa_cache_capacity(allocated_context: int) -> int:
@@ -1540,14 +1550,20 @@ def slab_block_mask(complete_blocks_col, arange_blocks_row, start: int, value: f
     per-layer ones."""
 
     dram = ttnn.DRAM_MEMORY_CONFIG
-    complete_col = ttnn.slice(
-        complete_blocks_col, (0, 0, start, 0), (1, 1, start + SLAB_SCORE_BLOCK_ROWS, 1), memory_config=dram
+    # A one-block slab has no sub-range: ttnn.slice over a full extent returns its input, so the column is the block.
+    one_block = _shape(complete_blocks_col)[2] == SLAB_SCORE_BLOCK_ROWS
+    complete_col = (
+        complete_blocks_col
+        if one_block
+        else ttnn.slice(
+            complete_blocks_col, (0, 0, start, 0), (1, 1, start + SLAB_SCORE_BLOCK_ROWS, 1), memory_config=dram
+        )
     )
     invalid_bits = ttnn.ge(arange_blocks_row, complete_col, dtype=ttnn.uint32, memory_config=dram)
     invalid = ttnn.typecast(invalid_bits, ttnn.bfloat16, memory_config=dram)
     mask_tiled = ttnn.multiply(invalid, value, memory_config=dram)
     mask = ttnn.to_layout(mask_tiled, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
-    _deallocate(complete_col, invalid_bits, invalid, mask_tiled)
+    _deallocate(None if one_block else complete_col, invalid_bits, invalid, mask_tiled)
     return mask
 
 
@@ -2007,6 +2023,8 @@ class Qwen38TTNNQSALaneConstants:
     compressed_rows_memory_config: Any
     paging: Qwen38LanePaging | None = None
     page_table: Any = None
+    # False on a bucket view: ``page_table`` is the parent's (shared), so :meth:`deallocate` leaves it.
+    owns_page_table: bool = True
 
     @property
     def page_size(self) -> int:
@@ -2085,6 +2103,43 @@ class Qwen38TTNNQSALaneConstants:
             _deallocate(*uploaded)
             raise
 
+    @classmethod
+    def build_view(
+        cls,
+        mesh_device,
+        mesh_contract: Qwen38MeshContract,
+        parent: "Qwen38TTNNQSALaneConstants",
+        *,
+        lanes: int,
+    ) -> "Qwen38TTNNQSALaneConstants":
+        """Constants of a ``lanes``-lane bucket view over the paged 32-lane ``parent``.
+
+        The view shares the parent's one page table (host writes to it reach every bucket) and does not own it; its
+        other constants are built at ``lanes`` lanes with the parent's context, indexer form and paging."""
+
+        if parent.paging is None:
+            raise ValueError("a QSA lane constants view needs a paged parent")
+        if parent.lanes != MAX_LANES:
+            raise ValueError(f"a QSA lane constants view needs a {MAX_LANES}-lane parent, got {parent.lanes}")
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < MAX_LANES:
+            raise ValueError(f"a QSA lane constants view takes 1 <= lanes < {MAX_LANES}, got {lanes!r}")
+        built = None
+        try:
+            built = cls.build(
+                mesh_device,
+                mesh_contract,
+                lanes=lanes,
+                allocated_context=parent.allocated_context,
+                indexer_form=parent.indexer_form,
+                paging=parent.paging,
+            )
+            _deallocate(built.page_table)
+            return replace(built, page_table=parent.page_table, owns_page_table=False)
+        except BaseException:
+            if built is not None:
+                built.deallocate()
+            raise
+
     def deallocate(self) -> None:
         _deallocate(
             self.arange32_tile,
@@ -2092,7 +2147,7 @@ class Qwen38TTNNQSALaneConstants:
             self.kv_offsets_row,
             self.block_offsets_lanes,
             self.arange_slots_lanes,
-            *(() if self.page_table is None else (self.page_table,)),
+            *(() if self.page_table is None or not self.owns_page_table else (self.page_table,)),
         )
 
 
@@ -2724,6 +2779,17 @@ class Qwen38TTNNQSALaneState:
     # PAGED (the plain lane body's page pool): ``packed_kv_cache`` is the pool ``[1,1,pool_rows,512]`` (0: the flat
     # ``[1,1,B*C + kv_scratch_rows,512]`` cache).
     pool_rows: int = 0
+    # Lanes of the tensors this state holds.  0 = the state owns ``lanes`` lanes; > ``lanes`` = a bucket view over a
+    # parent state of ``storage_lanes`` lanes (lanes 0..lanes-1 used; the tensors belong to the parent).
+    storage_lanes: int = 0
+
+    @property
+    def stored_lanes(self) -> int:
+        return self.storage_lanes or self.lanes
+
+    @property
+    def is_view(self) -> bool:
+        return self.stored_lanes != self.lanes
 
 
 # --------------------------------------------------------------------------- lane verify (B lanes x R rows, one tile)
@@ -3284,6 +3350,8 @@ def _lane_score_rows_of_composed(local_scores, lanes_of_rows, lanes: int, cache_
         )
         for row, lane in enumerate(lanes_of_rows)
     ]
+    if len(windows) == 1:
+        return windows[0]  # ttnn.concat of one tensor returns it: freeing the window would free the result
     stacked = ttnn.concat(windows, dim=2, memory_config=dram)
     _deallocate(*windows)
     return stacked
@@ -3315,6 +3383,9 @@ class Qwen38TTNNQSA:
     _main_tail_fused = None
     _post_attention_fused = None
     _widen_partial_fused = None
+    _trim_score_pages = None  # QWEN38_QSA_TRIM=1: the decode's slice + reshape before the score gather as one program
+    _trim_reduce = None  # QWEN38_QSA_TRIM=1: widen + output reduce + typecast as one program
+    _trim_post_attention = None  # QWEN38_QSA_TRIM=1: the 48-core post-attention program on the one-row decode
     _selection_row_fused = None
     _score_merge_fused = None
     _score_pages = None  # qsa_rows program 4 (qsa_score_pages): the indexer's rows straight into the gather's pages
@@ -3329,7 +3400,8 @@ class Qwen38TTNNQSA:
     # chain (docs/PREFILL.md), resolved at construction and kept through trace capture; the chunk forms never see it.
     _slab_attention_fused = None
     _slab_attention_base_config = None
-    _lane_score_rows_of = staticmethod(_lane_score_rows_of_composed)  # the fused row windows when the programs are on
+    # the lanes' score-row windows: the chain here, ttnn/fused/qsa_block.lane_score_rows_of(_fused) with qsa_score_merge
+    _lane_score_rows_of = staticmethod(_lane_score_rows_of_composed)
     # The prefill slab's dense-linear policy (ttnn/prefill_dense: the QWEN38_PREFILL_DENSE_* switches) for the slab's
     # query-gate / K / V / output projections; the index projections and every decode linear never read it.
     prefill_dense: Qwen38TTNNPrefillDense | None = None
@@ -3509,6 +3581,9 @@ class Qwen38TTNNQSA:
             self._selection_row_fused = fused_kernels.kernel("qsa_selection_row").fused
         if fused_kernels.enabled("qsa_score_merge"):
             self._score_merge_fused = fused_kernels.kernel("qsa_score_merge").fused
+            # the lanes' windows feed the score stage this switch fuses, whatever the slab kernel's state
+            self._lane_score_rows_fused = fused_kernels.qsa_block.lane_score_rows  # the lanes' windows, one program
+            self._lane_score_rows_of = fused_kernels.qsa_block.lane_score_rows_of  # the lane verify's row windows
         if fused_kernels.enabled("qsa_rows"):
             # the verify-form rows family (forward_verify_generic's glue on the 32-row tile), program by program
             self._rows_fused = fused_kernels.qsa_rows
@@ -3525,14 +3600,18 @@ class Qwen38TTNNQSA:
             # the compute config (HiFi4 / fp32 DEST, or the HiFi2 arm under QWEN38_SPARSE_SDPA_TILED_FIDELITY),
             # resolved once and kept through trace capture
             self._slab_attention_base_config = fused_kernels.sparse_sdpa_tiled.model_config()
-            self._lane_score_rows_fused = fused_kernels.qsa_block.lane_score_rows  # the lanes' windows, one program
-            self._lane_score_rows_of = fused_kernels.qsa_block.lane_score_rows_of  # the lane verify's row windows
         # The served path's one linear for the five projections (_project_merged): both fused tails read their column
         # windows of its shard, so it needs both on and the merged weight resident (a container built without it, the
         # dev microtests' random weights, runs the separate linears).  The lanes run the separate linears.
         self.merged_projections = (
             self._index_tail_fused is not None and self._main_tail_fused is not None and weights.projections is not None
         )
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_trim
+
+        if qsa_trim.enabled():
+            self._trim_score_pages = qsa_trim.score_pages_for(self)
+            self._trim_post_attention = qsa_trim.post_attention_for(self)
+            self._trim_reduce = qsa_trim.reduce_for(self)
         switches = (
             self._index_tail_fused,
             self._main_tail_fused,
@@ -4141,9 +4220,10 @@ class Qwen38TTNNQSA:
         # The gather writes the eight-core activation shard the index and main
         # projections read; the tensor stays allocated through the layer (20 KB
         # per core), as the GDN and MoE gathers do.
-        full_hidden = ttnn.all_gather(
+        from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
+
+        full_hidden = fused_kernels.resolve_admitted("row_gather")(
             hidden_sharded,
-            dim=3,
             cluster_axis=TP_AXIS,
             memory_config=self.hidden_act_memory_config,
         )
@@ -4791,12 +4871,10 @@ class Qwen38TTNNQSA:
             replicated_reference=full_hidden,
             expected_shape=(1, 1, 1, HIDDEN_SIZE),
         )
-        output_fp32 = ttnn.reduce_scatter(
+        output_fp32 = _row_reduce_call(
             local_partial_fp32,
-            dim=3,
             cluster_axis=TP_AXIS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.collective_topology,
         )
         _deallocate(local_partial_fp32)
         self.mesh_contract.mark_collective_shard(
@@ -4900,7 +4978,7 @@ class Qwen38TTNNQSA:
         read.  The separate linears' program (in0_block_w 5, the same K accumulation per output column), one reader
         per bank."""
 
-        return ttnn.linear(
+        return fused_mm_stream.linear(
             full_hidden,
             self.weights.projections,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -4984,23 +5062,34 @@ class Qwen38TTNNQSA:
             compute_kernel_config=self.indexer_compute_config,
             seq_shard_axes=[STAGING_AXIS],
         )
-        score_row = ttnn.slice(
-            local_scores,
-            (0, 0, 0, 0),
-            (1, 1, 1, self.allocated_compressed_blocks),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        _deallocate(local_scores)
-        self.mesh_contract.mark_local_partial(
-            score_row,
-            replicated_reference=state.compressed_index_cache,
-            expected_shape=(1, 1, 1, self.allocated_compressed_blocks),
-        )
-        # the row as 2 KB pages: ttnn.all_gather's kernels refuse a page of 65,536 bytes or more (the whole row at a
-        # 131072-token context); device d's page c lands at gathered page d * pages + c, which the fused merge reads
         pages = self.allocated_compressed_blocks // SCORE_GATHER_PAGE
-        paged = ttnn.reshape(score_row, (1, 1, pages, SCORE_GATHER_PAGE))
-        _deallocate(score_row)
+        if self._trim_score_pages and self._trim_score_pages.admits(local_scores, self.allocated_compressed_blocks):
+            # QWEN38_QSA_TRIM: the slice and the reshape below as ONE data-movement program (qsa_rows program 4, pure
+            # 2 KB copies: the same bytes)
+            paged = self._trim_score_pages(local_scores, self.allocated_compressed_blocks)
+            _deallocate(local_scores)
+            self.mesh_contract.mark_local_partial(
+                paged,
+                replicated_reference=state.compressed_index_cache,
+                expected_shape=(1, 1, pages, SCORE_GATHER_PAGE),
+            )
+        else:
+            score_row = ttnn.slice(
+                local_scores,
+                (0, 0, 0, 0),
+                (1, 1, 1, self.allocated_compressed_blocks),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            _deallocate(local_scores)
+            self.mesh_contract.mark_local_partial(
+                score_row,
+                replicated_reference=state.compressed_index_cache,
+                expected_shape=(1, 1, 1, self.allocated_compressed_blocks),
+            )
+            # the row as 2 KB pages: ttnn.all_gather's kernels refuse a page of 65,536 bytes or more (the whole row at a
+            # 131072-token context); device d's page c lands at gathered page d * pages + c, which the fused merge reads
+            paged = ttnn.reshape(score_row, (1, 1, pages, SCORE_GATHER_PAGE))
+            _deallocate(score_row)
         gathered = ttnn.all_gather(
             paged,
             dim=2,
@@ -5133,9 +5222,15 @@ class Qwen38TTNNQSA:
             compute_kernel_config=self.compute_config,
         )
         _deallocate(sparse_query)
-        attention_ws = self._post_attention_fused(
-            sparse_output, qg_ws, memory_config=self.out_act_memory_config, qg_first=qg_first
-        )
+        if self._trim_post_attention and self._trim_post_attention.admits(sparse_output, qg_ws, qg_first):
+            # QWEN38_QSA_TRIM: one core per (head, tile column) of the output instead of one per head
+            attention_ws = self._trim_post_attention(
+                sparse_output, qg_ws, memory_config=self.out_act_memory_config, qg_first=qg_first
+            )
+        else:
+            attention_ws = self._post_attention_fused(
+                sparse_output, qg_ws, memory_config=self.out_act_memory_config, qg_first=qg_first
+            )
         _deallocate(sparse_output, qg_ws)
         _require_shape(attention_ws, (1, 1, rows, LOCAL_QUERY_WIDTH), "fused gated QSA attention")
         _retag_tensor(attention_ws, reference=state.packed_kv_cache, shard_dim=3)
@@ -5159,6 +5254,19 @@ class Qwen38TTNNQSA:
             compute_kernel_config=self.projection_compute_config,
         )
         _deallocate(attention_ws)
+        if self._trim_reduce is not None and rows == 1 and self._trim_reduce.admits(local_partial_ws):
+            # QWEN38_QSA_TRIM: the widen below, the fp32 reduce and the typecast to bf16 as ONE program (bitwise)
+            output = self._trim_reduce(local_partial_ws, reference=full_hidden)
+            _deallocate(local_partial_ws)
+            self.mesh_contract.mark_collective_shard(
+                output,
+                replicated_reference=full_hidden,
+                shard_dim=3,
+                expected_local_shape=(1, 1, rows, HIDDEN_SIZE // TP_SIZE),
+            )
+            _require_shape(output, (1, 1, rows, HIDDEN_SIZE // TP_SIZE), "QSA output projection")
+            self.mesh_contract.validate_tensor(output, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
+            return output
         if self._widen_partial_fused is not None:
             local_partial_fp32 = self._widen_partial_fused(local_partial_ws)
             _deallocate(local_partial_ws)
@@ -5172,12 +5280,10 @@ class Qwen38TTNNQSA:
             replicated_reference=full_hidden,
             expected_shape=(1, 1, rows, HIDDEN_SIZE),
         )
-        output_fp32 = ttnn.reduce_scatter(
+        output_fp32 = _row_reduce_call(
             local_partial_fp32,
-            dim=3,
             cluster_axis=TP_AXIS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.collective_topology,
         )
         _deallocate(local_partial_fp32)
         self.mesh_contract.mark_collective_shard(
@@ -5348,12 +5454,10 @@ class Qwen38TTNNQSA:
             replicated_reference=full_hidden,
             expected_shape=(1, 1, 1, HIDDEN_SIZE),
         )
-        output_fp32 = ttnn.reduce_scatter(
+        output_fp32 = _row_reduce_call(
             local_partial_fp32,
-            dim=3,
             cluster_axis=TP_AXIS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.collective_topology,
         )
         _deallocate(local_partial_fp32)
         self.mesh_contract.mark_collective_shard(
@@ -5982,8 +6086,11 @@ class Qwen38TTNNQSA:
             _require_shape(masked, (1, 1, SLAB_SCORE_BLOCK_ROWS, blocks), "masked QSA slab block scores")
             block_ids_parts.append(ttnn.experimental.topk_large_indices(masked, k=BLOCK_TOPK))
             _deallocate(masked)
-        block_ids = ttnn.concat(block_ids_parts, dim=2, memory_config=dram)
-        _deallocate(*block_ids_parts)
+        if len(block_ids_parts) == 1:
+            block_ids = block_ids_parts[0]  # ttnn.concat of one tensor returns it (an alias): the part is the result
+        else:
+            block_ids = ttnn.concat(block_ids_parts, dim=2, memory_config=dram)
+            _deallocate(*block_ids_parts)
         _require_shape(block_ids, (1, 1, rows, BLOCK_TOPK), "top-k QSA slab block IDs")
         if block_ids.dtype != ttnn.uint32 or block_ids.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(
@@ -6390,12 +6497,10 @@ class Qwen38TTNNQSA:
         self.mesh_contract.mark_local_partial(
             local_partial_fp32, replicated_reference=full_hidden, expected_shape=(1, 1, rows, HIDDEN_SIZE)
         )
-        output_fp32 = ttnn.reduce_scatter(
+        output_fp32 = _row_reduce_call(
             local_partial_fp32,
-            dim=3,
             cluster_axis=TP_AXIS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.collective_topology,
         )
         _deallocate(local_partial_fp32)
         self.mesh_contract.mark_collective_shard(
@@ -7185,7 +7290,21 @@ class Qwen38TTNNQSA:
             pool_rows=pool_rows,
         )
 
+    @staticmethod
+    def _refuse_lane_view(state: Qwen38TTNNQSALaneState, what: str) -> None:
+        if state.is_view:
+            raise RuntimeError(
+                f"QSA lane state {what} ({state.lanes} of {state.stored_lanes} lanes) "
+                "is a bucket view; use the parent state"
+            )
+
+    @staticmethod
+    def _require_lane_not_view(state: Qwen38TTNNQSALaneState, what: str) -> None:
+        if state.is_view:
+            raise ValueError(f"{what} does not take a bucket view")
+
     def release_lane_state(self, state: Qwen38TTNNQSALaneState) -> None:
+        self._refuse_lane_view(state, "release_lane_state")
         self._validate_lane_state(state)
         _deallocate(state.packed_kv_cache, state.compressed_index_cache, state.kv_staging, state.raw_key_ring)
         self._live_generic_epochs.remove(state.epoch)
@@ -7194,6 +7313,7 @@ class Qwen38TTNNQSA:
         """Zero every lane's staging tile and raw-key ring without changing any address (trace safe); the two
         caches need no reset (rows past P_u are never gathered, blocks at or past the complete count are masked)."""
 
+        self._refuse_lane_view(state, "reset_lane_state_inplace")
         self._validate_lane_state(state)
         for label, tensor in (("QSA lane KV staging", state.kv_staging), ("QSA lane raw-key ring", state.raw_key_ring)):
             zeroed = ttnn.fill(tensor, 0.0, output_tensor=tensor)
@@ -7204,6 +7324,7 @@ class Qwen38TTNNQSA:
         """Zero lane ``lane``'s staging tile and raw-key ring (a keep-mask multiply over the lane axis, the other
         lanes x 1.0), no address change; the caches need no reset.  Eager host upload, never traced."""
 
+        self._refuse_lane_view(state, "reset_lane_inplace")
         self._validate_lane_state(state)
         if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < state.lanes:
             raise ValueError(f"QSA lane must be an int in [0,{state.lanes}), got {lane!r}")
@@ -7222,7 +7343,8 @@ class Qwen38TTNNQSA:
                 ("QSA lane KV staging", state.kv_staging),
                 ("QSA lane raw-key ring", state.raw_key_ring),
             ):
-                kept = ttnn.multiply(tensor, keep_lanes, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # A select (not slot * keep) keeps NaN/Inf in the admitted lane's old rows out of its new state; bit-identical for finite values.
+                kept = ttnn.where(keep_lanes, tensor, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 key = _tensor_key(tensor)
                 copied = ttnn.copy(kept, tensor)
                 _deallocate(kept)
@@ -7236,7 +7358,12 @@ class Qwen38TTNNQSA:
             raise ValueError(f"QSA lane state belongs to layer {state.layer_index}, expected {self.layer_index}")
         if state.epoch not in self._live_generic_epochs:
             raise ValueError(f"QSA lane state epoch {state.epoch} was not allocated by this module")
-        lanes = require_lane_count(state.lanes, label="QSA lane state lanes", error_type=RuntimeError)
+        require_lane_count(state.lanes, label="QSA lane state lanes", error_type=RuntimeError)
+        lanes = require_lane_count(state.stored_lanes, label="QSA lane state stored lanes", error_type=RuntimeError)
+        if lanes < state.lanes:
+            raise RuntimeError(f"QSA lane state stores {lanes} lanes, fewer than its {state.lanes} lanes")
+        if state.is_view and not state.pool_rows:
+            raise ValueError("a QSA lane bucket view must be paged (pool_rows > 0)")
         rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
         if state.kv_scratch_rows < 0 or state.kv_scratch_rows % CACHE_WRITE_ROWS:
             raise RuntimeError(f"QSA lane KV scratch rows must be whole blocks, got {state.kv_scratch_rows}")
@@ -7370,6 +7497,7 @@ class Qwen38TTNNQSA:
         lanes: Qwen38TTNNQSALaneInputs,
         lane_constants: Qwen38TTNNQSALaneConstants,
     ) -> None:
+        self._require_lane_not_view(state, "the composed QSA lane index write")
         count = state.lanes
         # Ring slot P_u % 4 of lane u <- its raw key row: the selection matmul places row u of the raw-key tile at
         # row P_u % 4 of lane u's ring tile (one nonzero term per element, fp32 accumulation), the keep column
@@ -7460,6 +7588,7 @@ class Qwen38TTNNQSA:
         lanes: Qwen38TTNNQSALaneInputs,
         lane_constants: Qwen38TTNNQSALaneConstants,
     ):
+        self._require_lane_not_view(state, "the composed QSA lane block score")
         count, blocks = state.lanes, self.allocated_compressed_blocks
         rows = blocks + ttnn.TILE_SIZE
         # Row u of the 32-row query tile is scored against lane u's blocks only: the wide form scores the flat
@@ -8142,6 +8271,8 @@ class Qwen38TTNNQSA:
         _retag_tensor(query_tile, reference=index_query, shard_dim=1)
         lane_rows = []
         if lane_constants.indexer_form == "wide":
+            # A bucket view scores the first ``count`` users of the parent's flat cache: kv_len bounds the keys.
+            view_kwargs = {"kv_len": count * rows} if state.is_view else {}
             local_scores = ttnn.experimental.indexer_score_dsa(
                 query_tile,
                 state.compressed_index_cache_flat,
@@ -8149,6 +8280,7 @@ class Qwen38TTNNQSA:
                 chunk_start_idx=count * rows - ttnn.TILE_SIZE,
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
+                **view_kwargs,
             )
             if self._lane_score_rows_fused is not None:
                 lane_rows.append(self._lane_score_rows_fused(local_scores, count, rows, blocks))
@@ -8156,6 +8288,7 @@ class Qwen38TTNNQSA:
                 lane_rows.append(self._lane_score_rows_of(local_scores, tuple(range(count)), count, rows, blocks))
             _deallocate(local_scores)
         else:
+            self._require_lane_not_view(state, "the per-lane QSA indexer")
             for lane in range(count):
                 local_scores = ttnn.experimental.indexer_score_dsa(
                     query_tile,

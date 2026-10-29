@@ -11,7 +11,7 @@
 #pragma once
 
 #ifdef QWEN38_FUSED_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #define FUSED_ZONE(name) DeviceZoneScopedN(name)
 #else
 #define FUSED_ZONE(name)

@@ -801,10 +801,10 @@ def test_penalties_use_each_rows_own_history(rig: Rig) -> None:
         assert out[row, 0] == _expected_draw(rig, row, 1, policy, torch.Generator().manual_seed(seed), history)
 
 
-def test_logprobs_are_refused_before_the_replay(rig: Rig, expect_error) -> None:
+def test_a_top_n_logprobs_request_is_refused_before_the_replay(rig: Rig, expect_error) -> None:
     rig.prefill([_prompt(20, 5)], [0], [[1]], greedy_batch_sampling_params(1))
-    params = _sampling(8, enable_log_probs=[True])
-    with expect_error(ValueError, "logprobs"):
+    params = _sampling(8, enable_log_probs=[True], num_logprobs=[3])
+    with expect_error(ValueError, "num_logprobs"):
         rig.decode([(7, 20, [1])] + [None] * 7, sampling_params=params)
     assert rig.decoder.steps == []
 

@@ -171,7 +171,8 @@ def test_composite_cb_and_semaphore_tables():
     assert 'extra=(sigmoid, se.CB_INDEX["cb_sig_bcast"])' in source
     # the eltwise kernels are shared_expert's by path, the untilize kernels untilize_rows', the top-k router_tail's
     assert 'se.KERNELS["reader"]' in source and 'se.KERNELS["compute"]' in source
-    assert "ur.READER" in source and "ur.WRITER" in source and "rt.program_parts(" in source
+    # the top-k is built by router_tail_sc.program_parts, which falls back to rt.program_parts unless the flag is set
+    assert "ur.READER" in source and "ur.WRITER" in source and "rt_sc.program_parts(" in source
 
 
 def test_model_switch_sites():

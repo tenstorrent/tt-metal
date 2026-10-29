@@ -51,6 +51,7 @@ import ttnn
 from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MESH_SHAPE,
+    SLAB_ROWS_RULE,
     TP_SIZE,
     is_slab_rows,
     replicate_tensor_2d_mesh_mapper,
@@ -118,7 +119,7 @@ def slab_working_set_bytes(rows: int) -> int:
     state, the tensors alive through a slab and the layer transients are rows-linear)."""
 
     if not is_slab_rows(rows):
-        raise ValueError(f"a prefill slab takes a multiple of 128 rows in 256..4096, got {rows!r}")
+        raise ValueError(f"a prefill slab takes {SLAB_ROWS_RULE}, got {rows!r}")
     return SLAB_WORKING_SET_BYTES * max(rows, MEASURED_SLAB_ROWS) // MEASURED_SLAB_ROWS
 
 

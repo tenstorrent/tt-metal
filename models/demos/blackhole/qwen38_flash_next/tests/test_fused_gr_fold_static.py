@@ -130,7 +130,7 @@ def test_compile_time_arg_layout_matches_the_python_side():
     }
     assert "constexpr uint32_t ACCESSOR_BASE = 11;" in KERNEL and KERNEL.count("next_compile_time_args_offset()") == 1
     assert (
-        "args=[first.scratch_cb,first.tiles,go,TP_SIZE,first.source,first.semaphore_ids[1],done,i,links,*first.page_strides,]"
+        "args=[first.scratch_cb,first.tiles,go,TP_SIZE,first.source,first.semaphore_ids[1],done,i,links,*first.page_strides,*first.extra_args,]"
         in BUILDER
     )
     two = dict(re.findall(pattern, KERNEL2))
@@ -140,13 +140,13 @@ def test_compile_time_arg_layout_matches_the_python_side():
             two[f"{phase}_{k}"]
             for k in ("SCRATCH_CB", "TILES", "SOURCE", "SEM_SCRATCH", "PAGE_TILE_STRIDE", "PAGE_RANK_STRIDE")
         ] == [str(base + j) for j in range(6)]
-    assert "constexpr uint32_t ACCESSOR_BASE = 17;" in KERNEL2 and KERNEL2.count("next_compile_time_args_offset()") == 3
+    assert "constexpr uint32_t ACCESSOR_BASE = 25;" in KERNEL2 and KERNEL2.count("next_compile_time_args_offset()") == 4
     assert (
         "args=[go,TP_SIZE,done,i,links]" in BUILDER
         and "args+=[t.scratch_cb,t.tiles,t.source,t.semaphore_ids[1],*t.page_strides]" in BUILDER
     )
     assert "fortintransports:args+=fp.accessor_args(t.out)+fp.accessor_args(t.local)" in BUILDER
-    assert "kernel=TRANSPORT_KERNELiflen(transports)==1elseTRANSPORT2_KERNEL" in BUILDER
+    assert "kernel=(first.kernelorTRANSPORT_KERNEL)iflen(transports)==1elseTRANSPORT2_KERNEL" in BUILDER
     assert (
         "semaphore_ids:tuple=(SEM_GO,SEM_SCRATCH,SEM_DONE)" in TRANSPORT_SPEC
         and "page_strides:tuple=(TP_SIZE,1)" in TRANSPORT_SPEC
@@ -158,7 +158,7 @@ def test_compile_time_arg_layout_matches_the_python_side():
     for phase, close in (("A", "false"), ("B", "true")):
         p = phase
         assert (
-            f"transport_phase<{p}_SCRATCH_CB,{p}_TILES,TILE_FIRST,TILE_STEP,{p}_PAGE_TILE_STRIDE,{p}_PAGE_RANK_STRIDE,{p}_SOURCE,RING,SEM_GO,{p}_SEM_SCRATCH,SEM_DONE,{close}>"
+            f"transport_phase<{p}_SCRATCH_CB,{p}_TILES,TILE_FIRST,TILE_STEP,{p}_PAGE_TILE_STRIDE,{p}_PAGE_RANK_STRIDE,{p}_SOURCE,RING,SEM_GO,{p}_SEM_SCRATCH,SEM_DONE,{close},{p}_ROWS,{p}_ROW_MODE,{p}_PACK_CB,{p}_SLOT_BYTES,{p}_LAND,{p}_DATA1>"
             in flat(KERNEL2)
         )
     assert (
@@ -219,7 +219,8 @@ def test_page_map_is_all_gathers_tile_order():
     links, core i carries tiles i, i + 2, ..."""
 
     assert "{.page_id = (TILE_FIRST + i * TILE_STEP) * PAGE_TILE_STRIDE + rank * PAGE_RANK_STRIDE}" in PHASE
-    assert "out.get_noc_addr((TILE_FIRST + i * TILE_STEP) * PAGE_TILE_STRIDE + rank * PAGE_RANK_STRIDE, 0, 0)" in PHASE
+    assert "const uint32_t page = (TILE_FIRST + i * TILE_STEP) * PAGE_TILE_STRIDE + rank * PAGE_RANK_STRIDE;" in PHASE
+    assert "out.get_noc_addr(page, chunk_off[k], 0)" in PHASE
     assert "MY_TILES = TILE_FIRST < TILES ? (TILES - TILE_FIRST + TILE_STEP - 1) / TILE_STEP : 0" in PHASE
     assert "const uint32_t rank = line.rank;" in PHASE
     for links in (1, 2):
@@ -290,7 +291,11 @@ def test_fact_1_exactly_n_minus_1_arrivals_per_counter_per_call():
 
 
 def test_fact_2_reset_is_program_ordered_before_the_release_that_gates_every_send():
-    brisc = PHASE[PHASE.index("#if defined(COMPILE_FOR_BRISC)\n    noc_semaphore_wait_min(barrier") :]
+    brisc = PHASE[
+        PHASE.index(
+            "#if defined(COMPILE_FOR_BRISC)\n    if constexpr (!NOBARRIER) {\n        noc_semaphore_wait_min(barrier"
+        ) :
+    ]
     assert (
         brisc.index("noc_semaphore_set(barrier, 0);")
         < brisc.index("go.set(1);")
@@ -304,9 +309,14 @@ def test_fact_2_reset_is_program_ordered_before_the_release_that_gates_every_sen
 
 
 def test_fact_3_data_wait_is_every_peers_every_tile_and_every_counter_is_reset_by_its_owner():
-    assert "noc_semaphore_wait_min(data, (RING - 1) * MY_TILES);" in PHASE and "noc_semaphore_set(data, 0);" in PHASE
-    assert PHASE.count("fabric_multicast_noc_fused_unicast_with_atomic_inc(") == 1  # every data tile: write + inc
-    body = PHASE[PHASE.index("for (uint32_t i = 0; i < MY_TILES; ++i) {\n            noc_async_writes_flushed();") :]
+    assert (
+        "noc_semaphore_wait_min(data, (RING - 1) * (PACKED ? 1 : MY_TILES * PKTS));" in PHASE
+        and "noc_semaphore_set(data, 0);" in PHASE
+    )
+    assert (
+        PHASE.count("fabric_multicast_noc_fused_unicast_with_atomic_inc(") == 2
+    )  # packed + per-tile sites; every data tile: write + inc
+    body = PHASE[PHASE.index("for (uint32_t k = 0; k < PKTS; ++k) {\n                noc_async_writes_flushed();") :]
     assert body.index("noc_async_writes_flushed();") < body.index("fabric_multicast_noc_fused_unicast_with_atomic_inc(")
     assert "go.set(0);" in PHASE and PHASE.count("scratch_ready.wait_min(MY_TILES);") == 2
     assert (
@@ -324,7 +334,7 @@ def test_fact_3_data_wait_is_every_peers_every_tile_and_every_counter_is_reset_b
     assert "MulticastRoutingCommandHeader" not in PHASE  # the linear API sets the route from (start 1, range)
     # the consumer signal follows the data wait and its reset
     assert (
-        flat(PHASE).index(flat("noc_semaphore_wait_min(data, (RING - 1) * MY_TILES);"))
+        flat(PHASE).index(flat("noc_semaphore_wait_min(data, (RING - 1) * (PACKED ? 1 : MY_TILES * PKTS));"))
         < flat(PHASE).index(flat("noc_semaphore_set(data, 0);"))
         < flat(PHASE).index(flat("ready.up(noc, get_arg_val<uint32_t>(rt + PHASE_RT_ARGS + 2 * c)"))
     )
@@ -341,12 +351,15 @@ def test_two_phases_on_one_connection_reuse_go_and_done_in_order():
     b = two.index("transport_phase<B_SCRATCH_CB")
     assert (
         two.index("line.open<RING>(rank,arg_idx);")
-        < two.index("line.arrive(get_arg_val<uint32_t>(A_RT+2));")
+        < two.index("ifconstexpr(!NOBARRIER){line.arrive(get_arg_val<uint32_t>(A_RT+2));")
         < two.index("line.arrive(get_arg_val<uint32_t>(b_rt+2));")
         < a
         < b
     )
-    assert "SEM_DONE,false>" in two[a:b] and "SEM_DONE,true>" in two[b:]
+    assert (
+        "SEM_DONE,false,A_ROWS,A_ROW_MODE,A_PACK_CB,A_SLOT_BYTES,A_LAND,A_DATA1>" in two[a:b]
+        and "SEM_DONE,true,B_ROWS,B_ROW_MODE,B_PACK_CB,B_SLOT_BYTES,B_LAND,B_DATA1>" in two[b:]
+    )
     # within one phase body BRISC's go.set(1) precedes its done.wait(1); the body runs twice, so phase B's release
     # follows phase A's done wait in program order
     assert (
@@ -540,3 +553,24 @@ def test_front_gate_orders_every_gathered_stats_page_before_the_norm_cores_read_
     # the gate semaphore lives on the norm cores only; the stats transport's (go, scratch, done) on it and the norm cores
     assert "fp.semaphore_descriptor(s_scratch,ps_set),fp.semaphore_descriptor(FRONT_STATS_READY,p_set)" in FRONT
     assert "[fp.semaphore_descriptor(sem,wt_set)forseminPARTIALS_SEMAPHORES]" in FRONT
+
+
+def test_row_mode_4_nobarrier_double_buffers_by_a_persistent_call_parity():
+    """QWEN38_GR_NOBARRIER (row mode 4): no barrier arrive or wait, slot set and data semaphore by the call parity, the
+    counter stepped by BRISC after `done` (after NCRISC's read), the landing slots in a persistent L1 buffer."""
+
+    ph = flat(PHASE)
+    assert (
+        "constexprboolNOBARRIER=ROW_MODE==4;" in ph
+        and "ifconstexpr(!NOBARRIER){noc_semaphore_wait_min(barrier,RING-1);" in ph
+    )
+    assert (
+        "parity=NOBARRIER?(*call_counter&1):0;" in ph
+        and "(NOBARRIER&&parity)?DATA1_ADDR:get_arg_val<uint32_t>(rt+3)" in ph
+    )
+    assert "land_base=NOBARRIER?LAND_ADDR+16+parity*RING*SLOT_BYTES:pack_base;" in ph
+    assert "land_base+rank*SLOT_BYTES" in ph and "land_base+r*SLOT_BYTES" in ph
+    brisc = ph[ph.index("done.wait(1);") :]
+    assert brisc.index("done.wait(1);") < brisc.index("*call_counter=*call_counter+1;")
+    assert "ifconstexpr(!NOBARRIER){line.arrive(" in flat(KERNEL2) and "NOBARRIER==(B_ROW_MODE==4)" in flat(KERNEL2)
+    assert 'os.environ.get("QWEN38_GR_NOBARRIER","0")=="1"' in flat(inspect.getsource(gr_fold))

@@ -15,7 +15,7 @@
 #   --allocated-context N   32768 (default) | 65536 | 131072 | 262144
 #   --mtp K                 multi-token-prediction drafting depth, 3, 4 or 5 (off by default; greedy chunked-mode requests draft)
 #   --long-chunks           accepted for compatibility: the 128-row chunks are the server's default (combines with --mtp)
-#   --prefill-slab ROWS     prefill in slabs of ROWS rows (a multiple of 128, 256..4096; 2048 is the measured form)
+#   --prefill-slab ROWS     prefill in slabs of ROWS rows (a multiple of 128 in 256..2048; the MoE serves the multiples of 512)
 #                           ahead of the 128-row chunks (off by default; implies --long-chunks; not with --mtp)
 #   --no-sampling           serve greedy requests only (the default server takes --sampling: a request naming no
 #                           sampling field is still the bitwise greedy stream, temperature > 0 samples)
@@ -54,7 +54,7 @@ readonly REPO_ROOT="$(cd -- "$MODEL_DIR/../../../.." && pwd -P)"
 readonly SERVER="$HERE/qwen38_chat_server.py"
 
 die() { printf 'run_qwen38_chat_server: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp= port=8000 host=0.0.0.0 long_chunks=
 prefill_slab=
@@ -178,8 +178,8 @@ if [[ -n "$mtp" ]]; then
 fi
 [[ -z "$long_chunks" ]] || args+=(--long-chunks)
 if [[ -n "$prefill_slab" ]]; then
-    [[ "$prefill_slab" =~ ^[0-9]+$ && $((prefill_slab % 128)) == 0 && "$prefill_slab" -ge 256 && "$prefill_slab" -le 4096 ]] \
-        || die "--prefill-slab takes a multiple of 128 in 256..4096, got $prefill_slab"
+    [[ "$prefill_slab" =~ ^[0-9]+$ && $((prefill_slab % 128)) == 0 && "$prefill_slab" -ge 256 && "$prefill_slab" -le 2048 ]] \
+        || die "--prefill-slab takes a multiple of 128 in 256..2048 (the MoE serves the multiples of 512; 2048 rows is the largest slab measured to serve), got $prefill_slab"
     args+=(--prefill-slab "$prefill_slab")
 fi
 [[ -z "$sampling" ]] || args+=(--sampling)
@@ -206,7 +206,7 @@ fi
 printf 'run_qwen38_chat_server: checkout %s (%s) head %s%s\n' "$REPO_ROOT" "$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)" "$head" "$([[ "$dirty" == 0 ]] || printf ' (%s modified files)' "$dirty")" >&2
 printf 'run_qwen38_chat_server: python %s, ttnn extension %s\n' "$python" "$extension" >&2
 printf 'run_qwen38_chat_server: profile %s devices %s context %s run %s\n' "$hardware_profile" "$visible_devices" "$allocated_context" "$run_dir" >&2
-[[ -z "${QWEN38_DENSE_WEIGHT_DTYPE:-}" ]] || printf 'run_qwen38_chat_server: QWEN38_DENSE_WEIGHT_DTYPE=%s (resident dense matmul weights; default bf8, bf16 = the previous production format)\n' "$QWEN38_DENSE_WEIGHT_DTYPE" >&2
+[[ -z "${QWEN38_DENSE_WEIGHT_DTYPE:-}" ]] || printf 'run_qwen38_chat_server: QWEN38_DENSE_WEIGHT_DTYPE=%s (resident dense matmul weights; default bf8)\n' "$QWEN38_DENSE_WEIGHT_DTYPE" >&2
 if [[ -n "$serve_seconds" ]]; then
     exec timeout --signal=TERM "$serve_seconds" "$python" "$SERVER" "${args[@]}"
 fi

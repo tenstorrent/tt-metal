@@ -10,7 +10,7 @@
 The server prefills a prompt through traced chunk bodies on the same device state the decode traces use: 128-row
 chunks where the prompt allows and 32-row chunks for the remainder (the served default since 2026-09-29; `--long-chunks`
 is accepted and changes nothing, `--prefill-mode teacher_forced` has no chunks), and, with `--prefill-slab ROWS`, slabs
-of ROWS rows (a multiple of 128 from 256 to 4096; 2048 is the measured form) ahead of the 128-row chunks.  The slab and
+of ROWS rows (a multiple of 128 from 256 to 2048; 2048 is the measured form and the largest that serves) ahead of the 128-row chunks.  The slab and
 the 128-row form are tolerance class against each other; on long chat-shaped prompts their greedy streams part early
 (token 30 of a 2,160-token document, token 0 of a 20,612-token one; `NUMERICS.md`).  Whatever the
 chunk sizes, the last prompt token is teacher-forced through the decode traces, so the decode, the MTP hand-off and the

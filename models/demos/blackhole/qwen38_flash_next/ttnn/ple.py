@@ -17,6 +17,7 @@ and ordering semantics before asynchronous host prefetch is introduced.
 from __future__ import annotations
 
 import functools
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -678,6 +679,24 @@ class Qwen38TTNNPLELanesState:
     zero_conv: Any
     mesh_contract: Qwen38MeshContract
     token_contexts: tuple[tuple[int, int] | None, ...]
+    # Lanes of the tensors this state holds.  0 = the state owns ``lanes`` lanes; > ``lanes`` = a bucket view over a
+    # parent state of ``storage_lanes`` lanes (lanes 0..lanes-1 used; the tensors belong to the parent).
+    storage_lanes: int = 0
+
+    @property
+    def stored_lanes(self) -> int:
+        return self.storage_lanes or self.lanes
+
+    @property
+    def is_view(self) -> bool:
+        return self.stored_lanes != self.lanes
+
+    def _refuse_view(self, what: str) -> None:
+        if self.is_view:
+            raise RuntimeError(
+                f"PLE lanes state {what} ({self.lanes} of {self.stored_lanes} lanes) "
+                "is a bucket view; use the parent state"
+            )
 
     @classmethod
     def allocate(cls, mesh_device, mesh_contract: Qwen38MeshContract, *, lanes: int) -> "Qwen38TTNNPLELanesState":
@@ -704,9 +723,12 @@ class Qwen38TTNNPLELanesState:
 
     def validate(self) -> None:
         lanes = require_lane_count(self.lanes, label="PLE lanes", error_type=RuntimeError)
+        stored = require_lane_count(self.stored_lanes, label="PLE stored lanes", error_type=RuntimeError)
+        if stored < lanes:
+            raise RuntimeError(f"PLE lanes state stores {stored} lanes, fewer than its {lanes} lanes")
         if len(self.conv) != CONV_STATE_LENGTH:
             raise RuntimeError(f"PLE lanes conv state holds {len(self.conv)} slots, expected {CONV_STATE_LENGTH}")
-        expected = _lanes_residual_shape(lanes)
+        expected = _lanes_residual_shape(stored)
         for index, tensor in enumerate((*self.conv, self.zero_conv)):
             if _shape(tensor) != expected or tensor.dtype != ttnn.bfloat16:
                 raise RuntimeError(
@@ -718,6 +740,7 @@ class Qwen38TTNNPLELanesState:
         self.token_contexts = _validate_lane_contexts(self.token_contexts, lanes, label="PLE lanes token contexts")
 
     def reset_inplace(self) -> None:
+        self._refuse_view("reset_inplace")
         self.validate()
         for index, tensor in enumerate(self.conv):
             _copy_inplace(self.zero_conv, tensor, label=f"PLE lanes conv[{index}] reset")
@@ -727,6 +750,7 @@ class Qwen38TTNNPLELanesState:
         """Zero lane ``lane`` of every slot (a keep-mask multiply, the other lanes x 1.0) and clear its context, no
         address change.  Eager host upload: a lifecycle op between steps, never traced."""
 
+        self._refuse_view("reset_lane_inplace")
         self.validate()
         if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < self.lanes:
             raise ValueError(f"PLE lane must be an int in [0,{self.lanes}), got {lane!r}")
@@ -743,7 +767,8 @@ class Qwen38TTNNPLELanesState:
         )
         try:
             for index, slot in enumerate(self.conv):
-                kept = ttnn.multiply(slot, keep_lanes, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # A select (not slot * keep) keeps NaN/Inf in the admitted lane's old rows out of its new state; bit-identical for finite values.
+                kept = ttnn.where(keep_lanes, slot, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 _copy_inplace(kept, slot, label=f"PLE lane {lane} conv[{index}] reset")
                 _deallocate(kept)
         finally:
@@ -753,6 +778,7 @@ class Qwen38TTNNPLELanesState:
         self.token_contexts = tuple(contexts)
 
     def deallocate(self) -> None:
+        self._refuse_view("deallocate")
         _deallocate(*self.conv, self.zero_conv)
 
 
@@ -832,6 +858,9 @@ class Qwen38ResidentPLELookup:
         spec = host_embedding.spec
         if spec.ngram_size != NGRAM_SIZE or spec.layer_multipliers.numel() != NGRAM_SIZE:
             raise RuntimeError(f"PLE decode-step hash requires n-gram size {NGRAM_SIZE}, got {spec.ngram_size}")
+        self._row_bytes = self.readers[0].row_bytes
+        if any(reader.row_bytes != self._row_bytes for reader in self.readers):
+            raise RuntimeError("PLE table parts disagree on the row size")
         self.eos_token_id = int(host_embedding.config.eos_token_id)
         self.vocab_size = int(host_embedding.config.vocab_size)
         self.multipliers = tuple(int(value) for value in spec.layer_multipliers.tolist())
@@ -899,7 +928,38 @@ class Qwen38ResidentPLELookup:
             head_vocab_sizes=self.head_vocab_sizes,
             head_offsets=self.head_offsets,
         )
-        return self._read_rows(ids), next_context
+        return self._read_token_rows(ids), next_context
+
+    def _read_token_rows(self, hashed: Sequence[int]) -> bytearray:
+        """:meth:`_read_rows` for the decode step's few rows: one ``preadv`` per row straight into the payload (no
+        WILLNEED, no per-row ``bytes``, no dict), then one identity proof per touched shard file after the reads.
+        The proof after the reads covers everything since the open: the identity holds the size, mtime and ctime,
+        which a write can only move forward, so a drift between the open and the end of the batch is seen here and the
+        payload is dropped (the batch proof before the reads only moved the same failure ahead of them).  Same bytes
+        in the same order as :meth:`_read_rows`."""
+
+        readers = self.readers
+        rows_per_shard = self.host_embedding.rows_per_shard
+        row_bytes = self._row_bytes
+        payload = bytearray(row_bytes * len(hashed))
+        view = memoryview(payload)
+        preadv = os.preadv
+        proving: dict[str, Any] = {}
+        start = 0
+        for index in hashed:
+            part, row = divmod(index, rows_per_shard)
+            reader = readers[part]
+            descriptor = reader._descriptor
+            if descriptor is None:
+                raise RuntimeError(f"sparse row reader for {reader.name} is closed")
+            end = start + row_bytes
+            if preadv(descriptor, (view[start:end],), reader._tensor_base + row * row_bytes) != row_bytes:
+                raise ValueError(f"truncated sparse row {row} for {reader.name}")
+            start = end
+            proving.setdefault(reader.shard, reader)
+        for reader in proving.values():
+            reader.prove_identity("after")
+        return payload
 
     def lookup_tokens(
         self, tokens: Sequence[int], context: tuple[int, int] | None
@@ -1030,7 +1090,10 @@ class Qwen38TTNNPLE:
         )
         # QWEN38_FUSED=ple: the fused device body (ttnn/fused/ple) binds at construction; forward_prepared's chain stays.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import edge_trim
 
+        if edge_trim.on("ple_kv"):
+            edge_trim.build_kv(self)  # QWEN38_EDGE_TRIM: the merged key | value weight, before any trace capture
         if fused_kernels.enabled("ple"):
             self._fused_forward_prepared = functools.partial(fused_kernels.kernel("ple").fused, self)
             self._fused_forward_prepared_lanes = functools.partial(fused_kernels.ple.ple_lanes_fused, self)
@@ -1112,28 +1175,30 @@ class Qwen38TTNNPLE:
         return tensor
 
     def _project(self, embedding_tile):
-        full_embedding = ttnn.all_gather(
-            embedding_tile,
-            dim=3,
-            cluster_axis=TP_AXIS,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import edge_trim
+
+        full_embedding = edge_trim.hidden_gather(
+            embedding_tile, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # QWEN38_EDGE_TRIM
         _deallocate(embedding_tile)
         self.mesh_contract.validate_tensor(full_embedding, placement=TensorPlacement.REPLICATED)
         if _shape(full_embedding) != (1, 1, 1, EMBEDDING_WIDTH):
             raise RuntimeError("PLE embedding all-gather did not reconstruct width 2560")
-        key_flat = ttnn.linear(
-            full_embedding,
-            self.weights.key,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
-        value = ttnn.linear(
-            full_embedding,
-            self.weights.value,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_config,
-        )
+        if edge_trim.on("ple_kv"):  # QWEN38_EDGE_TRIM: key | value as one DRAM-sharded matmul
+            key_flat, value = edge_trim.ple_kv(self, full_embedding)
+        else:
+            key_flat = ttnn.linear(
+                full_embedding,
+                self.weights.key,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
+            value = ttnn.linear(
+                full_embedding,
+                self.weights.value,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_config,
+            )
         _deallocate(full_embedding)
         self.mesh_contract.validate_tensor(key_flat, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
         self.mesh_contract.validate_tensor(value, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
@@ -1971,6 +2036,8 @@ class Qwen38TTNNPLE:
 
         if self._fused_forward_prepared_lanes is not None:
             return self._fused_forward_prepared_lanes(residual_lanes, prepared, lanes_state)
+        if lanes_state.is_view:
+            raise ValueError("the composed PLE lanes step does not take a bucket view")
         lanes_state.validate()
         lanes = lanes_state.lanes
         self._validate_rows_residual(residual_lanes, lanes, label="PLE lanes residual input")

@@ -263,6 +263,24 @@ def _all_reduce_owner_select_hidden(
         raise RuntimeError("device-token owner select requires Linear topology")
     mesh_contract.validate_tensor(local_partial, placement=TensorPlacement.LOCAL_PARTIAL)
     mesh_contract.validate_tensor(replicated_reference, placement=TensorPlacement.REPLICATED)
+    from models.demos.blackhole.qwen38_flash_next.ttnn.fused import edge_trim, row_reduce
+
+    if (
+        rows == 1
+        and edge_trim.on("embed_reduce")
+        and row_reduce.admits(local_partial, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ):
+        # QWEN38_EDGE_TRIM: the all-reduce + mesh_partition below is the reduce-scatter of the row (the partials are
+        # exact zeros but one): one row_reduce program, the same bits
+        hidden = row_reduce.row_reduce(local_partial, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _deallocate(local_partial)
+        mesh_contract.mark_collective_shard(
+            hidden,
+            replicated_reference=replicated_reference,
+            shard_dim=3,
+            expected_local_shape=(1, 1, rows, LOCAL_HIDDEN_SIZE),
+        )
+        return hidden
     reduced = ttnn.all_reduce(
         local_partial,
         cluster_axis=TP_AXIS,

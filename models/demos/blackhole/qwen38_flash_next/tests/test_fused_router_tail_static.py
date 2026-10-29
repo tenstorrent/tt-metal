@@ -390,3 +390,21 @@ def test_model_resolves_once_and_uses_it_for_one_tile_rows():
     route = source[source.index("    def _route(") : source.index("    def _routed_partial(")]
     assert "self._route_tail(logits, top_k=TOP_K, compute_kernel_config=self.compute_config)" in route
     assert route.index("if self._route_tail is not None:") < route.index("probabilities = ttnn.softmax(")
+
+
+def test_rawsort_flag_adds_the_define_and_default_is_unchanged(monkeypatch):
+    monkeypatch.delenv(rt.EXP_LIVE_ENV, raising=False)
+    monkeypatch.delenv(rt.RAWSORT_ENV, raising=False)
+    assert rt._compute_defines() == []
+    monkeypatch.setenv(rt.RAWSORT_ENV, "0")
+    assert rt._compute_defines() == []
+    monkeypatch.setenv(rt.RAWSORT_ENV, "1")
+    assert rt._compute_defines() == [("FRT_RAWSORT", "1")]
+    monkeypatch.setenv(rt.EXP_LIVE_ENV, "0")
+    assert rt._compute_defines() == [("FRT_EXP_LIVE", "0"), ("FRT_RAWSORT", "1")]
+    compute = SOURCES["compute"]
+    assert (
+        "#define FRT_RAWSORT 0" in compute
+        and compute.count("#if FRT_RAWSORT") == 1
+        and compute.count("#if !FRT_RAWSORT") == 1
+    )

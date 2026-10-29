@@ -94,6 +94,8 @@ TP8_READY: frozenset[str] = frozenset(
         "gr_recip_last",
         "gdn_prefill_rows",
         "sparse_sdpa_tiled",
+        "row_reduce",
+        "row_gather",
     }
 )
 
@@ -192,12 +194,23 @@ def default_names() -> frozenset[str]:
     return DEFAULT_ON
 
 
+def edge_trim_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
+    """The registry kernels ``QWEN38_EDGE_TRIM=1`` adds at TP=8 (default off): ``candidate_row`` (ttnn/fused/edge_trim)."""
+
+    from . import edge_trim
+
+    return frozenset({"candidate_row"} if edge_trim.on("candidate_row", environ) else ())
+
+
 def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
     """The kernels that run: ``DEFAULT_ON`` plus ``QWEN38_FUSED``, less ``QWEN38_FUSED_OFF``; every name in either
     variable must be registered.  Off TP=4 only the kernels in ``TP8_READY`` can run."""
 
-    names = (default_names() | _names(environ, ENV)) - _names(environ, OFF_ENV)
-    return names if TP_SIZE == 4 else names & TP8_READY
+    edge = edge_trim_names(environ)  # QWEN38_EDGE_TRIM=1: kernels served at TP=8 that are not in TP8_READY yet
+    names = (default_names() | _names(environ, ENV) | edge) - _names(environ, OFF_ENV)
+    if environ.get("QWEN38_ROW_GATHER", "1") in ("1", "v1"):  # the row_gather program's own switch (default on)
+        names = names | {"row_gather"}
+    return names if TP_SIZE == 4 else names & (TP8_READY | edge)
 
 
 def enabled(name: str, environ: Mapping[str, str] = os.environ) -> bool:

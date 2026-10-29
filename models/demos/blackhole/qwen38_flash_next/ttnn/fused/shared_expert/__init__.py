@@ -227,16 +227,23 @@ def shared_expert_composed(
     return gated
 
 
+def gate_partial(partial, sigmoid, rows: int):
+    """The chain's ``x sigmoid`` multiply on the fused pair: the sigmoid tile's first column (row ``r``'s gate)
+    broadcast over the ``rows`` rows of the ungated partial; a new DRAM tensor (``moe_post`` runs the same multiply
+    inside its program)."""
+
+    gate = ttnn.slice(sigmoid, (0, 0, 0, 0), (1, 1, rows, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    gated = ttnn.mul(partial, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(gate)
+    return gated
+
+
 def gated_partial_rows(result) -> torch.Tensor:
-    """``[rows, 2560]`` fp32 of the gated shared partial; the fused pair is gated here with the chain's own multiply
-    (its fused form runs inside ``moe_post``)."""
+    """``[rows, 2560]`` fp32 of the gated shared partial; the fused pair is gated here with the chain's own multiply."""
 
     if isinstance(result, tuple):
         partial, sigmoid = result
-        rows = fp.rows_of(partial)
-        gate = ttnn.slice(sigmoid, (0, 0, 0, 0), (1, 1, rows, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        result = ttnn.mul(partial, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(gate)
+        result = gate_partial(partial, sigmoid, fp.rows_of(partial))
     return ttnn.to_torch(result).float().reshape(-1, HIDDEN)
 
 

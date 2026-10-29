@@ -477,7 +477,7 @@ the environment, every one checked before the device is touched:
 | `HF_MODEL` | unset | the checkpoint: the `--model` directory, else `HF_MODEL` (a directory or a repo id), else `--model` as a repo id, else `Qwen/Qwen3.8-Flash-Next`; a repo id resolves to the pinned revision in the local Hugging Face hub cache under `HF_HOME`: no download happens at start |
 | `TT_CACHE_PATH` | required | this server's cache layout: `caches/<label>/{components,model-io}` and `caches/bf4-experts` |
 | `QWEN38_BF4_CORPUS`, `QWEN38_BF4_CORPUS_VERIFICATION` | unset | a CPU-staged BF4 expert corpus in place of the cache under `caches/bf4-experts`, which must otherwise exist: its first-start conversion runs inside vLLM start-up only with `QWEN38_VLLM_ALLOW_BF4_CONVERSION=1` |
-| `QWEN38_PREFILL_SLAB` | `2048` | the prefill slab's rows, a multiple of 128 in 256..4096: a prompt runs as `N // rows` slabs, then 128-row chunks, then 32-row chunks (`docs/PREFILL.md`); `0` or `off` serves without the slab; any other value is refused by name |
+| `QWEN38_PREFILL_SLAB` | `2048` | the prefill slab's rows, a multiple of 128 in 256..2048 (2048 is the largest slab measured to serve): a prompt runs as `N // rows` slabs, then 128-row chunks, then 32-row chunks (`docs/PREFILL.md`); `0` or `off` serves without the slab; any other value is refused by name |
 | `QWEN38_LONG_CHUNKS` | unset | with the slab off, `1` keeps the 128-row chunks ahead of the 32-row ones (a slab implies them) |
 | `QWEN38_PREFILL_PLAN` | `cost` | how a prompt's rows are covered by the slab, 128-row and 32-row passes: `cost` the cheapest sequence by a per-form cost table with one padded last pass (a remainder is one padded slab or chunk instead of many small ones), `legacy` the slabs, then 128-row chunks, then 32-row chunks and a padded 32-row tail (`docs/PREFILL.md`); a chain with MTP keeps `legacy`; any other value is refused by name |
 | `QWEN38_TT_METAL_SHA` | unset | the cache identity's tt-metal sha (40 lowercase hex); unset, the checkout head, else the runtime extension's digest prefix, so a checkout without `.git` or `git` serves |
@@ -500,7 +500,7 @@ chunks, 0.74-0.90 with 2,048-row slabs (a 31,716-token prompt in 23.6 s, 2,118 t
 |---|---|---|
 | batch | 1, or 2-32 | `--max_num_seqs 1`: one resident slot; 2-32: batch mode (below); no data parallelism |
 | contexts | 8k, 32k, 64k, 128k, 256k | by `--max-model-len`; 256k is single-user |
-| sampling | vLLM's host sampler over the full row; or, with `"sample_on_device_mode": "decode_only"` in the `tt` block of `--additional-config`, the adapter's host sampler over the row's top 1024 candidates | temperature, top-p, top-k, min-p, penalties, `logit_bias`, logprobs, structured output; a greedy request reproduces this server's greedy stream (the `json` acceptance record matches the CPU reference 96/96; the other records diverge at the pinned A3 indices). vLLM's `Sampler` sorts the 248,320-wide row on every sampled (non-greedy) decode step, about 22 ms per token; under `decode_only` the plugin hands the request's temperature / top-k / top-p / seed / penalties to `decode_forward` and the adapter draws the token itself from the same row with vLLM's sampler semantics (same distribution, not the same token stream per seed), well under a millisecond; greedy stays the argmax. Requests with min-p, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, logprobs or structured output keep vLLM's full-row sampler (the plugin decides per step); prefill stays on it too (`"all"` is refused) |
+| sampling | vLLM's host sampler over the full row; or, with `"sample_on_device_mode": "decode_only"` in the `tt` block of `--additional-config`, the adapter's host sampler over the row's top 1024 candidates | temperature, top-p, top-k, min-p, penalties, `logit_bias`, logprobs, structured output; a greedy request reproduces this server's greedy stream (the `json` acceptance record matches the CPU reference 96/96; the other records diverge at the pinned A3 indices). vLLM's `Sampler` sorts the 248,320-wide row on every sampled (non-greedy) decode step, about 22 ms per token; under `decode_only` the plugin hands the request's temperature / top-k / top-p / seed / penalties to `decode_forward` and the adapter draws the token itself from the same row with vLLM's sampler semantics (same distribution, not the same token stream per seed), well under a millisecond; greedy stays the argmax. Requests with min-p, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, top-N logprobs (`logprobs` >= 1) or structured output keep vLLM's full-row sampler (the plugin decides per step); at 8 or 32 devices the plugin keeps a `logprobs=0` request (the sampled token's logprob) on device sampling and the adapter returns the raw logprob (see Logprobs under device sampling); prefill stays on it too (`"all"` is refused) |
 | prefill | the slab and chunk traces over the whole prompt | `QWEN38_PREFILL_SLAB` above; vLLM's chunked prefill and prefix caching are declared unsupported (the plugin disables them); batch mode prefills one request at a time |
 | decode | one traced step per token | `trace_mode` other than `all` is not honoured; batch mode: one lane-trace step for all rows |
 | follow-up turns | re-prefilled | the prompt-end snapshot and prefix reuse are not used |
@@ -580,6 +580,23 @@ Greedy-only steps do not run it.  Measured (2026-10-27, `vllm bench serve` rando
 c8 144 -> 174 tok/s, TPOT 54.8 -> 45.1 ms.  Per B = 32 step: candidates 0.44 ms, host draw 2.05 ms, against 28.6-30.0 ms for the
 full gather and draw.
 
+Decode width buckets (`QWEN38_DECODE_BUCKETS`, 32 lanes): the lane decoder also captures narrower lane traces, and each step replays
+the smallest width R of 1, 2, 4, 8, 16, 32 that holds the highest live lane, so a server with few active users does not pay the
+32-lane step.  Unset (or empty) means all six widths with 32 lanes and the one full-width trace otherwise; `off` or `0` is the full
+width only; a comma list (for example `4,16,32`) must be sorted, distinct, contain 32, and needs 32 lanes, else the start is refused
+naming the variable.  A bucket replay advances only lanes 0 to R-1, so a new request takes the lowest free lane (the adapter swaps its
+slot -> lane map; no device move), and a step reads only R rows of the candidates, the normalizer and the logits.  Each extra bucket
+costs DRAM (`bucket_dram_bytes`: `BUCKET_FIXED_BYTES_32K` + R * `BUCKET_PER_LANE_BYTES_32K` per bucket, in the pool admission and in
+`get_max_tokens_all_users`; measured at TP=8, context 32768) and capture time.  The periodic `batch decode:` line shows the mean R and the steps per
+bucket.  The pack prefill and the MTP / speculative path are not bucketed (the n-gram and MTP decoders use their own full-width traces).
+
+Compaction (`QWEN38_DECODE_COMPACT`, default on, `0` off; only with buckets on): when users leave, a high lane can stay live and keep the
+bucket wide (live lanes 0 and 9 replay width 16, not 2).  At the start of a decode step the adapter asks the decoder for the moves
+(`compaction_moves`: the live count picks the smallest bucket that holds it, each live lane above it goes to the lowest free lane below it,
+highest first) and runs them (`move_lane`).  A move costs one lane copy on the device, the local pager's pack and unpack bodies with no host
+transfer (the paged KV stays in its pages; only the page-table row, the position row and the host mirrors move); the adapter swaps the
+slot -> lane map and the per-lane sampling state, so the step already replays the narrower bucket.  The log shows `decode compaction: lane S -> D`.
+
 Top-k-off sampled rows (`QWEN38_BATCH_NORMALIZER`, default on; `0` sends them to the full-logits path as in the paragraph above; only
 meaningful with the candidate rows on): a client that sends no `top_k` arrives with `top_k` = the vocabulary size.  On a step with
 such a row (temperature > 0, `top_p` < 1, no penalty) the candidate trace is replaced by a variant that also computes, per lane and
@@ -593,6 +610,14 @@ text (thinking, top_k off, T 1.0, top_p 0.95, c32, 64 questions, 4096 tokens) 3.
 but 59% of the steps hold at least one and pay the full gather (about 1.6 rows each).  `vllm bench serve` random 128/1024,
 top_k off: B = 32 c32 190 -> 221 tok/s (TPOT 166.7 -> 143.4 ms), B = 8 c8 118 -> 127 tok/s (TPOT 67.0 -> 62.1 ms); top_k 20 is
 unchanged (360 tok/s, TPOT 87.1 ms).  Random prompts give flat rows: about 72% of the B = 32 steps there hold a fallback row.
+
+Logprobs under device sampling (`logprobs=0`): at 8 or 32 devices the plugin keeps a step on device sampling when every logprobs row has `logprobs=0`
+and then needs `(tokens, logprobs)` back whenever any row of the step has `enable_log_probs`; at 4 devices and below, and for any row with
+`logprobs` >= 1, the step stays on vLLM's host sampler.  The adapter never changes the token of such a row (the same route as without the request);
+it reads the row (batch mode: with the fallback lanes' rows in one row read, or only the logprobs lanes when there is no fallback row; more lanes than the
+largest bucket take the full gather; single slot: the full row besides the device greedy token) and returns `log_softmax(row)[token]` of the raw
+fp32 row with the padding columns at `-inf`: no temperature, penalty, top-k or top-p (vLLM's `raw_logprobs`).  The batch return is `(tokens [lanes, 1], logprobs [lanes])`
+with 0 for rows without logprobs; the `batch decode:` line counts `logprobs rows`.  A top-N request that reaches `decode_forward` is refused by name.
 
 Fallback read and host full-row law (P3g-3; `QWEN38_BATCH_ROW_READ`, default on; `0` reads the full gather as before; only meaningful
 with the candidate rows on): a step with fallback rows reads only those lanes' logits.  One small trace per bucket (1, 2, 4, ... up to

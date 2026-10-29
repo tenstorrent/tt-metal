@@ -57,6 +57,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MESH_SHAPE,
+    SLAB_ROWS_RULE,
     TP_SIZE,
     Qwen38MeshContract,
     is_slab_rows,
@@ -1133,7 +1134,7 @@ class Qwen38TTNNBuilder:
         and nothing is admitted: a build without a slab is today's build."""
 
         if not is_slab_rows(rows):
-            raise ValueError(f"a prefill slab takes a multiple of 128 rows in 256..4096, got {rows!r}")
+            raise ValueError(f"a prefill slab takes {SLAB_ROWS_RULE}, got {rows!r}")
         if self._target_components is not None or self._built_target:
             raise RuntimeError("the prefill slab must be enabled before the target is built")
         self.prefill_slab_rows = rows

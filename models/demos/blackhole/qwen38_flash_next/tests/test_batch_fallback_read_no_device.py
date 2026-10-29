@@ -463,3 +463,167 @@ def test_the_branch_counts_name_every_branch_once_per_row() -> None:
         assert sum(counts.values()) - sum(before.values()) == 1, branch
         assert counts.get(branch, 0) == before.get(branch, 0) + 1, (branch, counts)
     assert math.isclose(sum(counts.values()), len(cases))
+
+
+# -- logprobs under device sampling: the row read serves them, the tokens do not change -----------------------------------
+
+LP_ROWS = (1, 2, 3, 4, 5)
+
+
+def _lp_params(logprobs_rows=(), **overrides):
+    """Eight rows: 0 plain greedy; 1 greedy; 2 top_k 20 (candidates); 3 top_k off (candidates with the normalizer, else a
+    fallback); 4 a raising presence penalty (fallback); 5 a repetition penalty (candidates); 6 top_k 50 (fallback); 7 top_k 20.
+    """
+
+    params = adapter_tests._sampling(
+        8,
+        temperature=[0.0, 0.0, 1.0, 1.0, 1.0, 0.9, 1.0, 0.8],
+        top_k=[1, 1, 20, VOCAB_SIZE, 20, 20, 50, 20],
+        top_p=[0.0, 0.0, 0.95, 0.95, 0.9, 1.0, 0.9, 0.9],
+        seed=[None, None, 11, 33, 44, 55, 66, 77],
+        presence_penalty=[0.0, 0.0, 0.0, 0.0, -0.5, 0.0, 0.0, 0.0],
+        repetition_penalty=[1.0, 1.0, 1.0, 1.0, 1.0, 1.3, 1.0, 1.0],
+        **overrides,
+    )
+    params.enable_log_probs = [row in logprobs_rows for row in range(8)]
+    return params
+
+
+def _lp_step(rig: Rig, params, rows=range(8), requests=8):
+    prompts = [adapter_tests._prompt(20 + 4 * i, 100 * (i + 1)) for i in range(8)]
+    blocks = [[1 + i] for i in range(8)]
+    rig.prefill(
+        prompts[:requests],
+        list(range(requests)),
+        blocks[:requests],
+        adapter_tests.greedy_batch_sampling_params(requests),
+    )
+    firsts = [1000 + i for i in range(8)]
+    prompt_tokens = torch.full((8, 8), -1, dtype=torch.int32)
+    output_tokens = torch.full((8, 8), -1, dtype=torch.int32)
+    prompt_tokens[4, :3] = torch.tensor([10, 11, 12])
+    output_tokens[4, :3] = torch.tensor([100, 101, 102])
+    prompt_tokens[5, :3] = torch.tensor([20, 21, 22])
+    output_tokens[5, :3] = torch.tensor([23, 24, 24])
+    decode_rows = [(firsts[i], len(prompts[i]), blocks[i]) if i in rows else None for i in range(8)]
+    return rig.decode(decode_rows, sampling_params=params, prompt_tokens=prompt_tokens, output_tokens=output_tokens)
+
+
+def _raw_logprob(rig: Rig, lane: int, token: int) -> float:
+    row = rig.decoder.logits_for(lane, 1).clone().to(torch.float64)
+    row[TOKENIZER_SIZE:] = float("-inf")
+    return float(torch.log_softmax(row, 0)[token])
+
+
+def _fresh_rrig(monkeypatch, normalizer: str) -> Rig:
+    monkeypatch.setenv(BATCH_NORMALIZER_VARIABLE, normalizer)
+    monkeypatch.setattr(adapter_tests, "FakeDecoder", RowReadDecoder)
+    return Rig(monkeypatch)
+
+
+@pytest.mark.parametrize("normalizer", ("0", "1"))
+def test_logprobs_rows_keep_their_tokens_and_get_the_raw_logprob(monkeypatch, normalizer) -> None:
+    plain_rig = _fresh_rrig(monkeypatch, normalizer)
+    plain = _lp_step(plain_rig, _lp_params())
+    assert isinstance(plain, torch.Tensor) and plain.shape == (8, 1) and plain.dtype == torch.int32  # as before
+    rig = _fresh_rrig(monkeypatch, normalizer)
+    out = _lp_step(rig, _lp_params(LP_ROWS))
+    assert isinstance(out, tuple) and len(out) == 2
+    tokens, log_probs = out
+    assert torch.equal(tokens, plain), (tokens.flatten().tolist(), plain.flatten().tolist())
+    assert log_probs.shape == (8,) and log_probs.dtype == torch.float32
+    for row in range(8):
+        if row in LP_ROWS:
+            assert float(log_probs[row]) == pytest.approx(_raw_logprob(rig, row, int(tokens[row, 0])), abs=1e-5), row
+        else:
+            assert float(log_probs[row]) == 0.0, row
+    # the reads: the fallback lanes (what the step reads without the request) plus the logprobs lanes, once
+    (fallback,) = plain_rig.decoder.row_reads
+    assert {4, 6} <= set(fallback) <= {3, 4, 6} and (3 in fallback or normalizer == "1")
+    assert rig.decoder.row_reads == [sorted(set(fallback) | set(LP_ROWS))] and rig.decoder.full_reads == 0
+    assert 0 not in rig.decoder.row_reads[0] and 7 not in rig.decoder.row_reads[0]
+    counters, plain_counters = rig.model.candidate_counters, plain_rig.model.candidate_counters
+    assert counters["logprobs_rows"] == len(LP_ROWS) and plain_counters["logprobs_rows"] == 0
+    for name in vllm_module.CANDIDATE_FALLBACK_REASONS:  # the token route is the same: the same rows fall back
+        assert counters[f"fallback_{name}"] == plain_counters[f"fallback_{name}"], name
+    assert counters["candidate_rows"] == plain_counters["candidate_rows"]
+
+
+def test_a_penalized_logprobs_row_reports_the_raw_not_the_penalized_logprob(monkeypatch) -> None:
+    rig = _fresh_rrig(monkeypatch, "1")
+    row = torch.full((VOCAB_SIZE,), -20.0)
+    row[100:103] = 3.0  # three spikes the presence penalty below pushes under the next ten tokens
+    row[200:210] = 2.0
+    rig.decoder.overrides[4] = row
+    params = _lp_params((4,))
+    params.presence_penalty[4] = 5.0
+    tokens, log_probs = _lp_step(rig, params)
+    raw = rig.decoder.logits_for(4, 1).clone()
+    raw[TOKENIZER_SIZE:] = float("-inf")
+    penalized = raw.clone()
+    vllm_module.apply_penalties(
+        penalized,
+        torch.tensor([10, 11, 12]),
+        torch.tensor([100, 101, 102]),
+        Qwen38HostSamplingPolicy(1.0, 20, 0.9, 5.0, 0.0),
+    )
+    token = int(tokens[4, 0])
+    assert float(log_probs[4]) == pytest.approx(float(raw[token] - torch.logsumexp(raw, 0)), abs=1e-5)
+    assert abs(float(log_probs[4]) - float(penalized[token] - torch.logsumexp(penalized, 0))) > 1e-3
+
+
+def test_a_greedy_logprobs_row_among_greedy_rows_reads_only_its_lane(monkeypatch) -> None:
+    rig = _fresh_rrig(monkeypatch, "1")
+    params = adapter_tests._sampling(8)
+    params.enable_log_probs = [row == 2 for row in range(8)]
+    prompts = [adapter_tests._prompt(20 + 4 * i, 100 * (i + 1)) for i in range(8)]
+    blocks = [[1 + i] for i in range(8)]
+    rig.prefill(prompts, list(range(8)), blocks, adapter_tests.greedy_batch_sampling_params(8))
+    rows = [(1000 + i, len(prompts[i]), blocks[i]) for i in range(8)]
+    tokens, log_probs = rig.decode(rows, sampling_params=params)
+    assert rig.decoder.row_reads == [[2]] and rig.decoder.full_reads == 0 and rig.decoder.candidate_reads == 0
+    assert tokens[:, 0].tolist() == [
+        adapter_tests.FakeDecoder.next_id(1000 + i, len(prompts[i])) for i in range(8)
+    ]  # device ids
+    assert float(log_probs[2]) == pytest.approx(_raw_logprob(rig, 2, int(tokens[2, 0])), abs=1e-5)
+    assert [float(log_probs[row]) for row in range(8) if row != 2] == [0.0] * 7
+    assert rig.model.candidate_counters["logprobs_rows"] == 1
+
+
+def test_a_padding_rows_flag_makes_the_step_return_the_tuple_with_zeros(monkeypatch) -> None:
+    rig = _fresh_rrig(monkeypatch, "1")
+    params = adapter_tests._sampling(8)
+    params.enable_log_probs = [row == 6 for row in range(8)]  # a padded row: the plugin's .any() still sees it
+    out = _lp_step(rig, params, rows=(0, 1, 2), requests=3)
+    assert isinstance(out, tuple) and not out[1].any() and out[1].shape == (8,)
+    assert out[0][:3, 0].tolist() == [adapter_tests.FakeDecoder.next_id(1000 + i, 20 + 4 * i) for i in range(3)]
+    assert rig.decoder.row_reads == [] and rig.model.candidate_counters["logprobs_rows"] == 0
+
+
+@pytest.mark.parametrize("mode", ("knob_off", "bucket", "no_traces"))
+def test_logprobs_rows_take_the_full_gather_when_the_row_read_cannot_serve_them(monkeypatch, mode) -> None:
+    if mode == "knob_off":
+        monkeypatch.setenv(BATCH_ROW_READ_VARIABLE, "0")
+    rig = _fresh_rrig(monkeypatch, "1")
+    if mode == "bucket":
+        rig.decoder.row_read_buckets = (1, 2)
+    if mode == "no_traces":
+        rig.decoder.has_row_read = False
+    plain = _lp_step(_fresh_rrig(monkeypatch, "1"), _lp_params())
+    tokens, log_probs = _lp_step(rig, _lp_params(LP_ROWS))
+    assert torch.equal(tokens, plain) and rig.decoder.row_reads == [] and rig.decoder.full_reads == 1
+    for row in LP_ROWS:
+        assert float(log_probs[row]) == pytest.approx(_raw_logprob(rig, row, int(tokens[row, 0])), abs=1e-5)
+
+
+def test_the_log_line_counts_the_logprobs_rows(monkeypatch) -> None:
+    monkeypatch.setattr(vllm_module, "DECODE_LOG_INTERVAL", 1)
+    rig = _fresh_rrig(monkeypatch, "1")
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="INFO")
+    try:
+        _lp_step(rig, _lp_params(LP_ROWS))
+    finally:
+        logger.remove(sink)
+    line = next(text for text in lines if "batch decode:" in text)
+    assert f"logprobs rows {len(LP_ROWS)}" in line, line

@@ -332,6 +332,23 @@ def _expect(tensor, shape, dtype, layout, label: str) -> None:
         )
 
 
+def _expect_lane_state(tensor, rows: int, tail, dtype, layout, label: str) -> None:
+    """A per-lane state tensor ``[1, B, *tail]``: the lane axis B may exceed ``rows`` (lane u is addressed from u alone)."""
+
+    got = tuple(tensor.shape)
+    if (
+        len(got) != 2 + len(tail)
+        or got[0] != 1
+        or got[1] < rows
+        or got[2:] != tuple(tail)
+        or tensor.dtype != dtype
+        or tensor.layout != layout
+    ):
+        raise ValueError(
+            f"{label} must be {layout} {dtype} {(1, f'>= {rows}', *tail)}, got {tensor.layout} {tensor.dtype} {got}"
+        )
+
+
 def _window(tensor, first_tile: int, width: int, label: str) -> None:
     """``tensor`` [1, 1, rows, W] of whole tiles holds the ``width`` columns from tile ``first_tile``: the separate
     projection shard at 0, or the projection's window of the merged shard."""
@@ -385,18 +402,18 @@ def index_tail(
         _expect(weight, (1, 1, 1, INDEX_HEAD_DIM), BF16, ttnn.TILE_LAYOUT, label)
     for label, table in (("cos", cos), ("sin", sin), ("block_cos", block_cos), ("block_sin", block_sin)):
         _expect(table, (1, 1, rows, ROPE_DIM), BF16, ttnn.TILE_LAYOUT, label)
-    _expect(ring, (1, rows, fp.TILE, INDEX_HEAD_DIM), BF16, ttnn.TILE_LAYOUT, "raw-key ring")
+    _expect_lane_state(ring, rows, (fp.TILE, INDEX_HEAD_DIM), BF16, ttnn.TILE_LAYOUT, "raw-key ring")
     cache_shape = tuple(compressed_cache.shape)
     if (
         len(cache_shape) != 4
-        or cache_shape[0] != rows
+        or cache_shape[0] < rows
         or cache_shape[1] != 1
         or cache_shape[2] % fp.TILE
         or cache_shape[3] != INDEX_HEAD_DIM
         or compressed_cache.dtype != BF16
         or compressed_cache.layout != ttnn.TILE_LAYOUT
     ):
-        raise ValueError(f"compressed cache must be TILE bf16 [{rows}, 1, 32k, 128], got {cache_shape}")
+        raise ValueError(f"compressed cache must be TILE bf16 [>= {rows}, 1, 32k, 128], got {cache_shape}")
     lane_tile_rows = cache_shape[2] // fp.TILE
     mesh = index_q_ws.device()
     out = fp.allocate((1, 1, rows, INDEX_HEAD_DIM), BF16, ttnn.TILE_LAYOUT, mesh)
@@ -771,7 +788,7 @@ def main_tail(
     for label, table in (("cos", cos), ("sin", sin)):
         _expect(table, (1, 1, rows, ROPE_DIM), BF16, ttnn.TILE_LAYOUT, label)
     if kv_stage is None:
-        _expect(staging, (1, rows, fp.TILE, KV_WIDTH), BF16, ttnn.TILE_LAYOUT, "KV staging")
+        _expect_lane_state(staging, rows, (fp.TILE, KV_WIDTH), BF16, ttnn.TILE_LAYOUT, "KV staging")
     cache_shape = tuple(kv_cache.shape) if kv_stage is None else (1, 1, 0, KV_WIDTH)
     if kv_stage is None and (
         len(cache_shape) != 4
@@ -1524,11 +1541,13 @@ def lane_score_rows_of(local_scores, lanes_of_rows, lanes: int, cache_rows: int,
         len(shape) != 4
         or shape[:2] != (1, 1)
         or shape[2] < rows
-        or shape[3] != lanes * cache_rows
+        or shape[3] < lanes * cache_rows
         or local_scores.dtype != BF16
         or local_scores.layout != ttnn.ROW_MAJOR_LAYOUT
     ):
-        raise ValueError(f"lane scores must be ROW_MAJOR bf16 [1, 1, >= {rows}, {lanes} * {cache_rows}], got {shape}")
+        raise ValueError(
+            f"lane scores must be ROW_MAJOR bf16 [1, 1, >= {rows}, >= {lanes} * {cache_rows}], got {shape}"
+        )
     if not 1 <= rows <= fp.ROWS_MAX or blocks > cache_rows or cache_rows % fp.TILE or blocks % fp.TILE:
         raise ValueError(
             f"lane windows need 1..32 rows and whole-tile cache_rows >= blocks, got {rows}, {cache_rows}, {blocks}"

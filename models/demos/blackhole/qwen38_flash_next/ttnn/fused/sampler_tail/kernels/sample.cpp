@@ -11,10 +11,13 @@
 // SFPU's), the kept prefix and the inverse CDF over all 128 lanes as the composite counts them, the chosen id into
 // lane r of the fp32 token tile, and the id's bit set in the row's history.  The greedy flag copies the greedy tile
 // (the composite's greedy_row * 1 + splat * 0).  The history is the row-major uint32 bit array of the L1 shard on
-// this core (rows x hist_words words, bit id of row r at word r * hist_words + (id >> 5)).
+// this core (rows x hist_words words, bit id of row r at word r * hist_words + (id >> 5)).  Bit r of the guard page's
+// lane 0 (fp32) is set when a token row r did not read could change its draw: the kept minimum does not clear the
+// shard floor (the largest shard minimum of the raw values) or the top-k minimum lies below it (only the presence
+// penalty can cause that); 0 under the greedy flag.
 // Named compile-time args: cb_stage, rows, lanes (128), table_size, hist_words.  Compile-time args: TensorAccessorArgs
-// of row, greedy, policy, uniforms, table, token.  Runtime args: 0 row, 1 greedy, 2 policy, 3 uniforms, 4 table,
-// 5 history (this core's L1 address), 6 token addresses.
+// of row, greedy, policy, uniforms, table, token, guard.  Runtime args: 0 row, 1 greedy, 2 policy, 3 uniforms, 4 table,
+// 5 history (this core's L1 address), 6 token, 7 guard addresses.
 
 #include <cstdint>
 
@@ -39,8 +42,9 @@ constexpr uint32_t STAGE_TILE = 0;
 constexpr uint32_t STAGE_ROWS = TILE_BYTES;
 constexpr uint32_t STAGE_POLICY = STAGE_ROWS + ROWS * ROW_BYTES;
 constexpr uint32_t STAGE_UNIFORMS = STAGE_POLICY + GRAIN;
-constexpr uint32_t STAGE_TABLE = STAGE_UNIFORMS + GRAIN;          // MAX_TOP_K 64-byte chunks
-constexpr uint32_t STAGE_WORK = STAGE_TABLE + MAX_TOP_K * GRAIN;  // the working arrays (L1, not the RISC stack)
+constexpr uint32_t STAGE_TABLE = STAGE_UNIFORMS + GRAIN;  // MAX_TOP_K 64-byte chunks
+constexpr uint32_t STAGE_GUARD = STAGE_TABLE + MAX_TOP_K * GRAIN;
+constexpr uint32_t STAGE_WORK = STAGE_GUARD + GRAIN;  // the working arrays (L1, not the RISC stack)
 constexpr uint32_t WORK_VALUES = STAGE_WORK / 4, WORK_IDS = WORK_VALUES + LANES, WORK_KEYS = WORK_IDS + LANES;
 constexpr uint32_t WORK_SORTED_IDS = WORK_KEYS + LANES, WORK_SORTED_VALUES = WORK_SORTED_IDS + MAX_TOP_K;
 constexpr uint32_t WORK_WEIGHTS = WORK_SORTED_VALUES + MAX_TOP_K, WORK_INCLUSIVE = WORK_WEIGHTS + MAX_TOP_K;
@@ -77,6 +81,7 @@ void kernel_main() {
     constexpr auto a_uniforms = TensorAccessorArgs<a_policy.next_compile_time_args_offset()>();
     constexpr auto a_table = TensorAccessorArgs<a_uniforms.next_compile_time_args_offset()>();
     constexpr auto a_token = TensorAccessorArgs<a_table.next_compile_time_args_offset()>();
+    constexpr auto a_guard = TensorAccessorArgs<a_token.next_compile_time_args_offset()>();
     const auto row = TensorAccessor(a_row, get_arg_val<uint32_t>(0));
     const auto greedy = TensorAccessor(a_greedy, get_arg_val<uint32_t>(1));
     const auto policy = TensorAccessor(a_policy, get_arg_val<uint32_t>(2));
@@ -84,6 +89,7 @@ void kernel_main() {
     const auto table = TensorAccessor(a_table, get_arg_val<uint32_t>(4));
     volatile tt_l1_ptr uint32_t* history = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(5));
     const auto token = TensorAccessor(a_token, get_arg_val<uint32_t>(6));
+    const auto guard = TensorAccessor(a_guard, get_arg_val<uint32_t>(7));
 
     Noc noc;
     DataflowBuffer stage(CB_STAGE);
@@ -107,6 +113,10 @@ void kernel_main() {
     const float min_weight = as_float(policy_words[2]);
     const bool greedy_flag = as_float(policy_words[3]) != 0.0f;
     const float presence = as_float(policy_words[4]);
+    volatile tt_l1_ptr uint32_t* guard_words = words + STAGE_GUARD / 4;
+    for (uint32_t i = 0; i < GRAIN / 4; ++i) {
+        guard_words[i] = 0;
+    }
 
     if (greedy_flag) {
         FUSED_ZONE("fz_st_greedy");
@@ -114,6 +124,7 @@ void kernel_main() {
         noc.async_read(greedy, stage, TILE_BYTES, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = STAGE_TILE});
         noc.async_read_barrier();
         noc.async_write(stage, token, TILE_BYTES, {.offset_bytes = STAGE_TILE}, {.page_id = 0, .offset_bytes = 0});
+        noc.async_write(stage, guard, GRAIN, {.offset_bytes = STAGE_GUARD}, {.page_id = 0, .offset_bytes = 0});
         noc.async_write_barrier();
         stage.push_back(1);
         return;
@@ -131,15 +142,25 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* weights = words + WORK_WEIGHTS;
     volatile tt_l1_ptr uint32_t* inclusive = words + WORK_INCLUSIVE;
     volatile tt_l1_ptr uint32_t* chunk_offset = words + WORK_CHUNK;
+    uint32_t guard_mask = 0;
     for (uint32_t r = 0; r < ROWS; ++r) {
         FUSED_ZONE("fz_st_row");
         volatile tt_l1_ptr uint32_t* lanes = words + (STAGE_ROWS + r * ROW_BYTES) / 4;
         volatile tt_l1_ptr uint32_t* hist = history + r * HIST_WORDS;
+        uint32_t floor_key = 0;  // the shard floor: an unread token is at most its shard's smallest raw value
         for (uint32_t d = 0; d < LANES / SHARD_LANES; ++d) {
+            uint32_t shard_min_key = 0xFFFFFFFFu;
             for (uint32_t c = 0; c < SHARD_LANES; ++c) {
-                values[d * SHARD_LANES + c] = lanes[d * 2 * SHARD_LANES + c];
-                ids[d * SHARD_LANES + c] =
-                    static_cast<uint32_t>(as_float(lanes[d * 2 * SHARD_LANES + SHARD_LANES + c]));
+                const uint32_t lane = d * SHARD_LANES + c;
+                values[lane] = lanes[d * 2 * SHARD_LANES + c];
+                ids[lane] = static_cast<uint32_t>(as_float(lanes[d * 2 * SHARD_LANES + SHARD_LANES + c]));
+                keys[lane] = key_of(values[lane]);
+                if (keys[lane] < shard_min_key) {
+                    shard_min_key = keys[lane];
+                }
+            }
+            if (shard_min_key > floor_key) {
+                floor_key = shard_min_key;
             }
         }
         // the presence penalty on the ids this row has emitted (fp32 subtract, round to nearest even)
@@ -147,11 +168,9 @@ void kernel_main() {
             for (uint32_t j = 0; j < LANES; ++j) {
                 if ((hist[ids[j] >> 5] >> (ids[j] & 31)) & 1u) {
                     values[j] = as_bits(as_float(values[j]) - presence);
+                    keys[j] = key_of(values[j]);
                 }
             }
-        }
-        for (uint32_t j = 0; j < LANES; ++j) {
-            keys[j] = key_of(values[j]);
         }
         // the first top_k lanes of the order value descending, global id ascending
         uint32_t taken[LANES / 32] = {0, 0, 0, 0};
@@ -219,6 +238,9 @@ void kernel_main() {
         if (kept < 1) {
             kept = 1;  // lane 0 weighs 2**18 and its exclusive prefix is 0: never taken, the composite's invariant
         }
+        if (key_of(sorted_values[kept - 1]) <= floor_key || key_of(sorted_values[top_k - 1]) < floor_key) {
+            guard_mask |= 1u << r;
+        }
         const uint32_t total_kept = inclusive[kept - 1];
         volatile tt_l1_ptr uint32_t* uniform_words = words + STAGE_UNIFORMS / 4;
         const float theta = as_float(uniform_words[r]) * static_cast<float>(total_kept);  // RNE site 2
@@ -234,7 +256,9 @@ void kernel_main() {
         tile[(r >> 4) * 256 + (r & 15)] = as_bits(static_cast<float>(chosen));  // lane (0, r) of the token tile
         hist[chosen >> 5] |= 1u << (chosen & 31);
     }
+    guard_words[0] = as_bits(static_cast<float>(guard_mask));
     noc.async_write(stage, token, TILE_BYTES, {.offset_bytes = STAGE_TILE}, {.page_id = 0, .offset_bytes = 0});
+    noc.async_write(stage, guard, GRAIN, {.offset_bytes = STAGE_GUARD}, {.page_id = 0, .offset_bytes = 0});
     noc.async_write_barrier();
     stage.push_back(1);
 }

@@ -14,15 +14,19 @@ configuration the adapter cannot serve is refused before the device is touched.
 
 Under the plugin's device-sampling contract (``--additional-config '{"tt": {"sample_on_device_mode": "decode_only"}}'``)
 a decode step arrives with ``sampling_params`` (the plugin's ``TTSamplingParams`` as per-row lists) and must return the
-token instead of the row.  A plain greedy row (temperature 0, no penalty, no logprobs) returns the device's greedy
-token from the token row, for decode and for prefill, without the full-logits gather.  Any other row: the adapter reads the full row and samples on the host with vLLM's sampler semantics
+token instead of the row.  A plain greedy row (temperature 0, no penalty) returns the device's greedy
+token from the token row, for decode and for prefill, without the full-logits gather (a row that asks for the sampled token's logprob keeps
+its token and also reads its full row).  Any other row: the adapter reads the full row and samples on the host with vLLM's sampler semantics
 (``vllm/v1/sample/sampler.py``: penalties, temperature, top-k, top-p, exponential-noise draw) computed over the row's
 top candidates wherever that is exact, and over the full row otherwise. vLLM's own ``Sampler`` sorts the full
 248,320-wide row. The reduced route preserves its distribution; the token stream for a given seed differs because
 the noise is drawn over the candidates. Historical fork sampling timings are not measurements of this port.
 The plugin decides host or device per step before the call (min_p, logit_bias, bad_words, allowed_token_ids,
-min_tokens, structured output and logprobs stay on its host sampler) and a step without ``sampling_params`` returns
-the row as before.  Prefill sampling (mode ``"all"``) is refused at warmup: prefill returns the row.
+min_tokens, structured output and top-N logprobs stay on its host sampler) and a step without ``sampling_params`` returns
+the row as before.  At 8 or 32 devices the plugin keeps a row with ``logprobs=0`` (the sampled token's logprob) on device
+sampling and expects ``(tokens, logprobs)`` back whenever any row of the step asks for it: the adapter reads those rows,
+returns the raw logprob (``log_softmax`` of the row, padding at ``-inf``, before temperature, penalties, top-k and
+top-p; vLLM's ``raw_logprobs``) and never changes the drawn token.  Prefill sampling (mode ``"all"``) is refused at warmup: prefill returns the row.
 
 The prefill form is the environment's (``prefill_form``): ``QWEN38_PREFILL_SLAB`` (default 2048) opens the chain
 with a prefill slab of that many rows ahead of the 128-row and 32-row chunks; ``0`` or ``off`` serves without the
@@ -40,7 +44,8 @@ chain; ``allocate_kv_cache`` reads ``num_blocks`` and ``block_size`` from the pl
 lane decoder's ``prepare`` as its warm hook (the lane tensors must exist before the chain captures) and captures the
 lane trace.  ``prefill_forward`` runs the B=1 chain prefill per row and imports it into the lane that owns
 ``empty_slots[i]``; ``decode_forward`` replays the lane trace once for all live rows.  A host map slot -> lane follows
-the plugin's ``slot_remap`` (no device moves: the lanes stay where they are).  A seeded host draw uses a generator
+the plugin's ``slot_remap`` (no device moves: the lanes stay where they are); with decode buckets on (32 lanes) a new
+request takes the lowest free lane, swapping the slot -> lane map, so live requests stay in the low lanes.  A seeded host draw uses a generator
 seeded from (seed, position), so it does not depend on ``reset_sampling_state`` or on the other lanes.  ``max_num_seqs`` 1
 keeps the single-slot path above unchanged.
 
@@ -54,7 +59,8 @@ import math
 import os
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -101,6 +107,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     DEFAULT_SLAB_ROWS,
     FABRIC_CONFIG,
     MESH_SHAPE,
+    SLAB_ROWS_RULE,
     TP_SIZE,
     is_slab_rows,
 )
@@ -119,11 +126,24 @@ LONG_CHUNKS_VARIABLE = "QWEN38_LONG_CHUNKS"  # "1": the 128-row chunks without a
 PREFILL_SLAB_OFF = ("0", "off")
 BATCH_MAX_LANES = 32  # batch mode: max_num_seqs 2..32 (one 32-row tile)
 MAX_TOKENS_ALL_USERS_VARIABLE = "QWEN38_MAX_TOKENS_ALL_USERS"  # the KV token pool the plugin sizes its blocks from
+PLE_EARLY_DECODE_VARIABLE = (
+    "QWEN38_PLE_EARLY"  # "1": B=1 decode does the PLE lookup + host row before HEAD (default off)
+)
+TOKEN_FEEDBACK_VARIABLE = "QWEN38_TOKEN_FEEDBACK"  # B=1 decode skips the token-row write when the device row already holds the token (default on since x53: -0.35..-0.62 ms; "0" off)
+HOST_FAST_VARIABLE = "QWEN38_HOST_FAST"  # "1": B=1 decode skips redundant per-step host work (default off)
 BATCH_CANDIDATES_VARIABLE = "QWEN38_BATCH_CANDIDATES"  # "1" (default) / "0": candidate rows for the sampled lanes
 BATCH_NORMALIZER_VARIABLE = (
     "QWEN38_BATCH_NORMALIZER"  # "1" (default) / "0": the device normalizer for top-k-off sampled rows
 )
 BATCH_ROW_READ_VARIABLE = "QWEN38_BATCH_ROW_READ"  # "1" (default) / "0": a fallback step reads only its rows' logits
+DECODE_BUCKETS_VARIABLE = (
+    "QWEN38_DECODE_BUCKETS"  # unset: 1,2,4,8,16,32 (32 lanes); "off" / "0": one full-width trace; or a list
+)
+DEFAULT_DECODE_BUCKETS = (1, 2, 4, 8, 16, 32)
+DECODE_COMPACT_VARIABLE = (
+    "QWEN38_DECODE_COMPACT"  # "1" (default) / "0": move a high live lane down so a step replays a narrower bucket
+)
+DECODE_BUCKETS_OFF = ("0", "off")
 CANDIDATE_FALLBACK_REASONS = ("top_k", "penalty", "guard", "nonfinite", "nucleus")
 # The host branches of ``sample_from_row`` (the keys of a ``branch_counts`` dict): greedy; top_k <= the candidates; the
 # nucleus over the top 1024 values; the nucleus over the argsorted full row; the whole row by inverse CDF (top-k off,
@@ -158,6 +178,7 @@ class Qwen38HostSamplingPolicy:
     frequency_penalty: float = 0.0
     repetition_penalty: float = 1.0
     seed: int | None = None
+    logprobs: bool = False  # the row asks for the sampled token's raw logprob (``logprobs=0``); never changes the token
 
     @property
     def greedy(self) -> bool:
@@ -170,7 +191,8 @@ class Qwen38HostSamplingPolicy:
     @classmethod
     def from_contract(cls, sampling_params: Any, row: int | None = None) -> "Qwen38HostSamplingPolicy":
         """The one slot's row of the plugin's per-row lists (tensors and scalars accepted); refused before the device
-        is touched when it holds more than one row or asks for logprobs (never sent on one device).  Batch mode
+        is touched when it holds more than one row or asks for top-N logprobs (``num_logprobs`` above 0 with
+        ``enable_log_probs``: the plugin keeps such a step on its host sampler, so it is never sent here).  Batch mode
         passes ``row``: that row of the padded per-row lists (a scalar applies to every row)."""
 
         def one(name: str, default: Any = None) -> Any:
@@ -190,9 +212,11 @@ class Qwen38HostSamplingPolicy:
                     value = value[row]
             return value
 
-        if one("enable_log_probs", False):
+        logprobs = bool(one("enable_log_probs", False))
+        if logprobs and int(one("num_logprobs", 0) or 0) > 0:
             raise ValueError(
-                "logprobs are not produced under device sampling: the plugin keeps them on its host sampler"
+                f"num_logprobs {one('num_logprobs')}: top-N logprobs are not produced under device sampling "
+                "(the plugin keeps them on its host sampler); only the sampled token's logprob (0) is"
             )
         temperature, top_k, top_p = float(one("temperature")), int(one("top_k")), float(one("top_p"))
         if temperature < 0.0 or not 0.0 <= top_p <= 1.0:
@@ -206,7 +230,25 @@ class Qwen38HostSamplingPolicy:
             frequency_penalty=float(one("frequency_penalty", 0.0)),
             repetition_penalty=float(one("repetition_penalty", 1.0)),
             seed=None if seed is None else int(seed),
+            logprobs=logprobs,
         )
+
+
+def logprobs_requested(sampling_params: Any) -> bool:
+    """The plugin's own test for a tuple return: ANY entry of the step's ``enable_log_probs`` (the whole padded list,
+    padding rows included) is true."""
+
+    value = getattr(sampling_params, "enable_log_probs", False)
+    if isinstance(value, torch.Tensor):
+        value = value.tolist()
+    return any(value) if isinstance(value, (list, tuple)) else bool(value)
+
+
+def raw_logprob(row: torch.Tensor, token: int) -> float:
+    """``log_softmax(row)[token]`` of one raw fp32 row (the LM head's padding at ``-inf``): vLLM's ``raw_logprobs``, before
+    temperature, penalties, top-k and top-p."""
+
+    return float(row[token] - torch.logsumexp(row, 0))
 
 
 def penalty_history(prompt_tokens: Any, output_tokens: Any, row: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
@@ -228,8 +270,9 @@ def penalty_history(prompt_tokens: Any, output_tokens: Any, row: int = 0) -> tup
 
 def device_greedy_contract(sampling_params: Any, row: int | None = None) -> bool:
     """True when the contract is plain greedy for the one row: temperature below the epsilon (the policy's own
-    ``greedy``), no penalty active (presence 0, frequency 0, repetition 1) and no logprobs (``from_contract`` refuses
-    those).  Such a row's token is the device's greedy resolve, so the full logits need not leave the device."""
+    ``greedy``) and no penalty active (presence 0, frequency 0, repetition 1).  Such a row's token is the device's greedy
+    resolve, so the full logits need not leave the device for the token.  A logprobs request does not change that (it
+    reads the row besides)."""
 
     if sampling_params is None:
         return False
@@ -338,6 +381,19 @@ def sample_from_row(
     return int(indices[(probs / noise).argmax()])
 
 
+def decode_compact_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """``QWEN38_DECODE_COMPACT``: "1" or unset = a step first moves live lanes down into free low lanes when that lets it
+    replay a narrower decode bucket (W5), "0" = lanes stay where they were admitted; anything else is refused.  Only used with
+    decode buckets on."""
+
+    value = (os.environ if environ is None else environ).get(DECODE_COMPACT_VARIABLE)
+    if value is None:
+        return True
+    if value not in ("0", "1"):
+        raise ValueError(f"{DECODE_COMPACT_VARIABLE} must be 0 or 1, got {value!r}")
+    return value == "1"
+
+
 def batch_candidates_enabled(environ: Mapping[str, str] | None = None) -> bool:
     """``QWEN38_BATCH_CANDIDATES``: "1" or unset = the sampled lanes draw from the device candidate rows (P3g-1), "0" = every
     sampled row reads the full gathered logits (the P2 path); anything else is refused."""
@@ -375,6 +431,31 @@ def batch_row_read_enabled(environ: Mapping[str, str] | None = None) -> bool:
     if value not in ("0", "1"):
         raise ValueError(f"{BATCH_ROW_READ_VARIABLE} must be 0 or 1, got {value!r}")
     return value == "1"
+
+
+def decode_buckets_from_env(lanes: int, environ: Mapping[str, str] | None = None) -> tuple[int, ...]:
+    """``QWEN38_DECODE_BUCKETS``: the decode-width buckets of the lane decoder.  Unset or empty = ``(1, 2, 4, 8, 16, 32)``
+    with 32 lanes, else the one full-width trace ``(lanes,)``; "off" or "0" = ``(lanes,)``; otherwise a comma list of
+    distinct widths in 1..lanes that contains ``lanes``.  More than one bucket needs 32 lanes; anything else is refused.
+    """
+
+    value = (os.environ if environ is None else environ).get(DECODE_BUCKETS_VARIABLE)
+    if value is None or not value.strip():
+        return DEFAULT_DECODE_BUCKETS if lanes == 32 else (lanes,)
+    value = value.strip()
+    if value.lower() in DECODE_BUCKETS_OFF:
+        return (lanes,)
+    try:
+        buckets = tuple(int(part) for part in value.split(","))
+    except ValueError:
+        raise ValueError(f"{DECODE_BUCKETS_VARIABLE} must be off, 0 or a comma list of widths, got {value!r}") from None
+    if list(buckets) != sorted(set(buckets)) or any(not 1 <= width <= lanes for width in buckets):
+        raise ValueError(f"{DECODE_BUCKETS_VARIABLE} must be sorted distinct widths in 1..{lanes}, got {value!r}")
+    if buckets[-1] != lanes:
+        raise ValueError(f"{DECODE_BUCKETS_VARIABLE} must contain the full width {lanes}, got {value!r}")
+    if len(buckets) > 1 and lanes != 32:
+        raise ValueError(f"{DECODE_BUCKETS_VARIABLE}: more than one bucket needs 32 lanes, got {lanes} lanes")
+    return buckets
 
 
 class CandidateFallback(Exception):
@@ -606,8 +687,8 @@ def _sample_whole_row(scaled: torch.Tensor, generator: torch.Generator | None) -
 
 def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | None]:
     """The prefill form the chain is opened with, as ``(long_chunks, slab_rows)``, from the environment (``os.environ``
-    by default).  ``QWEN38_PREFILL_SLAB`` is the slab's row count, a multiple of 128 in 256..4096 (default 2048, the
-    measured form); ``0`` or ``off`` serves without the slab.  A slab implies the 128-row chunks; without one,
+    by default).  ``QWEN38_PREFILL_SLAB`` is the slab's row count, a multiple of 128 in 256..2048 (default 2048, the
+    measured form; the MoE serves multiples of 512); ``0`` or ``off`` serves without the slab.  A slab implies the 128-row chunks; without one,
     ``QWEN38_LONG_CHUNKS=1`` turns the 128-row chunks on alone.  Any other value is refused by name."""
 
     environ = os.environ if environ is None else environ
@@ -621,8 +702,8 @@ def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | 
         rows = int(value) if value.isascii() and value.isdigit() else None
         if rows is None or not is_slab_rows(rows):
             raise ValueError(
-                f"{PREFILL_SLAB_VARIABLE} must be the slab's rows, a multiple of 128 in 256..4096, or 0 / off for no "
-                f"slab, got {raw!r}"
+                f"{PREFILL_SLAB_VARIABLE} must be the slab's rows, {SLAB_ROWS_RULE}, or 0 / off for no slab, "
+                f"got {raw!r}"
             )
         slab_rows = rows
     long_chunks = slab_rows is not None or environ.get(LONG_CHUNKS_VARIABLE, "").strip() == "1"
@@ -664,6 +745,11 @@ def is_prefill_dense_refusal(error: BaseException) -> bool:
 DRAM_CHAIN_FREE_32K = 13_368_200_192  # bytes free per device when the lane decoder's prepare starts
 LANE_FIXED_BASE_32K = 364_000_000  # bytes: the lane states' intercept at context 32768
 LANE_FIXED_PER_LANE_32K = 85_400_000  # bytes: and per lane
+# Each decode bucket R other than the full one holds lane-state views and a lane trace: a fixed part and a part per lane.
+# Measured at TP=8, context 32768 (test_batch_buckets_device.py step-times run): bucket views 5.7 / 7.7 / 11.6 / 21.5 /
+# 41.2 MB and lane traces 9.9 / 10.0 / 10.3 / 10.8 / 11.9 MB for R = 1 / 2 / 4 / 8 / 16, plus margin.
+BUCKET_FIXED_BYTES_32K = 16_000_000  # bytes per extra bucket
+BUCKET_PER_LANE_BYTES_32K = 2_600_000  # bytes per lane of an extra bucket
 CONTEXT_BYTES_PER_TOKEN = 13 * 1024  # per extra allocated-context token: the chain's B=1 KV and index caches
 CONTEXT_BYTES_PER_TOKEN_PER_LANE = 768  # and each lane's compressed index cache
 POOL_MARGIN_BYTES = 1 << 30  # transients: the full-logits gather, prefill scratch, fragmentation
@@ -672,16 +758,25 @@ POOL_MARGIN_BYTES = 1 << 30  # transients: the full-logits gather, prefill scrat
 POOL_ADMISSION_MARGIN_BYTES = POOL_MARGIN_BYTES // 2
 
 
-def batch_pool_token_cap(max_model_len: int, max_num_seqs: int) -> int:
+def bucket_dram_bytes(buckets: Sequence[int], lanes: int) -> int:
+    """DRAM per device of the decode buckets narrower than the full width ``lanes``: ``BUCKET_FIXED_BYTES_32K +
+    R * BUCKET_PER_LANE_BYTES_32K`` each."""
+
+    return sum(BUCKET_FIXED_BYTES_32K + r * BUCKET_PER_LANE_BYTES_32K for r in buckets if r < lanes)
+
+
+def batch_pool_token_cap(max_model_len: int, max_num_seqs: int, buckets: Sequence[int] = ()) -> int:
     """Tokens the paged KV pool may hold in batch mode: ``(free - lanes - margin) // KV_BYTES_PER_TOKEN`` where
     ``free`` is the DRAM free per device after the chain build at the allocated context, and ``lanes`` the lane states
     (GDN, ring, PLE and compressed index caches) of ``max_num_seqs`` lanes.  Both are measured at context 32768 and
-    scaled by ``CONTEXT_BYTES_PER_TOKEN`` (and per lane) for the other contexts."""
+    scaled by ``CONTEXT_BYTES_PER_TOKEN`` (and per lane) for the other contexts.  The decode ``buckets`` narrower than
+    ``max_num_seqs`` add ``bucket_dram_bytes``."""
 
     context = resident_allocated_context(max_model_len)
     extra = context - 32768
     free = DRAM_CHAIN_FREE_32K - extra * CONTEXT_BYTES_PER_TOKEN
     lanes = LANE_FIXED_BASE_32K + max_num_seqs * (LANE_FIXED_PER_LANE_32K + extra * CONTEXT_BYTES_PER_TOKEN_PER_LANE)
+    lanes += bucket_dram_bytes(buckets, max_num_seqs)
     if prefill_pack_enabled(lanes=max_num_seqs):  # the pack's persistent state and bucket traces take DRAM too
         lanes += pack_dram_bytes(pack_buckets_from_env(lanes=max_num_seqs), context)
     return max(0, (free - lanes - POOL_MARGIN_BYTES) // KV_BYTES_PER_TOKEN)
@@ -780,6 +875,14 @@ class Qwen38ForCausalLM:
         self.block_size: int | None = None
         self.num_blocks: int | None = None
         self.lane_of_slot: list[int] = list(range(batch_lanes))  # slot -> lane (the lane holding that slot's state)
+        # decode-width buckets (QWEN38_DECODE_BUCKETS; refused at start when bad): a step replays the smallest bucket that
+        # holds the highest live lane, so a new request takes the lowest free lane (_take_lane)
+        self.decode_buckets: tuple[int, ...] = (
+            decode_buckets_from_env(batch_lanes) if batch_lanes > 1 else (batch_lanes,)
+        )
+        # W5: with buckets on, a step first moves a live lane that keeps the bucket wide down to a free low lane
+        self.decode_compact = decode_compact_enabled() if len(self.decode_buckets) > 1 else False
+        self.lane_moves = 0
         self.lane_slots: list[Qwen38VLLMSlot] = [Qwen38VLLMSlot() for _ in range(batch_lanes)]  # per-lane policy/RNG
         self.batch_failed = False
         self.last_prefill_groups: list = []  # the groups of the last packed-mode prefill call (pack on)
@@ -806,6 +909,7 @@ class Qwen38ForCausalLM:
             "row_read_steps": 0,  # fallback steps that read only their rows' logits (P3g-3)
             "row_read_rows": 0,  # lanes those reads returned
             "full_read_steps": 0,  # fallback steps that read the full gather (knob off, or too many rows)
+            "logprobs_rows": 0,  # rows that returned a raw logprob of their sampled token
             **{f"fallback_{reason}": 0 for reason in CANDIDATE_FALLBACK_REASONS},
         }
         self.host_branch_counts: dict[str, int] = {
@@ -854,7 +958,10 @@ class Qwen38ForCausalLM:
             return int(override)
         if int(max_num_seqs) <= 1:
             return tokens
-        return min(tokens, batch_pool_token_cap(int(max_model_len), int(max_num_seqs)))
+        return min(
+            tokens,
+            batch_pool_token_cap(int(max_model_len), int(max_num_seqs), decode_buckets_from_env(int(max_num_seqs))),
+        )
 
     @classmethod
     def initialize_vllm_model(
@@ -961,6 +1068,12 @@ class Qwen38ForCausalLM:
 
         def open_chain(warm_hook: Callable[[Any], None] | None) -> Any:
             options = {} if warm_hook is None else {"warm_hook": warm_hook}
+            if os.environ.get("QWEN38_GREEDY_TAIL", "0") == "1" and max_batch_size == 1:
+                # the single-slot host sampler draws from the full-vocabulary row, never the candidate row: the TAIL
+                # traces skip the candidate chain (tools/qwen38_sampling_step.SKIP_CANDIDATE_ROW)
+                from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step
+
+                qwen38_sampling_step.SKIP_CANDIDATE_ROW = True
             try:
                 chain = Qwen38TracedChain.open(
                     construction,
@@ -1115,11 +1228,13 @@ class Qwen38ForCausalLM:
         prompt_tokens: Any = None,
         output_tokens: Any = None,
         **kwargs: Any,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """One teacher-forced step with the token vLLM sampled; returns the next position's logits, or, when the
         plugin sends ``sampling_params`` (its device-sampling contract), the next token as int32 ``[1, 1]``: the device's greedy
-        token when the row is plain greedy (no penalty, no logprobs), else drawn on the host from the full row with
-        vLLM's sampler semantics."""
+        token when the row is plain greedy (no penalty), else drawn on the host from the full row with
+        vLLM's sampler semantics.  A row with ``enable_log_probs`` keeps the token its route gives and returns
+        ``(token [1, 1] int32, logprob [1] float32)``: the raw logprob of that token (``log_softmax`` of the full row,
+        before temperature, penalties, top-k and top-p), read from the full row besides the device's greedy token."""
 
         if "reset_batch" in kwargs:
             raise TypeError("decode_input_update_contract 1: reset_batch is not accepted")
@@ -1145,22 +1260,32 @@ class Qwen38ForCausalLM:
         if not 0 <= token_id < TOKENIZER_SIZE:
             raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id}")
         policy = history = None
-        greedy_token = device_greedy_contract(sampling_params)
-        if sampling_params is not None:
-            policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
-            if policy.penalized:
-                history = penalty_history(prompt_tokens, output_tokens)
+        host_fast = os.environ.get(HOST_FAST_VARIABLE) == "1"
+        if host_fast:  # one parse of the contract: device_greedy_contract's rule on the policy this step needs anyway
+            greedy_token = False
+            if sampling_params is not None:
+                policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
+                greedy_token = policy.greedy and not policy.penalized
+        else:
+            greedy_token = device_greedy_contract(sampling_params)
+            if sampling_params is not None:
+                policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
+        if policy is not None and policy.penalized:
+            history = penalty_history(prompt_tokens, output_tokens)
         self._require_serviceable(enable_trace)
         position = int(start_pos[0])
         if position != len(self.slot.committed):
             raise Qwen38ChatChainError(f"runner position {position} vs device position {len(self.slot.committed)}")
         if policy is not None:
             self._adopt_policy(policy, reseed=reset_sampling_state)
+        logprobs = policy is not None and policy.logprobs
         try:
-            with self.chain.loop_guard():
+            with nullcontext() if host_fast else self.chain.loop_guard():  # the guard only rebinds ttnn names
                 residue = self._step(token_id)
                 if greedy_token:
-                    return self._greedy_token(residue)
+                    token = self._greedy_token(residue)
+                    if not logprobs:
+                        return token
                 logits = self._read_logits(residue)
         except BaseException:
             self.slot.failed = True
@@ -1168,9 +1293,14 @@ class Qwen38ForCausalLM:
         if policy is None:
             return logits
         row = logits[0, 0]
-        if history is not None:
-            apply_penalties(row, *history, policy)
-        return torch.tensor([[sample_from_row(row, policy, self.slot.generator)]], dtype=torch.int32)
+        raw = row.clone() if logprobs and history is not None else row  # the penalties act in place
+        if not greedy_token:
+            if history is not None:
+                apply_penalties(row, *history, policy)
+            token = torch.tensor([[sample_from_row(row, policy, self.slot.generator)]], dtype=torch.int32)
+        if not logprobs:
+            return token
+        return token, torch.tensor([raw_logprob(raw, int(token))], dtype=torch.float32)
 
     def _adopt_policy(
         self, policy: Qwen38HostSamplingPolicy, *, reseed: bool, slot: Qwen38VLLMSlot | None = None
@@ -1322,13 +1452,15 @@ class Qwen38ForCausalLM:
             candidates=self.batch_candidates,
             normalizer=self.batch_normalizer,
             row_read=self.batch_row_read,
+            buckets=self.decode_buckets,
         )
         decoder.warm_logits_gather = True  # host-sampled rows and host logits read the lane logits under the miss guard
         self.decoder, self.block_size, self.num_blocks = decoder, block_size, num_blocks
         logger.info(
             f"batch mode: {self.lanes} lanes, KV pool {num_blocks} blocks x {block_size} rows = "
             f"{paging.pool_rows} rows ({paging.pool_rows * KV_BYTES_PER_TOKEN / 2**30:.2f} GiB per device), page table "
-            f"{paging.max_blocks} blocks per lane, context {self.allocated_context}, indexer {decoder.indexer_form}"
+            f"{paging.max_blocks} blocks per lane, context {self.allocated_context}, indexer {decoder.indexer_form}, "
+            f"decode buckets {self.decode_buckets}"
         )
 
         def warm_hook(chain: Any) -> None:
@@ -1365,6 +1497,7 @@ class Qwen38ForCausalLM:
         lanes = LANE_FIXED_BASE_32K + self.lanes * (
             LANE_FIXED_PER_LANE_32K + (self.allocated_context - 32768) * CONTEXT_BYTES_PER_TOKEN_PER_LANE
         )
+        lanes += bucket_dram_bytes(self.decode_buckets, self.lanes)  # the extra decode buckets' views and traces
         if prefill_pack_enabled(lanes=self.lanes):  # the pack's persistent state and bucket traces
             lanes += pack_dram_bytes(pack_buckets_from_env(lanes=self.lanes), self.allocated_context)
         logger.info(
@@ -1416,6 +1549,22 @@ class Qwen38ForCausalLM:
         lane = self.lane_of_slot[slot]
         decoder.release_lane_external(lane)
         self.lane_slots[lane] = Qwen38VLLMSlot()
+
+    def _move_lane(self, decoder: Qwen38PlainLaneDecoder, src: int, dst: int) -> None:
+        """Compaction: the decoder moves live lane ``src`` into free lane ``dst``; the slot that held ``src`` now holds
+        ``dst`` (the two slots swap lanes in the map, host only) and the lane's policy/RNG follows."""
+
+        try:
+            decoder.move_lane(src, dst)
+        except BaseException:
+            self.batch_failed = True
+            raise
+        slot_src, slot_dst = self.lane_of_slot.index(src), self.lane_of_slot.index(dst)
+        self.lane_of_slot[slot_src], self.lane_of_slot[slot_dst] = dst, src
+        self.lane_slots[dst] = self.lane_slots[src]
+        self.lane_slots[src] = Qwen38VLLMSlot()
+        self.lane_moves += 1
+        logger.info(f"decode compaction: lane {src} -> {dst} ({decoder.last_move.get('ms', 0.0):.1f} ms)")
 
     def _prefill_batch(
         self,
@@ -1471,9 +1620,30 @@ class Qwen38ForCausalLM:
         if prefill_pack_enabled(lanes=self.lanes):
             return self._prefill_batch_grouped(prompts, pages, policies, slots), torch.zeros(rows, dtype=torch.long)
         outputs: list[torch.Tensor] = []
+        claimed: set[int] = set()  # the lanes this call hands out (not live until their row is imported)
         for i in range(rows):
-            outputs.append(self._prefill_row_single(decoder, slots[i], prompts[i], pages[i], policies[i]))
+            outputs.append(self._prefill_row_single(decoder, slots[i], prompts[i], pages[i], policies[i], claimed))
         return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
+
+    def _take_lane(self, decoder: Qwen38PlainLaneDecoder, slot: int, claimed: set[int]) -> int:
+        """The lane an admission into ``slot`` lands in.  The slot's own lane when it is the one to use (a still-live lane
+        is released first, with a warning); with decode buckets on, the lowest lane that holds no request and is not in
+        ``claimed`` (the lanes this prefill call already handed out), swapped into the slot -> lane map: a bucket replay
+        advances only lanes 0..R-1, so live requests stay in the low lanes.  The lane is added to ``claimed``."""
+
+        lane = self.lane_of_slot[slot]
+        if decoder.positions[lane] is not None:
+            logger.warning(f"prefill into slot {slot} whose lane {lane} still holds a request: released")
+            decoder.release_lane_external(lane)
+        if len(self.decode_buckets) == 1:
+            claimed.add(lane)
+            return lane
+        target = next(u for u in range(self.lanes) if decoder.positions[u] is None and u not in claimed)
+        if target != lane:
+            other = self.lane_of_slot.index(target)  # a slot with no request (the target's position is None)
+            self.lane_of_slot[slot], self.lane_of_slot[other] = target, lane
+        claimed.add(target)
+        return target
 
     def _prefill_row_single(
         self,
@@ -1482,14 +1652,12 @@ class Qwen38ForCausalLM:
         prompt: list[int],
         pages: list[int],
         policy: Qwen38HostSamplingPolicy | None,
+        claimed: set[int] | None = None,
     ) -> torch.Tensor:
         """One row alone: the B=1 chain prefill, its import into the lane of ``slot`` (a still-live lane is released first)
         and the row's output (the device greedy token, a host draw, or the host logits ``[1, 1, VOCAB_SIZE]``)."""
 
-        lane = self.lane_of_slot[slot]
-        if decoder.positions[lane] is not None:
-            logger.warning(f"prefill into slot {slot} whose lane {lane} still holds a request: released")
-            decoder.release_lane_external(lane)
+        lane = self._take_lane(decoder, slot, set() if claimed is None else claimed)
         device_greedy = policy is not None and policy.greedy and not policy.penalized
         out = self._prefill_one(prompt, greedy_token=device_greedy)
         try:
@@ -1536,17 +1704,14 @@ class Qwen38ForCausalLM:
         self.last_prefill_groups = groups
         logger.info(f"prefill groups for lengths {lengths}: {groups}")
         outputs: dict[int, torch.Tensor] = {}
+        claimed: set[int] = set()  # the lanes this call hands out (not live until their group is admitted)
         for group in groups:
             if group[0] == "single":
                 (i,) = group[1]
-                outputs[i] = self._prefill_row_single(decoder, slots[i], prompts[i], pages[i], policies[i])
+                outputs[i] = self._prefill_row_single(decoder, slots[i], prompts[i], pages[i], policies[i], claimed)
                 continue
             _kind, bucket, members = group
-            lanes = [self.lane_of_slot[slots[i]] for i in members]
-            for i, lane in zip(members, lanes):
-                if decoder.positions[lane] is not None:
-                    logger.warning(f"prefill into slot {slots[i]} whose lane {lane} still holds a request: released")
-                    decoder.release_lane_external(lane)
+            lanes = [self._take_lane(decoder, slots[i], claimed) for i in members]
             try:
                 logits = decoder.admit_pack(
                     lanes, [prompts[i] for i in members], bucket, pages=[pages[i] for i in members]
@@ -1587,13 +1752,18 @@ class Qwen38ForCausalLM:
         sampling_params: Any,
         prompt_tokens: Any,
         output_tokens: Any,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """One replay of the lane trace for the live rows.  Row ``i`` is live when ``start_pos[i] >= 0``; it runs in lane
         ``lane_of_slot[i]`` after ``slot_remap`` was applied to the slot -> lane map.  Every lane that holds a request
         must have a live row (the trace advances every lane).  Lanes without a request run the warm token on the scratch
         page, parked at position 0.  Returns the next tokens int32 ``[lanes, 1]`` under ``sampling_params`` (device
         greedy ids; host draws for the other live rows; padding rows 0), else the host logits ``[lanes, 1, VOCAB_SIZE]``
-        (padding rows 0)."""
+        (padding rows 0).  When any entry of ``sampling_params.enable_log_probs`` is true (the whole padded list, as the
+        plugin tests it) the return is ``(tokens, logprobs)``, ``logprobs`` float32 ``[lanes]``: for a live row with
+        ``enable_log_probs`` the raw logprob of its final token (``log_softmax`` of its fp32 row, padding at ``-inf``,
+        before the penalties, temperature, top-k and top-p), 0 for every other row.  Such a row's token comes from the
+        route it would take without the request; the request only adds the row's read (with the fallback lanes' rows,
+        through the same row read) and the host computation."""
 
         started = time.perf_counter()
         decoder = self._require_batch_ready()
@@ -1606,6 +1776,9 @@ class Qwen38ForCausalLM:
         if page_table is None or torch.as_tensor(page_table).shape[0] < lanes:
             raise ValueError(f"batch mode: page_table must hold {lanes} rows")
         page_table = torch.as_tensor(page_table)
+        if self.decode_compact:  # before the slot -> lane map is read: the moved lanes are what the rows resolve to
+            for src, dst in decoder.compaction_moves():
+                self._move_lane(decoder, src, dst)
         remap = parse_slot_remap(slot_remap, lanes)
         new_map = [self.lane_of_slot[remap[row]] for row in range(lanes)]
         live_rows = [row for row, position in enumerate(positions) if position >= 0]
@@ -1646,6 +1819,8 @@ class Qwen38ForCausalLM:
             if sampling_params is not None:
                 policies[row] = Qwen38HostSamplingPolicy.from_contract(sampling_params, row)
         host_rows = [row for row, policy in policies.items() if not (policy.greedy and not policy.penalized)]
+        lp_rows = [row for row in live_rows if row in policies and policies[row].logprobs]
+        lp_lanes = {row_lanes[row] for row in lp_rows}
         histories = {
             row: penalty_history(prompt_tokens, output_tokens, row) for row in host_rows if policies[row].penalized
         }
@@ -1687,9 +1862,9 @@ class Qwen38ForCausalLM:
             )
             if fallback_rows:
                 fallback_started = time.perf_counter()
-                fallback_lanes = sorted({row_lanes[row] for row in fallback_rows})
-                if self._row_read_serves(decoder, len(fallback_lanes)):
-                    fallback_logits = dict(zip(fallback_lanes, self._read_lane_rows(fallback_lanes)))
+                read_lanes = sorted({row_lanes[row] for row in fallback_rows} | lp_lanes)  # one read for both
+                if self._row_read_serves(decoder, len(read_lanes)):
+                    fallback_logits = dict(zip(read_lanes, self._read_lane_rows(read_lanes)))
                 else:
                     logits = self._read_lane_logits()
                     self.candidate_counters["full_read_steps"] += 1
@@ -1697,12 +1872,21 @@ class Qwen38ForCausalLM:
                 self.candidate_counters["fallback_steps"] += 1
         elif sampling_params is None or host_rows:
             logits = self._read_lane_logits()
+        if lp_lanes and logits is None and not lp_lanes <= set(fallback_logits):
+            # no fallback read this step (or none that covers them): only the logprobs rows' lanes are read
+            lanes_to_read = sorted(lp_lanes)
+            if self._row_read_serves(decoder, len(lanes_to_read)):
+                fallback_logits = dict(zip(lanes_to_read, self._read_lane_rows(lanes_to_read)))
+            else:
+                logits = self._read_lane_logits()
+                self.candidate_counters["full_read_steps"] += 1
         if sampling_params is None:
             out = torch.zeros(lanes, 1, VOCAB_SIZE, dtype=torch.float32)
             for row in live_rows:
                 out[row, 0] = logits[row_lanes[row]]
         else:
             out = torch.zeros(lanes, 1, dtype=torch.int32)
+            raw_rows: dict[int, torch.Tensor] = {}  # a penalized logprobs row's row as read, before the penalties
             for row in live_rows:
                 lane = row_lanes[row]
                 if row in drawn:
@@ -1712,6 +1896,8 @@ class Qwen38ForCausalLM:
                     draw_started = time.perf_counter()
                     values = fallback_logits[lane] if lane in fallback_logits else logits[lane]
                     if row in histories:
+                        if policies[row].logprobs:
+                            raw_rows[row] = values.clone()
                         apply_penalties(values, *histories[row], policies[row])
                     generator = position_generator(policies[row].seed, positions[row])
                     out[row, 0] = sample_from_row(
@@ -1736,10 +1922,21 @@ class Qwen38ForCausalLM:
                         logits = self._read_lane_logits()
                     token = int(logits[lane].argmax())
                 out[row, 0] = token
+        log_probs = None
+        if sampling_params is not None and logprobs_requested(sampling_params):
+            log_probs = torch.zeros(lanes, dtype=torch.float32)
+            for row in lp_rows:  # every token is final: the logprob of each from its row as read
+                lane = row_lanes[row]
+                raw = raw_rows.get(row)
+                if raw is None:
+                    raw = fallback_logits[lane] if lane in fallback_logits else logits[lane]
+                log_probs[row] = raw_logprob(raw, int(out[row, 0]))
+            self.candidate_counters["logprobs_rows"] += len(lp_rows)
         now = time.perf_counter()
         self.decode_stats.append(
             {
                 "rows": len(live_rows),
+                "bucket": getattr(getattr(decoder, "active", None), "lanes", self.lanes),  # R: the step's decode width
                 "total_s": now - started,
                 "step_s": step_s,
                 "gather_s": now - gather_started,
@@ -1751,6 +1948,7 @@ class Qwen38ForCausalLM:
                 "fallback_draw_s": fallback_draw_s,
                 "fallback_s": fallback_s if use_candidates else (now - gather_started if host_rows else 0.0),
                 "sampled_rows": len(host_rows),
+                "logprobs_rows": len(lp_rows),
             }
         )
         self.decode_calls += 1
@@ -1766,6 +1964,7 @@ class Qwen38ForCausalLM:
             branches = ", ".join(f"{name} {count}" for name, count in self.host_branch_counts.items() if count)
             logger.info(
                 f"batch decode: {self.decode_calls} calls, last {len(recent)}: mean rows {mean('rows'):.2f}, "
+                f"bucket R {mean('bucket'):.1f} (steps per bucket {dict(getattr(decoder, 'bucket_steps', {}))}), "
                 f"total {mean('total_s') * 1e3:.2f} ms, replay {mean('step_s') * 1e3:.2f} ms, "
                 f"gather+sample {mean('gather_s') * 1e3:.2f} ms, overhead {mean('overhead_s') * 1e3:.2f} ms; "
                 f"split: candidates {mean('candidates_s') * 1e3:.2f} ms, host draw {mean('draw_s') * 1e3:.2f} ms, "
@@ -1774,7 +1973,7 @@ class Qwen38ForCausalLM:
                 f"{counters['candidate_steps']} steps, fallback steps {counters['fallback_steps']} (rows: top_k "
                 f"{counters['fallback_top_k']}, penalty {counters['fallback_penalty']}, guard "
                 f"{counters['fallback_guard']}, nonfinite {counters['fallback_nonfinite']}, nucleus "
-                f"{counters['fallback_nucleus']}); normalizer {'on' if self.batch_normalizer else 'off'}: "
+                f"{counters['fallback_nucleus']}; logprobs rows {counters['logprobs_rows']}); normalizer {'on' if self.batch_normalizer else 'off'}: "
                 f"{counters['normalizer_rows']} rows in {counters['normalizer_steps']} steps, device+readback "
                 f"{(sum(norm_steps) / len(norm_steps) * 1e3) if norm_steps else 0.0:.2f} ms per normalizer step "
                 f"({len(norm_steps)} of the last {len(recent)}); fallback steps {len(fallback_steps)} of the last "
@@ -1784,7 +1983,7 @@ class Qwen38ForCausalLM:
                 f"{counters['row_read_steps']} steps / {counters['row_read_rows']} lanes, full gather "
                 f"{counters['full_read_steps']} steps; host branches: {branches or 'none'}"
             )
-        return out
+        return out if log_probs is None else (out, log_probs)
 
     def _draw_candidate_rows(
         self,
@@ -1937,7 +2136,9 @@ class Qwen38ForCausalLM:
             enable_trace=True,
             read_from_device=False,
         )
-        if self.batch_candidates and getattr(self.decoder, "has_candidates", False):
+        if self.batch_candidates and getattr(self.decoder, "has_candidates", False) and len(self.decode_buckets) > 1:
+            self.decoder.warm_bucket_reads()  # every bucket's sampling traces once under the closed miss guard
+        elif self.batch_candidates and getattr(self.decoder, "has_candidates", False):
             self.decoder.read_candidates()  # one candidate replay and readback under the closed miss guard
             if self.batch_normalizer and getattr(self.decoder, "has_normalizer", False):
                 self.decoder.read_candidates_normalized([1.0] * self.lanes)  # and one candidate + normalizer replay
@@ -1972,7 +2173,22 @@ class Qwen38ForCausalLM:
         """Write x_t into the token row, HEAD(t), the PLE row for x_t, TAIL(t); returns the residue t mod 4."""
 
         residue = len(self.slot.committed) % RESIDUE_CLASSES
-        self.chain.write_token_row(token_id)
+        write_token = (
+            self.chain.feed_token_row
+            if os.environ.get(TOKEN_FEEDBACK_VARIABLE, "1") == "1"
+            else self.chain.write_token_row
+        )
+        if os.environ.get(PLE_EARLY_DECODE_VARIABLE) == "1":
+            # lookup + host row before HEAD is enqueued: only the upload sits between HEAD and TAIL
+            host_row, next_context = self.chain.prepare_ple_row(token_id, self.slot.ple_context)
+            write_token(token_id)
+            self.chain.execute_head(residue)
+            self.chain.upload_ple_row(host_row)
+            self.slot.ple_context = next_context
+            self.chain.execute_tail(residue)
+            self.slot.committed.append(token_id)
+            return residue
+        write_token(token_id)
         self.chain.execute_head(residue)
         self.slot.ple_context = self.chain.refresh_ple_row(token_id, self.slot.ple_context)
         self.chain.execute_tail(residue)
@@ -1999,5 +2215,6 @@ class Qwen38ForCausalLM:
         """TAIL(residue)'s full-vocabulary gather (blocking), the padding rows masked, as ``[1, 1, VOCAB_SIZE]``."""
 
         logits = self.chain.sampling.read_full_logits(residue)
+        self.chain.mark_ple_fenced()  # the gather is blocking: the TAIL (after the PLE upload) has finished
         logits[TOKENIZER_SIZE:] = float("-inf")
         return logits.view(1, 1, VOCAB_SIZE)

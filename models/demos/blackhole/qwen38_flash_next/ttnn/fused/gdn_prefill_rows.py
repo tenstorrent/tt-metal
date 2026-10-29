@@ -33,11 +33,11 @@ FP32, BF16 = ttnn.float32, ttnn.bfloat16
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 # The slab row counts this form serves (ttnn/contracts.is_slab_rows, repeated here so the module stays free of the
 # model package's imports -- ttnn/gdn.py imports this one).
-MIN_SLAB_ROWS, MAX_SLAB_ROWS, SLAB_ROW_STEP = 256, 4096, 128
+MIN_SLAB_ROWS, MAX_SLAB_ROWS, SLAB_ROW_STEP = 256, 2048, 128
 
 
 def is_slab_rows(rows) -> bool:
-    """A prefill slab row count: a multiple of 128 in 256 .. 4096 (never 32 or 128)."""
+    """A prefill slab row count: a multiple of 128 in 256 .. 2048 (never 32 or 128)."""
 
     return (
         not isinstance(rows, bool)

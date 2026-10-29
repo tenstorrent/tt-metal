@@ -114,7 +114,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import (
     RESIDENT_QSA_CACHE_CAPACITIES,
     Qwen38ResidentContext,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import is_slab_rows
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import SLAB_ROWS_RULE, is_slab_rows
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_scan as gdn_rows_scan_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.moe import moe_slab_one_call_enabled
 from models.demos.blackhole.qwen38_flash_next.ttnn.vision_residency import (
@@ -2289,7 +2289,7 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="ROWS",
-        help="chunked prefill only: also capture a prefill slab of ROWS rows (a multiple of 128 in 256..4096; every "
+        help=f"chunked prefill only: also capture a prefill slab of ROWS rows ({SLAB_ROWS_RULE}; every "
         "dense linear as one matmul, the GDN state carried through the slab in one kernel call) and run slabs ahead "
         "of the 128-row chunks; implies --long-chunks; tolerance-class against the chunk bodies (docs/PREFILL.md)",
     )
@@ -2333,7 +2333,7 @@ def _parser() -> argparse.ArgumentParser:
         dest="sampling",
         action="store_true",
         default=False,
-        help="capture TAIL with the candidate-row epilogue: sampled requests served (+0.3 ms per greedy token); a "
+        help="capture TAIL with the candidate-row epilogue: sampled requests served; a "
         "request without sampling fields stays the bitwise greedy loop; the launchers pass this",
     )
     parser.add_argument(
@@ -2370,8 +2370,9 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         choices=MTP_DRAFTS,
         default=None,
-        help="draft K tokens per pass with the MTP layer (verify / draft / commit traces; greedy chunked-mode "
-        "requests generate through the pass loop); default off",
+        help="draft K tokens per pass with the MTP layer (verify / draft / commit traces; chunked-mode greedy "
+        "requests generate through the pass loop, and with --sampling the sampled ones too, except top_k 0, a "
+        "logit-raising penalty or logprobs); default off",
     )
     parser.add_argument(
         "--mtp-gdn-anchor",
@@ -2418,7 +2419,7 @@ def main() -> int:
     if args.acceptance_only and args.acceptance_prompts is None:
         raise SystemExit("--acceptance-only needs --acceptance-prompts")
     if args.prefill_slab is not None and not is_slab_rows(args.prefill_slab):
-        raise SystemExit(f"--prefill-slab takes a multiple of 128 in 256..4096, got {args.prefill_slab}")
+        raise SystemExit(f"--prefill-slab takes {SLAB_ROWS_RULE}, got {args.prefill_slab}")
     if args.prefill_slab is not None:
         # Validate the one-call slab option before runtime admission opens a device.
         try:

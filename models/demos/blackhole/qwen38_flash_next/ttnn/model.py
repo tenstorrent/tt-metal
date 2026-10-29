@@ -789,6 +789,22 @@ class Qwen38TTNNTextModelLaneState:
     qsa_chunk_constants: qsa_module.Qwen38TTNNQSAChunkConstants
     qsa_lane_constants: qsa_module.Qwen38TTNNQSALaneConstants
     _owner: object = field(repr=False, compare=False)
+    # 0: the state owns its lanes.  32: a bucket view of ``lanes`` < 32 lanes over the 32-lane parent's tensors; the
+    # position row, token row, chunk constants and page table are the parent's objects (``lanes`` sizes the work,
+    # ``storage_lanes`` the tensors).
+    storage_lanes: int = 0
+
+    @property
+    def stored_lanes(self) -> int:
+        """The lane extent of the stored tensors (``lanes`` unless a bucket view)."""
+
+        return self.storage_lanes or self.lanes
+
+    @property
+    def is_view(self) -> bool:
+        """True for a bucket view over a parent lane state (see ``Qwen38TTNNTextModel.allocate_bucket_lane_state``)."""
+
+        return self.storage_lanes != 0
 
     @property
     def paging(self) -> qsa_module.Qwen38LanePaging | None:
@@ -3716,8 +3732,15 @@ class Qwen38TTNNTextModel:
         if not isinstance(state, Qwen38TTNNTextModelLaneState) or state._owner is not self._state_owner:
             raise ValueError("text-model lane state was not allocated by this model owner")
         lanes = require_lane_count(state.lanes, label="text-model lanes")
-        if not isinstance(state.position, Qwen38TTNNDevicePositionRow) or state.position.lanes != lanes:
-            raise TypeError(f"text-model lane state requires a {lanes}-lane Qwen38TTNNDevicePositionRow")
+        if not isinstance(state.position, Qwen38TTNNDevicePositionRow) or state.position.lanes != state.stored_lanes:
+            raise TypeError(f"text-model lane state requires a {state.stored_lanes}-lane Qwen38TTNNDevicePositionRow")
+        if state.is_view:
+            if state.stored_lanes != CHUNK_ROWS:
+                raise ValueError(f"a bucket view is over the {CHUNK_ROWS}-lane parent, got {state.stored_lanes}")
+            if state.qsa_lane_constants.paging is None:
+                raise ValueError("a bucket view is over a paged parent")
+            if state.qsa_lane_constants.owns_page_table is not False:
+                raise ValueError("a bucket view's lane constants share the parent's page table")
         if len(state.layers) != BACKBONE_LAYERS:
             raise ValueError(f"text-model lane state must contain {BACKBONE_LAYERS} target layers")
         for layer_index, (layer, layer_state) in enumerate(zip(self.layers, state.layers)):
@@ -3747,6 +3770,25 @@ class Qwen38TTNNTextModel:
             if tuple(table.shape) != (1, 1, CHUNK_ROWS, paging.max_blocks) or table.dtype != ttnn.int32:
                 raise ValueError(f"the lane page table must be INT32 [1,1,32,{paging.max_blocks}], got {table}")
         return lanes
+
+    def _allocate_lane_embedding_rows(self, lanes: int):
+        """The persistent ``[1,1,lanes,640]`` embedding rows below 32 lanes (None at 32)."""
+
+        if lanes >= CHUNK_ROWS:
+            return None
+        return ttnn.from_torch(
+            torch.zeros((1, 1, lanes, HIDDEN_SIZE), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
+        )
+
+    @staticmethod
+    def _require_parent_lane_state(state: Qwen38TTNNTextModelLaneState, operation: str) -> None:
+        if state.is_view:
+            raise ValueError(f"{operation} was given a bucket view; use the parent lane state")
 
     def allocate_lane_state(
         self,
@@ -3811,15 +3853,7 @@ class Qwen38TTNNTextModel:
                 if residue_free and isinstance(allocated[-1].attention, gdn_module.Qwen38TTNNGDNState):
                     allocated[-1].attention.fixed_phase = True
             token_row = self.model_io.embedding.upload_token_row(0)
-            if lanes < CHUNK_ROWS:
-                embedding_rows = ttnn.from_torch(
-                    torch.zeros((1, 1, lanes, HIDDEN_SIZE), dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
-                )
+            embedding_rows = self._allocate_lane_embedding_rows(lanes)
             ple_layer, ple_lanes_state = self.layers[PLE_CHECKPOINT_LAYER], allocated[PLE_CHECKPOINT_LAYER].ple
             if ple_layer.ple is None or ple_lanes_state is None:
                 raise RuntimeError("checkpoint layer 1 PLE owner/lanes state is unavailable")
@@ -3860,8 +3894,99 @@ class Qwen38TTNNTextModel:
                 self._mark_poisoned("allocate_lane_state cleanup", 0, cause)
             raise
 
+    def allocate_bucket_lane_state(
+        self, parent: Qwen38TTNNTextModelLaneState, lanes: int
+    ) -> Qwen38TTNNTextModelLaneState:
+        """A ``lanes``-lane bucket view (``lanes`` < 32) over the paged 32-lane ``parent``, for the decode traces of
+        a partly filled batch.  Allocate before any capture (the traces bake the addresses).  The view shares the
+        parent's position row, token row, chunk constants, page table and every per-lane tensor (the fused kernels
+        address lane u by u); it owns its rows-``lanes`` MoE instances, attention rows, embedding rows, PLE rows
+        and ``lanes``-lane constants.  Free it with :meth:`release_bucket_lane_state` before the parent."""
+
+        lanes_parent = self._validate_lane_state(parent)
+        if parent.is_view:
+            raise ValueError("a bucket view is allocated over the parent lane state, not over a view")
+        if lanes_parent != CHUNK_ROWS:
+            raise ValueError(f"a bucket view needs the {CHUNK_ROWS}-lane parent, got {lanes_parent} lanes")
+        if parent.paging is None:
+            raise ValueError("a bucket view needs a paged parent lane state")
+        if isinstance(lanes, bool) or type(lanes) is not int or not 1 <= lanes < CHUNK_ROWS:
+            raise ValueError(f"bucket lanes must be an int in [1,{CHUNK_ROWS}), got {lanes!r}")
+        lane_constants = None
+        allocated: list[Qwen38TTNNDecoderLayerLaneState] = []
+        embedding_rows = None
+        ple_rows = None
+        try:
+            lane_constants = qsa_module.Qwen38TTNNQSALaneConstants.build_view(
+                self.mesh_device, self.mesh_contract, parent.qsa_lane_constants, lanes=lanes
+            )
+            for layer, parent_layer_state in zip(self.layers, parent.layers):
+                allocated.append(layer.allocate_bucket_lane_state(parent_layer_state, lanes))
+            embedding_rows = self._allocate_lane_embedding_rows(lanes)
+            ple_layer, ple_lanes_state = self.layers[PLE_CHECKPOINT_LAYER], allocated[PLE_CHECKPOINT_LAYER].ple
+            if ple_layer.ple is None or ple_lanes_state is None:
+                raise RuntimeError("checkpoint layer 1 PLE owner/lanes state is unavailable")
+            ple_rows = ple_layer.ple.prepare_lanes_input([0] * lanes, ple_lanes_state)
+            ple_lanes_state.token_contexts = (None,) * lanes
+            result = Qwen38TTNNTextModelLaneState(
+                lanes=lanes,
+                position=parent.position,
+                layers=tuple(allocated),
+                token_row=parent.token_row,
+                ple_rows=ple_rows,
+                embedding_rows=embedding_rows,
+                qsa_chunk_constants=parent.qsa_chunk_constants,
+                qsa_lane_constants=lane_constants,
+                _owner=self._state_owner,
+                storage_lanes=parent.lanes,
+            )
+            self._validate_lane_state(result)
+            return result
+        except BaseException as error:
+            actions = [
+                (
+                    f"target layer {index} bucket lane state",
+                    lambda layer=layer, layer_state=layer_state: layer.release_bucket_lane_state(layer_state),
+                )
+                for index, (layer, layer_state) in reversed(tuple(enumerate(zip(self.layers, allocated))))
+            ]
+            if ple_rows is not None:
+                actions.append(("bucket PLE rows", ple_rows.release))
+            if embedding_rows is not None:
+                actions.append(("bucket embedding rows", lambda: ttnn.deallocate(embedding_rows)))
+            if lane_constants is not None:
+                actions.append(("QSA bucket lane constants", lane_constants.deallocate))
+            cause = _cleanup_failure_cause("bucket lane text-model state allocation", actions, error)
+            if cause is not error:
+                self._mark_poisoned("allocate_bucket_lane_state cleanup", 0, cause)
+            raise
+
+    def release_bucket_lane_state(self, state: Qwen38TTNNTextModelLaneState) -> None:
+        """Free what the bucket view owns; the parent's tensors, position row, token row, chunk constants and page
+        table stay."""
+
+        self._validate_lane_state(state)
+        if not state.is_view:
+            raise ValueError("release_bucket_lane_state takes a bucket view; use release_lane_state")
+        actions = [
+            (
+                f"target layer {index} bucket lane state",
+                lambda layer=layer, layer_state=layer_state: layer.release_bucket_lane_state(layer_state),
+            )
+            for index, (layer, layer_state) in reversed(tuple(enumerate(zip(self.layers, state.layers))))
+        ]
+        actions.append(("bucket PLE rows", state.ple_rows.release))
+        if state.embedding_rows is not None:
+            actions.append(("bucket embedding rows", lambda: ttnn.deallocate(state.embedding_rows)))
+        actions.append(("QSA bucket lane constants", state.qsa_lane_constants.deallocate))
+        try:
+            _run_cleanup_actions("bucket lane text-model state", actions)
+        except BaseException as error:
+            self._mark_poisoned("release_bucket_lane_state", 0, error)
+
     def release_lane_state(self, state: Qwen38TTNNTextModelLaneState) -> None:
         self._validate_lane_state(state)
+        self._require_parent_lane_state(state, "release_lane_state")
         actions = [
             (
                 f"target layer {index} lane state",
@@ -3887,6 +4012,7 @@ class Qwen38TTNNTextModel:
         0), the token row zeroed."""
 
         self._validate_lane_state(state)
+        self._require_parent_lane_state(state, "reset_lane_state_inplace")
         try:
             state.position.reset(positions, shifts)
             for layer, layer_state in zip(self.layers, state.layers):
@@ -3902,6 +4028,7 @@ class Qwen38TTNNTextModel:
         and the position and shift rows take the lane."""
 
         self._validate_lane_state(state)
+        self._require_parent_lane_state(state, "admit_lane")
         state.position.admit(lane, position, rope_shift)  # the residue rule: a ValueError before any device write
         try:
             for layer, layer_state in zip(self.layers, state.layers):
@@ -3918,6 +4045,7 @@ class Qwen38TTNNTextModel:
         reset's work is dead there (48 layers of multiplies over the whole lane tensors, ~25 ms)."""
 
         self._validate_lane_state(state)
+        self._require_parent_lane_state(state, "admit_lane_position")
         state.position.admit(lane, position, rope_shift)  # the residue rule: a ValueError before any write
         ple = state.layers[PLE_CHECKPOINT_LAYER].ple
         if ple is not None:
@@ -3931,6 +4059,7 @@ class Qwen38TTNNTextModel:
         past ``len(rows)`` up to 32) are all 0."""
 
         self._validate_lane_state(state)
+        self._require_parent_lane_state(state, "write_lane_page_table")
         paging = state.paging
         if paging is None:
             raise ValueError("the lane state is not paged")
@@ -3964,6 +4093,7 @@ class Qwen38TTNNTextModel:
         from models.demos.blackhole.qwen38_flash_next.ttnn.fused.kv_page_scatter import kv_page_scatter
 
         self._validate_lane_state(state)
+        self._require_parent_lane_state(state, "admit_lane_kv_paged")
         self._validate_generic_state(chain_state)
         paging = state.paging
         if paging is None:
@@ -3994,6 +4124,7 @@ class Qwen38TTNNTextModel:
         with the model (re-admission goes through ``state.position.admit`` first)."""
 
         lanes = self._validate_lane_state(state)
+        self._require_parent_lane_state(state, "lane_layout")
         gdn_states = [s.attention for s in state.layers if isinstance(s.attention, gdn_module.Qwen38TTNNGDNState)]
         qsa_states = [s.attention for s in state.layers if isinstance(s.attention, qsa_module.Qwen38TTNNQSALaneState)]
         ple_state = state.layers[PLE_CHECKPOINT_LAYER].ple

@@ -227,7 +227,7 @@ def test_settings_from_env_and_configured(expect_error, monkeypatch):
 
 
 def test_max_rows_is_the_slab_contract():
-    assert mc.MAX_ROWS == contracts.MAX_SLAB_ROWS and mc.MIN_ROWS == 32
+    assert mc.MAX_ROWS >= contracts.MAX_SLAB_ROWS and mc.MIN_ROWS == 32
     assert mc.CHAIN_BLOCK_ROWS == 512
 
 

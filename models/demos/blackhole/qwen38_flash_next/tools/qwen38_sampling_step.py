@@ -82,6 +82,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.resident_decode import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn import fused, mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn.device_sampler import (
+    Qwen38DeviceSample,
     Qwen38DeviceSamplerPolicy,
     Qwen38TTNNDeviceSamplerConstants,
     candidate_row_lanes,
@@ -256,6 +257,13 @@ WARM_POLICY = Qwen38DeviceSamplerPolicy(temperature=1.0, top_k=20, top_p=0.95, m
 WARM_UNIFORM = 0.37500011920928955  # 6291458 * 2**-24
 
 
+# QWEN38_GREEDY_TAIL=1 (set by the vLLM adapter's single-slot open, tools/qwen38_vllm.py): the TAIL traces carry no candidate
+# row.  That adapter's host sampler draws from the FULL-vocabulary row (the retained logits' gather), never from the
+# candidate row, so the per-shard top-k chain (~228 us per step) is dead weight in every TAIL.  Only with no device sampler
+# (the sampler reads the row).
+SKIP_CANDIDATE_ROW = False
+
+
 class Qwen38SamplingChainExtension:
     """What a sampling chain adds to the traced chain: the epilogue, its warm-pass check and three per-step primitives.
 
@@ -308,6 +316,8 @@ class Qwen38SamplingChainExtension:
         else:
             candidates = self.lm_head.greedy_candidates(logits)
         greedy_row = self.lm_head.resolve_greedy_on_device(candidates, into=token_row_io)
+        if SKIP_CANDIDATE_ROW and self.sampler is None:
+            return candidates, None, greedy_row, greedy_row  # QWEN38_GREEDY_TAIL: no candidate row in the TAIL
         row = self.lm_head.sampling_candidates(logits, self.constants, candidates=candidates)
         if self.sampler is None:
             return candidates, row, greedy_row, greedy_row
@@ -341,7 +351,8 @@ class Qwen38SamplingChainExtension:
     def mark_trace_rows_corruptible(self) -> None:
         """After a capture: its row is rewritten by every replay, like the greedy candidates."""
 
-        acknowledge_corruptible(self.trace_rows[-1])
+        if self.trace_rows[-1] is not None:  # None: QWEN38_GREEDY_TAIL, no candidate row
+            acknowledge_corruptible(self.trace_rows[-1])
 
     def warm(self, logits: Qwen38ShardedLogits, token_row_io: Any, *, label: str) -> dict[str, Any]:
         """The capture's epilogue run eagerly (its programs compile here) and the fallback gather; the row must equal
@@ -364,6 +375,12 @@ class Qwen38SamplingChainExtension:
                 self.sampler.write_policy(policy)
                 self.sampler.write_uniform(WARM_UNIFORM)
             candidates, row, greedy_row, token_row = self._epilogue(logits, token_row_io)
+            if row is None:  # QWEN38_GREEDY_TAIL: the epilogue ran (its programs compiled), there is no row to compare
+                ttnn.deallocate(greedy_row)
+                ttnn.deallocate(candidates.local_indices)
+                ttnn.deallocate(candidates.local_values)
+                agreement = {"skipped": "greedy tail"}
+                continue
             actual = self.read_candidate_row()
             if agreement is None:
                 agreement = actual.agreement(Qwen38CandidateRow.emulate(full.to(torch.bfloat16)))
@@ -375,14 +392,19 @@ class Qwen38SamplingChainExtension:
             if policy is not None:
                 greedy = self._token_of(greedy_row)
                 if name == "greedy":
-                    expected = greedy
+                    expected, expected_guard = greedy, False
                 else:
                     values, ids = candidate_row_lanes(actual.to_host_row())
-                    expected = device_sampler_reference(values, ids, WARM_POLICY, WARM_UNIFORM).token_id
+                    reference = device_sampler_reference(values, ids, WARM_POLICY, WARM_UNIFORM)
+                    expected, expected_guard = reference.token_id, reference.guard
                 device = self._token_of(token_row)
                 checks[name] = {"device": device, "expected": expected}
                 if device != expected:
                     raise RuntimeError(f"{label}: device sampler {name} token {device} vs expected {expected}")
+                if self.presence_on_device and (device_guard := self.read_guard()) != expected_guard:
+                    raise RuntimeError(
+                        f"{label}: device sampler {name} guard {device_guard} vs the reference's {expected_guard}"
+                    )
                 ttnn.deallocate(token_row)
             ttnn.deallocate(greedy_row)
             ttnn.deallocate(row)
@@ -405,7 +427,11 @@ class Qwen38SamplingChainExtension:
         return int(host[0])
 
     def release(self) -> None:
-        for tensor in (*self.trace_rows, self.constants.readback_row, self.constants.shard_vocab_start):
+        for tensor in (
+            *(row for row in self.trace_rows if row is not None),
+            self.constants.readback_row,
+            self.constants.shard_vocab_start,
+        ):
             ttnn.deallocate(tensor)
         if self.sampler is not None:
             self.sampler.release()
@@ -460,6 +486,18 @@ class Qwen38SamplingChainExtension:
 
         if self.presence_on_device:
             self.sampler.rewrite_history([list(emitted)])
+
+    def read_guard_nonblocking(self) -> Any:
+        """The fused sampler's guard row behind the queued TAIL, for :meth:`read_guard` once the read's event
+        completed."""
+
+        return ttnn.from_device(ttnn.get_device_tensors(self.sampler.guard)[0], blocking=False)
+
+    def read_guard(self, pending: Any = None) -> bool:
+        """Row 0's guard bit (``device_sampler_reference``'s ``guard``): from ``pending``, else a blocking read."""
+
+        host = ttnn.to_torch(ttnn.get_device_tensors(self.sampler.guard)[0] if pending is None else pending)
+        return int(host.reshape(-1)[0]) & 1 == 1
 
     def read_candidate_row(self) -> Qwen38CandidateRow:
         """Blocking: completes the queued TAIL and parses its row (device 0's replica; the four agree)."""
@@ -709,19 +747,28 @@ def choose_token(
             top_logprobs=request.top_logprobs,
         )
     except Qwen38CandidateFallback:
-        request.clocks.fallbacks += 1
-        full = session.sampling.read_full_logits(tail_residue)
-        sample = sample_full_vocabulary(
-            full,
-            request.parameters,
-            token_history=session.committed,
-            prompt_tokens=prompt_tokens,
-            generator=request.generator,
-            top_logprobs=request.top_logprobs,
-        )
+        sample = sample_tail_logits(session, request, tail_residue=tail_residue, prompt_tokens=prompt_tokens)
     if sample.token_id not in row.ids.reshape(-1).tolist():
         request.clocks.candidate_misses += 1
     return sample
+
+
+def sample_tail_logits(
+    session: Any, request: Qwen38SamplingRequest, *, tail_residue: int, prompt_tokens: int
+) -> Qwen38CandidateSample:
+    """The fallback: the host sampler over TAIL(tail_residue)'s full-vocabulary logits with the request's generator,
+    counted in ``request.clocks.fallbacks``."""
+
+    request.clocks.fallbacks += 1
+    full = session.sampling.read_full_logits(tail_residue)
+    return sample_full_vocabulary(
+        full,
+        request.parameters,
+        token_history=session.committed,
+        prompt_tokens=prompt_tokens,
+        generator=request.generator,
+        top_logprobs=request.top_logprobs,
+    )
 
 
 # -- the MTP pass loop's sampled decision --------------------------------------------------------------------
@@ -940,6 +987,11 @@ def generate_sampled_on_device(
     before TAIL(t), which consumes it); a forced ``</think>`` step reuses the resident draw.  ``verify_each_step``
     (the discriminator's arm) also reads the row every step and checks the device token against the reference
     (``verified_steps``); the production loop reads nothing but the token.
+
+    A presence penalty can push read candidates below tokens the row never read: the sampler's guard bit flags such a
+    row and its token is the host sampler's fallback over TAIL's full logits instead (:func:`sample_tail_logits`, the
+    request's generator), written into the token row and the history before HEAD consumes it.  So a penalised request
+    reads the token and its guard before HEAD(t) is enqueued; a request without the penalty keeps the order above.
     """
 
     if not isinstance(request, Qwen38SamplingRequest):
@@ -951,21 +1003,35 @@ def generate_sampled_on_device(
     chain, sampler, clocks = session.chain, session.sampling.sampler, request.clocks
     now = clock_ns or (lambda: 0)
     request.prompt_tokens = len(session.committed)
+    guarded = session.sampling.device_policy_of(request).presence_penalty != 0
 
-    def reference_token() -> int:
+    def reference_token() -> Qwen38DeviceSample:
         return device_sampler_reference_of(session, request, -1)
+
+    def fall_back() -> int:
+        """The guarded row's token over the full logits of the TAIL that chose it, in the row and the history."""
+
+        tail_residue = (len(session.committed) - 1) % RESIDUE_CLASSES
+        token_id = sample_tail_logits(
+            session, request, tail_residue=tail_residue, prompt_tokens=request.prompt_tokens
+        ).token_id
+        chain.write_token_row(token_id)
+        session.sampling.rewrite_history([*session.committed[request.prompt_tokens :], token_id])
+        return token_id
 
     # The first token: the device's choice against the host reference on the row it was chosen from.
     expected = reference_token()
     device_token = chain.read_token_row()
-    if device_token != expected:
-        if prefilled:
-            raise RuntimeError(
-                f"device sampler first token {device_token} vs host reference {expected} on the read row "
-                f"(u={request.uniforms[-1]}, policy={session.sampling.device_policy_of(request)})"
-            )
-        chain.write_token_row(expected)
-        session.sampling.rewrite_history([expected])  # the emitted first token, not the device's draw
+    if device_token != expected.token_id and prefilled:
+        raise RuntimeError(
+            f"device sampler first token {device_token} vs host reference {expected.token_id} on the read row "
+            f"(u={request.uniforms[-1]}, policy={session.sampling.device_policy_of(request)})"
+        )
+    if guarded and expected.guard:
+        fall_back()
+    elif device_token != expected.token_id:
+        chain.write_token_row(expected.token_id)
+        session.sampling.rewrite_history([expected.token_id])  # the emitted first token, not the device's draw
         request.first_token_rewrites += 1
     produced = 0
     reasoning_tokens = 0
@@ -987,8 +1053,12 @@ def generate_sampled_on_device(
             if produced == max_new_tokens:
                 return
             continue
+        # x_0 was decided at entry; every later token is the device's draw, its guard read where it applies
+        check_guard = guarded and produced > 0
         if produced + 1 == max_new_tokens:
             token_id = chain.read_token_row()  # completes TAIL(t-1); the row keeps the unconsumed token
+            if check_guard and session.sampling.read_guard():
+                token_id = fall_back()
             if token_id >= tokenizer_size:
                 raise RuntimeError(f"token row holds {token_id}, at or above the tokenizer size {tokenizer_size}")
             session.row_token = token_id
@@ -996,16 +1066,29 @@ def generate_sampled_on_device(
             return
         residue = len(session.committed) % RESIDUE_CLASSES
         pending = chain.read_token_row_nonblocking()
+        pending_guard = session.sampling.read_guard_nonblocking() if check_guard else None
         event = chain.record_event()
+        if check_guard:
+            chain.event_synchronize(event)  # the guard decides the token before HEAD(t) consumes it
+            guard = session.sampling.read_guard(pending_guard)
+            device_token = chain.pending_value(pending)
+            token_id = fall_back() if guard else device_token
+            clocks.token_available_ns.append(now())
         chain.execute_head(residue)
         sampler.write_uniform(request.next_uniform())  # behind HEAD(t), before TAIL(t)
         clocks.head_enqueued_ns.append(now())
-        chain.event_synchronize(event)
-        token_id = chain.pending_value(pending)
-        clocks.token_available_ns.append(now())
+        if not check_guard:
+            chain.event_synchronize(event)
+            guard = False
+            token_id = device_token = chain.pending_value(pending)
+            clocks.token_available_ns.append(now())
         if verify_each_step and produced > 0:
-            if token_id != (check := device_sampler_reference_of(session, request, -2)):
-                raise RuntimeError(f"device sampler step {produced} token {token_id} vs host reference {check}")
+            check = device_sampler_reference_of(session, request, -2)
+            if device_token != check.token_id or (check_guard and guard != check.guard):
+                raise RuntimeError(
+                    f"device sampler step {produced} token {device_token} guard {guard} vs host reference "
+                    f"{check.token_id} guard {check.guard}"
+                )
             request.verified_steps += 1
         produced += 1
         if thinking_open:
@@ -1023,7 +1106,7 @@ def generate_sampled_on_device(
         yield token_id, None
 
 
-def device_sampler_reference_of(session: Any, request: Qwen38SamplingRequest, draw_index: int) -> int:
+def device_sampler_reference_of(session: Any, request: Qwen38SamplingRequest, draw_index: int) -> Qwen38DeviceSample:
     """The host reference on the readback row (the last completed TAIL's) with the request's draw ``draw_index`` and
     the request's emitted tokens so far as the presence history (``session.committed`` past the prompt)."""
 
@@ -1031,7 +1114,7 @@ def device_sampler_reference_of(session: Any, request: Qwen38SamplingRequest, dr
     emitted = set(session.committed[request.prompt_tokens :])
     seen = torch.tensor([int(i) in emitted for i in ids.tolist()], dtype=torch.bool)
     policy = session.sampling.device_policy_of(request)
-    return device_sampler_reference(values, ids, policy, request.uniforms[draw_index], seen=seen).token_id
+    return device_sampler_reference(values, ids, policy, request.uniforms[draw_index], seen=seen)
 
 
 # -- the discriminator over a live session ------------------------------------------------------------------

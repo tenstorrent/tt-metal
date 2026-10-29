@@ -9,7 +9,8 @@
 // of `go` across the phases needs `done`, which SOURCE 0 does not raise.
 // Compile-time args: 0 go semaphore id, 1 RING, 2 done semaphore id, 3 TILE_FIRST, 4 TILE_STEP, 5-10 phase A
 //   (scratch cb, TILES, SOURCE, scratch semaphore id, PAGE_TILE_STRIDE, PAGE_RANK_STRIDE), 11-16 phase B, 17.. four
-//   TensorAccessorArgs sets (A gathered, A local, B gathered, B local).
+//   TensorAccessorArgs sets (A gathered, A local, B gathered, B local) from 25; 17 A_ROWS, 18 B_ROWS, 19-20 row modes,
+//   21-22 pack CBs, 23-24 slot bytes (transport_phase.h: row-trimmed send).
 // Runtime args: 0 rank, 1 delay before the arrives, 2 delay after phase A's reset, 3.. phase A's block, then phase
 //   B's block (transport_phase.h: 6 words + the consumers' (x, y) pairs each), then the fabric connection.
 
@@ -33,10 +34,31 @@ constexpr uint32_t B_SOURCE = get_compile_time_arg_val(13);
 constexpr uint32_t B_SEM_SCRATCH = get_compile_time_arg_val(14);
 constexpr uint32_t B_PAGE_TILE_STRIDE = get_compile_time_arg_val(15);
 constexpr uint32_t B_PAGE_RANK_STRIDE = get_compile_time_arg_val(16);
-constexpr uint32_t ACCESSOR_BASE = 17;
+constexpr uint32_t A_ROWS = get_compile_time_arg_val(17);  // valid rows of a tile (32 = send whole tiles)
+constexpr uint32_t B_ROWS = get_compile_time_arg_val(18);
+constexpr uint32_t A_ROW_MODE = get_compile_time_arg_val(19);  // 0 whole tile, 1 span packet, 2 chunk packets, 3 packed
+constexpr uint32_t B_ROW_MODE = get_compile_time_arg_val(20);
+constexpr uint32_t A_PACK_CB = get_compile_time_arg_val(21);  // mode 3: landing slots + staging (L1 raw buffer)
+constexpr uint32_t B_PACK_CB = get_compile_time_arg_val(22);
+constexpr uint32_t A_SLOT_BYTES = get_compile_time_arg_val(23);
+constexpr uint32_t B_SLOT_BYTES = get_compile_time_arg_val(24);
+constexpr uint32_t ACCESSOR_BASE = 25;
 constexpr uint32_t A_RT = 3;
+constexpr bool NOBARRIER = A_ROW_MODE == 4;  // row mode 4 = packed without the barrier (transport_phase.h)
+static_assert(NOBARRIER == (B_ROW_MODE == 4), "both phases run without the barrier, or neither");
 static_assert(A_SOURCE == 1 && B_SOURCE == 1, "the two-phase transport takes both phases from producer cores");
 static_assert(A_SEM_SCRATCH != B_SEM_SCRATCH, "each phase has its own scratch semaphore");
+
+// A compile-time arg past the accessors, read only when ON (a discarded branch is not instantiated, so the flag-off
+// program, which has no such args, does not index past its list)
+template <bool ON, uint32_t IDX>
+constexpr uint32_t tail_arg() {
+    if constexpr (ON) {
+        return get_compile_time_arg_val(IDX);
+    } else {
+        return 0;
+    }
+}
 
 void kernel_main() {
     const uint32_t rank = get_arg_val<uint32_t>(0);
@@ -48,6 +70,12 @@ void kernel_main() {
     constexpr auto a_local_args = TensorAccessorArgs<a_out_args.next_compile_time_args_offset()>();
     constexpr auto b_out_args = TensorAccessorArgs<a_local_args.next_compile_time_args_offset()>();
     constexpr auto b_local_args = TensorAccessorArgs<b_out_args.next_compile_time_args_offset()>();
+    // NOBARRIER: after the four accessor sets: 2 odd data semaphores (A, B), 2 landing buffer addresses (A, B)
+    constexpr uint32_t TAIL = b_local_args.next_compile_time_args_offset();
+    constexpr uint32_t A_DATA1 = tail_arg<NOBARRIER, TAIL + 0>();
+    constexpr uint32_t B_DATA1 = tail_arg<NOBARRIER, TAIL + 1>();
+    constexpr uint32_t A_LAND = tail_arg<NOBARRIER, TAIL + 2>();
+    constexpr uint32_t B_LAND = tail_arg<NOBARRIER, TAIL + 3>();
     LineSender line;
     line.open<RING>(rank, arg_idx);
     if (delay_before_arrive != 0) {
@@ -55,8 +83,10 @@ void kernel_main() {
     }
     {
         FUSED_ZONE("fz_gf_tr2_stats");
-        line.arrive(get_arg_val<uint32_t>(A_RT + 2));
-        line.arrive(get_arg_val<uint32_t>(b_rt + 2));
+        if constexpr (!NOBARRIER) {
+            line.arrive(get_arg_val<uint32_t>(A_RT + 2));
+            line.arrive(get_arg_val<uint32_t>(b_rt + 2));
+        }
         transport_phase<
             A_SCRATCH_CB,
             A_TILES,
@@ -69,7 +99,13 @@ void kernel_main() {
             SEM_GO,
             A_SEM_SCRATCH,
             SEM_DONE,
-            false>(line, a_out_args, a_local_args, A_RT, delay_after_reset);
+            false,
+            A_ROWS,
+            A_ROW_MODE,
+            A_PACK_CB,
+            A_SLOT_BYTES,
+            A_LAND,
+            A_DATA1>(line, a_out_args, a_local_args, A_RT, delay_after_reset);
     }
     {
         FUSED_ZONE("fz_gf_tr2_partials");
@@ -85,7 +121,13 @@ void kernel_main() {
             SEM_GO,
             B_SEM_SCRATCH,
             SEM_DONE,
-            true>(line, b_out_args, b_local_args, b_rt, 0);
+            true,
+            B_ROWS,
+            B_ROW_MODE,
+            B_PACK_CB,
+            B_SLOT_BYTES,
+            B_LAND,
+            B_DATA1>(line, b_out_args, b_local_args, b_rt, 0);
     }
     noc_async_full_barrier();
 }

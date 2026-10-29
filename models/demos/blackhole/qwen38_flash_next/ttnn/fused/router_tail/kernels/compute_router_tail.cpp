@@ -55,6 +55,10 @@ FORCE_INLINE void frt_load_tile(uint32_t cb_probs, uint32_t cb_index, uint32_t w
 #ifndef FRT_EXP_LIVE
 #define FRT_EXP_LIVE 1
 #endif
+// 1: sort the raw logits and take the softmax over the selected top_k columns (QWEN38_ROUTER_RAWSORT); 0: the chain
+#ifndef FRT_RAWSORT
+#define FRT_RAWSORT 0
+#endif
 
 // The chain's sort of the 64 values in DST 0/1 (indices 2/3): topk.cpp's local sort call (unstable network, largest,
 // end phase 5); pass_mask != 0 sorts only those token passes of the same network (topk_lanes.h).
@@ -100,6 +104,7 @@ void kernel_main() {
     DataflowBuffer recips(cb_recip);
     DataflowBuffer probs(cb_probs);
 
+#if !FRT_RAWSORT
     {
         FUSED_ZONE("fz_rt_c_softmax");
         // ---- softmax.cpp: NUMERIC_STABLE, no mask, EXP_APPROX 0 ----
@@ -188,6 +193,39 @@ void kernel_main() {
         sum_scaler.pop_front(1);
     }
 
+#else
+    {
+        // QWEN38_ROUTER_RAWSORT: no 512-wide softmax.  The logits go through the same srcA / fp32-dest path the
+        // softmax's sub takes (a copy of each tile to DST, packed fp32) into cb_probs, and the insertion chain sorts
+        // the raw logits (softmax is monotone).  The weights are computed on the [token, k] tile below.
+        FUSED_ZONE("fz_rt_c_softmax");
+        compute_kernel_hw_startup(cb_in0, cb_max_scaler, cb_probs);
+        reconfig_data_format_srca(cb_in0);
+        pack_reconfig_data_format(cb_probs);
+        copy_init(cb_in0);
+        in0.wait_front(Wt);
+        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+            tile_regs_acquire();
+            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+                copy_tile(cb_in0, wt + wt8, wt8);
+            }
+            probs.reserve_back(ndst);
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+                pack_tile(wt8, cb_probs);
+            }
+            tile_regs_release();
+            probs.push_back(ndst);
+        }
+        in0.pop_front(Wt);
+        max_scaler.wait_front(1);
+        sum_scaler.wait_front(1);
+        max_scaler.pop_front(1);
+        sum_scaler.pop_front(1);
+    }
+#endif
+
     // ---- topk.cpp single core, Wt tiles, output_tiles 1, largest, stable_sort false ----
     // The running top 32 stays in DST 0 (values) / DST 2 (indices) instead of the kernel's result_prep CB round
     // trip; every new tile transposes into DST 1 / DST 3 exactly as the kernel's insertion loads it.
@@ -229,6 +267,44 @@ void kernel_main() {
     vals_t.wait_front(1);
     reconfig_data_format_srca(cb_vals_t);
     transpose_init(cb_vals_t);
+#if FRT_RAWSORT
+    // the sorted logits as the [token, k] tile (into cb_exps, a default-unpack fp32 CB), then exp(v - v[:, 0]) on it:
+    // the softmax over the selected columns.  Column 0 is the largest selected logit; the reader zeroes the exps of
+    // the columns >= top_k in cb_vals, so the sum, and the division below, see exactly the top_k exps.
+    DataflowBuffer exps_rm(cb_exps);
+    pack_reconfig_data_format(cb_exps);
+    tile_regs_acquire();
+    transpose_tile(cb_vals_t, 0, 0);
+    tile_regs_commit();
+    exps_rm.reserve_back(1);
+    tile_regs_wait();
+    pack_tile(0, cb_exps);
+    tile_regs_release();
+    exps_rm.push_back(1);
+    vals_t.pop_front(1);
+    exps_rm.wait_front(1);
+    reconfig_data_format(cb_exps, cb_exps);
+    pack_reconfig_data_format(cb_vals);
+    exp_tile_init<false>();
+    sub_bcast_cols_init(cb_exps, cb_exps);
+    tile_regs_acquire();
+    sub_tiles_bcast_cols(cb_exps, cb_exps, 0, 0, 0);
+#if FRT_EXP_LIVE
+    exp_tile_live(0, live_pairs);
+#else
+    exp_tile<false>(0);
+#endif
+    tile_regs_commit();
+    vals.reserve_back(1);
+    pad_div.reserve_back(1);
+    tile_regs_wait();
+    pack_tile(0, cb_vals);
+    pack_tile(0, cb_pad_div);
+    tile_regs_release();
+    vals.push_back(1);
+    pad_div.push_back(1);
+    exps_rm.pop_front(1);
+#else
     pack_reconfig_data_format(cb_vals);
     tile_regs_acquire();
     transpose_tile(cb_vals_t, 0, 0);
@@ -242,6 +318,7 @@ void kernel_main() {
     vals.push_back(1);
     pad_div.push_back(1);
     vals_t.pop_front(1);
+#endif
 
     {
         FUSED_ZONE("fz_rt_c_sum");

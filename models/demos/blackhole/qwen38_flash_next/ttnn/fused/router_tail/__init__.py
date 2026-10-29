@@ -42,6 +42,7 @@ LANES_HEADER = fp.kernel_source(NAME, "topk_lanes.h")
 EXP_LIVE_HEADER = fp.kernel_source(NAME, "exp_live.h")
 EXP_LIVE_ENV = "QWEN38_ROUTER_TAIL_EXP_LIVE"
 LANES_ENV = "QWEN38_ROUTER_TAIL_LANES"
+RAWSORT_ENV = "QWEN38_ROUTER_RAWSORT"  # 1: sort the raw logits, softmax over the selected columns only
 # The core rectangle the top-k asks the placement helper for (placement.free_rectangle): 4 x 5 = the exact multi-core
 # form's 16 worker cores plus up to four lane cores (q38-router-topk-exact); the lane form takes the rectangle's first
 # row, so the top-k lands on the same cores standalone and hosted by the MoE dense composite.  Off row 0: today's
@@ -260,7 +261,10 @@ def router_tail_program(
 def _compute_defines() -> list[tuple[str, str]]:
     """Retain the bitwise full-exp control; incomplete arithmetic study modes are not served."""
 
-    return [("FRT_EXP_LIVE", "0")] if os.environ.get(EXP_LIVE_ENV, "1") == "0" else []
+    defines = [("FRT_EXP_LIVE", "0")] if os.environ.get(EXP_LIVE_ENV, "1") == "0" else []
+    if os.environ.get(RAWSORT_ENV, "0") == "1":
+        defines.append(("FRT_RAWSORT", "1"))
+    return defines
 
 
 def router_tail(logits, *, top_k: int = TOP_K, compute_kernel_config=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):

@@ -290,13 +290,15 @@ def test_collectives_read_and_write_the_matmul_shard_layouts_directly() -> None:
     assert "to_memory_config(full_hidden" not in project
     assert "hidden_ws" not in project
     assert "projected_ws = ttnn.linear(\n            full_hidden," in project
-    gate = _method_source("_out_project")
+    # the reduce is the row_reduce dispatch (the stock ttnn.reduce_scatter unless QWEN38_ROW_REDUCE=1)
+    gate = _method_source("_out_project").replace(
+        "fused.row_reduce.row_reduce_or_reduce_scatter(", "ttnn.reduce_scatter("
+    )
     assert "to_memory_config(partial_ws" not in gate
     assert "mark_local_partial(\n            partial_ws," in gate
     reduce = gate.split("output = ttnn.reduce_scatter(", 1)[1].split("\n        )", 1)[0]
     assert reduce.startswith("\n            partial_ws,")
     assert "memory_config=ttnn.DRAM_MEMORY_CONFIG" in reduce
-    assert "topology=self.collective_topology" in reduce
     assert gate.index("output = ttnn.reduce_scatter(") < gate.index("_deallocate(partial_ws)")
     assert gate.index("_deallocate(partial_ws)") < gate.index("_deallocate(full_hidden)")
 

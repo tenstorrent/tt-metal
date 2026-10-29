@@ -100,6 +100,17 @@ def _multiply_device_zero(base_multiply):
     return op
 
 
+def _where_zero_else(condition, a, zero, memory_config=None):
+    """``where(condition != 0, a, 0.0)`` per shard with broadcast: the lane-reset select (+0.0 for a dropped row)."""
+
+    assert zero == 0.0
+    return step4.FakeTensor(
+        [torch.where(c != 0, x, torch.zeros_like(x)) for c, x in zip(condition.torch_shards(), a.torch_shards())],
+        a.dtype,
+        a.layout,
+    )
+
+
 @pytest.fixture
 def fake(monkeypatch):
     monkeypatch.setenv("QWEN38_FUSED_OFF", "ple")  # the fused PLE lane body serves by default; the fake runs the chain
@@ -108,6 +119,7 @@ def fake(monkeypatch):
     step4.install_source_chunk_fake(monkeypatch, chunk)
     fake_ttnn.matmul = _matmul_per_tile
     fake_ttnn.multiply = _multiply_device_zero(fake_ttnn.multiply)
+    fake_ttnn.where = _where_zero_else
     fake_ttnn.empty_like = lambda t, dtype=None, layout=None, memory_config=None: FakeTensor(
         [torch.empty_like(x) for x in t.torch_shards()], dtype or t.dtype, layout or t.layout
     )
@@ -530,14 +542,14 @@ def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_ro
     assert "Advance one true-global-B1 token" in inspect.getsource(gdn_module.Qwen38TTNNGDN.forward_decode)
     assert "admits a batch-1 state" in inspect.getsource(gdn_module.Qwen38TTNNGDN._validate_state)
     assert "lanes" not in inspect.getsource(gdn_module.Qwen38TTNNGDN._recurrent_decode)
-    # The lane resets are keep-mask multiplies landed in place (eager host uploads), never the trace body's ops.
+    # The lane resets are keep-mask selects landed in place (eager host uploads), never the trace body's ops.
     for function in (
         gdn_module.Qwen38TTNNGDNState.reset_lane_inplace,
         ple_module.Qwen38TTNNPLELanesState.reset_lane_inplace,
         qsa_module.Qwen38TTNNQSA.reset_lane_inplace,
     ):
         calls = _calls(function)
-        assert "ttnn.multiply" in calls and "ttnn.from_torch" in calls, function
+        assert "ttnn.where" in calls and "ttnn.from_torch" in calls, function
         assert "ttnn.copy" in calls or "_copy_inplace" in calls, function
 
 

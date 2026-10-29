@@ -25,6 +25,7 @@ hardcodes scaler and matmul mode ``chain``.
 
 from __future__ import annotations
 
+import os
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
@@ -51,6 +52,7 @@ PHASES = (
     "stats",
     "partials",
 )  # one (barrier, data) global semaphore pair per gather phase, never cycled: the design note's proof
+EXTRA_PHASES = ("rowgather",)  # the semaphore pairs of other programs on the line transport (row_gather)
 STATS_SCRATCH_CB = 3  # beside the stats program's CBs 0, 1, 2, 16
 PARTIALS_SCRATCH_CB = 11  # beside normalize_down's CBs 0-10, 16, 17
 # the transport cores per phase, one per link: the stats phase next to the four stats cores, the partials phase
@@ -65,6 +67,13 @@ PARTIALS_SEMAPHORES = (1, 2, 3)  # normalize_down's in0 multicast owns program s
 # connection per link (kernels/transport2.cpp; a link's worker sender channel is one per direction), the stats phase
 # with its own scratch semaphore; the gate is the norm cores' semaphore their reader waits on before streaming the
 # gathered stats
+# row-trimmed transport (transport_phase.h): 0 whole tiles, 1 one packet spanning the valid rows, 2 one packet per chunk, 3 packed (all tiles in one packet into the peer L1, unpacked there)
+ROW_MODE = int(os.environ.get("QWEN38_GR_ROW_MODE", "3"))
+# QWEN38_GR_NOBARRIER=1 (default 0): the two-phase packed transport (row mode 4) skips the barrier round trip; it lands
+# the packets in double-buffered slot sets (call parity) of a persistent L1 buffer on the transport cores, one data
+# semaphore per parity, a persistent per-phase call counter in that buffer (transport_phase.h: NOBARRIER)
+NOBARRIER = os.environ.get("QWEN38_GR_NOBARRIER", "0") == "1"
+LAND_HEADER_BYTES = 16  # the call counter (one word) ahead of the two slot sets, keeps the slots 16 B aligned
 TRANSPORT2_KERNEL = fp.kernel_source(NAME, "transport2.cpp")
 FRONT_STATS_SCRATCH_SEM = 4  # on the transport cores, beside the partials' (go, scratch, done) = 1, 2, 3
 FRONT_STATS_READY = 5  # on the norm cores, beside the in0 multicast's 0
@@ -90,15 +99,46 @@ class LineSemaphores:
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self.handles = {
             phase: (ttnn.create_global_semaphore(mesh, cores, 0), ttnn.create_global_semaphore(mesh, cores, 0))
-            for phase in PHASES
+            for phase in PHASES + EXTRA_PHASES
         }
         self.addresses = {
             phase: (int(ttnn.get_global_semaphore_address(barrier)), int(ttnn.get_global_semaphore_address(data)))
             for phase, (barrier, data) in self.handles.items()
         }
+        # NOBARRIER: the odd-parity data semaphore of each two-phase transport phase (created only with the flag, so the
+        # default allocates exactly what it did before)
+        self.data1_handles = (
+            {phase: ttnn.create_global_semaphore(mesh, cores, 0) for phase in PHASES} if NOBARRIER else {}
+        )
+        self.data1_addresses = {
+            phase: int(ttnn.get_global_semaphore_address(sem)) for phase, sem in self.data1_handles.items()
+        }
+        self.lands: dict = {}  # (phase, slot bytes, links) -> (persistent L1 landing tensor, its address)
 
     def pair(self, phase: str) -> tuple[int, int]:
         return self.addresses[phase]
+
+    def land(self, mesh, phase: str, slot: int, cores) -> tuple[int, int]:
+        """(odd data semaphore address, landing buffer address) of a NOBARRIER phase: a persistent L1 buffer, zeroed,
+        on every transport core of the links, laid out [call counter, 16 B][slot set 0: TP_SIZE slots][slot set 1]; it
+        outlives every program (a peer's packet may land while this device runs another program, so the landing
+        slots cannot be program CB memory) and its counter is never reset (the call parity survives trace replays).
+        One buffer per (phase, slot bytes): a program shape owns its counter."""
+
+        key = (phase, slot, len(cores))
+        if key not in self.lands:
+            words = (LAND_HEADER_BYTES + 2 * TP_SIZE * slot) // 4
+            grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+            memory = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(grid, [1, words], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            tensor = ttnn.zeros(
+                [len(cores), words], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=memory
+            )
+            self.lands[key] = (tensor, int(tensor.buffer_address()))
+        return self.data1_addresses[phase], self.lands[key][1]
 
 
 def line_semaphores(mesh) -> LineSemaphores:
@@ -189,6 +229,29 @@ class Transport:
     consumers: tuple = ()
     consumer_sem: int = 0
     delays: Any = None
+    kernel: Any = None  # single-phase programs: a kernel source other than transport.cpp (same runtime args)
+    extra_args: tuple = ()  # with ``kernel``: compile args after the page strides, before the accessors
+    pack_cb: int = 0  # mode 3: CB id of the raw L1 buffer (landing slots + staging) on the transport cores
+    rows: int = 0  # valid rows per tile (two-phase transport only): 0 or >= TILE sends whole tiles
+
+
+def _row_mode(t, links, mode=None):
+    """(mode, slot bytes) of one phase of a two-phase program: 0 = whole tiles (rows unknown or a full tile),
+    ROW_MODE otherwise; mode 3 falls back to mode 1 (one span packet per tile) when the core's packed tiles exceed
+    one fabric packet payload (ttnn.get_tt_fabric_max_payload_size_bytes)."""
+
+    want = ROW_MODE if mode is None else mode
+    if not 0 < t.rows < fp.TILE or want == 0:
+        return 0, 0
+    if want != 3:
+        return want, 0
+    tile_bytes = fp.TILE_BYTES[t.out.dtype]
+    face, row = tile_bytes // 4, tile_bytes // 64
+    packed = 2 * t.rows * row if t.rows <= 16 else 2 * face + 2 * (t.rows - 16) * row
+    my_tiles = -(-t.tiles // links)
+    if my_tiles * packed > int(ttnn.get_tt_fabric_max_payload_size_bytes()):
+        return 1, 0
+    return 3, -(-(my_tiles * packed) // 16) * 16
 
 
 def transport_mesh_program(
@@ -227,6 +290,26 @@ def transport_mesh_program(
         raise ValueError("one transport per phase per program, each with its own scratch semaphore")
     addresses = {t.phase: line_semaphores(mesh).pair(t.phase) for t in transports}
     go, done = first.semaphore_ids[0], first.semaphore_ids[2]
+    modes = [_row_mode(t, links) for t in transports] if len(transports) == 2 else []
+    nobarrier = NOBARRIER and bool(modes) and all(m == 3 for m, _ in modes)
+    tail = []  # NOBARRIER: compile args after the accessors: both phases' odd data semaphore, both landing buffers
+    if nobarrier:
+        modes = [(4, slot) for _, slot in modes]
+        lands = [line_semaphores(mesh).land(mesh, t.phase, slot, cores) for t, (_, slot) in zip(transports, modes)]
+        tail = [d for d, _ in lands] + [a for _, a in lands]
+    cbs = list(cbs)
+    for t, (mode, slot) in zip(transports, modes):
+        if mode in (3, 4):  # mode 3: RING landing slots + one staging slot per RISC, one raw L1 buffer on the transport
+            # cores; mode 4: only the two staging slots (the landing slots are the persistent buffer's)
+            cbs.append(
+                fp.cb_descriptor(
+                    t.pack_cb,
+                    gr_read.BF16,
+                    (2 if mode == 4 else TP_SIZE + 2) * slot,
+                    1,
+                    ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores]),
+                )
+            )
     mesh_program = ttnn.MeshProgramDescriptor()
     for rank, (coordinate, node) in enumerate(geometry.ranks()):
         before, after = (first.delays or {}).get(rank, (0, 0))
@@ -249,15 +332,21 @@ def transport_mesh_program(
                     i,
                     links,
                     *first.page_strides,
+                    *first.extra_args,
                 ]
             else:
                 args = [go, TP_SIZE, done, i, links]
                 for t in transports:
                     args += [t.scratch_cb, t.tiles, t.source, t.semaphore_ids[1], *t.page_strides]
+                args += [t.rows if 0 < t.rows < fp.TILE else fp.TILE for t in transports]
+                args += [m for m, _ in modes]
+                args += [t.pack_cb for t in transports]
+                args += [slot for _, slot in modes]
             for t in transports:
                 args += fp.accessor_args(t.out) + fp.accessor_args(t.local)
+            args += tail
             compile_args.append(args)
-        kernel = TRANSPORT_KERNEL if len(transports) == 1 else TRANSPORT2_KERNEL
+        kernel = (first.kernel or TRANSPORT_KERNEL) if len(transports) == 1 else TRANSPORT2_KERNEL
 
         def transport(build, per_link_args):
             return [

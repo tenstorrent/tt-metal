@@ -84,7 +84,7 @@ def _lane_model(contexts):
     ple = SimpleNamespace(token_contexts=tuple(contexts))
     layers = [SimpleNamespace(ple=None) for _ in range(model_module.PLE_CHECKPOINT_LAYER + 1)]
     layers[model_module.PLE_CHECKPOINT_LAYER] = SimpleNamespace(ple=ple)
-    return model, SimpleNamespace(position=_Position(), layers=layers), ple
+    return model, SimpleNamespace(position=_Position(), layers=layers, is_view=False), ple
 
 
 def test_admit_lane_position_takes_the_lane_and_clears_its_context_without_a_device_write() -> None:

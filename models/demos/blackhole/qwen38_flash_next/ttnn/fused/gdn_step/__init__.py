@@ -16,6 +16,7 @@ work/FUSE-GDN-STEP-20260913.md section 1).  ``reference_step`` is the kernel's a
 from __future__ import annotations
 
 import os
+import sys
 
 import torch
 import torch.nn.functional as F
@@ -29,7 +30,7 @@ from ..registry import COMPONENT, FusedKernel, register
 NAME = "gdn_step"
 READER = fp.kernel_source(NAME, "reader.cpp")
 WRITER = fp.kernel_source(NAME, "writer.cpp")
-COMPUTE = fp.kernel_source(NAME, "compute.cpp")
+COMPUTE = fp.kernel_source(NAME, "compute_v2.cpp" if os.environ.get("QWEN38_GDN_STEP_V2") == "1" else "compute.cpp")
 
 VALUE_HEADS, QK_HEADS_TOTAL = 48, 16
 HEADS = VALUE_HEADS // TP_SIZE
@@ -148,13 +149,21 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
     rows = fp.rows_of(projected)
     if fp.tile_width_of(projected) != PROJECTION_WIDTH:
         raise ValueError(f"gdn_step projection width must be {PROJECTION_WIDTH}, got {projected.shape[-1]}")
-    if tuple(recurrent.shape) != (rows, HEADS, HEAD_DIM, HEAD_DIM) or recurrent.dtype != FP32:
+    got = tuple(recurrent.shape)  # the lane axis may exceed rows: lane u is addressed from u alone
+    if len(got) != 4 or got[0] < rows or got[1:] != (HEADS, HEAD_DIM, HEAD_DIM) or recurrent.dtype != FP32:
         raise ValueError(
-            f"gdn_step state must be [{rows}, {HEADS}, {HEAD_DIM}, {HEAD_DIM}] fp32, got {recurrent.shape} {recurrent.dtype}"
+            f"gdn_step state must be [>= {rows}, {HEADS}, {HEAD_DIM}, {HEAD_DIM}] fp32, got {recurrent.shape} {recurrent.dtype}"
         )
     if len(older) != 3 or len(taps) != 4:
         raise ValueError("gdn_step takes three older ring slots and four taps")
     mesh = projected.device()
+    if os.environ.get("QWEN38_GDN_CONV_SPLIT", "2") in ("1", "2") and debug is None:  # default stage 2 (x34 A/Bs)
+        from . import conv_split
+
+        if conv_split.admits(rows, mesh):
+            return conv_split.run_cs(
+                sys.modules[__name__], projected, older, newest, taps, constants, norm, recurrent, out
+            )
     items = [(lane, head) for lane in range(rows) for head in range(HEADS)]
     work = fp.split_work(len(items), mesh)
     cores = fp.core_set(work)
@@ -271,7 +280,9 @@ def admits(gdn, projected, window, state) -> bool:
     return (
         slots == 4
         and recurrent is not None
-        and tuple(recurrent.shape) == (projected.shape[-2], HEADS, HEAD_DIM, HEAD_DIM)
+        and len(recurrent.shape) == 4
+        and recurrent.shape[0] >= projected.shape[-2]
+        and tuple(recurrent.shape[1:]) == (HEADS, HEAD_DIM, HEAD_DIM)
         and recurrent.dtype == FP32
     )
 

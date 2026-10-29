@@ -98,7 +98,9 @@ def extension_with_fakes(monkeypatch):
     monkeypatch.setattr(ext, "read_candidate_row", lambda: FakeCandidateRow())
     monkeypatch.setattr(ext, "_token_of", lambda row: 7)
     monkeypatch.setattr(step, "candidate_row_lanes", lambda host_row: (None, None))
-    monkeypatch.setattr(step, "device_sampler_reference", lambda *args, **kwargs: SimpleNamespace(token_id=7))
+    monkeypatch.setattr(
+        step, "device_sampler_reference", lambda *args, **kwargs: SimpleNamespace(token_id=7, guard=False)
+    )
     monkeypatch.setattr(step.Qwen38CandidateRow, "emulate", staticmethod(lambda full: None))
     return ext, keys
 

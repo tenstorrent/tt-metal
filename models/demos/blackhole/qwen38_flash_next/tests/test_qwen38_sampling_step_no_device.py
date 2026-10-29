@@ -13,7 +13,7 @@ import torch
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling_step as step
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import THINK_END_ID
 from models.demos.blackhole.qwen38_flash_next.ttnn import device_sampler as ds
-from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import VOCAB_SIZE
+from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, TP_SIZE, VOCAB_SIZE
 from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import (
     Qwen38CandidateRow,
     Qwen38SamplingParameters,
@@ -581,6 +581,124 @@ def test_device_loop_finishes_like_the_greedy_loop(expect_error) -> None:
     assert items[-1] == (None, "halt") and len(items) == 3
     with expect_error(RuntimeError, match="begin_request"):
         _run_device(FakeDeviceSession([1]), _request(), 2)
+
+
+def _ramp_logits() -> torch.Tensor:
+    """Shard 0's first 64 ids on a ramp down from 5.0 in steps of 1/32, every other shard's from -10, the rest -30:
+    once the request has emitted a dozen of shard 0's read ids, the penalty pushes them under its unread ones."""
+
+    logits = torch.full((VOCAB_SIZE,), -30.0)
+    for shard in range(TP_SIZE):
+        start = shard * LOCAL_VOCAB_SIZE
+        logits[start : start + 64] = (5.0 if shard == 0 else -10.0) - torch.arange(64) / 32
+    return logits.to(torch.bfloat16)
+
+
+class FakeFusedSampler(FakeDeviceSampler):
+    def __init__(self, chain: "FakeDeviceChain") -> None:
+        super().__init__(chain)
+        self.history: set[int] = set()
+
+    def reset_history(self) -> None:
+        self.history = set()
+
+
+class FakeFusedChain(FakeDeviceChain):
+    """The fused sampler's TAIL: the presence penalty from the device history, its draw's bit set, the row's guard."""
+
+    def __init__(self, prefix: list[int], sampler_holder: dict) -> None:
+        super().__init__(prefix, sampler_holder)
+        self.guard = False
+
+    def logits(self) -> torch.Tensor:
+        return _ramp_logits()
+
+    def execute_tail(self, residue: int) -> None:
+        self.log.append(f"tail:{residue}")
+        self.tails += 1
+        host_row = Qwen38CandidateRow.emulate(self.logits()).to_host_row()
+        self.row_history.append(host_row)
+        sampler = self.sampler_holder["sampler"]
+        values, ids = ds.candidate_row_lanes(host_row)
+        seen = torch.tensor([int(token_id) in sampler.history for token_id in ids.tolist()], dtype=torch.bool)
+        sample = ds.device_sampler_reference(values, ids, sampler.policy, sampler.uniform, seen=seen)
+        self.row, self.guard = sample.token_id, sample.guard
+        sampler.history.add(sample.token_id)
+
+
+class FakeFusedSampling(FakeDeviceSampling):
+    presence_on_device = True
+
+    def __init__(self, chain: FakeFusedChain) -> None:
+        FakeSampling.__init__(self, chain)
+        self.sampler = FakeFusedSampler(chain)
+        chain.sampler_holder["sampler"] = self.sampler
+
+    def rewrite_history(self, emitted) -> None:
+        self.chain.log.append("history")
+        self.sampler.history = set(emitted)
+
+    def read_guard_nonblocking(self):
+        self.chain.log.append("read_guard")
+        return self.chain.guard
+
+    def read_guard(self, pending=None) -> bool:
+        return self.chain.guard if pending is None else pending
+
+
+class FakeFusedSession(FakeDeviceSession):
+    def __init__(self, prefix: list[int]) -> None:
+        holder: dict = {}
+        self.chain = FakeFusedChain(prefix, holder)
+        self.sampling = FakeFusedSampling(self.chain)
+        self.committed = list(prefix)
+        self.ple_context = None
+        self.row_token = None
+
+
+def test_device_loop_samples_a_guarded_presence_row_over_the_full_vocabulary() -> None:
+    session = FakeFusedSession([1, 2])
+    request = _request(Qwen38SamplingParameters.official_non_thinking(seed=5))
+    session.sampling.begin_request(request)
+    penalty = request.device_policy(presence_on_device=True).presence_penalty
+    assert penalty == 1.5, penalty
+    session.prompt([3])
+    start = len(session.chain.log)
+    tokens = [token for token, _ in _run_device(session, request, 40, verify_each_step=True)]
+    log = session.chain.log[start:]
+    fallbacks = request.clocks.fallbacks
+    counts = (fallbacks, log.count("history"), session.sampling.full_reads, request.verified_steps)
+    assert 0 < fallbacks == counts[1] == counts[2] < 39 and counts[3] == 38, counts
+    assert request.as_dict()["fallbacks"] == fallbacks, request.as_dict()
+    # A penalised row's guard is read with its token, before HEAD(t): the guarded row is the host sampler's draw over
+    # TAIL(t-1)'s full logits, in the token row and the history before HEAD consumes it.
+    steps = [entry for entry in log if entry in ("read_nonblocking", "read_guard", "event", "sync")]
+    assert steps[:3] == ["read_nonblocking", "event", "sync"], steps[:3]  # x_0, decided at entry: no guard read
+    assert steps[3:] == ["read_nonblocking", "read_guard", "event", "sync"] * 38, steps[3:11]
+    generator = torch.Generator().manual_seed(5)
+    history = []
+    for k, token in enumerate(tokens[:-1]):
+        values, ids = ds.candidate_row_lanes(session.chain.row_history[k])
+        seen = torch.tensor([int(token_id) in history for token_id in ids.tolist()], dtype=torch.bool)
+        policy = request.device_policy(presence_on_device=True)
+        reference = ds.device_sampler_reference(values, ids, policy, request.uniforms[k], seen=seen)
+        if reference.guard:
+            expected = sample_full_vocabulary(
+                _ramp_logits().to(torch.float32),
+                request.parameters,
+                token_history=[1, 2, 3, *history],
+                prompt_tokens=3,
+                generator=generator,
+            ).token_id
+            gather = f"full_gather:{(2 + k) % step.RESIDUE_CLASSES}"
+            head = log.index(f"head:{(3 + k) % step.RESIDUE_CLASSES}", log.index(gather))
+            assert log[head - 3 : head] == [gather, f"write:{expected}", "history"], (k, log[head - 3 : head])
+        else:
+            expected = reference.token_id
+        assert token == expected, (k, token, expected)
+        history.append(token)
+        log = log[log.index(f"tail:{(3 + k) % step.RESIDUE_CLASSES}") + 1 :]
+    assert any(32 <= token < 64 for token in tokens), tokens  # unread ids of shard 0: never the device's draw
 
 
 def test_device_policy_routing_and_begin_request_for_greedy_and_host_loop_requests() -> None:

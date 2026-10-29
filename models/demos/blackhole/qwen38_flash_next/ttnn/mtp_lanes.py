@@ -9,7 +9,7 @@ Row layout, lane-major: row ``u*R + j`` is lane u's row j (j = 0 the pending tok
 cache).  Every dense op of the B=1 verify (``mtp_v2.forward_verify``) runs unchanged on the tile: the embedding, the
 GR reads and writes, the projections, the MoE on the ``B*R`` real rows, the final mixer, the LM head and the per-row
 greedy resolve are row-independent.  The per-lane state work runs on a batch axis behind exact 0/1 selects: the GDN
-rows path with lane u's own FIR history and recurrent state and ONE batched chunk-kernel call
+rows path with lane u's own FIR history and recurrent state and one recurrence over the lanes
 (``gdn.forward_rows_lanes`` / ``commit_rows_lanes``), the QSA verify with lane u's KV region of the flat cache, its
 compressed blocks and its raw-key history (``qsa.forward_verify_lanes`` / ``commit_verify_lanes``), the PLE rows path
 with lane u's dilated history (``ple.inject_rows_lanes`` / ``commit_rows_lanes``), the MTP alignment layer's lane

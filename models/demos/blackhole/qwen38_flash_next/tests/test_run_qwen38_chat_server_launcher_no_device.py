@@ -90,7 +90,7 @@ def test_validate_only_runs_the_interpreter_from_the_repository_root_wherever_it
 
 def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path) -> None:
     """The MTP chain prefills in 128-row chunks too (the extension's 128-row twin) and, since 2026-09-26, in slabs
-    (the twin's slab form): both flag pairs reach the server."""
+    (the twin's slab form): both flag pairs reach the server.  A slab above the 2048-row cap is refused."""
 
     if subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], stdout=subprocess.DEVNULL).returncode:
         pytest.skip("the launcher records the checkout's head: not a git checkout")
@@ -117,6 +117,8 @@ def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path) -> None:
     assert slab.returncode == 0, slab.stderr
     args = [line[len("arg=") :] for line in slab.stdout.splitlines()[1:]]
     assert args[args.index("--prefill-slab") + 1] == "256" and args[args.index("--mtp") + 1] == "4"
+    capped = run_launcher(tmp_path, *common, "--prefill-slab", "4096", "--validate-only")
+    assert capped.returncode == 2 and "256..2048" in capped.stderr, (capped.returncode, capped.stderr)
     acceptance = run_launcher(tmp_path, *common, "--acceptance", "--acceptance-only", "--require-json-96")
     assert acceptance.returncode == 0, acceptance.stderr
     assert "arg=--acceptance-only" in acceptance.stdout and "arg=--acceptance-prompts" in acceptance.stdout

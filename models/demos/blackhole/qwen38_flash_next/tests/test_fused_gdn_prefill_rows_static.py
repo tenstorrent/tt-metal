@@ -118,9 +118,9 @@ def test_the_extra_field_names_are_the_states_fused_fields():
 def test_the_slab_row_predicate_matches_the_models():
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import is_slab_rows
 
-    for rows in (1, 5, 32, 128, 255, 129, 4224, "2048", True, None):
+    for rows in (1, 5, 32, 128, 255, 129, 2176, 4096, 4224, "2048", True, None):
         assert module.is_slab_rows(rows) == is_slab_rows(rows), rows
-    for rows in (256, 384, 2048, 4096):
+    for rows in (256, 384, 2048):
         assert module.is_slab_rows(rows) and is_slab_rows(rows), rows
 
 

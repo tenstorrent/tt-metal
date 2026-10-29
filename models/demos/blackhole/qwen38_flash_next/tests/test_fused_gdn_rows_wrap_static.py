@@ -252,7 +252,7 @@ def test_the_slab_and_verify_admissions_never_both_admit():
     verify.wrap_buffers = object()
     assert module.admits(None, _Fake(), verify, state) is True
     assert slab.admits(None, _Fake(), verify, state.recurrent) is False  # 32 rows is not a slab
-    for rows in (256, 2048, 4096):
+    for rows in (256, 2048):
         slab_state = _RowsState(rows=rows, tile_rows=rows)
         slab_state.fused_prefill = True
         assert module.qualifies(slab_state) is False and module.admits(None, _Fake(), slab_state, state) is False

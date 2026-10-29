@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The device sampler: its op sequence on a torch model of the device == the host reference bitwise; the argmax
-short-circuit; ties; invariants; the reference against the host sampler; the RNG; the static op-list pin."""
+short-circuit; ties; invariants; the reference against the host sampler; the RNG; the presence guard;
+the static op-list pin."""
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import re
 from collections import Counter
@@ -567,6 +569,54 @@ def test_uniform_stream_vectors_exactness_and_independence(expect_error) -> None
     assert stream.draws == 1 and sample.uniform == UniformStream(5).next_uniform()
     with expect_error(ValueError, match="stream seed"):
         sample_candidates(row, parameters, generator=UniformStream(6))
+
+
+# --- T7: the presence guard ----------------------------------------------------------------------------------------
+
+
+def _read_lanes(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The value and id lanes the candidate row holds for fp32 ``[VOCAB]`` logits: per shard its top 32."""
+
+    values, local = torch.topk(logits.reshape(TP_SIZE, -1), K, dim=-1, sorted=True)
+    ids = local + VOCAB_SIZE // TP_SIZE * torch.arange(TP_SIZE).reshape(TP_SIZE, 1)
+    return values.reshape(-1), ids.reshape(-1)
+
+
+def test_a_clear_guard_proves_a_presence_row_exact_and_a_set_one_flags_the_deviating_rows() -> None:
+    """Rows whose head sits in one shard, the emitted tokens drawn from it: where the guard is clear the draw on the
+    read lanes equals the draw on the penalised vocabulary's own candidates for every uniform of a grid."""
+
+    generator = torch.Generator().manual_seed(11)
+    rows, guarded, deviating = 0, 0, 0
+    for _ in range(160):
+        logits = torch.randn(VOCAB_SIZE, generator=generator) * (0.25 + 2 * float(torch.rand((), generator=generator)))
+        shard = int(torch.randint(TP_SIZE, (1,), generator=generator))
+        head = shard * (VOCAB_SIZE // TP_SIZE) + torch.randperm(VOCAB_SIZE // TP_SIZE, generator=generator)[:48]
+        logits[head] = 4.0 + torch.rand(48, generator=generator)
+        history = torch.argsort(logits, descending=True)[: int(torch.randint(1, 24, (1,), generator=generator))]
+        policy = ds.Qwen38DeviceSamplerPolicy(
+            temperature=(0.7, 1.0)[rows % 2],
+            top_k=(20, 32, 5)[rows % 3],
+            top_p=(0.8, 0.95, 1.0)[rows % 3],
+            min_p=0.0,
+            presence_penalty=(1.5, 0.5, 2.0)[rows % 3],
+        )
+        penalised = logits.clone()
+        penalised[history] -= policy.presence_penalty
+        values, ids = _read_lanes(logits)
+        seen = torch.isin(ids, history)
+        exact_values, exact_ids = _read_lanes(penalised)
+        unpenalised = dataclasses.replace(policy, presence_penalty=0.0)
+        table = ds.weight_table(policy.temperature)
+        draws = [ds.device_sampler_reference(values, ids, policy, n / 64, table=table, seen=seen) for n in range(64)]
+        exact = [
+            ds.device_sampler_reference(exact_values, exact_ids, unpenalised, n / 64, table=table) for n in range(64)
+        ]
+        differs = [draw.token_id for draw in draws] != [draw.token_id for draw in exact]
+        rows, guarded, deviating = rows + 1, guarded + draws[0].guard, deviating + differs
+        guards = [draw.guard for draw in draws]
+        assert all(guard == guards[0] for guard in guards) and (guards[0] or not differs), (rows, guards, differs)
+    assert 0 < deviating <= guarded < rows, f"deviating {deviating}, guarded {guarded}, rows {rows}"
 
 
 # --- T8: the static op-list pin -----------------------------------------------------------------------------------
