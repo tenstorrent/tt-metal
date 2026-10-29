@@ -5,8 +5,9 @@
 # The image sfpi_disasm_docker.sh runs in.
 #
 # sfpi 7.9x links against glibc 2.34, so the comparison needs Ubuntu 22.04 even
-# when the host is older. Nothing else is installed: the Python packages come
-# from the host through PYTHONPATH, and the toolchain is downloaded per tree.
+# when the host is older. Beside that it holds only what the toolchain loads:
+# cc1plus wants libmpc, libmpfr and libgmp. The Python packages come from the
+# host through PYTHONPATH, and the toolchain is downloaded per tree.
 #
 #   docker build -f sfpi_disasm.Dockerfile -t llk-disasm:22.04 .
 
@@ -17,6 +18,9 @@ RUN apt-get -qq update \
         ca-certificates \
         curl \
         git \
+        libgmp10 \
+        libmpc3 \
+        libmpfr6 \
         python3 \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
