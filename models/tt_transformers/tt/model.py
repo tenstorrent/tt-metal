@@ -808,6 +808,25 @@ class Transformer(LightweightModule):
             # Hidden states are sharded, concatenation is correct
             return concatenated[0, 0, last_token_idx, :]
 
+    def read_decode_logits(self, logits, blocking=True):
+        """Read the decode logits to the host: only the rows this model serves, from the first device.
+
+        The row-major decode logits are padded to 32 rows and, with tensor parallelism, gathered on device
+        so every device holds a replica (process_output_decode reads device 0). A plain .cpu() pulls all
+        32 rows from every device: for a 166,912-token vocabulary on two devices that is 2 x 10.7 MB per
+        decode step, ~2.7 ms of a 47 ms step on P300 (one device sits behind a Gen4 x4 link). Slice the
+        live rows on device and read them from one device; the result keeps the host-tensor contract of
+        process_output_decode (ttnn.get_device_tensors(host)[0] is the tensor itself).
+        """
+        if logits.layout != ttnn.ROW_MAJOR_LAYOUT or not ttnn.is_tensor_storage_on_device(logits):
+            return logits.cpu(blocking=blocking)
+        shape = list(logits.shape)
+        rows = min(self.args.max_batch_size, shape[-2])
+        live = logits
+        if rows < shape[-2]:
+            live = ttnn.slice(logits, [0] * len(shape), shape[:-2] + [rows, shape[-1]])
+        return ttnn.get_device_tensors(live)[0].cpu(blocking=blocking)
+
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.

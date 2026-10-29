@@ -3418,23 +3418,31 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     read_events.append(ttnn.record_event(self.model[rank].mesh_device, 0))
             return (host_outputs, read_events) if async_read else host_outputs
 
+        def _read_logits(rank, logits, blocking=True):
+            # Models that gather their decode logits on device read only the live rows from one device
+            # (Transformer.read_decode_logits); the others read the whole tensor as before.
+            reader = getattr(self.model[rank], "read_decode_logits", None)
+            if reader is not None and isinstance(logits, ttnn.Tensor):
+                return reader(logits, blocking=blocking)
+            return logits.cpu(blocking=blocking)
+
         if not async_read:
             if isinstance(tt_out[0], tuple):
-                return [(out[0].cpu(), _read_logprobs(out[1])) for out in tt_out]
+                return [(_read_logits(i, out[0]), _read_logprobs(out[1])) for i, out in enumerate(tt_out)]
             elif isinstance(tt_out[0], ttnn.Tensor):
-                return [out.cpu() for out in tt_out]
+                return [_read_logits(i, out) for i, out in enumerate(tt_out)]
 
         host_outputs = []
         read_events = []
         for i in range(self.data_parallel):
             if isinstance(tt_out[i], tuple):
                 outputs = (
-                    tt_out[i][0].cpu(blocking=False),
+                    _read_logits(i, tt_out[i][0], blocking=False),
                     _read_logprobs(tt_out[i][1], blocking=False),
                 )
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
-                outputs = tt_out[i].cpu(blocking=False)
+                outputs = _read_logits(i, tt_out[i], blocking=False)
                 host_outputs.append(outputs)
 
             read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
