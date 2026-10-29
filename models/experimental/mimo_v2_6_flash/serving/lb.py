@@ -15,7 +15,8 @@ So requests sharing a long prefix (a document, a long system prompt, a multi-tur
 that cached it, and spill to another engine (which then caches it too) instead of queueing on one. Responses stream
 back unchanged.
 
-GET /health is 200 only when every engine answers its own /health. GET /metrics concatenates every engine's metrics.
+GET /health is 200 only when every engine answers its own /health. GET /metrics merges every engine's metrics into one
+exposition, each sample labeled with its engine's index (``merge_metrics``).
 GET /lb/stats shows in-flight and served counts and the prefix routing counters. A request whose engine refuses the
 connection goes to another engine (the refusing one is skipped for ``--down-s`` seconds).
 
@@ -25,6 +26,7 @@ import argparse
 import hashlib
 import itertools
 import json
+import re
 import time
 from collections import OrderedDict
 
@@ -32,6 +34,8 @@ from aiohttp import ClientConnectorError, ClientSession, ClientTimeout, TCPConne
 
 HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "content-encoding", "upgrade", "host"}
 PREFIX_PATHS = ("/v1/chat/completions", "/v1/completions", "/v1/responses")
+SAMPLE = re.compile(r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?(\s.*)$")  # name, labels, value [timestamp]
+LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\]|\\.)*)"')
 
 
 def prefix_text(path, body):
@@ -81,6 +85,39 @@ def chunk_hashes(text, chunk_chars):
         h = hashlib.blake2b(h + data[start : start + step], digest_size=16).digest()
         out.append(h)
     return out
+
+
+def merge_metrics(texts):
+    """The engines' Prometheus texts (in backend order) as one exposition.
+
+    Each engine is its own vLLM server, so all of them label their samples ``engine="0"``: concatenated, every series
+    and every family's HELP / TYPE would appear once per engine, which a Prometheus parser rejects or collapses. Here
+    every sample gets ``engine="<index of its engine>"``, as vLLM labels the engines of one data-parallel server, and
+    each family is written once: HELP / TYPE from the first engine that has them, then every engine's samples."""
+    families = OrderedDict()  # family name -> {"HELP": line, "TYPE": line, "samples": [lines]}
+    for index, text in enumerate(texts):
+        family = None
+        for line in text.splitlines():
+            if line.startswith("#"):
+                parts = line.split(None, 3)
+                if len(parts) >= 3 and parts[1] in ("HELP", "TYPE"):
+                    family = parts[2]
+                    families.setdefault(family, {"samples": []}).setdefault(parts[1], line)
+                continue
+            match = SAMPLE.match(line)
+            if match is None:
+                continue
+            name, labels, rest = match.groups()
+            if family is None or not (name == family or name.startswith(family + "_")):
+                family = name  # an untyped sample: its own family
+            labels = [(k, v) for k, v in LABEL.findall(labels or "") if k != "engine"] + [("engine", str(index))]
+            sample = name + "{" + ",".join(f'{k}="{v}"' for k, v in labels) + "}" + rest
+            families.setdefault(family, {"samples": []})["samples"].append(sample)
+    out = []
+    for lines in families.values():
+        out += [lines[key] for key in ("HELP", "TYPE") if key in lines]
+        out += lines["samples"]
+    return "\n".join(out) + "\n"
 
 
 class PrefixIndex:
@@ -218,12 +255,11 @@ def make_app(router, session_factory=None):
         return web.json_response(router.snapshot())
 
     async def all_metrics(_):
-        # Every backend's Prometheus text, concatenated: a client summing a counter's samples sums the engines.
         texts = []
         for b in router.backends:
             async with state["session"].get(b + "/metrics") as up:
-                texts.append(f"# backend {b}\n" + await up.text())
-        return web.Response(text="".join(texts), content_type="text/plain")
+                texts.append(await up.text())
+        return web.Response(text=merge_metrics(texts), content_type="text/plain")
 
     async def health(_):
         bad = []
