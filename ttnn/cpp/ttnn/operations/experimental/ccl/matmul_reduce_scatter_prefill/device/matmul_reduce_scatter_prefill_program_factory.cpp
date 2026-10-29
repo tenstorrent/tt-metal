@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <exception>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <tuple>
@@ -319,6 +320,12 @@ using MeshKey = decltype(std::declval<distributed::MeshDevice&>().id());
 std::map<MeshKey, MeshResources>& mrs_resource_map() {
     static ttsl::Indestructible<std::map<MeshKey, MeshResources>> resources;
     return resources.get();
+}
+
+// guards mrs_resource_map(); held for every lookup and creation
+std::mutex& mrs_resource_mutex() {
+    static ttsl::Indestructible<std::mutex> mutex;
+    return mutex.get();
 }
 
 std::optional<MatmulReduceScatterPrefillParams>& mrs_last_plan_slot() {
@@ -954,12 +961,20 @@ void MatmulReduceScatterPrefillProgramFactory::override_runtime_arguments(
 }
 
 MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh) {
+    const std::lock_guard<std::mutex> lock(mrs_resource_mutex());
     auto& resources = mrs_resource_map();
     const CoreCoord g = mesh->compute_with_storage_grid_size();
     const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
     const auto n = static_cast<uint32_t>(g.x * g.y);
     auto it = resources.find(mesh->id());
     if (it == resources.end()) {
+        // creating them writes the mailbox and synchronizes the mesh, which a trace capture cannot record
+        for (uint8_t cq = 0; cq < mesh->num_hw_cqs(); ++cq) {
+            TT_FATAL(
+                !mesh->mesh_command_queue(cq).trace_id().has_value(),
+                "matmul_reduce_scatter_prefill: the first call on a mesh creates its semaphores and mailbox and cannot "
+                "be traced; call the op once before begin_trace_capture");
+        }
         std::array<GlobalSemaphore, 4> sems{
             ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0),
             ttnn::global_semaphore::create_global_semaphore(mesh, grid, 0),
@@ -999,6 +1014,7 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
 }
 
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh) {
+    const std::lock_guard<std::mutex> lock(mrs_resource_mutex());
     auto& resources = mrs_resource_map();
     const auto it = resources.find(mesh->id());
     TT_FATAL(

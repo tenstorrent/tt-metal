@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -28,10 +29,13 @@ struct MatmulReduceScatterPrefillDeviceOperation {
 
     // The support contract and the operand checks, once per cached program.
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    // The key fixes every spec and the plan; only the preallocated output's buffer is checked again.
+    // The key fixes every spec and the plan; only the preallocated output (its mesh and buffer) is checked again.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    // The reduce-scatter's label: cluster_axis becomes Shard{scatter_dim} over the union label of A and W.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
@@ -45,13 +49,13 @@ void check_support(
     ttnn::ccl::Topology topology,
     const std::optional<int32_t>& num_links);
 
-// The operand checks the entry makes before it reads the mesh: ranks, K, DRAM- or L1-interleaved TILE operands and an
-// interleaved output memory config (TT_FATAL otherwise).
+// The operand checks the entry makes before it reads the mesh: ranks, K, DRAM- or L1-interleaved operands in default
+// 32x32 tiles and an interleaved output memory config (TT_FATAL otherwise).
 void check_operands(
     const Tensor& input_tensor, const Tensor& weight, const std::optional<tt::tt_metal::MemoryConfig>& memory_config);
 
-// The group along cluster_axis: a 2D mesh, >= 2 devices on the axis and a scattered extent that splits into G tile
-// blocks (TT_FATAL otherwise). scatter_dim is canonical. Returns G.
+// The group along cluster_axis: A and W stored on every device of one 2D mesh, >= 2 devices on the axis and a scattered
+// extent that splits into G tile blocks (TT_FATAL otherwise). scatter_dim is canonical. Returns G.
 uint32_t check_group(const Tensor& input_tensor, const Tensor& weight, int32_t cluster_axis, int32_t scatter_dim);
 
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill

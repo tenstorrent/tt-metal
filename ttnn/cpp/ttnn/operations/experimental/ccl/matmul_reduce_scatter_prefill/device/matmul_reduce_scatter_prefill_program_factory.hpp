@@ -35,7 +35,8 @@ struct MatmulReduceScatterPrefillProgramFactory {
 
 // Per-mesh persistent state: 4 global semaphores (arr_fwd, arr_bwd, ready, credit) on the full grid and the replicated
 // uint32 mailbox (height-sharded, (1, n * kMailboxStride / 4) per core); the kernels return every counter to 0, so
-// they carry over between calls. Held in a function-local ttsl::Indestructible map keyed by the mesh id.
+// they carry over between calls. Held in a function-local ttsl::Indestructible map keyed by the mesh id, behind a
+// mutex. Never released: the map outlives every mesh, so a closed mesh's entry stays until the process exits.
 struct MeshResources {
     std::array<tt::tt_metal::GlobalSemaphore, 4> sems;
     Tensor mailbox;
@@ -43,6 +44,7 @@ struct MeshResources {
 enum MeshSem : uint32_t { ARR_FWD, ARR_BWD, READY, CREDIT };
 
 // Called by the public entry before launch: creates the mesh's resources on first use (synchronizing the device once).
+// The first call cannot be traced: a mesh with no resources yet refuses a call made during trace capture.
 MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);
 // One call's staging tensor (bf16 tiles, height-sharded over the full grid, staging_tiles tiles per core). The mesh
 // allocator gives it the same address on every chip, which the fabric writes rely on; the entry frees it when the call

@@ -51,7 +51,7 @@ def random_stacked(mesh_shape, shape, seed, scale=1.0):
     return (torch.randn((*mesh_shape, *shape), dtype=torch.float32) * scale).to(torch.bfloat16)
 
 
-def to_mesh(stacked, mesh_device, dtype, on_device=True, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def to_mesh(stacked, mesh_device, dtype, on_device=True, memory_config=ttnn.DRAM_MEMORY_CONFIG, tile=None):
     """on_device=False: the same multi-device tensor on the host (for copy_host_to_device_tensor)."""
     rows, cols = stacked.shape[0], stacked.shape[1]
     full = torch.cat([torch.cat(list(stacked[r]), dim=1) for r in range(rows)], dim=0)
@@ -61,6 +61,7 @@ def to_mesh(stacked, mesh_device, dtype, on_device=True, memory_config=ttnn.DRAM
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(rows, cols)),
+        tile=tile,
         **placement,
     )
 
@@ -283,6 +284,7 @@ def test_program_cache(mesh_device):
     ids=["scatter_dim", "single_device_axis", "num_links", "fp32_weight", "k_mismatch", "sharded_output"],
 )
 def test_refusals(mesh_device, expect_error, overrides, message):
+    overrides = dict(overrides)  # the parametrized dict is shared across reruns
     shapes = {"a_shape": (1, 1, 640, 2048), "w_shape": (2048, 7168)}
     shapes.update({k: overrides.pop(k) for k in list(overrides) if k in shapes})
     weight_dtype = overrides.pop("weight_dtype", ttnn.bfloat8_b)
@@ -293,6 +295,82 @@ def test_refusals(mesh_device, expect_error, overrides, message):
     kwargs.update(overrides)
     with expect_error(RuntimeError, message):
         ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **kwargs)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "kind, message",
+    [
+        ("tiny_tile", "default 32x32 tile"),
+        ("device_shard", "stored on every device"),
+        ("weight_on_other_mesh", "weight must be on the input_tensor's mesh"),
+        ("output_on_other_mesh", "output_tensor must be on the input_tensor's mesh"),
+    ],
+)
+def test_operand_placement_refusals(mesh_device, expect_error, kind, message):
+    """Operands the op cannot address: non-default tiles, one device's shard of a mesh tensor, and a weight or output
+    on another mesh of the same shape (a full-mesh submesh)."""
+    mesh_shape = tuple(mesh_device.shape)
+    a = random_stacked(mesh_shape, (1, 1, 640, 2048), seed=0)
+    w = random_stacked(mesh_shape, (2048, 7168), seed=1)
+    ta = to_mesh(a, mesh_device, ttnn.bfloat16, tile=ttnn.Tile((16, 32)) if kind == "tiny_tile" else None)
+    tw = to_mesh(w, mesh_device, ttnn.bfloat8_b)
+    kwargs = dict(cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring, num_links=2)
+    if kind == "device_shard":
+        ta = ttnn.get_device_tensors(ta)[0]
+    elif kind == "weight_on_other_mesh":
+        tw = to_mesh(w, mesh_device.create_submeshes(ttnn.MeshShape(*mesh_shape))[0], ttnn.bfloat8_b)
+    elif kind == "output_on_other_mesh":
+        other = mesh_device.create_submeshes(ttnn.MeshShape(*mesh_shape))[0]
+        kwargs["output_tensor"] = ttnn.zeros(
+            (1, 1, 640, 7168 // mesh_shape[1]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=other,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **kwargs)
+
+
+def placement_names(tensor):
+    return [
+        f"Shard({p.dim})" if isinstance(p, ttnn.PlacementShard) else "Replicate"
+        for p in tensor.tensor_topology().placements()
+    ]
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "operands, expected",
+    [("sharded", ["Shard(0)", "Shard(3)"]), ("replicated", ["Replicate", "Shard(3)"])],
+)
+def test_output_topology(mesh_device, operands, expected):
+    """The output is labelled as the reduce-scatter's: cluster_axis holds Shard(scatter_dim), whatever the operands'
+    labels were on it."""
+    mesh_shape = tuple(mesh_device.shape)
+    a = random_stacked(mesh_shape, (1, 1, 640, 2048), seed=0)
+    w = random_stacked(mesh_shape, (2048, 7168), seed=1)
+    if operands == "sharded":
+        ta = to_mesh(a, mesh_device, ttnn.bfloat16)
+        tw = to_mesh(w, mesh_device, ttnn.bfloat8_b)
+    else:
+        replicate = dict(
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        ta = ttnn.from_torch(a[0, 0], dtype=ttnn.bfloat16, **replicate)
+        tw = ttnn.from_torch(w[0, 0], dtype=ttnn.bfloat8_b, **replicate)
+    out = ttnn.experimental.matmul_reduce_scatter_prefill(
+        ta, tw, cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring, num_links=2
+    )
+    assert placement_names(out) == expected
 
 
 # Traced calls. Each test compiles eagerly, captures one trace and replays it; every output is checked against the
@@ -419,3 +497,24 @@ def test_trace_new_inputs(mesh_device):
             check(traced, expected, mesh_device, weight_dtype)
     finally:
         ttnn.release_trace(mesh_device, trace_id)
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [traced_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_trace_cold_first_call(mesh_device, expect_error):
+    """The first call on a mesh creates its semaphores and mailbox (a host write and a synchronize), which a capture
+    cannot record: inside a capture it is refused, and the mesh stays usable for an eager call after it."""
+    a, w, expected = host_operands(tuple(mesh_device.shape), "kimi_k27_o_proj", seed=0)
+    ta = to_mesh(a, mesh_device, ttnn.bfloat16)
+    tw = to_mesh(w, mesh_device, TRACE_SHAPES["kimi_k27_o_proj"][2])
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    try:
+        with expect_error(RuntimeError, "call the op once before begin_trace_capture"):
+            ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS)
+    finally:
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.release_trace(mesh_device, trace_id)
+    out = ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **TRACE_KWARGS)
+    ttnn.synchronize_device(mesh_device)
+    check(out, expected, mesh_device, TRACE_SHAPES["kimi_k27_o_proj"][2])
