@@ -19,6 +19,7 @@ usage: python -m qwen36_resident.tests.rows_check --corpus corpus_ids.pt [--prom
 import argparse
 import faulthandler
 import gc
+import weakref
 import json
 import sys
 import time
@@ -72,12 +73,20 @@ def main():
         text = [int(ids[P + k]) for k in range(S + 1)]  # what step k should predict
         captured = [False]
 
-        def drop(m):
-            m.release_trace()
-            pp._ho.pop("model", None)  # the handoff's job cache holds the model
-            del m
+        def l1_addrs(m):
+            """the model's persistent L1 tensors' addresses (a later build placed lower means L1 still held)"""
+            names = ("o_in_t", "logits_t", "argmax_t")
+            return {k: getattr(m, k).buffer_address() for k in names if getattr(m, k, None) is not None}
+
+        def gone(ref, name):
+            """after the caller dropped its names: the model must be collected; else name what holds it"""
             gc.collect()
             ttnn.synchronize_device(mesh)
+            if ref() is None:
+                print(f"{name}: freed", flush=True)
+                return
+            holders = [f"{type(r).__name__}:{str(r)[:120]}" for r in gc.get_referrers(ref()) if r is not ref]
+            print(f"{name}: NOT freed, held by {holders}", flush=True)
 
         def b1_run():
             blocks, tables = shuffled_tables(1, max_pos, seed=9)
@@ -92,6 +101,7 @@ def main():
                 kv_pool_blocks=blocks,
                 block_tables=tables,
             )
+            print(f"B=1 build L1 addresses {l1_addrs(m)}", flush=True)
             m.step(m.token_state(emb[0].float(), 0))  # compile before the trace
             ttnn.synchronize_device(mesh)
             m.reset()
@@ -107,7 +117,11 @@ def main():
                 m.step(m.token_state(emb[tok].float(), P - 1 + k))
                 ttnn.synchronize_device(mesh)
                 lg.append(m.logits()[:, : d.vocab_chip].reshape(-1)[:vocab].float().clone())
-            drop(m)
+            ref = weakref.ref(m)
+            m.release_trace()
+            pp._ho.pop("model", None)  # the handoff's job cache holds the model
+            del m
+            gone(ref, "B=1 model")
             return torch.stack(lg)
 
         l1 = b1_run()
@@ -127,6 +141,7 @@ def main():
             block_tables=tables,
             rows=True,
         )
+        print(f"rows build L1 addresses {l1_addrs(m)}", flush=True)
         m.capture_trace()
         phase("rows model")
 
@@ -173,7 +188,11 @@ def main():
         phase(f"rows, A alone in slot {a.slot}: teacher-forced")
         lr_nb = rows_run(True)
         phase(f"rows, A in slot {a.slot} beside 7 users: teacher-forced")
-        drop(m)
+        ref = weakref.ref(m)
+        m.release_trace()
+        pp._ho.pop("model", None)
+        del m
+        gone(ref, "rows model")
 
         l1b = b1_run()
         phase("B=1 again, after the rows build: teacher-forced")
