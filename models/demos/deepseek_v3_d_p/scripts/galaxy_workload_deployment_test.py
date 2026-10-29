@@ -30,7 +30,8 @@ except ImportError:
     sys.exit(1)
 
 REDRAW_SECS = 15
-CELL = 16
+CELL = 15
+NOTE = 33
 COLOR = {
     Status.PASS: Fore.GREEN,
     Status.FAIL: Style.BRIGHT + Fore.RED,
@@ -60,19 +61,17 @@ class Screen:
 
     def lines(self) -> list[str]:
         gates = [s for s in self.steps if s.group == "gate"]
-        out = self.header + ["", "GATES"]
+        out = self.header + ["", f"{'GATES':<20} {'time':>8}    note"]
         for i, s in enumerate(gates):
             took = dur((s.state.end or time.time()) - s.state.start) if s.state.start else ""
             status = s.state.result.status
             out.append(
-                f" {i} {s.title:<10} {self.paint(status, f'{status.value:<6}')} {took:>8}    {s.state.result.reason}"
+                f"{i:>2} {s.title:<10} {self.paint(status, status.value, 6)} {took:>8}    {s.state.result.reason}"
             )
-            out += [
-                f"   {d}" if "MISSING" not in d else self.paint(Status.FAIL, f"   {d}") for d in s.state.result.details
-            ]
-        out += ["", f"{'MODELS':<13}" + "".join(f"{c:<{CELL}}" for c in self.columns())]
+            out += [self.gate_detail(s, d) for d in s.state.result.details]
+        out += ["", f"{'MODELS':<13}" + " ".join(f"{c:<{CELL}}" for c in self.columns())]
         for m in dict.fromkeys(s.model for s in self.steps if s.model):
-            out.append(f" {MODEL_LABEL[m]:<12}" + "".join(self.model_cells(m)))
+            out.append(f" {MODEL_LABEL[m]:<12}" + " ".join(self.model_cells(m)))
         running = next((s for s in self.steps if s.state.result.status == Status.RUN), None)
         if running:
             out += ["", f"NOW   {running.title}  {running.state.now or dur(time.time() - running.state.start)}"]
@@ -91,6 +90,13 @@ class Screen:
             result = Status.FAIL if errors else Status.PASS
             out += ["", f"RESULT  {self.paint(result, result.value)}" + (f" at {first}" if first else "")]
         return out
+
+    def gate_detail(self, step: Step, detail: str) -> str:
+        if step.key != "paths":
+            return " " * NOTE + detail
+        if detail.endswith(" MISSING"):
+            return f"   {detail.removesuffix('MISSING')}{self.paint(Status.FAIL, 'MISSING')}"
+        return f"   {detail}"
 
     def columns(self) -> list[str]:
         groups = list(dict.fromkeys(s.group for s in self.steps if s.model and s.group != "soak"))

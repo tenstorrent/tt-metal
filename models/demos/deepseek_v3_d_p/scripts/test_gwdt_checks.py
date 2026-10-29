@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import pytest
 from gwdt_checks import (
     LogFollower,
     Result,
@@ -286,3 +287,41 @@ def test_models_grid_aligned_with_color(tmp_path, monkeypatch):
     screen = Screen(steps, ["hdr"], tmp_path / "status.json", {})
     rows = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in screen.lines() if l.startswith((" K2.7", "MODELS"))]
     assert rows[0].index("smoke") == rows[1].index("·")
+
+
+@pytest.mark.parametrize("tty", [True, False])
+def test_screen_columns(tmp_path, monkeypatch, tty):
+    import re
+    import time
+
+    from galaxy_workload_deployment_test import Screen
+    from gwdt_steps import Step
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: tty)
+    paths = Step("paths", "paths", "gate", None, True, None)
+    paths.state.result = Result(Status.WARN, "5/6 exist", ["K2.7", "  A_VAR = /a", "  B_VAR = /b   MISSING"])
+    smi = Step("tt-smi", "tt-smi", "gate", None, True, None)
+    smi.state.result = Result(Status.WARN, "TDP low", ["fw_bundle_version 19.16.0.0 (32/32)"])
+    models = [Step(f"{g}:m", g, g, "kimi_k2_7", True, None) for g in ("block", "smoke", "soak")]
+    models += [Step("block:g", "block", "block", "glm53", True, None)]
+    models[0].state.result = Result(Status.PASS)
+    models[0].state.start, models[0].state.end = time.time() - 360000, time.time()
+    models[1].state.result = Result(Status.FAIL)
+    for s in (paths, smi, *models):
+        s.state.start = s.state.start or time.time()
+    lines = [
+        re.sub(r"\x1b\[[0-9;]*m", "", l) for l in Screen([paths, smi, *models], ["hdr"], tmp_path / "s", {}).lines()
+    ]
+    gates = next(i for i, l in enumerate(lines) if l.startswith("GATES"))
+    note = lines[gates].index("note")
+    assert lines[gates + 1].index("5/6 exist") == note
+    assert lines[gates + 2 : gates + 5] == ["   K2.7", "     A_VAR = /a", "     B_VAR = /b   MISSING"]
+    assert lines[gates + 5].index("TDP low") == note
+    assert lines[gates + 6].index("fw_bundle_version") == note
+    assert lines[gates + 5].index("0s") + 2 == lines[gates].index("time") + 4
+    assert lines[gates + 7] == ""
+    header, k2, glm = lines[gates + 8 : gates + 11]
+    starts = [header.index(c) for c in ("block", "smoke", "soak 1/3", "soak 2/3")]
+    assert [k2[i - 1] for i in starts[1:]] == [" "] * 3
+    assert [k2.index(t) for t in ("PASS", "FAIL")] == starts[:2]
+    assert glm.index("-") == starts[1]
