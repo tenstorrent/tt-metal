@@ -19,6 +19,15 @@ void check(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.dtype() == dt, "chunk_gdn: {} has wrong dtype", name);
     TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
+// g/beta accept FLOAT32 (default) or BFLOAT16 (QWEN36_GDN_GB_BF16); see the call site.
+void check_gb(const Tensor& t, const char* name) {
+    TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
+    TT_FATAL(
+        t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16,
+        "chunk_gdn: {} must be FLOAT32 or BFLOAT16",
+        name);
+    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -49,8 +58,23 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
-    check(in.g, "g", DataType::FLOAT32);
-    check(in.beta, "beta", DataType::FLOAT32);
+    // g/beta: FLOAT32 (default) or BFLOAT16 (QWEN36_GDN_GB_BF16). The caller's g/beta are bf16, so
+    // the fp32 form is a lossless widening; feeding bf16 straight through halves the host-side
+    // [BH,T] -> [BH,NC,C,1] relayout and the per-work-item read, with identical kernel math (they are
+    // only matmul/broadcast operands into an fp32 DEST). attrs.gb_bf16 mirrors this dtype so it is
+    // part of the program-cache key and drives the cb_g/cb_beta format in the program factory.
+    check_gb(in.g, "g");
+    check_gb(in.beta, "beta");
+    TT_FATAL(
+        in.g.dtype() == in.beta.dtype() && (in.g.dtype() == DataType::BFLOAT16) == attrs.gb_bf16,
+        "chunk_gdn: g/beta dtypes must match each other and attrs.gb_bf16");
+    if (in.g.logical_shape().rank() == 3) {
+        // Flat gates: token-major [B,T,HV] g/beta; the reader moves head hv's column of an fp32 tile.
+        TT_FATAL(
+            in.g.dtype() == DataType::FLOAT32 && attrs.chunk_size == TILE_HEIGHT && attrs.qk_flat && attrs.v_flat,
+            "chunk_gdn: token-major g/beta need FLOAT32, chunk_size 32 and flat q/k/v");
+        TT_FATAL(in.beta.logical_shape() == in.g.logical_shape(), "chunk_gdn: g/beta shapes must match");
+    }
     check(in.eye_c, "eye_c", DataType::FLOAT32);
     check(in.tril_c, "tril_c", DataType::FLOAT32);
     check(in.ones_c, "ones_c", DataType::FLOAT32);
@@ -129,6 +153,8 @@ std::vector<Tensor> chunk_gdn_prep(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        // Mirror the g/beta dtype into the attributes so the program cache keys on it.
+        .gb_bf16 = (g.dtype() == DataType::BFLOAT16),
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

@@ -17,11 +17,14 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -123,11 +126,18 @@ PrepWorkDist distribute_prep(CoreCoord grid, uint32_t total, uint32_t core_cap) 
 // scan op — kd@S, T_inv@diff, q_decay@S, intra@v_new, k_dec_t@v_new, S*dl — is column-wise in V,
 // needing only the full-K shared per-chunk tensors + that block's own V-slice). This mirrors FLA's
 // fwd_h/fwd_o launch grid over (i_v, i_bh) with a sequential loop over time. K is NOT split (v_new
-// and o reduce over all K). We pick the finest V-blocking whose ROW-ALIGNED placement fits the
-// grid: the largest NV | Vt with NV <= grid.x and BH <= (grid.x/NV)*grid.y — each head's NV cores
-// must form a 1xNV row rectangle (the shared-input multicast targets it), so row-alignment can
-// pick a smaller NV than the old flat BH*NV <= cores rule for some non-shipping BH values (same
-// math, coarser V split). Each core runs one (head, v-block) => BH*NV independent scans.
+// and o reduce over all K). Each core runs one (head, v-block) => BH*NV independent scans.
+//
+// Two placements, both bit-exact (every core runs the same (head, v-block) scan; only the data
+// movement differs):
+//   * distribute_scan (default; upstream #53790): the largest NV | Vt whose ROW-ALIGNED placement
+//     fits the grid (NV <= grid.x and BH <= (grid.x/NV)*grid.y) — each head's NV cores form a 1xNV
+//     row rectangle, which the use_mcast sender/receiver reader (reader_chunk_gdn_scan.cpp) targets.
+//   * distribute_scan_leader_mcast (TT_GDN_SCAN_MCAST=1; the qwen36 serving default set by
+//     models/demos/blackhole/qwen36/tt/model_config.py): the largest NV | Vt with BH*NV <= cores,
+//     each head group a tight gw x gh rectangle (1 x NV whenever that fits, else 2D), served by the
+//     leader-multicast reader (reader_chunk_gdn_scan_mcast.cpp). When its groups do not fit / are not
+//     tight it reports mcast = false and the op uses distribute_scan instead.
 struct ScanWorkDist {
     std::vector<CoreCoord> cores;
     std::vector<uint32_t> head;  // head index per core
@@ -135,7 +145,46 @@ struct ScanWorkDist {
     uint32_t Vtl = 1;            // per-core v-block width (tiles) = Vt / NV
     uint32_t NV = 1;             // v-blocks per head
     CoreRangeSet core_set;
+    // Leader-multicast mode (TT_GDN_SCAN_MCAST=1, groups fit the grid): each head's NV cores form a tight gw x gh
+    // rectangle (a 1 x NV row segment whenever that fits; see distribute_scan_leader_mcast); the leader
+    // (vblk == head % NV) reads the V-independent per-step tensors once and multicasts them to the rectangle.
+    bool mcast = false;
+    std::vector<CoreCoord> leader_phys;  // per core: NoC coords of its head's leader
+    std::vector<CoreCoord> rect_start;   // per core: NoC rect of its head group
+    std::vector<CoreCoord> rect_end;
 };
+
+bool gdn_scan_mcast_env_enabled() {
+    static const bool enabled = [] {
+        const char* e = std::getenv("TT_GDN_SCAN_MCAST");
+        return e != nullptr && e[0] == '1';
+    }();
+    return enabled;
+}
+
+// TT_GDN_SCAN_MCAST_2D (default on; "0" = 1 x NV row segments only, the previous placement): when the 1 x NV
+// head groups do not fit the grid (TP=2: BH=24, NV=4 on 11x10 needs 12 rows of 2 groups), lay each group out as
+// a gw x gh rectangle (gw * gh == NV, smallest gh that fits: 2x2 -> 5 groups per row pair, 25 >= 24) so the
+// leader-multicast reader still applies. Placement only: every core runs the same (head, v-block) scan, so the
+// output is bit-identical to the row-major fallback. Where 1 x NV segments fit (TP=4, TP=1) nothing changes.
+bool gdn_scan_mcast_2d_env_enabled() {
+    static const bool enabled = [] {
+        const char* e = std::getenv("TT_GDN_SCAN_MCAST_2D");
+        return e == nullptr || e[0] != '0';
+    }();
+    return enabled;
+}
+
+// TT_GDN_PREP_PREFETCH=1: the prep reader runs one work-item ahead (issue (head, chunk) i+1's
+// q/k/v/g/beta reads while the compute consumes i) instead of stalling on every DRAM read. Needs
+// 2-slot input CBs; off => today's synchronous reader and today's 1-slot CBs, bit for bit.
+bool gdn_prep_prefetch_env_enabled() {
+    static const bool enabled = [] {
+        const char* e = std::getenv("TT_GDN_PREP_PREFETCH");
+        return e != nullptr && e[0] == '1';
+    }();
+    return enabled;
+}
 
 ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, bool force_serial) {
     const uint32_t ncores = grid.x * grid.y;
@@ -180,6 +229,95 @@ ScanWorkDist distribute_scan(CoreCoord grid, uint32_t BH, uint32_t Vt, bool forc
     return d;
 }
 
+// Leader-multicast placement (TT_GDN_SCAN_MCAST=1). Returns mcast == false (and no cores) when it does
+// not apply; the caller then falls back to distribute_scan.
+ScanWorkDist distribute_scan_leader_mcast(
+    CoreCoord grid, uint32_t BH, uint32_t Vt, bool force_serial, IDevice* device) {
+    const uint32_t ncores = grid.x * grid.y;
+    TT_FATAL(BH <= ncores, "num_heads {} exceeds compute cores {}", BH, ncores);
+    // force_serial (QWEN_GDN_SCAN_SERIAL=1) forces NV=1, which never multicasts (=> distribute_scan).
+    uint32_t NV = 1;
+    for (uint32_t cand = force_serial ? 1u : Vt; cand >= 1; cand--) {  // cand==1 always satisfies
+        if (Vt % cand == 0 && BH * cand <= ncores) {
+            NV = cand;
+            break;
+        }
+    }
+    ScanWorkDist d;
+    d.NV = NV;
+    d.Vtl = Vt / NV;
+    const uint32_t total = BH * NV;
+    // Each group a contiguous gw x gh rectangle (gw * gh == NV; gh = 1, i.e. a 1 x NV row segment,
+    // whenever that fits), heads_per_row = grid.x / gw groups per row -- a tight NoC rectangle on
+    // Blackhole's translated coords.
+    uint32_t gw = NV, gh = 1;
+    auto groups_fit = [&](uint32_t w, uint32_t hgt) {
+        const uint32_t per_row = grid.x / w;
+        return per_row > 0 && ((BH + per_row - 1) / per_row) * hgt <= grid.y;
+    };
+    bool fits = NV > 1 && groups_fit(gw, gh);
+    if (NV > 1 && !fits && gdn_scan_mcast_2d_env_enabled()) {
+        for (uint32_t cand_h = 2; cand_h <= NV && !fits; cand_h++) {
+            if (NV % cand_h == 0 && groups_fit(NV / cand_h, cand_h)) {
+                gw = NV / cand_h;
+                gh = cand_h;
+                fits = true;
+            }
+        }
+    }
+    if (!fits || device == nullptr) {
+        return d;  // mcast == false
+    }
+    const uint32_t heads_per_row = grid.x / gw;
+    const CoreCoord full_grid = device->logical_grid_size();
+    d.cores.reserve(total);
+    d.head.reserve(total);
+    d.vblk.reserve(total);
+    std::set<CoreRange> crs;
+    for (uint32_t i = 0; i < total; i++) {
+        const uint32_t h = i / NV, v = i % NV;
+        const CoreCoord core{(h % heads_per_row) * gw + v % gw, (h / heads_per_row) * gh + v / gw};
+        d.cores.push_back(core);
+        d.head.push_back(h);
+        d.vblk.push_back(v);
+        crs.insert(CoreRange{core, core});
+    }
+    d.leader_phys.resize(total);
+    d.rect_start.resize(total);
+    d.rect_end.resize(total);
+    for (uint32_t h = 0; h < BH; h++) {
+        uint32_t min_x = UINT32_MAX, min_y = UINT32_MAX, max_x = 0, max_y = 0;
+        for (uint32_t v = 0; v < NV; v++) {
+            const CoreCoord p = device->worker_core_from_logical_core(d.cores[h * NV + v]);
+            min_x = std::min<uint32_t>(min_x, p.x);
+            max_x = std::max<uint32_t>(max_x, p.x);
+            min_y = std::min<uint32_t>(min_y, p.y);
+            max_y = std::max<uint32_t>(max_y, p.y);
+        }
+        uint32_t inside = 0;
+        for (uint32_t y = 0; y < full_grid.y; y++) {
+            for (uint32_t x = 0; x < full_grid.x; x++) {
+                const CoreCoord p = device->worker_core_from_logical_core(CoreCoord{x, y});
+                if (p.x >= min_x && p.x <= max_x && p.y >= min_y && p.y <= max_y) {
+                    inside++;
+                }
+            }
+        }
+        if (inside != NV) {
+            return ScanWorkDist{};  // not a tight rectangle: multicast would corrupt a non-member core
+        }
+        const CoreCoord leader = device->worker_core_from_logical_core(d.cores[h * NV + (h % NV)]);
+        for (uint32_t v = 0; v < NV; v++) {
+            d.leader_phys[h * NV + v] = leader;
+            d.rect_start[h * NV + v] = CoreCoord{min_x, min_y};
+            d.rect_end[h * NV + v] = CoreCoord{max_x, max_y};
+        }
+    }
+    d.mcast = true;
+    d.core_set = CoreRangeSet{crs};
+    return d;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -210,6 +348,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const CoreRangeSet& cores = dist.core_set;
     const uint32_t n_used = static_cast<uint32_t>(dist.cores.size());
 
+    const bool prep_prefetch = gdn_prep_prefetch_env_enabled();
+    if (prep_prefetch) {
+        log_info(
+            tt::LogOp,
+            "GDN prep reader prefetch: ENABLED (2-slot q/k/v/g/beta; BH={}, NC={}, cores={})",
+            BH,
+            NC,
+            n_used);
+    }
+
     ProgramDescriptor desc;
     auto add_cb = [&](uint32_t idx, uint32_t n_tiles, uint32_t nbuf = 1, tt::DataFormat fmt = tt::DataFormat::Float32) {
         const uint32_t ts = tt::tile_size(fmt);
@@ -222,11 +370,23 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
 
     // Allocate the full CB set in the SAME order/sizes as the monolithic op, so the prep phase's
     // L1 layout is byte-identical (the Horner's matmul L1 access pattern is layout-sensitive).
-    add_cb(pcb::q, ck, 1, df_io);
-    add_cb(pcb::k, ck, 1, df_io);
-    add_cb(pcb::v, cv, 1, df_io);
-    add_cb(pcb::g, Ct);
-    add_cb(pcb::beta, Ct);
+    // g/beta may arrive bf16 (QWEN36_GDN_GB_BF16) instead of fp32; the CB format follows the input.
+    // The tile COUNT is scaled so the CB's byte size is unchanged (Ct fp32 tiles == 2*Ct bf16 tiles),
+    // which keeps every later CB at exactly the L1 address it has today — see the note above about
+    // holding the prep L1 layout byte-identical to the monolithic op's.
+    const tt::DataFormat df_gb = attrs.gb_bf16 ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
+    const uint32_t gb_tiles = Ct * (tt::tile_size(tt::DataFormat::Float32) / tt::tile_size(df_gb));
+    // The prefetching reader (TT_GDN_PREP_PREFETCH=1) needs 2 slots in the five per-work-item input
+    // CBs so it can fill item i+1 while the compute drains i; the compute pops each of them exactly
+    // once per item, so the ping-pong stays aligned. NOTE: this shifts the L1 addresses of every CB
+    // allocated below, which the byte-identical-layout note above warns is perf-sensitive (values are
+    // unaffected). Unset env => nbuf 1 and the exact layout/behaviour of today.
+    const uint32_t in_nbuf = prep_prefetch ? 2 : 1;
+    add_cb(pcb::q, ck, in_nbuf, df_io);
+    add_cb(pcb::k, ck, in_nbuf, df_io);
+    add_cb(pcb::v, cv, in_nbuf, df_io);
+    add_cb(pcb::g, gb_tiles, in_nbuf, df_gb);
+    add_cb(pcb::beta, gb_tiles, in_nbuf, df_gb);
     add_cb(pcb::eye, cc);
     add_cb(pcb::tril, cc);
     add_cb(pcb::ones, cc);
@@ -285,6 +445,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = cores;
     reader.compile_time_args = reader_ct;
+    if (prep_prefetch) {
+        reader.defines = KernelDescriptor::Defines{{"GDN_PREP_PREFETCH", "1"}};
+    }
     reader.config = ReaderConfigDescriptor{};
     reader.runtime_args.reserve(n_used);
 
@@ -384,7 +547,26 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
 
     auto* device = in.v_beta.device();
     // Value-parallel fan-out: each core runs one (head, v-block) sequential scan.
-    auto sdist = distribute_scan(device->compute_with_storage_grid_size(), BH, Vt_full, attrs.force_serial);
+    // Leader-multicast placement under TT_GDN_SCAN_MCAST=1 when it applies; otherwise the row-aligned
+    // placement with the use_mcast sender/receiver reader (see distribute_scan).
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    ScanWorkDist sdist;
+    if (gdn_scan_mcast_env_enabled()) {
+        sdist = distribute_scan_leader_mcast(grid, BH, Vt_full, attrs.force_serial, device);
+    }
+    const bool mcast = sdist.mcast;  // leader-multicast mode (reader_chunk_gdn_scan_mcast.cpp)
+    if (!mcast) {
+        sdist = distribute_scan(grid, BH, Vt_full, attrs.force_serial);
+    }
+    if (gdn_scan_mcast_env_enabled()) {
+        log_info(
+            tt::LogOp,
+            "GDN scan leader-mcast: {} (BH={}, NV={}, cores={})",
+            mcast ? "ENABLED" : "not applicable (row-aligned placement)",
+            BH,
+            sdist.NV,
+            sdist.cores.size());
+    }
     const CoreRangeSet& cores = sdist.core_set;
     const uint32_t Vt = sdist.Vtl;  // per-core V-block width; CBs/compute use this
     const uint32_t n_used = static_cast<uint32_t>(sdist.cores.size());
@@ -404,14 +586,16 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1.
-    add_cb(pcb::u, cv, 1);  // v_beta
-    add_cb(pcb::w, ck, 1);  // kd
-    add_cb(pcb::qdecay, ck, 1);
-    add_cb(pcb::intra, cc, 1);
-    add_cb(pcb::kdec_t, kc, 1);
-    add_cb(pcb::dl, 1, 1);
-    add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
+    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1; the shared
+    // (V-independent) CBs get 2 slots in leader-mcast mode so the leader can stage step c+1 during step c.
+    const uint32_t nbuf_sh = mcast ? 2u : 1u;
+    add_cb(pcb::u, cv, nbuf_sh);  // v_beta (2 slots in leader-mcast mode so the reader can prefetch step c+1)
+    add_cb(pcb::w, ck, nbuf_sh);  // kd
+    add_cb(pcb::qdecay, ck, nbuf_sh);
+    add_cb(pcb::intra, cc, nbuf_sh);
+    add_cb(pcb::kdec_t, kc, nbuf_sh);
+    add_cb(pcb::dl, 1, nbuf_sh);
+    add_cb(pcb::Tinv, cc, nbuf_sh);  // t_inv (WY inverse)
     // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
     add_cb(pcb::S, kv);
     add_cb(pcb::s2, kv);
@@ -431,7 +615,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     // once and multicasts into the sibling cores' CBs — the siblings would otherwise re-read
     // identical DRAM pages (NV-fold read amplification). Needs NV >= 2 to have anyone to share
     // with; NV == 1 keeps the plain reader on every core (today's behavior, bit-exact either way).
-    const bool do_mcast = attrs.use_mcast && sdist.NV > 1;
+    // Not used in leader-multicast mode, which has its own reader and handshake.
+    const bool do_mcast = !mcast && attrs.use_mcast && sdist.NV > 1;
 
     CoreRangeSet sender_set, receiver_set;
     if (do_mcast) {
@@ -485,13 +670,33 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
 
-    // Plain reader (no mcast) or mcast sender — the full accessor set either way.
+    // Leader-mcast handshake semaphores (ids = push order): 0 sender counter (on the leader), 1 receiver flag,
+    // 2 constant VALID relayed by the leader.
+    constexpr uint32_t sem_sender = 0, sem_receiver = 1, sem_valid = 2;
+    if (mcast) {
+        for (auto [id, init] :
+             {std::pair<uint32_t, uint32_t>{sem_sender, INVALID},
+              std::pair<uint32_t, uint32_t>{sem_receiver, INVALID},
+              std::pair<uint32_t, uint32_t>{sem_valid, VALID}}) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = init});
+        }
+    }
+
+    // Plain reader (no mcast), use_mcast sender (full accessor set either way), or the leader-mcast reader.
     KernelDescriptor reader;
-    reader.kernel_source = kdir + "dataflow/reader_chunk_gdn_scan.cpp";
+    reader.kernel_source =
+        kdir + (mcast ? "dataflow/reader_chunk_gdn_scan_mcast.cpp" : "dataflow/reader_chunk_gdn_scan.cpp");
     reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = do_mcast ? sender_set : cores;
     reader.compile_time_args = reader_ct;
-    if (do_mcast) {
+    if (mcast) {
+        std::map<std::string, std::string> rdefs = {
+            {"GDN_SCAN_SEM_SENDER", std::to_string(sem_sender)},
+            {"GDN_SCAN_SEM_RECEIVER", std::to_string(sem_receiver)},
+            {"GDN_SCAN_SEM_VALID", std::to_string(sem_valid)}};
+        reader.defines = KernelDescriptor::Defines(rdefs.begin(), rdefs.end());
+    } else if (do_mcast) {
         reader.defines = {{"GDN_MCAST_SENDER", "1"}};
     }
     reader.config = ReaderConfigDescriptor{};
@@ -539,7 +744,30 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
         const auto& core = sdist.cores[i];
         const uint32_t h = sdist.head[i];
         const uint32_t vb = sdist.vblk[i];
-        if (!do_mcast) {
+        if (mcast) {
+            const bool is_leader = (vb == (h % sdist.NV));
+            reader.emplace_runtime_args(
+                core,
+                {h,
+                 vb,
+                 NC,
+                 vb_buf,
+                 kd_buf,
+                 qd_buf,
+                 it_buf,
+                 kdec_buf,
+                 dl_buf,
+                 ti_buf,
+                 s0_buf,
+                 static_cast<uint32_t>(is_leader),
+                 static_cast<uint32_t>(sdist.leader_phys[i].x),
+                 static_cast<uint32_t>(sdist.leader_phys[i].y),
+                 static_cast<uint32_t>(sdist.rect_start[i].x),
+                 static_cast<uint32_t>(sdist.rect_start[i].y),
+                 static_cast<uint32_t>(sdist.rect_end[i].x),
+                 static_cast<uint32_t>(sdist.rect_end[i].y),
+                 sdist.NV - 1});
+        } else if (!do_mcast) {
             reader.emplace_runtime_args(
                 core, {h, vb, NC, vb_buf, kd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf, s0_buf});
         } else if (vb == 0) {

@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/debug/assert.h"
 #include <vector>
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
@@ -61,8 +62,13 @@ void kernel_main() {
     // before page_table lookup. Value is in TILE rows (= cache_position_modulo /
     // TILE_HEIGHT). Validated to be a multiple of block_size_t at op level.
     constexpr uint32_t capacity_t = get_compile_time_arg_val(36);
+    // Speculative multi-position mode: Tg candidates share one batch row (PNHt == Tg) and the
+    // scan range is driven by the LAST (largest) entry of this batch row's GROUP of Tg bounds,
+    // i.e. cur_pos[cur_batch*Tg + Tg-1], rather than by cur_pos[cur_batch]. 0 = off.
+    constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(37);
+    constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
-    constexpr auto q_args = TensorAccessorArgs<37>();
+    constexpr auto q_args = TensorAccessorArgs<38>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -148,7 +154,25 @@ void kernel_main() {
             cb_writer.push_back(1);
             cb_compute.push_back(1);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-            cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
+            // Spec mode: cur_pos holds B*Tg bounds, one GROUP of Tg per batch row. This core's
+            // group occupies [cur_batch*Tg, cur_batch*Tg + Tg), so the KV scan range is set by
+            // that group's largest bound (positions are ascending within a group). Per-row
+            // bounds are applied later, by the mask.
+            if constexpr (spec_multi_pos) {
+                cur_pos = index_ptr[cur_batch * spec_multi_pos_T + (spec_multi_pos_T - 1)];
+#if ASSERT_ENABLED
+                // The reader derives the group's KV scan range from the group's LAST entry and skips
+                // k-chunks that end before its FIRST, so a non-ascending group silently drops KV; this
+                // is the on-device half of a contract validate cannot see, because in spec mode the
+                // positions live in cur_pos_tensor and are only ever read here, on device.
+                const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
+                for (uint32_t j = 0; j + 1 < spec_multi_pos_T; ++j) {
+                    ASSERT(index_ptr[spec_pos_base + j] <= index_ptr[spec_pos_base + j + 1]);
+                }
+#endif
+            } else {
+                cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
+            }
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped

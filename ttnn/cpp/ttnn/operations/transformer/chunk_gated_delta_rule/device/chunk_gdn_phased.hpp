@@ -46,6 +46,10 @@ struct ChunkGdnPrepParams {
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
     float scale = 1.0f;
+    // QWEN36_GDN_GB_BF16: g/beta arrive BFLOAT16 instead of FLOAT32 (the caller's g/beta are bf16, so
+    // the fp32 form was a lossless widening). Mirrors g.dtype(); kept as an attribute so it is part
+    // of the program-cache key and drives the cb_g/cb_beta format in the program factory.
+    bool gb_bf16 = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

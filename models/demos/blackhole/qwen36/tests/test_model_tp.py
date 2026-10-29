@@ -19,6 +19,7 @@ Run:
   MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
     pytest -svq models/demos/blackhole/qwen36/tests/test_model_tp.py
 """
+
 import math
 
 import pytest
@@ -201,6 +202,20 @@ def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
     kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
 
+    # PD prefill node (TP=1 only): bind the export mirror BEFORE the traces are captured, as
+    # warmup_kv_transfer does on the p1d1 producer, so every masked-bucket prefill below also runs
+    # the mirror's fill_cache -- its programs must be warm for EVERY fill width too (a 64-multiple
+    # page_len of an un-traced bucket compiles inside the forward otherwise; laneB review finding 1).
+    mirror = None
+    if mesh_device.get_num_devices() == 1:
+        from models.demos.blackhole.qwen36.tt.kv_transfer import Qwen36KVTransfer
+
+        mirror = Qwen36KVTransfer(model)
+        mirror.warmup_kv_transfer(role="kv_producer", mode="dumpfile", chunk_tokens=2048, slots=[0])
+        assert all(
+            layer.attention._pd_export_k is not None for layer in model.layers if layer.is_full_attention
+        ), "the export mirror did not bind (max_batch_size / chunk / bucket guard)"
+
     # Warmup + park the per-chunk prefill trace.
     model.capture_prefill_trace_chunked(mesh_device, page_table, chunk_size=2048)
 
@@ -223,9 +238,13 @@ def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
     logger.info(f"prefill-warmup no-recompile: program cache before={before} after={after} delta={after - before}")
     assert after == before, (
         f"{after - before} program(s) compiled after the trace was parked -> warmup missed a "
-        f"fill-width-dependent program (add it to _warmup_paged_fill_widths); at request time this "
-        f"clobbers the parked trace (hang)."
+        f"fill-width-dependent program (add it to _warmup_paged_fill_widths"
+        f"{' or to Qwen36KVTransfer._bind_export_staging' if mirror is not None else ''}); at request "
+        f"time this clobbers the parked trace (hang)."
     )
+    if mirror is not None:
+        assert mirror.request_time_compiles == 0
+        model.set_prefill_chunk_observer(None)
     logger.info("PASSED: masked-bucket warmup pre-compiles every fill width (no post-capture recompile)")
 
 

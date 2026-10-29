@@ -5,6 +5,7 @@ Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 """
+
 import os
 
 import pytest
@@ -238,26 +239,57 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     logger.info(f"PASSED: per-user GDN state (B={B}) worst PCC = {worst:.5f}")
 
 
+def _mixed_parity_remap(B):
+    """A slot permutation with identity rows, same-parity moves AND cross-parity moves (B=8:
+    [2, 1, 7, 0, 4, 6, 3, 5] -> rows 1/4 identity, 0<-2 / 7<-5 same parity, 2<-7 / 3<-0 / 5<-6 / 6<-3 cross).
+    The reverse permutation would make EVERY move cross-parity (i and B-1-i differ in parity for even B), which
+    would leave the plain-gather branch of remap_slots uncovered."""
+    if B == 8:
+        return [2, 1, 7, 0, 4, 6, 3, 5]
+    return [B - 1 - i for i in range(B)]
+
+
+def _retag_packed_parity(tile):
+    """[.., 4, 32, 32] packed conv-history tile(s) re-tagged for the other slot parity: tile rows 2c <-> 2c+1."""
+    lead = tile.shape[:-2]
+    return tile.reshape(*lead, 16, 2, 32).flip(-2).reshape(*lead, 32, 32)
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 @parametrize_batch(batches=(8,))
-def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, request):
-    """Per-slot GDN state edits for vLLM continuous batching: write_slot + remap_slots.
+@pytest.mark.parametrize("fused_conv", [False, True], ids=["composite", "fusedconv"])
+@pytest.mark.parametrize("remap_path", ["slice", "fast"])
+def test_gdn_tp_write_slot_and_remap(
+    mesh_device, B, fused_conv, remap_path, monkeypatch, reset_seeds, ensure_gc, request
+):
+    """Per-slot GDN state edits for vLLM continuous batching: write_slot + remap_slots, in both decode modes
+    (composite conv, and QWEN36_GDN_DECODE_FUSED=2 = fused-conv gdn_decode_step with the packed, parity-tagged
+    conv history -- the PD decode node's M2 mode).
 
     write_slot writes ONE user's B=1 prefill state into a single decode row without disturbing the
-    others — the incremental analogue of assemble_batched_state (which builds the whole batch at
+    others -- the incremental analogue of assemble_batched_state (which builds the whole batch at
     once). remap_slots reindexes the rows on a vLLM batch condense. Validates:
       (a) writing B users one slot at a time (in reverse order, so each write must preserve the
           rows written before it) then ONE batched decode matches B independent B=1 runs, row by row;
-      (b) remap_slots(reverse) makes decode row i carry user (B-1-i)'s state, and the permuted state
-          is exactly the pre-remap rows reindexed (no cross-row contamination).
+      (b) remap_slots(mixed permutation: identity / same-parity / cross-parity moves) makes decode row i
+          carry user remap[i]'s state exactly (rec_state rows reindexed, no cross-row contamination);
+          fused-conv: the packed history row i is the OLD row remap[i] re-tagged to parity i & 1 when the
+          parity changed (bit-exact), and the plain gather (old code path) differs for every cross-parity move;
+      (c) the decode step AFTER the remap: row i's output matches user remap[i]'s next B=1 decode step
+          (this is where a wrong-parity packed row decodes with an empty conv shift register);
+          remap_path "slice" = the slice/concat path (no ctx), "fast" = QWEN36_GDN_REMAP_FAST (a RemapCtx: moved rows
+          only, device-side parity re-tag; the TP=2 serving default) -- (b)-(d) must hold for both;
+      (d) fused-conv negative control: re-tagging one cross-parity row to the WRONG parity (what the plain
+          gather left behind) and decoding again breaks that row while every other row still matches.
     """
+    monkeypatch.setenv("QWEN36_GDN_DECODE_FUSED", "2" if fused_conv else "0")
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
     args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
-    logger.info(f"devices={nd} gdn layer={li} B={B}")
+    logger.info(f"devices={nd} gdn layer={li} B={B} fused_conv={fused_conv}")
 
     sd = load_gdn_layer(args.CKPT_DIR, li)
     from models.tt_transformers.tt.ccl import TT_CCL
@@ -266,22 +298,31 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
     tw = load_gdn_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
     T = 128
+    STEPS = 3  # decode steps per user: (a) after write_slot, (c) after the remap, (d) negative control
 
     xp = [torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16) for _ in range(B)]
-    xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+    xd = [[torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)] for _ in range(STEPS)]
 
-    # ---- reference: B independent B=1 prefill(capture_state) + decode ----
-    ref_rows = []
+    def rows_of(out):  # [1, 1, B, dim] mesh output -> list of per-row float vectors
+        t = ttnn.to_torch(out, mesh_composer=comp)
+        return [t[0, 0, i].float() for i in range(t.shape[2])]
+
+    # ---- reference: B independent B=1 prefill(capture_state) + STEPS decode steps ----
+    ref = [[None] * B for _ in range(STEPS)]  # ref[step][user]
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
         g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
-        out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
-        ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        for st in range(STEPS):
+            ref[st][u] = rows_of(g.forward_decode(replicate_to_device(mesh_device, xd[st][u])))[0]
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     gb.reset_state()
+    if fused_conv:
+        # the fused-conv path must really be taken (else this variant is vacuous)
+        assert gb._decode_fused_conv and gb._fuse_ab and getattr(args, "proj_1d_decode", False)
+        assert gb.conv_hist_packed is not None and gb._hist_packed_valid
     for u in reversed(range(B)):  # reverse order: every write must preserve the already-written rows
         gu = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         gu.reset_state()
@@ -289,30 +330,93 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
         gb.write_slot(u, gu.rec_state, list(gu.conv_states))  # consumes gu's rec/conv buffers
         gu.rec_state, gu.conv_states = None, None
 
-    x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
-    out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
-    out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
     thr = get_pcc_threshold(request)
-    pccs = [compute_pcc(ref_rows[u], out_t[0, 0, u].float()) for u in range(B)]
+
+    # (a) one batched decode, row u = user u
+    out_rows = rows_of(gb.forward_decode(replicate_to_device(mesh_device, torch.cat(xd[0], dim=2))))
+    pccs = [compute_pcc(ref[0][u], out_rows[u]) for u in range(B)]
     bad = [(u, p) for u, p in enumerate(pccs) if p < thr]
     assert not bad, f"write_slot users below PCC {thr}: {bad} (min={min(pccs):.5f})"
-    logger.info(f"write_slot (B={B}) worst PCC = {min(pccs):.5f}")
+    logger.info(f"(a) write_slot (B={B}) worst PCC = {min(pccs):.5f}")
 
-    # ---- remap_slots(reverse): row i must become the exact pre-remap row (B-1-i) ----
-    remap = [B - 1 - i for i in range(B)]
-    pre = ttnn.to_torch(gb.rec_state, mesh_composer=comp).float()  # [nd*B?, ...] mesh dim 0 = devices
-    gb.remap_slots(remap)
-    post = ttnn.to_torch(gb.rec_state, mesh_composer=comp).float()
-    # rec_state per device is [B, Nv, Dk, Dv]; mesh-concat stacks devices on dim 0 -> [nd*B, ...].
-    # Compare row i to pre row remap[i] within each device block.
+    # ---- (b) remap_slots(mixed): row i must become the exact pre-remap row remap[i] ----
+    remap = _mixed_parity_remap(B)
+    cross = [i for i in range(B) if remap[i] != i and (remap[i] & 1) != (i & 1)]
+    same = [i for i in range(B) if remap[i] != i and (remap[i] & 1) == (i & 1)]
+    logger.info(
+        f"remap={remap}: identity={[i for i in range(B) if remap[i] == i]} same-parity={same} cross-parity={cross}"
+    )
+    assert cross and same, "remap must exercise both the plain-gather and the parity re-tag branches"
+    comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)  # per-device blocks stacked on dim 0
+    pre = ttnn.to_torch(gb.rec_state, mesh_composer=comp0).float()  # [nd*B, Nv, Dk, Dv]
+    pre_hist = ttnn.to_torch(gb.conv_hist_packed, mesh_composer=comp0).float() if fused_conv else None
+    if remap_path == "fast":
+        from models.demos.blackhole.qwen36.tt.gdn.tp import RemapCtx
+
+        ctx = RemapCtx(mesh_device, remap)
+        try:
+            gb.remap_slots(remap, ctx=ctx)
+        finally:
+            ctx.close()
+    else:
+        gb.remap_slots(remap)
+    post = ttnn.to_torch(gb.rec_state, mesh_composer=comp0).float()
     ndev = pre.shape[0] // B
     max_diff = 0.0
     for d in range(ndev):
         for i in range(B):
             max_diff = max(max_diff, (post[d * B + i] - pre[d * B + remap[i]]).abs().max().item())
     assert max_diff < 1e-3, f"remap_slots rec mismatch: max_diff={max_diff}"
-    logger.info(f"remap_slots (B={B}) exact-permutation max_diff = {max_diff:.2e}")
-    logger.info(f"PASSED: write_slot + remap_slots (B={B})")
+    logger.info(f"(b) remap_slots (B={B}) rec exact-permutation max_diff = {max_diff:.2e}")
+    if fused_conv:
+        post_hist = ttnn.to_torch(gb.conv_hist_packed, mesh_composer=comp0).float()  # [nd*B, Nv, 4, 32, 32]
+        for d in range(ndev):
+            for i in range(B):
+                src = pre_hist[d * B + remap[i]]
+                plain = src  # what a plain gather (old remap_slots) leaves at row i
+                want = _retag_packed_parity(src) if (remap[i] & 1) != (i & 1) else src
+                got = post_hist[d * B + i]
+                assert torch.equal(got, want), f"packed history row {i} (dev {d}) != old row {remap[i]} re-tagged"
+                # the packed row must carry its chunks on ITS parity rows and nothing on the other parity
+                assert got[..., 1 - (i & 1) :: 2, :].abs().max().item() == 0.0, f"row {i}: data on the wrong parity"
+                assert got[..., (i & 1) :: 2, :].abs().max().item() > 0.0, f"row {i}: empty history"
+                if i in cross:  # negative control at the tile level: the plain gather would be a different tensor
+                    assert not torch.equal(
+                        got, plain
+                    ), f"cross-parity row {i}: plain gather == re-tagged (test is vacuous)"
+                    assert plain[..., 1 - (i & 1) :: 2, :].abs().max().item() > 0.0
+        logger.info(
+            f"(b) packed conv history: {len(cross)} cross-parity rows re-tagged bit-exactly, plain gather differs"
+        )
+
+    # ---- (c) decode after the remap: row i continues user remap[i] ----
+    x2 = torch.cat([xd[1][remap[i]] for i in range(B)], dim=2)
+    out_rows = rows_of(gb.forward_decode(replicate_to_device(mesh_device, x2)))
+    pccs = [compute_pcc(ref[1][remap[i]], out_rows[i]) for i in range(B)]
+    bad = [(i, p) for i, p in enumerate(pccs) if p < thr]
+    assert not bad, f"post-remap decode rows below PCC {thr}: {bad} (min={min(pccs):.5f}); cross-parity rows={cross}"
+    logger.info(
+        f"(c) post-remap decode (B={B}) worst PCC = {min(pccs):.5f} "
+        f"(cross-parity rows {[f'{i}:{pccs[i]:.5f}' for i in cross]})"
+    )
+
+    # ---- (d) negative control (fused-conv): a wrong-parity packed row == the old plain gather -> that row breaks ----
+    if fused_conv:
+        v = cross[0]
+        # the correctly tagged tile re-tagged once more == the wrong-parity tile the old plain gather left behind
+        wrong = gb._swap_packed_parity(gb._slice_along(gb.conv_hist_packed, 0, v, v + 1))
+        gb._write_index(gb.conv_hist_packed, wrong, v, dim=0)
+        x3 = torch.cat([xd[2][remap[i]] for i in range(B)], dim=2)
+        out_rows = rows_of(gb.forward_decode(replicate_to_device(mesh_device, x3)))
+        pccs = [compute_pcc(ref[2][remap[i]], out_rows[i]) for i in range(B)]
+        others = [(i, p) for i, p in enumerate(pccs) if i != v and p < thr]
+        assert not others, f"negative control: untouched rows below PCC {thr}: {others}"
+        logger.info(
+            f"(d) negative control: wrong-parity row {v} PCC = {pccs[v]:.5f}, other rows min = "
+            f"{min(p for i, p in enumerate(pccs) if i != v):.5f}"
+        )
+        assert pccs[v] < thr, f"negative control: wrong-parity row {v} still matches (PCC {pccs[v]:.5f} >= {thr})"
+    logger.info(f"PASSED: write_slot + remap_slots (B={B}, {'fused-conv' if fused_conv else 'composite'})")
 
 
 @torch.no_grad()
@@ -554,7 +658,7 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     [64, 512, 2048],
     ids=["OUTER_CHUNK_SIZE64", "OUTER_CHUNK_SIZE512", "OUTER_CHUNK_SIZE2048"],
 )
-def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure_gc):
+def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, monkeypatch, reset_seeds, ensure_gc):
     """GDN prefill out-projection: column-parallel AG+matmul vs the row-parallel matmul+reduce-scatter.
     Runs one forward_prefill with out-AGMM prefill enabled and disabled, and PCCs the two outputs against each other.
 
@@ -573,6 +677,8 @@ def test_gdn_out_agmm_vs_mmrs(mesh_device, OUTER_CHUNK_SIZE, reset_seeds, ensure
     from models.tt_transformers.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device)
+    # Upstream's column-parallel arm is QWEN36_GDN_OUT_MODE=colpar here (the serving default is our agmm arm).
+    monkeypatch.setenv("QWEN36_GDN_OUT_MODE", "colpar")
     tw = load_gdn_weights_tp(mesh_device, sd, args)
     gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
@@ -630,6 +736,7 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
     sd = load_gdn_layer(args.CKPT_DIR, li)
     from models.tt_transformers.tt.ccl import TT_CCL
 
+    monkeypatch.setenv("QWEN36_GDN_OUT_MODE", "colpar")  # upstream's column-parallel arm (see tt/gdn/tp.py)
     gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), TT_CCL(mesh_device))
     assert gdn._out_colpar_prefill, "column-parallel prefill out-proj not active"
     composer = tp_composer(mesh_device)
@@ -668,3 +775,171 @@ def test_gdn_out_agmm_deterministic_under_device_skew(mesh_device, monkeypatch, 
             f"device {late} late: {bad.numel()} output rows differ from the synchronized reference "
             f"(first {bad[:8].tolist()}): the out-projection gather overwrote data the late device still used"
         )
+
+
+def _snapshot_layer_state(gdn, mesh_device):
+    """Host copy of one GDN layer's (rec_state, conv_carry, conv_states)."""
+    comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    return (
+        ttnn.to_torch(gdn.rec_state, mesh_composer=comp),
+        ttnn.to_torch(gdn.conv_carry, mesh_composer=comp) if gdn.conv_carry is not None else None,
+        [ttnn.to_torch(c, mesh_composer=comp) for c in gdn.conv_states] if gdn.conv_states is not None else None,
+    )
+
+
+def _restore_layer_state(gdn, mesh_device, snap):
+    rec, carry, convs = snap
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+
+    def _back(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
+
+    r = _back(rec, gdn.rec_state.dtype)
+    ttnn.copy(r, gdn.rec_state)
+    ttnn.deallocate(r)
+    if carry is not None and gdn.conv_carry is not None:
+        c = _back(carry, gdn.conv_carry.dtype)
+        ttnn.copy(c, gdn.conv_carry)
+        ttnn.deallocate(c)
+    if convs is not None and gdn.conv_states is not None:
+        for j, cs in enumerate(convs):
+            cc = _back(cs, gdn.conv_states[j].dtype)
+            ttnn.copy(cc, gdn.conv_states[j])
+            ttnn.deallocate(cc)
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_chunk_vs_recurrent_attribution(mesh_device, reset_seeds, ensure_gc, request):
+    """Localize the chunk-vs-recurrent divergence that speculative decoding runs into.
+
+    Two facts already established elsewhere:
+      * torch chunk == torch recurrent to >= 0.9999 PCC in exactly the verify regime, including a
+        nonzero carried state (test_gdn_chunk_recurrent_parity, CPU) — so the ALGORITHM is exact;
+      * on device, chunk prefill == step decode over T=128 tokens FROM ZERO STATE
+        (test_gdn_tp_prefill / test_gdn_tp_fused_chunk_prefill).
+
+    Neither covers what verify actually does: a SHORT chunk continuing from a warmed state. A
+    whole-model measurement (tests/test_spec_decode_features.py) shows the two paths' hidden states
+    at cosine 0.93 after a single step from a bit-identical state, which is far too large to be
+    rounding — so the natural suspicion is the carried recurrent/conv state handoff. This narrows it
+    to one GDN layer and three regimes:
+
+        cold  : both paths from zero state over T tokens      (the already-covered case)
+        warm  : both continue from the SAME warmed state      (the verify case)
+        warm1 : ONE real token in a masked bucket             (what verify_forward runs per step)
+
+    MEASURED: all three agree at PCC ~0.99999 (cold 0.999955, warm 0.999991, warm1 0.999965), so
+    the suspicion is wrong — the carried-state handoff is sound and one GDN layer is faithful in
+    exactly the regime verify uses. The model-level gap is instead the COMPOUNDING of per-layer
+    differences of this size: test_spec_decode_tp.py::test_verify_layer_localization measures the
+    hidden PCC decaying 0.999999 (layer 0) -> 0.99990 (layer 31) -> 0.9932 (layer 63) with no jump
+    at any single layer, GDN or attention. Two kernel pairs contribute along the way (the delta-rule
+    scan vs its recurrence, and prefill vs decode SDPA), and 64 residual+RMSNorm stages amplify.
+
+    Consequences, both measured elsewhere rather than assumed:
+      * acceptance barely cares — injecting 30% relative noise into the drafter's hidden costs only
+        ~0.19 committed tokens/iter (tests/mtp_cpu_check.py), and the chunk and recurrent feature
+        sets give the same ceiling;
+      * output text does care — the two paths' greedy trajectories fork within a couple of tokens
+        and the chunk path degenerates into repetition on some prompts, which is why
+        test_spec_decode_align.py pins the base at the recurrent kernel and guards degeneracy.
+
+    This test therefore stands as a regression guard on the per-layer kernels, not as a reproduction
+    of the model-level gap.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    # T must exceed TILE_SIZE (32): at exactly 32 the in-projection takes the decode-sized branch,
+    # which expects a replicated rather than K-sharded activation. verify_forward's real bucket is
+    # 128, so anything above the boundary reproduces the production path.
+    W, T = 128, 64  # warmup tokens, then a short chunk (both 32-multiples for the fused kernel)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} warmup={W} chunk={T}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    gdn = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), tt_ccl)
+    composer = tp_composer(mesh_device)
+
+    warm_x = torch.randn(1, 1, W, args.dim, dtype=torch.bfloat16)
+    x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
+
+    def _chunk_rows(valid_len=None, n=None):
+        out = gdn.forward_prefill(
+            shard_to_device(mesh_device, x, dim=-1), chunk_size=T, valid_len=valid_len, capture_state=True
+        )
+        rows = ttnn.to_torch(out, mesh_composer=composer)[0, 0].float()
+        return rows[: n if n is not None else T]
+
+    def _decode_rows(n):
+        rows = []
+        for t in range(n):
+            ot = gdn.forward_decode(replicate_to_device(mesh_device, x[:, :, t : t + 1, :]))
+            rows.append(ttnn.to_torch(ot, mesh_composer=composer)[0, 0, 0].float())
+        return torch.stack(rows, dim=0)
+
+    results = {}
+
+    # ---- cold: both paths from zero state ----
+    gdn.reset_state()
+    cold_chunk = _chunk_rows()
+    gdn.reset_state()
+    cold_dec = _decode_rows(T)
+    results["cold"] = (cold_chunk, cold_dec)
+
+    # ---- warm: one prefill establishes the state (populating BOTH conv_carry for the chunk path
+    # and conv_states for the decode path), then each path continues from that exact snapshot ----
+    gdn.reset_state()
+    gdn._stable_state = True  # carry the state in place, as the model does during serving
+    ttnn.deallocate(gdn.forward_prefill(shard_to_device(mesh_device, warm_x, dim=-1), chunk_size=W, capture_state=True))
+    snap = _snapshot_layer_state(gdn, mesh_device)
+
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm_chunk = _chunk_rows()
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm_dec = _decode_rows(T)
+    results["warm"] = (warm_chunk, warm_dec)
+
+    # ---- warm1: a single real token in a masked bucket — verify_forward's per-step shape ----
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm1_chunk = _chunk_rows(valid_len=1, n=1)
+    _restore_layer_state(gdn, mesh_device, snap)
+    warm1_dec = _decode_rows(1)
+    results["warm1"] = (warm1_chunk, warm1_dec)
+
+    for label, (chunk_rows, dec_rows) in results.items():
+        n = chunk_rows.shape[0]
+        pcc = compute_pcc(dec_rows, chunk_rows)
+        cos = torch.nn.functional.cosine_similarity(dec_rows, chunk_rows, dim=-1)
+        per_pos = " ".join(f"t{t}={float(cos[t]):.5f}" for t in range(min(n, 4)))
+        logger.info(f"[{label}] chunk-vs-decode PCC={pcc:.6f} cos(min)={float(cos.min()):.6f} [{per_pos}]")
+
+    cold_pcc = compute_pcc(results["cold"][1], results["cold"][0])
+    warm_pcc = compute_pcc(results["warm"][1], results["warm"][0])
+    warm1_pcc = compute_pcc(results["warm1"][1], results["warm1"][0])
+    logger.info(f"ATTRIBUTION: cold={cold_pcc:.6f} warm={warm_pcc:.6f} warm1={warm1_pcc:.6f}")
+    if cold_pcc > 0.99 and warm_pcc < 0.99:
+        logger.error(
+            "chunk and decode agree from ZERO state but not from a CARRIED state -> the defect is "
+            "in the carried recurrent/conv state handoff, not kernel precision"
+        )
+
+    # Measured at ~0.99999 for all three; hold them near that rather than at a loose 0.99, since the
+    # whole point is that a single layer is far more faithful than the 64-layer stack.
+    thr = get_pcc_threshold(request, default=0.9995)
+    assert cold_pcc > thr, f"cold-start chunk vs decode regressed (PCC={cold_pcc:.6f})"
+    # The warm regimes are what speculative decoding depends on, and torch parity says they are
+    # exact; a drop here would be a real carried recurrent/conv state defect.
+    assert warm_pcc > thr, (
+        f"chunk vs decode from a CARRIED state is only PCC={warm_pcc:.6f} (cold-start is "
+        f"{cold_pcc:.6f}, and torch parity for this regime is >= 0.9999) — the carried "
+        "recurrent/conv state handoff regressed"
+    )
+    assert warm1_pcc > thr, (
+        f"a single-token masked chunk from a carried state is only PCC={warm1_pcc:.6f} — this is "
+        "exactly what verify_forward runs per step"
+    )

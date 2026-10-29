@@ -4,7 +4,11 @@
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_program_factory.hpp"
 
 #include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+#include <cstdlib>
+#include <filesystem>
 #include <limits>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -24,6 +28,10 @@ namespace {
 
 // Kimi-K3 supplies four learned causal-convolution taps; one channel block of weights is queued per tap.
 constexpr uint32_t tap_count = 4;
+
+// TILE-input path only: three shift amounts (1, 2, 3 rows back) x three sources (current tile-row, previous
+// tile-row, history tile-row). Built once per core by the reader; see the TILE reader kernel's header.
+constexpr uint32_t shift_tile_count = 9;
 
 }  // namespace
 
@@ -51,6 +59,39 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const uint32_t Ct = Qt + Kt + Vt;
     const uint32_t block_ct = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t num_blocks = Ct / block_ct;
+    // TILE input skips the caller's untilize: the reader moves whole tiles and the compute kernel does the
+    // causal row shift as a matmul against constant 0/1 matrices. Validation already forced history to match.
+    const bool tile_in = in.input.layout() == tt::tt_metal::Layout::TILE;
+    // The TILE kernels implement the single-partition chronology only: with one partition along the sequence
+    // axis, kda_chronology::derive never splits and every rank reads the caller's history, for any actual_start
+    // (exactly what the ROW_MAJOR reader does there). Sequence-parallel (wrapping) execution needs ROW_MAJOR.
+    TT_FATAL(
+        !tile_in ||
+            (attrs.sequence_parallel_axis < device.shape().dims() && device.shape()[attrs.sequence_parallel_axis] == 1),
+        "qkv_causal_conv1d_silu: TILE input supports only a mesh of size 1 along sequence_parallel_axis ({}); use "
+        "ROW_MAJOR input for sequence-parallel execution",
+        attrs.sequence_parallel_axis);
+    // TILE path, several channel blocks: order the work items block-major (work = block * Mt + mt) so a core's
+    // contiguous range walks consecutive tile-rows of ONE channel block and loads that block's four tap weight
+    // blocks once per run instead of once per item (the weights were 2/3 of the op's DRAM reads: 4 * block_ct
+    // tiles per item vs 2 * block_ct activation tiles). Data movement only: every output tile is computed from
+    // the same tiles by the same ops, so the result is bit-identical. TT_KDA_CONV_BLOCK_MAJOR=0 restores the
+    // tile-row-major order. Process-level knob: read once (it is not part of the program hash, so a per-call
+    // read would let an in-process toggle silently reuse a cached program built with the other order).
+    static const bool block_major_env = [] {
+        const char* e = std::getenv("TT_KDA_CONV_BLOCK_MAJOR");
+        return e == nullptr || e[0] != '0';
+    }();
+    const uint32_t block_major = (tile_in && num_blocks > 1 && block_major_env) ? 1u : 0u;
+    // Reader + compute CTAs: the TILE kernels also take the work-item order (the ROW_MAJOR ones never reorder).
+    // Mt is compile-time, so each sequence length builds its own kernels; today only full prefill chunks reach this
+    // op (masked KDA is off), i.e. a fixed set of warmed shapes.
+    const tt::tt_metal::experimental::KernelSpec::CompileTimeArgs conv_cta =
+        tile_in
+            ? tt::tt_metal::experimental::KernelSpec::
+                  CompileTimeArgs{{"block_ct", block_ct}, {"num_blocks", num_blocks}, {"Mt", Mt}, {"block_major", block_major}}
+            : tt::tt_metal::experimental::KernelSpec::CompileTimeArgs{
+                  {"block_ct", block_ct}, {"num_blocks", num_blocks}};
     auto dist = kda_factory_detail::distribute_prep(
         device.compute_with_storage_grid_size(), Mt * num_blocks, std::numeric_limits<uint32_t>::max());
     const auto& cores = dist.core_set;
@@ -61,6 +102,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
 
     const tt::tt_metal::experimental::DFBSpecName act_rm_dfb_name{"act_rm"};
     const tt::tt_metal::experimental::DFBSpecName act_tile_dfb_name{"act_tile"};
+    const tt::tt_metal::experimental::DFBSpecName shift_dfb_name{"shift"};
+    const tt::tt_metal::experimental::DFBSpecName shifted_dfb_name{"shifted"};
     const tt::tt_metal::experimental::DFBSpecName weights_dfb_name{"weights"};
     const tt::tt_metal::experimental::DFBSpecName partial_dfb_name{"partial"};
     const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
@@ -87,26 +130,55 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         };
     };
 
-    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
-        make_dfb(act_rm_dfb_name, 2 * block_ct),
-        make_dfb(act_tile_dfb_name, block_ct),
-        make_dfb(weights_dfb_name, tap_count * block_ct),
-        make_dfb(partial_dfb_name, 2 * block_ct),
-        make_dfb(output_dfb_name, 2 * block_ct),
-    };
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs;
+    if (tile_in) {
+        // act_tile carries 2 * block_ct tiles per work item (previous tile-row then current); double it so
+        // the reader can stay one work item ahead of compute.
+        dfbs = {
+            make_dfb(act_tile_dfb_name, 4 * block_ct),
+            make_dfb(shift_dfb_name, shift_tile_count),
+            make_dfb(shifted_dfb_name, 2 * block_ct),
+            make_dfb(weights_dfb_name, tap_count * block_ct),
+            make_dfb(partial_dfb_name, 2 * block_ct),
+            make_dfb(output_dfb_name, 2 * block_ct),
+        };
+    } else {
+        dfbs = {
+            make_dfb(act_rm_dfb_name, 2 * block_ct),
+            make_dfb(act_tile_dfb_name, block_ct),
+            make_dfb(weights_dfb_name, tap_count * block_ct),
+            make_dfb(partial_dfb_name, 2 * block_ct),
+            make_dfb(output_dfb_name, 2 * block_ct),
+        };
+    }
+
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DFBBinding> reader_dfb_bindings;
+    if (tile_in) {
+        reader_dfb_bindings = {
+            tt::tt_metal::experimental::DFBBinding{
+                act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            tt::tt_metal::experimental::DFBBinding{
+                shift_dfb_name, "shift", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            tt::tt_metal::experimental::DFBBinding{
+                weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+        };
+    } else {
+        reader_dfb_bindings = {
+            tt::tt_metal::experimental::DFBBinding{
+                act_rm_dfb_name, "act_rm", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            tt::tt_metal::experimental::DFBBinding{
+                weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+        };
+    }
 
     tt::tt_metal::experimental::KernelSpec reader{
         .unique_id = reader_kernel_name,
-        .source =
-            "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
-            "reader_qkv_causal_conv1d_silu.cpp",
-        .dfb_bindings =
-            {
-                tt::tt_metal::experimental::DFBBinding{
-                    act_rm_dfb_name, "act_rm", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-            },
+        .source = std::filesystem::path(
+            tile_in ? "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
+                      "reader_qkv_causal_conv1d_silu_tile.cpp"
+                    : "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
+                      "reader_qkv_causal_conv1d_silu.cpp"),
+        .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings =
             {
                 tt::tt_metal::experimental::TensorBinding{input_tensor_name, "input"},
@@ -116,7 +188,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
                 tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args = conv_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
@@ -139,36 +211,74 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::TensorBinding{k_tensor_name, "k"},
                 tt::tt_metal::experimental::TensorBinding{v_tensor_name, "v"},
             },
-        .compile_time_args = {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"num_blocks", num_blocks}},
+        .compile_time_args =
+            {{"Qt", Qt},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"block_ct", block_ct},
+             {"num_blocks", num_blocks},
+             {"Mt", Mt},
+             {"block_major", block_major}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DFBBinding> compute_dfb_bindings;
+    if (tile_in) {
+        compute_dfb_bindings = {
+            tt::tt_metal::experimental::DFBBinding{
+                act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                shift_dfb_name, "shift", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                shifted_dfb_name, "shifted", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            tt::tt_metal::experimental::DFBBinding{
+                shifted_dfb_name, "shifted", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            tt::tt_metal::experimental::DFBBinding{
+                partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+        };
+    } else {
+        compute_dfb_bindings = {
+            tt::tt_metal::experimental::DFBBinding{
+                act_rm_dfb_name, "act_rm", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            tt::tt_metal::experimental::DFBBinding{
+                act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            tt::tt_metal::experimental::DFBBinding{
+                partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+            tt::tt_metal::experimental::DFBBinding{
+                output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+        };
+    }
+
+    // The TILE compute kernel needs wi_start too: only the first tile-row takes its left context from the
+    // history tile (whose carry rows sit at tile rows 0-2), so it picks a different shift matrix.
+    tt::tt_metal::experimental::KernelSpec::RuntimeArgSchema compute_arg_schema{
+        .runtime_arg_names = tile_in ? tt::tt_metal::experimental::Group<std::string>{"wi_start", "wi_count"}
+                                     : tt::tt_metal::experimental::Group<std::string>{"wi_count"}};
+
     tt::tt_metal::experimental::KernelSpec compute{
         .unique_id = compute_kernel_name,
-        .source =
-            "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/"
-            "qkv_causal_conv1d_silu.cpp",
+        .source = std::filesystem::path(
+            tile_in ? "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/"
+                      "qkv_causal_conv1d_silu_tile.cpp"
+                    : "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/"
+                      "qkv_causal_conv1d_silu.cpp"),
         .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
-        .dfb_bindings =
-            {
-                tt::tt_metal::experimental::DFBBinding{
-                    act_rm_dfb_name, "act_rm", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-            },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .compile_time_args = conv_cta,
+        .runtime_arg_schema = std::move(compute_arg_schema),
         .hw_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config),
     };
 
@@ -181,8 +291,15 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
             reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-        tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
+        if (tile_in) {
+            tt::tt_metal::experimental::AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values,
+                core,
+                {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+        } else {
+            tt::tt_metal::experimental::AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
+        }
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {

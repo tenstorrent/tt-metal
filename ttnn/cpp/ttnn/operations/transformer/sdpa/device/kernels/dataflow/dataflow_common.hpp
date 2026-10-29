@@ -252,6 +252,60 @@ FORCE_INLINE void read_q_subblock(
     cb.push_back(sb_tiles);
 }
 
+// Paged K/V chunk read into an already-reserved CB slot (no CB lifecycle: the caller does cb_reserve_back /
+// cb_push_back around it), for the GQA mcast injector which multicasts the slot to its group before pushing.
+// Same tile layout / zero-padding as read_paged_chunk_with_padding.
+template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
+void read_paged_chunk_for_forwarding(
+    const ReaderType& reader,
+    const uint32_t cb_id,
+    const uint32_t dst_addr,
+    const uint32_t cur_head,
+    const uint32_t chunk_start_row,
+    const uint32_t src_rows,
+    const uint32_t src_cols,
+    const uint32_t dst_rows,
+    const uint32_t dst_cols,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold,
+    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
+    const bool transpose = false,
+    const uint32_t skip_src_cols = 0) {
+    Noc noc;
+    const uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
+    const uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
+
+    uint32_t barrier_count = 0;
+    for (uint32_t row = 0; row < src_rows; ++row) {
+        uint32_t write_ptr = dst_addr + row * outer_ptr_stride;
+        const uint32_t virtual_row_num = chunk_start_row + row;
+        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
+            virtual_row_num, cur_head, page_table_ptr);
+        for (uint32_t col = 0; col < src_cols; ++col) {
+            noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = physical_tile_id}, {});
+            physical_tile_id += 1;
+            write_ptr += inner_ptr_stride;
+            if (++barrier_count == barrier_threshold) {
+                noc.async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+        physical_tile_id += skip_src_cols;
+    }
+    // Zero the padding (offsets are relative to the CB write pointer == dst_addr after cb_reserve_back).
+    for (uint32_t row = 0; row < dst_rows; ++row) {
+        for (uint32_t col = 0; col < dst_cols; ++col) {
+            if (row < src_rows && col < src_cols) {
+                continue;
+            }
+            const uint32_t tile_idx = transpose ? col * dst_rows + row : row * dst_cols + col;
+            fill_zeros_async(noc, cb_id, tile_bytes, tile_idx * tile_bytes);
+        }
+    }
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+}
+
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
 void read_paged_chunk_with_padding(
     const ReaderType& reader,
@@ -267,50 +321,25 @@ void read_paged_chunk_with_padding(
     const volatile tt_l1_ptr uint32_t* const page_table_ptr,
     const bool transpose = false,
     const uint32_t skip_src_cols = 0) {
-    Noc noc;
+    // Same tile layout as the forwarding variant (single definition); this one owns the CB lifecycle.
     const uint32_t num_tiles = dst_rows * dst_cols;
     CircularBuffer cb(cb_id);
     cb.reserve_back(num_tiles);
-    const uint32_t base_write_ptr = cb.get_write_ptr();
-
-    // Stride calculation based on transpose flag
-    uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
-    uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
-
-    uint32_t barrier_count = 0;
-    for (uint32_t row = 0; row < src_rows; ++row) {
-        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-        uint32_t virtual_row_num = chunk_start_row + row;
-        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
-            virtual_row_num, cur_head, page_table_ptr);
-
-        for (uint32_t col = 0; col < src_cols; ++col) {
-            noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = physical_tile_id}, {});
-            physical_tile_id += 1;
-            write_ptr += inner_ptr_stride;
-
-            if (++barrier_count == barrier_threshold) {
-                noc.async_read_barrier();
-                barrier_count = 0;
-            }
-        }
-        physical_tile_id += skip_src_cols;  // Skip src cols if needed
-    }
-
-    // Zero out the padding
-    for (uint32_t row = 0; row < dst_rows; ++row) {
-        for (uint32_t col = 0; col < dst_cols; ++col) {
-            if (row < src_rows && col < src_cols) {
-                continue;
-            }
-            uint32_t tile_id = transpose ? col * dst_rows + row : row * dst_cols + col;
-            fill_zeros_async(noc, cb_id, tile_bytes, tile_id * tile_bytes);
-        }
-    }
-    // NOC reads and async_write_zeros use the same completion path on WH/BH but different
-    // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
-    noc.async_read_barrier();
-    noc.write_zeros_l1_barrier();
+    read_paged_chunk_for_forwarding<num_heads, block_size_t, Wt>(
+        reader,
+        cb_id,
+        cb.get_write_ptr(),
+        cur_head,
+        chunk_start_row,
+        src_rows,
+        src_cols,
+        dst_rows,
+        dst_cols,
+        tile_bytes,
+        barrier_threshold,
+        page_table_ptr,
+        transpose,
+        skip_src_cols);
     cb.push_back(num_tiles);
 }
 

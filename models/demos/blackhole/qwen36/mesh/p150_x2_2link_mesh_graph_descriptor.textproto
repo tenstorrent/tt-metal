@@ -1,0 +1,24 @@
+# p150_x2_2link_mesh_graph_descriptor.textproto -- the mesh graph descriptor the qwen3.8-27b-p150x2 package ships for its
+# `tp2` and `tp2-dflash2` profiles (TT_MESH_GRAPH_DESC_PATH): one (1,2) Blackhole mesh over two p150a cards.
+#
+# Why a 2-channel copy of tt_metal/fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto and not the stock
+# p150_x2_mesh_graph_descriptor.textproto (channels count 4):
+#   * `channels.count` is the MINIMUM number of trained ethernet links the control plane requires between the two chips
+#     under the fabric reliability mode vLLM's TT plugin uses by default (STRICT_INIT): tt_metal/fabric/control_plane.cpp
+#     configure_routing_tables_for_fabric_ethernet_channels, `TT_FATAL(connected_eth_cores.size() >= count, "Expected {}
+#     eth links from physical chip {} to physical chip {}")`. It is a floor, not an exact requirement and not a ceiling.
+#   * The number of routing planes the fabric then uses is the number of LIVE links (initialize_dynamic_routing_plane_counts:
+#     min over the mesh row of the live per-direction link counts; the descriptor count is not consulted), and every live
+#     link is assigned to the direction. So with this descriptor a one-cable pair (2 links) boots with 2 planes and a
+#     two-cable pair (4 links) boots with 4 planes; the stock 4-channel descriptor refuses a one-cable pair at mesh open.
+#   * Every validated tp2 / tp2-dflash2 run (P300x2 dev box, chips on two cards, one inter-card cable = 2 links) used a
+#     byte-equivalent 2-channel descriptor (profiles/pd/p3_mgd_1x2_chips12.textproto); this file makes the package ship
+#     what was validated. Evidence: profiles/thatch_adopt/laneG_RESULTS.md.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 2 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

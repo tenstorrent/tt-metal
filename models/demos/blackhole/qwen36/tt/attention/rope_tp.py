@@ -339,14 +339,16 @@ def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
     return result
 
 
-def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
+def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim, memory_config=None):
     """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim].
 
     Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf (replaces manual
     slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
+    memory_config: placement of the intermediates + result (default L1; TP=1 passes DRAM -- the
+    24-head [1,24,2048,256] q is 25 MB, 4x the TP=4 per-device size).
     """
     # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
-    _L1 = ttnn.L1_MEMORY_CONFIG
+    _L1 = ttnn.L1_MEMORY_CONFIG if memory_config is None else memory_config
     hd = x.shape[-1]
     seq_len = x.shape[-2]
     x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim), memory_config=_L1)

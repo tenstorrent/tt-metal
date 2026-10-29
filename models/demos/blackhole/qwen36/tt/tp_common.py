@@ -1,13 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8).
+"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8 / TP=1).
 
-Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
-mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
+Used whenever the TP code path is selected (args.use_tp_path: every multi-device mesh, and a (1,1)
+mesh for the 27B class -- "TP=1 mode"). DRAM-sharded matmul cfgs, prefill progcfgs, mesh
+shard/replicate, FP8 dequant, HF weight reorder for per-device sharding. The fused-collective
+wrappers (all_gather_*_prefill, matmul_reduce_scatter_*) are multi-device only; TP=1 callers use
+`prefill_matmul_plain` (the same matmul on the already-full-K activation, no gather).
 """
+
 import math
+import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -57,15 +63,74 @@ PREFILL_MAX_COLS_PORTABLE = 11
 # from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
 # tenant is the op under test, so it reports a win that the full model has no room for. Any future
 # raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+# TP=1 (27B on one die): every per-device N is 4x TP=4's (MLP gate/up 17408, GDN qkvzab 16480, attn qkv
+# 14336). With the default out_block == per-core block the 2D mcast matmul's CBs at S=2048 come to
+# 2.7-3.3 MB (in0 + in1 + bf16 out + fp32 interm) against a 1.5 MB L1, so the TP=1 entry carries a CB
+# budget: `create_prefill_matmul_program_config` shrinks out_block_h (a divisor of per_core_M) until the
+# estimate fits, which keeps the subblock width and only reduces the reuse height. Entries WITHOUT the
+# key (TP=4/8) are untouched (no out_block kwargs are emitted).
 _PREFILL_TUNING = {
+    1: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4, cb_budget_bytes=1024 * 1024),
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
 }
 
+# Tile byte sizes for the CB estimate (32x32 tiles).
+TILE_BYTES_BF16 = 2048
+TILE_BYTES_FP32 = 4096
+TILE_BYTES_BFP8 = 1088
+TILE_BYTES_BFP4 = 576
+
 
 def prefill_tuning(num_devices):
-    """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values."""
-    return _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
+    """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values.
+
+    TP=1 returns a COPY of its entry carrying `shape_overrides` = tp1_prefill_opt_enabled(), i.e. the
+    QWEN36_TP1_PREFILL_OPT knob resolved ONCE here (model init: model_config._init_tp_config); the matmul config
+    builder and the GDN layer both read that field, never the environment (tp1_prefill_opt)."""
+    tuning = _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
+    if num_devices == 1:
+        tuning = dict(tuning, shape_overrides=tp1_prefill_opt_enabled())
+    return tuning
+
+
+def tp1_prefill_opt_enabled():
+    """QWEN36_TP1_PREFILL_OPT (default on): the TP=1 prefill device-time optimizations (lane A, 2026-09-22): the
+    head-major GDN output relayout (gdn/tp.py `_concat_heads_groups`) and the three per-shape 1D matmul configs
+    (`_TP1_PREFILL_PROGCFG_2048`). =0 restores the pre-tuning TP=1 path byte-for-byte (rollback / A-B switch).
+    Resolved once per model by prefill_tuning(1); TP>1 never reads it. (QWEN36_SDPA_Q_CHUNK is a separate,
+    TP-independent knob.)"""
+    return os.environ.get("QWEN36_TP1_PREFILL_OPT", "1") == "1"
+
+
+def tp1_prefill_opt(args):
+    """The knob as resolved at model init (args.prefill_tuning["shape_overrides"]); False when args has no TP=1 tuning."""
+    tuning = getattr(args, "prefill_tuning", None)
+    return bool(tuning and tuning.get("shape_overrides"))
+
+
+def _prefill_2d_cb_bytes(out_block_h, per_core_N, in0_block_w, weight_tile_bytes):
+    """Static CB footprint of one core of the 2D mcast matmul (matmul_multicore_reuse_mcast_2d_program_factory):
+    in0 = out_block_h x in0_block_w tiles double-buffered (bf16), in1 = in0_block_w x per_core_N (out_block_w ==
+    per_core_N here) double-buffered in the weight dtype, out = out_block bf16, interm = out_block fp32
+    (separate CB under fp32_dest_acc_en)."""
+    in0 = 2 * out_block_h * in0_block_w * TILE_BYTES_BF16
+    in1 = 2 * in0_block_w * per_core_N * weight_tile_bytes
+    out = out_block_h * per_core_N * TILE_BYTES_BF16
+    interm = out_block_h * per_core_N * TILE_BYTES_FP32
+    return in0 + in1 + out + interm
+
+
+def _fit_out_block_h(per_core_M, per_core_N, in0_block_w, out_subblock_h, budget, weight_tile_bytes):
+    """Largest divisor of per_core_M (multiple of out_subblock_h) whose CB estimate fits `budget`; None when
+    the full per_core_M already fits (=> emit no out_block kwargs, i.e. the pre-existing config)."""
+    if _prefill_2d_cb_bytes(per_core_M, per_core_N, in0_block_w, weight_tile_bytes) <= budget:
+        return None
+    for h in range(per_core_M - 1, 0, -1):
+        if per_core_M % h == 0 and h % out_subblock_h == 0:
+            if _prefill_2d_cb_bytes(h, per_core_N, in0_block_w, weight_tile_bytes) <= budget:
+                return h
+    return out_subblock_h
 
 
 def _roundup(a, b):
@@ -134,16 +199,23 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, grid_h=None):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
     Grid is shaped WIDE-first (cols up to `grid_w`, the device worker-grid width — 11 on BH P150, 8 on
     WH): for a fixed core budget a wide-short grid shortens the in0 multicast column and beats a
     tall-narrow one (~2% on this matmul; see test_mlp_matmul_sweep wide1d_* vs forced1d_*). Default
-    grid_w=8 preserves the legacy shaping for callers that don't pass the device width."""
+    grid_w=8 preserves the legacy shaping for callers that don't pass the device width. `grid_h` (the
+    device worker-grid height, 10 on BH P150) makes an over-tall grid fail here with a legible message
+    instead of inside the matmul op (e.g. 110 cores on an 8-wide WH grid would need 14 rows)."""
     cols = min(grid_w, num_cores)
     rows = math.ceil(num_cores / cols)
+    if grid_h is not None and rows > grid_h:
+        raise ValueError(
+            f"1D decode matmul grid for {num_cores} cores needs {cols}x{rows} but the device grid is {grid_w}x{grid_h} "
+            f"(shape m={m} k={k} n={n})"
+        )
     m_tiles = math.ceil(m / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
@@ -211,11 +283,15 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
+def create_prefill_matmul_program_config(
+    m, k, n, grid_size=None, fused_activation=None, tuning=None, weight_tile_bytes=TILE_BYTES_BFP8
+):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+    weight_tile_bytes: in1 tile size for the TP=1 CB-budget estimate (bfp8 default; pass TILE_BYTES_BFP4
+    for the bf4 MLP gate/up weights). Ignored by tunings without `cb_budget_bytes`."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -234,6 +310,14 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
+    # TP=1 only (tunings with cb_budget_bytes): subdivide the output block along M so the CBs fit L1.
+    _out_block = {}
+    _budget = tuning.get("cb_budget_bytes")
+    if _budget:
+        _obh = _fit_out_block_h(per_core_M, per_core_N, in0_block_w, out_subblock_h, _budget, weight_tile_bytes)
+        if _obh is not None:
+            _out_block = dict(out_block_h=_obh, out_block_w=per_core_N)
+
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
@@ -244,6 +328,7 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=False,
+        **_out_block,
     )
 
 
@@ -281,7 +366,59 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
+# TP=1 (27B on one P150 die), per-shape prefill matmul configs for the 2048-token serving chunk, measured with
+# tests/test_prefill_matmul_sweep_tp1_scratch.py (lane A, 2026-09-22; profiles/p1d1_opt/laneA_RESULTS.md). Every entry
+# keeps the generic config's in0_block_w (4) on the HiFi2 bf8 matmuls -- a different K block changes the bf16 result
+# (measured max-abs 0.0078) -- and was verified bit-identical to the generic config on random data; the LoFi MLP
+# matmuls (packer_l1_acc) are bit-identical for any in0_block_w. Key: (M, K, N). Every entry is a
+# MatmulMultiCoreReuseMultiCast1DProgramConfig with mcast_in0 (every core streams its own N slice of the weight instead
+# of one in1 sender per grid column: the weight-heavy wide-N in-projections were bound by the column senders); `grid` is
+# the (cols, rows) the 1D factory may use = ceil(N tiles / per_core_N) cores, and the entry is skipped (generic config)
+# on a device whose worker grid is smaller (`_tp1_override_progcfg`).
+# Measured S=2048 device us, generic -> this (sweep wall us in parentheses; in-model device us in laneA_RESULTS.md 3c):
+#   attn qkv    5120x14336 bf8 HiFi2: 3190 -> 1977 (sweep 3331 -> 2060): 90 cores, per-core N 5 tiles, out block 16x5, bw 4
+#   gdn qkvzab  5120x16480 bf8 HiFi2: 3030 -> 2042 (sweep 3177 -> 2168): 103 cores, per-core N 5, out block 16x5, bw 4
+#   mlp gate/up 5120x17408 bf4 LoFi:  3534 -> 1340 (sweep 3777 -> 1475): 91 cores, per-core N 6, out block 16x6, bw 8,
+#               subblock 1x3. (Best 2D alternative, not shipped: 11x8 grid, per-core 8x50, out block 2x50, sub 2x2,
+#               bw 2: sweep 2183 us.)
+_TP1_PREFILL_PROGCFG_2048 = {
+    # attention fused [q|k|v|gate] in-projection
+    (2048, 5120, 14336): dict(grid=(11, 9), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
+    # GDN fused [qkv|z|a|b] in-projection
+    (2048, 5120, 16480): dict(grid=(11, 10), per_core_N=5, in0_block_w=4, out_block_h=16, sub=(1, 1)),
+    # MLP gate / up (bf4, LoFi, packer_l1_acc)
+    (2048, 5120, 17408): dict(grid=(11, 9), per_core_N=6, in0_block_w=8, out_block_h=16, sub=(1, 3)),
+}
+
+
+def _tp1_override_progcfg(m, k, n, fused_activation, max_cols, max_rows):
+    """The measured TP=1 1D config for (m, k, n), or None (generic path) when there is no entry or the entry's grid does
+    not fit the device (cols > max_cols or rows > max_rows: a differently harvested die / smaller worker grid). The knob
+    itself is checked by the caller (tuning["shape_overrides"])."""
+    spec = _TP1_PREFILL_PROGCFG_2048.get((m, k, n))
+    if spec is None:
+        return None
+    cols, rows = spec["grid"]
+    if cols > max_cols or rows > max_rows:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=spec["in0_block_w"],
+        out_subblock_h=spec["sub"][0],
+        out_subblock_w=spec["sub"][1],
+        out_block_h=spec["out_block_h"],
+        out_block_w=spec["per_core_N"],
+        per_core_M=math.ceil(m / TILE_SIZE),
+        per_core_N=spec["per_core_N"],
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        mcast_in0=True,
+    )
+
+
+def create_prefill_mlp_matmul_program_config(
+    m, k, n, fused_activation=None, max_cols=None, tuning=None, weight_tile_bytes=TILE_BYTES_BFP8
+):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
 
@@ -295,6 +432,14 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
+    if tuning.get("shape_overrides"):
+        # TP=1 with the opt knob on (prefill_tuning(1)): measured per-shape config for the serving chunk, clamped to the
+        # device grid (max_cols = the caller's worker-grid width, rows = the default prefill grid's); other shapes generic.
+        _ov = _tp1_override_progcfg(
+            m, k, n, fused_activation, max_cols=max_cols or PREFILL_MAX_COLS_PORTABLE, max_rows=grid[1]
+        )
+        if _ov is not None:
+            return _ov
     limit = max_cols or grid[0]
     if tuning["widest_cols"]:
         # Cap the width at PREFILL_MAX_COLS_PORTABLE (harvested parts expose 11, not 12) and never
@@ -304,7 +449,49 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     else:
         cols = _best_prefill_cols(n, limit)
     return create_prefill_matmul_program_config(
-        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, tuning=tuning
+        m,
+        k,
+        n,
+        grid_size=(cols, grid[1]),
+        fused_activation=fused_activation,
+        tuning=tuning,
+        weight_tile_bytes=weight_tile_bytes,
+    )
+
+
+def prefill_matmul_plain(
+    x,
+    weight,
+    compute_cfg,
+    args,
+    out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    fused_activation=None,
+    weight_tile_bytes=TILE_BYTES_BFP8,
+):
+    """TP=1 stand-in for the fused all-gather matmuls (all_gather_matmul_prefill / all_gather_then_matmul_prefill).
+
+    On one die the norm keeps its (no-op) all-gather, so `x` already carries the full K: the fused op reduces
+    to ONE 2D matmul of x [.,S,K] by the full [K,N] weight -- the same bf16-in0 x bfp8-weight fp32-accumulating
+    product with no cross-device partial sums (numerically the AGMM math; a different kernel/blocking, so not
+    bit-identical to the TP=4 fused op). Uses the tuned 2D prefill config with the TP=1 CB budget."""
+    S, K = x.shape[-2], x.shape[-1]
+    x4 = ttnn.reshape(x, (1, 1, S, K))
+    pc = create_prefill_mlp_matmul_program_config(
+        S,
+        K,
+        weight.shape[-1],
+        fused_activation=fused_activation,
+        max_cols=getattr(args, "decode_grid_w", 8),
+        tuning=getattr(args, "prefill_tuning", None),
+        weight_tile_bytes=weight_tile_bytes,
+    )
+    return ttnn.linear(
+        x4,
+        weight,
+        compute_kernel_config=compute_cfg,
+        program_config=pc,
+        memory_config=out_memory_config,
+        dtype=ttnn.bfloat16,
     )
 
 
@@ -362,6 +549,188 @@ def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     return pair[idx]
 
 
+def agmm_subblock_h(m_block):
+    """QWEN36_AGMM_SUBH=2: 2x4 output subblocks (8 dest tiles) for the fused all-gather matmuls with dst_full_sync_en (fp32 dest).
+    EXPERIMENT ONLY — measured 2026-09-07: the op accepts it but the kernel produces garbage (PCC 0). Keep unset."""
+    try:
+        sh = int(os.environ.get("QWEN36_AGMM_SUBH", "1") or 1)
+    except ValueError:
+        sh = 1
+    return sh if (sh > 1 and m_block % sh == 0) else 1
+
+
+def agmm_compute_cfg(compute_cfg, role="in"):
+    """QWEN36_AGMM_FIDELITY (default unset = caller's config, HiFi2): "lofi" -> LoFi for every fused all-gather matmul
+    routed through all_gather_matmul_prefill; "lofi_out" -> LoFi only for role="out" (the GDN out-projection). The op is
+    FPU-bound at HiFi2 (2 passes); LoFi is 1 pass. Numerics change -> gate on the 8-layer PCC/KL and the repo test."""
+    mode = os.environ.get("QWEN36_AGMM_FIDELITY", "")
+    lofi = mode == "lofi" or (mode == "lofi_out" and role == "out")
+    full_sync = agmm_subblock_h(4) > 1  # QWEN36_AGMM_SUBH=2 -> 8 fp32 dest tiles
+    if lofi or full_sync:
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi if lofi else compute_cfg.math_fidelity,
+            math_approx_mode=compute_cfg.math_approx_mode,
+            fp32_dest_acc_en=compute_cfg.fp32_dest_acc_en,
+            packer_l1_acc=compute_cfg.packer_l1_acc,
+            dst_full_sync_en=full_sync,
+        )
+    return compute_cfg
+
+
+_AGMM_PERSISTENT = {}
+_AGMM_BARRIER_TENSORS = {}
+
+
+def _agmm_persistent_mode():
+    return os.environ.get("QWEN36_AGMM_PERSISTENT", "0") == "1"
+
+
+def _agmm_barrier_mode():
+    """QWEN36_AGMM_BARRIER: 0/unset off; 1 = Python-side entry barrier (a 1-tile all_gather_async with barrier_semaphore
+    before every fused all-gather matmul); 2 = pass barrier_semaphore INTO all_gather_minimal_matmul_async (in-kernel
+    entry barrier; needs the factory/kernel support from profiles/agmm_inkernel_barrier.patch, otherwise it is a no-op).
+    """
+    try:
+        return int(os.environ.get("QWEN36_AGMM_BARRIER", "0") or 0)
+    except ValueError:
+        return 0
+
+
+def _agmm_barrier_kwargs(tt_ccl, cluster_axis):
+    """Extra kwargs for the fused all-gather matmul call in barrier mode 2."""
+    if _agmm_barrier_mode() == 2:
+        return {"barrier_semaphore": tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis)}
+    return {}
+
+
+def _agmm_persistent_intermediate(x4, tt_ccl, out_memory_config):
+    """Caller-owned all-gather intermediate for all_gather_minimal_matmul_async: [.., S, K_local * ring] in the op's
+    output dtype (bf16 here) / TILE / out_memory_config (matches compute_output_specs slot 0)."""
+    ring = tt_ccl.mesh_device.get_num_devices()
+    shape = (x4.shape[0], x4.shape[1], x4.shape[2], x4.shape[3] * ring)  # x4 is always [1, 1, S, K_local]
+    # Always DRAM: a process-lifetime L1 buffer steals L1 from every later kernel (an L1 one clashed with the
+    # chunk_gdn_prep CBs); the op only needs a TILE buffer of the right shape/dtype for the gather target.
+    key = (id(tt_ccl), tt_ccl.mesh_device.id(), shape)  # per CCL manager AND mesh device (tests reopen devices)
+    t = _AGMM_PERSISTENT.get(key)
+    if t is None:
+        t = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=tt_ccl.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(tt_ccl.mesh_device),
+        )
+        _AGMM_PERSISTENT[key] = t
+    return t
+
+
+def _agmm_pre_barrier(x4, tt_ccl, topology, cluster_axis):
+    """Cross-device entry barrier before a fused all-gather matmul: a 1-tile all_gather_async with a barrier
+    semaphore (every device waits until all peers have entered, i.e. finished the preceding ops)."""
+    key = (id(tt_ccl), tt_ccl.mesh_device.id(), cluster_axis)  # per CCL manager AND mesh device (tests reopen devices)
+    t = _AGMM_BARRIER_TENSORS.get(key)
+    if t is None:
+        logger.info(
+            f"[AGMM] Python entry barrier (QWEN36_AGMM_BARRIER=1) active: topology={topology} axis={cluster_axis}"
+        )
+        t = ttnn.from_torch(
+            torch.zeros((1, 1, TILE_SIZE, TILE_SIZE), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=tt_ccl.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(tt_ccl.mesh_device),
+        )
+        _AGMM_BARRIER_TENSORS[key] = t
+    g = ttnn.experimental.all_gather_async(
+        t,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        num_links=1,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+    )
+    ttnn.deallocate(g)
+
+
+_AG_SEM_POOL = {}
+
+
+def ag_semaphores(tt_ccl, cluster_axis):
+    """Global-semaphore pair for the fused all-gather ops.
+
+    Default (QWEN36_CCL_AG_SEM_POOL unset/0): TT_CCL's rotation, which hands the same pair to every 2nd call.
+    QWEN36_CCL_AG_SEM_POOL=N: a dedicated pool of N fixed-role pairs cycled round-robin, so a pair is reused
+    only every N-th call. Determinism probe for the traced multi-layer prefill: the op resets its two
+    semaphores at kernel end, so a straggling increment from a slower device lands on a pair that the next
+    call already reuses. Created lazily on the first (pre-capture warm) call; global semaphores persist.
+    """
+    try:
+        n = int(os.environ.get("QWEN36_CCL_AG_SEM_POOL", "0") or 0)
+    except ValueError:
+        n = 0
+    if n <= 0:
+        return tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis)
+    key = (id(tt_ccl), tt_ccl.mesh_device.id(), cluster_axis)  # per CCL manager AND mesh device (tests reopen devices)
+    pool = _AG_SEM_POOL.get(key)
+    if pool is None:
+        pool = {
+            "pairs": [
+                [ttnn.create_global_semaphore(tt_ccl.mesh_device, tt_ccl.sub_device_crs, 0) for _ in range(2)]
+                for _ in range(n)
+            ],
+            "idx": 0,
+        }
+        _AG_SEM_POOL[key] = pool
+    pair = pool["pairs"][pool["idx"]]
+    pool["idx"] = (pool["idx"] + 1) % n
+    return list(pair)
+
+
+def _agmm_layout(grid, n_tiles, default_n_block, num_links=2, m_rows=None):
+    """(grid, force_transpose, workers_per_link, n_block) for the fused all-gather matmuls.
+
+    Default (QWEN36_AGMM_LAYOUT unset / "t8x9"): transposed 8x9 grid, 2 links x 4 workers, N over the 9 rows.
+    "nt11x8": untransposed 11x8 grid — in0 (gather) axis = 8 rows = 2 links x 4 workers exactly as before, M 8
+    tiles/core unpadded, N over 11 columns (GDN 129 tiles -> 12/core, 2% padding vs 11%), the 4 fabric muxes stay on
+    the free device row 9; 88 compute cores instead of 72. Measured standalone: GDN in-proj 587 -> 457 us, attention
+    in-proj 603 -> 450 us, PCC identical (see profiles/REPORT.md, Task 2)."""
+    layout = os.environ.get("QWEN36_AGMM_LAYOUT", "t8x9")
+    # The op auto-transposes when M > N (the untransposed orientation needs N >= M), so narrow-N out-projections
+    # (N_local 1280 < S 2048) keep the default layout.
+    if layout == "nt11x8" and (m_rows is None or n_tiles * TILE_SIZE > m_rows):
+        grid = (11, 8)
+        workers = grid[1] // num_links  # in0 axis is grid.y when not transposed
+        per_core = max(1, math.ceil(n_tiles / grid[0]))
+        n_block = ((per_core + 3) // 4) * 4 if default_n_block % 4 == 0 else per_core
+        return grid, False, workers, n_block
+    grid = (8, grid[1])
+    return grid, True, grid[0] // num_links, default_n_block
+
+
+def proj_chunks_mode():
+    """QWEN36_GDN_PROJ_CHUNKS: split the fused in-projection AGMM output into per-consumer tensors.
+
+    0 / unset (DEFAULT) → off: the op writes one wide tensor and the model slices it.
+    1 → on, chunk outputs in DRAM (one memory config serves every chunk; DRAM is what the widest
+        consumer, the GDN `z` gate, requires during chunk-prefill).
+    2 → on, chunk outputs in L1 (perf A/B only — at S=2048 the GDN `z` chunk is 6 MB of L1 and
+        clashes with the chunk_gdn_prep/scan CBs, exactly what the sliced path avoids).
+    """
+    try:
+        return int(os.environ.get("QWEN36_GDN_PROJ_CHUNKS", "0") or 0)
+    except ValueError:
+        return 0
+
+
+def proj_chunks_memcfg(mode):
+    """Output memory config for the chunked in-projection (one config covers ALL chunks)."""
+    return ttnn.L1_MEMORY_CONFIG if mode >= 2 else ttnn.DRAM_MEMORY_CONFIG
+
+
 def all_gather_matmul_prefill(
     x,
     weight,
@@ -373,6 +742,8 @@ def all_gather_matmul_prefill(
     fused_activation=None,
     out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     persistent_output_buffer=None,
+    chunk_sizes=None,
+    role="in",
 ):
     """Fused all-gather(dim=3) + column-parallel matmul for prefill (all_gather_minimal_matmul_async).
 
@@ -380,40 +751,107 @@ def all_gather_matmul_prefill(
     matmuls in one op, replacing a separate all_gather + linear. fused_activation applied per tile
     before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). out_memory_config places the result
     (default DRAM; L1 keeps it resident for downstream slices). persistent_output_buffer: the gather buffer
-    (agmm_gather_buffer); None lets the op allocate one per call."""
+    (agmm_gather_buffer); None -> QWEN36_AGMM_PERSISTENT's process-lifetime buffer if that is on, else the op
+    allocates one per call.
+
+    chunk_sizes: per-consumer output widths in ELEMENTS. When given, the op writes one output tensor
+    per width instead of a single [.,S,N] tensor, and a list is returned in that order — this replaces
+    the caller's post-projection ttnn.slice chain. Every width must be a multiple of TILE_SIZE and they
+    must sum to the weight's N (device op validation:
+    ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/
+    all_gather_minimal_matmul_async_device_operation.cpp:172-205). The matmul blocking depends only on
+    the tile count, so chunked and sliced outputs are bit-identical."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
     # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
     num_links = 2
     grid = (8, grid[1])
-    workers = grid[0] // num_links
+    # Narrow-N out-projections (N_local=1280 -> 5 tiles/core) get an N block no wider than the per-core N and a
+    # subblock that divides it (the op handles partial N blocks either way; measured 401 vs 408 us, kept for clarity).
+    n_tiles = math.ceil(weight.shape[-1] / TILE_SIZE)
+    n_tiles_per_core = max(1, math.ceil(n_tiles / grid[0]))
+    n_block = min(8, n_tiles_per_core)
+    grid, force_transpose, workers, n_block = _agmm_layout(grid, n_tiles, n_block, num_links, m_rows=S)
+    sub_w = max(d for d in (4, 2, 1) if n_block % d == 0)
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
         K_block_size=agmm_k_block_size(K_local),
-        N_block_size=8,
-        subblock_h=1,
-        subblock_w=4,
+        N_block_size=n_block,
+        subblock_h=agmm_subblock_h(4),
+        subblock_w=sub_w,
         compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
     )
+    _chunks = list(chunk_sizes) if chunk_sizes else []
+    compute_cfg = agmm_compute_cfg(compute_cfg, role)
+    # Determinism probes (default off). The op documents that EITHER persistent_output_buffer OR barrier_semaphore is
+    # required (the factory implements neither barrier, so only the persistent gather buffer is available): without one,
+    # a device that runs ahead writes its next call's shard into a peer's gather buffer address before the peer has
+    # allocated it (the peer may still be reading another tensor there). QWEN36_AGMM_PERSISTENT=1 keeps one gather
+    # intermediate per (shape, dtype, memcfg) alive for the process (created on the pre-capture warm call).
+    _persist = persistent_output_buffer
+    if _persist is None and _agmm_persistent_mode():
+        _persist = _agmm_persistent_intermediate(x4, tt_ccl, out_memory_config)
+    if _agmm_barrier_mode() == 1:
+        _agmm_pre_barrier(x4, tt_ccl, topology, cluster_axis)
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
+        persistent_output_buffer=_persist,
+        **_agmm_barrier_kwargs(tt_ccl, cluster_axis),
         config=cfg,
         fused_activation=fused_activation,
         compute_kernel_config=compute_cfg,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        multi_device_global_semaphore=ag_semaphores(tt_ccl, cluster_axis),
         num_links=num_links,
         topology=topology,
         cluster_axis=cluster_axis,
         memory_config=out_memory_config,
         dtype=ttnn.bfloat16,
-        force_transpose=True,
+        force_transpose=force_transpose,
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
-        persistent_output_buffer=persistent_output_buffer,
-    )[0]
+        chunks=len(_chunks) if _chunks else 1,
+        chunk_sizes=_chunks,
+    )
+    # The op strips the gather intermediates, so the return is exactly the chunk outputs
+    # (all_gather_minimal_matmul_async_device_operation.cpp:524-528).
+    return out if _chunks else out[0]
 
+
+def all_gather_then_matmul_prefill(x, weight, tt_ccl, compute_cfg, topology, cluster_axis=1, max_cols=11):
+    """Un-fused alternative to all_gather_matmul_prefill for narrow-N out-projections: plain
+    all_gather_async (2 links) of the K-sharded activation, then the tuned 2D mcast matmul on the full
+    grid with the column-sharded weight. fp32 accumulation inside the matmul; output [1,1,S,N_local]."""
+    S, K_local = x.shape[-2], x.shape[-1]
+    x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    # Cross-device ENTRY BARRIER (default on; QWEN36_AGMM_OUT_AG_BARRIER=0 restores the old un-barriered call).
+    # This was the ONLY prefill collective without one: every other CCL in the layer stack (fused AGMMs via the
+    # Python pre-barrier / in-kernel barrier, matmul_reduce_scatter, tt_all_reduce's reduce_scatter, the norm and
+    # lm_head all-gathers) carries a barrier_semaphore. The gather output here is allocated per call, so without the
+    # barrier a device that runs ahead pushes its shard into the peer's output address while the peer is still
+    # executing the preceding ops (silu*mul / rms_norm of this same out-proj), whose freshly-freed tensors that address
+    # reuses -- the trace replays ops back-to-back, so the write lands mid-op. Root cause of the TP=2 (this path runs
+    # for every TP != 4) run-to-run nondeterministic prefill logits: profiles/pd/p1e_* -- QWEN36_AGMM_BARRIER=0/1/2 and
+    # QWEN36_AGMM_PERSISTENT=1 left T>=2048 8/8 distinct, this barrier alone gives 1/8 at unchanged TTFT.
+    _bar = {}
+    if os.environ.get("QWEN36_AGMM_OUT_AG_BARRIER", "1") != "0":
+        _bar = {"barrier_semaphore": tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis)}
+    xg = ttnn.experimental.all_gather_async(
+        x4,
+        dim=3,
+        multi_device_global_semaphore=ag_semaphores(tt_ccl, cluster_axis),
+        num_links=2,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **_bar,
+    )
+    pc = create_prefill_mlp_matmul_program_config(S, xg.shape[-1], weight.shape[-1], max_cols=max_cols)
+    out = ttnn.linear(
+        xg, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.deallocate(xg)
     return out
 
 
@@ -432,27 +870,43 @@ def all_gather_swiglu_prefill(
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     num_links = 2
     grid = (8, grid[1])
-    workers = grid[0] // num_links
+    # gate|up: N_block counts interleaved tiles (pairs); keep 16 unless the layout override / env sets one.
+    grid, force_transpose, workers, _ = _agmm_layout(
+        grid, math.ceil(weight.shape[-1] / TILE_SIZE), 16, num_links, m_rows=S
+    )
+    # 11x8 layout: N (272 interleaved gate|up tiles) splits 25/core; one 28-wide N block (7% padding) needs M_block 4 to
+    # fit the fp32 intermediate in L1 (M8/N28 overflows). Measured: M8/N16 751 us -> M4/N28 673 us (-10%); M4/N32 697.
+    if grid == (11, 8):
+        m_block = int(os.environ.get("QWEN36_AGMM_MLP_MBLOCK", "4"))
+        n_block = int(os.environ.get("QWEN36_AGMM_MLP_NBLOCK", "28"))
+    else:
+        m_block = int(os.environ.get("QWEN36_AGMM_MLP_MBLOCK", "8"))
+        n_block = int(os.environ.get("QWEN36_AGMM_MLP_NBLOCK", "16"))
     cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=8,
+        M_block_size=m_block,
         K_block_size=agmm_k_block_size(K_local),
-        N_block_size=16,
-        subblock_h=1,
+        N_block_size=n_block,
+        subblock_h=agmm_subblock_h(m_block),
         subblock_w=4,
         compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
     )
+    compute_cfg = agmm_compute_cfg(compute_cfg, "mlp")
+    # Same entry-barrier guard as all_gather_matmul_prefill (mode 1: Python pre-barrier op; mode 2: in-kernel).
+    if _agmm_barrier_mode() == 1:
+        _agmm_pre_barrier(x4, tt_ccl, topology, cluster_axis)
     return ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
+        **_agmm_barrier_kwargs(tt_ccl, cluster_axis),
         config=cfg,
         compute_kernel_config=compute_cfg,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        multi_device_global_semaphore=ag_semaphores(tt_ccl, cluster_axis),
         num_links=num_links,
         topology=topology,
         cluster_axis=cluster_axis,
         memory_config=out_memory_config,
         dtype=ttnn.bfloat16,
-        force_transpose=True,
+        force_transpose=force_transpose,
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
         fuse_swiglu=True,
@@ -596,6 +1050,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
         program_config=pc,
         compute_kernel_config=compute_cfg,
+        dtype=dtype,  # matmul output dtype matches the persistent buffers
     )
     return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

@@ -34,11 +34,17 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         Args:
             input (ttnn.Tensor): Current tokens ``[1, T, Q+K+V]``. Must be an
-                interleaved ROW_MAJOR BFLOAT16 device tensor.
-            history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history.
-                Shape ``[1,3,Q+K+V]``. SP calls supply the predecessor's three-row
-                history separately. The kernel derives when each history is needed
-                from actual_start and its mesh coordinate.
+                interleaved BFLOAT16 device tensor, in either ROW_MAJOR or TILE
+                layout. TILE skips the caller's untilize: the kernels then read
+                whole tiles and apply the causal row shift as a matmul against
+                constant 0/1 shift matrices, which is bit-identical to the
+                ROW_MAJOR gather. TILE requires a mesh of size 1 along
+                ``sequence_parallel_axis`` (no sequence-parallel wrap).
+            history (ttnn.Tensor): Interleaved BFLOAT16 history in the SAME
+                layout as ``input``. Shape ``[1,3,Q+K+V]``. SP calls supply the
+                predecessor's three-row history separately. The kernel derives
+                when each history is needed from actual_start and its mesh
+                coordinate.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
                 TILE-layout BFLOAT16 device tensor.

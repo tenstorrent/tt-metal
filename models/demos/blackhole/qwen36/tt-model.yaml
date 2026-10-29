@@ -1,0 +1,299 @@
+# tt-model.yaml — Qwen/Qwen3.8-27B on TWO p150a cards linked by ethernet (2 Blackhole chips), served through vLLM.
+#   profiles: tp2         (default) plain TP=2 over both chips, up to 32 users, full sampling, 64K context, 622,592-token KV pool
+#             p1d1        prefill chip + decode chip: prefill/decode disaggregation over the chip-to-chip fabric, <= 8 users, 64K context
+#             tp2-dflash2 TP=2 + lossless DFlash2 speculative decoding, 1-4 greedy users, 64K context (gate D passed on TP=2:
+#                         lossless-class identity vs tp2 AND 1.5x per user at <= 2k ISL / 3.7x on code; DFLASH2_FEASIBILITY.md 3.4)
+#   not included: p1d1-dflash2 (the KV connector needs traced-bucket prefill, DFlash2 needs it off; 2-3 weeks of model work)
+#
+#   tt-model package --container models/demos/blackhole/qwen36/tt-model.yaml --out <builds>
+#   tt-model serve   <builds>/qwen3.8-27b-p150x2/tt_kernel_manifest.json [--profile p1d1]
+#   tt-model push    <builds>/qwen3.8-27b-p150x2 --private
+#
+# Design: profiles/p150x2/MANIFEST_DESIGN.md (entry-point dispatch TT_SERVE_LAUNCHER -> pd_container supervisor, device/port
+# mapping, card layout). Every value below is the one the profile was validated and benchmarked with (profiles/p150x2/
+# tp2_env.sh + tp2_serve.sh, tp2_dflash2_serve.sh, p1d1_env.sh + p1d1_serve.sh, 2026-09-21):
+#   * KV cache is bf8 everywhere (QWEN_SDPA_BF8=1 in the common env): 17.0 KB/token/device at TP=2; the pools below do not
+#     fit at bf16.
+#   * tp2 and p1d1 sample on the host (Qwen36ForCausalLM refuses on-device sampling on any mesh but 1x4 / 1x8,
+#     tt/qwen36_vllm.py _validate_device_sampling_request). ONLY tp2-dflash2 carries additional_config.tt.sample_on_device_mode
+#     = decode_only: the plugin's block-output contract requires it (platform.py) and Qwen36DFlashForCausalLM accepts it at
+#     TP=2 when speculation is on (its decode tokens are its own greedy speculative outputs; prefill anchors are host-sampled).
+#     It is a PROFILE key, not a common one, so pd_container never has to drop it.
+#   * tp2-dflash2 speculates on EVERY prompt: the serving class pins tt_adaptive_block_max_prompt_tokens=0 (a plain trace
+#     followed by a spec replay hangs the device), so there is no per-ISL gate. The speed-up fades above ~8k ISL (1.07x at
+#     32k) -- documented on the card (1-4 users, best below ~8k ISL) rather than pretending a knob exists.
+schema: "5.1"
+repo: changh95/qwen3.8-27b-p150x2
+name: qwen3.8-27b-p150x2
+weights:
+  repo: Qwen/Qwen3.8-27B
+  revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0   # refs/main as validated 2026-09-12 (same pin as the p300x2 packages)
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal        # branch qwen36-p150x2 (PD/TP=1 mode + DFlash2 serving merged); pushed to
+                                                                 # tenstorrent/tt-metal before `package` (provenance: built.tt_metal.pushed)
+  code:                                                          # = union of the two p300x2 manifests' allowlists
+    - models/common
+    - models/tt_transformers
+    - models/demos/blackhole/qwen36                              # model, kv_transfer hook, DFlash2 drafter, vllm_bundle, demo, tests
+    - models/demos/qwen3_vl/tt/common.py
+    - models/demos/utils
+    - models/experimental/gated_attention_gated_deltanet
+    - models/perf
+    - models/tt_dit/utils/tensor.py
+    - models/model_trace_region_sizes.yaml
+    - models/model_targets.yaml
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.26.0"}                                    # the validated serving venv; the dispatch relies on 0.26.0 calling
+                                                               # load_general_plugins() before parsing `vllm serve` (arg_utils.py:2733)
+  # vllm-tt-plugin branch pd-disagg (superset of the DFlash2 package's 7ddf2c8): PD connector + FabricSocketTransport + launch
+  # layer + the TT_SERVE_LAUNCHER dispatch / pd_container supervisor, plus the 2026-09-22 p1d1 optimizations (handoff mirror,
+  # claim hold, compact host sampler, torch threads under mpirun, fused-decode defaults, rendezvous wait, pid identity, local cache dump; ab5f7f3, 380 tests). Pinned to the pushed commit.
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: ab5f7f3d795ee519b5d96f41f31cc1e0f635d6a7}
+  extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle    # main_class Qwen36DFlashForCausalLM (tp2-dflash2); the plain
+                                                               # profiles select Qwen36ForCausalLM via TT_MODEL_CLASS_OVERRIDES
+
+serve:                                   # common to every profile; a profile's env MERGES over this (it cannot unset a key)
+  hardware: p150x2
+  mesh_device: P150x2
+  port: 8000                             # bare `docker run` default only; `tt-model serve` publishes 20000+
+  block_size: 64
+  capabilities:
+    tool_parser: qwen3_coder
+    reasoning_parser: qwen3
+  additional_config:
+    tt:
+      l1_small_size: 24576               # no sample_on_device_mode here: tp2 / p1d1 sample on the host (see header)
+  env:
+    ARCH_NAME: blackhole
+    TT_QWEN35_TEXT_VER: qwen36_blackhole
+    QWEN36_SKIP_VISION: "1"
+    QWEN_SDPA_BF8: "1"                   # bf8 paged KV on every profile = every validated run (pd_container passes it to both ranks)
+    VLLM_RPC_TIMEOUT: "900000"
+    VLLM_CONFIGURE_LOGGING: "1"
+    TORCHDYNAMO_DISABLE: "1"
+    HF_HUB_OFFLINE: "1"
+
+serve_profiles:
+  - name: tp2
+    description: Plain TP=2 decode over both chips, up to 32 concurrent users, full sampling support, 64K context.
+    max_model_len: 65536                  # = CTX of every TP=2 artifact (boot, stress, determinism, identity, the benchmark grid)
+    max_num_seqs: 32
+    additional_config:
+      tt:
+        fabric_config: FABRIC_1D
+        trace_region_size: 1073741824
+    args:
+      - [--max-num-batched-tokens, "65536"]
+    env:
+      MESH_DEVICE: P150x2
+      # 2-channel (1,2) descriptor shipped in the model dir (header comment = the argument): channels.count is the MINIMUM
+      # number of trained eth links the control plane accepts under the plugin's default STRICT_INIT (control_plane.cpp
+      # "Expected {} eth links"), and the fabric then uses every live link. So this file boots a one-cable pair (2 links)
+      # AND a two-cable pair (4 links, 4 routing planes); the stock p150_x2 descriptor (count 4) refuses a one-cable pair at
+      # mesh open. Every validated tp2 run used a byte-equivalent 2-channel descriptor (profiles/thatch_adopt/laneG_RESULTS.md).
+      TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto
+      # The plugin registers the checkpoint arch under its TT-prefixed name (platform.py: "TT" + arch, the bundle too), so the
+      # override MUST be keyed on TTQwen3_5ForConditionalGeneration to beat the bundle's DFlash main_class; the raw arch is kept
+      # for the plain lookup path. (Keyed on the raw arch alone, the container resolved Qwen36DFlashForCausalLM: boot 1 of step 3.)
+      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM,Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
+      QWEN36_MTP: "0"                     # explicit: the plain class must not load the MTP drafter head / its paged KV cache
+      QWEN36_MAX_TOKENS_ALL_USERS: "622592"   # bf8 KV pool (9,760 blocks -> vLLM reports 624,640 tokens): 2.76 GiB/die free after the
+                                              # prefill warmup; 786,432 OOMs in the chunk-prefill warmup; 64k prefill + 32-user burst pass
+      TT_CACHE_PATH: /cache/tensors-tp2   # converted weights persist under BOTH consumer versions (docker: last --env wins)
+
+  - name: p1d1
+    description: Prefill on chip 0, decode on chip 1 (TP=1 each), KV handed over the ethernet fabric; up to 8 concurrent decodes, 64K context.
+    max_model_len: 65536                  # = CTX of the validated Phase 3 pair
+    max_num_seqs: 8                       # = D_CONC (decode-node concurrency)
+    additional_config:
+      tt:
+        trace_region_size: 536870912      # no fabric_config: the ranks set FABRIC_2D themselves (pd_fabric_rank open_mesh_device)
+    args:
+      - [--max-num-batched-tokens, "65536"]
+      - --no-enable-prefix-caching
+      - --no-async-scheduling
+    env:
+      TT_SERVE_LAUNCHER: pd_container      # the plugin's general-plugin hook execs the PD supervisor (MANIFEST_DESIGN.md 2.2)
+      MESH_DEVICE: P150                    # per rank (1,1); the rank binding sets TT_VISIBLE_DEVICES / TT_MESH_ID
+      # The plugin registers the checkpoint arch under its TT-prefixed name (platform.py: "TT" + arch, the bundle too), so the
+      # override MUST be keyed on TTQwen3_5ForConditionalGeneration to beat the bundle's DFlash main_class; the raw arch is kept
+      # for the plain lookup path. (Keyed on the raw arch alone, the container resolved Qwen36DFlashForCausalLM: boot 1 of step 3.)
+      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM,Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
+      QWEN36_FORCE_TP_PATH: "1"
+      QWEN36_PREFILL_BUCKET_TRACE: "1"     # required by the KV connector (platform.py:743)
+      QWEN36_MTP: "0"                      # no speculation on either node (spec must be off on the PD decode node)
+      QWEN36_MAX_TOKENS_ALL_USERS: "163840"   # = the decode pool
+      TT_PD_CHIPS: "0,1"                   # p150x2: card A / card B (dev P300x2 box: "0,3" with TT_PD_BOARD=p300x2)
+      TT_PD_CONNS: "2"                     # = trained eth links between the cards (1 or 2); the two-mesh MGD channel count must match
+      TT_PD_P_POOL: "65536"
+      TT_PD_D_POOL: "163840"
+      TT_PD_EXPORT_SLOTS: "1"              # one full-length export slot (2.125 GiB of P DRAM at CTX 65536, bf8) = every validated run
+      TT_PD_LEASE: "30"
+      TT_PD_FABRIC_CLAIM_LEASE_S: "0"      # 0 = 3 x LEASE = 90 s claim lease (claim-gated sends)
+      TT_PD_TAG: ttm
+      TT_PD_GDN_FUSED: "2"                 # decode rank: fused GDN decode + fused conv ("M2"; TPOT 1.3-1.5x vs composite, laneE_RESULTS 5); the prefill rank stays composite
+      TT_PD_ALLOW_FUSED_CONV: "1"          # the connector's fused-conv gate: parity-safe slot remap validated (PHASE2 6.1, laneE_RESULTS 4)
+      TT_PD_SSE_KEEPALIVE: "0"             # proxy sends no SSE keep-alive comments: vllm bench serve 0.26 counts a stream whose first token follows one as FAILED (laneB_RESULTS 1.4)
+      TT_CACHE_PATH: /cache/tensors-tp1
+      TT_METAL_OPERATION_TIMEOUT_SECONDS: "600"
+
+  - name: tp2-dflash2
+    description: TP=2 with lossless DFlash2 speculative decoding (single 4x8 bucket, composite GDN verify), 1-4 concurrent users, greedy output, 64K context.
+    max_model_len: 65536
+    max_num_seqs: 4                       # gdn_spec_step / fused_recurrent core budget at Nv=24 -> B <= 4
+    additional_config:
+      tt:
+        fabric_config: FABRIC_1D
+        trace_region_size: 1073741824
+        sample_on_device_mode: decode_only   # REQUIRED by the plugin's block-output contract (all | decode_only); the DFlash class
+                                             # accepts it at TP=2 when speculation is on (decode tokens = its greedy speculative outputs)
+    args:
+      - [--max-num-batched-tokens, "65536"]
+      - --no-async-scheduling
+    env:
+      MESH_DEVICE: P150x2
+      TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto   # = tp2 (2-channel floor, see there)
+      QWEN36_DRAFTER: dflash2
+      QWEN36_DFLASH_TP: "1"                # the TP drafter (the class default; the replicated oracle is test-only)
+      QWEN36_GDN_SPEC_FUSED: "1"           # fused gdn_spec_step verify: since 4d4935650c5 the op reads the a|b gate pair from two tiles, so Nv=24 (TP=2) runs it
+                                           # (-43 ms/iter vs the composite verify at every ISL; lossless-class, 0 confident mismatches; profiles/thatch_adopt/laneH_RESULTS.md)
+      QWEN36_DFLASH_BLOCK: "8"
+      QWEN36_DFLASH_FOLD_SEED: "1"
+      QWEN36_DFLASH_SERVE_BLOCK: "32"
+      QWEN36_PREFILL_BUCKET_TRACE: "0"     # the class forces it off anyway (eager masked prefill); explicit so the env is self-describing
+      # The drafter is a second checkpoint the single `weights` pointer cannot carry: resolved from the HF cache mounted at /hf, so
+      # run `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4` once before `tt-model serve`.
+      # (The validated run used a local copy of exactly this snapshot: model.safetensors sha256 67fc76d6...)
+      DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
+      QWEN36_MAX_TOKENS_ALL_USERS: "262144"   # 6.05 GiB/die free after warmup with the drafter + verify buffers resident
+      TT_CACHE_PATH: /cache/tensors-tp2
+default_profile: tp2
+
+verify:
+  - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"
+  - "from models.demos.blackhole.qwen36.tt.kv_transfer import Qwen36KVTransfer; assert Qwen36KVTransfer"
+  - "import vllm_tt_plugin.kv_transfer.tt_connector, vllm_tt_plugin.kv_transfer.pd_proxy, vllm_tt_plugin.kv_transfer.launch.pd_fabric_rank, vllm_tt_plugin.kv_transfer.launch.pd_container, vllm_tt_plugin.kv_transfer.launch.dispatch"
+  - "import importlib.metadata as m; eps = {e.name for e in m.entry_points(group='vllm.general_plugins')}; assert 'tt_serve_launcher' in eps, eps"
+  - "import importlib.resources as r; assert r.files('vllm_tt_plugin.kv_transfer.launch').joinpath('data/pd_two_p150_mesh_graph_descriptor.textproto').is_file()"
+  - "import importlib; importlib.import_module('ttnn.distributed.ttrun')"
+  - "from pathlib import Path; assert Path('/opt/openmpi-v5.0.7-ulfm/bin/mpirun').is_file()"
+  - "from pathlib import Path; p = Path('/opt/tt-metal/models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto'); assert p.is_file(); assert 'count: 2' in p.read_text(), p"
+  - "import os, subprocess, sys; os.environ.update(TT_PD_CHIPS='0,1', TT_METAL_CACHE='/tmp/c', TT_CACHE_PATH='/tmp/t'); subprocess.run([sys.executable, '-m', 'vllm_tt_plugin.kv_transfer.launch.pd_container', 'Qwen/Qwen3.8-27B', '--max-model-len', '65536', '--max-num-seqs', '8', '--block-size', '64', '--port', '20000', '--dry-run'], check=True)"
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_batched']"
+  - "import json; m=json.load(open('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json')); assert m['main_class'].endswith(':Qwen36DFlashForCausalLM'), m"
+  - "import vllm.model_executor.models.qwen3_5; import transformers.models.qwen3_5"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/model_trace_region_sizes.yaml').is_file()"
+
+# Rendered by profiles/p150x2/build_cards_p150x2.py render <this file> from profiles/p150x2/CARD_DRAFT.md once the lane
+# benchmarks land; the text below is the pre-benchmark draft (placeholders in {{...}}).
+card:
+  description: |
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served with vLLM on two Tenstorrent p150a cards linked by ethernet (2 Blackhole chips, 32 GB each). One image, three profiles: `tp2` (default, tensor-parallel over both chips), `p1d1` (one chip prefills, the other decodes), `tp2-dflash2` (`tp2` + [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding). Sibling packages for the 4-chip P300x2: [qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2), [qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2).
+  quickstart: |
+    ### Run
+
+    ```bash
+    tt-model pull  changh95/qwen3.8-27b-p150x2 --with-weights
+    tt-model serve changh95/qwen3.8-27b-p150x2                        # tp2 (default)
+    tt-model serve changh95/qwen3.8-27b-p150x2 --profile p1d1
+    tt-model serve changh95/qwen3.8-27b-p150x2 --profile tp2-dflash2  # needs: hf download incoai/Qwen3.8-27B-DFlash2
+    ```
+
+    * OpenAI-compatible API on port 20000, model id `Qwen/Qwen3.8-27B`; streaming, tool calls (`qwen3_coder`) and reasoning content (`qwen3`) work as in vLLM; `"chat_template_kwargs": {"enable_thinking": false}` turns thinking off.
+    * First boot converts the weights (6-8 min); later boots take about 2 min.
+
+    ```bash
+    curl -s http://localhost:20000/v1/chat/completions -H 'Content-Type: application/json' \
+      -d '{"model": "Qwen/Qwen3.8-27B", "messages": [{"role": "user", "content": "Explain KV caching in two sentences."}], "max_tokens": 256}'
+    ```
+
+    ### Profiles at a glance
+
+    | profile | users | context | KV pool | 1 user tok/s | TTFT 128 / 8k / 32k tokens | pick it for |
+    |---|---|---|---|---|---|---|
+    | `tp2` (default) | 32 | 64K | 622K tokens | 17.1 | 0.3 s / 1.9 s / 8.2 s | speed, long prompts, many users, all sampling options |
+    | `p1d1` | 8 | 64K | 164K tokens | 13.7 | 0.3 s / 3.8 s / 16 s | steady per-token latency while long prompts keep arriving (decode never pauses for a prefill) |
+    | `tp2-dflash2` | 4 | 64K | 262K tokens | 40.8 (58 on code) | 0.15 s / 2.1 s / 9.2 s | 1-4 greedy users, code, prompts under ~16k tokens |
+
+    * `tp2` is 1.2x faster per user than `p1d1` at 1 user and has 3.8x the KV pool; `p1d1` keeps TPOT at 71-87 ms at 1-8 users across every prompt length, where `tp2` at 8 users degrades to 146-285 ms once prompts reach 16k-32k tokens. At 8 users on prompts up to 4k tokens `p1d1` is within 4-9% of `tp2`'s aggregate throughput.
+    * `tp2-dflash2` is lossless (greedy trajectory of `tp2` up to bf16 near-ties); its gain fades with prompt length (2.4x at 128 tokens, 1.6x at 8k, 1.2x at 32k) and grows with answer length (3.3-3.4x at 1k-token answers).
+
+    ### Performance
+
+    Method: tt-inference-server `--workflow benchmarks` grid (random prompts of exactly ISL tokens, OSL output tokens, streaming). `t/s` = aggregate output tokens/s, `t/s/u` = per user (= OSL / mean end-to-end latency); TTFT and TPOT are means. Code: SPEED-Bench coding, 80 prompts, thinking off, temperature 0, 1 user. Measured on a P300x2 development box emulating the p150x2 (two chips on different cards over a 2-channel ethernet link), not on a p150a pair.
+
+    #### `tp2`: throughput, t/s (t/s/u)
+
+    | ISL / OSL | 1 user | 2 | 4 | 8 | 16 | 32 |
+    |---|---|---|---|---|---|---|
+    | 128 / 128 | 17 (17.1) | 29 (14.7) | 54 (13.4) | 92 (11.4) | 143 (9.0) | 193 (6.0) |
+    | 1,024 / 128 | 17 (16.7) | 28 (14.1) | 50 (12.6) | 83 (10.4) | 123 (7.7) | 156 (4.9) |
+    | 2,048 / 128 | 16 (16.3) | 27 (13.7) | 48 (11.9) | 75 (9.3) | 107 (6.7) | 131 (4.1) |
+    | 4,096 / 128 | 15 (15.4) | 25 (12.4) | 41 (10.2) | 59 (7.4) | 78 (4.9) | 90 (2.8) |
+    | 8,192 / 128 | 14 (13.9) | 21 (10.5) | 31 (7.8) | 41 (5.1) | 50 (3.1) | 54 (1.7) |
+    | 16,384 / 128 | 11 (11.4) | 16 (7.9) | 21 (5.2) | 25 (3.1) | 28 (1.8) | 29 (0.9) |
+    | 32,768 / 128 | 8 (8.2) | 10 (5.0) | 12 (3.0) | 13 (1.7) | 14 (0.9) | 14 (0.8) @18 |
+    | 128 / 1,024 | 18 (17.6) | 33 (16.6) | 65 (16.1) | 123 (15.4) | 218 (13.6) | 361 (11.3) |
+    | 8,192 / 1,024 | 17 (16.9) | 31 (15.6) | 57 (14.3) | 98 (12.2) | 153 (9.6) | 210 (6.6) |
+
+    `@18`: the KV pool seats 18 prompts of that length.
+
+    #### `tp2`: TTFT ms / TPOT ms
+
+    | ISL / OSL | 1 user | 8 users | 32 users |
+    |---|---|---|---|
+    | 128 / 128 | 316 / 57 | 2,394 / 69 | 10,226 / 87 |
+    | 2,048 / 128 | 610 / 57 | 4,518 / 72 | 19,498 / 93 |
+    | 8,192 / 128 | 1,941 / 57 | 14,217 / 84 | 39,474 / 285 |
+    | 32,768 / 128 | 8,243 / 58 | 40,999 / 285 | - |
+    | 128 / 1,024 | 317 / 57 | 2,379 / 63 | 10,322 / 79 |
+
+    #### `p1d1`: throughput, t/s (t/s/u)
+
+    | ISL / OSL | 1 user | 2 | 4 | 8 |
+    |---|---|---|---|---|
+    | 128 / 128 | 14 (13.7) | 26 (12.8) | 48 (12.2) | 87 (11.0) |
+    | 1,024 / 128 | 13 (12.9) | 24 (12.1) | 44 (11.3) | 76 (10.0) |
+    | 2,048 / 128 | 12 (12.5) | 23 (11.7) | 42 (10.9) | 72 (9.6) |
+    | 4,096 / 128 | 12 (11.5) | 21 (10.7) | 37 (9.8) | 56 (7.6) |
+    | 8,192 / 128 | 10 (9.9) | 17 (8.9) | 26 (7.4) | 29 (4.5) |
+    | 16,384 / 128 | 8 (7.6) | 12 (6.7) | 15 (4.3) | 16 (2.5) |
+    | 32,768 / 128 | 5 (5.0) | 6 (3.8) | 7 (2.6) | - |
+    | 128 / 1,024 | 14 (14.0) | 27 (13.5) | 52 (13.1) | 98 (12.3) |
+    | 8,192 / 1,024 | 13 (13.2) | 25 (12.5) | 46 (11.8) | 79 (10.4) |
+
+    #### `p1d1`: TTFT ms / TPOT ms
+
+    | ISL / OSL | 1 user | 8 users |
+    |---|---|---|
+    | 128 / 128 | 339 / 71 | 628 / 86 |
+    | 2,048 / 128 | 1,161 / 71 | 2,303 / 87 |
+    | 8,192 / 128 | 3,819 / 72 | 18,507 / 79 |
+    | 32,768 / 128 | 16,308 / 74 | - |
+    | 128 / 1,024 | 347 / 71 | 747 / 80 |
+
+    #### `tp2-dflash2` vs `tp2`, 1 user
+
+    | ISL / OSL | `tp2` t/s/u | `tp2-dflash2` t/s/u | speed-up | `tp2-dflash2` TTFT / TPOT ms |
+    |---|---|---|---|---|
+    | 128 / 128 | 17.1 | 40.8 | 2.39x | 152 / 24 |
+    | 2,048 / 128 | 16.3 | 33.6 | 2.06x | 511 / 26 |
+    | 8,192 / 128 | 13.9 | 22.6 | 1.63x | 2,060 / 28 |
+    | 32,768 / 128 | 8.2 | 9.6 | 1.17x | 9,224 / 32 |
+    | 128 / 1,024 | 17.6 | 58.8 | 3.34x | 154 / 17 |
+    | 8,192 / 1,024 | 16.9 | 56.7 | 3.36x | 2,060 / 16 |
+    | code (SPEED-Bench, EOS-terminated) | 16.2 | 58.4 | 3.6x | 194 / 13 |
+
+    * 4 users: 117 vs 54 t/s aggregate at 128/128 (2.2x), 163 vs 65 at 128/1,024 (2.5x), 42 vs 31 at 8k/128 (1.3x); no gain at 32k prompts with 4 users.
+
+    ### Notes
+
+    * Not yet run on real p150a cards: all numbers above come from the P300x2 emulation (two chips on different cards, one ethernet cable = 2 links). `tp2` and `tp2-dflash2` ship a 2-channel mesh descriptor (`models/demos/blackhole/qwen36/mesh/p150_x2_2link_mesh_graph_descriptor.textproto`): the channel count is the minimum number of trained links the fabric requires and it uses every link it finds, so a pair joined by one cable (2 links) or two cables (4 links) both boot. tt-metal's stock `p150_x2` descriptor asks for 4 links and refuses a one-cable pair at start-up (`Expected 4 eth links`). `p1d1` uses a separate two-mesh descriptor whose link count is `TT_PD_CONNS` (default 2 = one cable).
+    * `tp2-dflash2` produces greedy output only and serves at most 4 users; `tp2` and `p1d1` support every vLLM sampling option.
+    * Speculative decoding is not available in `p1d1`.

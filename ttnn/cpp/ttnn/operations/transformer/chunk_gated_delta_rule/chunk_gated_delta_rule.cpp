@@ -46,11 +46,13 @@ ttnn::Tensor head_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint
     return t;
 }
 
-// [B,T,Hn] -> [B*Hn, T], TILE fp32 (permute on TILE, no untilize).
-ttnn::Tensor headvec_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t Hn) {
+// [B,T,Hn] -> [B*Hn, T], TILE `dt` (permute on TILE, no untilize). `dt` is FLOAT32 by default;
+// QWEN36_GDN_GB_BF16 passes BFLOAT16 to keep the caller's bf16 g/beta (see the call site).
+ttnn::Tensor headvec_split_tile(
+    const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t Hn, DataType dt = DataType::FLOAT32) {
     ttnn::Tensor t = x;
-    if (t.dtype() != DataType::FLOAT32) {
-        t = ttnn::typecast(t, DataType::FLOAT32);
+    if (t.dtype() != dt) {
+        t = ttnn::typecast(t, dt);
     }
     t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1});  // [B, Hn, T] TILE
     t = ttnn::reshape(t, ttnn::Shape({B * Hn, T}));             // [BH, T] TILE
@@ -188,14 +190,48 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // Otherwise head-split to [BH,T,V] as usual.
     ttnn::Tensor v = flat_v ? (v_in.dtype() != DataType::BFLOAT16 ? ttnn::typecast(v_in, DataType::BFLOAT16) : v_in)
                             : head_split_tile(v_in, B, T, HV, V);
+    // Phase-split path: prep -> (DRAM hand-off) -> scan. The prep phase does all state-independent
+    // per-chunk work (incl. the WY inverse) fanned across the grid; the scan phase carries the
+    // recurrent state. Same math as the monolithic op. This is the DEFAULT; QWEN_GDN_PHASED=0 falls
+    // back to the single-kernel monolithic op (benchmark/debug only). Read fresh (not static) so a
+    // caller toggling it between calls is honored.
+    const bool phased = [] {
+        const char* e = std::getenv("QWEN_GDN_PHASED");
+        return e == nullptr || e[0] != '0';
+    }();
+
     // Flat q/k/v at chunk 32: the prep reader takes g / beta token-major [B,T,HV] as they are (it picks
-    // the head's column itself), so they skip the head-major relayout.
-    const bool flat_gates = flat_qk && flat_v && C == 32;
+    // the head's column itself), so they skip the head-major relayout. QWEN36_GDN_FLAT_GATES=0 (read
+    // fresh) restores the head-major [BH,NC,C,1] relayout for A/B; both feed the compute identical
+    // column-0 values.
+    const bool flat_gates_env = [] {
+        const char* e = std::getenv("QWEN36_GDN_FLAT_GATES");
+        return e == nullptr || e[0] != '0';
+    }();
+    const bool flat_gates = flat_gates_env && flat_qk && flat_v && C == 32;
     auto as_f32 = [&](const ttnn::Tensor& t) {
         return t.dtype() != DataType::FLOAT32 ? ttnn::typecast(t, DataType::FLOAT32) : t;
     };
-    ttnn::Tensor g = flat_gates ? as_f32(g_in) : headvec_split_tile(g_in, B, T, HV);           // [B*HV, T] TILE
-    ttnn::Tensor beta = flat_gates ? as_f32(beta_in) : headvec_split_tile(beta_in, B, T, HV);  // [B*HV, T] TILE
+
+    // QWEN36_GDN_GB_BF16 (default off): keep g/beta bf16 all the way into the prep kernel instead of
+    // widening to fp32 here. The model's g/beta ARE bf16 (sigmoid/softplus outputs), so the fp32
+    // typecast is a lossless widening that only doubles the bytes the permute and — expensively — the
+    // [BH,T] -> [BH,NC,C,1] column-tile reshape have to move (that reshape is 32x write-amplified:
+    // one padded tile per 32-element column). Halving it saves ~2x14 us/layer/chunk on top of the two
+    // 2 us typecasts. Numerics are unchanged: prep only feeds g/beta into HiFi4 matmuls / column
+    // broadcasts with fp32 dest, and an fp32 operand holding exact bf16 values contributes exactly
+    // the same products (the fp32 low-half passes multiply by zero). Prep only; the monolithic
+    // fallback kernel still wants fp32. Not applied to flat gates (no relayout to shrink; the flat
+    // gate reader wants fp32).
+    const bool gb_bf16_env = [] {
+        const char* e = std::getenv("QWEN36_GDN_GB_BF16");
+        return e != nullptr && e[0] == '1';
+    }();
+    const bool gb_bf16 = gb_bf16_env && phased && !flat_gates && g_in.dtype() == DataType::BFLOAT16 &&
+                         beta_in.dtype() == DataType::BFLOAT16;
+    const DataType gb_dt = gb_bf16 ? DataType::BFLOAT16 : DataType::FLOAT32;
+    ttnn::Tensor g = flat_gates ? as_f32(g_in) : headvec_split_tile(g_in, B, T, HV, gb_dt);           // [B*HV, T] TILE
+    ttnn::Tensor beta = flat_gates ? as_f32(beta_in) : headvec_split_tile(beta_in, B, T, HV, gb_dt);  // [B*HV, T] TILE
 
     // GQA expand q,k from H heads to HV heads (repeat_interleave along head-major dim 0).
     // OPT-A: for flat q/k the reader maps value-head hv -> key-head hk=hv/G at read time, so no expand.
@@ -222,10 +258,10 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     if (!flat_v) {
         v = pad_time_tile(v, BH, V, pad, dev);
     }
-    // g, beta are [BH, T] TILE; pad along dim 1.
-    if (pad > 0) {
-        ttnn::Tensor zc = ttnn::zeros(
-            ttnn::Shape({BH, pad}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+    // g, beta are [BH, T] TILE; pad along dim 1. (Flat gates need pad == 0, asserted below with flat q/k.)
+    if (pad > 0 && !flat_gates) {
+        ttnn::Tensor zc =
+            ttnn::zeros(ttnn::Shape({BH, pad}), gb_dt, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
         g = ttnn::concat(std::vector<ttnn::Tensor>{g, zc}, 1);
         beta = ttnn::concat(std::vector<ttnn::Tensor>{beta, zc}, 1);
     }
@@ -278,16 +314,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
-
-    // Phase-split path: prep -> (DRAM hand-off) -> scan. The prep phase does all state-independent
-    // per-chunk work (incl. the WY inverse) fanned across the grid; the scan phase carries the
-    // recurrent state. Same math as the monolithic op. This is the DEFAULT; QWEN_GDN_PHASED=0 falls
-    // back to the single-kernel monolithic op (benchmark/debug only). Read fresh (not static) so a
-    // caller toggling it between calls is honored.
-    const bool phased = [] {
-        const char* e = std::getenv("QWEN_GDN_PHASED");
-        return e == nullptr || e[0] != '0';
-    }();
 
     ttnn::Tensor o_c;          // [BH, NC, C, V]
     ttnn::Tensor final_state;  // [BH, K, V]

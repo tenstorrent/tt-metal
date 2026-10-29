@@ -304,6 +304,57 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
     cb_mask.push_back(total_read_tiles);
 }
 
+/*
+ * Speculative multi-position causal mask for ONE k-chunk.
+ *
+ * generate_mask() builds the mask for the last chunk from a single scalar cur_pos and then
+ * copy_tile-broadcasts row-tile 0 to every other row-tile, because in the legacy layout all
+ * PNHt row-tiles of a batch row share one causal bound. In spec mode each row-tile j is a
+ * different speculative candidate with its own bound pos_vec[j] — pos_vec being THIS batch
+ * row's group of PNHt bounds, already sliced out of the [B*PNHt] cur_pos vector by the
+ * caller — so there is no broadcast:
+ * every row-tile is generated from its own bound. The mask is still uniform WITHIN a
+ * row-tile (all 32 q-rows of candidate j share bound pos_vec[j]), which is exactly what
+ * fill_tile_partial produces, so that helper is used unchanged.
+ *
+ * chunk_start_pos is the chunk's absolute first KV position (k_chunk * k_chunk_size). For
+ * each (row-tile j, column-tile i) the tile covers absolute positions
+ * [chunk_start_pos + 32*i, chunk_start_pos + 32*i + 31]:
+ *   - bound at or past the tile's last position -> all-zero tile (fully visible)
+ *   - bound before the tile's first position    -> all -inf tile (fully masked)
+ *   - otherwise                                 -> partial cut inside the tile
+ *
+ * Unlike the legacy single-shot mask, this is called once per masked chunk and the compute
+ * kernel POPS the block after applying it (add_block_inplace<true>), so several masked
+ * chunks can be served through the single-buffered mask CB.
+ */
+template <uint32_t cb_mask_in, uint32_t PNHt>
+void generate_mask_spec_multi_pos(uint32_t Sk_chunk_t, uint32_t chunk_start_pos, const uint32_t* pos_vec) {
+    constexpr uint32_t NEG_INF = 0xFF80FF80;
+    constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
+    const uint32_t total_tiles = PNHt * Sk_chunk_t;
+
+    CircularBuffer cb_mask(cb_mask_in);
+    cb_mask.reserve_back(total_tiles);
+
+    for (uint32_t j = 0; j < PNHt; ++j) {
+        const uint32_t bound = pos_vec[j];
+        for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
+            const uint32_t tile_id = j * Sk_chunk_t + i;
+            const uint32_t tile_first_pos = chunk_start_pos + i * 32;
+            if (bound >= tile_first_pos + 31) {
+                fill_tile<tile_bytes>(cb_mask_in, tile_id, 0);
+            } else if (bound < tile_first_pos) {
+                fill_tile<tile_bytes>(cb_mask_in, tile_id, NEG_INF);
+            } else {
+                fill_tile_partial<tile_bytes>(cb_mask_in, tile_id, bound - tile_first_pos, NEG_INF);
+            }
+        }
+    }
+
+    cb_mask.push_back(total_tiles);
+}
+
 template <uint32_t cb_mask_in, uint32_t PNHt>
 void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
     Noc noc;
@@ -479,6 +530,65 @@ uint32_t write_partial_tiles_to_memory(
     }
 
     // We've consumed/written out_chunk_tiles tiles worth of data
+    out_tile_id += out_chunk_tiles;
+    return barrier_count;
+}
+
+// Speculative multi-position mode with num_kv_heads > 1: the output of batch group b is Tg (the
+// writer's PNHt) candidate tiles, and in EVERY candidate tile rows [cur_head*g, (cur_head+1)*g) belong to this
+// kv head (g = num_heads_to_write = spec_q_heads / num_kv_heads, all rows < 32). The rows of one
+// face half are contiguous in L1 and in the output tile (row r of face 0/1 sits at r*16 elements,
+// row r >= 16 of face 2/3 at (r+16)*16), so each (candidate tile, hidden tile, face half, column
+// face) is ONE contiguous write of nrows*16 elements.
+template <uint32_t cb_out, uint32_t ELEMENT_SIZE, uint32_t barrier_threshold, typename WriterType>
+uint32_t write_spec_partial_rows_to_memory(
+    uint32_t& out_tile_id,  // base tile index of this batch group
+    const WriterType& out_writer,
+    uint32_t& barrier_count,
+    uint32_t cur_head,            // kv-head index 0..num_kv_heads-1
+    uint32_t num_heads_to_write,  // q heads per kv head within one candidate tile
+    uint32_t out_chunk_tiles) {   // PNHt * vDHt
+    Noc noc;
+    constexpr uint32_t FACE_HW = 16;
+    constexpr uint32_t FACE_ELEMENT_CNT = FACE_HW * FACE_HW;
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    constexpr uint32_t FACE_LINE_BYTES = FACE_HW * ELEMENT_SIZE;
+    const uint32_t row_lo = cur_head * num_heads_to_write;
+    const uint32_t row_hi = row_lo + num_heads_to_write;  // exclusive, <= 32 (validated on host)
+
+    CircularBuffer cb(cb_out);
+    const uint32_t l1_base_addr = cb.get_read_ptr();
+
+    for (uint32_t tile_index = 0; tile_index < out_chunk_tiles; ++tile_index) {
+        // [candidate row-tile][hidden tile] order, same as the output tensor's tiles of this group
+        for (uint32_t half = 0; half < 2; ++half) {
+            const uint32_t r0 = half == 0 ? row_lo : (row_lo > FACE_HW ? row_lo : FACE_HW);
+            const uint32_t r1 = half == 0 ? (row_hi < FACE_HW ? row_hi : FACE_HW) : row_hi;
+            if (r0 >= r1) {
+                continue;
+            }
+            const uint32_t in_tile_offset = (half == 0 ? r0 : r0 + FACE_HW) * FACE_LINE_BYTES;
+            const uint32_t nbytes = (r1 - r0) * FACE_LINE_BYTES;
+            const uint32_t l1_addr = l1_base_addr + tile_index * tile_bytes + in_tile_offset;
+            const uint32_t dram_tile_id = out_tile_id + tile_index;
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_addr),
+                out_writer,
+                nbytes,
+                {},
+                {.page_id = dram_tile_id, .offset_bytes = in_tile_offset});
+            noc.async_write(
+                CoreLocalMem<uint32_t>(l1_addr + FACE_ELEMENT_CNT * ELEMENT_SIZE),
+                out_writer,
+                nbytes,
+                {},
+                {.page_id = dram_tile_id, .offset_bytes = in_tile_offset + FACE_ELEMENT_CNT * ELEMENT_SIZE});
+            if (++barrier_count == barrier_threshold) {
+                noc.async_writes_flushed();
+                barrier_count = 0;
+            }
+        }
+    }
     out_tile_id += out_chunk_tiles;
     return barrier_count;
 }
