@@ -5076,11 +5076,14 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         else:
             entry = f", entry {choice.entry_ms:.1f} ms" if choice.entry_ms > 0.0 else ""
             members = f" for {len(choice.members)}/{n} rows" if choice.members is not None else ""
+            calib = self._spec_policy.calibration
+            pool = calib.tokens_pool.get(calib._tokens_pool_key(("step", tuple(choice.shape), int(choice.width))))
+            pool_text = f", pool {pool[0]:.2f}/{pool[1]}" if pool and pool[0] is not None else ", pool none"
             logger.info(
                 f"{prefix} adaptive K: {n} rows, cap {cap_text} -> record {choice.shape} S_k={choice.width}{members} "
                 f"({choice.reason}; was {was}{skipped}); EWMA accepted {accepted}, per-position {cond_text}, "
                 f"expected {choice.tokens_per_row:.2f} tokens/row at {choice.cost_ms:.1f} ms "
-                f"({choice.cost_ms / plain_ms:.2f}x plain {plain_ms:.1f}{entry}), gain {choice.gain:.2f}x"
+                f"({choice.cost_ms / plain_ms:.2f}x plain {plain_ms:.1f}{entry}{pool_text}), gain {choice.gain:.2f}x"
             )
         self._spec_policy_logged = (chosen_k, now, 0)
 

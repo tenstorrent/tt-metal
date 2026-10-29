@@ -608,15 +608,18 @@ class ModeStats:
         self.outliers = [0, 0.0]  # count, ms
         self.idle = [0, 0.0]  # count, ms
 
-    def note(self, wall_ms, tokens, clean, table_ms, live_rows, idle=False):
+    def note(self, wall_ms, tokens, clean, table_ms, live_rows, idle=False, uncounted=False):
         """One step: ``wall_ms`` against ``table_ms`` (the warmup table at its position). Every interval with a
-        table calibrates, dirty ones included, except an ``idle`` one (the batch emptied inside it) and a clean
-        one far above the running median (an outlier)."""
+        table calibrates, dirty ones included, except an ``idle`` one (the batch emptied inside it), an
+        ``uncounted`` one (the step right after a reseed: its wall holds the entry the policy charges separately,
+        so it would double the step's cost) and a clean one far above the running median (an outlier)."""
         self.steps += 1
         self.tokens += int(tokens)
         if idle:
             self.idle[0] += 1
             self.idle[1] += float(wall_ms)
+            return False
+        if uncounted:
             return False
         if table_ms is None:
             return False
@@ -736,9 +739,14 @@ class Calibration:
         mode = tuple(mode)
         if idle:
             clean, cause = False, "idle"
+        # the step right after a reseed carries the entry (charged as entry_ms): it is reported, never a cost
+        # sample, else a run of one-step retries measures the mode at reseed + step and declines every next one
+        uncounted = cause == "reseed"
         counted = False
         for table in (self.modes, self.window):
-            counted = table.setdefault(mode, ModeStats()).note(wall_ms, tokens, clean, table_ms, live_rows, idle)
+            counted = table.setdefault(mode, ModeStats()).note(
+                wall_ms, tokens, clean, table_ms, live_rows, idle, uncounted=uncounted
+            )
         if counted and clean:
             # the acceptance pool is steady-state: a dirty step (the one right after a reseed, a switch, a prefill)
             # calibrates the wall but not the tokens per row, else a retry's single first step (reseed + the
