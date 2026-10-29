@@ -835,3 +835,10 @@ NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 969787
   re-checked against the new layout first). B and A gates add L.s56320 + K.1 (layout change). Estimates: attention
   73 -> ~45 ms device a chunk, ~270 op calls fewer, wall -30..-50 ms; risks: untuned M=160 matmuls, small all_to_all
   host cost, +3.8 GiB weights a chip (fits the 8x4 by estimate). The 0.75 ms/layer net is an estimate.
+- 08:00 OWNER: the 2x2 takes the window KV (-> the reference's fp8 width), the index keys (-> fp4 width) and the index
+  query (-> fp4), the way it did the compressed KV. Split while the Galaxy runs C / B / A (P.8-P.10): the 2x2 owns NEW
+  forks / fork options (sparse_sdpa window input at fp8 width, the indexer scoring read of fp4 keys, write ops), codecs,
+  CPU and single-card tests; the Galaxy owns tt/attention.py, tt/sparse_attention.py, tt/compressor.py, tt/indexer.py
+  until P.10 is decided (pushed after each of P.8 / P.9 / P.10); the 2x2 then rebases and integrates behind switches
+  (WINDOW_KV_FORMAT, INDEX_K_FORMAT, INDEX_Q_FORMAT), pushing to dnijemcevic/model_bringup_lowbit; the Galaxy runs the
+  full-size gates (as FIX.8). Ids: 2x2 DS41-150..169 / F220..F229 (F223 used); Galaxy DS41-130..149 / F207..F219.
