@@ -13,36 +13,22 @@ namespace ttnn::operations::binary_backward {
 
 namespace {
 
-constexpr BinaryBackwardKernelSpec kMulBw{
-    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_mul.cpp",
-    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-    .force_fp32_dest_acc = false,
-};
+// String-literal concat keeps paths constexpr; matches binary_ng/ternary utils style.
+#define BW_COMPUTE(file) "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/" file
 
-constexpr BinaryBackwardKernelSpec kAddBw{
-    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_add.cpp",
-    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-    .force_fp32_dest_acc = false,
-};
+using Spec = BinaryBackwardKernelSpec;
 
-constexpr BinaryBackwardKernelSpec kSubBw{
-    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_sub.cpp",
-    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-    .force_fp32_dest_acc = false,
-};
+// 1-input ops: ∂y/∂a, ∂y/∂b are constants (±1); kernel reads grad only (see program factory).
+constexpr Spec kAddBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_add.cpp"), .num_input_tensors = 1};
+constexpr Spec kSubBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_sub.cpp"), .num_input_tensors = 1};
+constexpr Spec kRsubBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_rsub.cpp"), .num_input_tensors = 1};
 
-constexpr BinaryBackwardKernelSpec kRsubBw{
-    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_rsub.cpp",
-    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-    .force_fp32_dest_acc = false,
-};
+// 3-input ops: ∂y/∂? uses operand values; kernel reads grad + input + other.
+constexpr Spec kMulBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_mul.cpp")};
+// div_bw: Recip + Square need fp32 dest acc for 1/other² accuracy.
+constexpr Spec kDivBw{.compute_kernel_path = BW_COMPUTE("eltwise_bw_div.cpp"), .force_fp32_dest_acc = true};
 
-// div_bw hits Recip + Square inside the kernel; fp32 dest acc keeps 1/other² accurate.
-constexpr BinaryBackwardKernelSpec kDivBw{
-    .compute_kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary_backward/device/kernels/compute/eltwise_bw_div.cpp",
-    .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-    .force_fp32_dest_acc = true,
-};
+#undef BW_COMPUTE
 
 }  // namespace
 
