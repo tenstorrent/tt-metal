@@ -4786,6 +4786,7 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
         # since (prefills, a reseed or bootstrap), the phases timed in the current proposal and the stats
         # window.
         self._spec_last_propose = None
+        self._spec_interval_logged = 0  # record intervals written at DEBUG (the first 200 of a run)
         self._spec_prefills_since = 0
         self._spec_dropped_since = 0  # rows (sessions) that ended since the last proposal: an idle interval test
         self._spec_entry_since = False
@@ -4944,6 +4945,12 @@ class Gemma4SpecContractBase(Gemma4ForCausalLM):
             self._spec_policy.calibration.note_step(
                 mode, (now - t_begin) * 1e3, tokens, cause is None, table_ms, rows_for_pool, cause, idle=idle
             )
+            if mode[0] == "step" and self._spec_interval_logged < 200:  # the first record intervals of a run
+                self._spec_interval_logged += 1
+                logger.debug(
+                    f"Gemma4 spec interval: mode={mode} wall={(now - t_begin) * 1e3:.1f} ms tokens={tokens} "
+                    f"live={int(live_rows)} prev_live={int(prev_live)} committing={committing} cause={cause}"
+                )
         self._spec_prefills_since = 0
         self._spec_dropped_since = 0
         self._spec_entry_since = False
