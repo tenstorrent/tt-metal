@@ -42,17 +42,28 @@ def _inputs(md, T, seed):
     )
 
 
-def _old(md, o, c, s, T):
+def _pf():
+    from models.demos.blackhole.deepseek_v41_flash.tt.attention import full_pair_swap
+
+    return full_pair_swap().reshape(1, 1, HD, HD)
+
+
+def _old(md, o, c, s, T, pf, ckc):
+    """The REAL stock chain: DSV41Attention._finish (fused rope_inplace) for T <= 8 or T % 8 == 0, spec_attention._finish (unfused
+    addcmul(multiply(x, c), x @ Pf, s), pad to a multiple of 8) otherwise."""
     if T == 1:
         x = ttnn.to_layout(ttnn.reshape(o, (1, 1, 32, HD)), ttnn.TILE_LAYOUT)
     else:
         x = ttnn.to_layout(ttnn.permute(o, (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
-    AF.rope_inplace(x, c, s, T)
-    Tp = (
-        T if (T <= 8 or T % 8 == 0) else -(-T // 8) * 8
-    )  # nlp_concat_heads_decode needs a rectangular core grid (spec_attention._finish)
-    if Tp != T:
-        x = ttnn.pad(ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG), [(0, 0), (0, Tp - T), (0, 0), (0, 0)], 0.0)
+    unf = T > 8 and T % 8 != 0
+    if unf:
+        p = ttnn.linear(x, pf, compute_kernel_config=ckc, core_grid=ttnn.CoreGrid(y=1, x=8))
+        x = ttnn.addcmul(ttnn.multiply(x, c), p, s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        Tp = -(-T // 8) * 8
+        x = ttnn.pad(x, [(0, 0), (0, Tp - T), (0, 0), (0, 0)], 0.0)
+    else:
+        AF.rope_inplace(x, c, s, T)
+        Tp = T
     ucfg = ttnn.create_sharded_memory_config(
         shape=(32, HD),
         core_grid=ttnn.num_cores_to_corerangeset(Tp, ttnn.CoreCoord(8, 8), row_wise=True),
@@ -77,15 +88,32 @@ def test_postfuse(mesh_device):
     ts = [int(v) for v in os.environ.get("DSV41_PF_TS", "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,24,32").split(",")]
     seeds = [int(v) for v in os.environ.get("DSV41_PF_SEEDS", "0,1,2").split(",")]
     prof = [int(v) for v in os.environ.get("DSV41_PF_PROF_T", "").split(",") if v]
+    pf = _up(md, _pf().to(torch.bfloat16), ttnn.TILE_LAYOUT)
+    ckc = ttnn.init_device_compute_kernel_config(
+        md.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
     bad = 0
     for T in ts:
         for seed in seeds:
             o, c, s = _inputs(md, T, seed)
-            want = _host(md, _old(md, o, c, s, T))
+            want = _host(md, _old(md, o, c, s, T, pf, ckc))
             got = _host(md, AF.rope_concat(o, c, s, T, NH))
             ok = torch.equal(want[:T].view(torch.int16), got[:T].view(torch.int16))
             pad = torch.equal(want[T:].view(torch.int16), got[T:].view(torch.int16)) if T < 32 else True
             print(f"POSTFUSE T={T} seed={seed} rows_bit_equal={ok} padding_equal={pad}", flush=True)
+            if not pad:
+                print(
+                    "  pad nonzero want/got:",
+                    int((want[T:] != 0).sum()),
+                    int((got[T:] != 0).sum()),
+                    "rows differing:",
+                    (want[T:].view(torch.int16) != got[T:].view(torch.int16)).any(-1).nonzero().flatten().tolist()[:8],
+                    flush=True,
+                )
             if not ok:
                 d = want[:T].view(torch.int16) != got[:T].view(torch.int16)
                 print(
@@ -99,7 +127,7 @@ def test_postfuse(mesh_device):
     assert bad == 0
     for T in prof:
         o, c, s = _inputs(md, T, 7)
-        for fn in (lambda: _old(md, o, c, s, T), lambda: AF.rope_concat(o, c, s, T, NH)):
+        for fn in (lambda: _old(md, o, c, s, T, pf, ckc), lambda: AF.rope_concat(o, c, s, T, NH)):
             for _ in range(4):
                 fn()
         print(f"POSTFUSE PROF T={T} done (order: 4x old chain then 4x new)", flush=True)

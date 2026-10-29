@@ -84,7 +84,8 @@ def rope_concat(o, c, s, users, nh):
     """Post-SDPA glue (DSV41_ATTN_POSTFUSE): o = SDPA output [1,32,T,512] bf16 ROW_MAJOR (page = h*T + t, ``users`` = T <= 32), c / s = the
     [1,T,1,512] bf16 TILE cos / negated-sin tables -> [1,1,32,nh*512] bf16 TILE DRAM (row t = user t, columns h*512 + d), the dims 448..511 of
     every head rotated exactly like ``rope_inplace`` (x @ R).  Replaces permute + tilize + rope_inplace + to_memory_config + nlp_concat_heads_decode
-    + to_memory_config.  Rows >= T of the output tiles are not written."""
+    + to_memory_config.  Rows >= T of the output tiles are not written (stale memory, like the stock chain; ignored by wo_a).
+    """
     assert (
         o.dtype == ttnn.bfloat16
         and o.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -105,7 +106,8 @@ def rope_concat(o, c, s, users, nh):
         ttnn.Shape([1, 1, 32, nh * 512]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
     bf = ttnn.bfloat16
-    X, R, SC, XS, O, P = range(6)
+    X, R, SC, XS, O, P, R2, RI, M, PP = range(10)
+    unf = T > 8 and T % 8 != 0  # the stock spec _finish rotates these T with the unfused addcmul formula
     rset, pset = _crs(rc), _crs(pc)
     cbs = [
         _cb(rset, X, 1, 2048, bf),
@@ -114,6 +116,11 @@ def rope_concat(o, c, s, users, nh):
         _cb(rset, XS, 1, 1024, bf),
         _cb(rset, O, 1, 2048, bf),
         _cb(pset, P, 1, 1024, bf),
+    ] + [
+        _cb(rset, R2, 1, 2048, bf),
+        _cb(rset, RI, 1, 2048, bf),
+        _cb(rset, M, 1, 2048, bf),
+        _cb(rset, PP, 1, 2048, bf),
     ]
     rt = ttnn.RuntimeArgs()
     for w, (cx, cy) in enumerate(rc):
@@ -127,7 +134,7 @@ def rope_concat(o, c, s, users, nh):
     reader = _kernel(
         "post_reader.cpp",
         rset,
-        [X, R, SC, XS, T, nh, 16, ROW] + _acc(o) + _acc(c) + _acc(s),
+        [X, R, SC, XS, T, nh, 16, ROW, int(unf), R2, RI] + _acc(o) + _acc(c) + _acc(s),
         rt,
         ttnn.ReaderConfigDescriptor(),
         [o.buffer_address(), c.buffer_address(), s.buffer_address()],
@@ -138,9 +145,9 @@ def rope_concat(o, c, s, users, nh):
     compute = _kernel(
         "post_compute.cpp",
         rset,
-        [X, R, O],
+        [X, R, O, int(unf), R2, RI, M, PP],
         ttnn.RuntimeArgs(),
-        ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+        ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=not unf),
         [],
     )
     passk = _kernel(
@@ -152,6 +159,8 @@ def rope_concat(o, c, s, users, nh):
         [o.buffer_address(), out.buffer_address()],
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute, passk], semaphores=[], cbs=cbs)
-    prog.custom_program_hash = _hash(0xA71, T, nh, tuple(_acc(o)), tuple(_acc(c)), tuple(_acc(s)), tuple(_acc(out)))
+    prog.custom_program_hash = _hash(
+        0xA71, T, nh, unf, tuple(_acc(o)), tuple(_acc(c)), tuple(_acc(s)), tuple(_acc(out))
+    )
     ttnn.generic_op([o, c, s, out], prog)
     return out
