@@ -341,6 +341,7 @@ void WaitProgramDone(IDevice& device, const Program& program) {
 
 void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
+    program.impl().validate_scratchpad_bindings();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
     if (!force_slow_dispatch) {

@@ -312,11 +312,13 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    auto lock = lock_api_function_();
+    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+        program.impl().validate_scratchpad_bindings();
+    }
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip workload execution for mock devices
     }
-
-    auto lock = lock_api_function_();
 
     if (!asynchronous_slow_dispatch_enabled_) {
         wait_for_cores_idle();

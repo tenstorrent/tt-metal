@@ -2331,6 +2331,24 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
     this->scratchpads_allocated_ = true;
 }
 
+void detail::ProgramImpl::validate_scratchpad_bindings() const {
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (const auto& binding : kernel->scratchpad_binding_handles()) {
+                if (binding.allocation_override) {
+                    TT_FATAL(
+                        binding.allocated_address != 0,
+                        "Scratchpad '{}' on kernel '{}' has no bound SRAMArena '{}'. "
+                        "Supply its arena argument through SetProgramRunArgs before dispatch.",
+                        binding.accessor_name,
+                        kernel->name(),
+                        binding.allocation_override->arena);
+                }
+            }
+        }
+    }
+}
+
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     TTZoneScopedD(PROGRAM);
 
