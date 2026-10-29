@@ -117,7 +117,13 @@ class TtPrefillRuntime:
                 completed.deallocate(True)
             if sink is not None:
                 first = self.config.first_layer_idx
-                sink.layers_completed(first, first + self.config.num_layers, slot, start, end)
+                sink.layers_completed(
+                    layer_start=first,
+                    layer_end=first + self.config.num_layers,
+                    slot_id=slot,
+                    pos_start=start,
+                    pos_end=end,
+                )
         finally:
             if output is not None:
                 output.deallocate(True)

@@ -497,7 +497,13 @@ class TtPrefillRuntime:
                 global_layer = cfg.first_layer_idx + layer_idx
                 for c in chunks:
                     if not c.is_empty:
-                        sink.layers_completed(global_layer, global_layer + 1, c.slot_id, c.actual_start, c.actual_end)
+                        sink.layers_completed(
+                            layer_start=global_layer,
+                            layer_end=global_layer + 1,
+                            slot_id=c.slot_id,
+                            pos_start=c.actual_start,
+                            pos_end=c.actual_end,
+                        )
 
         else:
             on_layer_complete = self._on_layer_complete

@@ -230,7 +230,7 @@ class _Sink:
     def __init__(self, events):
         self._events = events
 
-    def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end):
+    def layers_completed(self, *, layer_start, layer_end, slot_id, pos_start, pos_end):
         self._events.append(("ack", layer_start, layer_end, slot_id, pos_start, pos_end))
 
 

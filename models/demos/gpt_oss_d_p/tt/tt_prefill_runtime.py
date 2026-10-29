@@ -375,7 +375,13 @@ class TtPrefillRuntime:
                 # the enqueued writes are device-complete, as in DeepSeek's host ACK path.
                 ttnn.synchronize_device(self.mesh_device)
                 global_layer = self.config.first_layer_idx + layer_idx
-                sink.layers_completed(global_layer, global_layer + 1, slot_id, actual_start, actual_end)
+                sink.layers_completed(
+                    layer_start=global_layer,
+                    layer_end=global_layer + 1,
+                    slot_id=slot_id,
+                    pos_start=actual_start,
+                    pos_end=actual_end,
+                )
 
         else:
             on_layer_complete = None
@@ -401,7 +407,7 @@ class TtPrefillRuntime:
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register a layer-completion sink for pipelined (multi-rank) prefill. Called once per layer as
-        ``sink.layers_completed(global_layer, global_layer + 1, slot_id, actual_start, actual_end)``."""
+        ``sink.layers_completed(layer_start=global_layer, layer_end=global_layer + 1, ...)``."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 

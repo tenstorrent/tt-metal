@@ -1072,7 +1072,13 @@ class TtPrefillRuntime:
         sink = self._layer_completion_sink
 
         def on_layer_complete(layer_idx: int) -> None:
-            sink.layers_completed(layer_idx, layer_idx + 1, slot_id, actual_start, actual_end)
+            sink.layers_completed(
+                layer_start=layer_idx,
+                layer_end=layer_idx + 1,
+                slot_id=slot_id,
+                pos_start=actual_start,
+                pos_end=actual_end,
+            )
 
         return on_layer_complete
 
@@ -1784,7 +1790,7 @@ class TtPrefillRuntime:
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the completion sink for pipelined prefill. Once per completion event the runtime fires
-        `sink.layers_completed(layer_start, layer_end, slot_id, actual_start, actual_end)`, one
+        `sink.layers_completed(layer_start=, layer_end=, slot_id=, pos_start=, pos_end=)`, one
         layer at a time here, with the chunk's fields bound per prefill_chunk() call. Under trace the captured
         callback reads the published `_trace_*` fields instead."""
         assert self.compiled or self.config.use_trace, "Call compile() before set_layer_completion_sink()"
@@ -1794,7 +1800,11 @@ class TtPrefillRuntime:
 
         def on_layer_complete(layer_idx: int) -> None:
             sink.layers_completed(
-                layer_idx, layer_idx + 1, self._trace_slot_id, self._trace_pos_start, self._trace_pos_end
+                layer_start=layer_idx,
+                layer_end=layer_idx + 1,
+                slot_id=self._trace_slot_id,
+                pos_start=self._trace_pos_start,
+                pos_end=self._trace_pos_end,
             )
 
         # Route the traced path through the same controller hook the LayerAck channel uses, so the
