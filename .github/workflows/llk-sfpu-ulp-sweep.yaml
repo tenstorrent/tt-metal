@@ -1,21 +1,10 @@
 name: "LLK SFPU ULP sweep"
 
-# Nightly, called from llk-e2e.yaml, whose Slack report covers it; dispatch it by hand to
-# sweep every cell of a branch. PR Gate sweeps only the Wormhole cells a change can move
-# (llk-sfpu-ulp-pr-check.yaml); this run covers Blackhole, and what that one cannot see,
-# a change to the golden or the harness alone. On a Wormhole and on a Blackhole card: every finite bf16/fp16 value (and a stride of fp32) through every
-# enrolled unary op, held against that card's table under
-# tt_metal/tt-llk/tests/python_tests/helpers/ (sfpu_accuracy_budget_wh.yaml, _bh.yaml).
-# The job summary lists each failing (op, in, out, approx, dest_acc) and its value.
-#
-# A gated cell over its figure fails in pytest; a tolerance cell past the measurement or
-# the non-finite lane count its row records fails the `headroom` comparison
-# (helpers/ulp_budget_diff.py). The commands are the entries of
-# tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml, one per architecture.
-#
-# It compares the hardware with the table on the same commit, so it cannot see a budget
-# raised to fit a regression; llk-sfpu-ulp-budget-guard.yaml reports such a raise on the
-# PR, to the table's reviewers.
+# Nightly (called from llk-e2e.yaml); dispatch it to sweep a branch. Every SFPU ULP sweep cell on
+# a Wormhole and a Blackhole card, each held to its own table
+# (tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml). PR Gate runs only the Wormhole cells a
+# change can move (llk-sfpu-ulp-pr-check.yaml); this covers Blackhole, and changes to the golden
+# or harness alone.
 
 on:
   workflow_call:
@@ -25,54 +14,35 @@ permissions:
   contents: read
   packages: write
 
-env:
-  LLK_PATH: tt_metal/tt-llk
-
 jobs:
   build-images:
-    name: "Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
 
   load-test-matrix:
     runs-on: ubuntu-slim
-    permissions:
-      contents: read
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
             tests/pipeline_reorg
-          sparse-checkout-cone-mode: true
-      - name: Install dependencies
-        run: pip3 install PyYAML
-      - name: Build test matrix
-        id: build-matrix
-        # Pinned to @main as the action asks; the tests yaml is the checkout's, so a
-        # dispatch on a branch still runs that branch's matrix.
+      - run: pip3 install PyYAML
+      - id: matrix
         uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
         with:
           tests-yaml: ./tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml
-          enabled-skus: "ALL_SKUS_IN_TESTS"
+          enabled-skus: ALL_SKUS_IN_TESTS
           sku-config: ./.github/sku_config.yaml
-      - name: Fail on an empty matrix
-        # A SKU renamed or dropped from sku_config.yaml would otherwise skip the sweep,
-        # and the nightly summary would still read green.
-        if: ${{ steps.build-matrix.outputs.matrix == '[]' }}
-        run: |
-          echo "::error title=LLK SFPU ULP sweep::tests/pipeline_reorg/llk_sfpu_accuracy_tests.yaml gave no test group; check its skus against .github/sku_config.yaml."
-          exit 1
 
   ulp-sweep:
     needs: [load-test-matrix, build-images]
     strategy:
       fail-fast: false
       matrix:
+        # An empty matrix (a SKU dropped from sku_config.yaml) fails here instead of skipping.
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
@@ -83,48 +53,18 @@ jobs:
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    env:
+      CHIP_ARCH: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole' || 'blackhole' }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-      - name: Install SFPI
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Run the sweep
         shell: bash
-        working-directory: ${{ env.LLK_PATH }}/tests
-        run: ./setup_testing_env.sh
-      - name: Set CHIP_ARCH
-        shell: bash
-        env:
-          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        working-directory: tt_metal/tt-llk
         run: |
-          RUN_LABEL="${RUN_ON_LABELS%% *}"
-          if [[ "$RUN_LABEL" =~ N150 ]]; then
-            CHIP_ARCH=wormhole
-          elif [[ "$RUN_LABEL" =~ P150 ]]; then
-            CHIP_ARCH=blackhole
-          else
-            echo "::error::cannot tell the architecture from '$RUN_ON_LABELS'"
-            exit 1
-          fi
-          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
-
-      # The sweep, then the headroom comparison over what it measured. The cmd runs both
-      # whatever the first returns, publishes the report to the job summary, and exits
-      # with either one's failure.
-      - name: Run the ULP sweep and compare it with the table
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}
-        run: |
+          (cd tests && ./setup_testing_env.sh)
           ${{ matrix.test-group.cmd }}
-
-      - name: Upload the measurements and the report
-        # always(): a leg cancelled at the job timeout is the run whose partial
-        # measurements (appended per comparison) are worth keeping.
-        if: ${{ always() }}
+      - if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ulp-sweep-${{ env.CHIP_ARCH }}
-          path: |
-            ${{ env.LLK_PATH }}/tests/python_tests/ulp_measurements.jsonl
-            ${{ env.LLK_PATH }}/tests/python_tests/ulp_headroom_report.md
-            ${{ env.LLK_PATH }}/tests/python_tests/ulp_sweep_junit.xml
-          if-no-files-found: warn
+          path: tt_metal/tt-llk/tests/python_tests/ulp_measurements.jsonl

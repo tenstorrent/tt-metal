@@ -1,35 +1,12 @@
-# LLK SFPU accuracy — the exhaustive ULP sweep, held against the table of the card it
-# runs on: tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_wh.yaml on
-# Wormhole, _bh.yaml on Blackhole (ulp_table.TABLE_PATHS, by CHIP_ARCH).
-#
-# Run nightly by .github/workflows/llk-sfpu-ulp-sweep.yaml, which llk-e2e.yaml calls;
-# dispatch that workflow to sweep a branch. PR Gate runs only the Wormhole cells a change
-# can move (llk_sfpu_ulp_pr_gate_tests.yaml); this is the run over every cell, on both
-# cards. Every finite bfloat16 and float16 value (and
-# a stride of float32) through every enrolled unary op, per format pair, approximation
-# mode and dest accumulator.
-#
-# Two checks, both run whatever the first returns, and the job fails if either does:
-#   * pytest fails a gated cell whose worst lane is over its figure;
-#   * `helpers.ulp_budget_diff headroom` fails a tolerance cell past the measurement
-#     or the non-finite lane count its row records. Its report is the job summary.
-#
-# The JUnit file is not named pytest-report-*: the cmd lint (tt-metal#57706) reads any
-# later word `pytest` as a second device run after a recorded failure, and the
-# comparison after the sweep runs nothing on the device.
-#
-# Named by path, not by marker: the sweep is marked `accuracy`, which the other LLK
-# pipelines deselect. One entry per architecture with a table: each table's budgets are
-# that card's measurements. Nothing here writes a table: --ulp-emit is a deliberate
-# human step, and a table rewritten by CI would be a gate that agrees with itself.
-#
-# Charged to llk's e2e bucket, not pr_gate: PR Gate's wh_n150_civ2 bucket (40 minutes)
-# is taken by llk_smoke_wormhole's two 15-minute groups. The job took 9-11 minutes on
-# wh_n150_civ2, checkout and SFPI install included (2026-09/10); the Blackhole sweep
-# took 3.6 minutes on a p100a (2026-10-23). No single variant took over 6 s on a
-# Wormhole, so --timeout=120 fails a hung test well inside the job's 25 minutes.
+# LLK SFPU accuracy, nightly: the exhaustive ULP sweep, every cell, on each card with a table
+# (tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_{wh,bh}.yaml, by CHIP_ARCH).
+# Run only by .github/workflows/llk-sfpu-ulp-sweep.yaml (llk-e2e.yaml calls it; dispatch it to
+# sweep a branch). Fails if pytest fails a gated cell over its figure, or if `headroom` finds a
+# tolerance cell past what its row records. PR Gate runs the same check over the Wormhole cells
+# a change can move (llk_sfpu_ulp_pr_gate_tests.yaml).
+# 9-11 min on wh_n150_civ2 and 3.6 on a p100a (2026-10); no variant took over 6 s.
 
-- name: llk_sfpu_ulp_sweep_wormhole
+- name: llk_sfpu_ulp_sweep
   split_group: 1
   team: llk
   budget_type: e2e
@@ -38,47 +15,14 @@
     set -uo pipefail
     cd tests/python_tests
     status=0
-    pytest -q --override-ini=log_cli=false -n auto --dist=worksteal \
-      --ulp-measure=ulp_measurements.jsonl \
-      --timeout=120 \
-      --junitxml=ulp_sweep_junit.xml \
+    pytest -q -n auto --dist=worksteal --timeout=120 --ulp-measure=ulp_measurements.jsonl \
       test_unary_sfpu_ulp.py || status=$?
-    python3 -m helpers.ulp_budget_diff headroom \
-      --table helpers/sfpu_accuracy_budget_wh.yaml \
-      --measured ulp_measurements.jsonl \
-      --out ulp_headroom_report.md || status=$?
-    if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -s ulp_headroom_report.md ]]; then
-      cat ulp_headroom_report.md >> "$GITHUB_STEP_SUMMARY"
-    fi
+    python3 -m helpers.ulp_budget_diff headroom --measured ulp_measurements.jsonl \
+      --out "${GITHUB_STEP_SUMMARY:-/dev/null}" || status=$?
     exit "$status"
   skus:
     wh_n150_civ2:
       timeout: 25
-  owner_id: U09UC143684 # Nemanja Divnic
-
-- name: llk_sfpu_ulp_sweep_blackhole
-  split_group: 1
-  team: llk
-  budget_type: e2e
-  coverage: false
-  cmd: |
-    set -uo pipefail
-    cd tests/python_tests
-    status=0
-    pytest -q --override-ini=log_cli=false -n auto --dist=worksteal \
-      --ulp-measure=ulp_measurements.jsonl \
-      --timeout=120 \
-      --junitxml=ulp_sweep_junit.xml \
-      test_unary_sfpu_ulp.py || status=$?
-    python3 -m helpers.ulp_budget_diff headroom \
-      --table helpers/sfpu_accuracy_budget_bh.yaml \
-      --measured ulp_measurements.jsonl \
-      --out ulp_headroom_report.md || status=$?
-    if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -s ulp_headroom_report.md ]]; then
-      cat ulp_headroom_report.md >> "$GITHUB_STEP_SUMMARY"
-    fi
-    exit "$status"
-  skus:
     bh_p150b_civ2:
       timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
