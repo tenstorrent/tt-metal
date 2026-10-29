@@ -271,8 +271,12 @@ def _get_device_tensors(tensor):
 
 def _zeros(shape, *, dtype, layout, device, memory_config):
     tensor = FakeTensor([torch.zeros(tuple(shape), dtype=dtype.torch) for _ in range(TP)], dtype, layout)
-    # The legacy flat topology ttnn.zeros reports (what _canonicalize_flat_replicated_topology accepts).
-    tensor.topology = TensorTopology((TP,), [PlacementReplicate()], [(0, column) for column in range(TP)])
+    # ttnn.zeros fills a TILE bfloat16/float32 tensor of at least 128 KiB per device (tile-padded) on the device, which
+    # reports the canonical (1, 4) topology; the host fill reports the flat one.
+    *batch, rows, cols = shape
+    padded_bytes = math.prod(batch) * -(-rows // 32) * 32 * -(-cols // 32) * 32 * tensor.locals[0].element_size()
+    if layout != TILE or dtype not in (BF16, FP32) or padded_bytes < 128 * 1024:
+        tensor.topology = TensorTopology((TP,), [PlacementReplicate()], [(0, column) for column in range(TP)])
     return tensor
 
 
