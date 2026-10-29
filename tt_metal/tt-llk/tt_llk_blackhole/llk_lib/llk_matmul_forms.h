@@ -105,19 +105,18 @@ constexpr char matmul_default_form()
         return matmul_forms_table[((k_class * 4 + fid) * 2 + (dst_sync == DstSync::SyncFull ? 1 : 0)) * 2 + (fp32_dest ? 1 : 0)][fmt];
     }
 }
-// Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi2 with a 16-bit DEST and one k step per
-// section, Float16_b or Bfp8_b output. Elsewhere at half sync the earlier release of the held source read slower (unpack bound cells).
+// Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
+// Float16_b in1 into Float32, both when the operand formats are given; HiFi2 with a 16-bit DEST and one k step per section, Float16_b or Bfp8_b output.
+// At LoFi, at HiFi3 with a 32-bit DEST and elsewhere at HiFi2 the earlier release of the held source read slower.
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0 = DataFormat::Invalid, DataFormat in1 = DataFormat::Invalid>
 constexpr bool matmul_half_end_fold()
 {
-    // HiFi3 and HiFi4 take it on 16-bit and 32-bit operands, and on Bfp8_b by Bfp8_b into Float32: with other block float operands, and at HiFi3 with a 32-bit DEST,
-    // the earlier release of the held source reads slower
-    constexpr bool wide_operands = ((in0 == DataFormat::Float16_b || in0 == DataFormat::Float16 || in0 == DataFormat::Float32) &&
-                                    (in1 == DataFormat::Float16_b || in1 == DataFormat::Float16 || in1 == DataFormat::Float32)) ||
-                                   (in0 == DataFormat::Bfp8_b && in1 == DataFormat::Bfp8_b && out_format == DataFormat::Float32);
+    constexpr bool known_operands = in0 != DataFormat::Invalid && in1 != DataFormat::Invalid;
     return dst_sync == DstSync::SyncHalf &&
            ((math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 && (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b)) ||
-            ((math_fidelity == MathFidelity::HiFi4 || (math_fidelity == MathFidelity::HiFi3 && !fp32_dest)) && wide_operands));
+            (known_operands && math_fidelity == MathFidelity::HiFi4) ||
+            (known_operands && math_fidelity == MathFidelity::HiFi3 && !fp32_dest &&
+             !(in0 == DataFormat::Bfp8_b && in1 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
 }
 // Cells where the keys of the ttnn matmul kernels (the format each DEST section is packed to, the row MOP rule) pick a form that reads
 // slower than main's tile MOP and per-row unpack on the tt-llk sweep (perf_matmul_forms: every form of every perf_matmul Half cell,
@@ -212,10 +211,7 @@ constexpr bool matmul_mixed_main_form()
          (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Bfp4_b && rt_dim == 2 && ct_dim == 4 && kt_per_section == 1) ||
          (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 2 && kt_per_section == 4) ||
          (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Bfp4_b && rt_dim == 4 && ct_dim == 2 && kt_per_section == 1));
-    // HiFi3, half sync, 32-bit DEST, Bfp8_b in in1 against Float32 in in0 into Float32, a single tile of one k step: the keyed forms read 0.1 cycles behind main
-    constexpr bool hifi3_cell = math_fidelity == MathFidelity::HiFi3 && sync == 0 && fp32_dest && in0 == DataFormat::Float32 && in1 == DataFormat::Bfp8_b &&
-                                out_format == DataFormat::Float32 && kt_per_section == 1 && ct_dim == 1 && rt_dim == 1;
-    return lofi_cell || hifi3_cell || (math_fidelity == MathFidelity::HiFi2 &&
+    return lofi_cell || (math_fidelity == MathFidelity::HiFi2 &&
            ((f32_in1 && !keyed) || (in0 == DataFormat::Float32 && matmul_block_float_format(in1) && sync == 0 && kt_per_section == 1) ||
             (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
 }

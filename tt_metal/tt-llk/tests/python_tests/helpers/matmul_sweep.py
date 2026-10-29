@@ -154,6 +154,18 @@ def matmul_pack_form(
     ):
         # small tiles packed to Float32 behind Float16_b operands: the closed block beats the per-tile pack at LoFi
         return 2
+    if (
+        dest_sync == DestSync.Half
+        and throttle == 0
+        and kt_dim == 1
+        and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
+        and small
+        and formats.input_format == DataFormat.Bfp8_b
+        and formats.output_format == DataFormat.Float32
+        and rt_dim * ct_dim >= 4
+    ):
+        # small tiles packed to Float32 behind Bfp8_b operands: the closed block beats the per-tile pack at LoFi and HiFi2 half sync (not at HiFi3 and HiFi4, nor at full sync)
+        return 2
     # a Bfp4_b output of two or more full tiles takes the closed block pack at half sync too (up to 17 cycles under main on a 2x2 block at HiFi2 with a 32-bit DEST,
     # where the per-tile pack read 0.5 behind), except against a Float32 operand
     if (

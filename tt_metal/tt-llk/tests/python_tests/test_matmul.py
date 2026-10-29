@@ -155,7 +155,7 @@ def test_matmul(
         input_B_format=formats.input_format,
     )
 
-    if formats.input_format != DataFormat.Bfp8_b:
+    if not formats.input_format.is_block_float():
         tilized_A = tilize_block(
             src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
         )
