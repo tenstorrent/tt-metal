@@ -175,3 +175,56 @@ def test_sp_prefill_padded_ragged_chunk_carry(mesh_device, weights):
     )
     assert min(p.values()) > 0.995, p
     assert p["out padded vs min"] > 0.999 and p["recurrent padded vs min"] > 0.999, p
+
+    # The served chunk plans: a prompt continued in chunks whose START is not a multiple of the padded chunk length
+    # (vLLM's budget split: [2048, 2176) then [2176, 2348) padded to 256; 2176 % 256 = 128) vs the plan whose starts
+    # are multiples of their padded lengths (the adapter's own 1024 + 1024 + 300-in-512), both against HF on the whole
+    # prompt: the last chunk's outputs and the carries (the 2026-10-29 budget-split state diff: KDA conv taps and
+    # recurrent states wrong after the 2176-start chunk while every DSA row before 2176 matched).
+    n2 = 2348
+    torch.manual_seed(2)
+    x2 = (torch.randn(1, n2, cfg.hidden_size) * 0.8).to(torch.bfloat16)
+    y_hf2, layer2 = _hf_run(hf, text, x2)
+    conv_hf2 = layer2.conv_states[0][:, :, -3:].transpose(1, 2)
+
+    def run_plan(plan):
+        """``plan`` = [(start, end, padded T)]: the chunks in order through one carried state."""
+        state = tt.allocate_state(1)
+        outs = []
+        for s0, e, Tp in plan:
+            assert Tp % unit == 0 and e - s0 <= Tp and s0 % 32 == 0, (s0, e, Tp)
+            xp = torch.zeros(1, Tp, cfg.hidden_size, dtype=torch.bfloat16)
+            xp[:, : e - s0] = x2[:, s0:e]
+            x_dev = mesh.upload(xp, ttnn.bfloat16, rows=1)
+            y, state = tt.prefill_forward(x_dev, state, tt.scalar(s0), tt.scalar(e))
+            outs.append(mesh.to_host(y, rows=1).float()[:, : e - s0])
+        return torch.cat(outs, dim=1), _carries(mesh, state, cfg)[0]
+
+    plans = {
+        "aligned starts 1024+1024+300/512": [(0, 1024, 1024), (1024, 2048, 1024), (2048, 2348, 512)],
+        "budget split 1024+1024+128/256+172/256": [
+            (0, 1024, 1024),
+            (1024, 2048, 1024),
+            (2048, 2176, 256),
+            (2176, 2348, 256),
+        ],
+        "128 minimal then 172/256 from 2176": [
+            (0, 1024, 1024),
+            (1024, 2048, 1024),
+            (2048, 2176, 128),
+            (2176, 2348, 256),
+        ],
+        "one chunk to 2176 then 172/512": [(0, 2176, 2176), (2176, 2348, 512)],
+    }
+    results = {}
+    for name, plan in plans.items():
+        y_p, (rec_p, conv_p) = run_plan(plan)
+        results[name] = {
+            "last-chunk out vs HF": pcc(y_hf2[:, 2176:], y_p[:, 2176:]),
+            "out vs HF": pcc(y_hf2, y_p),
+            "recurrent vs HF": pcc(layer2.recurrent_states[0], rec_p),
+            "conv vs HF": pcc(conv_hf2, conv_p),
+        }
+        logger.info(f"SP KDA layer {LAYER} plan {name}: " + ", ".join(f"{k} {v:.6f}" for k, v in results[name].items()))
+    for name, r in results.items():
+        assert min(r.values()) > 0.995, f"plan {name}: {r}"
