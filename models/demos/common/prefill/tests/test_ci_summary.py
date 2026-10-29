@@ -22,3 +22,35 @@ def test_ci_pcc_matrix_reports_gqa_and_preserves_mla_index(tmp_path, capsys):
     assert lines[1].split() == ["layer", "kvpe.nope", "kvpe.pe", "K", "V", "index"]
     assert lines[2].split() == ["16", "0.98500", "0.97500", "0.99980", "0.99924", "0.96500"]
     assert lines[-1].endswith("0.965000")
+
+
+def _retire_line(start, push, retire, depth, warmup=0):
+    return (
+        f"[producer] CHUNK_RETIRE slot=0 start={start} end={start + 1024} push={push:.6f} "
+        f"retire={retire:.6f} depth={depth} warmup={warmup}\n"
+    )
+
+
+def test_retire_metrics_use_producer_push_and_retire_stamps(tmp_path):
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _retire_metrics
+
+    lines = [_retire_line(0, 1.0, 1.5, 0, warmup=1)]
+    lines += [_retire_line(i * 1024, 100.0 + i, 100.0 + i + 3.0, 2) for i in range(10)]
+    (tmp_path / "stderr").write_text("".join(lines))
+    out, rec = _retire_metrics(tmp_path, real_chunks=10, chunk_size=1024)
+    assert out[0].startswith("=" * 20 + " producer retire metrics")
+    assert rec["num_chunks"] == 10
+    assert all(abs(v - 3000.0) < 1e-6 for v in rec["chunk_time_ms"].values())
+    last = max(rec["ttft_s"], key=lambda k: rec["chunk_index"][k])
+    assert abs(rec["ttft_s"][last] - 12.0) < 1e-6
+    assert all(abs(v - 1024.0) < 1e-6 for v in rec["throughput_tok_s"].values())
+    assert rec["inflight_depth_p50"] == 3
+    assert abs(rec["busy_fraction"] - 1.0) < 1e-9
+    assert abs(rec["request_wall_s"] - 12.0) < 1e-9
+
+
+def test_retire_metrics_absent_without_retire_lines(tmp_path):
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _retire_metrics
+
+    (tmp_path / "stderr").write_text("[pp rank 0] CHUNK_START c=0 compute_start=1.0\n")
+    assert _retire_metrics(tmp_path, real_chunks=0, chunk_size=1024) == ([], {})

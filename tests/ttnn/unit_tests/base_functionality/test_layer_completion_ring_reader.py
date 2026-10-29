@@ -214,6 +214,17 @@ def test_drain_keeps_a_bounded_ring_moving_while_the_caller_produces():
     assert drain.reader.completed_chunks == 5
 
 
+def test_drain_reports_each_retired_chunk_in_completion_order():
+    retired = []
+    ring = FakeRing([msg(0, 2, slot_id=1), msg(0, 4, slot_id=0), msg(2, 4, slot_id=1)])
+    drain = start_layer_completion_drain(
+        ring, num_layers=NUM_LAYERS, chunk_layers=NUM_LAYERS, on_chunk_complete=lambda key, cov: retired.append(key)
+    )
+    assert wait_for_layer_completions(drain, 2 * NUM_LAYERS, timeout_s=5) == 2 * NUM_LAYERS
+    drain.stop()
+    assert retired == [(0, 0, 128), (1, 0, 128)]
+
+
 def test_drain_surfaces_a_producer_bug_on_the_callers_thread():
     drain = LayerCompletionDrain(FakeRing([msg(0, 3), msg(2, 4)]), num_layers=NUM_LAYERS).start()
     with pytest.raises(ValueError, match="overlaps"):  # allow-pytest.raises: host-only, no device error

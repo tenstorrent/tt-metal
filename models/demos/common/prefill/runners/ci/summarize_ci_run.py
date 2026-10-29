@@ -10,6 +10,10 @@ _GQA = re.compile(r"layer\s+(\d+):\s+K=([-\d.]+)\s+V=([-\d.]+)")
 _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+index PCC:\s+([-\d.]+)")
 _CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
 _CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
+_CHUNK_RETIRE = re.compile(
+    r"\[producer\] CHUNK_RETIRE slot=(\d+) start=(\d+) end=(\d+) push=([\d.]+) retire=([\d.]+) "
+    r"depth=(\d+) warmup=([01])"
+)
 
 # Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
 # so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
@@ -219,7 +223,15 @@ def _publish_json(rec, name):
         print(f"perf metrics not persisted ({exc})")
 
 
-def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
+def _perf_metrics(
+    kept,
+    cs_sorted,
+    disp,
+    chunk_size,
+    probe_chunks=None,
+    *,
+    chunk_time_def="chunk_time = first-rank start -> last-rank finish (cross-rank; assumes NTP-comparable clocks)",
+):
     n = len(cs_sorted)
     if n == 0:
         return [], {}
@@ -254,7 +266,7 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
     out = ["==================== perf metrics (measured request, warmup excluded) ===================="]
     out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size})")
     out.append("labels are tokens prefilled through that chunk, in units of 1024 (M past 1Mi); probes snap to chunks")
-    out.append("chunk_time = first-rank start -> last-rank finish (cross-rank; assumes NTP-comparable clocks)")
+    out.append(chunk_time_def)
     for lbl, d in probes((0, 50000, max_seq // 2, max_seq - chunk_size)):
         rec["chunk_index"][lbl] = d
         val = f"{ct[d]:>12.3f}" if d in ct else f"{'-':>12}"
@@ -322,6 +334,56 @@ def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, probe_chunk
     return [], {}
 
 
+def _retires_from_logs(root, real_chunks):
+    retires = []
+    for line in _iter_lines(root):
+        m = _CHUNK_RETIRE.search(line)
+        if m and m.group(7) == "0":
+            retires.append((float(m.group(4)), float(m.group(5)), int(m.group(6))))
+    retires.sort()
+    return retires[-real_chunks:] if real_chunks > 0 else retires
+
+
+def _busy_s(retires):
+    busy, cur_lo, cur_hi = 0.0, None, None
+    for push, retire, _depth in retires:
+        if cur_hi is None or push > cur_hi:
+            if cur_hi is not None:
+                busy += cur_hi - cur_lo
+            cur_lo, cur_hi = push, retire
+        else:
+            cur_hi = max(cur_hi, retire)
+    return busy + (cur_hi - cur_lo if cur_hi is not None else 0.0)
+
+
+def _retire_metrics(root, real_chunks, chunk_size, probe_chunks=None):
+    retires = _retires_from_logs(root, real_chunks)
+    if not retires or chunk_size <= 0:
+        return [], {}
+    kept = {0: {i: [push, (retire - push) * 1000.0] for i, (push, retire, _d) in enumerate(retires)}}
+    cs_sorted = sorted(kept[0])
+    disp = {c: c for c in cs_sorted}
+    lines, rec = _perf_metrics(
+        kept,
+        cs_sorted,
+        disp,
+        chunk_size,
+        probe_chunks,
+        chunk_time_def="chunk_time = producer push -> producer sees the chunk's last layer ack (one host clock)",
+    )
+    lines[0] = "==================== producer retire metrics (layer acks, producer clock) ===================="
+    rec.pop("pipeline_ranks", None)
+    depths = sorted(d + 1 for _p, _r, d in retires)
+    wall = retires[-1][1] - retires[0][0]
+    rec["inflight_depth_p50"] = depths[len(depths) // 2]
+    rec["inflight_depth_max"] = depths[-1]
+    rec["busy_fraction"] = _busy_s(retires) / wall if wall > 0 else 0.0
+    rec["request_wall_s"] = wall
+    lines.append(f"in-flight at retire (incl. the retiring chunk): p50={rec['inflight_depth_p50']} max={depths[-1]}")
+    lines.append(f"request wall = first push -> last retire: {wall:.3f} s; busy fraction = {rec['busy_fraction']:.4f}")
+    return lines, rec
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ranklogs", required=True, help="mpirun --output-filename root (runner + producer)")
@@ -345,6 +407,10 @@ def main():
     if args.probe_chunks:
         probe_chunks = {int(tok) for tok in args.probe_chunks.split(",") if tok.strip()}
     lines, rec = _timing_matrix(args.ranklogs, args.real_chunks, args.timing_dir, args.chunk_size, probe_chunks)
+    retire_lines, retire_rec = _retire_metrics(args.ranklogs, args.real_chunks, args.chunk_size, probe_chunks)
+    lines += retire_lines
+    if retire_rec:
+        rec = {**rec, "producer_retire": retire_rec} if rec else {"producer_retire": retire_rec}
     if lines:
         _publish(lines, args.summary_name)
     _publish_json(rec, args.summary_name)
