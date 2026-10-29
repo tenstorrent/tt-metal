@@ -632,10 +632,16 @@ class Model:
         sources alias the slab of their kv source."""
         if not (self.use_indexer and "indexer" in w):
             return None
-        from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DSV41DecodeIndexer, default_backend
+        from models.demos.blackhole.deepseek_v41_flash.tt.indexer import (
+            DSV41DecodeIndexer,
+            colshard_wanted,
+            default_backend,
+        )
 
         iw = w["indexer"]
         n_alloc = -(-(self.max_ctx // meta["ratio"] + 32) // 32) * 32
+        # column-sharded key slab (DSV41_IDX_KEY_SHARD=1, default off: from 65536 entries): 1/cols of the entries per chip, local top-k + candidate all_gather + global top-k
+        cs = colshard_wanted(self.max_ctx // meta["ratio"], self.cols)
         idx = DSV41DecodeIndexer(
             self.md,
             iw,
@@ -645,7 +651,10 @@ class Model:
             ratio=meta["ratio"],
             key_dtype=ttnn.bfloat8_b,
             fp4_q=True,
-            backend=default_backend(self.max_ctx // meta["ratio"]),
+            backend="matmul" if cs else default_backend(self.max_ctx // meta["ratio"]),
+            colshard=cs,
+            mesh_config=self.mc,
+            ccl=self.ccl,
         )
         if meta["is_kv_source"]:
             idx.set_key_weights(iw["wk"], iw["k_norm"])
@@ -653,6 +662,7 @@ class Model:
             self.index_owner[L] = idx
         else:
             idx.k_cache = self.index_owner[meta["kv_source"]].k_cache
+            idx.k_head = self.index_owner[meta["kv_source"]].k_head
             idx._slab_owner = self.index_owner[
                 meta["kv_source"]
             ]  # (decode buckets share one prefix view of the slab per step: tt/decode_buckets.py)
@@ -877,6 +887,7 @@ class Model:
             ):
                 continue
             _t = time.perf_counter()
+            assert not dec.cs, "the whole-prompt key export does not write a column-sharded slab (use the chunked path)"
             ix.export_keys(dec.k_cache, int(torch.as_tensor(lens).max()) // self.attns[L].ratio)
             if os.environ.get("DSV41_PF_TIMING") == "1":
                 ttnn.synchronize_device(self.md)
@@ -1124,7 +1135,15 @@ class Model:
             )
         return st[(NA, UD)]
 
-    def _export_user_keys(self, ix, k_cache, i_src, u_dst, rows_sel, off, n, warm_limit=None):
+    def _export_dec_keys(self, dec, ix, i_src, u_dst, rows_sel, off, n, warm_limit=None):
+        """``_export_user_keys`` into the decode key slab(s) of ``dec``: a column-sharded slab is written with ``_export_user_keys_cs``, and the replicated head slab (entries < n_head) with the plain export."""
+        if not dec.cs:
+            return self._export_user_keys(ix, dec.k_cache, i_src, u_dst, rows_sel, off, n, warm_limit)
+        self._export_user_keys(ix, dec.k_cache, i_src, u_dst, rows_sel, off, n, warm_limit, cs=True)
+        wl = None if warm_limit is None else min(warm_limit, dec.n_head)
+        self._export_user_keys(ix, dec.k_head, i_src, u_dst, rows_sel, off, min(n, dec.n_head), wl)
+
+    def _export_user_keys(self, ix, k_cache, i_src, u_dst, rows_sel, off, n, warm_limit=None, cs=False):
         """Hand-off of the index keys of the users held by prefill slot ``i_src`` of the mesh rows ``rows_sel`` (decode user ``u_dst`` of each of those rows) only: slab
         slots [off, off + n) of the prefill key FIFO -> decode key slab entries [0, n). The other mesh rows / users / entries keep their decode keys (bfp8 -> bf16 -> bfp8 is exact).
         The decode key slab ``k_cache`` is referenced by the CAPTURED decode traces, so it is updated IN PLACE (``ttnn.copy`` of the rebuilt slab; ``slice_write`` re-allocates).
@@ -1132,6 +1151,8 @@ class Model:
         buffer after the traces are captured (the first version sliced at value dependent offsets: each new prompt length created programs whose buffers were allocated under live traces,
         found by TT_METAL_TRACE_ALLOC_TRACKING; ``warm_key_export`` compiles the few programs before the captures).
         """
+        if cs:
+            return self._export_user_keys_cs(ix, k_cache, i_src, u_dst, rows_sel, off, n, warm_limit)
         sh = ix.sh
         IDIM, NA, UD = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0]
         P = key_export_piece(NA)
@@ -1265,6 +1286,183 @@ class Model:
                     seen.add(t.buffer_unique_id())
                     ttnn.deallocate(t)
 
+    def _cs_slab(self):
+        """the decode key slabs are column-sharded (tt/indexer_colshard.py)?"""
+        return any(getattr(d, "cs", False) for d in self.dec_idx.values())
+
+    def _export_state_cs(self, Pl, UD):
+        """``_export_state`` of the column-sharded slab: ``Pl`` LOCAL slots per piece; the gather indices [cols, Pl] and the entry mask [cols,1,Pl,1] are sharded over the mesh columns (every column
+        writes its own entries e = g0 + cols * slot + column)."""
+        st = self.__dict__.setdefault("_exp_state_cs", {})
+        if (Pl, UD) not in st:
+            rows, cols = self.rows, self.cols
+            csh = ttnn.ShardTensor2dMesh(self.md, dims=(None, 0), mesh_shape=(rows, cols))
+            st[(Pl, UD)] = dict(
+                idx=ttnn.from_torch(
+                    torch.zeros(cols, Pl, dtype=torch.int32),
+                    device=self.md,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=csh,
+                ),
+                emask=ttnn.from_torch(
+                    torch.zeros(cols, 1, Pl, 1),
+                    device=self.md,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=csh,
+                ),
+                umask=self._export_state(Pl, UD)["umask"],
+                csh=csh,
+            )
+        return st[(Pl, UD)]
+
+    def _export_user_keys_cs(self, ix, k_cache, i_src, u_dst, rows_sel, off, n, warm_limit=None):
+        """``_export_user_keys`` for a column-sharded decode key slab [UD,1,NL,128] per chip (entry e on column e % cols, slot e // cols): the same source blocks of the prefill key FIFO (gathered to a
+        replicated table), pieces of P global entries = P / cols local slots; column c takes the FIFO slots off + g0 + cols * slot + c of its piece (per-column gather indices and entry mask).
+        """
+        sh = ix.sh
+        cols = self.cols
+        IDIM, NL, UD = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0]
+        NAg = NL * cols
+        P = min(NAg, int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536")))
+        P = max(cols, P // cols * cols)
+        Pl = P // cols
+        st = self._export_state_cs(Pl, UD)
+        rep = ttnn.ReplicateTensorToMesh(self.md)
+        csh = st["csh"]
+        um = torch.zeros(self.rows, UD, 1, 1, 1)
+        for r in rows_sel:
+            um[r, u_dst] = 1.0
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                um.reshape(self.rows * UD, 1, 1, 1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=self._mp(),
+            ),
+            st["umask"],
+        )
+        if sh is None:
+            KL = ix.keys.shape[2]
+            blocks = [(0, KL, None)]
+        else:
+            Lc = sh["Lc"]
+            dL = cols * Lc - ix.KL_full
+            KL = ix.KL_full
+            Lq = min(Lc, P // cols)
+            blocks = []
+            for q0 in range(0, Lc, Lq):
+                q0 = min(q0, Lc - Lq)
+                blocks.append((cols * q0 - dL, cols * Lq, q0))
+            blocks = list(dict.fromkeys(blocks))
+        # prefill FIFO sharded by the SAME interleave (virtual slot v on column (v + dL) % cols, local row (v + dL) // cols): when (off + dL) % cols == 0 the entry e of the decode slab (column e % cols) sits on the
+        # SAME column of the FIFO, so the hand-off is column-local (no all_gather of the FIFO, no per-block gather tables). DSV41_IDX_CS_EXPORT_LOCAL=0 restores the gathered export.
+        aligned = (
+            sh is not None
+            and os.environ.get("DSV41_IDX_CS_EXPORT_LOCAL", "1") == "1"
+            and (cols * sh["Lc"] - ix.KL_full + off) % cols == 0
+        )
+        if aligned:
+            blocks = [(0, ix.KL_full, None)]
+        warm = n == 0 and off == 0 and not rows_sel
+        KEY_FILL = (
+            os.environ.get("DSV41_KEY_EXPORT_FILL", "1") == "1"
+        )  # (default as the replicated export: in place, the captured decode traces read the slab by address)
+        FILL_MAX = key_export_fill_max(NL)  # local rows
+        NP = -(-NAg // P)
+        ar_l = torch.arange(Pl)[None, :]
+        ar_c = torch.arange(cols)[:, None]
+        for base, SB, q0 in blocks:
+            hi = min(base + SB, KL)
+            pieces = []
+            for g0 in dict.fromkeys(min(pj * P, NAg - P) for pj in range(NP)):
+                g1 = g0 + P
+                a_, b_ = max(off + g0, base, 0), min(off + min(g1, n), hi)  # source slots served by this (block, piece)
+                if (warm and (warm_limit is None or g0 < warm_limit)) or a_ < b_:
+                    pieces.append((g0, g1, a_, b_))
+            if not pieces:
+                continue
+            if sh is None:
+                fifo = ttnn.slice(ix.keys, [i_src, 0, 0, 0], [i_src + 1, 1, KL, IDIM])
+                table = ttnn.to_layout(
+                    fifo, ttnn.ROW_MAJOR_LAYOUT
+                )  # (a full-extent slice may alias ix.keys: never freed)
+                tmp_blk = [table, fifo]
+            elif aligned:
+                k = ttnn.to_layout(
+                    ttnn.slice(ix.keys, [i_src, 0, 0, 0], [i_src + 1, 1, sh["Lc"], IDIM]), ttnn.ROW_MAJOR_LAYOUT
+                )  # this column's FIFO rows
+                table = k
+                tmp_blk = [k]
+            else:
+                k = ttnn.to_layout(
+                    ttnn.slice(ix.keys, [i_src, 0, q0, 0], [i_src + 1, 1, q0 + Lq, IDIM]), ttnn.ROW_MAJOR_LAYOUT
+                )
+                g = sh["mc"].allgather(
+                    k, sh["ccl"], axis=1, dim=1
+                )  # [1, cols, Lq, 128]: g[:, c, q] = padded slot cols * (q0 + q) + c
+                g = ttnn.permute(g, (0, 2, 1, 3))
+                table = ttnn.reshape(g, [1, 1, SB, IDIM])
+                tmp_blk = [k, g, table]
+            table = ttnn.reshape(table, [1, 1, table.shape[2], IDIM])
+            for g0, g1, a_, b_ in pieces:
+                src = (
+                    off + g0 + cols * ar_l + ar_c
+                )  # [cols, Pl]: FIFO slot of local slot l on column c (entry g0 + cols * l + c)
+                m = (src >= a_) & (src < b_)
+                if aligned:
+                    idx = torch.where(m, (src + (cols * sh["Lc"] - ix.KL_full)) // cols, torch.zeros_like(src)).to(
+                        torch.int32
+                    )  # local FIFO row of the virtual slot (the same on every column the slot belongs to)
+                else:
+                    idx = torch.where(m, src - base, torch.zeros_like(src)).to(torch.int32)
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=csh), st["idx"]
+                )
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        m.float().reshape(cols, 1, Pl, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=csh
+                    ),
+                    st["emask"],
+                )
+                j0 = g0 // cols  # first local slot of the piece
+                emb = ttnn.embedding(st["idx"], table, layout=ttnn.TILE_LAYOUT)  # [1, Pl, IDIM]
+                emb = ttnn.reshape(emb, [1, 1, Pl, IDIM])
+                emb_full = ttnn.repeat(emb, ttnn.Shape([UD, 1, 1, 1]))
+                cond = ttnn.multiply(st["umask"], st["emask"])  # [UD, 1, Pl, 1]
+                old = ttnn.slice(k_cache, [0, 0, j0, 0], [UD, 1, j0 + Pl, IDIM])
+                old_bf = old if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(old, ttnn.bfloat16)
+                new = ttnn.where(cond, emb_full, old_bf)
+                out = new if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(new, k_cache.dtype)
+                if KEY_FILL and j0 + Pl <= FILL_MAX:
+                    full = (
+                        out
+                        if j0 == 0
+                        else ttnn.concat([ttnn.slice(k_cache, [0, 0, 0, 0], [UD, 1, j0, IDIM]), out], dim=2)
+                    )
+                    for u_ in range(UD):
+                        inp = full if UD == 1 else ttnn.slice(full, [u_, 0, 0, 0], [u_ + 1, 1, j0 + Pl, IDIM])
+                        ttnn.fill_cache(k_cache, inp, u_)
+                        if inp is not full:
+                            ttnn.deallocate(inp)
+                    if full is not out:
+                        ttnn.deallocate(full)
+                else:
+                    ttnn.experimental.slice_write(out, k_cache, [0, 0, j0, 0], [UD, 1, j0 + Pl, IDIM], [1, 1, 1, 1])
+                seen = {ix.keys.buffer_unique_id(), k_cache.buffer_unique_id()}
+                for t in (emb, emb_full, cond, old, old_bf, new, out):
+                    if t.is_allocated() and t.buffer_unique_id() not in seen:
+                        seen.add(t.buffer_unique_id())
+                        ttnn.deallocate(t)
+            seen = {ix.keys.buffer_unique_id(), k_cache.buffer_unique_id()}
+            for t in tmp_blk:
+                if t.is_allocated() and t.buffer_unique_id() not in seen:
+                    seen.add(t.buffer_unique_id())
+                    ttnn.deallocate(t)
+
     def selftest_key_export(self):
         """Device self-test of ``_export_user_keys`` on the idle model: random content in the prefill key FIFO of the first key-owner layer, an export of FIFO[off, off + n) into user ``u`` of
         mesh rows 1 and 3 only, and a check of the decode key slab on the host (exported entries equal up to bfp8 rounding, every other row / user / entry unchanged). Returns the report string.
@@ -1282,6 +1480,8 @@ class Model:
             return "no key owner"
         if ix.sh is not None:
             return "column-sharded prefill indexer: self-test skipped"
+        if dec.cs:
+            return "column-sharded decode key slab: self-test skipped"
         rows, cols = self.rows, self.cols
         Up, KL, IDIM = ix.keys.shape[0], ix.keys.shape[2], ix.keys.shape[3]
         k = dec.k_cache
@@ -1336,6 +1536,14 @@ class Model:
             return
         for L, dec in self.dec_idx.items():
             if L in self.index_owner:
+                if dec.cs:
+                    # (column-sharded key slab: its own export, the lean in-place write does not apply)
+                    P = min(dec.n_global, int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536")))
+                    self._export_state_cs(max(self.cols, P // self.cols * self.cols) // self.cols, dec.k_cache.shape[0])
+                    self._export_state(
+                        min(dec.n_head, int(os.environ.get("DSV41_KEY_EXPORT_PIECE", "65536"))), dec.k_head.shape[0]
+                    )
+                    continue
                 P = key_export_piece(dec.k_cache.shape[2])
                 self._export_state(P, dec.k_cache.shape[0])
 
@@ -1352,7 +1560,7 @@ class Model:
             if ix is None or ix.key_owner is not None or ix.keys is None:
                 continue
             for i_src in range(ix.keys.shape[0]):
-                self._export_user_keys(ix, dec.k_cache, i_src, 0, [], 0, 0, warm_limit=limit)
+                self._export_dec_keys(dec, ix, i_src, 0, [], 0, 0, warm_limit=limit)
         ttnn.synchronize_device(self.md)
 
     def _export_keys_users(self, users, ends, s_end, slot_of):
@@ -1379,9 +1587,9 @@ class Model:
             ) - s_end // r  # column-sharded FIFO: ix.KL is the per-column length
             if ix.sh is not None and ix.sh.get("single"):
                 off = ix.sh["Cc"]  # single trace: entry j sits at slot Cc + j
-            n = min(ceil32(mx // r), s_end // r, dec.k_cache.shape[2])
+            n = min(ceil32(mx // r), s_end // r, dec.n_global if dec.cs else dec.k_cache.shape[2])
             for (i_src, u_dst), rws in by_u.items():
-                self._export_user_keys(ix, dec.k_cache, i_src, u_dst, sorted(rws), off, n)
+                self._export_dec_keys(dec, ix, i_src, u_dst, sorted(rws), off, n)
         ttnn.synchronize_device(self.md)
 
     # ---- lazy key hand-off (DSV41_PF_LAZY_EXPORT=1, default): the server does not know which chunk step is the LAST of a prompt (the plugin sends the END of the scheduled chunk, never the prompt length),

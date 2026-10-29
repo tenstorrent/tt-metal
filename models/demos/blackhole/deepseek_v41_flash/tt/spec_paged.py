@@ -16,11 +16,11 @@ The block compression of ratio-2 layers (previous-token chain inside the block, 
 import os
 
 import torch
-import ttnn
 
+import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
-from models.demos.blackhole.deepseek_v41_flash.tt.indexer import _FP4_FUSED, DIM, HEADS, DSV41DecodeIndexer
+from models.demos.blackhole.deepseek_v41_flash.tt.indexer import _FP4_FUSED, DIM, HEADS, DSV41DecodeIndexer, _cs_consts
 from models.demos.blackhole.deepseek_v41_flash.tt.model import DSV41DecodeChain
 from models.demos.blackhole.deepseek_v41_flash.tt.paged_attention import (
     DSV41PagedAttention,
@@ -84,15 +84,43 @@ class SpecIndexer(DSV41DecodeIndexer):
             st[key] = ttnn.typecast(nv, ttnn.uint32)
         return st[key]
 
+    def _cs_nvalid_u32(self, st):
+        """column-sharded slab: the valid LOCAL slots of every query row on this column, ceil((nvalid - c) / cols) (entry e is slot e // cols of column e % cols), uint32 [1,1,1,32] row-major; cached in ``st``."""
+        key = ("nvalid_loc_u32", self.R)
+        if key not in st:
+            nv = ttnn.reshape(ttnn.to_layout(st["nvalid"], ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, self.R])
+            nv = ttnn.to_layout(ttnn.pad(nv, [(0, 0), (0, 0), (0, 0), (0, 32 - self.R)], 0.0), ttnn.TILE_LAYOUT)
+            cc = _cs_consts(self.md, self.n_alloc)["col_id"]
+            loc = ttnn.floor(ttnn.multiply(ttnn.subtract(ttnn.add(nv, float(self.cols - 1)), cc), 1.0 / self.cols))
+            st[key] = ttnn.typecast(ttnn.to_layout(loc, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint32)
+        return st[key]
+
     def forward(self, x, qr, st, return_scores=False):
         if _FUSED_SCORE and not return_scores and "nvalid" in st and self.R <= 32:
             # fused score + validity mask (tt/idx_score.py, bit-identical to score() + mask_scores(); DSV41_IDX_FUSED=0 restores the chain)
             from models.demos.blackhole.deepseek_v41_flash.tt.idx_score import score_mask_fused
 
             q, w = self.project(x, qr, st)
-            sc = score_mask_fused(
-                q, self.k_cache, self._w_flat, self._nvalid_u32(st), self.n, self.n_score, valid=st["valid"]
-            )
+            if self.cs and not self.head_mode:
+                # column-sharded slab: this column scores its local slots (valid local counts per row), local top-k, candidate all_gather, global top-k (tt/indexer_colshard.py)
+                from models.demos.blackhole.deepseek_v41_flash.tt.indexer_colshard import _cs_fast, cs_select
+
+                vl = self._cs_vl(st)
+                sc = score_mask_fused(
+                    q, self.k_cache, self._w_flat, self._cs_nvalid_u32(st), self.n, self.n_score, valid=vl
+                )
+                ids = cs_select(
+                    self,
+                    _cs_consts(self.md, self.n_alloc),
+                    ttnn.reshape(sc, [self.R, 1, 1, self.n_score]),
+                    self.R,
+                    self.n_score,
+                    None,
+                    vl,
+                )[0]
+                return ids if _cs_fast() else _canonical_ids(ids)  # (the fast merge returns the ids ascending already)
+            slab = self.k_head if self.head_mode else self.k_cache
+            sc = score_mask_fused(q, slab, self._w_flat, self._nvalid_u32(st), self.n, self.n_score, valid=st["valid"])
             ids = ttnn.experimental.topk_large_indices(sc, k=self.topk, valid_length_tensor=st["valid"])
             ids = ids if ids.shape[0] == self.R else ttnn.reshape(ids, [self.R, 1, 1, self.topk])
             return _canonical_ids(
@@ -102,15 +130,9 @@ class SpecIndexer(DSV41DecodeIndexer):
 
     def score(self, q, w):
         U, n, R = self.T, self.n, self.R
-        kc = self.k_cache
-        Us = getattr(self, "U_slab", None)
-        if (
-            Us is not None and Us != U
-        ):  # decode bucket: the users u < U of the shared slab (sliced once per round by the owner's key append)
-            own = getattr(self, "_slab_owner", None) or self
-            kc = own.__dict__.get("_kc_view")
-            if kc is None:
-                kc = ttnn.slice(self.k_cache, [0, 0, 0, 0], [U, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
+        kc = self._scoring_slab(
+            U
+        )  # (a decode bucket: the users u < U of the shared slab, sliced once per round by the owner's key append)
         NS = self.n_score
         SP = int(os.environ.get("DSV41_SPEC_SCORE_PIECE", "131072"))
         if NS > SP and NS % 32 == 0:
@@ -170,7 +192,10 @@ class SpecIndexer(DSV41DecodeIndexer):
                 self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, R * 4, 32))), ttnn.bfloat16
             )
         k_rm = ttnn.reshape(ttnn.to_layout(ttnn.reshape(k, (1, 1, R, DIM)), ttnn.ROW_MAJOR_LAYOUT), (U, n, DIM))
-        ents = self._ent_per_j(st)
+        ents_g = self._ent_per_j(st)  # global entries
+        ents = (
+            [self._cs_ent(e) for e in ents_g] if self.cs else ents_g
+        )  # column-sharded slab: the local slot on the owner column, -1 (skip) elsewhere
         for j in range(n):
             kj = ttnn.slice(k_rm, [0, j, 0], [U, j + 1, DIM])  # [U,1,128] row-major
             Us = getattr(self, "U_slab", None)
@@ -184,10 +209,17 @@ class SpecIndexer(DSV41DecodeIndexer):
             kj = ttnn.to_layout(ttnn.reshape(kj, (1, Uk, 1, DIM)), ttnn.TILE_LAYOUT)  # one tile per user, key in row 0
             kj = ttnn.to_memory_config(kj, self._kcfg)
             ttnn.experimental.paged_update_cache(self.k_cache, kj, update_idxs_tensor=ent_j, page_table=None)
+            if (
+                self.cs
+            ):  # the replicated head slab holds the entries < n_head too (ent_j is already the LOCAL slot: the head takes the global entry)
+                ent_g = ents_g[j] if Us is None or Us == U else ttnn.concat([ents_g[j], self._pad_idx], dim=0)
+                ttnn.experimental.paged_update_cache(
+                    self.k_head, kj, update_idxs_tensor=self._head_ent(ent_g), page_table=None
+                )
             ttnn.deallocate(kj)
         Us = getattr(self, "U_slab", None)
         if Us is not None and Us != U:
-            self._kc_view = ttnn.slice(self.k_cache, [0, 0, 0, 0], [U, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
+            self._slab_view()
 
 
 class SpecPagedWindowAttention(_SpecFinish, DSV41PagedAttention):

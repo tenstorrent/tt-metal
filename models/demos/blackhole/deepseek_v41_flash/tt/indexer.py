@@ -113,7 +113,9 @@ def ids_sort(ids):
         R *= v
     assert ids.dtype == ttnn.uint32 and ids.layout == ttnn.ROW_MAJOR_LAYOUT and k % 2 == 0
     mesh = ids.device()
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+    )
     grid = mesh.compute_with_storage_grid_size()
     cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)][: min(R, grid.x * grid.y)]
     nc = len(cores)
@@ -124,7 +126,15 @@ def ids_sort(ids):
     u32 = ttnn.uint32
     cbs = [_cb(core_set, 0, 1, k * 4, u32), _cb(core_set, 1, 1, k * 4, u32), _cb(core_set, 2, 1, 256 * 4, u32)]
     ct = [0, 1, 2, k] + _acc(ids) + _acc(out)
-    kern = _kernel("ids_sort.cpp", core_set, ct, rt, None, ttnn.ReaderConfigDescriptor(), common=[ids.buffer_address(), out.buffer_address()])
+    kern = _kernel(
+        "ids_sort.cpp",
+        core_set,
+        ct,
+        rt,
+        None,
+        ttnn.ReaderConfigDescriptor(),
+        common=[ids.buffer_address(), out.buffer_address()],
+    )
     prog = ttnn.ProgramDescriptor(kernels=[kern], semaphores=[], cbs=cbs)
     prog.custom_program_hash = _hash(0x1D5, R, k, tuple(_acc(ids)), tuple(_acc(out)))
     ttnn.generic_op([ids, out], prog)
@@ -162,7 +172,9 @@ def mask_scores(scores, nvalid, ar):
     U, n = int(scores.shape[0]), int(scores.shape[-1])
     sc = ttnn.reshape(scores, [1, 1, U, n])
     nv = ttnn.reshape(ttnn.to_layout(nvalid, ttnn.ROW_MAJOR_LAYOUT), [1, 1, U, 1])
-    if os.environ.get("DSV41_MASK_LEAN", "1") == "1":  # default ON (bit-identical to the float32 path, 78 vs 140 us at 32,832 entries; DSV41_MASK_LEAN=0 restores the old chain)
+    if (
+        os.environ.get("DSV41_MASK_LEAN", "1") == "1"
+    ):  # default ON (bit-identical to the float32 path, 78 vs 140 us at 32,832 entries; DSV41_MASK_LEAN=0 restores the old chain)
         # same values with ~1/3 of the DRAM temporaries (no float32 copies; a bf16 select of bf16 scores is the typecast round trip of the float32 one): the eager decode step of a 1M build
         # needs ~17 MiB/bank blocks for them (measured bit-identical to the float32 path, test in the commit message)
         keep = ttnn.lt(ar, ttnn.to_layout(nv, ttnn.TILE_LAYOUT), dtype=ttnn.bfloat16)
@@ -181,8 +193,65 @@ def mask_scores(scores, nvalid, ar):
 
 
 _ARANGES = {}  # id(mesh device) -> {n: [1,1,1,n] float32 tile 0..n-1}
+_CS_CONSTS = {}  # id(mesh device) -> {n_local: column-shard constants (see ``_cs_consts``)}
 
-_FP4_FUSED = os.environ.get("DSV41_IDX_FP4", "fused") == "fused"  # fused fp4 simulation of the indexer q / key (bit-identical); DSV41_IDX_FP4=chain: the ttnn op chain
+
+def colshard_wanted(n_entries, cols, backend="matmul"):
+    """Column-shard the decode key slab (tt/indexer_colshard.py: entry interleave over the mesh columns, local top-k, all_gather of the candidates, global top-k)? ``DSV41_IDX_KEY_SHARD``
+    (default OFF): ``1`` = for slabs of at least ``DSV41_IDX_CS_MIN_ENTRIES`` entries (default 65536, i.e. a context of 131072 at ratio 2), ``all`` = every slab, ``0`` / unset = never. The slab then holds
+    1/cols of the entries per chip, scored with the matmul backend; position buckets up to ``DSV41_IDX_CS_HEAD`` positions use a small replicated head slab.
+    """
+    v = os.environ.get("DSV41_IDX_KEY_SHARD", "0").strip().lower()
+    if v in ("", "0", "off", "false"):
+        return False
+    if backend != "matmul" and v != "all":
+        return False
+    if v == "all":
+        return True
+    return int(n_entries) >= int(os.environ.get("DSV41_IDX_CS_MIN_ENTRIES", "65536"))
+
+
+def _cs_vl_full(md, n_alloc, n):
+    """uint32 [1,1,1,1] per device = n (every local slot of a scored length ``n`` is ranked; the entries beyond the valid ones are masked on their global ids). Created by ``set_pos_bucket``, before any trace."""
+    d = _cs_consts(md, n_alloc).setdefault("vl", {})
+    if n not in d:
+        rows, cols = tuple(md.shape)
+        d[n] = ttnn.from_torch(
+            torch.full((cols, 1, 1, 1), n, dtype=torch.int32),
+            device=md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(None, 0), mesh_shape=(rows, cols)),
+        )
+    return d[n]
+
+
+def _cs_consts(md, n_local):
+    """Per-device constants of the column-sharded selection, shared by every indexer of the device: global id of every local slot (cols * slot + column), the column id, the full valid length."""
+    d = _CS_CONSTS.setdefault(id(md), {})
+    if n_local not in d:
+        rows, cols = tuple(md.shape)
+        c = torch.arange(cols, dtype=torch.float32)
+        j = torch.arange(n_local, dtype=torch.float32)
+        csh = ttnn.ShardTensor2dMesh(md, dims=(None, 0), mesh_shape=(rows, cols))
+        up = lambda t, dt, lay: ttnn.from_torch(
+            t.contiguous(), device=md, dtype=dt, layout=lay, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=csh
+        )
+        d[n_local] = dict(
+            gid=up((j[None, :] * cols + c[:, None]).reshape(cols, 1, 1, n_local), ttnn.float32, ttnn.TILE_LAYOUT),
+            col_id=up(c.reshape(cols, 1, 1, 1), ttnn.float32, ttnn.TILE_LAYOUT),
+            # the column index as a 64-byte row-major page per device (tt/idx_cs_kernels/cs_cand.cpp)
+            col_u32=up(
+                c.to(torch.int32).reshape(cols, 1, 1, 1).repeat(1, 1, 1, 16), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+            ),
+        )
+    return d[n_local]
+
+
+_FP4_FUSED = (
+    os.environ.get("DSV41_IDX_FP4", "fused") == "fused"
+)  # fused fp4 simulation of the indexer q / key (bit-identical); DSV41_IDX_FP4=chain: the ttnn op chain
 
 SELECT_CONCAT_BYTES = (
     1 << 20
@@ -190,6 +259,10 @@ SELECT_CONCAT_BYTES = (
 
 
 class DSV41DecodeIndexer:
+    cs = False  # column-sharded key slab (see ``__init__``)
+    head_mode = False  # (column-sharded slab) the traces being captured score the replicated head slab ``k_head`` (small position buckets) instead of the sharded slab
+    k_head = None
+
     def __init__(
         self,
         mesh_device,
@@ -206,14 +279,32 @@ class DSV41DecodeIndexer:
         k_chunk=128,
         head_group=0,
         fp4_q=False,
+        colshard=False,
+        mesh_config=None,
+        ccl=None,
     ):
         """``w``: ``wq_b`` [4096, 1280] and ``weights_proj`` [32, 5120] (dequantised bf16 [out, in]); ``freqs_cis``: complex RoPE table of the layer.
         ``n_alloc``: allocated key length per user (multiple of 32, >= max entries + 32: row 0 of the query tile may only see keys <= n_alloc - 32).
+        ``colshard``: the key slab is sharded over the mesh columns by an entry interleave (entry e on column e % cols, slot e // cols; ``n_alloc`` is then rounded up to a multiple of 32 * cols and
+        ``self.n_alloc`` is the LOCAL length, ``self.n_global`` the full one); needs the matmul backend and ``mesh_config`` / ``ccl`` (the candidate all_gather). Layout and selection: tt/indexer_colshard.py.
         """
         assert n_alloc % 32 == 0 and topk % 16 == 0
         self.md, self.T, self.ratio, self.topk = mesh_device, users_per_row, ratio, topk
         self.rows, self.cols = tuple(mesh_device.shape)
         self.B = self.rows * self.T
+        self.cs = bool(colshard)
+        self.n_global = n_alloc
+        if self.cs:
+            assert backend == "matmul", "the column-sharded key slab is scored with the matmul backend"
+            assert mesh_config is not None and ccl is not None
+            n_alloc = -(-n_alloc // (32 * self.cols)) * (32 * self.cols)
+            self.n_global = n_alloc
+            n_alloc //= self.cols
+        self.mc, self.ccl = mesh_config, ccl
+        self.head_pos = int(
+            os.environ.get("DSV41_IDX_CS_HEAD", "32768")
+        )  # position buckets up to this score the replicated head slab (the sharded select has a fixed ~0.5 ms cost per layer)
+        self.n_head = min(self.n_global, -(-(self.head_pos // ratio + 32) // 32) * 32) if self.cs else 0
         self.n_alloc, self.key_dtype, self.q_dtype, self.backend, self.fp4_q = (
             n_alloc,
             key_dtype,
@@ -255,23 +346,56 @@ class DSV41DecodeIndexer:
         """Score / rank only the first ``nb`` entries of the key slab (matmul backend): ``nb`` covers every entry that a position < ``pos_bucket`` can hold (+ the 32 of the block / group in
         progress). A trace captured with a bucket is replayed only while every user's position (+ the verify block) stays below it, so the per-step cost follows the positions, not the
         allocated maximum (the score matmuls, the validity mask and the top-k all scale with ``nb``). ``None`` / a bucket >= the slab: the whole slab.
+        Column-sharded slab: buckets up to ``head_pos`` positions score the replicated head slab (``head_mode``, exactly the replicated code path), the larger ones and the whole slab the sharded slab.
         """
         # dense: every position of the bucket has <= topk valid entries (pos + 1 <= topk * ratio), so the top-k keeps ALL of them: the attention op builds the same indices itself (no ids, the path of a
         # context <= 512 build) and the indexer's project / score / select are skipped. The keys keep being appended (later buckets rank them).
         self.dense = pos_bucket is not None and int(pos_bucket) <= self.topk * self.ratio
+        self.head_mode = False
         if pos_bucket is None or self.backend != "matmul":
             self.nb = None
             self.dense = False
             self._arange_for(self.n_alloc)
+            if self.cs:
+                _cs_vl_full(self.md, self.n_alloc, self.n_alloc)
             return self.n_alloc
         if self.dense:
             self.nb = None
             return self.n_alloc
         nb = -(-(int(pos_bucket) // self.ratio + 32) // 32) * 32
+        if self.cs:
+            if int(pos_bucket) <= self.head_pos:
+                self.head_mode = True
+                self.nb = nb
+                self._arange_for(nb)
+                return nb
+            nb = (
+                -(-nb // (32 * self.cols)) * 32
+            )  # the first nb entries are the first nb / cols local slots of every column (entry interleave)
         nb = max(nb, -(-(self.topk + 32) // 32) * 32)
         self.nb = None if nb >= self.n_alloc else nb
         self._arange_for(self.n_score)
+        if self.cs:
+            _cs_vl_full(self.md, self.n_alloc, self.n_score)
         return self.n_score
+
+    def _scoring_slab(self, U):
+        """the key slab the score of the current traces reads, users u < U: the sharded slab, or the replicated head slab (``head_mode``); a decode bucket (U < the slab's users) reads the prefix view
+        that the owner's key append sliced once per step."""
+        slab = self.k_head if self.head_mode else self.k_cache
+        Us = getattr(self, "U_slab", None)
+        if Us is not None and Us != U:
+            own = getattr(self, "_slab_owner", None) or self
+            kc = own.__dict__.get("_kh_view" if self.head_mode else "_kc_view")
+            if kc is None:
+                kc = ttnn.slice(slab, [0, 0, 0, 0], [U, 1, slab.shape[2], slab.shape[3]])
+            return kc
+        return slab
+
+    def _slab_view(self):
+        """(owner, bucket) the users u < T of the slab being scored, sliced ONCE per step after the key append and shared by every index layer scoring against this slab."""
+        slab, attr = (self.k_head, "_kh_view") if self.head_mode else (self.k_cache, "_kc_view")
+        setattr(self, attr, ttnn.slice(slab, [0, 0, 0, 0], [self.T, 1, slab.shape[2], slab.shape[3]]))
 
     @property
     def n_score(self):
@@ -297,6 +421,33 @@ class DSV41DecodeIndexer:
     def load_keys(self, index_k: torch.Tensor):
         """index_k [B, N, 128] (RoPE'd, fp4-simulated keys of every user, row-major user order) -> device cache [U, 1, n_alloc, 128] per mesh row."""
         B, N, _ = index_k.shape
+        if (
+            self.cs
+        ):  # entry e -> column e % cols, local slot e // cols: [B, cols, n_local, 128] sharded over (mesh rows, columns)
+            assert B == self.B and N + 32 <= self.n_global
+            cols, nl = self.cols, self.n_alloc
+            full = torch.zeros(B, nl * cols, DIM, dtype=torch.bfloat16)
+            full[:, :N] = index_k.to(torch.bfloat16)
+            self.k_cache = ttnn.from_torch(
+                full.reshape(B, nl, cols, DIM).permute(0, 2, 1, 3).contiguous(),
+                device=self.md,
+                dtype=self.key_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, 1), mesh_shape=(self.rows, cols)),
+            )
+            head = torch.zeros(B, 1, self.n_head, DIM)  # the replicated head slab (entries [0, n_head))
+            m = min(N, self.n_head)
+            head[:, 0, :m] = index_k[:, :m].float()
+            self.k_head = ttnn.from_torch(
+                head,
+                device=self.md,
+                dtype=self.key_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=(self.rows, cols)),
+            )
+            return
         assert B == self.B and N + 32 <= self.n_alloc
         full = torch.zeros(B, 1, self.n_alloc, DIM)
         full[:, 0, :N] = index_k.float()
@@ -315,6 +466,9 @@ class DSV41DecodeIndexer:
         its own user ``user``), SAME dtype as the slab, N a multiple of 32; row n of ``keys`` becomes compressed entry ``entry0 + n`` (entry j = the key of
         compressed group j, RoPE'd at position j * ratio, fp4-simulated; layout notes in paged_api.md). ``entry0`` must be a multiple of 32.
         """
+        assert (
+            not self.cs
+        ), "the column-sharded key slab is written by the model's key export (dsv41_model._export_user_keys_cs)"
         N = int(keys.shape[-2])
         assert N % 32 == 0 and entry0 % 32 == 0 and entry0 + N <= self.n_alloc
         if entry0 == 0:
@@ -430,25 +584,28 @@ class DSV41DecodeIndexer:
                 self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, T * 4, 32))), ttnn.bfloat16
             )
         k = ttnn.reshape(k, (1, 1, T, DIM))
-        ent = st["ent"]
+        ent = self._cs_ent(st["ent"]) if self.cs else st["ent"]
+        ent_h = self._head_ent(st["ent"]) if self.cs else None
         Us = getattr(self, "U_slab", None)
         if Us is not None and Us != T:
             # decode bucket (tt/decode_buckets.py): the key slab keeps its [U,..] shape and the op takes one row per slab user: the users outside the bucket get a zero key at entry 0
             # (they hold no live state; their slab rows are rewritten by the prefill hand-off)
             k = ttnn.pad(k, [(0, 0), (0, 0), (0, Us - T), (0, 0)], 0.0)
             ent = ttnn.concat([ent, self._pad_idx], dim=0)
+            if ent_h is not None:
+                ent_h = ttnn.concat([ent_h, self._pad_idx], dim=0)
             T = Us
         k = ttnn.to_layout(
             ttnn.reshape(ttnn.to_layout(k, ttnn.ROW_MAJOR_LAYOUT), (1, T, 1, DIM)), ttnn.TILE_LAYOUT
         )  # one tile per user, key in row 0
         k = ttnn.to_memory_config(k, self._kcfg)
         ttnn.experimental.paged_update_cache(self.k_cache, k, update_idxs_tensor=ent, page_table=None)
+        if ent_h is not None:  # the replicated head slab holds entries < n_head too
+            ttnn.experimental.paged_update_cache(self.k_head, k, update_idxs_tensor=ent_h, page_table=None)
         if Us is not None and Us != self.T:
             # decode bucket: the users u < T of the slab, sliced ONCE per step here (after this layer's append) and shared by every index layer that scores against this slab
             # (``_slab_owner``): ~20 slices of a few MB per step otherwise
-            self._kc_view = ttnn.slice(
-                self.k_cache, [0, 0, 0, 0], [self.T, 1, self.k_cache.shape[2], self.k_cache.shape[3]]
-            )
+            self._slab_view()
         ttnn.deallocate(k)
 
     def project(self, x, qr, st):
@@ -497,15 +654,9 @@ class DSV41DecodeIndexer:
                     )
                 )
             return out
-        kc = self.k_cache
-        Us = getattr(self, "U_slab", None)
-        if (
-            Us is not None and Us != self.T
-        ):  # decode bucket: the users u < T of the shared slab (sliced once per step by the owner's key append)
-            own = getattr(self, "_slab_owner", None) or self
-            kc = own.__dict__.get("_kc_view")
-            if kc is None:
-                kc = ttnn.slice(self.k_cache, [0, 0, 0, 0], [self.T, 1, self.k_cache.shape[2], self.k_cache.shape[3]])
+        kc = self._scoring_slab(
+            self.T
+        )  # (a decode bucket: the users u < T of the shared slab, sliced once per step by the owner's key append)
         if self.nb is not None:  # position bucket: the first nb entries of every user's slab
             kc = ttnn.slice(kc, [0, 0, 0, 0], [self.T, 1, self.nb, DIM])
         s = ttnn.matmul(q, kc, transpose_b=True, activation="relu", compute_kernel_config=self.ckc)  # [U,1,32,T]
@@ -517,6 +668,11 @@ class DSV41DecodeIndexer:
         for all users (rows are ranked in parallel, so the cost is that of one user): fused backend concatenates row 0 (the query row) of every
         user's score tile. ``st["valid"]``: valid length (device tensor, the batch maximum); ``st["nvalid"]`` (optional, float32 [U,1,1,1] tile): per-user valid entry counts -> per-user masking (ragged batches).
         """
+        if self.cs and not self.head_mode:
+            from models.demos.blackhole.deepseek_v41_flash.tt.indexer_colshard import _cs_fast
+
+            ids = self._cs_select(scores, st)
+            return ids if _cs_fast() else canonical_ids(ids)  # (the fast merge returns the ids ascending already)
         if self.backend == "fused":
             rows = [ttnn.slice(s, [0, 0, 0, 0], [1, 1, 1, self.n_alloc]) for s in scores]
             if len(rows) > 1 and len(rows) * self.n_alloc * 2 >= SELECT_CONCAT_BYTES:
@@ -541,6 +697,55 @@ class DSV41DecodeIndexer:
         ids = ttnn.experimental.topk_large_indices(scores, k=self.topk, valid_length_tensor=st["valid"])
         ids = ids if ids.shape[0] == scores.shape[0] else ttnn.reshape(ids, [scores.shape[0], 1, 1, self.topk])
         return canonical_ids(ids)
+
+    # ---- column-sharded key slab -----------------------------------------------------------------------------------------------
+    def _cs_ent(self, ent):
+        """global entry index int32 [T] row-major (-1 = skip) -> local slot of THIS column's slab (e // cols on the owner column e % cols, -1 elsewhere), int32 [T] row-major, as the update
+        indices of ``paged_update_cache`` (computed on the device in float32: exact below 2**24)."""
+        T = int(ent.shape[0])
+        cc = _cs_consts(self.md, self.n_alloc)["col_id"]
+        e = ttnn.to_layout(ttnn.typecast(ttnn.reshape(ent, [1, 1, 1, T]), ttnn.float32), ttnn.TILE_LAYOUT)
+        loc = ttnn.floor(ttnn.multiply(e, 1.0 / self.cols))
+        own = ttnn.eq(ttnn.subtract(e, ttnn.multiply(loc, float(self.cols))), cc)
+        v = ttnn.where(own, loc, -1.0)
+        return ttnn.reshape(ttnn.to_layout(ttnn.typecast(v, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [T])
+
+    def _head_ent(self, ent):
+        """global entry index int32 [T] row-major (-1 = skip) -> the same for the replicated head slab: entries >= n_head are skipped (-1)."""
+        T = int(ent.shape[0])
+        e = ttnn.to_layout(ttnn.typecast(ttnn.reshape(ent, [1, 1, 1, T]), ttnn.float32), ttnn.TILE_LAYOUT)
+        v = ttnn.where(ttnn.lt(e, float(self.n_head)), e, -1.0)
+        return ttnn.reshape(ttnn.to_layout(ttnn.typecast(v, ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [T])
+
+    def _cs_vl(self, st):
+        """uint32 [1,1,1,1] row-major per device: the valid local slots of this column for the batch maximum ``st["valid"]``, ceil((N - c) / cols) (>= topk); cached in ``st``."""
+        vl = st.get("_vl_col")
+        if vl is None:
+            consts = _cs_consts(self.md, self.n_alloc)
+            v = ttnn.to_layout(ttnn.typecast(st["valid"], ttnn.float32), ttnn.TILE_LAYOUT)
+            vc = ttnn.floor(
+                ttnn.multiply(ttnn.subtract(ttnn.add(v, float(self.cols - 1)), consts["col_id"]), 1.0 / self.cols)
+            )
+            vl = ttnn.to_layout(ttnn.typecast(ttnn.clamp(vc, min=float(self.topk)), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+            st["_vl_col"] = vl
+        return vl
+
+    def _cs_select(self, scores, st):
+        """top-``topk`` GLOBAL entry ids uint32 [R,1,1,topk] of the column-sharded slab: ``scores`` [R,1,1,n] (the local scores of this column, ``score``) -> local top-k, all_gather of the candidates
+        over the mesh columns, global top-k (same set as the replicated ``select`` up to bf16 ties). ``st["nvalid"]`` (per-row valid entry counts) masks on the global ids, else ``st["valid"]``
+        (the batch maximum) bounds the local top-k (valid entries of column c: ceil((N - c) / cols))."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.indexer_colshard import cs_select
+
+        consts = _cs_consts(self.md, self.n_alloc)
+        R, n = int(scores.shape[0]), int(scores.shape[-1])
+        nv = vl = None
+        if "nvalid" in st:
+            nv = ttnn.to_layout(
+                ttnn.reshape(ttnn.to_layout(st["nvalid"], ttnn.ROW_MAJOR_LAYOUT), [1, 1, R, 1]), ttnn.TILE_LAYOUT
+            )
+        else:
+            vl = self._cs_vl(st)
+        return cs_select(self, consts, scores, R, n, nv, vl)[0]
 
     def forward(self, x, qr, st, return_scores=False):
         q, w = self.project(x, qr, st)
