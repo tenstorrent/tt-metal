@@ -6,10 +6,7 @@ op: one device run per variant. A gated cell is held to its row's figure (entry 
 entry for a ``domains`` list); a tolerance cell is measured and skipped, and the
 headroom report (``python -m helpers.ulp_budget_diff headroom`` over ``--ulp-measure``)
 holds it to its row's recorded figure. ``--ulp-emit`` writes the table instead of gating
-against it. Marked ``accuracy``, which every LLK workflow deselects; llk-e2e runs it by
-path every night on a Wormhole and a Blackhole card (llk-sfpu-ulp-sweep.yaml), and PR
-Gate runs the Wormhole cells a change can move (llk-sfpu-ulp-pr-check.yaml), which
-``--ulp-variants`` records the builds of. See SFPU_ULP.md for the commands."""
+against it. Marked ``accuracy``; see SFPU_ULP.md for the commands."""
 
 import pytest
 import torch
@@ -54,7 +51,7 @@ _LOG_TAIL = ". The failing lanes are in the ULP-budget log above."
 
 def run_sweep(mathop, formats, approx_mode, dest_acc, node):
     """One variant on hardware over the whole swept input. Returns ``(src, golden,
-    result)``. Under ``--ulp-variants`` it records the build as *node*'s first."""
+    result)``. Records the build for *node* under ``--ulp-variants``."""
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=SWEEP_DIMENSIONS,

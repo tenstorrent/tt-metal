@@ -283,7 +283,7 @@ _RAISED_HEAD = _edited(0, Row(input=F16B, output=F16B, measured=9))
 @pytest.mark.parametrize(
     "head, flags, status",
     [(_BASE, [], 0), (_RAISED_HEAD, [], 1), (_RAISED_HEAD, ["--allow-raises"], 0)],
-    ids=["unchanged", "raised", "raised-admitted"],
+    ids=["unchanged", "raised", "raised-advisory"],
 )
 def test_diff_exit_status(tmp_path, head, flags, status):
     base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
@@ -341,13 +341,6 @@ def test_a_base_the_head_cannot_read_is_named_as_the_base(tmp_path, capsys):
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
     assert main([*argv, "--arch", MEASURED_ARCH.value]) == 2
     assert f"the base table {base_path}" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("allowed", [False, True])
-def test_the_report_says_whether_a_raise_was_admitted(allowed):
-    text = render_budget_diff(compare(_BASE, _RAISED_HEAD), allowed=allowed)
-    assert ("**Allowed:**" in text) is allowed
-    assert ("may only be loosened" in text) is not allowed
 
 
 def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
