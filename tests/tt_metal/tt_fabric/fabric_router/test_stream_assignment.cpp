@@ -71,29 +71,6 @@ std::set<std::string> emitted_names(const StreamAssignment& a) {
     return names;
 }
 
-TEST(StreamAssignmentTest, CreditPlanKeepsEachVcsReasons) {
-    CreditTransportPlan plan{};
-    // No reason has been added yet
-    EXPECT_FALSE(plan.any_vc_uses_counters());
-
-    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
-    plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
-    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
-    EXPECT_TRUE(plan.vc_uses_counters(0));
-    EXPECT_TRUE(plan.vc_uses_counters(1));
-    EXPECT_FALSE(plan.vc_uses_counters(2));
-    EXPECT_TRUE(plan.any_vc_uses_counters());
-    EXPECT_TRUE(plan.has_counter_reason(0, L1CreditCounterReason::MULTI_TXQ));
-    EXPECT_FALSE(plan.has_counter_reason(0, L1CreditCounterReason::EXPRESS));
-    EXPECT_TRUE(plan.has_counter_reason(1, L1CreditCounterReason::MULTI_TXQ));
-    EXPECT_TRUE(plan.has_counter_reason(1, L1CreditCounterReason::EXPRESS));
-    EXPECT_FALSE(plan.has_counter_reason(1, L1CreditCounterReason::NO_COMPLETION_REGISTER));
-
-    // Invalid VC index should throw
-    EXPECT_ANY_THROW(plan.add_counter_reason(builder_config::MAX_NUM_VCS, L1CreditCounterReason::EXPRESS));
-    EXPECT_ANY_THROW(plan.vc_uses_counters(builder_config::MAX_NUM_VCS));
-}
-
 TEST(StreamAssignmentTest, Legacy2DFitsAndPlacesDeterministically) {
     const auto a = make_stream_assignment(stream_requirements(legacy_2d_placement(), CreditTransportPlan{}));
     // The layout: the vc0 sender-free-slots base pinned at the worker-facing constant (the bottom
@@ -118,8 +95,8 @@ TEST(StreamAssignmentTest, Legacy2DFitsAndPlacesDeterministically) {
 
 TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
     CreditTransportPlan plan{};
-    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
-    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
+    plan.vc1_uses_counters = true;
+    plan.vc2_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(express_full_placement(), plan));
     // 3 receivers (VC1 and VC2 both have one, so VC2's lands on channel 2) + 5 acked + 5 completed
     // + 8 downstream + 9 sender-free = 30, exactly filling the region below the pinned pair, with
@@ -133,7 +110,7 @@ TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
 TEST(StreamAssignmentTest, Vc2ReceiverTakesChannelOneWhenVc1IsAbsent) {
     // Receiver roles use dense channel indices: when VC1 is absent, VC2 occupies channel 1.
     CreditTransportPlan plan{};
-    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
+    plan.vc2_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(vc2_without_vc1_placement(), plan));
     EXPECT_TRUE(a.has(StreamRole::RECEIVER_PKTS_SENT, 1, 0));
     EXPECT_LT(a.id(StreamRole::RECEIVER_PKTS_SENT, 1, 0), k_unused_stream_id);
@@ -145,7 +122,7 @@ TEST(StreamAssignmentTest, ExpressFullWithVc1OnRegistersOverruns) {
     // Maximal express with VC1 on registers needs 33 registers, exceeding the 30 below the pinned
     // pair. VC2 stays on counters so this isolates the register budget.
     CreditTransportPlan plan{};
-    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
+    plan.vc2_uses_counters = true;
     EXPECT_ANY_THROW(make_stream_assignment(stream_requirements(express_full_placement(), plan)));
 }
 
@@ -166,7 +143,7 @@ TEST(StreamAssignmentTest, BoundaryOnRegistersStatesFullNeedAndHitsTheBudgetWall
 
 TEST(StreamAssignmentTest, ExpressVc1AbsentFits) {
     CreditTransportPlan plan{};
-    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
+    plan.vc1_uses_counters = true;
 
     // VC1 is absent, so the need is 1 receiver + 5 acked + 5 completed + 4 downstream + 5
     // sender-free = 20 registers.
@@ -181,8 +158,8 @@ TEST(StreamAssignmentTest, ExpressVc1AbsentFits) {
 
 TEST(StreamAssignmentTest, PinnedIdThirtyHasAtMostOneLiveConsumer) {
     CreditTransportPlan plan{};
-    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
-    plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
+    plan.vc1_uses_counters = true;
+    plan.vc2_uses_counters = true;
     auto need = stream_requirements(express_full_placement(), plan);  // vc2_present == true
     need.tensix_relay_present = true;
     EXPECT_ANY_THROW(make_stream_assignment(need));
@@ -206,29 +183,25 @@ TEST(StreamAssignmentTest, EmittedNameSetIsExactlyTheKernelSet) {
 
 TEST(StreamAssignmentTest, BoundaryChipAgreementOnTheBoundaryOnlyChannel) {
     // A boundary fabric's five-wide VC0 maps channels 0..4 to ids 0..4 for every router, including
-    // narrower mesh routers. Multi-TXQ puts VC0 and VC1 on counters together, so neither VC takes an
-    // acked or completed group.
+    // narrower mesh routers. The host-only VC0-counter/VC1-register plan keeps a VC1 completed group
+    // present while testing these placement pins.
     CreditTransportPlan plan{};
-    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
-    plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
+    plan.vc0_uses_counters = true;  // VC0 credits on counters, VC1 left on registers
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 0, 4), 4u);
     EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 0, 3), 3u);
     // The flat base of VC1 follows the fabric max (5), not a narrower router's own count (4).
     EXPECT_EQ(a.sender_flat_base(1), 5u);
-    // Above the pinned VC0 sender-free group (0..4): 2 receivers + 8 downstream, so VC1's sender-free
-    // group starts at 15.
-    EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 0), 15u);
+    EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 0), 19u);
 }
 
 TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     // A router with 4 VC0 senders in a 5-wide fabric: the free-slots table still carries a real id
     // at index 4 (placement is fabric-scoped, so a downstream lookup resolves it), while the acked
-    // table carries the sentinel there (activity is a transport-plan question, and multi-TXQ puts
-    // VC0 and VC1 on counters here).
+    // table carries the sentinel there (activity is a transport-plan question, and VC0 is on
+    // counters here).
     CreditTransportPlan plan{};
-    plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
-    plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
+    plan.vc0_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(legacy_with_boundary_placement(), plan));
     std::map<std::string, uint32_t> values;
     for (const auto& [name, value] : a.named_args()) {
@@ -237,12 +210,12 @@ TEST(StreamAssignmentTest, FreeSlotsEmitPlacementWhileAckedEmitsActivity) {
     EXPECT_EQ(values["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"], 4u);      // real id: placement, not activity
     EXPECT_EQ(values["TO_SENDER_4_PKTS_ACKED_ID"], k_unused_stream_id);  // sentinel: activity
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 0, 0));
-    EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
+    EXPECT_TRUE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
 }
 
 TEST(StreamAssignmentTest, InactiveConsumersEmitTheSentinel) {
     CreditTransportPlan plan{};
-    plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
+    plan.vc1_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(express_vc1_absent_placement(), plan));
     std::map<std::string, uint32_t> values;
     for (const auto& [name, value] : a.named_args()) {

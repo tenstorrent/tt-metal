@@ -47,19 +47,13 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id)
     // The credit plan follows express enablement (per mesh) and multi-TXQ (device-wide, from the
     // shared router config) -- the same facts the per-router derivation used, lifted to the scope
     // they actually vary at.
-    CreditTransportPlan plan;
-    if (get_fabric_router_config().multi_txq_enabled()) {
-        plan.add_counter_reason(0, L1CreditCounterReason::MULTI_TXQ);
-        plan.add_counter_reason(1, L1CreditCounterReason::MULTI_TXQ);
-    }
-    if (express_enabled) {
-        plan.add_counter_reason(1, L1CreditCounterReason::EXPRESS);
-    }
-    // VC2 has no completion register to fall back on -- the completed table stops at flat
-    // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
-    if (intermesh_vc_config_.requires_vc2) {
-        plan.add_counter_reason(2, L1CreditCounterReason::NO_COMPLETION_REGISTER);
-    }
+    const bool multi_txq_enabled = get_fabric_router_config().multi_txq_enabled();
+    const CreditTransportPlan plan{
+        .vc0_uses_counters = multi_txq_enabled,
+        .vc1_uses_counters = multi_txq_enabled || express_enabled,
+        // VC2 has no completion register to fall back on -- the completed table stops at flat
+        // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
+        .vc2_uses_counters = intermesh_vc_config_.requires_vc2};
 
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_senders{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_receivers{};
