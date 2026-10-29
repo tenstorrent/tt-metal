@@ -826,3 +826,12 @@ NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 969787
   ComputeKernel config hash ignores the flag (a source define works around it; the 2x2 found the same).
 - NOW: tmux ds41-chain3: fresh 0k-512k profile CUR on d1571ee35ac (~65 min, started 06:45), then resume --until P.5
   (P.7 CKV_BFP4_PREPARED -> P.4 -> P.5). Then publish the profile page (ENG vs CUR).
+- 07:40 SP=32 STUDY (read-only agent) + OWNER: deployment box is the 8x4. Attention today is TP=4 x SP=8 in the
+  projections only (sparse_sdpa / indexer already 160 rows x 64 heads a chip); the two 10.5 MB head<->seq all_to_all
+  cost 22 ms a chunk (more than sparse_sdpa), plus q_a RS+AG and wo_b RS of bf16 partials and 4x redundant norm/RoPE;
+  ~1525 of ~2030 op calls a chunk are attention's. DeepSeek-V3 sparse MLA keeps top-k local and reshards heads->seq only
+  when heads/tp < 32. OWNER ORDER: P.7 -> P.8 C INDEXER_TOPK_LOCAL -> P.9 B ATTN_SP32_PROJ (wq_b/wo_a/wo_b full rows,
+  +3.5 GiB a chip) -> P.10 A ATTN_SP32 (CONDITIONAL on P.9's host savings, else rejected unrun) -> P.4 -> P.5 (both
+  re-checked against the new layout first). B and A gates add L.s56320 + K.1 (layout change). Estimates: attention
+  73 -> ~45 ms device a chunk, ~270 op calls fewer, wall -30..-50 ms; risks: untuned M=160 matmuls, small all_to_all
+  host cost, +3.8 GiB weights a chip (fits the 8x4 by estimate). The 0.75 ms/layer net is an estimate.

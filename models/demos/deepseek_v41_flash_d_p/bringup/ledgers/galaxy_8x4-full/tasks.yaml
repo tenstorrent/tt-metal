@@ -914,6 +914,90 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: P.8
+  title: 'INDEXER_TOPK_LOCAL: the indexer top-k stays on the chip that scores it (option C of the SP=32 study)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.7
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER DECISION 2026-10-29 (order P.7 -> C -> B -> A -> P.4 -> P.5). Option C: the indexer scores 160 query rows a chip already; drop the top-k all-gather over TP (indexer.py:315) and the mesh_partition back in attention (sparse_attention.py:225 / 244), as DeepSeek-V3 does when attention is not head-sharded. Estimate: ~46 op calls and ~0.7 ms device a chunk fewer, ~6-9 ms wall. Study (overseer 2026-10-29, read-only agent; supervision.md 07:40 entry): attention runs TP=4 x SP=8 for the projections while sparse_sdpa and the indexer scoring already run 160 query rows a chip with all 64 heads (SP=32 in effect); the split costs two 10.5 MB head<->seq all_to_all per layer (attention.py:447-452, 22 ms a chunk, more than sparse_sdpa), the q_a RS+AG of a 2.3 MB bf16 partial (q_a.py:78-84), the wo_b RS of a 6.6 MB bf16 partial (attention.py:715), 4x redundant norm / RoPE on the same rows, and ~1525 of ~2030 op calls a chunk are attention''s. DeepSeek-V3''s sparse MLA (models/demos/deepseek_v3_d_p/tt/mla/mla.py:2238-2358, indexer.py:1000-1021) keeps top-k local and reshards heads->seq only when heads/tp < 32. Deployment box is the 8x4 (owner): attention weights replicated on all 32 chips fit (+3.8 GiB a chip, estimate; check plan_memory). Owner focus: host time per chunk (host-bound: warm wall ~400 vs device ~220 ms), device time not worse. Behind the named setting in tt/settings.py (default on, ''off'' = today''s path); accuracy within the recorded limits (never a precision raise; the bf16 TP partial sums disappearing is expected to help). Derive every size from the mesh (no 8x4 literals). Do not touch tt/engram*.py. Do not edit frozen tests; if a state readback (e.g. top-k) needs another layout, adapt the model''s host readback (to_host / state), not the test. Report: device ms per section and op calls per chunk before / after (BRINGUP_PROFILE_OPS), the warm wall before / after with DS41_ENGRAM_TABLE=resident, DRAM per chip, collectives per layer before / after.'
+  ab:
+    env:
+      DS41_INDEXER_TOPK_LOCAL: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_INDEXER_TOPK_LOCAL: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+- id: P.9
+  title: 'ATTN_SP32_PROJ: wq_b / wo_a / wo_b on the chip''s own 160 rows with full weights, no head<->seq all_to_all, no wo_b reduce-scatter (option B)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.8
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER DECISION 2026-10-29. Option B: replicate wq_b, wo_a, wo_b (bfp8, attention.py:426-440) on every chip; each chip takes its own 160 rows of q_resid (mesh_partition of the TP-replicated q_resid), wq_b writes [64 heads, 160 rows] directly (no _reshard all_to_all before sparse_sdpa), inverse RoPE with the chip''s own cos / sin rows, wo_a all 8 groups, wo_b full on 160 rows, then ONE all_to_all of [160, 5120] back to the residual layout instead of the out all_to_all + the wo_b reduce-scatter (sum_cols). Estimate: device -20..-26 ms a chunk, ~85 op calls fewer, +3.5 GiB a chip. The M=160 matmuls need configs in tt/mm_configs.py (untuned: may start slower); a stock or forked all_to_all for the small transition (check ttnn/ttnn/bringup/INDEX.md first). Study (overseer 2026-10-29, read-only agent; supervision.md 07:40 entry): attention runs TP=4 x SP=8 for the projections while sparse_sdpa and the indexer scoring already run 160 query rows a chip with all 64 heads (SP=32 in effect); the split costs two 10.5 MB head<->seq all_to_all per layer (attention.py:447-452, 22 ms a chunk, more than sparse_sdpa), the q_a RS+AG of a 2.3 MB bf16 partial (q_a.py:78-84), the wo_b RS of a 6.6 MB bf16 partial (attention.py:715), 4x redundant norm / RoPE on the same rows, and ~1525 of ~2030 op calls a chunk are attention''s. DeepSeek-V3''s sparse MLA (models/demos/deepseek_v3_d_p/tt/mla/mla.py:2238-2358, indexer.py:1000-1021) keeps top-k local and reshards heads->seq only when heads/tp < 32. Deployment box is the 8x4 (owner): attention weights replicated on all 32 chips fit (+3.8 GiB a chip, estimate; check plan_memory). Owner focus: host time per chunk (host-bound: warm wall ~400 vs device ~220 ms), device time not worse. Behind the named setting in tt/settings.py (default on, ''off'' = today''s path); accuracy within the recorded limits (never a precision raise; the bf16 TP partial sums disappearing is expected to help). Derive every size from the mesh (no 8x4 literals). Do not touch tt/engram*.py. Do not edit frozen tests; if a state readback (e.g. top-k) needs another layout, adapt the model''s host readback (to_host / state), not the test. Report: device ms per section and op calls per chunk before / after (BRINGUP_PROFILE_OPS), the warm wall before / after with DS41_ENGRAM_TABLE=resident, DRAM per chip, collectives per layer before / after.'
+  ab:
+    env:
+      DS41_ATTN_SP32_PROJ: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_ATTN_SP32_PROJ: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
+- id: P.10
+  title: 'ATTN_SP32: the rest of attention on 160 rows a chip: attn_norm, q_a / wkv, norms / RoPE, compressor, indexer weights_proj (option A)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.9
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER DECISION 2026-10-29, CONDITIONAL: the overseer runs it only if P.9 (option B) shows its host savings; otherwise it is rejected unrun. Option A on top of B: one all_to_all [640, 1280] -> [160, 5120] entering attention (then a local full-width attn_norm, no stats gather), [wq_a | wkv] replicated (q_a.py TtAttnInProj: no tp_sum RS+AG), q_norm / kv_norm / RoPE on the chip''s 160 rows only (no 4x redundancy), window KV gathered over 32 chips, the compressor on 160 rows a chip with 32-way gathers (no tp_sum), indexer weights_proj local; the exit all_to_all from B stays. mHC and the MoE keep today''s layout. Estimate on top of B: ~185 op calls and ~6-8 ms device fewer a chunk, +0.3 GiB a chip. Study (overseer 2026-10-29, read-only agent; supervision.md 07:40 entry): attention runs TP=4 x SP=8 for the projections while sparse_sdpa and the indexer scoring already run 160 query rows a chip with all 64 heads (SP=32 in effect); the split costs two 10.5 MB head<->seq all_to_all per layer (attention.py:447-452, 22 ms a chunk, more than sparse_sdpa), the q_a RS+AG of a 2.3 MB bf16 partial (q_a.py:78-84), the wo_b RS of a 6.6 MB bf16 partial (attention.py:715), 4x redundant norm / RoPE on the same rows, and ~1525 of ~2030 op calls a chunk are attention''s. DeepSeek-V3''s sparse MLA (models/demos/deepseek_v3_d_p/tt/mla/mla.py:2238-2358, indexer.py:1000-1021) keeps top-k local and reshards heads->seq only when heads/tp < 32. Deployment box is the 8x4 (owner): attention weights replicated on all 32 chips fit (+3.8 GiB a chip, estimate; check plan_memory). Owner focus: host time per chunk (host-bound: warm wall ~400 vs device ~220 ms), device time not worse. Behind the named setting in tt/settings.py (default on, ''off'' = today''s path); accuracy within the recorded limits (never a precision raise; the bf16 TP partial sums disappearing is expected to help). Derive every size from the mesh (no 8x4 literals). Do not touch tt/engram*.py. Do not edit frozen tests; if a state readback (e.g. top-k) needs another layout, adapt the model''s host readback (to_host / state), not the test. Report: device ms per section and op calls per chunk before / after (BRINGUP_PROFILE_OPS), the warm wall before / after with DS41_ENGRAM_TABLE=resident, DRAM per chip, collectives per layer before / after.'
+  ab:
+    env:
+      DS41_ATTN_SP32: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_ATTN_SP32: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
 - id: P.4
   title: 'CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per chunk) and reduce-scatter'
   step: perf
@@ -924,10 +1008,11 @@ tasks:
   - FIX.7
   - P.6
   - P.7
+  - P.10
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:
-    details: 'perf_proposals.md entry CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per
+    details: 'RE-CHECK FIRST (owner 2026-10-29): this pick was written before the SP=32 attention change (P.8-P.10); measure which of its targets still exist and adapt the change to the new layout before implementing. perf_proposals.md entry CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per
       chunk) and reduce-scatters (92), removing their allocate/deallocate host cost. Owner focus (2026-10-28): reduce HOST
       time per chunk (the model is host-dispatch bound: device 223.9 ms, warm wall 692.7 ms at X.1, block MoE fused head +
       tail on FABRIC_2D_TORUS_XY). Read perf_proposals.md in this ledger dir (the entry named below: evidence, call sites,
@@ -957,10 +1042,11 @@ tasks:
   device: true
   deps:
   - P.4
+  - P.10
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:
-    details: 'perf_proposals.md entry ROPE_UNIFORM_PROGRAM: RoPE (rotary_embedding_indexed, 136 calls per chunk at ~197 us)
+    details: 'RE-CHECK FIRST (owner 2026-10-29): this pick was written before the SP=32 attention change (P.8-P.10); measure which of its targets still exist and adapt the change to the new layout before implementing. perf_proposals.md entry ROPE_UNIFORM_PROGRAM: RoPE (rotary_embedding_indexed, 136 calls per chunk at ~197 us)
       built as one program for the mesh instead of 32, via a fork option. Owner focus (2026-10-28): reduce HOST time per chunk
       (the model is host-dispatch bound: device 223.9 ms, warm wall 692.7 ms at X.1, block MoE fused head + tail on FABRIC_2D_TORUS_XY).
       Read perf_proposals.md in this ledger dir (the entry named below: evidence, call sites, estimates) and ttnn/ttnn/bringup/INDEX.md
