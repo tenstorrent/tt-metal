@@ -57,32 +57,32 @@
           "@5k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.05
           },
           "@50k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.05
           },
           "@100k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.05
           },
           "@255k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.05
           },
           "@510k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.05
           },
           "@1M": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.15
+            "chunk_time_ms": 0.05
           }
         },
         "8kw": {
