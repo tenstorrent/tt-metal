@@ -524,9 +524,9 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
     TT_DEBUG_SITE(hash, ::tt::debug_event::ZoneColorMeta{name, color}); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-// `color` is 0xRRGGBB; `verbosity` is a uint8_t level the host receives with the zone.
-#define DeviceZoneScopedNCV(name, color, verbosity)                                    \
-    TT_DEBUG_SITE(hash, ::tt::debug_event::ZoneVerbosityMeta{name, color, verbosity}); \
+// `color` is 0xRRGGBB; `unit` is a kernel_profiler::TimeUnit, the unit a consumer should present the duration in.
+#define DeviceZoneScopedNCU(name, color, unit)                               \
+    TT_DEBUG_SITE(hash, ::tt::debug_event::ZoneUnitMeta{name, color, unit}); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 #define DeviceZoneScopedNIf(name, active)         \
@@ -585,7 +585,7 @@ struct stackCanaryScope {};  // FW builds and active ERISC: no kernel stack floo
 
 #define DeviceZoneScopedNC(name, color) (void(name), void(sizeof(color)))
 
-#define DeviceZoneScopedNCV(name, color, verbosity) (void(name), void(sizeof(color)), void(sizeof(verbosity)))
+#define DeviceZoneScopedNCU(name, color, unit) (void(name), void(sizeof(color)), void(sizeof(unit)))
 
 #define DeviceZoneScopedNIf(name, active) (void(name), void(sizeof(active)))
 
