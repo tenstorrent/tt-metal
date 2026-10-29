@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Debug event metadata, layer 1a: the rules a metadata type must follow and the host's unmarshalling
+// Observability event metadata, layer 1a: the rules a metadata type must follow and the host's unmarshalling
 // (hostdev/observability_event_meta.h), checked on the host with no device and no device compiler. The rules are
 // static_asserts on the header's predicates, so breaking one fails this file's build. Round trips of every shape
-// through the loader are in test_debug_event_meta_loader.cpp.
+// through the loader are in test_observability_event_meta_loader.cpp.
 // Not covered here: the device compiler's view (its spelling of type names, the asm it emits, the error text a
-// user sees) -- that is the offline-compile layer, test_debug_event_meta_compile.cpp.
+// user sees) -- that is the offline-compile layer, test_observability_event_meta_compile.cpp.
 
 #include <gtest/gtest.h>
 
@@ -20,10 +20,10 @@
 #include "hostdev/observability_event_meta.h"
 
 // Named, not anonymous: a metadata type in an anonymous namespace is itself a rule violation.
-namespace debug_event_meta_test {
+namespace observability_event_meta_test {
 
-using namespace tt::debug_event;
-using namespace tt::debug_event::detail;
+using namespace tt::observability_event;
+using namespace tt::observability_event::detail;
 
 // ---- Types that follow every rule ------------------------------------------------------------------------------
 
@@ -130,7 +130,7 @@ struct InAnonymousNamespace {
 };
 }  // namespace
 
-// How many rules T breaks, counted the way check_type / check_site_type report them: a type with the wrong shape
+// How many rules T breaks, counted the way check_type / check_event_type report them: a type with the wrong shape
 // is not also told its first field is wrong.
 template <class T>
 constexpr int rules_broken() {
@@ -141,9 +141,9 @@ constexpr int rules_broken() {
 
 // ---- The rules ---------------------------------------------------------------------------------------------------
 
-static_assert(is_valid_site_type<ZoneMeta>() && is_valid_site_type<ZoneColorMeta>());
-static_assert(is_valid_site_type<Plain>() && is_valid_site_type<Nested>() && is_valid_site_type<AllWidths>());
-static_assert(is_valid_site_type<Defaulted>() && is_valid_site_type<Templated<uint32_t>>());
+static_assert(is_valid_event_type<EventMeta>() && is_valid_event_type<ZoneColorMeta>());
+static_assert(is_valid_event_type<Plain>() && is_valid_event_type<Nested>() && is_valid_event_type<AllWidths>());
+static_assert(is_valid_event_type<Defaulted>() && is_valid_event_type<Templated<uint32_t>>());
 
 static_assert(!has_no_bases<WithBase>() && rules_broken<WithBase>() == 1);
 static_assert(!has_no_bases<WithEmptyBase>() && rules_broken<WithEmptyBase>() == 1);
@@ -177,8 +177,8 @@ static_assert(quotes_as("line\nbreak\ttab", R"("line\012break\011tab")"));
 static_assert(quotes_as("\n1", R"("\0121")"));
 static_assert(quotes_as("\xC3\xA9\x7F\x01", R"("\303\251\177\001")"));
 
-static_assert(site_name_ok(ZoneMeta{"x"}));
-static_assert(!site_name_ok(ZoneMeta{""}) && !site_name_ok(ZoneMeta{nullptr}));
+static_assert(event_name_ok(EventMeta{"x"}));
+static_assert(!event_name_ok(EventMeta{""}) && !event_name_ok(EventMeta{nullptr}));
 
 // The handle label's hash: equal values share a handle, any difference -- a field, or the type -- gets its own.
 static_assert(meta_hash(ZoneColorMeta{"a", 1}) == meta_hash(ZoneColorMeta{"a", 1}));
@@ -187,11 +187,11 @@ static_assert(meta_hash(ZoneColorMeta{"a", 1}) != meta_hash(ZoneColorMeta{"b", 1
 static_assert(meta_hash(ZoneColorMeta{"a", 1}) != meta_hash(Plain{"a", 1}));
 static_assert(meta_hash(Nested{"a", {1, 2}, 3}) != meta_hash(Nested{"a", {1, 3}, 3}));
 
-// A SiteMeta as the host loader builds it from the device's record: one FieldValue per leaf field, integers as the
+// A Metadata as the host loader builds it from the device's record: one FieldValue per leaf field, integers as the
 // unsigned value of their own width (what the device emits and the loader reads back).
 template <class T>
-SiteMeta site_meta_of(const T& value) {
-    SiteMeta meta;
+Metadata metadata_of(const T& value) {
+    Metadata meta;
     meta.signature = signature_of<T>();
     for_each_leaf(value, [&](const auto& field) {
         using F = field_t<decltype(field)>;
@@ -208,22 +208,22 @@ SiteMeta site_meta_of(const T& value) {
 
 // ---- Signatures --------------------------------------------------------------------------------------------------
 
-TEST(DebugEventMeta, CPU_SignatureSpellsTypeNameAndFieldCodes) {
-    EXPECT_EQ(signature_of<ZoneMeta>(), "tt::debug_event::ZoneMeta:s");
-    EXPECT_EQ(signature_of<ZoneColorMeta>(), "tt::debug_event::ZoneColorMeta:sw");
-    EXPECT_EQ(signature_of<Nested>(), "debug_event_meta_test::Nested:s{wb}h");
-    EXPECT_EQ(signature_of<AllWidths>(), "debug_event_meta_test::AllWidths:sbbhwqqb");
-    EXPECT_EQ(site_meta_of(ZoneColorMeta{"x", 0}).type_name(), "tt::debug_event::ZoneColorMeta");
+TEST(ObservabilityEventMeta, CPU_SignatureSpellsTypeNameAndFieldCodes) {
+    EXPECT_EQ(signature_of<EventMeta>(), "tt::observability_event::EventMeta:s");
+    EXPECT_EQ(signature_of<ZoneColorMeta>(), "tt::observability_event::ZoneColorMeta:sw");
+    EXPECT_EQ(signature_of<Nested>(), "observability_event_meta_test::Nested:s{wb}h");
+    EXPECT_EQ(signature_of<AllWidths>(), "observability_event_meta_test::AllWidths:sbbhwqqb");
+    EXPECT_EQ(metadata_of(ZoneColorMeta{"x", 0}).type_name(), "tt::observability_event::ZoneColorMeta");
 }
 
-// ---- Decoding through SiteMeta::as<T>() -----------------------------------------------------------------------------
+// ---- Decoding through Metadata::as<T>() -----------------------------------------------------------------------------
 
-TEST(DebugEventMeta, CPU_AsReturnsNothingForAnotherType) {
-    const SiteMeta color = site_meta_of(ZoneColorMeta{"c", 0xFF0000});
-    EXPECT_FALSE(color.as<ZoneMeta>().has_value());
+TEST(ObservabilityEventMeta, CPU_AsReturnsNothingForAnotherType) {
+    const Metadata color = metadata_of(ZoneColorMeta{"c", 0xFF0000});
+    EXPECT_FALSE(color.as<EventMeta>().has_value());
     // Same field codes ("sw"), different type: the name in the signature tells them apart.
     EXPECT_FALSE(color.as<Plain>().has_value());
     EXPECT_TRUE(color.as<ZoneColorMeta>().has_value());
 }
 
-}  // namespace debug_event_meta_test
+}  // namespace observability_event_meta_test

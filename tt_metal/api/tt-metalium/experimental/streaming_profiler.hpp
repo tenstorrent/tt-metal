@@ -34,8 +34,8 @@
 //         },
 //         "my-tool");
 //
-namespace tt::debug_event {
-struct SiteMeta;  // hostdev/observability_event_meta.h
+namespace tt::observability_event {
+struct Metadata;  // hostdev/observability_event_meta.h
 }
 namespace tt::tt_metal::experimental::streaming_profiler {
 
@@ -50,9 +50,9 @@ struct SourceLocation {
 struct ObservabilityEventDescriptor {
     std::string_view name;  // Valid for the lifetime of the process.
     SourceLocation location;
-    // The metadata struct the site was declared with (e.g. ZoneColorMeta for DeviceZoneScopedNC); read it with
-    // meta->as<T>(). Null for sites without a record, such as the stall zone. Valid for the lifetime of the process.
-    const tt::debug_event::SiteMeta* meta = nullptr;
+    // The metadata struct the event was declared with (e.g. ZoneColorMeta for DeviceZoneScopedNC); read it with
+    // meta->as<T>(). Null for events without a record, such as the stall zone. Valid for the lifetime of the process.
+    const tt::observability_event::Metadata* meta = nullptr;
 };
 
 /**
@@ -79,20 +79,20 @@ class Callback;
 
 // Implementation detail.
 namespace detail {
-// Zone ids are 16-bit and assigned per process: each device image gets the next block as it loads
+// Descriptor ids are 16-bit and assigned per process: each device image gets the next block as it loads
 // (hostdev/observability_event_descriptor.h), so the table is flat and a lookup is one load.
 inline constexpr uint32_t EVENT_DESCRIPTOR_ID_BITS = 16;
 inline constexpr uint32_t EVENT_DESCRIPTOR_ID_COUNT = 1u << EVENT_DESCRIPTOR_ID_BITS;
 
 struct DescriptorRegistry {
-    static std::atomic<const ObservabilityEventDescriptor*> sites[EVENT_DESCRIPTOR_ID_COUNT];
+    static std::atomic<const ObservabilityEventDescriptor*> descriptors[EVENT_DESCRIPTOR_ID_COUNT];
 };
 inline constexpr ObservabilityEventDescriptor UNNAMED_DESCRIPTOR{};
 
 inline const ObservabilityEventDescriptor& descriptor_of(uint32_t descriptor_id) {
     const ObservabilityEventDescriptor* s =
         descriptor_id < EVENT_DESCRIPTOR_ID_COUNT
-            ? DescriptorRegistry::sites[descriptor_id].load(std::memory_order_acquire)
+            ? DescriptorRegistry::descriptors[descriptor_id].load(std::memory_order_acquire)
             : nullptr;
     return s != nullptr ? *s : UNNAMED_DESCRIPTOR;
 }

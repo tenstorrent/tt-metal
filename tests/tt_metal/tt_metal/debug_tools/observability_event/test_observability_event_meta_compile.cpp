@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Debug event metadata, layer 2: what the device compiler says about a site. Each case of
+// Observability event metadata, layer 2: what the device compiler says about an event. Each case of
 // test_kernels/misc/observability_event_meta_cases.cpp is built offline (experimental::CompileKernelOffline, mock mode,
 // no device), so this runs the real device compiler with the real kernel flags and opens nothing that a failed build
 // could leave wedged. A bad case must fail to compile with exactly one error, its own rule's; the valid case must
@@ -30,7 +30,7 @@
 
 #include "llrt/rtoptions.hpp"
 
-namespace debug_event_compile_test {
+namespace observability_event_compile_test {
 
 using namespace tt::tt_metal;
 namespace fs = std::filesystem;
@@ -49,9 +49,9 @@ constexpr std::string_view kRuleMessages[] = {
     "cannot have const members",
     "a metadata field must be a string literal",
     "must be named at namespace scope",
-    "the first field of a debug event metadata type must be the site's name",
+    "the first field of an observability event metadata type must be the event's name",
     "name_must_be_a_non_empty_string_literal",
-    "debug_event_site_metadata_too_long_shorten_its_strings",
+    "observability_event_metadata_too_long_shorten_its_strings",
 };
 
 // Sets or clears an environment variable for one scope; CompileKernelOffline reads the environment on every call.
@@ -85,7 +85,7 @@ struct ProfilerMode {
 struct ScopedTempDir {
     ScopedTempDir() {
         const auto ns = std::chrono::steady_clock::now().time_since_epoch().count();
-        path = fs::temp_directory_path() / ("debug_event_meta_compile_" + std::to_string(ns));
+        path = fs::temp_directory_path() / ("observability_event_meta_compile_" + std::to_string(ns));
         fs::create_directories(path);
     }
     ~ScopedTempDir() {
@@ -101,7 +101,7 @@ std::optional<std::string> compile_case(int which) {
     const DataMovementConfig config{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
-        .defines = {{"DEBUG_EVENT_META_CASE", std::to_string(which)}},
+        .defines = {{"OBSERVABILITY_EVENT_META_CASE", std::to_string(which)}},
     };
     try {
         experimental::CompileKernelOffline(kCasesKernel, config, {.output_dir = out.path});
@@ -154,7 +154,7 @@ std::string first_error(const std::string& text) {
     return std::regex_search(text, m, line) ? m.str() : text.substr(0, 2000);
 }
 
-class DebugEventMetaCompile : public ::testing::Test {
+class ObservabilityEventMetaCompile : public ::testing::Test {
 protected:
     void SetUp() override {
         {
@@ -200,7 +200,7 @@ private:
 
 // ---- The valid case, in every profiler mode -------------------------------------------------------------------------
 
-TEST_F(DebugEventMetaCompile, CPU_ValidSitesCompileUnderTheStreamingProfiler) {
+TEST_F(ObservabilityEventMetaCompile, CPU_ValidEventsCompileUnderTheStreamingProfiler) {
     if (!profiler_supported(Profiler::Streaming)) {
         GTEST_SKIP() << "the streaming profiler needs a Tracy-enabled build";
     }
@@ -211,7 +211,7 @@ TEST_F(DebugEventMetaCompile, CPU_ValidSitesCompileUnderTheStreamingProfiler) {
     }
 }
 
-TEST_F(DebugEventMetaCompile, CPU_ValidSitesCompileUnderTheDramProfiler) {
+TEST_F(ObservabilityEventMetaCompile, CPU_ValidEventsCompileUnderTheDramProfiler) {
     if (!profiler_supported(Profiler::Dram)) {
         GTEST_SKIP() << "the DRAM profiler needs a Tracy-enabled build";
     }
@@ -222,7 +222,7 @@ TEST_F(DebugEventMetaCompile, CPU_ValidSitesCompileUnderTheDramProfiler) {
     }
 }
 
-TEST_F(DebugEventMetaCompile, CPU_ValidSitesBuildWithTheProfilerOff) {
+TEST_F(ObservabilityEventMetaCompile, CPU_ValidEventsBuildWithTheProfilerOff) {
     ProfilerMode off(Profiler::Off);
     const std::optional<std::string> error = compile_case(0);
     EXPECT_FALSE(error.has_value()) << error.value_or("").substr(0, 2000);
@@ -230,40 +230,48 @@ TEST_F(DebugEventMetaCompile, CPU_ValidSitesBuildWithTheProfilerOff) {
 
 // ---- One rule broken per case, under the streaming profiler ---------------------------------------------------------
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsAnArrayMember) { expect_rejected(1, "cannot have C array members"); }
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsAnArrayMember) { expect_rejected(1, "cannot have C array members"); }
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsAnArrayInANestedStruct) { expect_rejected(2, "cannot have C array members"); }
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsAnArrayInANestedStruct) {
+    expect_rejected(2, "cannot have C array members");
+}
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsAConstMember) { expect_rejected(3, "cannot have const members"); }
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsAConstMember) { expect_rejected(3, "cannot have const members"); }
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsAFloatField) {
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsAFloatField) {
     expect_rejected(4, "a metadata field must be a string literal");
 }
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsABaseClass) { expect_rejected(5, "cannot have a base class"); }
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsABaseClass) { expect_rejected(5, "cannot have a base class"); }
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsAFirstFieldThatIsNotTheName) {
-    expect_rejected(6, "the first field of a debug event metadata type must be the site's name");
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsAFirstFieldThatIsNotTheName) {
+    expect_rejected(6, "the first field of an observability event metadata type must be the event's name");
 }
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsAnEmptyName) { expect_rejected(7, "name_must_be_a_non_empty_string_literal"); }
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsAnEmptyName) {
+    expect_rejected(7, "name_must_be_a_non_empty_string_literal");
+}
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsATypeInAnAnonymousNamespace) {
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsATypeInAnAnonymousNamespace) {
     expect_rejected(8, "must be named at namespace scope");
 }
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsAFunctionLocalType) { expect_rejected(9, "must be named at namespace scope"); }
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsAFunctionLocalType) {
+    expect_rejected(9, "must be named at namespace scope");
+}
 
-// GCC's own error, pinned so a clearer message is a deliberate change. The site's value is evaluated inside the
-// site's own local struct, hence "from containing function" rather than "not a constant expression".
-TEST_F(DebugEventMetaCompile, CPU_RejectsARunTimeValue) {
+// GCC's own error, pinned so a clearer message is a deliberate change. The event's value is evaluated inside the
+// event's own local struct, hence "from containing function" rather than "not a constant expression".
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsARunTimeValue) {
     expect_rejected(10, "use of local variable with automatic storage from containing function");
 }
 
-TEST_F(DebugEventMetaCompile, CPU_RejectsMoreThanMaxFields) { expect_rejected(11, "need 1..kMaxFields fields"); }
-
-TEST_F(DebugEventMetaCompile, CPU_RejectsStringsTooLongForOneSite) {
-    expect_rejected(12, "debug_event_site_metadata_too_long_shorten_its_strings");
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsMoreThanMaxFields) {
+    expect_rejected(11, "need 1..kMaxFields fields");
 }
 
-}  // namespace debug_event_compile_test
+TEST_F(ObservabilityEventMetaCompile, CPU_RejectsStringsTooLongForOneSite) {
+    expect_rejected(12, "observability_event_metadata_too_long_shorten_its_strings");
+}
+
+}  // namespace observability_event_compile_test
