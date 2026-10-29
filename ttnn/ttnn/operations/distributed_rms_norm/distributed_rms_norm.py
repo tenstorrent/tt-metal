@@ -30,7 +30,6 @@ from .distributed_rms_norm_program_descriptor import (
     plan_summary as _plan_summary,
 )
 
-
 # ---------------------------------------------------------------------------
 # Default compute config — the ONE place the default is defined.
 # ---------------------------------------------------------------------------
@@ -255,5 +254,10 @@ def plan_summary(
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     links = _hard_validate(input_tensor, cluster_axis, gamma, topology, num_links)
     return _plan_summary(
-        input_tensor, cluster_axis=cluster_axis, num_links=links, gamma=gamma, fp32_dest_acc_en=cfg.fp32_dest_acc_en
+        input_tensor,
+        cluster_axis=cluster_axis,
+        num_links=links,
+        gamma=gamma,
+        fp32_dest_acc_en=cfg.fp32_dest_acc_en,
+        ring=topology == Topology.Ring,
     )

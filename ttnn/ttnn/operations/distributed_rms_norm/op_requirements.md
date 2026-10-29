@@ -219,7 +219,7 @@ extraction a compact contribution needs).
 **Verifier notes**: OVERLAP is measured only in the op, never on a dummy exchange. Must follow Refinement 2: the
 amount of local work available to hide behind is what Refinement 2 changes.
 
-### [ ] Refinement 4 — TRANSPORT: port placement and link use for the stats exchange
+### [x] Refinement 4 — TRANSPORT: port placement and link use for the stats exchange
 
 **Type**: perf
 
@@ -237,6 +237,19 @@ No SUPPORTED change.
 **Done when**: the traced slowest-chip device-ns of 640×1792 improves (or the refinement records a measured null
 per lever and leaves the code unchanged), golden green, and no regression on the guard set (Linear / Ring ×
 1 / 2 links × cluster_axis 0 / 1).
+
+**Outcome** (implementer): measured null on both levers, defaults unchanged; 640×1792 traced slowest op 21.0–21.8 µs
+before, 20.7–21.5 after (stub 16.5–16.8). **Placement** (one worker grid for all variants, `DRMS_PORT_EXCLUDE_ALL`):
+row0 20.8–21.5, `eth_uniform` (one core per port index, fewest summed NoC1 hops to each chip's link Ethernet core)
+21.2–21.3, `eth` per chip (fabric_all_gather `_worker_nearest_noc1`) 22.6–25.4; 2048×1280 31.6 / 31.5 / 35.4. The
+port-to-Ethernet NoC distance does not show at ≈ 2.7 KiB; per-chip port sets make the chip programs non-uniform and the
+ready fence waits out a larger launch skew (`prt_ready_wait` 4–7 → 11–13 µs). **Links (L3)**: every record on link 0
+(`STATS_LINKS_MAX = 1`, link-1 port cores freed → 108 workers) 640×1792 21.4 (null), 2048×1280 34.0–35.4 vs
+30.1–30.8 (+3.5 µs: one port pair serializes every root's publishes and notifies); with link-1 ports still reserved
+21.9 / 34.4. Kept: `PORT_PLACEMENT` (`row0` / `eth` / `eth_uniform`) and `STATS_LINKS_MAX` (unbounded) as live knobs, and
+the port's per-destination port coordinates (any placement is correct). Bound now: unchanged from Refinement 3 —
+launch skew (~4 µs, not hideable) + the post-landing chain. Next: X-mcast stays deferred (≤ 0.3 µs by the example's
+floor); the transport is at its fence floor, so the remaining exchange time is OVERLAP / launch skew, not TRANSPORT.
 
 **Verifier notes**: smallest expected win of the three perf phases (the transport floor is the ≈ 5 µs fence, which
 Refinement 3 hides rather than shrinks); kept separate from Refinement 3 because TRANSPORT and OVERLAP are measured

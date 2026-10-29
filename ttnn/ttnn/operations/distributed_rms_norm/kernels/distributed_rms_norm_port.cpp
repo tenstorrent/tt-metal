@@ -54,7 +54,7 @@ inline void route_to(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_i
 
 // RT records (host: port args). One packet header per distinct destination chip, routed once at setup (a 2D route
 // lookup per packet sits on every relay / send latency chain).
-constexpr uint32_t DEST_WORDS = 3;  // chip id, mesh id, hops
+constexpr uint32_t DEST_WORDS = 5;  // chip id, mesh id, hops, destination port x, y (placement may differ per chip)
 constexpr uint32_t SEND_WORDS =
     4;  // slot q, destination header, destination arrival address, wait (0 own, j+1 relay j)
 constexpr uint32_t READY_WORDS = 3;  // destination header, target port x, target port y
@@ -86,8 +86,8 @@ void kernel_main() {
     const uint32_t n_roots = get_arg_val<uint32_t>(a++);      // roots publishing into my own slot (0 if I send nothing)
     const uint32_t n_ready_out = get_arg_val<uint32_t>(a++);  // ready packets this port sends
     const uint32_t n_ready_wait = get_arg_val<uint32_t>(a++);  // readies to wait for (destination chips)
-    const uint32_t my_x = get_arg_val<uint32_t>(a++);      // this port's virtual coords = the destination port's (every
-    const uint32_t my_y = get_arg_val<uint32_t>(a++);      // chip uses the same logical port cores)
+    [[maybe_unused]] const uint32_t my_x = get_arg_val<uint32_t>(a++);  // this port's virtual coords (destination
+    [[maybe_unused]] const uint32_t my_y = get_arg_val<uint32_t>(a++);  // ports' coords: per header, DEST_WORDS)
     const uint32_t n_notify = get_arg_val<uint32_t>(a++);  // roots I notify per entry (0 if I receive nothing)
     const bool has_conn = get_arg_val<uint32_t>(a++) != 0;
     // Notify quantum: 1 = per landed entry (lamp L4), n_in = once per wave (every entry of the wave landed).
@@ -180,8 +180,9 @@ void kernel_main() {
         // entry's arrival counter incremented with the last packet.
         auto send_item = [&](uint32_t item, uint32_t src, uint32_t bytes) {
             const uint32_t d = get_arg_val<uint32_t>(send_idx + item * SEND_WORDS + 1);  // destination header
-            const uint64_t dst_arrival =
-                get_noc_addr(my_x, my_y, get_arg_val<uint32_t>(send_idx + item * SEND_WORDS + 2));
+            const uint32_t dx = get_arg_val<uint32_t>(dest_idx + d * DEST_WORDS + 3);
+            const uint32_t dy = get_arg_val<uint32_t>(dest_idx + d * DEST_WORDS + 4);
+            const uint64_t dst_arrival = get_noc_addr(dx, dy, get_arg_val<uint32_t>(send_idx + item * SEND_WORDS + 2));
             if (bytes == 0) {
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header(d);
                 hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dst_arrival, 1, true});
@@ -192,7 +193,7 @@ void kernel_main() {
             }
             for (uint32_t off = 0; off < bytes; off += payload) {
                 const uint32_t n = (bytes - off) < payload ? bytes - off : payload;
-                const uint64_t dst = get_noc_addr(my_x, my_y, src + off);  // same landing address on the peer
+                const uint64_t dst = get_noc_addr(dx, dy, src + off);  // same landing address on the peer
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header(d);
                 if (off + n == bytes) {
                     hdr->to_noc_fused_unicast_write_atomic_inc(

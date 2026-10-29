@@ -242,3 +242,27 @@ mix-up), `test_distributed_rms_norm_perf.py` (perf driver); both run with `--no-
 - Tests added: `test_distributed_rms_norm_r3.py` (an overflowed Σx² row must not hang the sentinel protocol; other rows
   at the acceptance PCC; `--no-precompile`); `test_distributed_rms_norm_perf_guard.py` gained `DRMS_GUARD_TOPO` /
   `DRMS_GUARD_LINKS` / `DRMS_GUARD_AXIS`.
+
+## Refinement 4 — TRANSPORT: port placement and link use for the stats exchange
+- Date: 2026-10-29
+- What was done: both TRANSPORT levers built as live knobs and measured in the op on the traced slowest chip (1×4 ring,
+  FABRIC_2D_TORUS_XY, 2 links). (1) Port placement: `PORT_PLACEMENT` = `row0` (Phase 0, default) / `eth` (per chip,
+  free core with the fewest NoC1 hops to the port's link Ethernet core — the Ethernet channel is the first word of
+  `setup_fabric_connection`, mapped through the SoC descriptor tables copied from fabric_all_gather; no probe dispatch)
+  / `eth_uniform` (one core per port index for all chips, fewest summed NoC1 hops). The worker grid excludes the union
+  of every chip's ports; the port kernel now carries the destination chip's port coordinates per packet header
+  (`DEST_WORDS` 3 → 5), the ready fence targets the target chip's port. (2) Links (lamp L3): `STATS_LINKS_MAX` caps the
+  links that carry records and reserve port cores. Measurement-only env: `DRMS_PORT_PLACEMENT`, `DRMS_STATS_LINKS`,
+  `DRMS_RESERVE_LINKS`, `DRMS_PORT_EXCLUDE_ALL` (A/B on one worker grid).
+- Measured (traced slowest chip, µs): baseline 640×1792 21.00 / 21.75 / 21.09, 2048×1280 30.6 / 30.1 / 30.8, decode
+  11.7–12.1. Placement on one grid: row0 20.8 / 21.5, eth_uniform 21.3 / 21.2, eth 22.6 / 25.4 / 25.1 (2048×1280 31.6 /
+  31.5 / 35.4) — NoC distance null; per-chip placement grows the launch skew (`prt_ready_wait` 11–13 µs on two chips vs
+  4–7). One link: 640×1792 21.4 / 21.5, 2048×1280 35.4 / 34.0 (ports freed, 108 workers); 21.9 / 34.4 with link-1 ports
+  reserved. Defaults kept (row0, both links): measured null for 640×1792, regression avoided on 2048×1280.
+- Accuracy achieved: unchanged (perf-case PCC > 0.999 on every variant; unit suites bit-for-bit paths unchanged).
+- Golden test progress: loose perf cases 3/3; slice of 16 cells (640×1792, 17×50, 2048×1280, 2×1×128×100 bf16 γ TILE,
+  every feasible topology × links × cluster_axis) 16/16; full suite left to the harness.
+- Issues encountered: the example's "a second link is equal or slower" (fabric_ring_exchange, transport alone) does not
+  carry into the op — its ports also serialize the publishes and the per-entry notifies of many roots.
+- Tests added: `test_distributed_rms_norm_r4_debug.py` (host-only probe: per chip / direction / link Ethernet channel,
+  its NoC coordinate and the nearest-NoC1 port core). Unit files green on default, `eth` and `eth_uniform` placement.

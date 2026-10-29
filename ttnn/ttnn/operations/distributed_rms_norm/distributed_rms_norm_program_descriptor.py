@@ -84,6 +84,9 @@ FOLD_AHEAD_SOLO = FOLD_AHEAD_ALL  # G_w == 1 (D1 / D1-HS): the core owns every w
 RECORD_BYTES = 32 * 4  # one fp32 per row of a tile-row
 SEG_ALIGN = 64  # landing slot alignment (Blackhole DRAM/L1 NoC alignment)
 MAX_HEADERS = 8  # packet headers per port (one per destination chip)
+PORT_PLACEMENT = "row0"  # Refinement 4 (TRANSPORT): "row0" = 2·L cores nearest the middle of logical row 0, the same on
+#                          every chip; "eth" = per chip, each port on the free core with the fewest NoC1 hops to its
+#                          link's Ethernet core (fabric_all_gather plan()); the worker grid excludes the union
 STATS_LINKS_MAX = (
     1 << 16
 )  # Refinement 4 (TRANSPORT, lamp L3): links that carry the stats records, min'ed with num_links;
@@ -669,6 +672,157 @@ def port_cores(grid, n_ports, taken=frozenset()):
     return [ttnn.CoreCoord(x, y) for x, y in sel]
 
 
+def port_placement() -> str:
+    """PORT_PLACEMENT, overridable for measurement only (DRMS_PORT_PLACEMENT; unset in production)."""
+    import os
+
+    return os.environ.get("DRMS_PORT_PLACEMENT", "") or PORT_PLACEMENT
+
+
+# Nearest-Ethernet placement helpers, copied from fabric_all_gather (program_descriptor_with_inline_kernels.py
+# _eth_physical_lists / _chip_maps / _noc_grid / _worker_nearest_noc1). No probe program (a second dispatch): the
+# Ethernet channel is the first word setup_fabric_connection returns (WorkerToFabricEdmSender::build_from_args reads
+# it as the connection-table index), channel i = the i-th non-harvested entry of the arch Ethernet list.
+_ETH_CACHE = {}
+_PLACEMENT_CACHE = {}
+
+
+def _eth_tables(mesh):
+    """(uid -> (non-harvested eth physical (x, y) list, translated column map), (noc x size, noc y size))."""
+    if id(mesh) in _ETH_CACHE:
+        return _ETH_CACHE[id(mesh)][1]
+    import os
+
+    import yaml
+
+    desc = yaml.safe_load(open(ttnn.cluster.serialize_cluster_descriptor()))
+    root = os.environ.get("TT_METAL_HOME", os.getcwd())
+    arch_yaml = {"BLACKHOLE": "blackhole_140_arch.yaml", "WORMHOLE_B0": "wormhole_b0_80_arch.yaml"}[
+        str(mesh.arch()).split(".")[-1]
+    ]
+    soc = yaml.safe_load(open(os.path.join(root, "tt_metal", "soc_descriptors", arch_yaml)))
+    arch_eth = [tuple(int(v) for v in e.split("-")) for e in soc["eth"]]
+    tensix_cols = sorted({int(w.split("-")[0]) for w in soc["functional_workers"]})
+    lists = {}
+    for chip, uid in desc.get("chip_unique_ids", {}).items():
+        h = desc.get("harvesting", {}).get(chip, {})
+        mask = int(h.get("eth_harvesting_mask", 0))
+        tmask = int(h.get("harvest_mask", 0))
+        live = [x for i, x in enumerate(tensix_cols) if not (tmask >> i) & 1]
+        t2p = {tensix_cols[k]: px for k, px in enumerate(live)} if h.get("noc_translation", False) else {}
+        lists[int(uid)] = ([e for i, e in enumerate(arch_eth) if not (mask >> i) & 1], t2p)
+    out = (lists, (int(soc["grid"]["x_size"]), int(soc["grid"]["y_size"])))
+    _ETH_CACHE[id(mesh)] = (mesh, out)
+    return out
+
+
+def _noc1_hops(mesh, t2p, noc_grid, eth_xy, xy):
+    """NoC1 hops (-Y then -X, wrapping) from logical worker xy to the Ethernet core at physical eth_xy, with the
+    fabric_all_gather _worker_nearest_noc1 tie-breaks (lower row, then lower column)."""
+    gx, gy = noc_grid
+    v = mesh.worker_core_from_logical_core(ttnn.CoreCoord(*xy))
+    px = t2p.get(v.x, v.x)
+    return ((v.y - eth_xy[1]) % gy + (px - eth_xy[0]) % gx, v.y, px)
+
+
+def _eth_targets(mesh, cluster_axis, ring, n_links):
+    """{chip coord: ([eth physical (x, y) or None per port index 2·l + d], translated column map)}."""
+    lists, _ = _eth_tables(mesh)
+    out = {}
+    for grp in build_groups(tuple(mesh.shape), cluster_axis):
+        G = len(grp)
+        for p, coord in enumerate(grp):
+            me = _node(mesh, coord)
+            uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(me.mesh_id), int(me.chip_id)))
+            eth_list, t2p = lists.get(uid, (None, {}))
+            tg = [None] * (2 * n_links)
+            for d, q in ((FWD, p + 1), (BWD, p - 1)):
+                if not (ring or 0 <= q < G) or eth_list is None:
+                    continue
+                pn = _node(mesh, grp[q % G])
+                link_ids = ttnn.get_forwarding_link_indices(me, pn)
+                for l in range(min(n_links, len(link_ids))):
+                    conn = ttnn.setup_fabric_connection(
+                        me, pn, link_ids[l], ttnn.ProgramDescriptor(), ttnn.CoreCoord(0, 0)
+                    )
+                    ch = int(conn[0])
+                    tg[2 * l + d] = eth_list[ch] if ch < len(eth_list) else None
+            out[coord] = (tg, t2p)
+    return out
+
+
+def chip_port_maps(mesh, grid, cluster_axis, ring, n_links, taken=frozenset(), mode=None):
+    """{chip coord: [port core of (direction d, link l) at index 2·l + d]} for every chip of every group.
+
+    "row0": port_cores() on every chip. "eth": per chip, the free core with the fewest NoC1 hops to the port's link's
+    Ethernet core. "eth_uniform": one core per port index for every chip, the one with the fewest NoC1 hops summed over
+    the chips. A port with no peer (a line end's missing direction) takes the next free row-0 core."""
+    mode = mode or port_placement()
+    coords = [c for grp in build_groups(tuple(mesh.shape), cluster_axis) for c in grp]
+    if mode not in ("eth", "eth_uniform"):
+        same = port_cores(grid, 2 * n_links, taken)
+        return {c: same for c in coords}
+    key = (id(mesh), str(ttnn.get_fabric_config()), cluster_axis, ring, n_links, tuple(sorted(taken)), mode)
+    if key in _PLACEMENT_CACHE:
+        return _PLACEMENT_CACHE[key][1]
+    _, noc_grid = _eth_tables(mesh)
+    targets = _eth_targets(mesh, cluster_axis, ring, n_links)
+    free = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in taken]
+
+    def fill(chosen):
+        used = {c for c in chosen if c is not None}
+        rest = [(c.x, c.y) for c in port_cores(grid, 2 * n_links, taken | used) if (c.x, c.y) not in used]
+        return [ttnn.CoreCoord(*(c if c is not None else rest.pop(0))) for c in chosen]
+
+    out = {}
+    if mode == "eth":
+        for coord in coords:
+            tg, t2p = targets[coord]
+            chosen = [None] * (2 * n_links)
+            for i, exy in enumerate(tg):
+                if exy is not None:
+                    cand = [c for c in free if c not in chosen]
+                    chosen[i] = min(cand, key=lambda c: _noc1_hops(mesh, t2p, noc_grid, exy, c)) if cand else None
+            out[coord] = fill(chosen)
+    else:
+        chosen = [None] * (2 * n_links)
+        for i in range(2 * n_links):
+            legs = [(targets[c][0][i], targets[c][1]) for c in coords if targets[c][0][i] is not None]
+            cand = [c for c in free if c not in chosen]
+            if legs and cand:
+                chosen[i] = min(
+                    cand, key=lambda c: sum(_noc1_hops(mesh, t2p, noc_grid, exy, c)[0] for exy, t2p in legs)
+                )
+        same = fill(chosen)
+        out = {c: same for c in coords}
+    _PLACEMENT_CACHE[key] = (mesh, out)
+    return out
+
+
+def port_union(maps, n_used_links=None) -> list:
+    """Sorted union over chips of the port cores (of the first n_used_links links, default all)."""
+    s = set()
+    for lst in maps.values():
+        for i, c in enumerate(lst):
+            if n_used_links is None or i < 2 * n_used_links:
+                s.add((c.x, c.y))
+    return [ttnn.CoreCoord(x, y) for x, y in sorted(s, key=lambda c: (c[1], c[0]))]
+
+
+def port_exclusion(mesh, grid, cluster_axis, ring, num_links, taken, maps) -> set:
+    """Logical cores kept off the worker grid: the union over chips of the port cores (identical worker count N on
+    every chip). DRMS_PORT_EXCLUDE_ALL (measurement only) excludes every placement's ports, so placements A/B on one
+    worker grid."""
+    import os
+
+    pset = {(c.x, c.y) for c in port_union(maps)}
+    if os.environ.get("DRMS_PORT_EXCLUDE_ALL", "") not in ("", "0"):
+        for mode in ("row0", "eth", "eth_uniform"):
+            other = chip_port_maps(mesh, grid, cluster_axis, ring, reserved_links(num_links), taken, mode)
+            pset |= {(c.x, c.y) for c in port_union(other)}
+    return pset
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Persistent exchange resources (cold call only)
 # ---------------------------------------------------------------------------------------------------------------
@@ -1012,7 +1166,9 @@ def _out_resident(input_tensor, output_tensor) -> bool:
     )
 
 
-def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest_acc_en=True, out_resident=None):
+def plan_summary(
+    input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest_acc_en=True, out_resident=None, ring=False
+):
     """Host-only: the selected regime and its split (for tests). out_resident defaults to the input's own placement
     for a sharded input (the golden suite's sharded-output request)."""
     mesh = input_tensor.device()
@@ -1021,8 +1177,17 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
     mc = input_tensor.memory_config()
     if mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         taken = {(c.x, c.y) for r in mc.shard_spec.grid.ranges() for c in _range_cores(r)}
-    ports = port_cores(grid, 2 * reserved_links(num_links), taken)
-    pset = {(c.x, c.y) for c in ports}
+    G = mesh.shape[cluster_axis]
+    ring = ring and G >= 3
+    pset = port_exclusion(
+        mesh,
+        grid,
+        cluster_axis,
+        ring,
+        num_links,
+        taken,
+        chip_port_maps(mesh, grid, cluster_axis, ring, reserved_links(num_links), taken),
+    )
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
     sz = _sizes(input_tensor, gamma, fp32_dest_acc_en, mesh.shape[cluster_axis])
     if out_resident is None:
@@ -1107,8 +1272,8 @@ def create_mesh_program_descriptor(
     taken = set()
     if mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         taken = {(c.x, c.y) for r in mc.shard_spec.grid.ranges() for c in _range_cores(r)}
-    port_list = port_cores(grid, 2 * reserved_links(num_links), taken)
-    pset = {(c.x, c.y) for c in port_list}
+    port_maps = chip_port_maps(mesh, grid, cluster_axis, ring, reserved_links(num_links), taken)
+    pset = port_exclusion(mesh, grid, cluster_axis, ring, num_links, taken, port_maps)
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
     out_resident = _out_resident(input_tensor, output_tensor)
     # The plan sizes the landing scratch, and a grown scratch is an L1 buffer that lowers the CB budget: re-plan
@@ -1142,9 +1307,10 @@ def create_mesh_program_descriptor(
         n_pub = [len([k for k in range(P) if k % L == l]) for l in range(L)]
         seg_bytes = [n_pub[l] * plan.q * RECORD_BYTES for l in range(L)]
         seg_stride = _align_up(max(seg_bytes), SEG_ALIGN)
-        ports = {(d, l): port_list[2 * l + d] for l in range(L) for d in (FWD, BWD)}
-        used_ports = list(ports.values())
-        res = get_resources(mesh, used_ports, G, plan.num_waves, seg_stride)
+        ports_of = {
+            coord: {(d, l): lst[2 * l + d] for l in range(L) for d in (FWD, BWD)} for coord, lst in port_maps.items()
+        }
+        res = get_resources(mesh, port_union(port_maps, L), G, plan.num_waves, seg_stride)
         budget_now = (l1_largest_hole(mesh) - SCRATCH_SLACK) if scratch_cbs else l1_budget(mesh)
         if footprint(sz, plan) <= budget_now:
             break
@@ -1181,8 +1347,6 @@ def create_mesh_program_descriptor(
     assert max(n_worker_sems, n_port_sems + FABRIC_PORT_SEMAPHORES) <= NUM_SEMAPHORES, "NUM_SEMAPHORES"
 
     worker_crs = _crs([m.core for m in plan.members])
-    port_crs = _crs(used_ports)
-    all_crs = _crs([m.core for m in plan.members] + used_ports)
 
     # ---- CBs (worker cores): cb_table() is the single source of the allocated CBs and of footprint() ----
     fmt = {
@@ -1306,7 +1470,6 @@ def create_mesh_program_descriptor(
 
     groups_list = [groups[g] for g in range(plan.G_h)]
     group_coords = [[pack(virt(grp[j].core)) for j in range(plan.G_w)] for grp in groups_list]
-    port_xy = [pack(virt(ports[(d, l)])) for l in range(L) for d in (FWD, BWD)]
 
     dm_defines = _measurement_defines()
     mesh_desc = ttnn.MeshProgramDescriptor()
@@ -1318,6 +1481,9 @@ def create_mesh_program_descriptor(
             src_dir = [2 if pos == p else (FWD if pos in info["entries"][FWD] else BWD) for pos in range(G)]
             n_in = {d: len(info["entries"][d]) for d in (FWD, BWD)}
 
+            ports = ports_of[coord]  # this chip's port cores
+            port_crs = _crs(list(ports.values()))
+            port_xy = [pack(virt(ports[(d, l)])) for l in range(L) for d in (FWD, BWD)]
             program = ttnn.ProgramDescriptor()
             # Our semaphores first: setup_fabric_connection (below) appends the port's fabric teardown / buffer-index
             # semaphores at the next free ids, which must not alias the per-wave own_stats ids.
@@ -1391,11 +1557,12 @@ def create_mesh_program_descriptor(
                     args += res.arrival_addrs[: len(entries)]
                     for dst, h in dests:
                         dn = _node(mesh, grp_coords[dst])
-                        args += [int(dn.chip_id), int(dn.mesh_id), h]
+                        dc = virt(ports_of[grp_coords[dst]][(d, l)])  # the destination chip's port of (d, l)
+                        args += [int(dn.chip_id), int(dn.mesh_id), h, dc.x, dc.y]
                     for q_slot, dst, idx, h, wait in sends:
                         args += [q_slot, dests.index((dst, h)), res.arrival_addrs[idx], wait]
                     for tgt, td, h in ready_out:
-                        rc = virt(ports[(td, l)])
+                        rc = virt(ports_of[grp_coords[tgt]][(td, l)])
                         args += [dests.index((tgt, h)), rc.x, rc.y]
                     args += [seg_bytes[l]] * plan.num_waves
                     args += root_list
@@ -1476,12 +1643,15 @@ def create_mesh_program_descriptor(
                     None if mc.shard_spec is None else (tuple(mc.shard_spec.shape), str(mc.shard_spec.grid)),
                     output_tensor.memory_config().buffer_type,
                     tuple(sorted(pset)),
+                    tuple((c.x, c.y) for c in port_maps[coord]),
                     plan.out_resident,
-                    None
-                    if output_tensor.memory_config().shard_spec is None
-                    else (
-                        tuple(output_tensor.memory_config().shard_spec.shape),
-                        str(output_tensor.memory_config().shard_spec.grid),
+                    (
+                        None
+                        if output_tensor.memory_config().shard_spec is None
+                        else (
+                            tuple(output_tensor.memory_config().shard_spec.shape),
+                            str(output_tensor.memory_config().shard_spec.grid),
+                        )
                     ),
                     plan.gamma_mode,
                     plan.gamma_stream,
