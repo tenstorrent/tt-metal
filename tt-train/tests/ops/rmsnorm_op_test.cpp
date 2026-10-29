@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <tt-umd-workload/cluster.hpp>
 #include <utility>
@@ -873,8 +874,8 @@ TEST_F(RMSNormOpTest, GatedPreallocatedOutputsOnCachedProgram) {
         const auto dgate = ttml::core::zeros(ttnn::Shape(s.head_merged()), device);
 
         const auto fw = ttnn::prim::ttml_rmsnorm_fw(x, gamma, gate, /* return_intermediates */ true, kEps, rms, out);
-        const auto bw =
-            ttnn::prim::ttml_rmsnorm_bw(x, gamma, rms, dy, gate, compute_dgamma, da, dgamma_components, dgate);
+        const auto bw = ttnn::prim::ttml_rmsnorm_bw(
+            x, gamma, rms, dy, gate, compute_dgamma, /* compute_da */ true, da, dgamma_components, dgate);
         EXPECT_EQ(device->num_program_cache_entries(), num_programs) << suffix;
 
         EXPECT_EQ(fw[0].buffer()->address(), out.buffer()->address());
@@ -954,6 +955,7 @@ TEST_F(RMSNormOpTest, GatedRejectsMismatchedBackwardTensors) {
                 x,
                 /* gate */ std::nullopt,
                 /* compute_dgamma */ true,
+                /* compute_da */ true,
                 std::nullopt,
                 std::nullopt,
                 ttml::core::zeros(ttnn::Shape(s.head_merged()), device));
@@ -969,6 +971,7 @@ TEST_F(RMSNormOpTest, GatedRejectsMismatchedBackwardTensors) {
                 dy,
                 gate,
                 /* compute_dgamma */ false,
+                /* compute_da */ true,
                 std::nullopt,
                 ttml::core::zeros(ttnn::Shape(s.head_major()), device),
                 std::nullopt);
@@ -1484,6 +1487,7 @@ TEST_F(RMSNormCacheHitTest, Backward_PreallocatedOutputsAcrossOptionalPresence_T
                 in.dL_dout.tensor,
                 /*gate=*/std::nullopt,
                 /*compute_dgamma=*/true,
+                /*compute_da=*/true,
                 preallocated_dL_da,
                 preallocated_dL_dgamma_components),
             label);
@@ -1883,6 +1887,7 @@ TEST_F(RMSNormCacheHitTest, GatedBackward_PreallocatedOutputsAcrossOptionalPrese
             in.dL_dout,
             in.gate,
             /*compute_dgamma=*/true,
+            /*compute_da=*/true,
             preallocated_dL_da,
             preallocated_dL_dgamma_components,
             preallocated_dL_dgate);
@@ -2005,6 +2010,7 @@ TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctProgra
                 plain.dL_dout,
                 /*gate=*/std::nullopt,
                 /*compute_dgamma=*/true,
+                /*compute_da=*/true,
                 std::nullopt,
                 std::nullopt,
                 preallocated_dL_dgate);
@@ -2021,6 +2027,7 @@ TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctProgra
                 gated.dL_dout,
                 gated.gate,
                 /*compute_dgamma=*/false,
+                /*compute_da=*/true,
                 std::nullopt,
                 preallocated_dL_dgamma_components,
                 std::nullopt);
@@ -2032,4 +2039,227 @@ TEST_F(RMSNormCacheHitTest, Backward_GateHeadCountAndDgammaCompileDistinctProgra
         << "the rejected launch wrote the preallocated dL_dgamma_components";
 
     kept.expect_unchanged();
+}
+
+// A frozen input in gated mode: the kernel skips dL/dinput, and with a frozen gamma also du, leaving only dL/dgate.
+TEST_F(RMSNormOpTest, GatedAutogradSkipsFrozenInput) {
+    using namespace ttml;
+    for (const bool train_gamma : {true, false}) {
+        const Shape s{1, 64, 3, 128};
+        const auto in = make_inputs(s, 41U, ttnn::DataType::FLOAT32, /* gated */ true);
+        auto x = autograd::create_tensor(to_device(in.x, ttnn::DataType::FLOAT32), /* requires_grad */ false);
+        auto gate = autograd::create_tensor(to_device(*in.gate), /* requires_grad */ true);
+        auto gamma = autograd::create_tensor(to_device(in.gamma), /* requires_grad */ train_gamma);
+
+        auto out = ops::gated_rmsnorm(x, gate, gamma, kEps);
+        out->backward();
+
+        const xt::xarray<float> ones = xt::ones<float>(s.head_merged());  // backward() seeds dL/dout with ones
+        const auto ref = reference(in, ones, s);
+        EXPECT_FALSE(x->is_grad_initialized());
+        ASSERT_TRUE(gate->is_grad_initialized());
+        expect_dgate_close(core::to_xtensor(gate->get_grad()), ref.dgate, "autograd dgate, frozen input");
+        ASSERT_EQ(gamma->is_grad_initialized(), train_gamma);
+        if (train_gamma) {
+            expect_close(core::to_xtensor(gamma->get_grad()), ref.dgamma, "autograd dgamma, frozen input");
+        }
+        autograd::ctx().reset_graph();
+    }
+}
+
+// dL/dinput skipped, against the reference: plain on both kernel paths (fits in L1 with a masked last tile, and
+// streaming), and gated with dL/dgamma (du is kept) and without it (only dL/dgate is computed).
+class RMSNormOpSkipDxTest : public RMSNormOpTest, public ::testing::WithParamInterface<RMSNormCase> {};
+
+TEST_P(RMSNormOpSkipDxTest, MatchesReference) {
+    const auto& c = GetParam();
+    const auto in = make_inputs(c.shape, 13U, c.dtype, c.gated);
+    const auto ref = reference(in, in.dy, c.shape);
+    const auto x = to_device(in.x, c.dtype);
+    const auto gate = to_device(in.gate);
+    const auto gamma = to_device(in.gamma);
+    const auto dy = to_device(in.dy);
+    const auto rms = ttml::metal::rmsnorm_fw(x, gamma, /* return_intermediates */ true, kEps, gate)[1].value();
+
+    for (const bool compute_dgamma : {true, false}) {
+        if (!c.gated && !compute_dgamma) {
+            continue;  // plain mode then has nothing to compute
+        }
+        const std::string suffix = compute_dgamma ? " without dx" : " without dx and dgamma";
+        const auto bw = ttml::metal::rmsnorm_bw(x, gamma, rms, dy, compute_dgamma, gate, /* compute_da */ false);
+        ASSERT_EQ(bw.size(), 3U);
+        EXPECT_FALSE(bw[0].has_value()) << suffix;
+        ASSERT_EQ(bw[1].has_value(), compute_dgamma);
+        if (compute_dgamma) {
+            expect_close(ttml::core::to_xtensor(bw[1].value()), ref.dgamma, "dgamma" + suffix);
+        }
+        ASSERT_EQ(bw[2].has_value(), c.gated);
+        if (c.gated) {
+            expect_dgate_close(ttml::core::to_xtensor(bw[2].value()), ref.dgate, "dgate" + suffix);
+        }
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    RMSNormSkipDx,
+    RMSNormOpSkipDxTest,
+    ::testing::Values(
+        // C % 32 != 0 masks the last tile.
+        RMSNormCase{.shape = Shape{1, 32, 1, 1000}},
+        // With fp32 input the backward streams even without gamma.
+        RMSNormCase{.shape = Shape{1, 32, 1, 16384}, .dtype = ttnn::DataType::FLOAT32},
+        RMSNormCase{.shape = Shape{1, 64, 3, 128}, .gated = true},
+        // A single head with a partial last tile.
+        RMSNormCase{.shape = Shape{2, 64, 1, 80}, .gated = true, .dtype = ttnn::DataType::FLOAT32},
+        // The Qwen3.8 TP=4 layout: both core groups run and every core processes more than one row.
+        RMSNormCase{.shape = Shape{1, 1024, 12, 128}, .gated = true}),
+    rmsnorm_case_name);
+
+// ============================================================================
+// Section 5: Skipping one grad in the plain RMSNorm backward kernel
+// ============================================================================
+// rmsnorm_bw takes a flag for each of dL_dinput (compute_da) and dL_dgamma (compute_dgamma). A skipped grad is
+// nullopt; the kernel drops its compute, its output CB and, for dL_dinput, gamma and the scale reduction. Rows cover
+// each flag on both kernel paths: everything in L1 (several rows per core, so gamma is read once and reused) and not
+// (gamma re-read every row).
+// ============================================================================
+
+namespace {
+
+struct RMSNormBwSkipCase {
+    std::string name;
+    std::vector<uint32_t> shape;
+    bool compute_da = true;
+    bool compute_dgamma = true;
+};
+
+// gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
+void PrintTo(const RMSNormBwSkipCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+struct RMSNormBwInputs {
+    ttnn::Tensor input;
+    ttnn::Tensor gamma;
+    ttnn::Tensor rms;
+    ttnn::Tensor dL_dout;
+};
+
+RMSNormBwInputs make_rmsnorm_bw_inputs(const std::vector<uint32_t>& shape, uint32_t seed) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const std::vector<uint32_t> gamma_shape{1U, 1U, 1U, shape[3]};
+    auto input = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    auto gamma = core::from_xtensor(test_utils::make_uniform_xarray<float>(gamma_shape, 0.0F, 1.0F, seed + 1U), device);
+    auto dL_dout = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 2U), device);
+    auto rms = metal::rmsnorm_fw(input, gamma, /* return_intermediates */ true)[1].value();
+    return {input, gamma, rms, dL_dout};
+}
+
+}  // namespace
+
+class RMSNormBwSkipTest : public ::testing::TestWithParam<RMSNormBwSkipCase> {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// The requested grad must equal the one from the full backward bit for bit: the kernel does the same per-tile
+// arithmetic either way. The flags are compile-time, so the first skipping run must compile its own program; a second
+// run with other live inputs must hit that program and read and write the new buffers.
+TEST_P(RMSNormBwSkipTest, RequestedGradMatchesFullBackward) {
+    using namespace ttml;
+    const RMSNormBwSkipCase& c = GetParam();
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    // Both sets stay alive, so the second cannot land at the first's addresses.
+    const RMSNormBwInputs first = make_rmsnorm_bw_inputs(c.shape, 1U);
+    const RMSNormBwInputs second = make_rmsnorm_bw_inputs(c.shape, 11U);
+
+    const auto run = [](const RMSNormBwInputs& in, bool compute_da, bool compute_dgamma) {
+        return metal::rmsnorm_bw(in.input, in.gamma, in.rms, in.dL_dout, compute_dgamma, std::nullopt, compute_da);
+    };
+    // The full backward also compiles the dL_dgamma reduction, so the skipping runs below only add their own program.
+    const auto full_first = run(first, true, true);
+    const auto full_second = run(second, true, true);
+    const size_t grad_idx = c.compute_da ? 0U : 1U;
+    const xt::xarray<float> expected_first = core::to_xtensor(full_first[grad_idx].value());
+    const xt::xarray<float> expected_second = core::to_xtensor(full_second[grad_idx].value());
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto skip_first = run(first, c.compute_da, c.compute_dgamma);
+    const auto entries_after_first = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_first, entries_before + 1U)
+        << c.name << ": the skipping run must compile exactly one program of its own";
+    const auto skip_second = run(second, c.compute_da, c.compute_dgamma);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << c.name << ": the second skipping run at identical shapes missed the program cache";
+
+    for (const auto* grads : {&skip_first, &skip_second}) {
+        ASSERT_EQ(grads->size(), 3U) << c.name;
+        EXPECT_EQ((*grads)[0].has_value(), c.compute_da) << c.name << ": dL_dinput presence";
+        EXPECT_EQ((*grads)[1].has_value(), c.compute_dgamma) << c.name << ": dL_dgamma presence";
+        EXPECT_FALSE((*grads)[2].has_value()) << c.name << ": dL_dgate without a gate";
+        ASSERT_TRUE((*grads)[grad_idx].has_value()) << c.name;
+    }
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(skip_first[grad_idx].value()), expected_first)))
+        << c.name << ": requested grad differs from the full backward";
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(skip_second[grad_idx].value()), expected_second)))
+        << c.name << ": cache-hit grad differs from the full backward on the second inputs (stale address?)";
+}
+
+// C = 127: Wt = 4 with masking; 256 tile rows give every core more than one row on Wormhole and Blackhole.
+// C = 16383: Wt = 512, so input and dL_dout alone (2 MB) exceed L1 even without gamma.
+// The unmasked dL_dinput-only rows are the frozen-gamma case of Qwen3 / Qwen3.8 LoRA: per-head norms (head_dim 128,
+// Wt = 4, and Qwen3.8's QK-norm at head_dim 256, Wt = 8), the decoder norms (hidden 5120, Wt = 160, still fits in L1),
+// and an odd Wt for block size 1.
+INSTANTIATE_TEST_SUITE_P(
+    RMSNormBwSkipCases,
+    RMSNormBwSkipTest,
+    ::testing::Values(
+        RMSNormBwSkipCase{.name = "InputOnly_FitsInL1", .shape = {1U, 1U, 8192U, 127U}, .compute_dgamma = false},
+        RMSNormBwSkipCase{.name = "InputOnly_HeadDim128", .shape = {1U, 64U, 128U, 128U}, .compute_dgamma = false},
+        RMSNormBwSkipCase{.name = "InputOnly_HeadDim256", .shape = {1U, 24U, 256U, 256U}, .compute_dgamma = false},
+        RMSNormBwSkipCase{.name = "InputOnly_Hidden5120", .shape = {1U, 1U, 8192U, 5120U}, .compute_dgamma = false},
+        RMSNormBwSkipCase{.name = "InputOnly_BlockSize1", .shape = {1U, 1U, 8192U, 96U}, .compute_dgamma = false},
+        RMSNormBwSkipCase{.name = "GammaOnly_FitsInL1", .shape = {1U, 1U, 8192U, 127U}, .compute_da = false},
+        RMSNormBwSkipCase{.name = "InputOnly_DoesNotFitInL1", .shape = {1U, 1U, 64U, 16383U}, .compute_dgamma = false},
+        RMSNormBwSkipCase{.name = "GammaOnly_DoesNotFitInL1", .shape = {1U, 1U, 64U, 16383U}, .compute_da = false}),
+    [](const ::testing::TestParamInfo<RMSNormBwSkipCase>& info) { return info.param.name; });
+
+// Without a gate the kernel writes only dL_dinput and dL_dgamma, so a call that requests neither must be refused, as
+// must a preallocated dL_dinput that would not be written.
+TEST_F(RMSNormOpTest, BackwardRejectsNoRequestedGrad) {
+    const RMSNormBwInputs in = make_rmsnorm_bw_inputs({1U, 1U, 32U, 64U}, 1U);
+    EXPECT_THAT(
+        ([&in] {
+            return ttml::metal::rmsnorm_bw(
+                in.input,
+                in.gamma,
+                in.rms,
+                in.dL_dout,
+                /* compute_dgamma */ false,
+                /* gate */ std::nullopt,
+                /* compute_da */ false);
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("nothing to compute")));
+    EXPECT_THAT(
+        ([&in] {
+            return ttnn::prim::ttml_rmsnorm_bw(
+                in.input,
+                in.gamma,
+                in.rms,
+                in.dL_dout,
+                /* gate */ std::nullopt,
+                /* compute_dgamma */ true,
+                /* compute_da */ false,
+                ttml::core::zeros_like(in.input));
+        }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("compute_da is false")));
 }

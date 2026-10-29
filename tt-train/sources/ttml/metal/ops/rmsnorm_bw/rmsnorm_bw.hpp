@@ -10,14 +10,16 @@
 
 namespace ttml::metal {
 
-// Returns {dL_dinput, dL_dgamma, dL_dgate}. dL_dgamma is computed only with `compute_dgamma` (skip it for a frozen
-// gamma) and dL_dgate only in gated mode, where `dL_dout` and dL_dgate have the gate's layout; see rmsnorm_fw.
+// Returns {dL_dinput, dL_dgamma, dL_dgate}. dL_dinput is computed only with `compute_da` (skip it for a frozen input),
+// dL_dgamma only with `compute_dgamma` (skip it for a frozen gamma) and dL_dgate only in gated mode, where `dL_dout`
+// and dL_dgate have the gate's layout; see rmsnorm_fw. Without a gate, at least one of the flags must be set.
 std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,  // intermediate from fw
     const ttnn::Tensor& dL_dout_tensor,
     bool compute_dgamma = true,
-    const std::optional<ttnn::Tensor>& gate_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& gate_tensor = std::nullopt,
+    bool compute_da = true);
 
 }  // namespace ttml::metal
