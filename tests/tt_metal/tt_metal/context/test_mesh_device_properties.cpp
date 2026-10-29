@@ -11,7 +11,7 @@
 #include <string>
 
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/context/mesh_device_properties.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/mesh_config.hpp>
