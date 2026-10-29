@@ -13,6 +13,9 @@ namespace ttml::metal::ops::rmsnorm_bw::device {
 struct RMSNormBackwardParams {
     // Without it no dL_dgamma_components are computed or written, e.g. for a frozen gamma.
     bool compute_dgamma = true;
+    // Without it no dL_da is computed or written, e.g. for a frozen input. Plain mode then also skips gamma and the
+    // scale reduction; gated mode still needs gamma for dL_dgate.
+    bool compute_da = true;
 };
 
 // Tensors required for backward
@@ -31,8 +34,8 @@ struct RMSNormBackwardInputs {
 using operation_attributes_t = RMSNormBackwardParams;
 using tensor_args_t = RMSNormBackwardInputs;
 
-// {dL_da, dL_dgamma_components, dL_dgate}; dL_dgamma_components is nullopt without compute_dgamma and dL_dgate
-// without a gate.
+// {dL_da, dL_dgamma_components, dL_dgate}; dL_da is nullopt without compute_da, dL_dgamma_components without
+// compute_dgamma and dL_dgate without a gate.
 using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
 using tensor_return_value_t = std::vector<std::optional<ttnn::Tensor>>;
 
