@@ -206,9 +206,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    const uint32_t num_cores = std::min(num_available_cores, num_work_units(shape, chunks));
+    const uint32_t num_cores = std::min(num_available_cores, num_work_units(shape, chunks, num_available_cores));
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
-    const std::vector<CoreItemRuns> per_core_runs = split_work(shape, chunks, num_cores);
+    const std::vector<CoreItemRuns> per_core_runs = split_work(shape, chunks, num_cores, num_available_cores);
 
     // DST is the register file the math unit computes in: 4 tiles per half in fp32 mode (8 in bf16);
     // the kernels run half-sync, so one pass gets one half.
