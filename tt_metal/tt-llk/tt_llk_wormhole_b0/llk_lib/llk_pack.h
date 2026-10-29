@@ -345,6 +345,8 @@ inline void _llk_pack_hw_configure_(
 
     // ADDR_MOD_7 is invariant state: zero advance, so it behaves like a NOOP. SFPU ops also run from this thread.
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    // ADDR_MOD_6 is invariant state: dest += 2, so it behaves like dst_reg++.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
