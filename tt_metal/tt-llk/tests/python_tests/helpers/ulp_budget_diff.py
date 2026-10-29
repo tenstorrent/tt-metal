@@ -39,10 +39,6 @@ from .ulp_table import (
 # The op and the key of the row that decides a cell.
 Cell = tuple[MathOperation, BudgetKey]
 
-# The label that approves a pull request loosening a gate. The guard workflow admits one
-# only when the change touches nothing but the tables and carries this label.
-RAISE_LABEL = "ulp-budget-raise-approved"
-
 # A collapsed section shows this many rows and says how many it withheld; a list of
 # what failed or loosened is never cut.
 _MAX_ROWS = 40
@@ -491,9 +487,8 @@ def _section(
     return [f"**{heading}**", "", *table]
 
 
-def render_budget_diff(changes: list[Change], allowed: bool = False) -> str:
-    """The diff report: what loosens first, the rest collapsed. *allowed* is
-    ``--allow-raises``: the loosened cells are a raise the guard admitted."""
+def render_budget_diff(changes: list[Change]) -> str:
+    """The diff report: what loosens first, the rest collapsed."""
     if not changes:
         return "### SFPU ULP budgets\n\nNo budget changed.\n"
     header = ("cell", "change", "before", "after")
@@ -515,24 +510,6 @@ def render_budget_diff(changes: list[Change], allowed: bool = False) -> str:
             header,
             lines(loosened),
             collapsed=False,
-        ),
-        *(
-            [
-                f"**Allowed:** a budget raise PR, labelled `{RAISE_LABEL}`.",
-                "",
-            ]
-            if loosened and allowed
-            else (
-                [
-                    "A gate may only be loosened in a pull request that changes nothing but "
-                    f"the tables and carries the `{RAISE_LABEL}` label, with each raised row "
-                    "re-measured; otherwise the budget is being fitted to a failure, and the "
-                    "kernel or the golden is what moved.",
-                    "",
-                ]
-                if loosened
-                else []
-            )
         ),
         *_section(
             f"{len(other)} other budget change(s)", header, lines(other), collapsed=True
@@ -779,15 +756,11 @@ def main(argv: list[str] | None = None) -> int:
     diff = sub.add_parser("diff", help="what a change to the table does to the gates")
     diff.add_argument("--base", type=Path, required=True)
     diff.add_argument("--head", type=Path, required=True)
-    diff.add_argument(
-        "--allow-raises",
-        action="store_true",
-        help="report loosened gates but exit 0 (a budget-only, approved PR)",
-    )
+    diff.add_argument("--allow-raises", action="store_true", help="report, do not fail")
     headroom = sub.add_parser(
         "headroom", help="--ulp-measure records against the table"
     )
-    headroom.add_argument("--table", type=Path, required=True)
+    headroom.add_argument("--table", type=Path, help="default: CHIP_ARCH's table")
     headroom.add_argument("--measured", type=Path, required=True)
     for command in (diff, headroom):
         command.add_argument("--out", type=Path, help="also write the report here")
@@ -802,17 +775,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "diff":
             arch = _tables_arch(args.arch, args.head, args.base)
             changes = compare(_load("base", args.base), _load("head", args.head), arch)
-            report = render_budget_diff(changes, allowed=args.allow_raises)
+            report = render_budget_diff(changes)
             loosened = any(c.kind.loosens for c in changes)
             status = 1 if loosened and not args.allow_raises else 0
         else:
             # The reader takes a missing file as no records (a sweep that died before its
             # first cell); here it is an input that is not there, so it cannot load.
             args.measured.stat()
-            arch = _tables_arch(args.arch, args.table)
+            table = args.table or TABLE_PATHS[measured_arch()]
+            arch = _tables_arch(args.arch, table)
             records = read_measurements(args.measured)
             _check_records_arch(records, arch, args.measured)
-            headroom = judge(load_table(args.table), records, arch)
+            headroom = judge(load_table(table), records, arch)
             report = render_headroom(headroom)
             status = 1 if headroom.regressions else 0
     except (ValueError, OSError) as refused:

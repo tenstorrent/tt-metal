@@ -704,40 +704,9 @@ jobs:
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
 
-  # LLK SFPU ULP budget guard (llk-sfpu-ulp-budget-guard.yaml): it fails a change to
-  # tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_{wh,bh}.yaml that
-  # loosens a gate, unless the change touches only those tables and carries the
-  # `ulp-budget-raise-approved` label. Host-only: an ubuntu-slim job lists the tables
-  # the change touches (deletions included, which find-changed-files ignores), and
-  # the comparison in the LLK image runs, on a medium runner, only when there is one.
-  # Not gated on find-changed-files for that reason. Skips drafts like the rest: a job
-  # that ran there would wake workflow-status, which then fails on the skipped
-  # verify-time-budgets. The sweep that holds the hardware to the tables is
-  # llk-sfpu-ulp-pr-check below (Wormhole, the cells a change can move) and the nightly
-  # one (llk-e2e.yaml, both cards, every cell).
-  llk-sfpu-ulp-budget-guard:
-    needs: [resolve-docker-pull-refs, build-docker-images]
-    if: >-
-      ${{
-        github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' ||
-         (github.event_name == 'pull_request' && !github.event.pull_request.draft))
-      }}
-    permissions:
-      contents: read
-      issues: read
-      pull-requests: write
-    uses: ./.github/workflows/llk-sfpu-ulp-budget-guard.yaml
-    with:
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-
-  # LLK SFPU ULP PR check (llk-sfpu-ulp-pr-check.yaml): the exhaustive ULP sweep on a
-  # Wormhole card over the cells the change can move -- those whose kernel builds
-  # differently from the first parent's, or whose row in sfpu_accuracy_budget_wh.yaml
-  # changed -- failing a cell that measures worse than its row. It lists the kernel
-  # sources it needs itself (find-changed-files misses some include roots), builds both
-  # revisions on a CPU runner, and takes a card only when a cell was picked. Blackhole
-  # is nightly only: llk's pr_gate bucket on that card is full.
+  # LLK SFPU ULP PR check (llk-sfpu-ulp-pr-check.yaml): fails a change that makes a
+  # Wormhole SFPU op less accurate, or loosens an SFPU accuracy budget. Not gated on
+  # find-changed-files, which misses some of the sweep's include roots.
   llk-sfpu-ulp-pr-check:
     needs: [resolve-docker-pull-refs, build-docker-images]
     if: >-
@@ -748,6 +717,7 @@ jobs:
       }}
     permissions:
       contents: read
+      issues: read
     uses: ./.github/workflows/llk-sfpu-ulp-pr-check.yaml
     secrets: inherit
     with:
@@ -778,7 +748,6 @@ jobs:
       - llk-smoke-tests
       - llk-quasar-tests
       - llk-hardware-free-tests
-      - llk-sfpu-ulp-budget-guard
       - llk-sfpu-ulp-pr-check
       - verify-time-budgets
     runs-on: ubuntu-slim
@@ -798,6 +767,6 @@ jobs:
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
             llk-smoke-tests, llk-quasar-tests, llk-hardware-free-tests,
-            llk-sfpu-ulp-budget-guard, llk-sfpu-ulp-pr-check
+            llk-sfpu-ulp-pr-check
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
