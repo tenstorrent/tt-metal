@@ -19,6 +19,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
+#include "attn_rows.hpp"
 
 using namespace resident_attn;
 
@@ -34,11 +35,13 @@ FORCE_INLINE void push_resident(uint32_t cb, uint32_t n) {
     cb_push_back(cb, n);
 }
 
-// copy a user's face rows of a batch x 32 tile (src: its face 0 row) into row 0 of a 32x32 bf16 tile
-FORCE_INLINE void place_row0(uint32_t src, uint32_t tile) {
-    noc_async_read(get_noc_addr(src), tile, kFaceRow);
-    noc_async_read(get_noc_addr(src + batch * kFaceRow), tile + kFace, kFaceRow);
+// copy a user's face rows of a batch x 32 tile (src: its face 0 row) into row `row` of a 32x32 bf16 tile
+FORCE_INLINE void place_row(uint32_t src, uint32_t tile, uint32_t row) {
+    noc_async_read(get_noc_addr(src), tile + row_offset(row), kFaceRow);
+    noc_async_read(get_noc_addr(src + batch * kFaceRow), tile + kFace + row_offset(row), kFaceRow);
 }
+
+FORCE_INLINE void place_row0(uint32_t src, uint32_t tile) { place_row(src, tile, 0); }
 
 // a bf16 32x32 tile with `on` where one(row, col) holds and `off` elsewhere
 FORCE_INLINE void fill_bf16(uint32_t addr, bool (*one)(uint32_t, uint32_t), uint16_t on, uint16_t off) {
@@ -92,7 +95,12 @@ void kernel_main() {
         tail_rs[u] = pos % 32;
         chs[u] = role == 2 ? Chunk{tp, 1, 1} : chunk_of(w, tp);
     }
-    for (uint32_t u = 0; u < batch; u++) {
+    // packed: every pass takes the tiles below row 0's; the tail core row 0's tile and the next one if a row reaches it
+    const uint32_t n_tail = packed && tps[batch - 1] != tps[0] ? 2 : 1;
+    for (uint32_t u = 0; packed && u < users; u++) {
+        chs[u] = role == 2 ? Chunk{tps[0], 1, n_tail} : chunk_of(w, tps[0]);
+    }
+    for (uint32_t u = 0; u < users; u++) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u] = chs[u].n;
     }
     cb_push_back(cb_ntiles, 1);
@@ -110,10 +118,45 @@ void kernel_main() {
                 p[i] = 0;
             }
         }
+        if constexpr (packed) {
+            // per pass and tail tile j: row (r, h) sees column c up to its row's position; per tail tile j: the
+            // placement matrix of the new rows on it (row pos % 32 <- row r) and the rows it keeps
+            cb_reserve_back(cb_mask, 2 * users);
+            cb_reserve_back(cb_rowsel, 4);
+            volatile tt_l1_ptr uint16_t* m = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_mask));
+            volatile tt_l1_ptr uint16_t* sel = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_rowsel));
+            for (uint32_t row = 0; row < 32; row++) {
+                for (uint32_t col = 0; col < 32; col++) {
+                    const uint32_t at = ((row / 16) * 2 + col / 16) * 256 + (row % 16) * 16 + col % 16;
+                    for (uint32_t j = 0; j < 2; j++) {
+                        for (uint32_t g = 0; g < users; g++) {
+                            const uint32_t r = g * group_rows + row / heads;
+                            const bool seen = row >= qrows || (tps[0] + j) * 32 + col <= tps[r] * 32 + tail_rs[r];
+                            m[(2 * g + j) * 1024 + at] = seen ? 0 : 0xff80;
+                        }
+                        bool placed = false, kept = true;
+                        for (uint32_t r = 0; r < batch; r++) {
+                            const bool here = tps[r] == tps[0] + j && tail_rs[r] == row;
+                            placed |= here && col == r;
+                            kept &= !here;
+                        }
+                        sel[2 * j * 1024 + at] = placed ? 0x3f80 : 0;
+                        sel[(2 * j + 1) * 1024 + at] = kept ? 0x3f80 : 0;
+                    }
+                }
+            }
+            cb_push_back(cb_mask, 2 * users);
+            cb_push_back(cb_rowsel, 4);
+            cb_reserve_back(cb_rope, kRopePages);
+            noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * kTile);
+            noc_async_read_barrier();
+            build_packed_rope(get_write_ptr(cb_rope));
+            cb_push_back(cb_rope, kRopePages);
+        }
         // per user: causal mask over the tail columns (0 up to r, -inf after); R = ones in row r, 1 - R
-        cb_reserve_back(cb_mask, batch);
-        cb_reserve_back(cb_rowsel, 2 * batch);
-        for (uint32_t u = 0; u < batch; u++) {
+        cb_reserve_back(cb_mask, packed ? 0 : batch);
+        cb_reserve_back(cb_rowsel, packed ? 0 : 2 * batch);
+        for (uint32_t u = 0; !packed && u < batch; u++) {
             tail_r = tail_rs[u];
             fill_bf16(
                 get_write_ptr(cb_mask) + u * kTile, [](uint32_t, uint32_t col) { return col <= tail_r; }, 0, 0xff80);
@@ -121,12 +164,14 @@ void kernel_main() {
             fill_bf16(sel, [](uint32_t row, uint32_t) { return row == tail_r; }, 0x3f80, 0);
             fill_bf16(sel + kTile, [](uint32_t row, uint32_t) { return row == tail_r; }, 0, 0x3f80);
         }
-        cb_push_back(cb_mask, batch);
-        cb_push_back(cb_rowsel, 2 * batch);
-        cb_reserve_back(cb_rope, 3 * batch);
-        noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * kTile);
-        noc_async_read_barrier();
-        cb_push_back(cb_rope, 3 * batch);
+        if constexpr (!packed) {
+            cb_push_back(cb_mask, batch);
+            cb_push_back(cb_rowsel, 2 * batch);
+            cb_reserve_back(cb_rope, 3 * batch);
+            noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * kTile);
+            noc_async_read_barrier();
+            cb_push_back(cb_rope, 3 * batch);
+        }
         push_resident(cb_mean, 1);
     }
 
@@ -156,10 +201,10 @@ void kernel_main() {
         for (uint32_t u = batch - 1; u > 0; u--) {
             cross = tps[u] != tps[0] ? u : cross;
         }
-        waits_tail = role == 1 && cross < batch && holds(chs[cross], tps[0]);
+        waits_tail = !packed && role == 1 && cross < batch && holds(chs[cross], tps[0]);
     }
     for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
+        const uint32_t l = i / users, u = i % users;
         const Chunk& ch = chs[u];
         const uint32_t k_addr = k_cache + u * user_stride + (l % copies) * copy_stride;
         const uint32_t v_addr = v_cache + u * user_stride + (l % copies) * copy_stride;
@@ -187,6 +232,33 @@ void kernel_main() {
                 noc_semaphore_wait_min(tail_sem, l + 1);
             }
             read_blocks(0, early);
+        } else if (packed) {
+            // once per layer: the tail tiles, the k norm weight and every row's k / v (rows 0 .. batch - 1)
+            if (u == 0) {
+                cb_reserve_back(cb_tail8, 2 * n_tail * Dt);
+                read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8));
+                read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8) + n_tail * kKvRow);
+                cb_reserve_back(cb_kw, Dt);
+                for (uint32_t d = 0; d < Dt; d++) {
+                    noc_async_read_page((l % copies) * Dt + d, kw_dram, get_write_ptr(cb_kw) + d * kTile);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_tail8, 2 * n_tail * Dt);
+                cb_push_back(cb_kw, Dt);
+                noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
+                cb_reserve_back(cb_kraw, Dt);
+                cb_reserve_back(cb_vraw, Dt);
+                const uint32_t k = get_write_ptr(cb_kraw), v = get_write_ptr(cb_vraw);
+                for (uint32_t r = 0; r < batch; r++) {
+                    for (uint32_t d = 0; d < Dt; d++) {
+                        place_row(rows + (k0 + d) * kRowTile + user_offset(r), k + d * kTile, r);
+                        place_row(rows + (v0 + d) * kRowTile + user_offset(r), v + d * kTile, r);
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_kraw, Dt);
+                cb_push_back(cb_vraw, Dt);
+            }
         } else {
             // the user's tail of this copy was written back by its previous use (verify: by row u - 1, same tile)
             if (verify && u > 0 && tps[u] == tps[u - 1]) {

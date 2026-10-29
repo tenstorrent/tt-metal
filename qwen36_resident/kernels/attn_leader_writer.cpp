@@ -76,7 +76,7 @@ void kernel_main() {
         cb_pop_front(cb_q_mc, Dt);
     };
     for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
+        const uint32_t l = i / users, u = i % users;
         // q to the workers (a later user's q goes out as soon as the workers have this user's scores)
         if (u == 0) {
             send_q(i);
@@ -87,42 +87,47 @@ void kernel_main() {
         noc_semaphore_wait_min(m_sem, active * (i + 1));
         invalidate_l1_cache();  // the slots are written by other cores
         {
+            // row h's column 0: slot (face 0 rows, then face 2 rows at 512 B) -> tile (face 2 at 1024 B)
             volatile tt_l1_ptr uint16_t* out = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(M_addr);
-            for (uint32_t h = 0; h < heads; h++) {
-                uint16_t best = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots)[h * 16];
+            for (uint32_t h = 0; h < qrows; h++) {
+                const uint32_t at = h < 16 ? h * 16 : 256 + (h - 16) * 16;
+                uint16_t best = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots)[at];
                 for (uint32_t w = 1; w < active; w++) {
-                    const uint16_t v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots + w * kMSlot)[h * 16];
+                    const uint16_t v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_slots + w * kMSlot)[at];
                     if (key(v) > key(best)) {
                         best = v;
                     }
                 }
-                out[h * 16] = best;
+                out[h < 16 ? h * 16 : 512 + (h - 16) * 16] = best;
             }
         }
-        noc_async_write_multicast(M_addr, mc_M, heads * kFaceRow, mc_dests);
+        noc_async_write_multicast(M_addr, mc_M, top_faces ? heads * kFaceRow : kTile, mc_dests);
         noc_async_write_barrier();
         *M_sem = i + 1;
         noc_semaphore_set_multicast(get_semaphore(sem_M), mc_M_sem, mc_dests);
         mark(l, 6);
         // every worker sent its row max, so none reads q any more: the next user's q can go
-        if (u + 1 < batch) {
+        if (u + 1 < users) {
             send_q(i + 1);
         }
 
         // rows 0..heads-1 of the output into row u of the staged tiles
         cb_wait_front(cb_out, Dt);
         const uint32_t out = get_read_ptr(cb_out);
-        for (uint32_t h = 0; h < heads; h++) {
-            for (uint32_t d = 0; d < Dt; d++) {
-                const uint32_t src = out + d * kTile + row_offset(h);
-                const uint32_t dst = stage + (h * Dt + d) * kRowTile + user_offset(u);
-                noc_async_read(get_noc_addr(src), dst, kFaceRow);
-                noc_async_read(get_noc_addr(src + kFace), dst + batch * kFaceRow, kFaceRow);
+        // (row (r, h) of a pass is head h of row u * group_rows + r)
+        for (uint32_t r = 0; r < group_rows; r++) {
+            for (uint32_t h = 0; h < heads; h++) {
+                for (uint32_t d = 0; d < Dt; d++) {
+                    const uint32_t src = out + d * kTile + row_offset(r * heads + h);
+                    const uint32_t dst = stage + (h * Dt + d) * kRowTile + user_offset(u * group_rows + r);
+                    noc_async_read(get_noc_addr(src), dst, kFaceRow);
+                    noc_async_read(get_noc_addr(src + kFace), dst + batch * kFaceRow, kFaceRow);
+                }
             }
         }
         noc_async_read_barrier();
         cb_pop_front(cb_out, Dt);
-        if (u + 1 < batch) {
+        if (u + 1 < users) {
             continue;
         }
         for (uint32_t s = 0; s < num_streamers; s++) {

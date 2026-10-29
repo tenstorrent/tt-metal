@@ -25,8 +25,11 @@
 
 namespace resident_attn {
 
+// the SFPU exp over a pass's rows: the top faces, or the whole tile when the rows reach the bottom faces
+constexpr auto kExpMode = top_faces ? VectorMode::R : VectorMode::RC;
+
 // s[j] for j < n_tiles; with mask, tile mask_tile of cb_mask is added to the last tile (tail columns
-// past the position)
+// past the position; packed: tile mask_tile + j to every tile, the tail tiles under per-row masks)
 FORCE_INLINE void scores(
     uint32_t q_cb, uint32_t k_cb, uint32_t k_base, uint32_t n_tiles, bool mask, uint32_t mask_tile = 0) {
     cb_reserve_back(cb_s, chunk_max);
@@ -38,9 +41,9 @@ FORCE_INLINE void scores(
         for (uint32_t d = 0; d < Dt; d++) {
             matmul_tiles(q_cb, k_cb, d, k_base + j * Dt + d, 0);
         }
-        if (mask && j + 1 == n_tiles) {
+        if (mask && (packed || j + 1 == n_tiles)) {
             add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask);
-            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask, mask_tile, 0);
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_mask, mask_tile + (packed ? j : 0), 0);
             matmul_init(q_cb, k_cb, 1);
         }
         tile_regs_commit();
@@ -80,7 +83,7 @@ FORCE_INLINE void probs_and_partial(uint32_t v_cb, uint32_t v_base, uint32_t n_t
     for (uint32_t j = 0; j < n_tiles; j++) {
         tile_regs_acquire();
         sub_tiles_bcast_cols(cb_s, cb_M, j, 0, 0);
-        exp_tile(0, VectorMode::R);  // head rows live in the top faces
+        exp_tile(0, kExpMode);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile<true>(0, cb_p, j);
@@ -321,23 +324,64 @@ FORCE_INLINE void update_tail(uint32_t sel = 0) {
     cb_pop_front(cb_vraw, Dt);
 }
 
-// the updated tail tiles as bf8 for the DRAM write-back; pops them
-FORCE_INLINE void pack_tail_bf8() {
-    cb_reserve_back(cb_flush, 2 * Dt);
+// packed: the n_tail tail tiles (cb_tail8: k of each tile, then v of each) with every row's new k / v row (rows
+// 0 .. batch - 1 of cb_knew / cb_vraw) at its position: tail (x) keep + P @ new, per tile the keep mask and the
+// placement matrix P at tiles 2 j + 1, 2 j of cb_rowsel (exact: 0/1 products)
+FORCE_INLINE void update_tail_rows(uint32_t n_tail) {
+    cb_wait_front(cb_tail8, 2 * n_tail * Dt);
+    cb_wait_front(cb_knew, Dt);
+    cb_wait_front(cb_vraw, Dt);
+    cb_reserve_back(cb_tailk, n_tail * Dt);
+    cb_reserve_back(cb_tailv, n_tail * Dt);
+    pack_reconfig_data_format(cb_tailk);
+    for (uint32_t kv = 0; kv < 2; kv++) {
+        const uint32_t row_cb = kv == 0 ? cb_knew : cb_vraw;
+        for (uint32_t j = 0; j < n_tail; j++) {
+            for (uint32_t d0 = 0; d0 < Dt; d0 += kBatch) {
+                tile_regs_acquire();
+                reconfig_data_format(cb_tail8, cb_rowsel);
+                mul_init(cb_tail8, cb_rowsel, false);
+                for (uint32_t i = 0; i < kBatch; i++) {
+                    mul_tiles(cb_tail8, cb_rowsel, (kv * n_tail + j) * Dt + d0 + i, 2 * j + 1, i);
+                }
+                reconfig_data_format(row_cb, cb_rowsel);
+                matmul_init(cb_rowsel, row_cb, 0);
+                for (uint32_t i = 0; i < kBatch; i++) {
+                    matmul_tiles(cb_rowsel, row_cb, 2 * j, d0 + i, i);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < kBatch; i++) {
+                    pack_tile(i, kv == 0 ? cb_tailk : cb_tailv);
+                }
+                tile_regs_release();
+            }
+        }
+    }
+    cb_push_back(cb_tailk, n_tail * Dt);
+    cb_push_back(cb_tailv, n_tail * Dt);
+    cb_pop_front(cb_tail8, 2 * n_tail * Dt);
+    cb_pop_front(cb_knew, Dt);
+    cb_pop_front(cb_vraw, Dt);
+}
+
+// the updated tail tiles (n_tail of them) as bf8 for the DRAM write-back, k of each tile then v; pops them
+FORCE_INLINE void pack_tail_bf8(uint32_t n_tail = 1) {
+    cb_reserve_back(cb_flush, 2 * n_tail * Dt);
     reconfig_data_format(cb_tailk, cb_tailk);
     pack_reconfig_data_format(cb_flush);
     copy_init(cb_tailk);
-    for (uint32_t i = 0; i < 2 * Dt; i++) {
+    for (uint32_t i = 0; i < 2 * n_tail * Dt; i++) {
         tile_regs_acquire();
-        copy_tile(i < Dt ? cb_tailk : cb_tailv, i % Dt, 0);
+        copy_tile(i < n_tail * Dt ? cb_tailk : cb_tailv, i % (n_tail * Dt), 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_flush);
         tile_regs_release();
     }
-    cb_push_back(cb_flush, 2 * Dt);
-    cb_pop_front(cb_tailk, Dt);
-    cb_pop_front(cb_tailv, Dt);
+    cb_push_back(cb_flush, 2 * n_tail * Dt);
+    cb_pop_front(cb_tailk, n_tail * Dt);
+    cb_pop_front(cb_tailv, n_tail * Dt);
 }
 
 }  // namespace resident_attn

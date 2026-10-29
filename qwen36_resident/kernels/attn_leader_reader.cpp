@@ -14,6 +14,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "attn_common.hpp"
+#include "attn_rows.hpp"
 
 using namespace resident_attn;
 
@@ -65,34 +66,42 @@ void kernel_main() {
     push_resident(cb_mean, 1);
     {
         const InterleavedAddrGen<true> tok{.bank_base_address = tok_addr, .page_size = rope_off + 3 * batch * kTile};
-        cb_reserve_back(cb_rope, 3 * batch);
+        cb_reserve_back(cb_rope, kRopePages);
         noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * kTile);
         noc_async_read_barrier();
-        cb_push_back(cb_rope, 3 * batch);
+        if constexpr (packed) {
+            build_packed_rope(get_write_ptr(cb_rope));
+        }
+        cb_push_back(cb_rope, kRopePages);
     }
 
     constexpr uint32_t gate0 = heads * Dt;
+    // pass u: row (r, h) = r * heads + h of q / gate from row u * group_rows + r (one row per pass: row h)
     auto place = [&](uint32_t u) {
         cb_reserve_back(cb_qraw, Dt);
         cb_reserve_back(cb_gate, Dt);
         const uint32_t q = get_write_ptr(cb_qraw), g = get_write_ptr(cb_gate);
-        for (uint32_t h = 0; h < heads; h++) {
-            for (uint32_t d = 0; d < Dt; d++) {
-                place_row(rows + (h * Dt + d) * kRowTile, u, q + d * kTile, h);
+        for (uint32_t r = 0; r < group_rows; r++) {
+            for (uint32_t h = 0; h < heads; h++) {
+                for (uint32_t d = 0; d < Dt; d++) {
+                    place_row(rows + (h * Dt + d) * kRowTile, u * group_rows + r, q + d * kTile, r * heads + h);
+                }
             }
         }
         noc_async_read_barrier();
         cb_push_back(cb_qraw, Dt);
-        for (uint32_t h = 0; h < heads; h++) {
-            for (uint32_t d = 0; d < Dt; d++) {
-                place_row(rows + (gate0 + h * Dt + d) * kRowTile, u, g + d * kTile, h);
+        for (uint32_t r = 0; r < group_rows; r++) {
+            for (uint32_t h = 0; h < heads; h++) {
+                for (uint32_t d = 0; d < Dt; d++) {
+                    place_row(rows + (gate0 + h * Dt + d) * kRowTile, u * group_rows + r, g + d * kTile, r * heads + h);
+                }
             }
         }
         noc_async_read_barrier();
         cb_push_back(cb_gate, Dt);
     };
     for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
+        const uint32_t l = i / users, u = i % users;
         if (u == 0) {
             cb_reserve_back(cb_qw, Dt);
             for (uint32_t d = 0; d < Dt; d++) {
@@ -106,12 +115,12 @@ void kernel_main() {
             mark(l, 2);
         }
         // the next user's rows go in before this user's partials arrive, so compute prepares its q meanwhile
-        if (u + 1 < batch) {
+        if (u + 1 < users) {
             place(u + 1);
         }
 
         noc_semaphore_wait_min(part_sem, children * (i + 1));
-        if (u + 1 == batch) {
+        if (u + 1 == users) {
             mark(l, 3);
         }
         push_resident(cb_parts, fanin * kPart);

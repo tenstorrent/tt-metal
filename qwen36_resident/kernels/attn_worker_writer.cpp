@@ -55,9 +55,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* q_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_q));
     volatile tt_l1_ptr uint32_t* M_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_M));
     cb_wait_front(cb_ntiles, 1);
-    bool chunk_of_user[batch];
+    bool chunk_of_user[users];
     bool any_chunkless = false;
-    for (uint32_t u = 0; u < batch; u++) {
+    for (uint32_t u = 0; u < users; u++) {
         chunk_of_user[u] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_ntiles))[u] > 0;
         any_chunkless |= !chunk_of_user[u];
     }
@@ -65,7 +65,7 @@ void kernel_main() {
     const uint32_t neg_inf = get_read_ptr(cb_ntiles) + kNegInfOff;
     if (any_chunkless) {
         volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(neg_inf);
-        for (uint32_t i = 0; i < heads * kFaceRow / 2; i++) {
+        for (uint32_t i = 0; i < kMRows0 / 2; i++) {
             p[i] = 0xff80;
         }
     }
@@ -82,7 +82,7 @@ void kernel_main() {
             tail_bank[u] = tp % banks;
             tail_row[u] = tp / banks;
         }
-        if constexpr (verify) {
+        if constexpr (verify && !packed) {
             const uint32_t tp0 = tail_row[0] * banks + tail_bank[0];
             for (uint32_t u = 1; u < batch && last == batch; u++) {
                 const uint32_t tp = tail_row[u] * banks + tail_bank[u];
@@ -98,15 +98,27 @@ void kernel_main() {
             }
         }
     }
+    // packed: the tail tiles (row 0's tile, and the next one if a row reaches it)
+    const uint32_t n_tail =
+        packed && role == 2 && tail_row[batch - 1] * banks + tail_bank[batch - 1] != tail_row[0] * banks + tail_bank[0]
+            ? 2
+            : 1;
     for (uint32_t i = 0; i < iters; i++) {
-        const uint32_t l = i / batch, u = i % batch;
+        const uint32_t l = i / users, u = i % users;
         const bool has_chunk = chunk_of_user[u];
+        // the row max: face 0's rows, then (more than 16 rows) face 2's at 512 in the slot
         if (has_chunk) {
             cb_wait_front(cb_m, 1);
-            noc_async_write(get_read_ptr(cb_m), m_dst, heads * kFaceRow);
+            noc_async_write(get_read_ptr(cb_m), m_dst, kMRows0);
+            if constexpr (kMRows2 > 0) {
+                noc_async_write(get_read_ptr(cb_m) + 2 * kFace, m_dst + 512, kMRows2);
+            }
         } else {
             noc_semaphore_wait_min(q_sem, i + 1);
-            noc_async_write(neg_inf, m_dst, heads * kFaceRow);
+            noc_async_write(neg_inf, m_dst, kMRows0);
+            if constexpr (kMRows2 > 0) {
+                noc_async_write(neg_inf, m_dst + 512, kMRows2);
+            }
         }
         noc_async_write_barrier();
         noc_semaphore_inc(m_sem, 1);
@@ -119,7 +131,7 @@ void kernel_main() {
         cb_wait_front(out_cb, kPart);
         const uint32_t src = get_read_ptr(out_cb);
         for (uint32_t d = 0; d < kPart; d++) {
-            noc_async_write(src + d * kTile, get_noc_addr(px, py, part_dst + d * kTile), 2 * kFace);
+            noc_async_write(src + d * kTile, get_noc_addr(px, py, part_dst + d * kTile), kPartBytes);
         }
         noc_async_write_barrier();
         noc_semaphore_inc(part_sem, 1);
@@ -127,7 +139,27 @@ void kernel_main() {
         if (ts_addr) {
             ts[l * 4 + 3] = *clk;
         }
-        if (role == 2) {
+        if (packed && role == 2 && u + 1 == users) {
+            // the layer's tail tiles, once all passes have used them: k of each tile, then v
+            const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
+            const uint32_t tp0 = tail_row[0] * banks + tail_bank[0];
+            cb_wait_front(cb_flush, 2 * n_tail * Dt);
+            for (uint32_t kv = 0; kv < 2; kv++) {
+                for (uint32_t j = 0; j < n_tail; j++) {
+                    const uint32_t t = tp0 + j;
+                    const uint32_t addr =
+                        get_arg_val<uint32_t>(tail_args + kv) + (l % copies) * copy_stride + (t / banks) * kKvRow;
+                    noc_async_write(
+                        get_read_ptr(cb_flush) + (kv * n_tail + j) * kKvRow,
+                        get_noc_addr_from_bank_id<true>(t % banks, addr),
+                        kKvRow);
+                }
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_flush, 2 * n_tail * Dt);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = l + 1;
+        }
+        if (!packed && role == 2) {
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
             const uint32_t copy_off = ((verify ? 0 : u) * copies + l % copies) * copy_stride + tail_row[u] * kKvRow;
             cb_wait_front(cb_flush, 2 * Dt);

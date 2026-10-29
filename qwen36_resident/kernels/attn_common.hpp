@@ -38,13 +38,22 @@
 // complete tiles w, w + workers - 1, ... from every bank instead of its own bank's rows, which balances the
 // chunks when workers - 1 is not a multiple of the banks; the partials are summed in another order),
 // 22 two_nocs (0 / 1: a chunk worker's reader alternates its KV reads between both NOCs; its writer issues no
-// reads, so the reader owns the read counters of the writer's NOC too)
+// reads, so the reader owns the read counters of the writer's NOC too), 23 group_rows (verify: rows per pass, 1
+// = one row per pass, see below)
 //
 // Verify: the R = batch rows are one user at positions p .. p + R - 1 and share its KV cache (user 0's). Row r's
 // tail tile holds the new rows of the rows before it: on the same tile the tail core reads it after row r - 1's
 // write-back; once a row's position starts the next tile, row 0's tile is complete for it and the rows after it,
 // and the chunk worker reading it waits for the write-back of its last row (the tail writer bumps the worker's
 // sem_tail, unused on chunk workers otherwise).
+//
+// Packed verify (group_rows P > 1): the R rows run as R / P passes ("users") of P rows each. A pass's q tile holds
+// row (r, h) = r * heads + h for row r of the group and head h (P * heads <= 32 rows, all four faces when more than
+// 16), with per-row rope. The chunk workers take the tiles below row 0's tile for every pass, so the KV cache is
+// read once per pass instead of once per row. The tail core takes row 0's tile and the next one if a row reaches it
+// (n_tail tiles): once per layer it inserts every row's new k / v (a 0/1 placement matmul per tile, then the
+// tiles stay in L1 for the passes), and per pass it scores the tail tiles under per-row causal masks; it writes
+// the tail tiles back once per layer.
 //
 // Batch: the users run one after another through every attention layer (iteration i = layer * batch +
 // user; the semaphores count iterations). User u has its own position (token state word 1 + u), rope
@@ -80,12 +89,20 @@ constexpr bool verify = get_compile_time_arg_val(20) != 0;
 constexpr bool round_robin = get_compile_time_arg_val(21) != 0;
 constexpr bool two_nocs = get_compile_time_arg_val(22) != 0;
 static_assert(!verify || batch >= 2, "verify runs two or more rows of one user");
-constexpr uint32_t iters = layers * batch;
-static_assert(heads <= 16, "head rows live in the top faces");
+constexpr uint32_t group_rows = get_compile_time_arg_val(23);
+constexpr bool packed = group_rows > 1;
+static_assert(!packed || (verify && batch % group_rows == 0), "packed passes take groups of the verify rows");
+constexpr uint32_t users = batch / group_rows;  // passes per layer: users, or groups of verify rows
+constexpr uint32_t qrows = heads * group_rows;  // q / output rows of a pass
+static_assert(qrows <= 32, "a pass's rows fit one tile");
+constexpr bool top_faces = qrows <= 16;  // a pass's rows live in the top faces only
+constexpr uint32_t iters = layers * users;
 static_assert(rot_tiles == 2, "rope pairs dims (i, i + 32) of the first 64 head dims");
 
 constexpr uint32_t kPart = Dt + 1;         // a partial: Dt output tiles, then the row-sum tile
-constexpr uint32_t kMSlot = 256;           // bytes per worker row-max slot (rows 0..heads-1 of column 0)
+// bytes per worker row-max slot: the m tile's face 0 rows (0 .. 15), then (more than 16 rows) its face 2 rows at 512
+constexpr uint32_t kMSlot = top_faces ? 256 : 1024;
+constexpr uint32_t kMRows0 = (qrows < 16 ? qrows : 16) * 32, kMRows2 = top_faces ? 0 : (qrows - 16) * 32;
 constexpr uint32_t kTile = 2048;           // bf16 32x32 tile
 constexpr uint32_t kKvTile = 1088;         // bf8 32x32 tile
 constexpr uint32_t kFaceRow = 32;          // bytes of one 16-element face row (bf16)
@@ -104,8 +121,10 @@ constexpr uint32_t cb_p = 6;         // exp(s - M) of one block, chunk_max tiles
 constexpr uint32_t cb_m = 7;         // this core's row max
 constexpr uint32_t cb_o = 8;         // this core's partial (kPart tiles)
 constexpr uint32_t cb_ntiles = 10;   // worker: its chunk's KV tiles per user (uint32s, for compute and writer)
-constexpr uint32_t kNegInfOff = 64;  // in the cb_ntiles page: the writer's -inf row-max rows (heads x 32 B)
+constexpr uint32_t kNegInfOff = 64;  // in the cb_ntiles page: the writer's -inf row-max rows (a row-max slot)
 static_assert(batch * 4 <= kNegInfOff, "chunk counts overlap the -inf rows");
+// packed: the bytes of a partial's tiles a worker sends (the top two faces, or all four)
+constexpr uint32_t kPartBytes = top_faces ? 2 * 512 : 4 * 512;
 // chunk worker: online-softmax state over the chunk's blocks (fp32): output, row sum, row max, rescale
 constexpr uint32_t cb_orun = 9;    // 2 x Dt
 constexpr uint32_t cb_lrun = 15;   // 2
@@ -121,13 +140,18 @@ constexpr uint32_t cb_rs = 14;      // 1 / rms per row
 constexpr uint32_t cb_qw = 15;      // this layer's (1 + w_q) / sqrt(head_dim), Dt tiles, rows replicated
 constexpr uint32_t cb_kw = 16;      // this layer's (1 + w_k)
 constexpr uint32_t cb_rope = 17;    // per user: cos, sin, -sin of its position (rows replicated)
+// cb_rope pages: per token-state row cos, sin, -sin (rows replicated); packed: then per pass the q rope (row (r, h)
+// from the group's row r) and the tail's k rope (row r from row r)
+constexpr uint32_t kRopeQ = 3 * batch, kRopeK = 3 * batch + 3 * users;
+constexpr uint32_t kRopePages = packed ? kRopeK + 3 : 3 * batch;
 constexpr uint32_t cb_knew = 18;    // normalized + rotated k row (row 0)
 constexpr uint32_t cb_tail8 = 31;   // tail core: tail k | v tiles as read from DRAM (2 Dt bf8)
-constexpr uint32_t cb_rowsel = 12;  // tail core: per user R (ones in row r), 1 - R
+constexpr uint32_t cb_rowsel = 12;  // tail core: per user R (ones in row r), 1 - R (packed: per tail tile the
+                                    // placement matrix of the new rows and the rows it keeps)
 constexpr uint32_t cb_tailk = 19;   // tail tiles with the new row (bf16, Dt)
 constexpr uint32_t cb_tailv = 20;
 constexpr uint32_t cb_vraw = 21;   // v row (row 0)
-constexpr uint32_t cb_mask = 22;   // per user 0 / -inf over the tail columns
+constexpr uint32_t cb_mask = 22;   // per user 0 / -inf over the tail columns (packed: per pass and tail tile)
 constexpr uint32_t cb_parts = 23;  // fanin x kPart partials of this node's children (written by them)
 constexpr uint32_t cb_gs = 26;     // leader: sigmoid(gate)
 constexpr uint32_t cb_osum = 25;   // own + children's partials (kPart)
