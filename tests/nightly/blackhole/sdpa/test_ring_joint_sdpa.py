@@ -9162,7 +9162,8 @@ def test_ring_joint_attention_gemma4_global_segmented_accuracy():
     )
 
 
-def test_ring_joint_sdpa_cache_hit_uses_new_semaphores():
+@pytest.mark.parametrize("sliding", [False, True], ids=["nonslide", "slide"])
+def test_ring_joint_sdpa_cache_hit_uses_new_semaphores(sliding):
     """A program-cache hit must use the all-gather semaphores passed to that call (#62923).
 
     The global semaphores are not part of the program hash, so a second call with fresh semaphores
@@ -9170,48 +9171,73 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores():
     call's semaphores instead, it wipes whatever that slot holds by then; in H3 that was another
     all-gather's in-flight increments, and that all-gather then waited forever.
 
-    Call 1 runs on set A. A sentinel then goes into A on every all-gather core; the reader waits with
+    Call 1 runs on set A. A sentinel then goes into A on every checked core; the reader waits with
     >=, so a stale use of A cannot hang on it. Call 2 runs on set B and must not touch A.
+    The sliding case covers the neighbor-halo exchange, which signals on semaphore 2.
     """
     sentinel = 0x5E5E
-    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, num_global_semaphores=3)
+    mesh_config = gpt_oss_chunked_mesh_config() if sliding else MESH_CONFIG
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, num_global_semaphores=3)
     mesh_device = runtime.mesh_device
     sem_a = runtime.ccl_semaphore_handles
     try:
         grid = mesh_device.compute_with_storage_grid_size()
         all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         sem_b = create_global_semaphores(mesh_device, all_cores, 0, count=len(sem_a))
-        ag_cores = [ttnn.CoreCoord(x, y) for x in range(runtime.ccl_column, grid.x) for y in range(grid.y)]
+        # Halo readers and writers run on SDPA worker cores, so the sliding case checks the whole grid.
+        first_column = 0 if sliding else runtime.ccl_column
+        ag_cores = [ttnn.CoreCoord(x, y) for x in range(first_column, grid.x) for y in range(grid.y)]
         coords = [ttnn.MeshCoordinate(r, c) for r in range(mesh_device.shape[0]) for c in range(mesh_device.shape[1])]
         addrs_a = [ttnn.get_global_semaphore_address(s) for s in sem_a]
 
-        b, nh, d = 1, 4 * MESH_CONFIG.tp_size, 128
-        sq = 256 * MESH_CONFIG.sp_size
         sp_dims = [None, None]
         sp_dims[runtime.sp_axis] = 2
-        if MESH_CONFIG.tp_size > 1:
+        if mesh_config.tp_size > 1:
             sp_dims[runtime.tp_axis] = 1
         buf_dims = [None, None]
-        if MESH_CONFIG.tp_size > 1:
+        if mesh_config.tp_size > 1:
             buf_dims[runtime.tp_axis] = 1
 
-        def to_mesh(t, dims):
+        def to_mesh(t, dims, dtype=ttnn.bfloat16):
             return ttnn.from_torch(
                 t,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
             )
 
-        tt_q, tt_k, tt_v = (to_mesh(fa_rand(b, nh, sq, d), sp_dims) for _ in range(3))
-        p_buf_k = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
-        p_buf_v = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+        if sliding:
+            cfg = GPT_OSS_RING_SINK_CONFIG
+            b, d, chunk_size_local, window, k_chunk = 1, cfg.head_dim, 128, 128, 128
+            nhq, nhk = 8 * mesh_config.tp_size, 1 * mesh_config.tp_size
+            sq = chunk_size_local * mesh_config.sp_size
+            q_new, k_new, v_new = fa_rand(b, nhq, sq, d), fa_rand(b, nhk, sq, d), fa_rand(b, nhk, sq, d)
+            empty = torch.zeros(b, nhk, 0, d)
+            q_host, k_host, v_host, _, _ = build_kv_pad_rotation_inputs(
+                empty, empty, q_new, k_new, v_new, 0, mesh_config.sp_size, chunk_size_local
+            )
+            tt_q = to_mesh(q_host, sp_dims, cfg.q_dtype)
+            tt_k = to_mesh(k_host, sp_dims, cfg.kv_dtype)
+            tt_v = to_mesh(v_host, sp_dims, cfg.kv_dtype)
+            buf_seq = max(math.ceil((window - 1) / k_chunk) * k_chunk, ttnn.TILE_SIZE)
+            p_buf_k = to_mesh(torch.zeros(b, nhk, buf_seq, d), buf_dims, cfg.kv_dtype)
+            p_buf_v = to_mesh(torch.zeros(b, nhk, buf_seq, d), buf_dims, cfg.kv_dtype)
+            q_chunk, extra = 64, dict(kv_actual_isl=0, sliding_window_size=window)
+            is_causal = True
+        else:
+            b, nh, d = 1, 4 * mesh_config.tp_size, 128
+            sq = 256 * mesh_config.sp_size
+            tt_q, tt_k, tt_v = (to_mesh(fa_rand(b, nh, sq, d), sp_dims) for _ in range(3))
+            p_buf_k = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+            p_buf_v = to_mesh(torch.zeros(b, nh, sq, d), buf_dims)
+            q_chunk, k_chunk, extra = 128, 128, {}
+            is_causal = False
         fence_persistent_buffers(mesh_device)
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=runtime.sdpa_compute_grid,
-            q_chunk_size=128,
-            k_chunk_size=128,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
             exp_approx_mode=False,
         )
 
@@ -9221,7 +9247,7 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores():
                 tt_k,
                 tt_v,
                 sq,
-                is_causal=False,
+                is_causal=is_causal,
                 is_balanced=False,
                 p_buf_k=p_buf_k,
                 p_buf_v=p_buf_v,
@@ -9234,6 +9260,7 @@ def test_ring_joint_sdpa_cache_hit_uses_new_semaphores():
                 topology=runtime.topology,
                 worker_sub_device_id=runtime.worker_sub_device_id,
                 ccl_column=runtime.ccl_column,
+                **extra,
             )
             ttnn.synchronize_device(mesh_device)
 
