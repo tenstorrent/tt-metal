@@ -22,6 +22,7 @@ The mesh axis comes from the shared table in `tests/pcc/mesh_configs.py`, so CI'
 selection through `requires_mesh_topology` matches the model's other prefill tests.
 """
 
+import math
 import re
 from contextlib import contextmanager
 
@@ -413,7 +414,16 @@ class _Fixture:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, subdevice_id=None, padding_config=None):
+    def run(
+        self,
+        cluster_axis,
+        num_links,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        subdevice_id=None,
+        padding_config=None,
+        buffers=(None, None),
+    ):
+        forwarding_buffer, staging_buffer = buffers
         return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
             self.tt_x[layout],
             self.tt_idx,
@@ -433,6 +443,8 @@ class _Fixture:
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=subdevice_id,
+            forwarding_buffer=forwarding_buffer,
+            staging_buffer=staging_buffer,
         )
 
     def reference(self):
@@ -749,6 +761,250 @@ def test_dispatch_fabric2d_back_to_back(mesh_device, device_params, num_links):
     for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
         fx.check(payload, metadata, f"launch {i} of four with no host sync between them")
     logger.info("back-to-back: 4 unsynchronised launches byte-exact")
+
+
+# A power of two, so exactly representable in bfloat16, and far outside the random payload, so equality is a safe test.
+_SENTINEL = 2.0**126
+
+
+def _sentinel_rows(t, mesh_device):
+    """Payload rows still holding the sentinel, summed over the mesh. A token is written whole and its tail lands
+    last, so a row's last 32 elements (one 64 B NoC unit) say whether it landed; reading only those keeps this cheap."""
+    shape = list(t.shape)
+    probe = ttnn.slice(t, [0] * (len(shape) - 1) + [shape[-1] - 32], shape)
+    rows = ttnn.to_torch(probe, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
+    ttnn.deallocate(probe)
+    return int((rows[..., 0] == _SENTINEL).sum())
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm", "tile"])
+@pytest.mark.timeout(1800)
+def test_dispatch_fabric2d_next_op_sees_every_token(mesh_device, device_params, num_links, input_layout):
+    """The next op on a chip finds every token dispatch delivered to it.
+
+    The upstream chip writes a token's last hop straight into this chip's output. If the chip's program could end
+    while some are still in flight, the next op on it would read pages that have not landed. The other tests read
+    the output only after a host synchronize, when every chip has finished, so they cannot see this.
+
+    Before each launch the DRAM the payload will occupy is filled with a sentinel: a sentinel tensor of the
+    payload's shape is allocated and freed, and the allocator hands the payload the same address, asserted below.
+    An on-device clone of the payload is then queued right behind dispatch with no host sync. A page that is the
+    sentinel in the clone but a token in the payload read later had not landed when the next op ran. Full-width
+    tokens and a buffer sized to the draw, because the window is widest when every write is 14 kB, and ten launches
+    because the race is timing dependent.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(
+        mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=7168, seed=41, capacity_div=None
+    )
+    # Built and launched once first, so the program, its staging buffers and its semaphores are allocated
+    # before the sentinel goes down and cannot take the payload's address in a measured launch.
+    for t in fx.run(cfg.sp_axis, num_links, layout=input_layout):
+        ttnn.deallocate(t)
+    ttnn.synchronize_device(mesh_device)
+
+    payload_shape = [1, 1, fx.capacity, fx.emb_dim]
+    late_per_launch = []
+    unwritten_total = 0
+    for launch in range(10):
+        poison = ttnn.full(
+            payload_shape,
+            fill_value=_SENTINEL,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        poison_addr = poison.buffer_address()
+        ttnn.deallocate(poison)
+
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=input_layout)
+        assert payload.buffer_address() == poison_addr, "dispatch's payload did not land on the sentinel-filled memory"
+        # The next op on each chip, queued behind dispatch with no host sync.
+        snapshot = ttnn.clone(payload, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.synchronize_device(mesh_device)
+
+        # Pages no token is routed to are never written, so they are the sentinel in both.
+        unwritten = _sentinel_rows(payload, mesh_device)
+        late = _sentinel_rows(snapshot, mesh_device) - unwritten
+        assert late >= 0, f"launch {launch}: the next op saw fewer unwritten pages than the final payload"
+        logger.info(f"launch {launch}: {late} pages had not landed for the next op")
+        late_per_launch.append(late)
+        unwritten_total += unwritten
+        for t in (snapshot, payload, metadata):
+            ttnn.deallocate(t)
+
+    # The buffer is sized to the busiest chip, so the others leave pages unwritten. None would mean the sentinel
+    # never matched, and a late page could not have been seen either.
+    assert unwritten_total > 0, "no payload page ever held the sentinel, so this test could not see a late page"
+    assert sum(late_per_launch) == 0, (
+        f"pages not yet landed when the next op on their chip read the payload, per launch: {late_per_launch}. "
+        "A chip finished dispatch_fabric2d before the upstream chip's last-hop tokens arrived."
+    )
+
+
+def _dram_bytes_allocated(mesh_device):
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks
+
+
+def _fabric2d_buffers(fx, cluster_axis, num_links, seq_len_per_chip=None, emb_dim=None):
+    """[forwarding_buffer, staging_buffer] for the fixture's calls, or for another chunk or token width."""
+    return ttnn.experimental.deepseek_prefill.dispatch_fabric2d_buffers(
+        fx.mesh_device,
+        emb_dim=fx.emb_dim if emb_dim is None else emb_dim,
+        experts_per_chip=fx.experts_per_chip,
+        num_experts_per_tok=fx.topk,
+        seq_len_per_chip=fx.seq_len_per_chip if seq_len_per_chip is None else seq_len_per_chip,
+        cluster_axis=cluster_axis,
+        num_links=num_links,
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_external_buffers(mesh_device, device_params, num_links):
+    """Buffers the caller allocates once serve every launch, and the op then allocates only its outputs.
+
+    Two draws alternate with no host sync, in both input layouts, so a launch reading another's staged pages would
+    show up as the other draw's tokens. Then a pair sized for twice the chunk serves this one, and a TILE input with
+    only the forwarding buffer passed stages its tokens in a buffer of the op's own.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=51, capacity_div=8)
+    b = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=52, capacity_div=8)
+    buffers = _fabric2d_buffers(a, cfg.sp_axis, num_links)
+
+    def run_and_check(fx, layout, bufs, label):
+        payload, metadata = fx.run(cfg.sp_axis, num_links, layout=layout, buffers=bufs)
+        fx.check(payload, metadata, label)
+        for t in (payload, metadata):
+            ttnn.deallocate(t)
+
+    # Per device, as the memory view reports, and exactly what the op would allocate for itself at this shape:
+    # the buffers are sized for this call. UINT32 pages, so four bytes an element.
+    forwarding_bytes = math.prod(buffers[0].shape) * 4
+    for layout in (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT):
+        ttnn.synchronize_device(mesh_device)
+        before = _dram_bytes_allocated(mesh_device)
+        payload, metadata = a.run(cfg.sp_axis, num_links, layout=layout, buffers=buffers)
+        ttnn.synchronize_device(mesh_device)
+        # The outputs are a few MB here. A forwarding buffer of the op's own would add forwarding_bytes on top.
+        grown = _dram_bytes_allocated(mesh_device) - before
+        assert grown < forwarding_bytes, (
+            f"{layout}: the first launch allocated {grown} B of DRAM, which only a {forwarding_bytes} B forwarding "
+            "buffer of the op's own explains, instead of using the buffers passed in"
+        )
+        a.check(payload, metadata, f"{layout}, first launch with external buffers")
+        for t in (payload, metadata):
+            ttnn.deallocate(t)
+
+        order = [a, b, a, b]
+        results = [fx.run(cfg.sp_axis, num_links, layout=layout, buffers=buffers) for fx in order]
+        for i, (fx, (payload, metadata)) in enumerate(zip(order, results)):
+            fx.check(payload, metadata, f"{layout}, launch {i} of four sharing external buffers")
+            for t in (payload, metadata):
+                ttnn.deallocate(t)
+
+    larger = _fabric2d_buffers(a, cfg.sp_axis, num_links, seq_len_per_chip=2 * a.seq_len_per_chip)
+    run_and_check(a, ttnn.TILE_LAYOUT, larger, "buffers sized for twice the chunk")
+    run_and_check(a, ttnn.TILE_LAYOUT, (buffers[0], None), "TILE input with only the forwarding buffer passed")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_dispatch_fabric2d_external_buffers_rebind(mesh_device, device_params, num_links):
+    """A cached program relaunched with a new pair of buffers writes into the new pair.
+
+    The program is built against a first pair, which is then freed and its forwarding memory refilled with a
+    marker. The relaunch is a program-cache hit; if it kept the first pair's address it would still dispatch
+    correctly, through the marker memory, so the marker is what shows a stale binding.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=53, capacity_div=8)
+    first = _fabric2d_buffers(fx, cfg.sp_axis, num_links)
+    for t in fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, buffers=first):
+        ttnn.deallocate(t)
+    ttnn.synchronize_device(mesh_device)
+
+    shape = list(first[0].shape)
+    old_address = first[0].buffer_address()
+    # Allocated while the first pair is live, so it cannot land on the first pair's memory.
+    second = _fabric2d_buffers(fx, cfg.sp_axis, num_links)
+    for t in first:
+        ttnn.deallocate(t)
+    marker = 0x5A5A5A5A
+    marked = ttnn.full(
+        shape,
+        fill_value=marker,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    assert marked.buffer_address() == old_address, "the marker did not land on the first forwarding buffer's memory"
+
+    payload, metadata = fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, buffers=second)
+    ttnn.synchronize_device(mesh_device)
+    fx.check(payload, metadata, "relaunch with a second pair of buffers")
+
+    # Every stream's fwd_section starts at stream * pages_per_stream and is filled from its first page, so the head
+    # of each is where a stale binding writes first.
+    streams = 2 * num_links
+    pages_per_stream = shape[0] // streams
+    for stream in range(streams):
+        start = stream * pages_per_stream
+        probe = ttnn.slice(marked, [start, 0], [start + 64, shape[1]])
+        got = ttnn.to_torch(probe, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(torch.int64)
+        ttnn.deallocate(probe)
+        assert torch.all(got == marker), f"stream {stream}: the relaunch wrote into the freed first buffer"
+    for t in (payload, metadata, marked, *second):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("undersized", "forwarding_buffer has"),
+        ("page_size", "forwarding_buffer pages at"),
+        ("aliased", "staging_buffer shares its buffer"),
+    ],
+    ids=["undersized", "page_size", "aliased"],
+)
+@pytest.mark.timeout(300)
+def test_dispatch_fabric2d_external_buffers_refused(mesh_device, device_params, num_links, case, message, expect_error):
+    """Buffers the op cannot use are refused before anything runs: too few pages, pages for another token width,
+    or one allocation passed as both buffers."""
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=54, capacity_div=8)
+    if case == "undersized":
+        buffers = _fabric2d_buffers(fx, cfg.sp_axis, num_links, seq_len_per_chip=fx.seq_len_per_chip // 2)
+    elif case == "page_size":
+        buffers = _fabric2d_buffers(fx, cfg.sp_axis, num_links, emb_dim=fx.emb_dim // 2)
+    else:
+        forwarding, staging = _fabric2d_buffers(fx, cfg.sp_axis, num_links)
+        ttnn.deallocate(staging)
+        buffers = (forwarding, forwarding)
+    with expect_error(RuntimeError, message):
+        fx.run(cfg.sp_axis, num_links, layout=ttnn.TILE_LAYOUT, buffers=buffers)
 
 
 def _starve_a_relay(fx):

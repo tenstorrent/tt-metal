@@ -29,7 +29,9 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<ttnn::Tensor>& forwarding_buffer,
+    const std::optional<ttnn::Tensor>& staging_buffer) {
     // Ring on an axis without a closing link resolves to Linear, which this op cannot run: it sends
     // single hops around a ring.
     const tt::tt_fabric::Topology usable = ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
@@ -66,7 +68,32 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         num_links,
         usable,
         memory_config,
-        allowed_cores);
+        allowed_cores,
+        forwarding_buffer,
+        staging_buffer);
+}
+
+std::array<ttnn::Tensor, 2> dispatch_fabric2d_buffers(
+    ttnn::MeshDevice* mesh_device,
+    uint32_t emb_dim,
+    uint32_t experts_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
+    uint32_t cluster_axis,
+    uint32_t num_links) {
+    // Only the fields the buffer specs read.
+    const DispatchFabric2dParams params{
+        .device = mesh_device,
+        .experts_per_chip = experts_per_chip,
+        .num_experts_per_tok = num_experts_per_tok,
+        .seq_len_per_chip = seq_len_per_chip,
+        .axis = cluster_axis,
+        .num_links = num_links,
+    };
+    const uint32_t token_bytes = token_page_bytes(mesh_device, emb_dim);
+    return {
+        create_device_tensor(forwarding_buffer_spec(params, token_bytes), mesh_device),
+        create_device_tensor(staging_buffer_spec(params, token_bytes), mesh_device)};
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

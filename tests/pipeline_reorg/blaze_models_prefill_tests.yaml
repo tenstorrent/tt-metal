@@ -101,9 +101,12 @@
     )
 
     kimi_moe() (
-      timeout -k 2m 48m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # Then the fabric2d transport Kimi K2.7 runs in production: its PCC, and its traced replays; see glm_moe.
+      timeout -k 2m 78m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "torus-xy-8x4 and kimi-5k-pcc" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe_fabric2d models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe_fabric2d_trace.py -k "torus-xy-8x4 and (test_kimi_moe_fabric2d or (kimi_k2_7 and overlap_auto and pad0))" -vvv --tb=short
       '
     )
 
@@ -159,7 +162,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 142
+      timeout: 172
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -633,10 +636,14 @@
 
     glm_moe() (
       export MESH_DEVICE=TG
-      # GLM-5.3 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
-      timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # GLM-5.3 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights. Then the
+      # fabric2d transport GLM runs in production: its PCC, and its traced replays compared bit for bit against
+      # the same program run eagerly, padded and not.
+      timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe_fabric2d models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe_fabric2d_trace.py -k "torus-xy-8x4 and (test_glm_moe_fabric2d or (glm and overlap_auto))" -vvv --tb=short
       '
     )
 
@@ -654,7 +661,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 157
+      timeout: 177
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic

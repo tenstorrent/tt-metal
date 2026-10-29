@@ -188,6 +188,8 @@ class TT_CCL:
         self.combine_overlap_semaphores = None
         # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
         self.combine_forwarding_buffers = {}
+        # dispatch_fabric2d's forwarding and staging buffers, one pair per shape; see get_dispatch_fabric2d_buffers.
+        self.dispatch_fabric2d_buffers = {}
         # ready/data_valid pair for MLA's TP high_bw_all_gather calls; see get_mla_high_bw_gather_semaphores.
         self.mla_high_bw_gather_semaphores = None
 
@@ -264,6 +266,33 @@ class TT_CCL:
             )
             self.combine_forwarding_buffers[key] = buffer
         return buffer
+
+    def get_dispatch_fabric2d_buffers(
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, cluster_axis=0
+    ):
+        """dispatch_fabric2d's DRAM forwarding and staging buffers, as (forwarding, staging).
+
+        One pair per shape, shared by every MoE layer, which run one after another. The forwarding buffer is sized
+        for the worst-case routing, about 572 MB per device at GLM-5.3's 640-token chunk, so get it at model init:
+        left to the op, it is allocated at the first dispatch's cache miss in the middle of a forward and every
+        cached program keeps its own copy, which is how a model that fits runs out of DRAM.
+        """
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, cluster_axis)
+        buffers = self.dispatch_fabric2d_buffers.get(key)
+        if buffers is None:
+            buffers = tuple(
+                ttnn.experimental.deepseek_prefill.dispatch_fabric2d_buffers(
+                    self.mesh_device,
+                    emb_dim=emb_dim,
+                    experts_per_chip=experts_per_chip,
+                    num_experts_per_tok=num_experts_per_tok,
+                    seq_len_per_chip=seq_len_per_chip,
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                )
+            )
+            self.dispatch_fabric2d_buffers[key] = buffers
+        return buffers
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
         """Create or return the sparse-MLA overlap profile: KV gather on the top worker row, top-k on the rest.

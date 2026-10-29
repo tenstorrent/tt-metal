@@ -564,6 +564,11 @@ class TtMoe(LightweightModule):
                 cluster_axis=0,
                 num_links=self.row_num_links,
                 subdevice_id=self.dispatch_sd_id,
+                # Fetched here, at init, so the worst-case forwarding buffer is placed before any forward's
+                # tensors, and every layer shares one.
+                buffers=self.tt_ccl.get_dispatch_fabric2d_buffers(
+                    self.routed_emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, self.row_num_links
+                ),
             )
         else:
             self.dispatch_module = TtDispatchModule(

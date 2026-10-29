@@ -120,27 +120,33 @@ L1Layout compute_l1_layout(
     return l;
 }
 
-// Five counters: `filled` and `freed` are the reader/sender queue handshake, `fwd_arrived` is raised by
-// the upstream chip's sender as it fills this stream's fwd_section, `launch_credit` is raised by the
-// downstream chip when it starts a launch, and `untilized` is raised by this chip's untilizer writers as
-// they write tile rows to staging.
+// Six counters: `filled` and `freed` are the reader/sender queue handshake, `fwd_arrived` is raised by
+// the upstream chip's sender as it fills this stream's fwd_section, `final_arrived` by the same sender for
+// every token it writes straight into this chip's output, `launch_credit` is raised by the downstream chip
+// when it starts a launch, and `untilized` is raised by this chip's untilizer writers as they write tile rows
+// to staging.
 //
 // The launch credit crosses direction: our stream s sender grants it to the downstream chip's reverse stream
 // core, and our own `launch_credit` is granted by that core's sender. Our sender takes one before its first
 // send, so nothing it writes reaches the downstream chip before that chip is in the same launch.
 //
+// `final_arrived` is the receive count for the last hop. Nothing else on this chip sees those tokens land, so
+// without it this chip's program can finish -- and the next op on it read the output -- while the upstream
+// chip is still delivering. The reader waits for the count it expects before exiting.
+//
 // GlobalSemaphores so they sit at the same address on every chip: a neighbouring chip signals
-// `fwd_arrived` and `launch_credit` and has to know their address.
+// `fwd_arrived`, `final_arrived` and `launch_credit` and has to know their address.
 //
 // Nothing resets them between launches, so the kernels undo each launch's count. `filled` and `freed` are
-// set to zero at end of run, and `untilized` too for a TILE input. `fwd_arrived` is lowered by the count
-// consumed, which stays right without relying on the launch credit. `launch_credit` is lowered by the one
-// credit taken at the start of the send loop, because the downstream chip can grant the next launch's credit
-// before this launch ends.
+// set to zero at end of run, and `untilized` too for a TILE input. `fwd_arrived` and `final_arrived` are
+// lowered by the count this launch accounted for, which stays right without relying on the launch credit.
+// `launch_credit` is lowered by the one credit taken at the start of the send loop, because the downstream
+// chip can grant the next launch's credit before this launch ends.
 struct StreamSemaphores {
     tt::tt_metal::GlobalSemaphore filled;
     tt::tt_metal::GlobalSemaphore freed;
     tt::tt_metal::GlobalSemaphore fwd_arrived;
+    tt::tt_metal::GlobalSemaphore final_arrived;
     tt::tt_metal::GlobalSemaphore launch_credit;
     // Allocated for both input layouts so the reader's argument list is the same; a row-major input never
     // uses it.
@@ -148,7 +154,12 @@ struct StreamSemaphores {
 
     uint32_t lowest_address() const {
         return static_cast<uint32_t>(std::min(
-            {filled.address(), freed.address(), fwd_arrived.address(), launch_credit.address(), untilized.address()}));
+            {filled.address(),
+             freed.address(),
+             fwd_arrived.address(),
+             final_arrived.address(),
+             launch_credit.address(),
+             untilized.address()}));
     }
 };
 
@@ -156,44 +167,73 @@ StreamSemaphores allocate_stream_semaphores(ttnn::MeshDevice* mesh, const CoreRa
     const auto make = [&] {
         return ttnn::global_semaphore::create_global_semaphore(mesh, allowed_cores, 0, tt::tt_metal::BufferType::L1);
     };
-    StreamSemaphores sems{make(), make(), make(), make(), make()};
+    StreamSemaphores sems{make(), make(), make(), make(), make(), make()};
     tt::tt_metal::distributed::Synchronize(*mesh, std::nullopt, {});
     return sems;
 }
 
-// A device buffer the op allocates for itself, never initialises and never reads back on the host. The
-// workload holds the owner so the buffer lives as long as the cached program; the kernels get its address
-// as a runtime argument the framework updates on each dispatch.
-struct OwnedBuffer {
-    std::shared_ptr<ttnn::Tensor> owner;
-    tt::tt_metal::Buffer* buffer = nullptr;
-};
-
 // Typed UINT32 so a page is exactly page_bytes, with no alignment rounding. Kernels address these buffers
 // by a page index they compute themselves, so a wider page would misplace every page after the first.
-OwnedBuffer allocate_buffer(ttnn::MeshDevice* mesh, uint32_t num_pages, uint32_t page_bytes, std::string_view what) {
+tt::tt_metal::TensorSpec dram_scratch_spec(uint32_t num_pages, uint32_t page_bytes, std::string_view what) {
     TT_FATAL(
         page_bytes % 64 == 0, "dispatch_fabric2d: {} page {} B must be 64-byte aligned for DRAM", what, page_bytes);
-    const tt::tt_metal::TensorSpec spec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape({num_pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-    OwnedBuffer owned;
-    // Throws if it does not fit in DRAM.
-    owned.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    owned.buffer = owned.owner->buffer();
-    TT_FATAL(
-        owned.buffer->aligned_page_size() == page_bytes,
-        "dispatch_fabric2d: {} page is {} B after alignment but the op addresses it as {} B",
-        what,
-        owned.buffer->aligned_page_size(),
-        page_bytes);
-    return owned;
+}
+
+// DRAM the op keeps tokens in between reads and writes: the caller's buffer if it passed one (validated with the
+// other inputs), else one the op allocates for itself, never initialises and never reads back on the host. The
+// workload holds an owned buffer so it lives as long as the cached program; the kernels get either kind's address
+// as a runtime argument the framework updates on each dispatch.
+struct DramScratch {
+    std::shared_ptr<ttnn::Tensor> owner;  // null for the caller's buffer
+    tt::tt_metal::Buffer* buffer = nullptr;
+};
+
+DramScratch dram_scratch(
+    ttnn::MeshDevice* mesh, const tt::tt_metal::TensorSpec& spec, const std::optional<ttnn::Tensor>& provided) {
+    DramScratch scratch;
+    if (provided.has_value()) {
+        scratch.buffer = provided->buffer();
+    } else {
+        // Throws if it does not fit in DRAM.
+        scratch.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
+        scratch.buffer = scratch.owner->buffer();
+    }
+    return scratch;
 }
 
 }  // namespace
+
+uint32_t token_page_bytes(ttnn::MeshDevice* mesh, uint32_t emb_dim) {
+    return tt::round_up(
+        emb_dim * static_cast<uint32_t>(sizeof(uint16_t)),
+        mesh->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM));
+}
+
+tt::tt_metal::TensorSpec forwarding_buffer_spec(const DispatchFabric2dParams& args, uint32_t token_size_bytes) {
+    // A page is a token plus its fwd_meta, so one fabric write carries both.
+    const uint32_t pages_per_stream = fwd_pages_per_stream(
+        ring_extent_of(args), args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
+    return dram_scratch_spec(
+        pages_per_stream * stream_count(args.num_links),
+        token_size_bytes + dspf2d::FORWARDING_METADATA_SIZE,
+        "forwarding");
+}
+
+tt::tt_metal::TensorSpec staging_buffer_spec(const DispatchFabric2dParams& args, uint32_t token_size_bytes) {
+    // One row-major page per untilized token, so the stream cores address a token by page index as they do for a
+    // row-major input. Rounded up to whole tile rows because the untilizer packs all 32 rows of a tile; the extra
+    // pages hold padding rows and are never read.
+    return dram_scratch_spec(
+        tt::round_up(args.seq_len_per_chip, static_cast<uint32_t>(tt::constants::TILE_HEIGHT)),
+        token_size_bytes,
+        "staging");
+}
 
 tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload_descriptor(
     const DispatchFabric2dParams& args,
@@ -232,17 +272,18 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     validate_descriptor_agreement(extent, args.num_links);
     const auto placement = decide_placement(mesh, args.axis, args.num_links, args.worker_core_range_set);
     const auto sems = allocate_stream_semaphores(mesh, args.worker_core_range_set);
-    // A page is a token plus its fwd_meta, so one fabric write carries both.
     const uint32_t fwd_pages = fwd_pages_per_stream(
         extent, args.num_links, args.seq_len_per_chip, args.num_experts_per_tok, args.experts_per_chip);
-    const OwnedBuffer fwd = allocate_buffer(
-        mesh, fwd_pages * stream_count(args.num_links), token_bytes + dspf2d::FORWARDING_METADATA_SIZE, "forwarding");
-    // Only for a TILE input: the untilized tokens, one row-major page each, so the stream cores address a
-    // token by page index as they do for a row-major input. Rounded up to whole tile rows because the
-    // untilizer packs all 32 rows of a tile; the extra pages hold padding rows and are never read.
-    const uint32_t staging_pages =
-        tt::round_up(args.seq_len_per_chip, static_cast<uint32_t>(tt::constants::TILE_HEIGHT));
-    const OwnedBuffer staging = tiled ? allocate_buffer(mesh, staging_pages, token_bytes, "staging") : OwnedBuffer{};
+    TT_FATAL(
+        token_bytes == token_page_bytes(mesh, static_cast<uint32_t>(tensor_args.input_tensor.logical_shape()[-1])),
+        "dispatch_fabric2d: the output pages a token at {} B, not the {} B the staging buffers were checked against",
+        token_bytes,
+        token_page_bytes(mesh, static_cast<uint32_t>(tensor_args.input_tensor.logical_shape()[-1])));
+    const DramScratch fwd =
+        dram_scratch(mesh, forwarding_buffer_spec(args, token_bytes), tensor_args.forwarding_buffer);
+    // Only for a TILE input: the untilized tokens.
+    const DramScratch staging =
+        tiled ? dram_scratch(mesh, staging_buffer_spec(args, token_bytes), tensor_args.staging_buffer) : DramScratch{};
     const auto untilize = plan_untilize(
         tensor_args.input_tensor,
         tensor_return_value[0],
@@ -277,11 +318,14 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     workload.semaphores.push_back(sems.filled);
     workload.semaphores.push_back(sems.freed);
     workload.semaphores.push_back(sems.fwd_arrived);
+    workload.semaphores.push_back(sems.final_arrived);
     workload.semaphores.push_back(sems.launch_credit);
     workload.semaphores.push_back(sems.untilized);
-    workload.buffers.push_back({fwd.owner, fwd.buffer});
-    if (tiled) {
-        workload.buffers.push_back({staging.owner, staging.buffer});
+    // A caller's buffer is its own to keep alive; only an owned one has to outlive the call with the workload.
+    for (const DramScratch* scratch : {&fwd, &staging}) {
+        if (scratch->owner) {
+            workload.buffers.push_back({scratch->owner, scratch->buffer});
+        }
     }
 
     // Tile rows the stream readers wait for before their first token read; zero for a row-major input,
@@ -315,6 +359,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             plan.queue_filled_addr = static_cast<uint32_t>(sems.filled.address());
             plan.queue_freed_addr = static_cast<uint32_t>(sems.freed.address());
             plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
+            plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
             plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
             plan.untilize_sem_addr = static_cast<uint32_t>(sems.untilized.address());
             plan.untilize_tile_rows = untilize_tile_rows;
@@ -361,6 +406,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             };
             const auto in_words = to_words(forwarding_descriptors(stream, pos, extent, args.num_links));
             const auto out_words = to_words(outgoing_descriptors(stream, pos, extent, args.num_links));
+            const auto finals = incoming_final_descriptors(chip_ids, stream, pos, args.num_links);
+            const auto final_words = to_words(finals);
 
             tt::tt_metal::KernelDescriptor rdr;
             rdr.kernel_source =
@@ -377,8 +424,9 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                                         l1,
                                         plan,
                                         own_count,
-                                        static_cast<uint32_t>(work.size()) - own_count)
-                                        .to_ct_word_arr(chip_ids, assignment_words, in_words, out_words);
+                                        static_cast<uint32_t>(work.size()) - own_count,
+                                        static_cast<uint32_t>(finals.size()))
+                                        .to_ct_word_arr(chip_ids, assignment_words, in_words, out_words, final_words);
             for (tt::tt_metal::Buffer* buffer : dram) {
                 tt::tt_metal::TensorAccessorArgs(buffer).append_to(rdr.compile_time_args);
             }

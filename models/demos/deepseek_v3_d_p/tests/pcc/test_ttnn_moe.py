@@ -106,6 +106,8 @@ _UPSTREAM_ACT = {
 
 # Synthetic tid2eid depth: no checkpoint table exists, and the lookup is exact on both sides.
 _HASH_VOCAB_SIZE = 1024
+# run_model's default for routed_expert_hybrid_token_threshold: the variant's own.
+_THRESHOLD_FROM_VARIANT = object()
 _HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
 
 
@@ -144,6 +146,8 @@ def run_model(
     overlap_routed_expert_with_combine=False,
     moe_transport="direct",
     combine_fwd_reduction=None,
+    realistic_weights=False,
+    routed_expert_hybrid_token_threshold=_THRESHOLD_FROM_VARIANT,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -170,6 +174,11 @@ def run_model(
     cross-check. ``overlap_routed_expert_with_combine`` goes straight to TtMoe: off unless the caller passes
     routed_expert_combine_overlap_arg for a model that opts in (Kimi K2.7, GLM 5.3, Mistral Small 4).
     ``moe_transport`` and ``combine_fwd_reduction`` go straight to TtMoe too.
+
+    ``realistic_weights`` builds the seeded expert weights a PCC run uses without the PCC check, for a caller
+    that compares outputs itself: a perf run's placeholder experts give an output of about zero, which matches
+    anything. ``routed_expert_hybrid_token_threshold`` overrides the variant's, for a caller grading another
+    model's dispatch through the same variant.
 
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
     per-token ids are built here and handed to both sides, and the torch reference takes the
@@ -257,7 +266,8 @@ def run_model(
         logger.info(f"LatentMoE: routed side at {routed_emb} (emb_dim={emb_dim}), shared inter={shared_hidden}")
 
     bias_free_router = not getattr(variant.model_config, "ROUTER_HAS_CORRECTION_BIAS", True)
-    weights_type = ("realistic" if run_pcc_check else "dummy") + ("_bias0" if bias_free_router else "")
+    realistic = run_pcc_check or realistic_weights
+    weights_type = ("realistic" if realistic else "dummy") + ("_bias0" if bias_free_router else "")
     # Scaled gate/up is a different weight set at identical shapes, so it needs its own cohort.
     if gate_up_scale != 1.0:
         weights_type = f"{weights_type}_x{gate_up_scale:g}"
@@ -293,7 +303,7 @@ def run_model(
         # whether routed/shared weights were drawn first (run_pcc_check branch),
         # so a perf-built cache (gate drawn first) silently mismatches the PCC
         # reference (gate drawn third) and collapses gate recall to ~random.
-        if run_pcc_check:
+        if realistic:
             # Routed experts at the latent width, shared expert at emb_dim with its own intermediate.
             all_routed_weights = create_torch_expert_weights(num_routed_experts, routed_emb, hidden_dim, seed=1234)
             shared_expert_weights = create_shared_expert_weights(emb_dim, shared_hidden, seed=5678)
@@ -541,8 +551,10 @@ def run_model(
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
         # fused-only sentinel for K2.7, 1792 for GLM 5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
-        routed_expert_hybrid_token_threshold=getattr(
-            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
+        routed_expert_hybrid_token_threshold=(
+            getattr(variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
+            if routed_expert_hybrid_token_threshold is _THRESHOLD_FROM_VARIANT
+            else routed_expert_hybrid_token_threshold
         ),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
