@@ -417,6 +417,9 @@ class ResidentModel:
         fc=None,
         tok=None,
         feed_peer=None,
+        kv_pool_blocks=None,
+        block_tables=None,
+        kv_block_size=64,
     ):
         """st: the decode state (State), or one State per user for a batch of len(st) users. More than 8 users
         run as sub-batches of 8, one launch each (the launches share the weights and buffers, each has its
@@ -428,7 +431,11 @@ class ResidentModel:
         its K slice [2 HIDDEN / n, HIDDEN] of the fc that makes x0 from the token state's two vectors per row
         (see streamer_common.hpp). tok: the token state tensor (default: a new one, see tok_tensor).
         verify with embed: the hub feeds the MTP draft loop (mlp_hub.cpp kinds 1 and 2), writing the next
-        token state of feed_peer's model (the draft model for the main one and back)"""
+        token state of feed_peer's model (the draft model for the main one and back).
+        kv_pool_blocks (paged KV, attn_paged.hpp): the KV caches are one pool per K / V of this many blocks of
+        kv_block_size positions, shared by every user and sub-batch, instead of a contiguous max_pos cache per user;
+        block_tables: per user the physical block of each logical block (default: user u takes blocks
+        u * blocks_per_user ...), see set_page_table. The users' States are placed into the pool through them."""
         self.mesh, self.d, self.layers, self.interval, self.lm_head = mesh, d, layers, interval, lm_head
         self.verify = verify
         self.fc = fc is not None
@@ -712,7 +719,12 @@ class ResidentModel:
             self._initial.append((host, dev))
             return dev
 
-        self.K_t, self.V_t = settled(cache("K")), settled(cache("V"))
+        self.kv_paged = kv_pool_blocks is not None
+        if self.kv_paged:  # the pools stand in for the caches, addressed through the page lists (no stride)
+            kv_stride = 0
+            self._kv_pool_setup(sts_all[:1] if verify else sts_all, kv_pool_blocks, kv_block_size, block_tables)
+        else:
+            self.K_t, self.V_t = settled(cache("K")), settled(cache("V"))
         # a chunk worker streams its KV tiles in blocks of kv_block (L1 independent of the context length)
         kv_block = min(KV_BLOCK, max(chunk_of(wi, max_tp, banks)[3] for wi in range(WORKERS - 1)) or 1)
         nodes = list(range(WORKERS))
@@ -797,14 +809,21 @@ class ResidentModel:
                 logits=self.logits_t,
             )
         ]
+        # paged KV: a page table per launch (rows = its users), apart from the token state (set_page_table)
+        pt_zeros = lambda: dram_t(
+            torch.zeros(B, self.pt_cols, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep
+        )
+        if self.kv_paged:
+            subs[0]["pt"] = pt_zeros()
         for k in range(1, n_sub):
             sk = sts_all[k * B : (k + 1) * B]
             hist_k, state_k = self._hist_host(sk), self._state_host(sk)
             sub = dict(
                 hist=dram_t(hist_k, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
                 state=dram_t(state_k, ttnn.float32),
-                K=settled(cache("K", sk)),
-                V=settled(cache("V", sk)),
+                K=self.K_t if self.kv_paged else settled(cache("K", sk)),
+                V=self.V_t if self.kv_paged else settled(cache("V", sk)),
+                pt=pt_zeros() if self.kv_paged else None,
                 tok=dram_t(torch.zeros(1, self.tok_words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rep),
                 x=dram_t(torch.zeros(n, B * HIDDEN), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
                 argmax=(
@@ -982,16 +1001,20 @@ class ResidentModel:
                 cb(28, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
                 cb(31, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
             ]
+            if self.kv_paged:
+                # page lists of the workers' tiles, then a page-table window (attn_paged.hpp cb_pages)
+                cbs.append(cb(30, work_grid, 1, ttnn.uint32, -(-(4 * B * self.kv_max_n + 2048 + 64) // 64) * 64))
             # the hub needs free semaphore ids for its fabric connections: the head-group one only on the heads
             sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=all_grid, initial_value=0) for i in range(SEM_GROUP)]
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
 
-            def kernel(src, core_ranges, ct, rt, config):
+            def kernel(src, core_ranges, ct, rt, config, named=()):
                 return ttnn.KernelDescriptor(
                     kernel_source=KDIR + src,
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=core_ranges,
                     compile_time_args=ct,
+                    named_compile_time_args=list(named),
                     runtime_args=rt,
                     config=config,
                 )
@@ -1033,6 +1056,15 @@ class ResidentModel:
                 SEM_LOCAL,
                 B,
                 int(self.verify),
+            ]
+            # attention worker reader / writer: paged KV (attn_paged.hpp)
+            pg = self.kv_paged
+            kv_named = [
+                ("kv_paged", int(pg)),
+                ("kv_tpb", self.kv_tpb if pg else 1),
+                ("kv_max_n", self.kv_max_n if pg else 1),
+                ("kv_copy_pages", self.kv_copy_pages if pg else 0),
+                ("kv_pt_row_bytes", 4 * self.pt_cols if pg else 64),
             ]
             group = d.nv // d.nk
             kv_addrs = [sub["K"].buffer_address(), sub["V"].buffer_address()]
@@ -1223,6 +1255,7 @@ class ResidentModel:
                         + kv_addrs
                         + [kv_stride, len(ch), 0, tok_addr, self.rope_off]
                         + ([rows_t.buffer_address(), kw_t.buffer_address()] if is_tail else [])
+                        + ([sub["pt"].buffer_address()] if self.kv_paged else [])
                     )
                     aw[c.x][c.y] = (
                         [role, w_i, lead_p.x, lead_p.y, m_slots_t.buffer_address(), pp.x, pp.y, slot, len(ch)]
@@ -1273,8 +1306,8 @@ class ResidentModel:
                     ]
                 if self.n_attn:
                     kernels += [
-                        kernel("attn_worker_reader.cpp", work_grid, attn_ct, ar, dm(NCRISC, NOC1)),
-                        kernel("attn_worker_writer.cpp", work_grid, attn_ct, aw, dm(BRISC, NOC0)),
+                        kernel("attn_worker_reader.cpp", work_grid, attn_ct, ar, dm(NCRISC, NOC1), kv_named),
+                        kernel("attn_worker_writer.cpp", work_grid, attn_ct, aw, dm(BRISC, NOC0), kv_named),
                         kernel("attn_worker_compute.cpp", chunk_grid, attn_ct, ac, work_compute),
                         kernel("attn_worker_compute.cpp", tail_grid, attn_ct, ac, attn_compute),
                         kernel("attn_leader_reader.cpp", lead_grid, attn_ct, lr, dm(NCRISC, NOC1)),
@@ -1300,6 +1333,8 @@ class ResidentModel:
             io += self._keep
             if lm_head:
                 io += [sub["logits"], sub["argmax"]]
+            if self.kv_paged:
+                io.append(sub["pt"])
             if self.feed:
                 io += [self.cand_t, self.rope_t, self.out_t, self.params_t, self.embed]
                 if self.feed_peer is not None:
@@ -1314,6 +1349,8 @@ class ResidentModel:
         self.ios = [io for _, io in built]
         self.mesh_pd, self.io = built[0]
         self.nv_split, self.v_bank = nv_split, v_bank
+        if self.kv_paged:
+            self.set_page_table(self.block_tables)
 
     @staticmethod
     def tok_tensor(mesh, d, batch, fc=False):
@@ -1454,6 +1491,97 @@ class ResidentModel:
                         t[chip, b, u, c, : sel.shape[0] * TILE] = sel.reshape(-1, HD)
         return t.reshape(n * banks * B * copies * rpb * TILE, HD)
 
+    # ---- paged KV (attn_paged.hpp)
+    def _kv_pool_setup(self, sts, blocks, block_size, tables):
+        """the K / V pools of `blocks` blocks of block_size positions, the page-table geometry and the users'
+        block tables (sts: the users owning KV; their States' caches are placed through the tables)"""
+        d, banks = self.d, self.d.banks
+        assert block_size % TILE == 0
+        self.kv_tpb = block_size // TILE
+        self.kv_blocks, self.kv_block_size = blocks, block_size
+        self.kv_copy_pages = blocks * self.kv_tpb
+        self._kv_pool_rows = -(-self._attn_copies * self.kv_copy_pages // banks)  # pages per bank
+        max_pos = sts[0].max_pos
+        self.blocks_per_user = -(-max_pos // block_size)
+        self.pt_cols = -(-self.blocks_per_user // 16) * 16  # whole 64 B DRAM reads per row
+        # page list entries per user: a chunk's tiles grow with the position once every bank holds some
+        max_tp = max_pos // TILE
+        tps = list(range(min(max_tp, 2 * banks) + 1)) + [max_tp]
+        self.kv_max_n = max(1, max(chunk_of(w, tp, banks)[3] for w in range(WORKERS - 1) for tp in tps))
+        if tables is None:
+            bpu = self.blocks_per_user
+            assert blocks >= len(sts) * bpu, (blocks, len(sts), bpu)
+            tables = [range(u * bpu, (u + 1) * bpu) for u in range(len(sts))]
+        self.block_tables = [[int(b) for b in t] for t in tables]
+        dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+        self._pool_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_grid, [self._kv_pool_rows * TILE, HD], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        pools = []
+        for which in ("K", "V"):
+            pools.append(
+                ttnn.from_torch(
+                    self._kv_pool_host(sts, which),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh,
+                    memory_config=self._pool_mc,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+                )
+            )
+            ttnn.synchronize_device(self.mesh)
+        # (not restored by reset(): positions at or past a step's are only read masked; stale rows are finite)
+        self.K_t, self.V_t = pools
+
+    def _kv_pool_host(self, sts, which, tables=None):
+        """the pool image of the users' K or V caches: position tile t of user u's copy c at page
+        c * kv_copy_pages + tables[u][t // kv_tpb] * kv_tpb + t % kv_tpb (bank page % banks, row page // banks);
+        pages no user owns are zero"""
+        tables = self.block_tables if tables is None else tables
+        n, banks, copies, tpb = self.d.n, self.d.banks, self._attn_copies, self.kv_tpb
+        img = torch.zeros(n, banks, self._kv_pool_rows, TILE, HD)
+        for u, st in enumerate(sts):
+            caches = st.K if which == "K" else st.V
+            tbl = torch.as_tensor(tables[u], dtype=torch.long)
+            for c in range(min(len(caches), copies)):
+                for chip in range(n):
+                    src = caches[c][chip]
+                    pts = min(src.shape[0] // TILE, len(tbl) * tpb)
+                    assert not src[pts * TILE :].any(), "KV rows past the user's block table"
+                    t = torch.arange(pts)
+                    page = c * self.kv_copy_pages + tbl[t // tpb] * tpb + t % tpb
+                    img[chip, page % banks, page // banks] = src[: pts * TILE].reshape(pts, TILE, HD)
+        return img.reshape(-1, HD)
+
+    def page_table_host(self, tables):
+        """host tensors (one per sub-batch) of the page tables: tables[u] lists the physical blocks of user u's
+        logical blocks 0, 1, ... (blocks past a user's last position are never read; missing rows / entries 0)"""
+        B, out = self.batch, []
+        for k in range(self.n_sub):
+            pt = torch.zeros(B, self.pt_cols, dtype=torch.int32)
+            for r, tbl in enumerate(tables[k * B : (k + 1) * B]):
+                tbl = torch.as_tensor(list(tbl), dtype=torch.int64)
+                assert len(tbl) <= self.pt_cols and bool(((tbl >= 0) & (tbl < self.kv_blocks)).all())
+                pt[r, : len(tbl)] = tbl.to(torch.int32)
+            out.append(
+                ttnn.from_torch(
+                    pt,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                )
+            )
+        return out
+
+    def set_page_table(self, tables):
+        """write the launches' page tables (paged KV), and only them: a step reads them at its start"""
+        assert self.kv_paged
+        self.block_tables = [[int(b) for b in t] for t in tables]
+        for host, sub in zip(self.page_table_host(self.block_tables), self.subs):
+            ttnn.copy_host_to_device_tensor(host, sub["pt"])
+
     def load_hist(self, st):
         """write st's conv histories (at st.pos) as the decode's"""
         host = ttnn.from_torch(
@@ -1474,13 +1602,10 @@ class ResidentModel:
             ),
         ]
         for which, dev in (("K", self.K_t), ("V", self.V_t)):
+            # (paged: the whole pool, st's caches through user 0's block table)
+            kv = self._kv_pool_host([st], which) if self.kv_paged else self._kv_host(st, which)
             hosts.append(
-                (
-                    ttnn.from_torch(
-                        self._kv_host(st, which), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip
-                    ),
-                    dev,
-                )
+                (ttnn.from_torch(kv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip), dev)
             )
         for host, dev in hosts:
             ttnn.copy_host_to_device_tensor(host, dev)
