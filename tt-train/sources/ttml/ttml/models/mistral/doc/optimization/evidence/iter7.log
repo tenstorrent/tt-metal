@@ -1,0 +1,36 @@
+=== iter7 TP=4 gradient check 2026-10-29T19:10:18Z
+tp4 rc=0
+RMSNorm layers on the all-core backward: 3
+tp 4: transposed 5, fused 4
+partial LoRA gradients reduced over tp: 4
+PASS
+=== iter7_tp TP=4 MFU after 600s cool-down 2026-10-29T19:11:01Z
+rc=0
+40 of 40 layers, tp 4: 551.3 ms/step over 6 steps (best 544.3), 174.8 TFLOP/s, MFU 29.43%
+=== iter7_tp TP=4 Tracy 4 layers 2026-10-29T19:24:24Z
+rc=0
+4 of 40 layers, tp 4: 69.2 ms/step over 2 steps (best 68.7), 174.9 TFLOP/s, MFU 29.45%
+=== done 2026-10-29T19:26:01Z
+=== narrow TP-shape sweeps 2026-10-29T19:26:01Z
+--- w2_fwd_tp 19:26:01
+rc=0
+M=1024 K=8256 N=5120: ttnn's own choice on the 11x10 grid 1.01 ms, 85.6 TFLOP/s wall
+      0.99 ms     87.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=2 in0_block_w=3 sub=4x1 out_block=32x2
+      0.99 ms     87.3 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=2 in0_block_w=3 sub=4x1 out_block=32x2
+--- gateup_dx_tp 19:26:13
+rc=0
+M=5184 K=16384 N=1024: ttnn's own choice on the 11x10 grid 1.52 ms, 114.6 TFLOP/s wall
+--- w2_dx_tp 19:26:17
+rc=0
+M=8256 K=5120 N=1024: ttnn's own choice on the 11x10 grid 0.78 ms, 110.8 TFLOP/s wall
+--- qkv_fwd_tp 19:26:21
+rc=0
+M=1024 K=5184 N=1536: ttnn's own choice on the 11x10 grid 0.25 ms, 65.5 TFLOP/s wall
+      0.46 ms     35.4 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=1 in0_block_w=3 sub=4x1 out_block=32x1
+      0.46 ms     35.4 TFLOP/s  max|diff| 0.00e+00  grid 11x10 per_core_N=1 in0_block_w=3 sub=4x1 out_block=32x1
+--- out_fwd_tp 19:26:29
+rc=0
+M=1024 K=1088 N=5120: ttnn's own choice on the 11x10 grid 0.22 ms, 51.9 TFLOP/s wall
+      0.21 ms     53.2 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=2 in0_block_w=2 sub=4x1 out_block=32x2
+      0.21 ms     53.2 TFLOP/s  max|diff| 0.00e+00  grid 10x10 per_core_N=2 in0_block_w=2 sub=4x1 out_block=32x2
+=== iter7 chain finished 2026-10-29T19:26:39Z
