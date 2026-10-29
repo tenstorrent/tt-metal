@@ -40,6 +40,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <hostdevcommon/common_values.hpp>
+#include <unordered_map>
 
 using namespace tt::tt_metal;
 using ttnn::Tensor;
@@ -635,32 +636,62 @@ std::optional<uint32_t> compute_gather_valid_Ht(
         tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT);
 }
 
-// The fused all-gather bakes its out_ready semaphore address into the reader (arg 2) and writer (arg 4)
-// at create time. The caller's semaphore can change between dispatches (e.g. a CCLManager pool hands
-// out a different slot per call), so re-apply the current address on every cache hit, as the
-// standalone ring attention all-gather does.
-void apply_ring_joint_all_gather_semaphore_args(Program& program, const ttnn::prim::RingJointSDPAParams& args) {
-    if (args.has_sliding_window()) {
-        return;
+std::optional<ring_joint::ChunkedSlidingHaloLayout> build_runtime_halo_layout(
+    const ttnn::prim::RingJointSDPAParams& args,
+    const ttnn::prim::RingJointSDPAInputs& tensor_args,
+    uint32_t logical_nt) {
+    if (!args.has_sliding_window()) {
+        return std::nullopt;
     }
-    namespace dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
-    const auto& semaphore = args.all_gather_operation_attributes.semaphore;
-    const auto patch_semaphore_arg = [&program](uint32_t kernel_id, uint32_t arg_idx, uint32_t address) {
-        auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
-        for (auto& col_args : grid_args) {
-            for (auto& core_args : col_args) {
-                if (core_args.size() > arg_idx) {  // skip cores that don't run this kernel
-                    write_runtime_arg(core_args, arg_idx, address, "all_gather.out_ready_semaphore");
-                }
-            }
+    auto layout = ring_joint::build_chunked_sliding_halo_layout(
+        tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
+        args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
+        args.sliding_window_size.value(),
+        tt::constants::TILE_HEIGHT,
+        static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size),
+        logical_nt,
+        tensor_args.gathered_k.logical_shape()[2] / tt::constants::TILE_HEIGHT,
+        derived_kv_slab_count(args, tensor_args),
+        args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                       : std::nullopt);
+    TT_FATAL(layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
+    return layout;
+}
+
+// The fused all-gather bakes its out_ready semaphore addresses into the reader (arg 2) and writer (arg 4),
+// and each sliding halo exchange bakes semaphores[2] into its reader (arg 0) and writer (arg 2). The
+// caller's semaphores can change between dispatches (e.g. a CCLManager pool hands out a different slot
+// per call), so record those slots once here and re-apply the current addresses on cache hits.
+ag_dyn::SemaphoreArgPatch record_ring_joint_semaphore_arg_patch(
+    Program& program,
+    const ttnn::prim::RingJointSDPAParams& args,
+    const ttnn::prim::RingJointSDPAInputs& tensor_args,
+    const ttnn::MeshCoordinate& coord) {
+    ag_dyn::SemaphoreArgPatch patch;
+    if (args.has_sliding_window()) {
+        const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, coord);
+        const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
+        const auto halo_layout = build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
+        const auto halo_exchanges = plan_halo_exchanges(args, *halo_layout, ring_write_plan.transport_rank);
+        for (uint32_t exchange = 0; exchange < halo_exchanges.size(); ++exchange) {
+            ag_dyn::record_semaphore_arg_slot(
+                patch,
+                program,
+                kNeighborHaloReaderKernelIndex + 2 * exchange,
+                ag_dyn::kHaloReaderSemaphoreArg,
+                ag_dyn::kHaloSemaphoreIdx);
+            ag_dyn::record_semaphore_arg_slot(
+                patch,
+                program,
+                kNeighborHaloWriterKernelIndex + 2 * exchange,
+                ag_dyn::kHaloWriterSemaphoreArg,
+                ag_dyn::kHaloSemaphoreIdx);
         }
-    };
-    const auto forward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kForwardSemaphoreIdx).address());
-    const auto backward_sem_addr = static_cast<uint32_t>(semaphore.at(dyn::kBackwardSemaphoreIdx).address());
-    patch_semaphore_arg(kAllGatherReaderForwardKernelIndex, dyn::kReaderSemaphoreArg, forward_sem_addr);
-    patch_semaphore_arg(kAllGatherWriterForwardKernelIndex, dyn::kWriterSemaphoreArg, forward_sem_addr);
-    patch_semaphore_arg(kAllGatherReaderBackwardKernelIndex, dyn::kReaderSemaphoreArg, backward_sem_addr);
-    patch_semaphore_arg(kAllGatherWriterBackwardKernelIndex, dyn::kWriterSemaphoreArg, backward_sem_addr);
+    } else {
+        ag_dyn::record_all_gather_semaphore_arg_slots(patch, program, kFirstAllGatherKernelIndex);
+    }
+    patch.addresses = ag_dyn::semaphore_addresses(args.all_gather_operation_attributes.semaphore);
+    return patch;
 }
 
 void apply_ring_joint_scalar_runtime_args(
@@ -692,21 +723,8 @@ void apply_ring_joint_scalar_runtime_args(
         &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
     const bool uses_neighbor_halo = args.has_sliding_window();
     // One reader/writer kernel pair per halo hop, appended in hop order after the three SDPA kernels.
-    std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout;
-    if (uses_neighbor_halo) {
-        runtime_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
-            tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT,
-            args.get_k_chunk_size() / tt::constants::TILE_HEIGHT,
-            args.sliding_window_size.value(),
-            tt::constants::TILE_HEIGHT,
-            static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size),
-            runtime_plan.logical_nt,
-            tensor_args.gathered_k.logical_shape()[2] / tt::constants::TILE_HEIGHT,
-            derived_kv_slab_count(args, tensor_args),
-            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
-                                           : std::nullopt);
-        TT_FATAL(runtime_halo_layout->uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
-    }
+    const std::optional<ring_joint::ChunkedSlidingHaloLayout> runtime_halo_layout =
+        build_runtime_halo_layout(args, tensor_args, runtime_plan.logical_nt);
     const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
         runtime_halo_layout ? plan_halo_exchanges(args, *runtime_halo_layout, ring_write_plan.transport_rank)
                             : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
@@ -4320,7 +4338,15 @@ RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorklo
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
+    auto descriptor_cached =
+        descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
+        auto& shared = shared_variables[range];
+        shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
+        shared.semaphore_patch = record_ring_joint_semaphore_arg_patch(program, args, tensor_args, range.start_coord());
+    }
+    return {std::move(descriptor_cached.workload), std::move(shared_variables)};
 }
 
 void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
@@ -4328,16 +4354,25 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
     RingJointSDPAResult& output_tensors) {
-    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
-
+    if (cached_workload.shared_variables.empty()) {
+        return;
+    }
+    // Every coordinate's descriptor copy holds the same workload resources, so collect once.
+    const auto collected = descriptor_adapter_t::collect_tensor_buffers(
+        tensor_args, output_tensors, cached_workload.shared_variables.begin()->second.descriptor.workload_descriptor);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        auto& shared = cached_workload.shared_variables.at(coordinate_range);
+        if (!shared.descriptor.resolved_bindings.empty()) {
+            tt::tt_metal::apply_resolved_bindings(program, shared.descriptor.resolved_bindings, collected.buffers);
+        }
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
             coord == coordinate_range.end_coord(),
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
-        apply_ring_joint_all_gather_semaphore_args(program, args);
+        ag_dyn::apply_semaphore_arg_patch(
+            shared.semaphore_patch, program, args.all_gather_operation_attributes.semaphore);
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
     }
 }
