@@ -32,6 +32,15 @@
 #     and its generation_config.json top_k is unset or above that limit. Without it
 #     those requests (all of vllm bench serve) sample on host, or are silently capped
 #     on device for model classes that declare no max_device_top_k.
+#   extra-env: space-separated KEY=VALUE pairs exported before the server starts.
+#
+# First use (a model not yet on /mnt/MLPerf; dispatch with mlperf-write-access):
+#   hub-download: true downloads the checkpoint into HF_HUB_CACHE before the server
+#     starts, only on a dispatch with /mnt/MLPerf writable. Every other run stays
+#     offline (HF_HUB_OFFLINE=1) on the cached snapshot.
+#   first-use-timeout (per SKU) / first-use-server-timeout: the job and server-start
+#     timeouts (minutes) of such a dispatch, which also builds the TT cache during
+#     startup. Not charged to the time budget; scheduled runs never use them.
 #
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -479,6 +488,41 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
+  team: models
+  budget_type: vllm
+
+# ── MiMo ───────────────────────────────────────────────────────────
+
+# MiMo-V2.6-Flash (models/experimental/mimo_v2_6_flash) on BH Galaxy: four TP=8
+# lanes, one per mesh row, 4 users each. Serving settings follow the
+# tt-inference-server BLACKHOLE_GALAXY spec. The chunked-prefill and
+# prefix-caching steps send prompts longer than the 4096-token budget, so later
+# prefill chunks run and replay their traces (MIMO_PREFILL_CHUNK_TRACE, default
+# on). The first run needs a dispatch with mlperf-write-access: it downloads the
+# 178 GB checkpoint and builds the ~186 GB TT cache (~45 min of weights plus
+# ~1 min per MoE layer); every later run starts from the cache.
+- name: "MiMo-V2.6-Flash DP=4"
+  model: XiaomiMiMo/MiMo-V2.6-Flash-MOPD
+  server-timeout: 30
+  first-use-server-timeout: 200
+  hub-download: true
+  benchmark-timeout: 10
+  mesh-device: "(4, 8)"
+  arch: arch-blackhole
+  tt-config: '{"trace_mode": "decode_only", "trace_region_size": 1000000000, "l1_small_size": 65536, "dispatch_core_axis": "col", "sample_on_device_mode": "decode_only", "prefill_gather_ms": 200, "prefill_gather_quiet_ms": 25}'
+  additional-server-args: "--data_parallel_size 4 --max_num_seqs 4 --block_size 64 --max_model_len 1048576 --max_num_batched_tokens 4096 --enable_chunked_prefill --enable-prefix-caching --trust-remote-code --reasoning-parser mimo --enable-auto-tool-choice --tool-call-parser mimo"
+  # VLLM_ENGINE_READY_TIMEOUT_S: the first-use start (TT cache build) runs for hours.
+  extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400"
+  coherence-test: true
+  prefix-caching-test: true
+  chunked-prefill-budget: 4096
+  multimodal: false
+  skus:
+    bh_galaxy:
+      timeout: 75
+      first-use-timeout: 480
+      tier: 3
+  owner_id: U0APWUMQBJ9 # Divy Wadhwani
   team: models
   budget_type: vllm
 

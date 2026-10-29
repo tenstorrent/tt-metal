@@ -165,10 +165,12 @@ SAMPLER_CHECK = os.environ.get("MIMO_SAMPLER_CHECK") == "1"
 PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1" and os.environ.get("MIMO_SPEC_DECODE") != "dflash"
 # MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
 PREFILL_TRACE = os.environ.get("MIMO_PREFILL_TRACE", "1") == "1"
-# MIMO_PREFILL_CHUNK_TRACE=1: a lane's later prefill chunks of the step's full token budget (padded) replay a trace of
-# the whole chunk (TtMiMoModel.setup_prefill_chunk_traces) instead of dispatching its ops, so one host thread keeps every
-# lane busy. MIMO_PREFILL_CHUNK_TRACE_SDPA (default "256"): the global SDPA chunk sizes traced (a chunk whose start is
-# an odd multiple of 128 runs 128; "256,128" traces those too).
+# MIMO_PREFILL_CHUNK_TRACE (model.PREFILL_CHUNK_TRACE; default 1, 0 opts out): a lane's later prefill chunks of the
+# step's full token budget (padded) replay a trace of the whole chunk (TtMiMoModel.setup_prefill_chunk_traces) instead
+# of dispatching its ops, so one host thread keeps every lane busy. A setup or capture that fails (a trace region too
+# small for them, say) drops them with a warning: later chunks then run eagerly and the server still starts.
+# MIMO_PREFILL_CHUNK_TRACE_SDPA (default "256"): the global SDPA chunk sizes traced (a chunk whose start is an odd
+# multiple of 128 runs 128; "256,128" traces those too).
 CHUNK_TRACE_SDPA = tuple(int(c) for c in os.environ.get("MIMO_PREFILL_CHUNK_TRACE_SDPA", "256").split(","))
 # Decode, verify and MTP draft steps read their RoPE cos / sin from device tables of every position
 # (TtMiMoModel.setup_decode_rope_tables); MIMO_DEVICE_ROPE=0 uploads them every step instead.
@@ -926,15 +928,15 @@ class MiMoV2ForCausalLM:
             if model.decode_trace is None or model.mesh_device.num_program_cache_entries() == programs[lane]:
                 continue
             new = model.mesh_device.num_program_cache_entries() - programs[lane]
-            # Every trace of the replica, in warmup_model_decode's order: the greedy and sampled decode steps, then the
-            # verify step and the MTP draft program.
+            # Every trace of the replica, in warmup_model_decode's order: the greedy and sampled decode steps, the
+            # verify step and the MTP draft program, then the later-chunk prefill traces.
             model.release_spec_traces()
             model.release_decode_trace()
             model.release_prefill_chunk_traces()
             model.capture_decode_trace()
-            model.capture_prefill_chunk_traces()
             if model.mtp is not None or model.dflash is not None:
                 model.capture_spec_traces()
+            model.capture_prefill_chunk_traces()  # optional, so last: if they no longer fit they are dropped
             self.decode_recaptures += 1
             logger.info(
                 f"MiMo vLLM: replica {lane} decode trace recaptured after {new} new prefill programs "
@@ -2070,25 +2072,32 @@ class MiMoV2ForCausalLM:
                 ttnn.synchronize_device(model.mesh_device)
         # Traced later chunks: the same, for a chunk of the step's whole budget and for the longest chunk (an unaligned
         # start moved back), each SDPA program a start can bring.
-        chunk_traces = []
+        chunk_traces = {}  # replica -> its traced later chunks (none: dropped, it runs them eagerly)
         if PREFILL_CHUNK_TRACE and not DFLASH and not all(m.chunk_traces_supported() for m in self.models):
             logger.warning(
-                "MiMo vLLM: MIMO_PREFILL_CHUNK_TRACE=1 ignored: this ttnn build's chunked_flash_mla_prefill takes no "
-                "chunk_start_idx_tensor, so a later-chunk trace could only replay at its capture's start; later "
-                "chunks run eagerly"
+                "MiMo vLLM: traced later prefill chunks (MIMO_PREFILL_CHUNK_TRACE) off: this ttnn build's "
+                "chunked_flash_mla_prefill takes no chunk_start_idx_tensor, so a later-chunk trace could only replay "
+                "at its capture's start; later chunks run eagerly"
             )
         elif PREFILL_CHUNK_TRACE and not DFLASH:
             pair = self.pair_split
             lengths = sorted({prefill_padded_len(n, self._chunk_align(), pair) for n in self._chunk_trace_tokens()})
-            for model in self.models:
-                chunk_traces = model.setup_prefill_chunk_traces(lengths, CHUNK_TRACE_SDPA)
-                model.warm_prefill_chunk_traces()
+            for lane, model in enumerate(self.models):
+                try:
+                    chunk_traces[lane] = model.setup_prefill_chunk_traces(lengths, CHUNK_TRACE_SDPA)
+                    model.warm_prefill_chunk_traces()
+                except Exception as e:  # e.g. out of DRAM for their buffers: serve with eager later chunks
+                    model.drop_prefill_chunk_traces(f"replica {lane}: setting up later-chunk traces failed: {e}")
+                    chunk_traces[lane] = []
+        # One entry when every replica traces the same chunks; per replica when one dropped them.
+        traced = list(chunk_traces.values())
+        traced = traced[0] if traced and all(t == traced[0] for t in traced) else (chunk_traces or [])
         self.already_warmed_up_prefill = self.prefill_programs_compiled = True
         new = [m.mesh_device.num_program_cache_entries() - p for m, p in zip(self.models, programs)]
         logger.info(
             f"MiMo vLLM: prefill warmed up in {time.time() - t0:.1f}s: {len(chunks)} chunks of up to {max_tokens} "
             f"tokens and {len(batches)} batches through layers {layers}, {new} new programs per replica; "
-            f"traced later chunks {chunk_traces}"
+            f"traced later chunks {traced}"
         )
 
     def _chunk_trace_tokens(self):
@@ -2114,12 +2123,14 @@ class MiMoV2ForCausalLM:
                     model.capture_prefill_batch_trace(users, padded)
                 if pending:
                     logger.info(f"MiMo vLLM: replica {lane} prefill traces captured for (users, length) {pending}")
-                if any(t["id"] is None for t in model.chunk_traces.values()):
-                    model.capture_prefill_chunk_traces()
-                    logger.info(f"MiMo vLLM: replica {lane} later-chunk prefill traces {list(model.chunk_traces)}")
                 if (model.mtp is not None or model.dflash is not None) and model.verify_trace is None:
                     model.capture_spec_traces()
                     logger.info(f"MiMo vLLM: replica {lane} verify and draft traces captured")
+                # Last: they are optional, so every trace the replica needs is in the region before them; one that
+                # does not fit drops them all (capture_prefill_chunk_traces warns) and later chunks run eagerly.
+                if any(t["id"] is None for t in model.chunk_traces.values()):
+                    if model.capture_prefill_chunk_traces():
+                        logger.info(f"MiMo vLLM: replica {lane} later-chunk prefill traces {list(model.chunk_traces)}")
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))
