@@ -41,12 +41,14 @@ CONFIGS = {
 NUM_LAYERS = 2
 PROJECTOR_HIDDEN, TEXT_HIDDEN = 96, 64
 
-# (t, h, w) patch grid of each image. The images of one call share one attention (no mask).
+# (t, h, w) patch grid of each image.
 GRIDS = {
     "h4w4": [(1, 4, 4)],
     "h4w6": [(1, 4, 6)],
     "h6w4": [(1, 6, 4)],
     "t2h4w4": [(2, 4, 4)],
+    # HF parity only: Hugging Face 5.12.1 gives the images of one call one attention (no mask). The TT model and
+    # encode() take one image per forward, as vLLM and SGLang keep attention inside each image.
     "two_images": [(1, 4, 4), (1, 2, 6)],
 }
 

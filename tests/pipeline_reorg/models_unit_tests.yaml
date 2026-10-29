@@ -811,9 +811,9 @@
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
     # Host-only tests have no mesh id; run them here: chunk layout, model variants / config checks, checkpoint
-    # dequant, router precision, compute configs, the shared-expert 2D blocking, vision linear program configs
-    # and vision RoPE.
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward or vision_linear_program_config or vision_rope"
+    # dequant, router precision, compute configs, the shared-expert 2D blocking, vision linear program configs,
+    # vision RoPE and vision input checks.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward or vision_linear_program_config or vision_rope or vision_image_input"
     # The media module the encoder service loads, against Hugging Face's image processor.
     pytest --timeout 120 models/demos/minimax_m3/tests/unit/test_vision_media.py
     # The prefill runner's media embedding store, against a fake client and a local Mooncake master.
