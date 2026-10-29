@@ -91,24 +91,27 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     const uint32_t iter_units = slice_count * element_units;
-    for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        const bool last = iter + 1 == num_iters;
-        const uint32_t skip = last ? final_skip : 0;
-        const uint32_t take = last ? final_count : slice_count;
-        const uint32_t take_units = take * element_units;
-        walk.init((initial_stripe + iter * stripe_step) % num_devices, slice_start, slice_count, skip, take);
-        if (iter == 0) {
-            // Local data (our own input tensor)
-            ag::fill_slots(noc, cb, lay, unit_bytes, input_builder, take_units, do_local_write, [](uint32_t) {});
-        } else {
-            // Relay: upstream sent its iteration iter - 1 in walk order and signals cumulative units, so the first
-            // `skip` elements of that pass precede ours. Wait before reserving: a slot holds at most slot_units, all
-            // of this iteration, so the target covers every read of the slot and is reached without holding one (a
-            // ring would deadlock otherwise).
-            const uint32_t relay_base = (iter - 1) * iter_units + skip * element_units;
-            ag::fill_slots(noc, cb, lay, unit_bytes, relay_builder, take_units, false, [&](uint32_t consumed) {
-                noc_semaphore_wait_min(data_valid_ptr, relay_base + std::min(consumed + slot_units, take_units));
-            });
+    {
+        AG_TEST_ZONE("AG-RD-FILL");  // TEST ONLY
+        for (uint32_t iter = 0; iter < num_iters; ++iter) {
+            const bool last = iter + 1 == num_iters;
+            const uint32_t skip = last ? final_skip : 0;
+            const uint32_t take = last ? final_count : slice_count;
+            const uint32_t take_units = take * element_units;
+            walk.init((initial_stripe + iter * stripe_step) % num_devices, slice_start, slice_count, skip, take);
+            if (iter == 0) {
+                // Local data (our own input tensor)
+                ag::fill_slots(noc, cb, lay, unit_bytes, input_builder, take_units, do_local_write, [](uint32_t) {});
+            } else {
+                // Relay: upstream sent its iteration iter - 1 in walk order and signals cumulative units, so the first
+                // `skip` elements of that pass precede ours. Wait before reserving: a slot holds at most slot_units,
+                // all of this iteration, so the target covers every read of the slot and is reached without holding one
+                // (a ring would deadlock otherwise).
+                const uint32_t relay_base = (iter - 1) * iter_units + skip * element_units;
+                ag::fill_slots(noc, cb, lay, unit_bytes, relay_builder, take_units, false, [&](uint32_t consumed) {
+                    noc_semaphore_wait_min(data_valid_ptr, relay_base + std::min(consumed + slot_units, take_units));
+                });
+            }
         }
     }
 
@@ -118,7 +121,11 @@ void kernel_main() {
 
     // Completion: wait for every unit upstream sends us, then subtract only this launch's; a reset could drop the
     // next's.
-    ag::wait_and_consume(data_valid_sem, total_units);
+    {
+        AG_TEST_ZONE("AG-RD-DONEWAIT");  // TEST ONLY
+        ag::wait_and_consume(data_valid_sem, total_units);
+    }
+    AG_TEST_ZONE("AG-RD-BARRIERS");  // TEST ONLY
     noc.async_atomic_barrier();
     // The local copy has landed in our output before the op completes.
     noc.async_write_barrier();

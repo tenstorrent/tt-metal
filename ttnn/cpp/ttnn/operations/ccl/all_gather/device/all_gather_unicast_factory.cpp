@@ -336,6 +336,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = worker_core_range;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
+    reader_kernel_desc.defines = ag_test::diag_defines();  // TEST ONLY
     reader_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
     desc.kernels.push_back(std::move(reader_kernel_desc));
@@ -345,6 +346,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = worker_core_range;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
+    writer_kernel_desc.defines = ag_test::diag_defines();  // TEST ONLY
     writer_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_noc};
     desc.kernels.push_back(std::move(writer_kernel_desc));

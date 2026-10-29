@@ -117,6 +117,7 @@ void kernel_main() {
     set_route(signal, neighbor_chip_id, neighbor_mesh_id);
     // Tell the neighbor's opposite-direction worker we are alive: our output exists, and we are done reading the
     // previous launch's.
+#ifndef AG_TEST_NO_INIT  // TEST ONLY
     fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
         UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
         &sender,
@@ -124,6 +125,7 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             ag::fabric_frame_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem), 1});
     noc.async_writes_flushed();
+#endif
 
     // The headers of every slot are ours for the whole op (the reader never writes them), so each gets its command
     // type and route once: a unicast-write and a scatter-write header per packet. The CB starts at its base, and its
@@ -141,7 +143,12 @@ void kernel_main() {
     }
     // Our data goes into the neighbor's output: wait until it is alive (it sent its init the same way). Our reader
     // fills the slots meanwhile.
-    ag::wait_and_consume(barrier_sem, 1);
+#ifndef AG_TEST_NO_INIT  // TEST ONLY
+    {
+        AG_TEST_ZONE("AG-WR-INIT");
+        ag::wait_and_consume(barrier_sem, 1);
+    }
+#endif
     const uint64_t data_valid_addr = ag::fabric_frame_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem);
 
     ///////////////////////////////////////////////////
@@ -149,47 +156,50 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     SignalCadence cadence(data_valid_cadence);
-    for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        const uint32_t count = (iter + 1 == num_iters) ? final_count : slice_count;
-        // An empty pass (empty slice, or an even-ring half of nothing) pushes no slot.
-        for (bool iter_end = count == 0; !iter_end;) {
-            cb.wait_front(1);
-            const uint32_t slot = cb.get_read_ptr();
-            ag::slot_acquire();
-            const ag::SlotInfo info = *reinterpret_cast<const ag::SlotInfo*>(slot);
-            for (uint32_t j = 0; j < info.packets; ++j) {
-                const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
-                const uint32_t payload = lay.payload(slot, j);
-                if (rec.segments == 1) {
-                    fabric_api::fabric_unicast_noc_unicast_write_with_state<
-                        UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                        &sender,
-                        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.unicast_header(slot, j)),
-                        payload,
-                        tt::tt_fabric::NocUnicastCommandHeader{rec.dst[0]},
-                        rec.payload_bytes);
-                } else {
-                    fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                        UnicastScatterWriteUpdateMask::PayloadSize>(
-                        &sender,
-                        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.scatter_header(slot, j)),
-                        payload,
-                        tt::tt_fabric::NocUnicastScatterCommandHeader(
-                            rec.dst, rec.bytes, static_cast<uint8_t>(rec.segments)),
-                        rec.payload_bytes);
+    {
+        AG_TEST_ZONE("AG-WR-LOOP");  // TEST ONLY
+        for (uint32_t iter = 0; iter < num_iters; ++iter) {
+            const uint32_t count = (iter + 1 == num_iters) ? final_count : slice_count;
+            // An empty pass (empty slice, or an even-ring half of nothing) pushes no slot.
+            for (bool iter_end = count == 0; !iter_end;) {
+                cb.wait_front(1);
+                const uint32_t slot = cb.get_read_ptr();
+                ag::slot_acquire();
+                const ag::SlotInfo info = *reinterpret_cast<const ag::SlotInfo*>(slot);
+                for (uint32_t j = 0; j < info.packets; ++j) {
+                    const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
+                    const uint32_t payload = lay.payload(slot, j);
+                    if (rec.segments == 1) {
+                        fabric_api::fabric_unicast_noc_unicast_write_with_state<
+                            UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                            &sender,
+                            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.unicast_header(slot, j)),
+                            payload,
+                            tt::tt_fabric::NocUnicastCommandHeader{rec.dst[0]},
+                            rec.payload_bytes);
+                    } else {
+                        fabric_api::fabric_unicast_noc_scatter_write_with_state<
+                            UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                            UnicastScatterWriteUpdateMask::PayloadSize>(
+                            &sender,
+                            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.scatter_header(slot, j)),
+                            payload,
+                            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                                rec.dst, rec.bytes, static_cast<uint8_t>(rec.segments)),
+                            rec.payload_bytes);
+                    }
                 }
+                // Same sender as the data, so the channel's FIFO lands the signal after the units it counts.
+                if (const uint32_t units = cadence.on_slot(info)) {
+                    fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
+                        UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
+                        &sender, signal, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{data_valid_addr, units});
+                }
+                // Payload, headers and the signal have left L1 before the reader may refill the slot.
+                noc.async_writes_flushed();
+                cb.pop_front(1);
+                iter_end = info.iter_end != 0;
             }
-            // Same sender as the data, so the channel's FIFO lands the signal after the units it counts.
-            if (const uint32_t units = cadence.on_slot(info)) {
-                fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
-                    UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
-                    &sender, signal, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{data_valid_addr, units});
-            }
-            // Payload, headers and the signal have left L1 before the reader may refill the slot.
-            noc.async_writes_flushed();
-            cb.pop_front(1);
-            iter_end = info.iter_end != 0;
         }
     }
 
@@ -197,6 +207,7 @@ void kernel_main() {
     // CLEANUP
     ///////////////////////////////////////////////////
 
+    AG_TEST_ZONE("AG-WR-TAIL");  // TEST ONLY
     noc.async_write_barrier();
     noc.async_atomic_barrier();
     sender.close();

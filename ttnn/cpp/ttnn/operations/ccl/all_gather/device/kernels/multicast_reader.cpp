@@ -79,15 +79,22 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     walk.init(device_idx, slice_start, slice_count, 0, slice_count);
-    ag::fill_slots(
-        noc, cb, lay, unit_bytes, builder, slice_count * element_units, /*local_copy=*/true, [](uint32_t) {});
+    {
+        AG_TEST_ZONE("AG-RD-FILL");  // TEST ONLY
+        ag::fill_slots(
+            noc, cb, lay, unit_bytes, builder, slice_count * element_units, /*local_copy=*/true, [](uint32_t) {});
+    }
 
     ///////////////////////////////////////////////////
     // CLEANUP
     ///////////////////////////////////////////////////
 
     // Every other device's done credit has landed (each follows that device's data); take only this launch's.
-    ag::wait_and_consume(done_sem, done_wait_value);
+    {
+        AG_TEST_ZONE("AG-RD-DONEWAIT");  // TEST ONLY
+        ag::wait_and_consume(done_sem, done_wait_value);
+    }
+    AG_TEST_ZONE("AG-RD-BARRIERS");  // TEST ONLY
     noc.async_atomic_barrier();
     // The local copy has landed in our output before the op completes.
     noc.async_write_barrier();

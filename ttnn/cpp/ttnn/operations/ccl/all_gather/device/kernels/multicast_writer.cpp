@@ -118,7 +118,9 @@ void kernel_main() {
 
     // Initialization barrier: tell every other device we are alive (our output exists, and we are done reading the
     // previous launch's), then set up the data routes.
+#ifndef AG_TEST_NO_INIT  // TEST ONLY
     signal_all(barrier_sem);
+#endif
     fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
         fabric_connection,
         unicast_route_id,
@@ -135,45 +137,53 @@ void kernel_main() {
         ranges);
     // Our data goes into every other device's output: wait until all are alive (each sent its init the same way). Our
     // reader fills the slots and does the local copy meanwhile.
-    ag::wait_and_consume(barrier_sem, barrier_wait_value);
+#ifndef AG_TEST_NO_INIT  // TEST ONLY
+    {
+        AG_TEST_ZONE("AG-WR-INIT");
+        ag::wait_and_consume(barrier_sem, barrier_wait_value);
+    }
+#endif
 
     ///////////////////////////////////////////////////
     // MAIN
     ///////////////////////////////////////////////////
 
-    for (bool iter_end = slice_count == 0; !iter_end;) {
-        cb.wait_front(1);
-        const uint32_t slot = cb.get_read_ptr();
-        ag::slot_acquire();
-        const ag::SlotInfo info = *reinterpret_cast<const ag::SlotInfo*>(slot);
-        for (uint32_t j = 0; j < info.packets; ++j) {
-            const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
-            const uint32_t payload = lay.payload(slot, j);
-            noc.async_writes_flushed();
-            if (rec.segments == 1) {
-                fabric_api::fabric_multicast_noc_unicast_write_with_state<
-                    UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                    fabric_connection,
-                    unicast_route_id,
-                    payload,
-                    tt::tt_fabric::NocUnicastCommandHeader{rec.dst[0]},
-                    rec.payload_bytes);
-            } else {
-                fabric_api::fabric_multicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
-                    UnicastScatterWriteUpdateMask::PayloadSize>(
-                    fabric_connection,
-                    scatter_route_id,
-                    payload,
-                    tt::tt_fabric::NocUnicastScatterCommandHeader(
-                        rec.dst, rec.bytes, static_cast<uint8_t>(rec.segments)),
-                    rec.payload_bytes);
+    {
+        AG_TEST_ZONE("AG-WR-LOOP");  // TEST ONLY
+        for (bool iter_end = slice_count == 0; !iter_end;) {
+            cb.wait_front(1);
+            const uint32_t slot = cb.get_read_ptr();
+            ag::slot_acquire();
+            const ag::SlotInfo info = *reinterpret_cast<const ag::SlotInfo*>(slot);
+            for (uint32_t j = 0; j < info.packets; ++j) {
+                const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
+                const uint32_t payload = lay.payload(slot, j);
+                noc.async_writes_flushed();
+                if (rec.segments == 1) {
+                    fabric_api::fabric_multicast_noc_unicast_write_with_state<
+                        UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                        fabric_connection,
+                        unicast_route_id,
+                        payload,
+                        tt::tt_fabric::NocUnicastCommandHeader{rec.dst[0]},
+                        rec.payload_bytes);
+                } else {
+                    fabric_api::fabric_multicast_noc_scatter_write_with_state<
+                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                        UnicastScatterWriteUpdateMask::PayloadSize>(
+                        fabric_connection,
+                        scatter_route_id,
+                        payload,
+                        tt::tt_fabric::NocUnicastScatterCommandHeader(
+                            rec.dst, rec.bytes, static_cast<uint8_t>(rec.segments)),
+                        rec.payload_bytes);
+                }
             }
+            // Wait for Fabric writes to be sent out before popping CB entry
+            noc.async_writes_flushed();
+            cb.pop_front(1);
+            iter_end = info.iter_end != 0;
         }
-        // Wait for Fabric writes to be sent out before popping CB entry
-        noc.async_writes_flushed();
-        cb.pop_front(1);
-        iter_end = info.iter_end != 0;
     }
 
     ///////////////////////////////////////////////////
@@ -182,6 +192,7 @@ void kernel_main() {
 
     // Completion barrier: after every data packet on the same routes, so each receiver's done count implies our data
     // has landed. Sent even with nothing to send: every reader waits for all of them.
+    AG_TEST_ZONE("AG-WR-TAIL");  // TEST ONLY
     signal_all(done_sem);
     tt::tt_fabric::common::experimental::close_connections(fabric_connection);
     noc.async_write_barrier();

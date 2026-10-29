@@ -58,6 +58,15 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "ttnn/operations/ccl/all_gather/shared_with_host/all_gather_walk.hpp"
 
+// TEST ONLY, DO NOT UPSTREAM: TT_AG_ZONES=1 defines AG_TEST_ZONES (device-profiler zones around the init wait, the
+// main loop and the tail); TT_AG_NO_INIT=1 defines AG_TEST_NO_INIT (skip the init handshake; races across back-to-back
+// launches, diagnosis only). See all_gather_test_knobs.hpp.
+#ifdef AG_TEST_ZONES
+#define AG_TEST_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define AG_TEST_ZONE(name)
+#endif
+
 namespace ttnn::operations::ccl::all_gather_walk {
 
 // ---- the walk ----
