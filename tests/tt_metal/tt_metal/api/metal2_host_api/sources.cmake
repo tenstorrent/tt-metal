@@ -66,6 +66,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/prefetcher_pipe_slots.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/semaphore_scope.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/array_args.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/sram_arena_dispatch.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/borrowed_dfb_attach.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_run_overrides.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/kernel_run_args.cpp
