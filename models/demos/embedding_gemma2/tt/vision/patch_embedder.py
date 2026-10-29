@@ -33,7 +33,7 @@ from models.demos.embedding_gemma2.tt.vision.config import VisionConfig, vision_
 from models.demos.embedding_gemma2.tt.weights import as_weight, linear_weight
 
 # E10.1 topology (doc/prefill_towers/, bit-identical, every grid): 2 * px - 1 as one op (-0.35 % at 1 x 2560
-# on 12 x 10) and the [B, 1, S, 768] outputs in L1 (-0.24 %; both -0.62 %, burst, same-session control).
+# on 12 x 10) and the position lookups and sums in L1 (the projection output stays in DRAM, see forward).
 # EG2_VISION_PATCH_ONE_OP=0 / EG2_VISION_PATCH_L1=0 restore the E5b forms (A/B switches).
 AFFINE_ONE_OP = os.environ.get("EG2_VISION_PATCH_ONE_OP", "1") == "1"
 PATCH_L1 = os.environ.get("EG2_VISION_PATCH_L1", "1") == "1"
@@ -110,8 +110,8 @@ class VisionPatchEmbedder(LightweightModule):
 
     def forward(self, pixel_values: ttnn.Tensor, pos_x: ttnn.Tensor, pos_y: ttnn.Tensor) -> ttnn.Tensor:
         dram = ttnn.DRAM_MEMORY_CONFIG
-        # EG2_VISION_PATCH_L1=1: the [B, 1, S, 768] bf16 outputs (projection, lookups, sums) in L1 when they
-        # fit the vision rule (vision_act_memory_config), as the encoder layers' activations
+        # EG2_VISION_PATCH_L1=1: the [B, 1, S, 768] bf16 lookups and sums in L1 when they fit the vision rule
+        # (vision_act_memory_config), as the encoder layers' activations
         B, S = pixel_values.shape[0], pixel_values.shape[2]
         act = vision_act_memory_config(pixel_values.device(), B, S, self.config.hidden_size) if PATCH_L1 else dram
         if AFFINE_ONE_OP:
@@ -127,7 +127,10 @@ class VisionPatchEmbedder(LightweightModule):
             self.w_in,
             dtype=self.policy.out_ttnn_dtype,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=act,
+            # DRAM even with PATCH_L1: ttnn picks this matmul's config from its output placement too (L1
+            # output: 30 cores, 97.7 us vs 64.2 us at 1 x 2560 on 12 x 10, and a different accumulation
+            # order at 13 x 10; E10.1 Tracy)
+            memory_config=dram,
         )
         ttnn.deallocate(px1)
         ex = self.lookup(pos_x, self.table_x, act)
