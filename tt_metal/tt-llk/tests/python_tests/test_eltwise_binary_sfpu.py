@@ -513,6 +513,28 @@ def _logsigmoid_stimuli_spec():
 # =============================================================================
 
 
+def _override_src_A(src_A, src_A_override, *, repeat):
+    """Replace the generated operand buffer with an explicit one, cast to its dtype.
+
+    With ``repeat`` the override is tiled across the buffer (its length must evenly divide
+    the buffer length); without it the override must be the whole buffer.
+    """
+    override = src_A_override.to(src_A.dtype).flatten()
+    if repeat:
+        if src_A.numel() % override.numel() != 0:
+            raise ValueError(
+                "SFPU binary override length must evenly divide the buffer length "
+                f"({src_A.numel()} elements), got {override.numel()}"
+            )
+        return override.repeat(src_A.numel() // override.numel())
+    if override.numel() != src_A.numel():
+        raise ValueError(
+            f"SFPU binary override must hold the whole buffer ({src_A.numel()} "
+            f"elements), got {override.numel()}"
+        )
+    return override
+
+
 def sfpu_binary(
     formats,
     dest_acc,
@@ -625,12 +647,7 @@ def sfpu_binary(
         # The kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1), so an
         # explicit src_A fully controls inputs for edge cases; src_B stays random but unused.
         if src_A_override is not None:
-            override = src_A_override.to(src_A.dtype).flatten()
-            if src_A.numel() % override.numel() != 0:
-                raise ValueError(
-                    "SFPU binary override must contain a whole number of tile pairs"
-                )
-            src_A = override.repeat(src_A.numel() // override.numel())
+            src_A = _override_src_A(src_A, src_A_override, repeat=True)
 
         # generate_stimuli does not round-trip Bfp8_b stimuli through their pack/unpack
         # quantization, so a registry domain or an override would leave the device seeing
@@ -2576,6 +2593,8 @@ def _run_sfpu_add_top_row(
     dest_acc,
     mathop,
     *,
+    src_A_override=None,
+    twos_complement=False,
     is_perf=False,
     perf_report=None,
     run_types=None,
@@ -2590,6 +2609,11 @@ def _run_sfpu_add_top_row(
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+
+    # The kernel only consumes buffer_A (tile 0 = operand 0, tile 1 = operand 1); the
+    # override must be exactly the one [64, 32] tile pair the driver runs.
+    if src_A_override is not None:
+        src_A = _override_src_A(src_A, src_A_override, repeat=False)
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_tensor = generate_golden(
@@ -2645,6 +2669,7 @@ def _run_sfpu_add_top_row(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": formats.input_format.is_32_bit(),
@@ -2686,6 +2711,52 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
+
+
+# Both operands of the across-zero pair cycle through the same small signed range.
+_ACROSS_ZERO_SPAN = 16  # distinct values per operand
+_ACROSS_ZERO_OFFSET = _ACROSS_ZERO_SPAN // 2  # shifts 0..15 to -8..7
+# Tile 1 advances once per four lanes, so the 64 written lanes of each face hold distinct pairs.
+_ACROSS_ZERO_STRIDE = 4
+
+
+def _build_add_top_row_int32_across_zero_src():
+    """One Int32 tile pair of small values of either sign: tile 0 cycles -8..7 per lane,
+    tile 1 cycles the same range once per four lanes, so each face's 64 written lanes hold
+    distinct (a, b) pairs. The default sweep draws Int32 from [0, 2**30), where
+    sign-magnitude and two's complement are the same bits.
+    """
+    period = _ACROSS_ZERO_SPAN * _ACROSS_ZERO_STRIDE
+    pairs = [
+        (
+            (i % _ACROSS_ZERO_SPAN) - _ACROSS_ZERO_OFFSET,
+            ((i // _ACROSS_ZERO_STRIDE) % _ACROSS_ZERO_SPAN) - _ACROSS_ZERO_OFFSET,
+        )
+        for i in range(period)
+    ]
+    return _build_paired_tile_override(pairs, torch.int32)
+
+
+# mathop and dest_acc stay parametrize axes with one value each: --op selection reads the
+# MathOperation from the variant's parameters, and the variant id names the Dest width.
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuAddTopRow],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_add_top_row_int32_across_zero(formats, dest_acc, mathop):
+    """Negative and mixed-sign Int32 operands, which the positive-only sweep never reaches.
+
+    A native Int32 tile reaches Dst as raw two's complement, so a kernel that applied the
+    sign-magnitude conversion on load/store fails here on 84 of the 128 written lanes.
+    """
+    _run_sfpu_add_top_row(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_add_top_row_int32_across_zero_src(),
+        twos_complement=True,
+    )
 
 
 # =============================================================================
