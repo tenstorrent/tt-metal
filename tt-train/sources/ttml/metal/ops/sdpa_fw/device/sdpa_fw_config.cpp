@@ -255,8 +255,10 @@ SDPAForwardChunks resolve_chunks(
     // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
     // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
     // while they do not fit L1 or would leave cores idle: causal work goes out as light/heavy chunk pairs
-    // once there is a pair per core (main's rule), so a pair per core is the floor there (main's one-row
-    // chunks on every core), an item per core otherwise.
+    // once there is a pair per core (main's rule), so on a causal shape that can pair (an even tile count,
+    // which main always paired) a pair per core is the floor (main's one-row chunks on every core), an item
+    // per core otherwise. An odd chunk count has no pairs, so it shrinks too: three four-row chunks of a
+    // twelve-tile sequence would go out contiguously and unbalanced where main paired.
     constexpr uint32_t kDefaultSqChunkT = 4U;
     const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
     SDPAForwardChunks chunks{
@@ -265,9 +267,9 @@ SDPAForwardChunks resolve_chunks(
         .heads_per_item = std::max(user.heads_per_item, 1U)};
     if (chunks.Sq_chunk_t == 0U) {
         chunks.Sq_chunk_t = kDefaultSqChunkT;
+        const bool can_pair = shape.mask_type == AttentionMaskType::Causal && shape.St % 2U == 0U;
         const auto units_for_balance = [&]() {
-            const uint32_t pairs = num_causal_pairs(shape, chunks);
-            return pairs > 0U ? pairs : num_work_items(shape, chunks);
+            return can_pair ? num_causal_pairs(shape, chunks) : num_work_items(shape, chunks);
         };
         while (chunks.Sq_chunk_t > 1U &&
                (shape.St % chunks.Sq_chunk_t != 0U || units_for_balance() < num_available_cores)) {
