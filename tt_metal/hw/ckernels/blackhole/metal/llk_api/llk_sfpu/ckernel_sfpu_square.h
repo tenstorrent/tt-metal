@@ -12,10 +12,6 @@
 namespace ckernel::sfpu {
 
 inline void square_init() {
-    // The paired store walks dest through ADDR_MOD_6, which advances by the two rows
-    // the loop just wrote (one sfpi row is two dest counter steps), so the loop body
-    // needs no separate increment.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     sfpi::vConstIntPrgm0 = 1;
@@ -47,6 +43,8 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne_for_16b_store(sfpi::vFloat in) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_square() {
+    // The paired store advances dest through ADDR_MOD_6 past the two rows just written.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
     static_assert(ITERATIONS % 2 == 0, "calculate_square() processes dest rows in pairs.");
 
 #pragma GCC unroll 4
@@ -62,6 +60,9 @@ inline void calculate_square() {
         sfpi::dst_reg[0] = r0;
         sfpi::dst_reg[1].mode(ADDR_MOD_6) = r1;
     }
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 }  // namespace ckernel::sfpu
