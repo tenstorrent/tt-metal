@@ -18,6 +18,15 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
   at +0 with a 64 B exponent section, stream B at +32 with a 32 B section, both putting the values at +64. The writer
   only NoC-writes the 32 records (and the rounded tiles); no data-movement RISC touches the bytes.
 - Limit: a 16-value group whose max is below 2^-124 comes out 0 (the host rule would keep it).
+- Limit: the ProgramDescriptor is rebuilt in Python on every call (~1.3 ms host on a 32-chip mesh); not cached.
+
+## Measured
+- One p150b: records byte-exact vs the host rule (tests/unit). 2x2 deepseek_v41_flash_d_p rung `last` (chunk 2048):
+  0.04 ms a chunk vs 0.006-0.011 ms for the bf16 slice_write it replaces.
+- Galaxy 8x4, deepseek_v41_flash_d_p FIX.8 (chunk 5120, 4 KV sources): device 0.209 ms a chunk (4 calls) vs 0.066 ms
+  for the bf16 slice_write; HOST 1.33 ms a call (5.3 ms a chunk, of which 1.4 ms the Python `program()` descriptor
+  build, the rest generic_op's dispatch of a fresh descriptor) vs 0.12 ms for slice_write. The model is host-bound, so
+  this is the op's real cost there (DS41-135).
 
 ## Consider it instead of
 - `ttnn.typecast(x, ttnn.bfloat4_b)` / any op with a bfloat4_b output where round-to-nearest matters (they truncate in
