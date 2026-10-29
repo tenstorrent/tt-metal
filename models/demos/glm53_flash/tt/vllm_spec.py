@@ -18,7 +18,7 @@ The served loop (the harness loop of ``tt/spec_decode.py`` spread over the plugi
 
 Knobs: ``GLM53_VLLM_SPEC=1`` enables the path (the MTP drafter is built, the P / V / C / D / D0 graphs are warmed and
 captured at boot; off = today's plain adapter, bit for bit); ``GLM53_VLLM_SPEC_K`` (default 3) the draft length
-ceiling, capped by ``B (K + 1) <= 31`` per mesh row (``VERIFY_ROWS_CAP``: below the full tile); ``GLM53_SPEC_COMMIT`` the
+ceiling, capped by ``B (K + 1) <= 32`` per mesh row (``VERIFY_ROWS_CAP``); ``GLM53_SPEC_COMMIT`` the
 KDA commit mode (the adapter's default is ``fused``, the measured 8x4 point; the model's own default stays
 ``blend``).
 """
@@ -41,19 +41,21 @@ SPEC_K_ENV = "GLM53_VLLM_SPEC_K"
 # num_speculative_tokens is the ceiling. GLM53_SPEC_K_BY_ROWS="B:K,B:K" replaces the table, "off" leaves the catalog's K.
 K_BY_ROWS_ENV = "GLM53_SPEC_K_BY_ROWS"
 # the 2026-10-29 sweep (doc/mesh/spec_k_by_batch.md): the acceptance plateaus near 3 drafts whatever K, so the shortest K
-# that keeps it wins (1-4 per row: 3); every point on the full 32-row verify tile (B (K + 1) = 32: B2_K15, B4_K7, B8_K3,
-# B16_K1) breaks losslessness on mesh row 5 at token 4 (VERIFY_ROWS_CAP keeps the policy below it), and at 8 per row the
-# 24-row verify of K=2 is a padded tile that costs more than K=1's 16 rows (13.3 vs 19.8 tok/s per user), so 8 per row
-# draft 1 and 16 per row decode plainly until the full-tile defect is fixed
+# that keeps it wins (1-4 per row: 3); at 8 per row K=1 (16 verify rows, 19.8 tok/s per user) beats K=2 (a padded
+# 24-row verify, 13.3) and K=3 (the full tile through the compact glue, 14.4); 16 per row stays plain until K=1 (the
+# full tile) is measured through the compact glue
 DEFAULT_K_BY_ROWS: tuple[tuple[int, int], ...] = ((1, 3), (2, 3), (4, 3), (8, 1), (16, 0))
 DEFAULT_SPEC_K = 3  # the measured sweet spot on the 8x4 (24.0 tok/s per user at 32 users, K=3, fused commit)
 SPEC_COMMIT_ENV = "GLM53_SPEC_COMMIT"
 DEFAULT_SERVING_COMMIT = "fused"
 SPEC_COMMIT_MODES = ("blend", "gated", "fused")  # = spec_decode.SPEC_COMMIT_MODES (ttnn-free copy)
 MAX_VERIFY_ROWS = 32  # = spec_decode.MAX_VERIFY_ROWS: B (K + 1) candidate rows fit one tile row per mesh row
-# the policy stays BELOW the full tile: at B (K + 1) = 32 every user of mesh row 5 diverges from plain greedy at token 4
-# (2026-10-29 sweep B2_K15 / B4_K7 / B8_K3, the same signature; an open verify defect), so the cap is 31 rows
-VERIFY_ROWS_CAP = MAX_VERIFY_ROWS - 1
+# the full tile is allowed again: its 2026-10-29 losslessness break (every user of mesh row 5 diverging at token 4 for
+# B2_K15 / B4_K7 / B8_K3 / B16_K1) was the MoE decode glue sending the 32-row verify through the padded gather +
+# reduce-scatter (per-row drift); the compact gather + all-reduce now covers T = 32 (tt/moe.py decode_glue_modes) and
+# the 32-row verify is bit-identical across the rows (spec_fulltile_glue_B8_K3). The compact path costs more at 32 rows
+# (69 vs 50 ms per iteration), which the measured table below reflects.
+VERIFY_ROWS_CAP = MAX_VERIFY_ROWS
 ACCEPT_MODE_ARGMAX_IDS = "argmax_ids"
 PLACEHOLDER_TOKEN_ID = -1  # the plugin's padded-column / padded-tail marker (vllm_tt_plugin.spec_decode)
 MTP_LAYER = 45
@@ -217,6 +219,13 @@ def resolve_spec_decision(
     except ValueError as exc:
         return SpecDecision(False, users_per_row=users_per_row, reason=str(exc), supported_k=supported)
     if table_k is not None:
+        if table_k == 0:  # the table's "plain decode" entry (16 users per row today)
+            return SpecDecision(
+                False,
+                users_per_row=users_per_row,
+                reason=f"the K-by-rows table decodes {users_per_row} users per row plainly ({K_BY_ROWS_ENV} overrides it)",
+                supported_k=supported,
+            )
         effective_k = max(1, min(effective_k, table_k))  # the batch's measured best, under the catalog's ceiling
     return SpecDecision(
         True,

@@ -192,18 +192,21 @@ def hybrid_combine_mode(env=None) -> str:
     return mode
 
 
-HYBRID_GLUE_FULL_TILE_ENV = "GLM53_HYBRID_GLUE_FULL_TILE"  # 1 = the compact gather + its combine at T = 32 rows too
+HYBRID_GLUE_FULL_TILE_ENV = (
+    "GLM53_HYBRID_GLUE_FULL_TILE"  # 0 = the padded gather + reduce-scatter at T = 32 rows (per-row drift)
+)
 
 
 def decode_glue_modes(rows: int, T: int, *, has_idx: bool, in_prefill: bool, env=None) -> tuple[bool, str]:
     """(compact gather?, combine mode) of one ``TtRoutedExperts.forward`` call: the knobs apply to decode shapes
-    only -- a multi-row mesh, T < 32 users per row (T = 32 too under ``GLM53_HYBRID_GLUE_FULL_TILE=1``: the 32-row
-    speculative verify, whose padded gather + reduce-scatter path drifted per row on the 2026-10-29 sweep while the
-    16-row verify through the compact + all-reduce path was row-identical), no top-k lists (``idx``: the dispatch /
-    regions prefill paths) and not inside ``GLMMesh.prefill_scope``; everything else keeps today's padded gather and
-    reduce-scatter (``"rs"``). A pure function of the env and the static shape (trace-safe)."""
+    only -- a multi-row mesh, T <= 32 users per row (the full tile since 2026-10-29: the 32-row speculative verify
+    through the padded gather + reduce-scatter drifted per mesh row by 0.3-0.75 logits at 45 layers and broke
+    losslessness on one row, while the compact gather + all-reduce path is bit-identical across the rows;
+    ``GLM53_HYBRID_GLUE_FULL_TILE=0`` restores the old T < 32 rule), no top-k lists (``idx``: the dispatch / regions
+    prefill paths) and not inside ``GLMMesh.prefill_scope``; everything else keeps the padded gather and reduce-scatter
+    (``"rs"``). A pure function of the env and the static shape (trace-safe)."""
     env_ = os.environ if env is None else env
-    t_max = TILE + 1 if env_.get(HYBRID_GLUE_FULL_TILE_ENV, "0") == "1" else TILE
+    t_max = TILE if env_.get(HYBRID_GLUE_FULL_TILE_ENV, "1") == "0" else TILE + 1
     decode_shape = rows > 1 and not has_idx and T < t_max and not in_prefill
     if not decode_shape:
         return False, "rs"
