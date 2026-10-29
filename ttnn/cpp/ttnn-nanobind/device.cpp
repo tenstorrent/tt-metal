@@ -325,6 +325,8 @@ void device_module(nb::module_& m_device) {
         nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
+        Submeshes created from the device that are still open are closed with it; with fast dispatch, call
+        quiesce_devices() first if one of them ran work.
 
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
@@ -342,6 +344,8 @@ void device_module(nb::module_& m_device) {
         nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
+        Submeshes created from the devices that are still open are closed with them; with fast dispatch, call
+        quiesce_devices() first if one of them ran work.
 
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
