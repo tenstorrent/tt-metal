@@ -96,7 +96,7 @@ GDN_CHUNK = os.environ.get("RESIDENT_GDN_CHUNK", "1") == "1"
 # (attention of a verify of R > 2 rows in packed passes of several rows, attn_common.hpp; 0: a pass per row)
 ATTN_PACKED = os.environ.get("RESIDENT_ATTN_PACKED", "1") == "1"
 HUB_LINKS = int(os.environ.get("RESIDENT_HUB_LINKS", "2"))  # fabric links per neighbour the hubs' all-reduce uses
-HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "1"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
+HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "2"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
 TOK_PREV = 14  # token state word: the previous verify step's accepted drafts (chunked GDN; none: 0xFFFFFFFF)
 TOK_X0 = 64
 TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
