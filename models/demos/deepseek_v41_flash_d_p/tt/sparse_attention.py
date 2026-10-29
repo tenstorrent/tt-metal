@@ -312,7 +312,7 @@ class TtSparseAttention(TtWindowAttention):
         source) layers: the gathered compressed history and the index list are taken from it when an earlier layer
         of the chunk made them for the same source, start and cache version."""
         g = self.geo
-        s = q_resid.shape[-2] * g.sp
+        s = self.chunk_of(q_resid.shape[-2])
         assert s == g.chunk, f"chunk of {s} rows; the window tables were built for {g.chunk}"
         end = start + s if end is None else int(end)
         if self.static:
