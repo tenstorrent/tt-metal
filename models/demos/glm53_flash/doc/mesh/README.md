@@ -1540,3 +1540,12 @@ plans match HF), and `tt/ttkda` now carries the A0 row-local plumbing, forwarded
   traces, the seal) and case (a) green; its case (b) "failure" was a reference top-2 gap of exactly 0.000 at step 1.
 - Next: the 45-layer served run with 32 distinct requests (`served_waves_8x4`: the 1 M profile, `max-num-seqs=32`,
   `GLM53_VLLM_ROWS_INDEPENDENT=1`, stages a-d with the bench at ISL 128 x 32 users), then the catalog (A7).
+
+### 2026-10-29 05:53: the 32-user row on the H1/H2 defaults
+
+`e2e_8x4_B4_h1h2_default` (45 layers, 4 users per row, wt_frozen123 = the flipped defaults): traced decode step 48.36 ms =
+20.7 tok/s per user, 662 tok/s aggregate (61.5 ms / 16.3 tok/s on the 2026-10-28 defaults), TTFT 120 ms traced (eager
+warm 962 ms), first token = HF: the README's 32-user row. The stage's chain test then failed after its measurement at
+the harness's second `capture_prefill` ("KDA scalar(0) would allocate a device constant after a trace capture"): the
+harness captures the decode trace before the prefill traces, serving the other way round, and the traced prefill's
+constant start was first allocated at that capture; `TtKDA` now allocates it at construction.

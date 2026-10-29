@@ -306,6 +306,10 @@ class TtKDA(LightweightModule):
         self._const_cache: dict = {}
         self.chrono_scalar(0, "start")  # allocate the mesh's chronology pair before any trace capture
         self.chrono_scalar(0, "end")
+        # the traced prefill's constant start (functional_decoder._prefill_forward_traced): allocated here so a
+        # harness that captures the decode trace before the prefill traces (tests/test_mesh_model.py) never allocates
+        # it after a capture (the e2e_8x4_B4_h1h2_default run, 2026-10-29); serving captures the prefill traces first
+        self.scalar(0)
         if fused_decode is None:
             self.fused_decode = KDA_FUSED_DEFAULT
         elif isinstance(fused_decode, bool):
