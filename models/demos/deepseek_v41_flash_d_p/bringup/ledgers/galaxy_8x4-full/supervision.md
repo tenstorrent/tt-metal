@@ -842,3 +842,19 @@ NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 969787
   until P.10 is decided (pushed after each of P.8 / P.9 / P.10); the 2x2 then rebases and integrates behind switches
   (WINDOW_KV_FORMAT, INDEX_K_FORMAT, INDEX_Q_FORMAT), pushing to dnijemcevic/model_bringup_lowbit; the Galaxy runs the
   full-size gates (as FIX.8). Ids: 2x2 DS41-150..169 / F220..F229 (F223 used); Galaxy DS41-130..149 / F207..F219.
+
+## 2026-10-29 08:15 MILESTONE + HAND-OFF: fresh 0k-512k profile CUR on d1571ee35ac (FIX.8 + P.6 + FIX.9)
+Page (3 series: before / night / now): https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc (v2). Results:
+overseer_tools/profile_cur_20261029/ (+ /scratch/dnijemcevic/posprof/results/CUR*). 4-bit KV explainer:
+https://claude.ai/artifact/Egi6v1myQkWQvFWvQRtJ3k .
+| context | device night | device now | wall night | wall now |
+| 0       | 220.8 | 217.0 | 432.2 | 412.2 |
+| 51.2k   | 229.1 | 230.3 | 463.7 | 423.6 |
+| 102.4k  | 237.4 | 236.1 | 464.8 | 420.9 |
+| 204.8k  | 248.2 | 248.6 | 469.7 | 438.3 |
+| 512k    | 288.2 | 281.5 | 464.0 | 422.4 |
+Op calls a chunk 2117 -> 2149 (FIX.9 cast +40, 4-bit read -8). Wall vs the first torus run: -33 % (0k), -35 % (512k).
+NOW: orchestrator --until P.5 running P.7 (attempt 2; attempt 1 was cut off at 02:45). Queue: P.7 -> P.8 C -> P.9 B
+-> P.10 A (conditional on P.9) -> P.4 -> P.5 (re-checked). The 2x2 does window KV / index keys / index query phase 1
+(forks + tests) on dnijemcevic/model_bringup_lowbit. Perf bars stay chunk_wall_ms < 434 / device <= 230 (not-worse
+guards around the CUR walls ~412-438); the A/B decides.
