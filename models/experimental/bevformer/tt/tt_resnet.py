@@ -726,7 +726,6 @@ class TTBottleneck:
             dram_conv_slices=dram_conv_slices,
             input_dtype=input_dtype,
             input_layout=input_layout,
-            output_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
         )
 
         if not self.with_dcn:
@@ -800,8 +799,8 @@ class TTBottleneck:
         x, _, _ = self.conv1(x_identity, subsampled=self.shared_subsample)
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        if self.row_major_conv2 and x.layout != ttnn.ROW_MAJOR_LAYOUT:
-            # A 1x1 conv1 runs as ttnn.linear, which emits TILE.
+        if self.row_major_conv2:
+            # conv1, a 1x1 conv in DRAM along with conv2, runs as ttnn.linear, which emits TILE.
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x, _, _ = self.conv2(x)
         # Before conv3, whose output may stay in L1 for the add and would crowd the downsample's.
