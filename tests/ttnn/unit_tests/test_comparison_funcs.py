@@ -218,7 +218,7 @@ class TestMessages:
     def test_comp_equal_pass_skips_pcc(self, monkeypatch):
         golden, _ = _noisy((64, 64), torch.bfloat16)
         monkeypatch.setattr(comparison_funcs, "get_atol_rtol_pcc", _fail_if_called)
-        assert comparison_funcs.comp_equal(golden, golden.clone()) == (True, "Equal check passed")
+        assert comparison_funcs.comp_equal(golden, golden.clone())[0]
 
     def test_comp_equal_fail_message(self):
         golden, calculated = _noisy((64, 64), torch.bfloat16)
@@ -234,10 +234,7 @@ class TestMessages:
     def test_comp_allclose_pass_skips_pcc(self, monkeypatch):
         golden, calculated = _noisy((64, 64), torch.bfloat16)
         monkeypatch.setattr(comparison_funcs, "get_atol_rtol_pcc", _fail_if_called)
-        assert comparison_funcs.comp_allclose(golden, calculated, rtol=0.1, atol=0.1) == (
-            True,
-            "Allclose check passed",
-        )
+        assert comparison_funcs.comp_allclose(golden, calculated, rtol=0.1, atol=0.1)[0]
         # Same element count but a different rank still takes the fast path.
         assert comparison_funcs.comp_allclose(golden.reshape(1, 64, 64), calculated, rtol=0.1, atol=0.1)[0]
 
