@@ -693,6 +693,80 @@ tasks:
     gate_tasks:
     - L.s56320
     - K.1
+- id: FIX.8
+  title: 'CKV_FORMAT=bfp4_rows: the compressed KV attention table in 4 bits (bfloat4_b rows, 288 B)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=M.1 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s10240 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.last BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s56320 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.smoke scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_smoke.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      smoke_device_ok: == 1
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-28: the 4-bit compressed KV is DEVELOPED ON THE 2x2 (packer test, forks, single-card tests, the
+      2x2 ladder) and pushed; this job INTEGRATES and gates it at full size on the Galaxy: pull the 2x2''s CKV_FORMAT work,
+      make it run on the 8x4 (sizes / link counts / payloads derived from the mesh, never the 2x2''s literals), set CKV_FORMAT=bfp4_rows
+      as the default once this gate passes, and report what the 2x2 could not measure (DRAM per chip of the replicated attention
+      tables at the deploy context, sparse_sdpa kernel time bf16 vs bfp4 rows at chunk 5120, warm wall and device time per
+      chunk). The original brief follows. OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses):
+      the compressed KV (reference: fp4 e2m1 + e4m3 scale per 16, RoPE before quantization; ds41_ref.py:797-799) is stored
+      in 4 bits instead of bf16. Design and evidence: bringup/CKV_4BIT_DERISK.md (option B: row-packed bfloat4_b, 288 B a
+      row, attention output 1-11 % above the reference''s own fp4; truncation would be 4-5x worse, so the write rounds to
+      nearest even: on the SFPU before the pack if the packer truncates - the overseer''s packer test result is in the note).
+      Scope, owner 2026-10-28: (1) ONLY the attention table (AttnTable, tt/compressor.py:153, read by sparse_sdpa) goes to
+      bfp4 rows; the SERVED records (TtServedRows, tt/compressor.py:264, shipped by tt-d-gen) stay bf16 rows holding the bfp4-rounded
+      values (exact), so the serving contract and tt-d-gen are unchanged; load_served / load_host repack the bf16 records
+      into the bfp4 table (exact: they are on the bfp4 grid). (2) Write: a fork op (ttnn.bringup, INDEX.md first) packing
+      ckv bf16 TILE -> bfloat4_b -> 288 B row records. (3) Read: a sparse_sdpa fork option kv_format=ROW_BFP4 that gathers
+      288 B rows and shuffles 32 rows into 16 bfloat4_b tiles for the matmuls (no tilize, no scale multiply); the window rows
+      stay a separate bf16 tensor (two KV tensors; keep SparseIndexTables'' window chunk and top-k chunks apart for starts
+      < 128). (4) Behind the setting CKV_FORMAT=bf16|bfp4_rows in tt/settings.py, default bfp4_rows once the gates pass; bf16
+      = today''s stock path, kept. Start from the CPU codec in tests/tools (tt/ckv_codec.py, tests/test_ckv_codec.py) and
+      the L1 single-card tests 0-5 of the report before any full-model run; work in small loops (single card, the 3-layer
+      repro behind CKV_FORMAT) and run the ladder / K.1 only as the gate. Report: per-step accuracy vs the bf16 path, sparse_sdpa
+      kernel time bf16 vs bfp4 rows, the warm wall and device time per chunk, DRAM per chip of the attention tables.'
+    gate_tasks:
+    - W.1
+    - M.1
+    - L.s10240
+    - L.last
+    - L.s56320
+    - L.smoke
+    - K.1
 - id: P.6
   title: 'ENGRAM_ASYNC: engram rows looked up and uploaded off the critical path (layer 14 behind layers 1-13)'
   step: perf
@@ -701,6 +775,7 @@ tasks:
   deps:
   - FIX.7
   - FIX.10
+  - FIX.8
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:

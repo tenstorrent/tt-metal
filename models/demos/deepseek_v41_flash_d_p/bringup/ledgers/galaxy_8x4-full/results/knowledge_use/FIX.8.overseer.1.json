@@ -1,0 +1,67 @@
+{
+ "used": [
+  {
+   "id": "DS41-101",
+   "how": "measured the replicated attention table as the DRAM that matters at 1M: bf16 2570.5 -> bfp4_rows 817.4 MiB a chip from AttnTable's allocated shapes (KV sources 2/8/14 r2, 20 r1)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-99",
+   "how": "the chunk is host-bound, so the wall was attributed with a host cProfile (ckv_bfp4 +5.3 ms host a chunk) rather than read from the noisy wall medians; became DS41-135",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-81",
+   "how": "checked that bfp4_rows skips the start < 128 compaction (sparse_attention.py: ROW_BFP4 takes the window and top-k sentinel tails apart) and measured the removed ttnn.gather (0.18 ms a chunk)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the sdpa fork README had no ROW_BFP4 / kv_window entry after the 2x2 added it (only the CHANGELOG did): added",
+  "a Python ProgramDescriptor op (generic_op) rebuilt every call costs ~1.3 ms host on a 32-chip mesh: now DS41-135"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.8",
+   "answer": "done",
+   "evidence": "The merged 2x2 code (bf6c8b497a6, ttnn rebuilt) ran unchanged on the 8x4: no box literals (ckv_bfp4 grid from the device; ROW_BFP4 has no grid or chip constants; table sizes from TtServedRows; no CCL involved). CKV_FORMAT default stays bfp4_rows. Gate FIX.8 --check: all 11 units PASS (L.s56320 final hidden 0.1961 / 0.2586 vs bf16 0.1889, top5 1.0; compress_kv state 0.116-0.197 within 0.20-0.33; K.1 contract 0 failed, producer compress PCC 0.9767 / 0.937; smoke and runner smoke Paris). Reported: table DRAM a chip at 1,044,480 tokens 2570.5 -> 817.4 MiB; sparse_sdpa at chunk 5120 (64 x 160 q a chip) +2.5 % at position 0 (13.60 -> 13.94 ms a chunk), +4.2 % at 512k (16.70 -> 17.39); device a chunk 216.44 -> 217.66 / 283.77 -> 284.25 ms; warm wall medians 419.7 -> 441.6 and 412.5 -> 426.3 (position 0), 451.3 -> 472.0 (512k), of which +5.3 ms is attributable (ckv_bfp4 host, DS41-135). BREADCRUMBS FIX.8."
+  },
+  {
+   "id": "OV-18",
+   "answer": "done",
+   "evidence": "Did not redo the 2x2's work: no change to the forks' code or the model's code; integrated, gated (all units PASS) and measured what the 2x2 could not: DRAM per chip at the deploy context, sparse_sdpa bf16 vs bfp4_rows at chunk 5120 / 160 q a chip, warm wall and device time per chunk with DS41_ENGRAM_TABLE=resident (BREADCRUMBS FIX.8)."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "No padding or duplication added. The 320 B record's second exponent copy is the 2x2's design (the reader's 64 B-congruent NoC read), not a workaround added here."
+  }
+ ],
+ "cited_only": [
+  "DS41-135"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.8",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T01:00:33",
+  "head": "bf6c8b497a6",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.8.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.8_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.8_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.8.overseer.1.json",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/README.md",
+   "ttnn/ttnn/bringup/sdpa/README.md"
+  ]
+ }
+}

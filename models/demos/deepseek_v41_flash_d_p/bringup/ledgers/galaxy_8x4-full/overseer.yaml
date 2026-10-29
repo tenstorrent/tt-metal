@@ -176,6 +176,19 @@ notes:
   text: 'The overseer stopped attempt 1 (perf): Held by the owner: P.4/P.5 wait until the precision fixes (KV caches and
     GEMM activations at the reference''s width) land, then they are re-measured on that model. The overseer''s resume dropped
     its pause (resume clears PAUSE); not a fault of this attempt.'
+- id: OV-18
+  tasks:
+  - FIX.8
+  status: open
+  t: '2026-10-28T22:11:04'
+  text: 'The 2x2''s work is ALREADY MERGED (bf6c8b497a6 = origin/dnijemcevic/model_bringup_bfp4kv @ 9697878dfb0) and ttnn
+    is rebuilt with it (ttnn.bringup.ckv_bfp4, sparse_sdpa ROW_BFP4 + kv_window, F223); CKV_FORMAT defaults to bfp4_rows.
+    Your job: make it run on the 8x4 at full size and pass this gate; do not redo the 2x2''s work. Facts from the 2x2 (commit
+    messages bf9a0798730, be134102377, 2c866762cc0, 9697878dfb0; ckv_derisk/CKV_4BIT_DERISK.md sections 8-9): the device
+    packer truncates bfp4 (the op rounds on the SFPU first), row record 320 B, sparse_sdpa ROW_BFP4 +3.5-5 % kernel time.
+    Report what the 2x2 could not measure: DRAM per chip of the attention tables at the deploy context, sparse_sdpa kernel
+    time bf16 vs bfp4_rows at chunk 5120 / 8x4 query counts, warm wall and device time per chunk (with DS41_ENGRAM_TABLE=resident
+    for the wall).'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -341,7 +354,7 @@ fixes:
   - L.s56320
   - L.smoke
   - K.1
-  status: held
+  status: placed
   t: '2026-10-28T18:17:08'
   text: 'OWNER 2026-10-28: the 4-bit compressed KV is DEVELOPED ON THE 2x2 (packer test, forks, single-card tests, the 2x2
     ladder) and pushed; this job INTEGRATES and gates it at full size on the Galaxy: pull the 2x2''s CKV_FORMAT work, make
@@ -369,6 +382,8 @@ fixes:
   paths:
   - models/demos/deepseek_v41_flash_d_p
   - ttnn/ttnn/bringup
+  released: '2026-10-28T22:11:04'
+  placed: '2026-10-28T22:11:05'
 - id: FIX.9
   title: 'DS41-132: the shared expert''s x / h as bfp8 inside the block MoE''s fused head (GEMM_INPUTS reaches MOE_HEAD=fused)'
   gate:
@@ -402,7 +417,7 @@ fixes:
   gate:
   - L.s56320
   - K.1
-  status: queued
+  status: placed
   t: '2026-10-28T19:29:49'
   text: 'OWNER 2026-10-28 (the engram tables in host RAM are the owner''s choice for the Galaxy; the engram code is the
     Galaxy''s for this and P.6). Evidence: K.1 runner smoke with the default ENGRAM_TABLE=resident (the runner, runner_case.py,
@@ -422,6 +437,7 @@ fixes:
     the spec wording with the owner; do not edit the spec.'
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-28T19:29:59'
 classified:
   L.smoke:
     kind: framework

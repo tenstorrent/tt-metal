@@ -8,6 +8,9 @@ Every callable above is bound; the program config is the shared `ttnn.SDPAProgra
 - `sparse_sdpa`: opt-in `high_precision` (Float32 running output / row-sum / 1/sum, exact softmax exp; also with
   `attention_sink`), `fp32_output`, `fp32_scores` (Float32 scores and probabilities, TF32 round-to-nearest in DEST,
   float32 q), `bf16_probs` (Float32 running max, probabilities rounded to bf16 before P@V: DeepSeek sparse_attn precision).
+- `sparse_sdpa`: opt-in `kv_format=SparseKVFormat.ROW_BFP4` + `kv_window=`: K / V from 320 B bfloat4_b row records
+  (`ttnn.bringup.ckv_bfp4`) gathered by NoC reads and turned into bfloat4_b tiles by the unpacker; the first k_chunk
+  (the window) from a separate bf16 tensor. Realistic for a cache the reference stores in 4 bits.
 - `ring_mla` (latent V) runs at `fp32_dest_acc_en=True` on the streaming path (the source refuses it). Host only.
 - `ring_mla` / `ring_joint_scaled_dot_product_attention`: host `kv_actual_isl=0` with per-device Q.seq == K.seq
   (non-chunked causal) runs the full-prefill path (the source raises TT_FATAL).
@@ -38,7 +41,11 @@ Realistic (use by default):
   attention_sink=None, ...)`: the stock arguments; with the precision options off the program is the source's.
 - `ring_mla(..., kv_actual_isl=0)` on a non-chunked causal input accepted (fork bug fix, no new argument).
 - `SparseKVFormat`: `BF16`, `FP8_E4M3`, `SCALED_FP8` (the source enum, re-bound under `ttnn.bringup`; pass this one to
-  `ttnn.bringup.sparse_sdpa`).
+  `ttnn.bringup.sparse_sdpa`), plus the fork's `ROW_BFP4`.
+- `sparse_sdpa(q, kv, indices, v_dim, kv_format=SparseKVFormat.ROW_BFP4, kv_window=w, ...)` (fork, opt-in): kv
+  `[B, 1, T, 320]` uint8 row records, kv_window `[1, 1, Tw, 512]` bf16 DRAM interleaved ROW_MAJOR; the index row is
+  `[window k_chunk | top-k]`, each part with its own sentinel tail (no compaction). Needs K_DIM 512, a bf16 q,
+  TOPK > k_chunk_size, no block_cyclic. kv_window is given exactly with ROW_BFP4.
 
 Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - `sparse_sdpa(...)` plus:
@@ -72,6 +79,11 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   17.9 vs 25.9 ms (`models/demos/xing40_a4b_d_p/bringup/known_issues.md`, XING-3).
 - `ring_mla` single-chunk `kv_actual_isl=0`: rel 0.018 / worst row 0.031 at fp32 DEST, 0.023 / 0.058 at bf16 DEST
   (CHANGELOG.md).
+- `ROW_BFP4`, one p150b (H 64, 640 indices): 160 q 341 -> 353 us (+3.5 %), 512 q 1182 -> 1245 us (+5 %) vs BF16
+  (CHANGELOG.md). In deepseek_v41_flash_d_p on the Galaxy 8x4 (FIX.8, chunk 5120, 64 heads x 160 queries a chip, 38
+  compressed layers, real-time profiler, same session): 0.351 -> 0.360 ms a call at position 0 (+2.6 %), 0.432 ->
+  0.451 ms at 512k (+4.2 %); the bf16 start < 128 compaction (ttnn.gather, 0.18 ms a chunk) is gone. Table DRAM a chip
+  at 1,044,480 tokens: 2570.5 -> 817.4 MiB (BREADCRUMBS FIX.8).
 - Box: not stated per number in the CHANGELOG except the Xing tests (4x2 LoudBox, 8x p150b); `tests/source.yaml`
   records 4x Blackhole p150b.
 
@@ -111,7 +123,9 @@ Tests: `tests/test_sdpa.py` (model cases, `tests/cases.py`), `tests/unit/test_sd
   C.dsa_moe.attention, O.1.
 - xing40_a4b_d_p: `tt/attention.py`, `ring_mla` at HiFi2 + fp32 DEST (`XING_MLA_SDPA_FIDELITY`, default HiFi2; `XING_MLA_SDPA=source` keeps the source op at bf16 DEST);
   C.dense.attention, X.3, O.1.
-- deepseek_v41_flash_d_p: none since FIX.8 (2026-10-21; the model runs stock ttnn.transformer.sparse_sdpa, the
+- deepseek_v41_flash_d_p: sparse_sdpa `ROW_BFP4` + `kv_window` (`tt/attention.py` `_sdpa`, the compressed layers'
+  attention; `CKV_FORMAT=bf16` keeps stock ttnn.transformer.sparse_sdpa); FIX.8 (2026-10-28, 2x2 and Galaxy 8x4).
+  Earlier: none since FIX.8 (2026-10-21; the model runs stock ttnn.transformer.sparse_sdpa, the
   settings `DS41_WINDOW_SDPA*` are deleted). Before: `tt/attention.py`, `tt/sparse_attention.py`, sparse_sdpa
   `high_precision` + sink + `fp32_scores` + `bf16_probs`; C.swa.attention, S.swa.06, S.swa.11, FIX.2. The options
   `fp32_output` / `fp32_scores` / `bf16_probs` have no user now.

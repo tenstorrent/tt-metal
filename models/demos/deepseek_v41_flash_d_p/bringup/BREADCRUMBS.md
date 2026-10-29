@@ -3664,3 +3664,50 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.10 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; old behaviour:
   DS41_ENGRAM_HUGEPAGES=on DS41_ENGRAM_BUILD=load (the thread guard has no switch: it only restores torch's count).
+
+## FIX.8 (overseer fix, 2026-10-28): CKV_FORMAT=bfp4_rows integrated and gated at full size on the Galaxy 8x4
+- What: no code change was needed. The 2x2's work (merge bf6c8b497a6 = dnijemcevic/model_bringup_bfp4kv @ 9697878dfb0;
+  ttnn rebuilt with it at 22:10, `_ttnn.so` has ROW_BFP4) runs as merged on the 8x4. CKV_FORMAT defaults to bfp4_rows
+  (tt/settings.py; bf16 = the old stock path). Checked for box literals: ckv_bfp4 takes its core grid from the device
+  (`_cores`: bands of 32 rows over compute_with_storage_grid_size, 80 bands at r 2 / 160 at r 1 for chunk 5120); the
+  sparse_sdpa ROW_BFP4 program has no grid or chip constants; AttnTable sizes come from TtServedRows (`max_seq / r`
+  rows, `WINDOW + geo.chunk` window rows); no CCL or fabric payload is involved (the table is replicated, every chip
+  writes its own copy from the replicated gathered tiles).
+- Gate FIX.8 (`--check`, all on the merged code, 4917 s + W.1 204 s): every unit PASS. Accuracy vs the bf16 path
+  (FIX.10's records, same rungs; value / limit):
+  - L.s56320: final hidden rel 0.1889 -> 0.1961 / 0.2586, top5 1.0 -> 1.0; err_layer L02 0.0526 -> 0.0573, L08 0.1125 ->
+    0.1221, L14 0.0930 -> 0.0981, L20 0.1636 -> 0.1678, L24 0.1386 -> 0.1431, L39 0.905 -> 0.613 / 1.49; compress_kv
+    state L02 0.0330 -> 0.1161 / 0.2011, L08 0.0732 -> 0.1445 / 0.2259, L14 0.1547 -> 0.1973 / 0.3294, L20 0.1288 ->
+    0.1747 / 0.2912; topk_idx L20 0.1163 -> 0.1216, L24 0.1299 -> 0.1364; candidates L20 0.0364 -> 0.0382.
+  - M.1 / L.s10240: final hidden pcc 0.9794 rel 0.2021 (FIX.7: 0.1919), top1 / top5 1.0. L.last: rel 0.1914 (FIX.7:
+    0.1843), top1 0.9971, top5 1.0. W.1 (seed): err_layer L14 0.0331 / 0.0550, L20 0.0309 / 0.0370, L24 0.0318 / 0.0336
+    (closest to its limit), compress_kv L02 0.116 / 0.201, L14 0.112 / 0.191, L20 0.113 / 0.191.
+  - K.1: contract 0 failed, acks_early 0, producer KV PCC compress 0.9847 -> 0.9767 / 0.9370, window 0.9777 -> 0.9732,
+    index_k 0.9919 -> 0.9909; L.smoke and the tt-d-gen runner smoke both answer Paris. host_transfers_per_layer 0.
+  - The served compressed records stay bf16 (state_bits compress_kv 16): they hold the bfp4-rounded values, so the
+    serving contract and tt-d-gen are unchanged.
+- DRAM a chip of the replicated attention tables at the deploy context (1,044,480 tokens, KV sources 2 / 8 / 14 at
+  ratio 2 and 20 at ratio 1; from the allocated shapes in tt/compressor.AttnTable):
+  bf16 rows: 3 x [527488, 512] bf16 (515.1 MiB) + [1049728, 512] bf16 (1025.1 MiB) = 2570.5 MiB (2.51 GiB).
+  bfp4_rows: 3 x ([522240, 320] u8 159.4 MiB + window [5248, 512] bf16 5.1 MiB) + ([1044480, 320] u8 318.8 MiB + 5.1
+  MiB) = 817.4 MiB (0.80 GiB). Saves 1.71 GiB a chip (3.1x); the plan's deployment margin was 0.3 GiB.
+- Time, chunk 5120, 40 layers, resident engram (DS41_ENGRAM_TABLE=resident), same session, bf16 -> bfp4_rows
+  (scripts /scratch/dnijemcevic/fix8/, results /scratch/dnijemcevic/posprof/results/CKV16* / CKV4*):
+  - sparse_sdpa kernel (64 heads x 160 queries a chip, top-k 512 after a 128 window): position 0 13.60 -> 13.94 ms a
+    chunk (+2.5 %; per compressed layer 0.351 -> 0.360 ms, 38 calls; layers 0 / 1 stay stock, 0.136 ms each);
+    position 512k 16.70 -> 17.39 ms (+4.2 %; 0.432 -> 0.451 ms a call). The 2x2 single-card figure was +3.5 % at 160 q.
+  - Table write: ckv_bfp4 0.209 ms a chunk (4 calls) vs slice_write 0.066 ms; the start < 128 compaction (ttnn.gather
+    0.18 ms at position 0) is gone in bfp4_rows.
+  - Device time a chunk: position 0 216.44 -> 217.66 ms (+0.56 %), 512k 283.77 -> 284.25 ms (+0.17 %).
+  - Warm wall (F196, 10 timed runs, misses refused), medians: position 0 419.7 -> 441.6 ms and in a second pair 412.5
+    -> 426.3 ms; 512k 451.3 -> 472.0 ms. Run spreads 30-130 ms. cProfile of 5 warm chunks (position 0) puts the
+    attributable cost at +5.3 ms a chunk, all of it ckv_bfp4's host time (1.33 ms a call, Python descriptor 1.4 ms of
+    the 5.3; DS41-135); both cProfiled runs took 443 ms a chunk, and the other differences (engram tile packing,
+    experts) moved in both directions run to run. So the real wall cost is about +5 ms a chunk (+1.2 %), not the +14 to
+    +22 ms the medians show.
+- Follow-up: cache ckv_bfp4's ProgramDescriptor (patch row0 / addresses; ttnn.bringup.prepared_program) or make it a
+  C++ op, which removes the ~5 ms of host time a chunk (DS41-135). The sdpa fork README had no ROW_BFP4 entry: added
+  (options, Galaxy numbers, used by); ckv_bfp4 README: Measured + the host limit.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.8 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; old path DS41_CKV_FORMAT=bf16;
+  profile series `/scratch/dnijemcevic/fix8/series_ckv.sh`, host profile `/scratch/dnijemcevic/fix8/hostprof_ckv.sh`.
