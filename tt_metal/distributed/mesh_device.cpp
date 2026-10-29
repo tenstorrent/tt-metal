@@ -99,7 +99,7 @@ int generate_unique_mesh_id() {
     return next_id++;
 }
 
-// All physical devices must belong to the same context ID. Workers stay awake for `spin` after their last work.
+// All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
     ContextId context_id,
     const std::vector<Device*>& physical_devices,
