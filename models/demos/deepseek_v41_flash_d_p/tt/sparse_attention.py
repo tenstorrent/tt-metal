@@ -42,7 +42,8 @@ j at row j, max_seq / r rows | window region 128 + S at base = max_seq / r]. The
 groups with one slice_write (the replicated natural-order rows it writes into the served cache), a host load of the
 served cache writes the same rows; each compressed layer slice_writes its [carry | chunk] into the window region (the
 source's layers run in order on one queue and reuse it). The index list is [window ids + base (load-time) | the top-k
-ids as they are]: mesh_partition + concat, + the same compaction gather for starts < 128. No history gather, no
+ids as they are]: mesh_partition + concat, + the same compaction gather for starts < 128 (INDEXER_TOPK_LOCAL=on, P.8:
+the indexer's top-k is already the chip's own rows, so no mesh_partition). No history gather, no
 [window | history] concat, no fp32 id remap, and the table has one shape in every chunk.
 """
 
@@ -129,7 +130,8 @@ class TtSparseAttention(TtWindowAttention):
     positions [start, start + S)), end = actual_end, ``cache`` the layer's TtWindowCache (written), ``ckv_cache``
     the KV source's served compressed cache (tt/compressor.TtServedRows, read; already holding this chunk's groups
     when the layer is its own source), topk [1, 1, S/SP, K] uint32 ROW_MAJOR (row-split, TP-replicated; group ids,
-    0xFFFFFFFF = none) -> attn_out [1, 1, S/SP, H/TP] fp32. Does not consume its inputs."""
+    0xFFFFFFFF = none) or the chip's own rows [1, 1, q_rows, K] (INDEXER_TOPK_LOCAL=on, P.8) -> attn_out [1, 1, S/SP, H/TP] fp32. Does not consume its inputs.
+    """
 
     INTERLEAVED = True
 
@@ -218,11 +220,22 @@ class TtSparseAttention(TtWindowAttention):
         dealloc(i32)
         return rm
 
+    def _mine(self, topk: ttnn.Tensor) -> ttnn.Tensor:
+        """The chip's own query rows [1, 1, q_rows, K] of a top-k: as given when it is already per chip
+        (INDEXER_TOPK_LOCAL=on, P.8: the indexer did not gather it; or TP == 1), else mesh_partition of the
+        row-split, TP-replicated [1, 1, S/SP, K] (the gathered layout; component harnesses)."""
+        g = self.geo
+        rows = topk.shape[-2]
+        if g.tp == 1 or rows == g.q_rows:
+            return topk
+        assert rows == g.w, (rows, g.w, g.q_rows)
+        return ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+
     def _index(self, topk: ttnn.Tensor, ckv_cache, nb: int, start: int) -> ttnn.Tensor:
         """The chip's index list [1, 1, q_rows, 128 + K] uint32 ROW_MAJOR: [window | top-k rows], sentinels last."""
         g = self.geo
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
-        mine = topk if g.tp == 1 else ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+        mine = self._mine(topk)
         rows = self._topk_rows(mine, ckv_cache, nb, WINDOW + g.chunk)
         if mine is not topk:
             dealloc(mine)
@@ -241,7 +254,7 @@ class TtSparseAttention(TtWindowAttention):
         starts < 128 as ``_index``."""
         g = self.geo
         assert topk.shape[-1] == self.sparse.topk, (topk.shape, self.sparse.topk)
-        mine = topk if g.tp == 1 else ttnn.mesh_partition(topk, dim=2, cluster_axis=TP_AXIS, memory_config=DRAM)
+        mine = self._mine(topk)
         cls = g.start_class(start)
         src = ttnn.concat([table.index[cls], mine], dim=-1, memory_config=DRAM)
         if mine is not topk:

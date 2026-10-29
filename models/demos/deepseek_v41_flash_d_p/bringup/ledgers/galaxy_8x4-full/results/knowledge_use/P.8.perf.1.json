@@ -1,0 +1,47 @@
+{
+ "used": [
+  {
+   "id": "DS41-117",
+   "how": "Sq = chunk / SP / TP (160 on 8x4) is the indexer's per-chip query block; the local top-k rows are those Sq rows, matched to the attention's geo.q_rows by shape in TtSparseAttention._mine",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-2",
+   "how": "the top-k state is kept per position and read back per chunk start; the per-chip readback rebuilds [S, K] rows in chip order so the ladder's per-position state comparison is unchanged",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the SP=32 study counted ~46 op calls for option C, but ChunkMemo (INDEXER_GLUE) already shares one index list per index source: only 8 all_gathers + 8 mesh_partitions a chunk go away on the 40-layer model",
+  "bringup/hooks.py (component / swap harnesses) reads the indexer output as a TP-replicated [W, K] tensor (ConcatMesh2dToTensor, column 0) and uploads a reader's top-k replicated, so a per-chip layout must stay opt-in on the module (TtIndexer.local) and not be a module-wide default"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "nothing padded or duplicated: the change removes an all_gather and a mesh_partition; the top-k tensors are the same topk_large_indices output (measure P.8: every metric equal to P.7's)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.8",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T09:47:52",
+  "head": "1cd8d254f45",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.8.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

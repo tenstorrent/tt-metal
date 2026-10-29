@@ -52,7 +52,7 @@ from .engram import TtEngramRows
 from .engram_add import build_engram_add
 from .engram_kv import build_engram_kv
 from .experts import build_experts
-from .indexer import TtCandidateIndexer, TtReindexer, build_indexer
+from .indexer import TtCandidateIndexer, TtReindexer, build_indexer, topk_local
 from .kv import TtWindowKv, attn_in_weights, rope_freqs
 from .layout import HC, hidden_split_to_host, row_split_to_device, row_split_to_host, streams_to_device, streams_to_host
 from .mhc import NG, build_hc
@@ -116,10 +116,15 @@ def _free(v, protect: set[int] = frozenset()) -> None:
             dealloc(t)  # GLUE_FOLD=on (P.19): the binding itself (tt/ccl.py:dealloc)
 
 
-def _ids_to_host(t: ttnn.Tensor, mesh) -> torch.Tensor:
+def _ids_to_host(t: ttnn.Tensor, mesh, per_chip: bool = False) -> torch.Tensor:
     """A row-split, TP-replicated uint32 index tensor [1, 1, W, k] -> host [S, k] int32, 0xFFFFFFFF -> -1 (harness
-    boundary: the ladder's state read-back)."""
-    idx = row_split_to_host(mesh, t).to(torch.int64) & 0xFFFFFFFF
+    boundary: the ladder's state read-back). ``per_chip`` (INDEXER_TOPK_LOCAL=on, P.8): [1, 1, Sq, k] of the chip's
+    own query rows (chip (r, c) = rows (r TP + c) Sq, device order), concatenated in chip order; the ids as they are."""
+    if per_chip:
+        idx = torch.cat([ttnn.to_torch(x) for x in ttnn.get_device_tensors(t)], dim=-2)
+        idx = idx.reshape(-1, idx.shape[-1]).to(torch.int64) & 0xFFFFFFFF
+    else:
+        idx = row_split_to_host(mesh, t).to(torch.int64) & 0xFFFFFFFF
     return torch.where(idx >= NONE_ID, torch.full_like(idx, -1), idx).to(torch.int32)
 
 
@@ -141,7 +146,8 @@ class DS41DeviceState:
     window[i]    TtWindowCache (served 0_window_kv) of every layer
     compress[i]  TtCompressCaches (served compressed KV + index keys) of every KV-source layer
     topk[i]      {chunk start: device top-k [1, 1, S/SP, K] uint32} of every index-source layer (this chunk's readers
-                 take the entry of their start; earlier entries stay for the state read-back)
+                 take the entry of their start; earlier entries stay for the state read-back); INDEXER_TOPK_LOCAL=on
+                 (P.8): [1, 1, Sq, K], each chip's own query rows
     cands[i]     {chunk start: device candidate pool [1, 1, Sq, 2048] uint32 per chip} of the candidate source
     tail[i]      engram tail [3] int64 (host) of every engram layer
     The ``*_prefix`` dicts hold a golden prefix's integer state loaded on the host (ladder rung ``last``).
@@ -229,7 +235,11 @@ class DS41DeviceState:
         for start, t in sorted(store[layer].items()):
             if start >= length:
                 continue
-            rows = _cands_to_host(t) if per_chip else _ids_to_host(t, self.mesh)
+            if per_chip:
+                rows = _cands_to_host(t)
+            else:  # INDEXER_TOPK_LOCAL=on (P.8): the chip's own rows (not gathered over TP)
+                local = self.mesh.shape[TP_AXIS] > 1 and t.shape[-2] * self.mesh.shape[SP_AXIS] != self.model.chunk
+                rows = _ids_to_host(t, self.mesh, per_chip=local)
             n = min(rows.shape[0], length - start)
             out[start : start + n] = rows[:n]
         return out
@@ -345,6 +355,7 @@ class TtDS41Block:
         self.indexer = None
         if cfg.is_index_source(i):
             self.indexer = build_indexer(mesh, ck, cfg, i, model.max_seq, model.chunk, rope=rope)
+            self.indexer.local = topk_local()  # INDEXER_TOPK_LOCAL=on (P.8): no TP gather of the top-k
         w = attention_weights(ck, i)
         if r:
             self.attention = TtSparseAttention(mesh, cfg, w, rope, model.tables, model.sparse_tables())
