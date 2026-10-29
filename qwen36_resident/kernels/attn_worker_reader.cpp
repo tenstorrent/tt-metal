@@ -148,11 +148,15 @@ void kernel_main() {
 
     constexpr uint32_t k0 = 2 * heads * Dt, v0 = k0 + Dt;
     const uint32_t user_stride = verify ? 0 : copies * copy_stride;
-    // verify, p the last row of its tile: whether row 1's chunk of this worker holds that tile
-    bool waits_tail = false, same_tile = false;
+    // verify: rows from `cross` on (the first row past row 0's tile) have that tile among their complete tiles;
+    // whether this worker's chunk of theirs holds it
+    uint32_t cross = batch;
+    bool waits_tail = false;
     if constexpr (verify) {
-        same_tile = tps[1] == tps[0];
-        waits_tail = role == 1 && !same_tile && holds(chs[1], tps[0]);
+        for (uint32_t u = batch - 1; u > 0; u--) {
+            cross = tps[u] != tps[0] ? u : cross;
+        }
+        waits_tail = role == 1 && cross < batch && holds(chs[cross], tps[0]);
     }
     for (uint32_t i = 0; i < iters; i++) {
         const uint32_t l = i / batch, u = i % batch;
@@ -179,13 +183,13 @@ void kernel_main() {
         const uint32_t early = ch.n < 2 * chunk_max ? ch.n : 2 * chunk_max;
         volatile tt_l1_ptr uint32_t* tail_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail));
         if (role == 1) {
-            if (waits_tail && u == 1) {
+            if (waits_tail && u == cross) {
                 noc_semaphore_wait_min(tail_sem, l + 1);
             }
             read_blocks(0, early);
         } else {
-            // the user's tail of this copy was written back by its previous use (verify: by row 0, same tile)
-            if (same_tile && u == 1) {
+            // the user's tail of this copy was written back by its previous use (verify: by row u - 1, same tile)
+            if (verify && u > 0 && tps[u] == tps[u - 1]) {
                 noc_semaphore_wait_min(tail_sem, i);
             } else if (l >= copies) {
                 noc_semaphore_wait_min(tail_sem, i - copies * batch + 1);

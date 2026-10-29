@@ -40,10 +40,11 @@
 // 22 two_nocs (0 / 1: a chunk worker's reader alternates its KV reads between both NOCs; its writer issues no
 // reads, so the reader owns the read counters of the writer's NOC too)
 //
-// Verify: the two rows are one user at positions p and p + 1 and share its KV cache (user 0's). Row 1's
-// tail tile holds row 0's new row: on the same tile the tail core reads it after row 0's write-back; when
-// p is the last row of its tile, that tile is complete for row 1 and the chunk worker reading it waits for
-// the write-back (the tail writer bumps the worker's sem_tail, unused on chunk workers otherwise).
+// Verify: the R = batch rows are one user at positions p .. p + R - 1 and share its KV cache (user 0's). Row r's
+// tail tile holds the new rows of the rows before it: on the same tile the tail core reads it after row r - 1's
+// write-back; once a row's position starts the next tile, row 0's tile is complete for it and the rows after it,
+// and the chunk worker reading it waits for the write-back of its last row (the tail writer bumps the worker's
+// sem_tail, unused on chunk workers otherwise).
 //
 // Batch: the users run one after another through every attention layer (iteration i = layer * batch +
 // user; the semaphores count iterations). User u has its own position (token state word 1 + u), rope
@@ -78,7 +79,7 @@ constexpr uint32_t batch = get_compile_time_arg_val(19);
 constexpr bool verify = get_compile_time_arg_val(20) != 0;
 constexpr bool round_robin = get_compile_time_arg_val(21) != 0;
 constexpr bool two_nocs = get_compile_time_arg_val(22) != 0;
-static_assert(!verify || batch == 2, "verify runs two rows of one user");
+static_assert(!verify || batch >= 2, "verify runs two or more rows of one user");
 constexpr uint32_t iters = layers * batch;
 static_assert(heads <= 16, "head rows live in the top faces");
 static_assert(rot_tiles == 2, "rope pairs dims (i, i + 32) of the first 64 head dims");

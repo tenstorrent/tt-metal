@@ -70,7 +70,8 @@ void kernel_main() {
         }
     }
     uint32_t tail_bank[batch], tail_row[batch];
-    uint64_t owner_sem = 0;  // verify: the tail-semaphore of the chunk worker reading row 0's tile for row 1
+    uint64_t owner_sem = 0;  // verify: the tail-semaphore of the chunk worker reading row 0's tile for later rows
+    uint32_t last = batch;   // verify: the last row on row 0's tile, if a later row starts the next one
     if (role == 2) {
         const InterleavedAddrGen<true> tok{
             .bank_base_address = get_arg_val<uint32_t>(tail_args + 3), .page_size = 4 * (1 + batch)};
@@ -82,14 +83,18 @@ void kernel_main() {
             tail_row[u] = tp / banks;
         }
         if constexpr (verify) {
-            const uint32_t tp0 = tail_row[0] * banks + tail_bank[0], tp1 = tail_row[1] * banks + tail_bank[1];
-            if (tp1 != tp0) {
-                // chunk_of's worker for row 0's tile among row 1's complete tiles
-                const uint32_t owner = owner_of(tp0, tp1);
-                owner_sem = get_noc_addr(
-                    get_arg_val<uint32_t>(tail_args + 4 + 2 * owner),
-                    get_arg_val<uint32_t>(tail_args + 5 + 2 * owner),
-                    get_semaphore(sem_tail));
+            const uint32_t tp0 = tail_row[0] * banks + tail_bank[0];
+            for (uint32_t u = 1; u < batch && last == batch; u++) {
+                const uint32_t tp = tail_row[u] * banks + tail_bank[u];
+                if (tp != tp0) {
+                    // chunk_of's worker for row 0's tile among the complete tiles of row u (and the rows after it)
+                    const uint32_t owner = owner_of(tp0, tp);
+                    owner_sem = get_noc_addr(
+                        get_arg_val<uint32_t>(tail_args + 4 + 2 * owner),
+                        get_arg_val<uint32_t>(tail_args + 5 + 2 * owner),
+                        get_semaphore(sem_tail));
+                    last = u - 1;
+                }
             }
         }
     }
@@ -134,7 +139,7 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_flush, 2 * Dt);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = i + 1;
-            if (owner_sem && u == 0) {
+            if (owner_sem && u == last) {
                 noc_semaphore_inc(owner_sem, 1);
             }
         }
