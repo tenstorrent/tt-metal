@@ -58,6 +58,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0036 | Cut the on-screen (display) overhead: parallel strip JPEG + panel at 10 Hz | 2026-10-27 | DONE: on screen bs4 staggered 21.4 → 11.3 ms, bs4 synchronized 34.2 → 24.6, bs20 53.0 → 48.0; live-view image identical; panel may lag tiles ≤ 100 ms |
 | YOLO26-0037 | Defect from 0036: panel at 10 Hz disagreed with the tiles in the recording | 2026-10-27 | FIXED: only changed panel rows redrawn on every update; 60/60 rows match in 3 checked frames; on screen 11.5 → 12.8 ms |
 | YOLO26-0038 | Like-for-like latency table: bs=4 vs bs=20, all 20 cameras captured together, with display breakdown | 2026-10-28 | RECORDED: bs=4 11.2 → 35.2 ms by set (on screen ~14.7 → ~38.7), bs=20 44.6 ms all (on screen ~50.3); display +3.5 / +5.7 ms |
+| YOLO26-0039 | dp=4 batch 4 reaches ~91 % of 4 × one chip (2,406 vs 2,638 FPS): where does the rest go? | 2026-10-29 | ROOT-CAUSED: output read-back (reads from the 4 chips run one after another; 8.60 MB per chip, a third of it tile padding). Copies outside the trace refuted (≤ 0.05 ms); a host thread per chip refuted (2× slower); untilizing the outputs in the trace 2,450 → 2,533 / 2,554 FPS on 4 chips but 662 → 633 on 1 chip; not applied to the test |
 
 ## Entries
 
@@ -1225,3 +1226,71 @@ Method:
 - For reference, staggered bs=4 (default, cameras on their own phases; recording `..._batch4_v3.mp4`): 9.4-10.0 ms
   per set to results, 12.8 ms on screen (median). A full round of all 20 staggered cameras completes ~36 ms after
   its first capture (26.7 ms capture spread + ~9.5 ms; INFERRED), about the same as synchronized (35.2 ms).
+
+### YOLO26-0039 — dp=4 batch 4: where the last ~9 % goes (appended 2026-10-29)
+
+Question: one chip runs yolo26s batch 4 at ~660 FPS, so four should give ~2,640; dp=4 gave 2,347-2,404 (YOLO26-0025).
+Is something slow, and does the demo's > 2,400 images/s mean the test is understating?
+
+Code: branch `sdawle/tvardhineni/yolov26_bringup` at `fb1856e06ca` (the batch-4 L1 path is the same on this branch).
+yolo26s, 640×640, batch 4 per chip, trace + 2CQ; chips reset (`tt-smi -r`) before every process.
+
+1. Re-measure (MEASURED, `test_yolo26_trace_2cq.py`, `-k yolo26s-640-4`):
+   - each chip alone (`test_yolo26_trace_2cq_perf`, `TT_VISIBLE_DEVICES=0..3`): 659.6 / 653.8 / 659.1 / 665.4 FPS
+     (6.06 / 6.12 / 6.07 / 6.01 ms per iteration), sum 2,638;
+   - dp=4 (`test_yolo26_trace_2cq_perf_dp`, 50 iterations): 2,363.1 / 2,402.6 / 2,404.0 / 2,420.6 / 2,438.0 FPS,
+     mean 2,406 (6.56-6.77 ms per iteration) = 91 % of the sum. One further attempt hung at trace capture
+     (YOLO26-0021, still OPEN) and was killed after 15 min; not counted.
+   - The demo's 2,400 images/s (YOLO26-0028) is the offered load (80 × 30 FPS), not a ceiling; its measured
+     ceiling 2,598.5 is explained in step 3.
+
+2. Loop breakdown (MEASURED, scratch script `scratchpad/dpcheck/breakdown.py`: the perf-test loop with parts
+   removed, 200 iterations after 20 warm-up, ms per iteration after `synchronize_device`; 2 processes each, values
+   within 0.01 ms unless shown; one 4-chip process hung at capture):
+
+   | step | 1 chip | 4 chips | 4 chips, output copies captured in the trace |
+   |---|---|---|---|
+   | trace only | 5.82 | 5.84 | 5.87 |
+   | + upload (CQ1) + input copy | +0.05 | +0.05 | +0.05 |
+   | + 6 outputs → DRAM (`to_memory_config`, outside the trace) | +0.05 | +0.05 | +0.00 (in trace) |
+   | + `from_device` of the 6 outputs (CQ1) | +0.14 | +0.65 | +0.57 / +0.64 |
+   | = perf-test loop | 6.05 (660 FPS) | 6.58 (2,431 FPS) | 6.49 / 6.56 (2,466 / 2,439 FPS) |
+
+   - The device scales perfectly: the trace takes 5.84 ms on the 1×4 mesh vs 5.82 ms on one chip (2,740 FPS of
+     compute).
+   - Host time spent issuing commands (perf_counter before synchronize): 5.4-5.6 ms per iteration on 1 chip, 6.55 of
+     6.58 ms on 4 chips, i.e. the 4-chip loop is host bound.
+   - Hypothesis "the 6 output copies issued from the host, outside the trace, cost the 4-chip loop": REFUTED. They
+     cost 0.05 ms on 1 and 4 chips alike; capturing them in the trace saves that but the trace grows 0.03-0.04 ms.
+   - Hypothesis "reading the full outputs back is the cost": CONFIRMED, see step 3.
+
+3. Read-back variants (MEASURED, scratch script `scratchpad/dpcheck/readback.py`; output copies in the trace for all
+   variants; "reads alone" = 20 reads of the outputs with the device idle, ms each):
+
+   | read-back | data per chip | reads alone | perf-test loop | FPS |
+   |---|---|---|---|---|
+   | 1 chip, 6 tile outputs (`from_device`) | 8.60 MB | 0.64 ms | 6.04 ms | 662.0 |
+   | 4 chips, 6 tile outputs (`from_device` on the mesh tensors, as the test) | 8.60 MB | 3.89 ms | 6.53 ms | 2,449.9 |
+   | 4 chips, per-chip shards (`get_device_tensors`) read from 4 host threads | 8.60 MB | 5.26 ms | 13.81 ms | 1,158.6 |
+   | 4 chips, 6 outputs untilized in the trace (`to_layout` ROW_MAJOR, DRAM) | 5.64 MB | 3.36 / 3.17 ms | 6.32 / 6.27 ms | 2,533.3 / 2,553.9 |
+   | 1 chip, same untilized outputs | 5.64 MB | 1.50 ms | 6.32 ms | 633.0 |
+   | 4 chips, demo packing (`pack_outputs`: boxes + person logit only, row-major) | 0.34 MB | 1.03 ms | 6.14 ms | 2,606.1 |
+
+   - Output sizes (READ from the tensors): boxes [1,1,N,4] are tile-padded to 32 columns (8× the data), scores
+     [1,1,N,80] to 96; N = 25,600 / 6,400 / 1,600 for batch 4. Of the 8.60 MB per chip, 2.96 MB is padding.
+   - 4 chips take ~6× as long as 1 chip to read the same per-chip data with the device idle (3.89 vs 0.64 ms), so the
+     mesh reads run one chip after another (INFERRED from the timing; ~0.97 ms per chip). In the loop ~0.5 ms of it is
+     not hidden behind compute: that is the 6.06 → 6.53-6.58 ms gap.
+   - A host thread per chip: REFUTED, the iteration more than doubles (not investigated further; INFERRED to be
+     contention on the shared CQ1 / blocking reads).
+   - Untilizing in the trace removes the padding (5.64 MB per chip; lossless layout change, PCC not re-run): +3.4 to
+     +4.2 % on 4 chips, but −4.4 % on one chip, where the device is the bottleneck and the untilize adds ~0.28 ms of
+     device time (INFERRED: 6.32 − 6.04 ms). Row-major reads are also slower per byte (1.50 ms for 5.64 MB vs 0.64 ms
+     for 8.60 MB on one chip).
+   - Demo packing reaches 2,606 FPS on 4 chips, matching the demo's measured ceiling (2,598.5, YOLO26-0028), but it
+     keeps 1 of 80 classes, so it is not the same test.
+
+Status: ROOT-CAUSED. The chips scale; the shortfall is host read-back of tile-padded outputs from 4 chips in turn.
+Not applied: the perf test still reads the 6 tile outputs, so its dp=4 batch-4 number stays 2,406 FPS (mean). Options
+left: untilize only when `num_devices > 1` (+~4 %), or read a packed full-output tensor (boxes + 80 scores, row-major,
+~5.6 MB per chip; the packed single-output attempt in YOLO26-0023 was slower on one chip, not tried on four).
