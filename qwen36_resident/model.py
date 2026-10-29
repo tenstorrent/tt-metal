@@ -21,6 +21,7 @@ bf16 rounding points.
 
 import math
 import os
+import weakref
 
 import numpy as np
 import torch
@@ -106,6 +107,74 @@ KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]
 
 def bf16(t):
     return t.bfloat16().float()
+
+
+# Live decode models, for the persistent-L1 layout check of traces captured beside them (see l1_layout)
+_LIVE_MODELS = weakref.WeakSet()
+
+
+def l1_layout():
+    """the persistent L1 buffers of every live ResidentModel, as a sorted tuple of addresses. A trace replays the CB
+    and intermediate addresses its programs got at capture, which were placed around the L1 buffers live then and
+    are not checked again: a decode model built after a trace (e.g. PPPrefill's) with another L1 layout can be
+    overwritten by the trace's replays (seen 2026-10-30: a B = 8 rows model built after the PP traces were captured
+    beside a B = 1 model decoded garbage, and vice versa). Compare it with the layout at capture."""
+    return tuple(sorted(a for m in list(_LIVE_MODELS) for a in m.l1_addrs))
+
+
+def l1_low_water(mesh):
+    """the lowest allocated L1 address on the device in the allocator's view (every L1 buffer, the decode models',
+    drafters', samplers', ...; an offset from the allocator's base), or None when nothing is allocated"""
+    lows = [
+        int(b["address"]) for b in ttnn.get_memory_view(mesh, ttnn.BufferType.L1).block_table if b["allocated"] == "yes"
+    ]
+    return min(lows) if lows else None
+
+
+def cb_extent(cbs):
+    """the static CB region the CB descriptors take on their busiest core: bytes above the L1 allocator's base (CBs
+    without a backing tensor, each rounded up to 64 B, an upper bound of the allocator's alignment)"""
+    per_core = {}
+    for cb in cbs:
+        if cb.has_buffer():
+            continue
+        size = -(-cb.total_size // 64) * 64
+        for r in cb.core_ranges.ranges():
+            for x in range(r.start.x, r.end.x + 1):
+                for y in range(r.start.y, r.end.y + 1):
+                    per_core[(x, y)] = per_core.get((x, y), 0) + size
+    return max(per_core.values(), default=0)
+
+
+class TraceL1Guard:
+    """what a trace's replays rely on: the L1 its programs' CBs and intermediates got at capture still holds no buffer.
+    check() raises otherwise: a buffer allocated there since is overwritten by every replay (a silent garbage decode).
+    With cb_top (bytes above the allocator's base: the traced programs' static CB region, cb_extent) that region is
+    the bound; without it (programs we don't describe, e.g. ttnn ops) the lowest buffer live at capture is, which is
+    conservative. The allocator's view covers every L1 buffer but costs a memory-view walk, so a decode trace checks
+    the decode models' registry every replay and the allocator every `every` replays."""
+
+    def __init__(self, mesh, what, every=64, cb_top=None):
+        self.mesh, self.what, self.every, self.n = mesh, what, every, 0
+        if cb_top is not None:
+            self.low = cb_top
+            self.reg = ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1) + cb_top
+        else:
+            self.low = l1_low_water(mesh)
+            self.reg = min(l1_layout(), default=None)
+
+    def check(self, full=False):
+        reg = min(l1_layout(), default=None)
+        bad = reg is not None and (self.reg is None or reg < self.reg)
+        self.n += 1
+        if full or self.n % self.every == 0:
+            low = l1_low_water(self.mesh)
+            bad |= low is not None and (self.low is None or low < self.low)
+        if bad:
+            raise RuntimeError(
+                f"an L1 buffer was allocated below the ones live when the {self.what} trace was captured: its replays "
+                "overwrite it; capture the trace again after allocating it (model.TraceL1Guard)"
+            )
 
 
 def rmsnorm(x, w=None):
@@ -576,8 +645,12 @@ class ResidentModel:
             ttnn.synchronize_device(mesh)
             return t
 
+        self.l1_addrs = []  # persistent L1 buffers (see l1_layout)
+
         def l1(t, grid_, shard, dtype=ttnn.bfloat16, tile=tiny, mapper=rep, layout=ttnn.TILE_LAYOUT):
-            return settled(_l1(t, grid_, shard, dtype, tile, mapper, layout))
+            out = settled(_l1(t, grid_, shard, dtype, tile, mapper, layout))
+            self.l1_addrs.append(out.buffer_address())
+            return out
 
         def _l1(t, grid_, shard, dtype=ttnn.bfloat16, tile=tiny, mapper=rep, layout=ttnn.TILE_LAYOUT):
             return ttnn.from_torch(
@@ -889,6 +962,7 @@ class ResidentModel:
         ts_addr = self.ts_t.buffer_address() if timeline else 0
         # the hub's: per round 8 words (mlp_hub.cpp kHubTs)
         self.hub_ts_t = ts_buf(hub_grid, 1, (2 * layers + int(self.fc)) * 8) if timeline else None
+        self.l1_addrs += [ts_addr, self.hub_ts_t.buffer_address()] if timeline else []
 
         # ---- per sub-batch decode state (sub-batch 0's is above)
         subs = [
@@ -1484,6 +1558,7 @@ class ResidentModel:
                         kernel("attn_leader_compute.cpp", lead_grid, attn_ct, lc, attn_compute),
                     ]
                 program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+                self._cb_top = max(getattr(self, "_cb_top", 0), cb_extent(cbs))  # (TraceL1Guard)
                 args = program.kernels[3].runtime_args[hub.x][hub.y]
                 for nb in (chip + 1, chip - 1):
                     if 0 <= nb < n:
@@ -1521,6 +1596,9 @@ class ResidentModel:
         self.nv_split, self.v_bank = nv_split, v_bank
         if self.kv_paged:
             self.set_page_table(self.block_tables)
+        sems = self.ccl_sems + (self.feed_sems if self.feed else [])
+        self.l1_addrs += [ttnn.get_global_semaphore_address(g) for g in sems]
+        _LIVE_MODELS.add(self)
 
     @staticmethod
     def tok_tensor(mesh, d, batch, fc=False):
@@ -2079,6 +2157,7 @@ class ResidentModel:
             self.trace_ids.append(tid)
         self.trace_id = self.trace_ids[0]
         ttnn.synchronize_device(self.mesh)
+        self._trace_guard = TraceL1Guard(self.mesh, "decode", cb_top=self._cb_top)
 
     def release_trace(self):
         for tid in getattr(self, "trace_ids", None) or []:
@@ -2096,6 +2175,7 @@ class ResidentModel:
                 if t is not None:
                     ttnn.copy_host_to_device_tensor(t, self.subs[k]["tok"])
         if getattr(self, "trace_id", None) is not None:
+            self._trace_guard.check()
             for tid in [self.trace_ids[k] for k in ks] if self.rows else self.trace_ids:
                 ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=False)
         else:

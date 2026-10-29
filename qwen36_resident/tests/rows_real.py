@@ -198,6 +198,7 @@ def main():
         ttnn.synchronize_device(mesh)
         m1.reset()
         m1.capture_trace()
+        pp.capture()  # after every decode build (model.l1_layout)
         phase("B=1 decode model")
         m1.reset()
         pp.reset()

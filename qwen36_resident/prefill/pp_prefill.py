@@ -44,7 +44,9 @@ from qwen36_resident.model import (
     ROPE_THETA,
     ROT,
     State,
+    TraceL1Guard,
     is_attn,
+    l1_layout,
     quantize_rows,
 )
 
@@ -955,7 +957,15 @@ class PPPrefill:
         ]
 
     def capture(self):
-        """compile the tick body of every chunk size, then record each into a trace (replayed by run())"""
+        """compile the tick body of every chunk size, then record each into a trace (replayed by run()). Call it after
+        building the decode model(s) it serves, and again after building another (earlier traces are released): the
+        traces replay L1 addresses placed around the decode models' L1 buffers live at capture (model.l1_layout)"""
+        for C in self.chunks:
+            self._use(C)
+            if self.trace_id is not None:
+                ttnn.release_trace(self.mesh, self.trace_id)
+                self.trace_id = None
+        self._l1_layout = l1_layout()
         for C in self.chunks:
             self._use(C)
             for host, dev in self._control(-1, 1):  # every chip idle: KV writes go to the scratch blocks
@@ -967,6 +977,7 @@ class PPPrefill:
             self.x_out = self._body()
             ttnn.end_trace_capture(self.mesh, self.trace_id, cq_id=0)
             ttnn.synchronize_device(self.mesh)
+        self._trace_guard = TraceL1Guard(self.mesh, "prefill")  # the L1 its replays assume (model.TraceL1Guard)
 
     def reset(self):
         self._use(self.C)
@@ -994,6 +1005,13 @@ class PPPrefill:
 
         T = token_ids.shape[0]
         assert T <= self.max_len
+        if getattr(self, "_l1_layout", None) is not None:
+            if l1_layout() != self._l1_layout:
+                raise RuntimeError(
+                    "the decode models' L1 layout changed since the prefill traces were captured: their replays could "
+                    "overwrite the new model's L1 buffers; call capture() again after building it (model.l1_layout)"
+                )
+            self._trace_guard.check(full=True)
         self._use(chunk or self.pick_chunk(T))
         n, C = self.n, self.C
         chunks = (T + C - 1) // C
