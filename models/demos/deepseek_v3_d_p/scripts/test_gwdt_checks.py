@@ -408,3 +408,14 @@ def test_collect_gate_names_only_the_bad_step(tmp_path, monkeypatch):
     r = steps[1].run(Ctx(Path(__file__).resolve().parents[4], tmp_path, False), State())
     assert r.status == Status.FAIL
     assert [d.split(":")[0] + ":" + d.split(":")[1] for d in r.details] == [bad.key]
+
+
+def test_help_lists_every_step_key(capsys):
+    import pytest
+    from galaxy_workload_deployment_test import main
+    from gwdt_steps import build_steps
+
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    out = capsys.readouterr().out
+    assert all(s.key in out for s in build_steps(["kimi_k2_7", "glm53"]))
