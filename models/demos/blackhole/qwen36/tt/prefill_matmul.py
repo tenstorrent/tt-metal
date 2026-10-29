@@ -18,6 +18,33 @@ SUBBLOCK = (1, 4)
 
 _configs = {}
 _small_configs = {}
+_acc_ccs = {}
+
+
+def fp32_acc():
+    """QWEN36_PREFILL_MM_FP32_ACC (default "1"): "0" runs the minimal_matmul paths with fp32_dest_acc_en=False."""
+    return os.environ.get("QWEN36_PREFILL_MM_FP32_ACC", "1") != "0"
+
+
+def _no_fp32_cc(cc):
+    """Copy of cc with fp32 dest accumulation off and packer L1 accumulation on (cached per input config)."""
+    out = _acc_ccs.get(id(cc))
+    if out is None:
+        out = type(cc)(
+            math_fidelity=cc.math_fidelity,
+            math_approx_mode=cc.math_approx_mode,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        _acc_ccs[id(cc)] = (cc, out)
+        return out
+    return out[1]
+
+
+def _subblock(n_block, default):
+    if not fp32_acc() and n_block % 8 == 0:
+        return (1, 8)
+    return default
 
 
 def enabled():
@@ -56,16 +83,18 @@ def swiglu_enabled():
 def _config(device, m_tiles, k_tiles, n_tiles):
     grid = device.compute_with_storage_grid_size()
     bm, bk, bn = _blocks(m_tiles, k_tiles, n_tiles)
-    key = (grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn)
+    key = (grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn, fp32_acc())
     cfg = _configs.get(key)
     if cfg is None:
         kw = {}
-        if SUBBLOCK is not None:
-            kw = dict(subblock_h=SUBBLOCK[0], subblock_w=SUBBLOCK[1])
+        nb = max(1, min(bn, n_tiles))
+        sub = _subblock(nb, SUBBLOCK)
+        if sub is not None:
+            kw = dict(subblock_h=sub[0], subblock_w=sub[1])
         cfg = _configs[key] = ttnn.MinimalMatmulConfig(
             M_block_size=max(1, min(bm, m_tiles)),
             K_block_size=max(1, min(bk, k_tiles)),
-            N_block_size=max(1, min(bn, n_tiles)),
+            N_block_size=nb,
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
             **kw,
         )
@@ -139,6 +168,8 @@ def prefill_linear(x, w, compute_kernel_config, activation=None, memory_config=N
     kw = {}
     if memory_config is not None:
         kw["memory_config"] = memory_config
+    if not fp32_acc():
+        compute_kernel_config = _no_fp32_cc(compute_kernel_config)
     return ttnn.experimental.minimal_matmul(x, w, config=cfg, compute_kernel_config=compute_kernel_config, **kw)
 
 
@@ -149,18 +180,22 @@ def prefill_swiglu(x, w_gu, compute_kernel_config, memory_config=None):
     k_tiles, n_tiles = (x.shape[-1] + 31) // 32, (w_gu.shape[-1] + 31) // 32
     grid = x.device().compute_with_storage_grid_size()
     bm, bk, bn = SWIGLU_BLOCKS
-    key = ("swiglu", grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn)
+    key = ("swiglu", grid.x, grid.y, m_tiles, k_tiles, n_tiles, bm, bk, bn, fp32_acc())
     cfg = _configs.get(key)
     if cfg is None:
+        nb = max(1, min(bn, n_tiles))
+        sub = _subblock(nb, SUBBLOCK)
         cfg = _configs[key] = ttnn.MinimalMatmulConfig(
             M_block_size=max(1, min(bm, m_tiles)),
             K_block_size=max(1, min(bk, k_tiles)),
-            N_block_size=max(1, min(bn, n_tiles)),
-            subblock_h=SUBBLOCK[0],
-            subblock_w=SUBBLOCK[1],
+            N_block_size=nb,
+            subblock_h=sub[0],
+            subblock_w=sub[1],
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
         )
     kw = {} if memory_config is None else {"memory_config": memory_config}
+    if not fp32_acc():
+        compute_kernel_config = _no_fp32_cc(compute_kernel_config)
     return ttnn.experimental.minimal_matmul(
         x, w_gu, config=cfg, compute_kernel_config=compute_kernel_config, fuse_swiglu=True, **kw
     )
