@@ -183,6 +183,8 @@ class DFlash2DrafterTP:
         self.fc = self._w(Wt[perm].contiguous(), "fc", dim=0)  # [ntaps*dim_tp, H] per device
         self.hnorm = self._rep(s["hidden_norm.weight"], "hidden_norm")
         self.fnorm = self._rep(s["norm.weight"], "norm")
+        self.hnorm_rm = self._rep_rm(s["hidden_norm.weight"], "hidden_norm")
+        self.fnorm_rm = self._rep_rm(s["norm.weight"], "norm")
         # host-built constants: never disk-cached. E is 0/1 (exact in bfp4; one nonzero term per output): a quarter
         # of the bf16 matrix's DRAM reads, the same results
         self.E = self._rep(_expansion(), "E", dtype=ttnn.bfloat4_b, cache=False)
@@ -197,6 +199,21 @@ class DFlash2DrafterTP:
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
+        )
+        # the one-tile-row hidden RMSNorms (_rms_h): width-sharded, 4 tiles on each of 40 cores
+        # (QWEN36_DFLASH_LN_SHARDED=0: interleaved, A/B)
+        self._ln_sharded = os.environ.get("QWEN36_DFLASH_LN_SHARDED", "1") == "1"
+        ln_grid = ttnn.CoreGrid(y=4, x=10)
+        self._ln_mc = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, H // ln_grid.num_cores),
+            core_grid=ln_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        bw = H // ln_grid.num_cores // ttnn.TILE_SIZE
+        self._ln_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[ln_grid.x, ln_grid.y], subblock_w=bw, block_h=1, block_w=bw, inplace=False
         )
         # (the V row of a fused K/V cache update: one core next to _sc1's)
         self._sc1b = ttnn.MemoryConfig(
@@ -274,11 +291,26 @@ class DFlash2DrafterTP:
             **({"mesh_mapper": mapper} if mapper else {}),
         )
 
+    def _rep_rm(self, t, name):
+        """a replicated hidden-dim norm weight as the sharded RMSNorm takes it: ROW_MAJOR [1, 1, H / 32, 32]"""
+        mapper = ttnn.ReplicateTensorToMesh(self.mesh) if self.nd > 1 else None
+        return ttnn.as_tensor(
+            t.reshape(1, 1, -1, ttnn.TILE_SIZE).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=self._cache(f"{name}_rm", "r", ttnn.bfloat16),
+            **({"mesh_mapper": mapper} if mapper else {}),
+        )
+
     def _load_layer(self, s, i):
         p = f"layers.{i}"
         lw = {
             "in_ln": self._rep(s[f"{p}.input_layernorm.weight"], f"l{i}.in_ln"),
             "post_ln": self._rep(s[f"{p}.post_attention_layernorm.weight"], f"l{i}.post_ln"),
+            "in_ln_rm": self._rep_rm(s[f"{p}.input_layernorm.weight"], f"l{i}.in_ln"),
+            "post_ln_rm": self._rep_rm(s[f"{p}.post_attention_layernorm.weight"], f"l{i}.post_ln"),
             "qn": self._rep(s[f"{p}.self_attn.q_norm.weight"], f"l{i}.qn"),
             "kn": self._rep(s[f"{p}.self_attn.k_norm.weight"], f"l{i}.kn"),
         }
@@ -308,7 +340,7 @@ class DFlash2DrafterTP:
                 seen.add(id(t))
                 ttnn.deallocate(t)
 
-        for name in ("fc", "hnorm", "fnorm", "E", "hproj"):
+        for name in ("fc", "hnorm", "fnorm", "hnorm_rm", "fnorm_rm", "E", "hproj"):
             _free(getattr(self, name, None))
             setattr(self, name, None)
         for lw in self.layers:
@@ -331,6 +363,25 @@ class DFlash2DrafterTP:
 
     def _rms(self, x, w):
         return ttnn.rms_norm(x, weight=w, epsilon=1e-6, compute_kernel_config=CKC)
+
+    def _rms_h(self, x, w, w_rm):
+        """RMSNorm over the hidden dim of [1, 1, n, H] rows. Up to one tile row it runs width-sharded over
+        _ln_mc's cores (an interleaved norm of one tile row runs on one core: ~105 us); longer, interleaved."""
+        if x.shape[-2] > ttnn.TILE_SIZE or not self._ln_sharded:
+            return self._rms(x, w)
+        xs = ttnn.to_memory_config(x, self._ln_mc)
+        o = ttnn.rms_norm(
+            xs,
+            weight=w_rm,
+            epsilon=1e-6,
+            program_config=self._ln_pc,
+            memory_config=self._ln_mc,
+            compute_kernel_config=CKC,
+        )
+        ttnn.deallocate(xs)
+        out = ttnn.to_memory_config(o, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(o)
+        return out
 
     def _allreduce(self, x4):
         """Row-parallel partial [1,1,n,H] (consumed) -> replicated full [1,1,n,H]."""
@@ -400,7 +451,7 @@ class DFlash2DrafterTP:
         part = self._lin(x, self.fc)
         ttnn.deallocate(x)
         full = self._allreduce(part)
-        out = self._rms(full, self.hnorm)
+        out = self._rms_h(full, self.hnorm, self.hnorm_rm)
         ttnn.deallocate(full)
         return out
 
@@ -963,7 +1014,7 @@ class DFlash2DrafterTP:
         st = self._staging[lay.R]
         L = lay.R
         cur_t = st["pos"] if self.causal[li] else st["cur"]
-        h = self._rms(hidden, lw["in_ln"])
+        h = self._rms_h(hidden, lw["in_ln"], lw["in_ln_rm"])
         if "ac_kp" in lw:
             kp = self._lin(h, lw["ac_kp"])
             hb = self._gdc(h, kp, lw["ac_b00"], lw["ac_b01"], 0, L, lay.S)
@@ -977,7 +1028,7 @@ class DFlash2DrafterTP:
         ttnn.deallocate(h)
         h1 = ttnn.add(hidden, a)
         ttnn.deallocate(a)
-        h2 = self._rms(h1, lw["post_ln"])
+        h2 = self._rms_h(h1, lw["post_ln"], lw["post_ln_rm"])
         if "mc_kp" in lw:
             kpm = self._lin(h2, lw["mc_kp"])
             hm = self._gdc(h2, kpm, lw["mc_b00"], lw["mc_b01"], 0, L, lay.S)
@@ -1005,7 +1056,7 @@ class DFlash2DrafterTP:
                 ttnn.deallocate(h)
             h = h_new
         self._free_index(idx)
-        hn = self._rms(h, self.fnorm)
+        hn = self._rms_h(h, self.fnorm, self.fnorm_rm)
         ttnn.deallocate(h)
         logits = ttnn.linear(hn, self.lm_w)  # [1,1,B,V/nd] per device
         vals, idx = ttnn.topk(logits, self.topk, dim=-1, largest=True, sorted=True)
