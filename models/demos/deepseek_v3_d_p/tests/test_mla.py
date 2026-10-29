@@ -1328,6 +1328,7 @@ _CHUNKED_SCENARIOS = (
         # a drifted start can overrun. See tight_cache in the driver.
         ("padoverflow-1u", dict(iters_isl=[5120 - 32] * 2 + [32], tight_cache=True)),
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
+        ("deep-200k+5k", dict(iters_isl=[5120], prefill_len=200 * 1024)),
         ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
 )
@@ -1361,6 +1362,8 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+# deep-200k+5k is a K2.7-only row; the mistral4 CI selector pins no scenario and would otherwise run it.
+@pytest.mark.uncollect_if(pred=lambda **p: p["kwargs"].get("prefill_len") == 200 * 1024 and p["variant"] != "kimi_k2_7")
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
     request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check, tp_shard_kv
