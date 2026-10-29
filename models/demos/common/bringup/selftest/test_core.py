@@ -509,3 +509,46 @@ def test_a_gate_that_needs_device_time_but_only_profiles_the_wall_is_refused_up_
     t["gate"]["cmd"] = f"BRINGUP_PROFILE_WALL=1 {prof}"
     led.tasks_path.write_text(__import__("yaml").safe_dump({"tasks": list(led.tasks().values())[:0] + [t]}))
     assert any("wall-only" in e for e in led.validate())
+
+
+def test_an_owner_unit_waiver_passes_only_the_named_contract_failures():
+    """F225: tests.unit_waivers waives a frozen test's named failures (a contract check has no limit to waive); any
+    other failure in the same run, another error or a crash is never waived, and the waiver is part of the stamp."""
+    from models.demos.common.bringup.core import stamps
+    from models.demos.common.bringup.core.gate import waived_failures
+
+    class S(dict):
+        def get(self, k, d=None):
+            return self.get_path(k) if "." in k else dict.get(self, k, d)
+
+        def get_path(self, k):
+            a, b = k.split(".")
+            return (dict.get(self, a) or {}).get(b)
+
+    w = {"test_adapter_acks": {"match": [r"0_window_kv layer 20 nope pcc 0\.98\d+ <"], "why": "owner: DS41-141"}}
+    spec = S(tests={"unit_waivers": w})
+    cmd = "scripts/run_safe_pytest.sh --run-all models/x/tests/bringup/contract/test_adapter_acks.py"
+    uw = stamps.unit_waivers(spec, cmd)
+    assert [x["test"] for x in uw] == ["test_adapter_acks"]
+    assert stamps.unit_waivers(spec, "pytest models/x/test_kv_layout.py") == []
+    assert stamps.waiver_key(spec, cmd) != "" and stamps.waiver_key(spec, "pytest t/test_kv_layout.py") == ""
+
+    class D:  # the spec text every unit's stamp reads leaves the unit waivers out (only their own unit re-runs)
+        def __init__(self, data):
+            self.data = data
+
+    assert stamps.spec_text(D({"a": 1, "tests": {"unit_waivers": w}})) == stamps.spec_text(D({"a": 1}))
+
+    one = (
+        "E       AssertionError: chunk 0: ack slot 0 [0, 2536) (last-window 128 rows): 0_window_kv layer 20 nope pcc"
+        " 0.9885 < 0.9895\nE       assert not ['chunk 0: ...']\n\nFAILED models/x/test_adapter_acks.py::t - Assert\n"
+    )
+    assert waived_failures(one, uw) == "owner: DS41-141"
+    two = one.replace(
+        "E       assert not", "E       chunk 1: 0_window_kv layer 21 nope pcc 0.97 < 0.98\nE       assert not"
+    )
+    assert waived_failures(two, uw) is None  # a second, unwaived check in the same message
+    assert waived_failures(one.replace("0.9885", "0.9785"), uw) is None  # worse than the waiver allows
+    assert waived_failures(one + "ERROR models/x/test_adapter_acks.py::u - RuntimeError\n", uw) is None
+    assert waived_failures("Segmentation fault\n", uw) is None  # no pytest failure lines: never waived
+    assert waived_failures(one, []) is None

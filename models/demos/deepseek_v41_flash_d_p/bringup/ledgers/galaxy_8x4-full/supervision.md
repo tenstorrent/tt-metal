@@ -954,3 +954,33 @@ PAUSE (use --until).
 Pages: precision table https://claude.ai/artifact/QP9f8tn3xDrojyyk8fMLUs ; 4-bit explainer
 https://claude.ai/artifact/Egi6v1myQkWQvFWvQRtJ3k (v7; update its read path / round / numbers after FIX.12, and add a
 line that DRAM holds row records, tiles only in L1).
+- 14:10 FIX.12 was placed before FIX.11 (the records-only fix job still TODO in state) and fell outside --until P.5, so
+  P.4 started first; stopped within a minute, P.4 now deps FIX.12 (tasks.yaml, uncommitted). Same root as F216: a
+  records-only fix job must be closable. FIX.12 running (orchestrator --until P.5). tasks.yaml + this entry: commit at
+  the next gap between agent steps.
+- 14:25 TO DO after FIX.12 (owner): update the 4-bit explainer https://claude.ai/artifact/Egi6v1myQkWQvFWvQRtJ3k (v8;
+  source file /tmp/claude-4338/-home-dnijemcevic-repos-tt-metal/18b53c01-1e9a-4881-8200-e204caa57d73/scratchpad/ckv-4bit-dataflow.html,
+  else `Artifact read` the url): (1) read path step 3 + its diagram + "why the exponents appear twice": ONE DRAM read of
+  the whole 320 B record into a 64 B aligned scratch, then two local copies (exponents: copy A / B by row parity, now
+  for the local copy's 64 B phase; values) - gather_bfp4_rows_staged, sparse_sdpa_gather.hpp (409afc0a341); (2) write
+  path step 3: the SFPU round is |x| + 2^23 LSB - 2^23 LSB (the adder rounds to nearest even), same bytes, ~-30 %
+  (ce48e727448); (3) the numbers table: sparse_sdpa / attention / device / wall from FIX.12's 8x4 measurements
+  (2x2 single card: compressed-layer attention -17..-21 %). Already current: rows-vs-tiles section, Next (decided
+  formats), temporary bf16 serving.
+- 15:45 FIX.12 RESULT: the 2x2's lowbit merge is bit-identical at 8x4 (207 accuracy metrics equal P.10's); sparse_sdpa
+  368 -> 309 us a call (-16 %), ckv_bfp4 write 52 -> 40 us (-23 %), attention device 69.3 -> 67.4 ms, device 206.0 ->
+  203.8 ms, wall 370.7 / 381.1 (spread ~68). 4-bit explainer v9 published (read path one read + local copies, the add
+  round, the FIX.12 table). Two contract units (test_adapter_acks, test_runner_contract) fail on one check: L20
+  window_kv last 128 rows of the 2536-token prompt, PCC 0.98855 < 0.98957; bisected to P.9 (ATTN_SP32_PROJ=off passes,
+  P.10 off still fails); DS41-141. Agent says rounding; I doubt it (P.9 replaced bf16 partial sums by one fp32 sum,
+  which should move closer to native; the prompt is a padded partial chunk).
+  OWNER: waive for now; check the cause later -> F225 (tests.unit_waivers, a waiver for named failures of a frozen
+  test; spec stamp leaves them out) + the spec waiver for both tests (intake re-approved on the owner's word); FIX.13
+  queued then (owner 15:40) released with the device allowed: find the first layer / op where P.9 on vs off differs
+  beyond rounding, padding first. Launcher /scratch/dnijemcevic/run_ds41_fix13.sh (--until FIX.13) so the Galaxy is
+  free for FIX.14 (the 2x2's phase 2: window bfp8 blocks, index K/Q bfp4; renumbered from FIX.13) next. OWNER: pause
+  after FIX.12 (done: PAUSE, then orchestrator stopped by hand at FIX.12's gate to avoid re-running acks unwaived).
+  FIX.12's agent hung after its report: its background `until ! pgrep -f "bringup gate FIX.12"` matched its own
+  command line (killed by pid). Lesson for agents too: a waiter on pgrep -f matches itself; wait on a pid.
+  Selftests: 2 fail before and after F225 (test_e2e_runtime fixed threshold in xing40 server_rules.py:393;
+  test_fork_cases volatile cache key, timeout) - to look at.

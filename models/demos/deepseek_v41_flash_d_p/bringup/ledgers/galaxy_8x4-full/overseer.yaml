@@ -205,6 +205,20 @@ notes:
     / ROW_BFP8) on branch dnijemcevic/model_bringup_lowbit and rebases onto this branch after you land. If attention precision
     needs a sparse_sdpa change, prefer the fork's existing precision options (math fidelity, fp32 dest / accumulation) set
     from the model, or add one small option; do not restructure the reader / compute kernels. Same for ckv_bfp4.
+- id: OV-21
+  tasks:
+  - FIX.12
+  status: closed
+  t: '2026-10-29T14:54:26'
+  text: 'P.9 (DS41_ATTN_SP32_PROJ, wq_b/wo_a/wo_b on 160 rows) moves test_adapter_acks below its reference-derived limit:
+    ack slot 0 [0, 2536) last-window 128 rows, 0_window_kv layer 20 nope 0.98855 < 0.98957; passes with DS41_ATTN_SP32_PROJ=off
+    (your /scratch/dnijemcevic/fix12/acks_projoff.log). Your gate needs this unit, so finding the cause is in FIX.12''s
+    scope. Suspect the padded partial chunk (2536 tokens < 5120): rows past the valid length or the pad rows'' handling
+    in P.9''s per-chip 160-row projections. Compare layer 20''s input / window KV on and off for that prompt, find the first
+    layer that differs, fix the cause in P.9''s path. Never loosen the limit or change the test. If it is honest rounding
+    of the new layout (no bug), stop and report the numbers per layer for the owner.'
+  closed: '2026-10-29T15:09:09'
+  why_closed: 'owner 2026-10-29: waived for now; the cause check is parked as FIX.13 (held, CPU only)'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -495,7 +509,7 @@ fixes:
   title: Verify the 2x2's bit-identical 4-bit speedups at full size (merged 7f55821f579)
   gate:
   - P.10
-  status: queued
+  status: placed
   t: '2026-10-29T13:44:29'
   text: 'OWNER 2026-10-29 (was ''P.12''). The 2x2''s lowbit phase 1 is merged (7f55821f579, branch dnijemcevic/model_bringup_lowbit
     @ 2bf71707602) and ttnn rebuilt. Default-on and bit-identical: sparse_sdpa ROW_BFP4 reads each 320 B record in ONE DRAM
@@ -507,6 +521,29 @@ fixes:
     if something breaks at 8x4 sizes, fix it in the forks behind the same behaviour. Do not touch tt/engram*.py.'
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-29T13:45:15'
+- id: FIX.13
+  title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
+  gate:
+  - K.1
+  - P.10
+  status: queued
+  t: '2026-10-29T15:08:46'
+  text: 'OWNER: check whether P.9 (DS41_ATTN_SP32_PROJ) raises layer 20''s window KV error by rounding or by a bug. Evidence
+    (FIX.12): test_adapter_acks ack slot 0 [0, 2536) last-window 128 rows, 0_window_kv L20 nope 0.98855 < 0.98957 with P.9,
+    passes with ATTN_SP32_PROJ=off; ladder window_kv L20 0.090 -> 0.106. Suspicious: P.9 replaces bf16 TP partial sums of
+    wo_b by one fp32 sum, which should move closer to native, not further; the failing prompt is a padded partial chunk.
+    OWNER 15:40: the device may be used. Do: find the first layer / op where P.9 on vs off differs beyond its rounding for
+    that prompt (device dumps of the 2536-token prompt, layer by layer, on vs off; the CPU at the device''s formats, agents''
+    rule 14, to tell rounding from a bug). Check the padded partial chunk first: rows past the valid length, pad rows entering
+    the per-chip 160-row projections, the last chip''s share, any reduction or norm over padded rows. Bug -> fix it and
+    remove the waiver; honest rounding -> record the evidence and keep the waiver for the owner. Both failing checks are
+    the same one: test_adapter_acks and test_runner_contract (slot 0 turn 1), last-window 128 rows of 0_window_kv L20, waived
+    in tests.unit_waivers until this is settled.'
+  hold: 'owner 2026-10-29: parked, waived for now; CPU only, no Galaxy time'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  released: '2026-10-29T15:36:21'
 classified:
   L.smoke:
     kind: framework
