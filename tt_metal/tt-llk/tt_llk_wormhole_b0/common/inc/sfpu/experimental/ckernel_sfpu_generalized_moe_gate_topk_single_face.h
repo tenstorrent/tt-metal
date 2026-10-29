@@ -295,6 +295,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _generalized_moe_gate_sort_top4_groups()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    _gmg_enable_index_tracking();
     // Sort top4
     // Load the top2 sums and concat indices
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
@@ -334,6 +335,7 @@ inline void _gmg_merge4_runs_raw()
     // Even Columns sorted Top8 in LREG0 and LREG1. `base` selects which 4-run block to read
     // (0 = groups in cols +0/+2/+4/+6; 8 = the next block at +8/+10/+12/+14, if step1 filled it).
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    _gmg_enable_index_tracking();
 
     // Reverse order of sort for top8 values in odd columns
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + base + 6);
