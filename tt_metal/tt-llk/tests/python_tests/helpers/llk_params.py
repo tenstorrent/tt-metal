@@ -13,6 +13,7 @@ format_dict = {
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
+    DataFormat.Bfp8: torch.float16,  # BFP8 with an A exponent, represented as float16
     DataFormat.Bfp8_b: torch.bfloat16,  # BFP8 not native to PyTorch, is represented as bfloat16
     DataFormat.Bfp4_b: torch.bfloat16,  # BFP4 not native to PyTorch, is represented as bfloat16
     DataFormat.Bfp2_b: torch.bfloat16,  # BFP2 not native to PyTorch, is represented as bfloat16
