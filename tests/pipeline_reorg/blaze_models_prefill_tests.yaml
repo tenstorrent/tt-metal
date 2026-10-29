@@ -1388,8 +1388,8 @@
 # 240 chunks). The 860160 (p99) row of the benchmark definition has never been measured and is left out, as there.
 # Config C of #57827 (2026-09-27, re-measured 2026-10-11): chunk 2048 and one dense layer alone on each of stages 0-2.
 # 16 ranks of [2,4] over the 4 galaxies, placed by tt-run discovery on the z-chain mesh graph. Perf is reported (job
-# summary in the #57827 table layout + artifact), not gated. Like run_matrix.sh, each cached row gets its own runner
-# launch with KV capacity cached + 51200, so the numbers are comparable with #57827.
+# summary in the #57827 table layout + artifact), not gated. One runner launch serves every row, with the KV capacity at
+# the model's max context (1048576, as in production), so the weights are loaded once (see ci/run_matrix_ci.sh).
 - name: "(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"
   cmd: |
     set -euo pipefail
@@ -1413,9 +1413,9 @@
   artifact_subdir: m3_prefill_matrix
   skus:
     bh_sc4:
-      # Run 39659921568 (3x3 table): first launch 2m18s to ready, later launches ~40 s, ~20-25 s per cell (idle +
-      # loaded), ~50 s shutdown, cached prefix ~20 s at 143k. Estimate for this table: ~25-30 min test step = 5 launches
-      # x ~4.5 min (bring-up, prefix, 7 cells, shutdown) + the first launch's discovery. Lower once measured.
+      # Run 39751806622 (3x3 table, one launch per row): first launch 2m19s to ready, ~13 s producer attach and
+      # ~20-35 s per cell (idle + loaded) per row, cached prefix 19 s at 143k and 72 s at 553k, ~25 s shutdown.
+      # Estimate for this table with one launch: ~20-22 min test step. Lower once measured.
       timeout: 60
       tier: 2
       release_ready: false
