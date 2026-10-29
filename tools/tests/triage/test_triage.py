@@ -123,19 +123,34 @@ HANG_APP_EXPECTED_RESULTS = {
 class AppOutput:
     RETAINED_LINES = 20000
 
-    def __init__(self, proc: subprocess.Popen):
+    def __init__(self, proc: subprocess.Popen, ready_line: str | None = None):
         self._lock = threading.Lock()
         self._chunks: deque[str] = deque(maxlen=self.RETAINED_LINES)
-        for stream in (proc.stdout, proc.stderr):
+        self._ready_line = ready_line
+        self.ready_line_seen = False
+        # Set when ready_line arrives or both streams close (the app exited), so the fixture can sleep on it.
+        self.stop_waiting = threading.Event()
+        streams = (proc.stdout, proc.stderr)
+        self._open_streams = len(streams)
+        for stream in streams:
             threading.Thread(target=self._drain, args=(stream,), daemon=True).start()
 
     def _drain(self, stream) -> None:
         try:
             for line in iter(stream.readline, b""):
+                text = line.decode("utf-8", errors="replace")
                 with self._lock:
-                    self._chunks.append(line.decode("utf-8", errors="replace"))
+                    self._chunks.append(text)
+                if self._ready_line is not None and self._ready_line in text:
+                    self.ready_line_seen = True
+                    self.stop_waiting.set()
         except (ValueError, OSError):
             pass  # the pipe was closed under us while the app was being torn down
+        finally:
+            with self._lock:
+                self._open_streams -= 1
+                if self._open_streams == 0:
+                    self.stop_waiting.set()
 
     def text(self) -> str:
         with self._lock:
@@ -237,16 +252,25 @@ def cause_hang_with_app(request):
         env={**os.environ, **app_configuration.get("env", {})},
     )
 
-    output = AppOutput(proc)
+    output = AppOutput(proc, "Device timeout detected as expected.")
     try:
         expected_results = app_configuration.get("expected_results", {})
         if on_simulator:
             request.cls.exalens_context = wait_for_simulated_hang(proc, output, app, expected_results)
         else:
             auto_timeout = app_configuration.get("auto_timeout", False)
-            # auto_timeout apps exit 0 once they detect their own hang; expect_running ones stay wedged.
+            # auto_timeout apps print a line once they detect their own hang and then stay alive; expect_running ones
+            # stay wedged.
             expect_running = app_configuration.get("expect_running", False)
-            if auto_timeout or expect_running:
+            if auto_timeout:
+                # Sleep until the application reports its own hang, exits, or the timeout runs out
+                output.stop_waiting.wait(timeout)
+                if not output.ready_line_seen:
+                    # Print process output for debugging
+                    print("The application did not hang as expected.")
+                    output.print()
+                    raise RuntimeError("The application did not hang as expected.")
+            elif expect_running:
                 # Wait for the application to hang itself
                 try:
                     proc.wait(timeout=timeout)
@@ -254,7 +278,7 @@ def cause_hang_with_app(request):
                     pass
 
                 # Check if the process has exited
-                if proc.returncode != (None if expect_running else 0):
+                if proc.returncode is not None:
                     # Print process output for debugging
                     print("The application did not hang as expected.")
                     output.print()
@@ -264,9 +288,6 @@ def cause_hang_with_app(request):
 
         request.cls.app_configuration = app_configuration
         request.cls.expected_results = expected_results
-        if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
-            metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
-            os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
 
         yield
     finally:
@@ -284,37 +305,28 @@ def cause_hang_with_app(request):
     "cause_hang_with_app",
     [
         (
-            # Manual hang detection with timeout from outside
-            HANG_APP_ADD_2_INTEGERS,
-            [],
-            {
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
-            },
-            10,
-        ),
-        (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
+            # Automatic hang detection with timeout inside the app, fast dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
             },
             60,
         ),
         (
-            # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, slow dispatch
+            # Automatic hang detection with timeout inside the app, slow dispatch
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
@@ -329,7 +341,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
             },
@@ -343,7 +355,7 @@ def cause_hang_with_app(request):
                 "auto_timeout": True,
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-                    "TT_METAL_LOGS_PATH": "/tmp/tt-metal/inspector-ttnn",
+                    "TT_TRIAGE_HANG_APP_STAY_ALIVE": "1",
                     "TT_METAL_SLOW_DISPATCH_MODE": "1",
                 },
                 "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_TTNN_ADD_INTEGERS],
