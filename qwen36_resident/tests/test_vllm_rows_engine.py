@@ -62,7 +62,9 @@ class ResidentModel(ResidentRowsAdapter):
         return []
 
 
-def vllm_config(max_num_seqs, async_scheduling, device_sampling):
+def vllm_config(max_num_seqs, async_scheduling, device_sampling, cls=None):
+    """the VllmConfig vLLM builds for the class (ResidentModel unless given) under the running plugin"""
+    cls = cls or ResidentModel
     if not MODEL_CONFIG.is_dir():
         pytest.skip(f"no plugin test model config at {MODEL_CONFIG}")
     mc = ModelConfig(model=str(MODEL_CONFIG), dtype="float16", seed=42, skip_tokenizer_init=True)
@@ -85,7 +87,7 @@ def vllm_config(max_num_seqs, async_scheduling, device_sampling):
             "vllm.model_executor.models.registry.ModelRegistry.get_supported_archs",
             return_value=["TTQwen2ForCausalLM"],
         ),
-        patch("vllm.model_executor.model_loader.utils.get_model_architecture", return_value=(ResidentModel, None)),
+        patch("vllm.model_executor.model_loader.utils.get_model_architecture", return_value=(cls, None)),
     ):
         return VllmConfig(
             scheduler_config=sc,

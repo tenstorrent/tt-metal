@@ -6,7 +6,8 @@
 #
 # usage: HF_MODEL=<checkpoint snapshot dir> qwen36_resident/serve/serve_local.sh plain|mtp|multi [extra vllm serve args...]
 #   plain: one user, any sampling; greedy and top_k <= 32 are drawn on device (full speed), others on the host.
-#   mtp:   one user, greedy only, MTP speculative decode (4 tokens per step) through the plugin's adaptive block output.
+#   mtp:   one user, greedy only (a request with temperature > 0 is served greedily; the server warns once), MTP
+#          speculative decode (4 tokens per step) through the plugin's adaptive block output.
 #   multi: MAX_NUM_SEQS users (default 8) on the rows-mode build (launches of 8, paged KV pool), chunked prefill of
 #          PREFILL_CHUNK_TOKENS (default 1024) between decode steps. Needs vllm-tt-plugin branch resident-mu (TT chunk
 #          core). Host sampling unless SAMPLE_ON_DEVICE=1 (needs the rows-mode hub feed, WP7).

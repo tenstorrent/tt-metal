@@ -18,7 +18,9 @@ max_num_seqs 1 keeps the single-user build above unchanged.
 
 Qwen36ResidentMTPForCausalLM serves greedy MTP speculative decode (qwen36_resident.mtp) through the
 plugin's adaptive block output: every decode step commits MTP_BLOCK tokens, the device running MTP_DEPTH
-verify + draft steps ahead of the host so it keeps decoding during the runner's per-step work.
+verify + draft steps ahead of the host so it keeps decoding during the runner's per-step work. It is greedy-only
+(greedy_only = True): every request is served greedily, and the server logs one warning the first time a request
+with temperature > 0 arrives (greedy_only.install, run on import in the API server process).
 """
 import os
 
@@ -27,6 +29,7 @@ from loguru import logger
 from vllm.transformers_utils.config import uses_mrope
 
 import ttnn
+from qwen36_resident import greedy_only
 from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K, Dims, ResidentModel, State
 from qwen36_resident.mtp import SpecDecoder
@@ -35,6 +38,7 @@ from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngin
 
 PREFILL_CHUNKS = (128, 256, 512, 1024)
 assert max(PREFILL_CHUNKS) == CHUNK_UNIT
+greedy_only.install()
 
 
 class Qwen36ResidentForCausalLM:
@@ -245,6 +249,7 @@ class Qwen36ResidentMTPForCausalLM(Qwen36ResidentForCausalLM):
     the prefill's logits) must be their argmax; anything else raises. One user (max_num_seqs=1), so every
     request owns the scheduler's block session and every decode step is a block step."""
 
+    greedy_only = True
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": True,
