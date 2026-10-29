@@ -180,10 +180,12 @@ fp16 subnormals the pack does not reproduce.
   `--head` file's name says (`--arch` to name it).
 - **Raising a budget is a PR of its own.** PR Gate's `llk-sfpu-ulp-budget-guard` fails
   a change that loosens a gate in either table (a raised figure, a widened floor, a gate
-  demoted or deleted, a widened `atol`/`rtol`) unless the change touches nothing but
-  the tables and carries the `ulp-budget-raise-approved` label; after adding the label,
-  re-run the job. Lowering a budget is never blocked, and a tolerance cell's recorded
-  measurement going up is reported, not blocked.
+  demoted or deleted, a widened `atol`/`rtol`, or a tolerance row's `measured` or
+  `nonfinite` raised or dropped, since the nightly headroom check holds the cell to
+  them) unless the change touches nothing but the tables and carries the
+  `ulp-budget-raise-approved` label; after adding the label, re-run the job. Lowering a
+  budget is never blocked, and neither is a cell no row covered before: a new op's
+  block, or a cell enrolled with its kernel, can land in the same PR as the kernel.
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
