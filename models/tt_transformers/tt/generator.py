@@ -45,6 +45,29 @@ from models.tt_transformers.tt.common import (
 # Maximum total tokens (batch_size * seq_len) allowed for a batched prefill pass.
 # Exceeding this triggers a fallback to sequential per-user prefill.
 MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
+MIN_PREFILL_CHUNK_SIZE = 2048
+
+
+def prefill_chunk_sizes(real_len, max_chunk_size, padded_len):
+    """Chunk sizes for a non-cached chunked prefill of ``real_len`` real tokens.
+
+    Greedy power-of-two decomposition (each chunk a power of two >= MIN_PREFILL_CHUNK_SIZE and
+    <= max_chunk_size, descending), so the tail is covered by a small chunk instead of a full
+    max-size one: 16,470 tokens with a 16K max chunk become [16384, 2048] (18,432 tokens of work)
+    instead of [16384, 16384]. With max_chunk_size == MIN_PREFILL_CHUNK_SIZE this reduces to the
+    previous uniform chunking. Power-of-two sizes are the lengths prefill is compiled/warmed for.
+    """
+    cap = min(max_chunk_size, padded_len)
+    cap = 1 << (cap.bit_length() - 1)  # largest power of two <= cap
+    remaining = -(-real_len // MIN_PREFILL_CHUNK_SIZE) * MIN_PREFILL_CHUNK_SIZE
+    if padded_len <= MIN_PREFILL_CHUNK_SIZE or remaining > padded_len:
+        return [padded_len]  # nothing to decompose (short prefill) or inconsistent padding: single chunk
+    sizes = []
+    while remaining > 0:
+        c = min(cap, 1 << (remaining.bit_length() - 1))
+        sizes.append(c)
+        remaining -= c
+    return sizes
 
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
@@ -2035,13 +2058,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
-        use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
+        max_chunk = self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
         # kwargs are for prepare_inputs_prefill (global_user_id, multimodal inputs, serving plugin keywords);
         # ttnn_prefill_forward takes only the per-layer page tables from them, on every path.
         forward_kwargs = (
             {"page_tables_per_layer": kwargs["page_tables_per_layer"]} if "page_tables_per_layer" in kwargs else {}
         )
+        # Also chunk prompts that fit in max_chunk but exceed the minimum chunk: the padded
+        # (power-of-two) length is then decomposed into smaller power-of-two chunks that cover
+        # only the real tokens (see prefill_chunk_sizes), e.g. 9,000 real tokens -> 8192 + 2048
+        # instead of one 16384 prefill. Needs paged attention like the existing chunked path.
+        can_decompose = (
+            page_table is not None and kv_cache is not None and last_token_idx is not None and not use_prefix_caching
+        )
+        use_chunked_prefill = seq_len > max_chunk or (can_decompose and seq_len > MIN_PREFILL_CHUNK_SIZE)
         if use_chunked_prefill or use_prefix_caching:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
@@ -2060,17 +2091,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 f"last_token_idx={last_token_idx}, seq_len={seq_len}, num_cached_tokens={num_cached_tokens}"
             )
 
-            if use_chunked_prefill:
-                # If chunked prefill (more than one chunk is needed), we want to use the maximum chunk size.
-                chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
-            else:
-                # Otherwise we only have one chunk.
-                chunk_size = seq_len
-
             last_token_idx_in_seq = last_token_idx - num_cached_tokens  # Excluding the cached tokens
-            last_token_idx_in_chunk = last_token_idx_in_seq % chunk_size
-            # Calculate which chunk contains the last_token_idx
-            last_chunk_start = (last_token_idx_in_seq // chunk_size) * chunk_size
+            if use_prefix_caching:
+                # Resumed prefill: keep uniform chunks (max chunk size if more than one chunk is needed).
+                if seq_len > max_chunk:
+                    chunk_size = get_max_prefill_chunk_size(seq_len, max_chunk)
+                else:
+                    chunk_size = seq_len
+                num_chunks = last_token_idx_in_seq // chunk_size + 1  # up to the chunk holding the last token
+                chunk_sizes = [chunk_size] * num_chunks
+            else:
+                chunk_sizes = prefill_chunk_sizes(last_token_idx_in_seq + 1, max_chunk, seq_len)
+            logger.info(f"Chunked prefill: {len(chunk_sizes)} chunk(s) {chunk_sizes} for {last_token_idx_in_seq + 1} tokens")
             # Hybrid models may substitute a full-attention per-layer table here
             # so ``chunk_page_table`` carries the block IDs (and column stride) that
             # full-layer fill actually writes (legacy ``page_table`` is often
@@ -2090,7 +2122,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
             CHUNK_USER_ID = 0
 
-            for chunk_start in range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size):
+            chunk_start = num_cached_tokens
+            for chunk_idx, chunk_size in enumerate(chunk_sizes):
                 # These are absolute, i.e. including the cached tokens
                 chunk_end = chunk_start + chunk_size
                 # These are relative, i.e. excluding the cached tokens
@@ -2112,7 +2145,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # Cached pages must be skipped as well,
                 # so using absolute indexes.
                 chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
-                is_last_chunk = chunk_start_relative == last_chunk_start
+                is_last_chunk = chunk_idx == len(chunk_sizes) - 1
+                last_token_idx_in_chunk = last_token_idx_in_seq - chunk_start_relative
 
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
@@ -2153,6 +2187,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     return tt_logits
                 else:
                     del tt_logits
+                chunk_start = chunk_end
         else:
             inputs = self.model[model_id].prepare_inputs_prefill(
                 tokens,
