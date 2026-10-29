@@ -81,6 +81,13 @@ def test_failed_fill_is_not_marked_and_unlocks(tmp_path, expect_error):
     assert os.path.exists(cache_name(cache_dir, "top", "complete"))
 
 
+def test_new_cache_dir_is_made(tmp_path):
+    cache_dir = str(tmp_path / "mtp" / "new")  # e.g. setup_mtp(..., cache_dir) on a directory nothing has made yet
+    with cache_fill(cache_dir, "mtp0_tp8") as need:
+        assert need
+    assert os.path.exists(cache_name(cache_dir, "mtp0_tp8", "complete"))
+
+
 def test_no_cache_dir_always_converts():
     with cache_fill(None, "top") as need:
         assert need

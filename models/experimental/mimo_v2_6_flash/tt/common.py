@@ -150,6 +150,7 @@ def cache_fill(cache_dir, tag):
     if os.path.exists(done):
         yield False
         return
+    os.makedirs(cache_dir, exist_ok=True)  # a drafter may get a new directory (ttnn.as_tensor would make it too)
     with open(cache_name(cache_dir, tag, "lock"), "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # released when the file closes, also when the block raises
         need = not os.path.exists(done)
