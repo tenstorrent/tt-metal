@@ -173,12 +173,18 @@ TT_METAL_HOME=<tt-metal build> PLUGIN_SRC=<vllm-tt-plugin at mimo-v2.6-flash/sin
   - A one-lane MTP verify step then took 61 ms instead of 23, with a 50 ms gap between verifies, and MTP at c=16
     served 439 tok/s.
   - Plain decode was not affected: a steady step replays its trace and runs almost no torch ops.
-- **Rows.** The row-to-chip groups in the script are the BH Galaxy's; `serving/discover_rows.py` prints them.
+- **Rows.** Chip ids depend on the machine, so `serve_rows.sh` finds each row's chips before it starts the engines,
+  with `serving/discover_rows.py` (it opens the whole mesh; set `ROW_DEVICES` to skip it). vllm-tt-plugin's standard DP
+  discovers its ranks' groups the same way.
   - Four processes can each open one row at the same time: a ring all_gather and an all_reduce on every row are exact.
   - tt-metal pins each chip's dispatch threads to core (local chip id) % N, which is the same set of cores in every
     engine. Spreading them with a per-engine `LD_PRELOAD` offset made no difference.
 - **Startup** takes about 1.5 minutes, because each engine warms up 4 users of one replica. The 4-lane engine takes
   about 4.5 minutes.
+- **Cold TTNN cache.** The four engines share one `MIMO_TT_CACHE`, and `ttnn.as_tensor` writes a cache file in place.
+  Each cache tag (`top`, every layer, each MTP layer, DFlash) is therefore filled under a file lock
+  (`tt.common.cache_fill`): one engine converts and writes it, and the others wait, then load it. A complete tag takes
+  no lock.
 - **vLLM's own DP** (`--data-parallel-size 4` without the lane fold) is no alternative. For an MoE model vLLM runs the
   DP ranks in lockstep (`DPEngineCoreProc`), and the plugin refuses standard DP for MoE.
 
@@ -210,9 +216,10 @@ The 4-lane plain numbers are from the build before #63006. That change touches o
 | decode window (all 16 decoding) | 1291.8 tok/s | 1301.0 tok/s |
 
 **tt-inference-server.** The release flow starts this deployment itself, on branch
-`mimo-v2.6-flash/row-engines` of tt-inference-server. A device spec's `submesh_engines` (the four row chip groups in
-the MiMo Blackhole Galaxy entries) makes `vllm-tt-metal/src/run_vllm_api_server.py` start one engine per group and
-serve the same proxy (`engine_proxy.py`) on the service port, so every workflow talks to one endpoint.
+`mimo-v2.6-flash/row-engines` of tt-inference-server. A device spec's `submesh_engines: true` makes
+`vllm-tt-metal/src/run_vllm_api_server.py` split the mesh into `data_parallel_size` device groups, discovered at launch
+as the plugin's standard DP does (the four rows on a Galaxy), start one engine per group, and serve the same proxy
+(`engine_proxy.py`) on the service port, so every workflow talks to one endpoint.
 - **Checked on the host:** the launcher with the dev catalog's MiMo runtime spec (1M context) came up with all 4
   engines healthy in 250 s. SPEED-Bench c=16 through it gave 958 tok/s greedy and 938 sampled, and SIGTERM stopped
   every engine in 8 s. The MTP entry gave 1122 greedy and 1038 sampled. Every verify was accepted on device and 96%
