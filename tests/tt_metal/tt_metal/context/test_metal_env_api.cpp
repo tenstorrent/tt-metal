@@ -31,8 +31,8 @@ TEST(MetalEnv, Mock) {
         .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)};
     MetalEnv env_1(settings);
     MetalEnv env_2(settings);
-    EXPECT_EQ(env_1.get_arch(), tt::ARCH::WORMHOLE_B0);
-    EXPECT_EQ(env_2.get_arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(env_1.get_device_properties().arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(env_2.get_device_properties().arch(), tt::ARCH::WORMHOLE_B0);
 }
 
 TEST(MetalEnv, OnePhysicalMultipleMock) {
@@ -47,31 +47,52 @@ TEST(MetalEnv, OnePhysicalMultipleMock) {
 
 TEST(MetalEnv, EnvQueries) {
     MetalEnv env;
-    EXPECT_NO_THROW(env.get_arch());
-    EXPECT_NO_THROW(env.get_arch_name());
     EXPECT_NO_THROW(env.get_num_pcie_devices());
-    EXPECT_NO_THROW(env.get_l1_size());
-    EXPECT_NO_THROW(env.get_dram_alignment());
-    EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
-    EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
-    EXPECT_NO_THROW(env.get_eps());
-    EXPECT_NO_THROW(env.get_nan());
-    EXPECT_NO_THROW(env.get_inf());
+    const auto props = env.get_device_properties();
+    EXPECT_NO_THROW(props.arch());
+    EXPECT_NO_THROW(props.arch_name());
+    EXPECT_NO_THROW(props.node_local_mem_size());
+    EXPECT_NO_THROW(props.dram_alignment());
+    EXPECT_NO_THROW(props.node_local_mem_alignment());
+    EXPECT_NO_THROW(props.num_dataflow_buffers());
+    EXPECT_NO_THROW(props.max_worker_node_local_mem_unreserved_size());
+    EXPECT_NO_THROW(props.sfpu_eps());
+    EXPECT_NO_THROW(props.sfpu_nan());
+    EXPECT_NO_THROW(props.sfpu_inf());
 }
 
 TEST(MetalEnv, EnvQueriesMock) {
     MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
-    EXPECT_EQ(env.get_arch(), tt::ARCH::BLACKHOLE);
-    EXPECT_NO_THROW(env.get_l1_size());
     EXPECT_EQ(env.get_num_pcie_devices(), 2);
-    EXPECT_NO_THROW(env.get_dram_alignment());
-    EXPECT_NO_THROW(env.get_l1_alignment());
-    EXPECT_NO_THROW(env.get_num_dataflow_buffers());
-    EXPECT_NO_THROW(env.get_max_worker_l1_unreserved_size());
-    EXPECT_NO_THROW(env.get_eps());
-    EXPECT_NO_THROW(env.get_nan());
-    EXPECT_NO_THROW(env.get_inf());
+    const auto props = env.get_device_properties();
+    EXPECT_EQ(props.arch(), tt::ARCH::BLACKHOLE);
+    EXPECT_NO_THROW(props.node_local_mem_size());
+    EXPECT_NO_THROW(props.dram_alignment());
+    EXPECT_NO_THROW(props.node_local_mem_alignment());
+    EXPECT_NO_THROW(props.num_dataflow_buffers());
+    EXPECT_NO_THROW(props.max_worker_node_local_mem_unreserved_size());
+    EXPECT_NO_THROW(props.sfpu_eps());
+    EXPECT_NO_THROW(props.sfpu_nan());
+    EXPECT_NO_THROW(props.sfpu_inf());
+}
+
+TEST(MetalEnv, DevicePropertiesCopyAndAssign) {
+    MetalEnv env_wh({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
+    MetalEnv env_bh({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 2)});
+
+    // The handle is a regular value type: copyable and reassignable to a view of another env.
+    MetalDeviceProperties props = env_wh.get_device_properties();
+    const MetalDeviceProperties props_copy = props;
+    EXPECT_EQ(props_copy.arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(props_copy.node_local_mem_alignment(), env_wh.get_device_properties().node_local_mem_alignment());
+
+    props = env_bh.get_device_properties();
+    EXPECT_EQ(props.arch(), tt::ARCH::BLACKHOLE);
+    EXPECT_EQ(props.arch_name(), "blackhole");
+    EXPECT_EQ(props.node_local_mem_size(), env_bh.get_device_properties().node_local_mem_size());
+
+    // The earlier copy still refers to the first env.
+    EXPECT_EQ(props_copy.arch(), tt::ARCH::WORMHOLE_B0);
 }
 
 TEST(MetalEnv, ForkSafety) {
@@ -229,7 +250,8 @@ TEST(MetalEnv, ConfigureFabricThrowsAfterSystemMesh) {
 
 TEST(MetalEnv, ConfigureFabricThrowsAfterCreateMeshDevice) {
     MetalEnv env(wormhole_mock_descriptor());
-    auto mesh = env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape{1u, 1u}));
+    auto mesh =
+        distributed::MeshDevice::open_mesh_device(env, distributed::MeshDeviceConfig(distributed::MeshShape{1u, 1u}));
     EXPECT_THROW(env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D}), std::runtime_error);
     mesh->close();
     EXPECT_THROW(env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D}), std::runtime_error);
@@ -323,8 +345,10 @@ TEST(MetalEnv, FailedCreateMeshDeviceDoesNotLeakContext) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
         // Fatals inside MeshDeviceImpl::create, after the context exists and before ownership transfers.
         EXPECT_THROW(
-            env.create_mesh_device(distributed::MeshDeviceConfig(
-                /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
+            distributed::MeshDevice::open_mesh_device(
+                env,
+                distributed::MeshDeviceConfig(
+                    /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
             std::runtime_error);
     }
 
@@ -338,7 +362,7 @@ TEST(MetalEnv, FailedCreateUnitMeshDeviceDoesNotLeakContext) {
     for (int i = 0; i < 3; ++i) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
         // Device 99 is not in the 1-chip mock cluster, so opening it fails.
-        EXPECT_THROW(env.create_unit_mesh(99), std::runtime_error);
+        EXPECT_THROW(distributed::MeshDevice::open_unit_mesh(env, 99), std::runtime_error);
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
@@ -350,7 +374,7 @@ TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
 
     for (int i = 0; i < 3; ++i) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
-        EXPECT_THROW(env.create_unit_meshes({}), std::runtime_error);
+        EXPECT_THROW(distributed::MeshDevice::open_unit_meshes(env, {}), std::runtime_error);
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());

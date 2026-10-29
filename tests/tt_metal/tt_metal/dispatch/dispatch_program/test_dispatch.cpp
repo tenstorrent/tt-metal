@@ -34,8 +34,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, ProgramImpl::get_cb_size, Eth, EthernetConfig,
 // CreateSemaphore with CoreType
@@ -43,6 +43,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -66,7 +67,7 @@ static void test_sems_across_core_types(
     }
 
     for (const auto& mesh_device : devices) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         if (not device->is_mmio_capable()) {
             continue;
         }
@@ -157,8 +158,11 @@ static void test_sems_across_core_types(
 }
 
 TEST_F(MeshDispatchFixture, EthTestBlank) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -232,7 +236,7 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     }
 
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
@@ -272,7 +276,12 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     }
 }
 
-TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
+TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
+    test_sems_across_core_types(this, this->devices_, true);
+}
 
 TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
@@ -285,6 +294,9 @@ TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
 TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
@@ -297,7 +309,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t cb_config_buffer_size = max_dfbs_ * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
 
         CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
         bool found_overlapping_core = false;

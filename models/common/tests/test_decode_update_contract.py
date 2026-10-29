@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import importlib
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from models.common.sampling.generator import (
@@ -14,8 +16,10 @@ from models.common.sampling.generator import (
     SeedManager,
     _hash_request_seed_to_device_seed,
 )
+from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.common.warmup.warmup_utils import WarmupForwardMixin
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.generator import Generator
 
 
 def _fake_sampling_generator():
@@ -263,14 +267,14 @@ def test_qwen_vl_slot_remap_moves_persistent_rope_deltas():
     from models.demos.qwen25_vl.tt.generator import Generator as Qwen25Generator
 
     for generator_cls in (Qwen25Generator, Qwen3Generator):
-        generator = SimpleNamespace(
-            model=SimpleNamespace(
-                rope_setup=SimpleNamespace(
-                    batch_size=4,
-                    rope_deltas=torch.tensor([10, 20, 30, 40]),
-                )
+        model = SimpleNamespace(
+            rope_setup=SimpleNamespace(
+                batch_size=4,
+                rope_deltas=torch.tensor([10, 20, 30, 40]),
             )
         )
+        # Qwen3-VL reads self.model; Qwen2.5-VL remaps per data-parallel lane through the shared generator.
+        generator = SimpleNamespace(model=model, data_parallel=1, _ttt_generator=SimpleNamespace(model=[model]))
 
         generator_cls.remap_rope_deltas(generator, [3, 1, 2, 3])
 
@@ -383,6 +387,92 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
 
     with expect_error(ValueError, "outside its global range"):
         Generator._apply_sampling_slot_remap(fake, torch.tensor([0, 2, 2, 3]))
+
+
+@pytest.mark.parametrize(
+    "adapter_path, forwarded_width",
+    [
+        ("models.tt_transformers.tt.generator_vllm:LlamaForCausalLM", 8),
+        ("models.tt_transformers.tt.generator_vllm:QwenForCausalLM", 8),
+        ("models.tt_transformers.tt.generator_vllm:MistralForCausalLM", 8),
+        ("models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration", 8),
+        # Decode bucketing runs 3 active rows in the width-4 bucket.
+        ("models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM", 4),
+    ],
+    ids=lambda value: value.rsplit(":", 1)[1] if isinstance(value, str) else None,
+)
+def test_adapter_forwards_deferred_decode(adapter_path, forwarded_width, monkeypatch):
+    """A device grammar adapter hands the deferred decode to the shared Generator."""
+    stub_vllm_if_missing(monkeypatch)
+    module_name, class_name = adapter_path.split(":")
+    adapter = getattr(importlib.import_module(module_name), class_name)
+    forwarded = []
+    buckets = []
+    payload = object()
+
+    def fake_decode(self, *args, **kwargs):
+        forwarded.append(kwargs)
+        return payload
+
+    monkeypatch.setattr(Generator, "decode_forward", fake_decode)
+    monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
+    wrapper = adapter.__new__(adapter)
+    sampling = SimpleNamespace(set_trace_bucket=buckets.append)
+    wrapper.model = [SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), sampling=sampling)]
+    wrapper.data_parallel = 1  # read by Generator.__del__
+    # Distinct rows, so a forwarded row can be matched to its source. Three are active;
+    # the runner marks padded rows with position -1.
+    tokens = torch.arange(100, 108, dtype=torch.int32).reshape(8, 1)
+    start_pos = torch.tensor([10, 11, 12, -1, -1, -1, -1, -1], dtype=torch.int32)
+
+    result = adapter.decode_forward(
+        wrapper,
+        tokens=tokens,
+        start_pos=start_pos,
+        page_table=None,
+        kv_cache=None,
+        read_from_device=False,
+        defer_device_sampling=True,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+
+    assert result is payload
+    kwargs = forwarded[0]
+    assert kwargs["defer_device_sampling"] is True
+    assert kwargs["read_from_device"] is False
+    assert "sampling_params" not in kwargs
+    torch.testing.assert_close(kwargs["tokens"], tokens[:forwarded_width])
+    torch.testing.assert_close(kwargs["start_pos"], start_pos[:forwarded_width])
+    # Only bucketing adapters move the sampler to the bucket's trace.
+    assert buckets == ([forwarded_width] if forwarded_width < 8 else [])
+
+
+@pytest.mark.parametrize(
+    "adapter_path",
+    [
+        "models.tt_transformers.tt.generator_vllm:LlamaForCausalLM",
+        "models.tt_transformers.tt.generator_vllm:QwenForCausalLM",
+        "models.tt_transformers.tt.generator_vllm:MistralForCausalLM",
+        "models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration",
+        "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM",
+        "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM",
+    ],
+    ids=lambda value: value.rsplit(":", 1)[1],
+)
+def test_device_grammar_requires_device_sampling(adapter_path, monkeypatch):
+    """The vLLM TT plugin refuses to start a model that declares device grammar without device sampling.
+
+    Read from the imported class, so a subclass that spreads its base's capabilities is checked as resolved.
+    """
+    stub_vllm_if_missing(monkeypatch)
+    module_name, class_name = adapter_path.split(":")
+    capabilities = getattr(importlib.import_module(module_name), class_name).model_capabilities
+
+    if capabilities.get("supports_device_grammar", False):
+        assert capabilities.get("supports_sample_on_device", False) is True
 
 
 def test_sglang_bridge_explicitly_requests_host_authoritative_decode(monkeypatch):
@@ -624,6 +714,7 @@ def test_gemma4_decode_restores_full_layer_page_tables_after_sequential_prefill(
         _decode_forward_trace_text=lambda **kwargs: decode("replay", **kwargs),
         _prepare_decode_trace_variant=lambda **kwargs: decode("prepare", **kwargs),
         _apply_sampling_slot_remap=lambda remap: None,
+        _install_per_layer_page_tables=ChunkedPrefillPageTableGuardMixin._install_per_layer_page_tables,
     )
     fake._clear_sequential_batch_page_tables = (
         lambda: ChunkedPrefillPageTableGuardMixin._clear_sequential_batch_page_tables(fake)

@@ -78,6 +78,9 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
+    // The kernel's defines come first, as -D flags would: the generated headers below pull in API headers
+    // (e.g. compute_kernel_hw_startup.h) that test them, and #pragma once fixes what they saw.
+    prolog << "#include \"defines_generated.h\"\n";
     if (is_metal2_kernel) {
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
@@ -90,7 +93,6 @@ string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool 
         prolog << "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
-    prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
 
@@ -128,6 +130,16 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
         out_dir + string(jit_build::utils::NAMED_CT_ARG_MAP_HEADER),
         jit_build::utils::format_named_ct_arg_map_header(named_args));
     return true;
+}
+
+// DFBBindingToken template argument for a dfb::AccessPattern code (STRIDED 0, ALL 1, BLOCKED 2).
+const char* dfb_access_name(uint8_t code) {
+    switch (code) {
+        case 0: return "dfb::AccessPattern::STRIDED";
+        case 1: return "dfb::AccessPattern::ALL";
+        case 2: return "dfb::AccessPattern::BLOCKED";
+        default: TT_THROW("Unknown DFB access pattern code {}", code);
+    }
 }
 
 /**
@@ -218,6 +230,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         bool is_relay;
         uint8_t prefetcher_pipe_id;
         std::optional<LLKMetadata> metadata;
+        uint8_t pap;
+        uint8_t cap;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
@@ -226,8 +240,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             uint16_t id,
             bool is_relay,
             uint8_t prefetcher_pipe_id,
-            const std::optional<LLKMetadata>& metadata) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata});
+            const std::optional<LLKMetadata>& metadata,
+            uint8_t pap,
+            uint8_t cap) {
+            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap});
         });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
@@ -246,17 +262,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     struct TaEntry {
         string name;
         uint32_t cta_offset;
-        uint32_t addr_crta_offset;
+        bool is_per_node;
+        uint32_t addr_offset;
         LLKMetadata metadata;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles(
-        [&ta_entries](
-            const string& name,
-            uint32_t cta_offset,
-            uint32_t addr_crta_offset,
-            uint32_t /*num_rt_words*/,
-            const LLKMetadata& metadata) { ta_entries.push_back({name, cta_offset, addr_crta_offset, metadata}); });
+    settings.process_tensor_binding_handles([&ta_entries](
+                                                const string& name,
+                                                uint32_t cta_offset,
+                                                bool is_per_node,
+                                                uint32_t addr_offset,
+                                                uint32_t /*num_rt_words*/,
+                                                const LLKMetadata& metadata) {
+        ta_entries.push_back({name, cta_offset, is_per_node, addr_offset, metadata});
+    });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -356,7 +375,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // the headers that define those token types are omitted, but the empty getter still returns
     // const BindingTokenType*{nullptr} and needs those types in scope.
     if (dfb_entries.empty()) {
-        content << "struct DFBBindingToken;\n";
+        // DFBBindingToken is a template (pattern pair), so it cannot be forward-declared here.
+        content << "#include \"api/dataflow/dfb_binding_token.h\"\n";
     }
     if (scratch_entries.empty()) {
         content << "struct ScratchpadBindingToken;\n";
@@ -374,15 +394,21 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
             content << "};\n";
-        } else if (entry.metadata.has_value()) {
-            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", ";
-            content << serialize_llk_metadata(*entry.metadata);
-            content << "};\n";
         } else {
-            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
+            // Both sides' access patterns ride on the token so the device DataflowBuffer can
+            // specialize on the pattern pair at compile time; LLK metadata, when the host set it,
+            // rides as the second constructor argument.
+            content << "constexpr DFBBindingToken<" << dfb_access_name(entry.pap) << ", " << dfb_access_name(entry.cap)
+                    << "> " << entry.name << "{" << entry.id;
+            if (entry.metadata.has_value()) {
+                content << ", ";
+                content << serialize_llk_metadata(*entry.metadata);
+            }
+            content << "};\n";
         }
     }
-    emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
+    emit_programmatic_binding_token_getter(
+        content, dfb_entries, "DFBBindingToken<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>");
     content << "}  // namespace dfb\n";
 
     // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
@@ -408,10 +434,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
     // template with extra metadata in the future without touching kernel source.
     //
+    // Per-node bindings get a PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET> instead.
+    //
     // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
     for (const auto& entry : ta_entries) {
-        content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
-                << entry.addr_crta_offset << "u>;\n";
+        const char* token_type = entry.is_per_node ? "PerNodeTensorBindingToken" : "TensorBindingToken";
+        content << "using " << entry.name << "_t = ::tensor_accessor::" << token_type << "<" << entry.cta_offset
+                << "u, " << entry.addr_offset << "u>;\n";
         content << "constexpr " << entry.name << "_t " << entry.name << "{";
         content << serialize_llk_metadata(entry.metadata);
         content << "};\n";
@@ -477,6 +506,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // so we read them directly here. The vararg helpers below need the vararg-section
     // start offset to skip past sections 1 and 2.
     const KernelCrtaLayout crta_layout = settings.get_crta_layout();
+    const KernelRtaLayout rta_layout = settings.get_rta_layout();
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
@@ -542,9 +572,10 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // around get_arg_val / get_common_arg_val.
     // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
     // which already accounts for both the user-named CRTAs and the TensorBinding section.
-    const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
-    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
-            << " + idx); }\n"
+    // RTA-side note: likewise, rta_layout.vararg_section_offset accounts for the user-named RTAs
+    // and the per-node TensorBinding section.
+    content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>("
+            << rta_layout.vararg_section_offset << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
 
@@ -819,6 +850,8 @@ void jit_build_genfiles_triscs_src(
     if (!gen_defines_file) {
         throw std::runtime_error("Cannot create file: " + generated_defines_fname);
     }
+    // trisck.cc includes this ahead of the firmware headers, and chlkc_*.cpp include it again.
+    gen_defines_file << "#pragma once\n";
     settings.process_defines([&gen_defines_file](const string& define, const string& value) {
         gen_defines_file << "#define " << define << " " << value << endl;
     });

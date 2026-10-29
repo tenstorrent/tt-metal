@@ -11,6 +11,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -95,6 +96,8 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
     const KernelSpecName WRITER{"writer"};
     // in0 stages one input stick: the reader fills it, the writer drains it.
     const DFBSpecName IN0{"in0"};
+    // scratch holds a DRAM read granule span for an input stick that does not start on a granule.
+    const DFBSpecName SCRATCH{"scratch"};
     // One DFB per index dimension the reader stages a tile of, indexed by 5-D-normalized dimension.
     const std::array<DFBSpecName, 5> INDEX_DFB{
         DFBSpecName{"in1"}, DFBSpecName{"in2"}, DFBSpecName{"in3"}, DFBSpecName{"in4"}, DFBSpecName{"in5"}};
@@ -525,12 +528,30 @@ ttnn::device_operation::ProgramArtifacts MorehGetItemOperation::MorehGetItemTili
         .data_format_metadata = src_cb_data_format,
     });
 
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = SCRATCH,
+        .entry_size = tt::round_up(input_unit_size, dram_alignment) + dram_alignment,
+        .num_entries = 1,
+        .data_format_metadata = src_cb_data_format,
+    });
+
     // ---- Reader kernel ----
     Group<DFBBinding> reader_dfb_bindings = {
         DFBBinding{
             .dfb_spec_name = IN0,
             .accessor_name = "in0",
             .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = SCRATCH,
+            .accessor_name = "scratch",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        },
+        DFBBinding{
+            .dfb_spec_name = SCRATCH,
+            .accessor_name = "scratch",
+            .endpoint_type = DFBEndpointType::CONSUMER,
         },
     };
     Group<TensorBinding> reader_tensor_bindings = {

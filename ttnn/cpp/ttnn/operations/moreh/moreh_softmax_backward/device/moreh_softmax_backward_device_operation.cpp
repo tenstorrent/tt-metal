@@ -71,8 +71,8 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     const auto& output_grad_tensor = tensor_args.output_grad_tensor;
     TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
     TT_FATAL(output_grad_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-    TT_FATAL(output_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
-    TT_FATAL(output_grad_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL(output_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL(output_grad_tensor.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((output_tensor.layout() == Layout::TILE), "Output to softmax must be tilized");
     TT_FATAL((output_grad_tensor.layout() == Layout::TILE), "Output_grad to softmax must be tilized");
     TT_FATAL(

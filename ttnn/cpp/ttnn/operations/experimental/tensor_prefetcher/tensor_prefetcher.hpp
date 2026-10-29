@@ -14,7 +14,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -24,14 +23,17 @@ class MeshDevice;
 
 namespace ttnn::operations::experimental {
 
-// One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
-// block_count is the number of K-blocks to divide the tensor's K dimension into. rotation
-// (receiver-contiguous layout only; omitted/empty == batched) is the per-receiver streaming
-// ring-rotation table, indexed by global ring position: it delivers that tensor's K-blocks in
-// host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
-// TensorPrefetcherInput for the rotation contract.
-using TensorPrefetcherQueueTensor =
-    std::variant<std::pair<ttnn::Tensor, uint32_t>, std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>;
+// One tensor to prefetch: (tensor, block_count), (tensor, block_count, rotation) or
+// (tensor, block_count, rotation, selector). block_count is the number of K-blocks to divide the
+// tensor's K dimension into. rotation (receiver-contiguous layout only; empty == batched) is the
+// per-receiver streaming ring-rotation table, indexed by global ring position: it delivers that
+// tensor's K-blocks in host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
+// TensorPrefetcherInput for the rotation contract. selector is the mask of a grouped weight's
+// TensorPrefetcherGroupSelector: only the groups whose mask entry is non-zero are streamed.
+using TensorPrefetcherQueueTensor = std::variant<
+    std::pair<ttnn::Tensor, uint32_t>,
+    std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>,
+    std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>, ttnn::Tensor>>;
 
 // Thin ttnn-side wrappers around the queueable
 // tt::tt_metal::experimental::Start/Queue/Stop TensorPrefetcher API.
@@ -40,11 +42,11 @@ using TensorPrefetcherQueueTensor =
 //   1. start_tensor_prefetcher(device)
 //      - Builds the long-running DRISC kernel on every DRAM sender core and
 //        spawns the host worker thread. Returns immediately. Receiver count
-//        is per-GCB (read from each GCB's sender state block on every
-//        request), so a single prefetcher can serve GCBs with different
-//        num_receivers values.
-//   2. queue_tensor_prefetcher_request(device, tensors, global_cb, device_subset=None,
-//                                      capture_into_trace=False)
+//        is per pipe (read from each pipe's sender config page on every
+//        request), so a single prefetcher can serve pipe sets with different
+//        receiver counts.
+//   2. queue_tensor_prefetcher_request(device, tensors, prefetcher_pipes=pipes,
+//                                      device_subset=None, capture_into_trace=False)
 //      - Push one request. `tensors` is the full, flattened list of weights (at
 //        least one), streamed in list order; each item is (weight, block_count)
 //        or (weight, block_count, rotation) (see TensorPrefetcherQueueTensor).
@@ -72,28 +74,25 @@ void start_tensor_prefetcher(
 // `capture_into_trace` selects whether this request may be captured into a trace: when true
 // and the calling thread's current command queue is mid trace-capture, the request is captured
 // and re-sent on every execute_trace of that trace; when false the request is always sent
-// immediately.
-// Exactly one of `global_cb` / `prefetcher_pipes` must be supplied; whichever it is selects the
-// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the one extra
-// precondition PrefetcherPipe delivery imposes: every tensor must be receiver-contiguous.
+// immediately. See the metal-level QueueTensorPrefetcherRequest for the preconditions on the pipes
+// and tensors.
 //
 // `prefetcher_pipes` is one PrefetcherPipe per DRAM sender core, from one
 // create_prefetcher_pipes_for_tensor_prefetcher call. Each pipe already knows the bank-local slabs
 // its sender owns, so the call's pipes are accepted in any order; a subset, or pipes from two
-// different calls, are not. An empty list means no pipe target. Keep the
-// pipes alive for as long as any program has bound them or the prefetcher may still deliver into
-// them -- dropping the last owner of one frees its ring and config pages.
+// different calls, are not. Keep the pipes alive for as long as any program has bound them or the
+// prefetcher may still deliver into them -- dropping the last owner of one frees its ring and config
+// pages.
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes = {},
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
     bool capture_into_trace = false);
 
-// Create the PrefetcherPipes whose senders are programmable DRAM cores, as a delivery target for
-// the Tensor prefetcher. Sender placement matches create_global_circular_buffer_for_tensor_prefetcher.
-// One pipe per DRAM sender core, bank-major -- the order every layer that walks them must agree on.
+// Create the PrefetcherPipes whose senders are programmable DRAM cores, as the delivery target of
+// the Tensor prefetcher. One pipe per DRAM sender core, bank-major -- the order every layer that
+// walks them must agree on.
 // ttnn shares each pipe between Python and the operation attributes that name it, so it hands them
 // out as shared_ptrs.
 std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(

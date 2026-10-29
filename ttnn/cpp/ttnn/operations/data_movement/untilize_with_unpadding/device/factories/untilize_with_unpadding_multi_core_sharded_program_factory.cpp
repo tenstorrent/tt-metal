@@ -163,7 +163,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .borrowed_from = src_sharded ? std::optional<TensorParamName>{SH_INPUT} : std::nullopt,
     };
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
     uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
@@ -328,10 +328,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     /** compute
      */
     KernelSpec::CompilerOptions::Defines compute_kernel_defines;
-    if (input_dfb_data_format == tt::DataFormat::Int32 || input_dfb_data_format == tt::DataFormat::UInt32 ||
-        input_dfb_data_format == tt::DataFormat::Float32) {
-        compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
-    }
     ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_hw_config.unpack_modes = {{SH_IN, UnpackMode::UnpackToDest}};

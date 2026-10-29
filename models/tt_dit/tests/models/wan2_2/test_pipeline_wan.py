@@ -191,20 +191,25 @@ def test_pipeline_inference(
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
+    # These thresholds are deliberately loose, they're just to catch a broken pipeline
+    # (garbage, static or blurry output)
+    #
+    # This test runs a single prompt at a single seed, and is therefore too sensitive
+    # to numeric fluctuation to support strict thresholds; those should be in perf tests.
     vbench_thresholds_by_height = {
         720: {
-            "subject_consistency": 0.91,
-            "background_consistency": 0.92,
-            "motion_smoothness": 0.955,
+            "subject_consistency": 0.8,
+            "background_consistency": 0.8,
+            "motion_smoothness": 0.9,
             "dynamic_degree": 1.0,
-            "imaging_quality": 0.62,
+            "imaging_quality": 0.5,
         },
         480: {
-            "subject_consistency": 0.94,
-            "background_consistency": 0.96,
-            "motion_smoothness": 0.97,
+            "subject_consistency": 0.8,
+            "background_consistency": 0.8,
+            "motion_smoothness": 0.9,
             "dynamic_degree": 1.0,
-            "imaging_quality": 0.545,
+            "imaging_quality": 0.45,
         },
     }
 

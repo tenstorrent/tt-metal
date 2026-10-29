@@ -487,14 +487,20 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     # ---- online path: batched warmup (eager|traced) + prefill_paged_slots + batched decode ----
     bmodel, args, bpt, num_blocks = _build(B)
     warmup_pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-    # Mirror qwen36_vllm.warmup_model_prefill: the eager phase prepares; the traced phase also records.
+    # Mirror qwen36_vllm.warmup_model_prefill: the eager phase prepares and compiles the per-slot GDN
+    # writes; the traced phase then only records, so nothing compiles once the chunk trace is live.
     prev = bmodel._bind_gdn_prefill_scratch()
     try:
         bmodel.prepare_prefill_trace_chunked(mesh_device, warmup_pt, chunk_size=2048)
-        if traced:
-            bmodel.record_prefill_trace_chunked(mesh_device)
     finally:
         bmodel._unbind_gdn_prefill_scratch(prev)
+    bmodel.warmup_gdn_slot_ops()
+    if traced:
+        prev = bmodel._bind_gdn_prefill_scratch()
+        try:
+            bmodel.record_prefill_trace_chunked(mesh_device)
+        finally:
+            bmodel._unbind_gdn_prefill_scratch(prev)
     assert (bmodel._chunked_trace_id is not None) == traced, "only the traced warmup parks the chunk trace"
 
     token_list = [torch.tensor([prompts[u]], dtype=torch.long) for u in range(B)]

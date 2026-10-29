@@ -25,7 +25,7 @@ void PreAllGatherDeviceOperation::validate_on_program_cache_miss(
             input.dtype() == DataType::FLOAT32,
         "Input data format not supported.");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands must be on device.");
-    TT_FATAL(input.buffer() != nullptr, "Operands must be allocated on device.");
+    TT_FATAL(input.is_allocated(), "Operands must be allocated on device.");
     const auto output_dtype = args.dtype.value_or(input.dtype());
     TT_FATAL(
         output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32,

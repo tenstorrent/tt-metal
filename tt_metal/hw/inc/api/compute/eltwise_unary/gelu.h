@@ -55,37 +55,64 @@ ALWI void gelu_tile_pack(uint32_t idst) {
 /**
  * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
  */
+template <bool fast = false>
 ALWI void gelu_tanh_tile_init() {
-    MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+    if constexpr (fast) {
+        MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
+    } else {
+        MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+    }
 }
 
+template <bool fast = false>
 ALWI void gelu_tanh_tile_init_pack() {
-    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+    if constexpr (fast) {
+        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_fast_init));
+    } else {
+        PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+    }
 }
 
 // clang-format off
 /**
- * Element-wise GELU using the tanh approximation, computed in FP32:
+ * Element-wise GELU using the tanh approximation:
  *   GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
  *
  * Intended as a fused-activation drop-in for matmuls that need the
  * tanh-GELU (e.g. F.gelu(approximate="tanh")).
+ *
+ * fast = false evaluates it in FP32 with the accurate tanh. fast = true, for BF16 outputs, computes the same
+ * function as x / (1 + exp(-2u)) with a polynomial exp and two Newton steps on the reciprocal: within 1 BF16
+ * ULP of the accurate form where |GELU| >= 1e-3, and without its cancellation in the negative tail.
  *
  * Return value: None
  *
  * | Argument         | Description                                                                | Type     | Valid Range                                           | Required |
  * |------------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast             | x / (1 + exp(-2u)) instead of the FP32 tanh form                           | bool     |                                                       | False    |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool fast = false>
 ALWI void gelu_tanh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    if constexpr (fast) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    } else {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    }
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool fast = false>
 ALWI void gelu_tanh_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    if constexpr (fast) {
+        PACK(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh_fast, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    } else {
+        PACK(SFPU_UNARY_CALL(
+            DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
+    }
 }
 
 /**

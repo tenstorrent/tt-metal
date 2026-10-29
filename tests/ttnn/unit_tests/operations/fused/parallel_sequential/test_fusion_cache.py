@@ -19,7 +19,7 @@ import ttnn
 from collections import OrderedDict
 from unittest import mock
 
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 from models.experimental.ops.descriptors.fusion import Parallel, Sequential, clear_build_cache
 from models.experimental.ops.descriptors.fusion.fusion import (
     _BUILD_CACHE,
@@ -548,7 +548,9 @@ class TestUpdateAPI:
     def test_update_error_unknown_name(self, device):
         """update(bad_name=t) raises ValueError with valid names listed."""
         q, _, _ = _make_branches(device)
-        with pytest.raises(ValueError, match="Unknown input name"):
+        with pytest.raises(  # allow-pytest.raises: host-side ValueError, not a device error
+            ValueError, match="Unknown input name"
+        ):
             q.update(nonexistent=q.input_tensors[0])
 
     def test_update_multiple_positional(self, device):
@@ -574,7 +576,9 @@ class TestUpdateAPI:
         """update(t, input_tensor=t) raises ValueError."""
         q, _, _ = _make_branches(device)
         t = q.input_tensors[0]
-        with pytest.raises(ValueError, match="positional OR keyword"):
+        with pytest.raises(  # allow-pytest.raises: host-side ValueError, not a device error
+            ValueError, match="positional OR keyword"
+        ):
             q.update(t, input_tensor=t)
 
 
@@ -651,7 +655,9 @@ class TestNamedKwargs:
         q, kv, _ = _make_branches(device)
         q2, _, _ = _make_branches(device, seed=99)
         inner = Parallel(q=q, kv=kv)
-        with pytest.raises(ValueError, match="Duplicate descriptor name"):
+        with pytest.raises(  # allow-pytest.raises: host-side ValueError, not a device error
+            ValueError, match="Duplicate descriptor name"
+        ):
             Sequential(q=q2, branches=inner)  # "q" collides
 
 

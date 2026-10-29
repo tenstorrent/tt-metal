@@ -171,7 +171,6 @@ def main():
                 rot_mats_global=host_out[1],
                 rot_mats_local=host_out[2],
                 kv_cache=None,
-                batch_size=1,
                 get_last_token=-1,
             )
             ttnn.synchronize_device(mesh)
