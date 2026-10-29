@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -234,10 +235,12 @@ TEST(ThreadPoolTest, ParallelForConcurrentCallers) {
     constexpr uint32_t NUM_CALLERS = 4;
     constexpr uint32_t NUM_FAN_OUTS = 2000;
     std::vector<std::vector<std::atomic<uint32_t>>> runs;
+    runs.reserve(NUM_CALLERS);
     for (uint32_t caller = 0; caller < NUM_CALLERS; caller++) {
         runs.emplace_back(device_ids.size());
     }
     std::vector<std::thread> callers;
+    callers.reserve(NUM_CALLERS);
     for (uint32_t caller = 0; caller < NUM_CALLERS; caller++) {
         callers.emplace_back([&, caller] {
             for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
@@ -262,13 +265,14 @@ TEST(ThreadPoolTest, ParallelForChangingDevices) {
     const auto forward = one_call_per_device(2);
     const std::vector<uint32_t> backward(forward.rbegin(), forward.rend());
     const std::vector<uint32_t> first_device(forward.size(), 0);
+    const std::array<const std::vector<uint32_t>*, 3> device_lists = {&forward, &backward, &first_device};
     uint32_t num_devices = forward.size() / 2;
     std::vector<std::atomic<bool>> busy(num_devices);
     std::atomic<uint32_t> violations = 0;
     std::atomic<uint32_t> runs = 0;
     constexpr uint32_t NUM_FAN_OUTS = 3000;
     for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
-        const auto& device_ids = iter % 3 == 0 ? forward : (iter % 3 == 1 ? backward : first_device);
+        const auto& device_ids = *device_lists[iter % device_lists.size()];
         std::vector<int64_t> last_call(num_devices, -1);
         thread_pool->parallel_for(device_ids, [&](size_t call) {
             uint32_t device = device_ids[call];
