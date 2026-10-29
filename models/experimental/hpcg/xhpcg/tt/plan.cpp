@@ -22,14 +22,17 @@ int clamp_cores(int ncores, const std::vector<std::pair<int64_t, int64_t>>& bloc
     return (int)std::max<int64_t>(1, std::min<int64_t>(ncores, most));
 }
 
-// bands are used only when they split every block and the cores divide evenly over them (plan.py's _init)
+// bands are used only when they split every block and the cores divide evenly over each block's bands (plan.py's
+// _init). Blocks can differ: on an odd nx the even-y colours have one band more than the odd-y ones (level.cpp)
 const std::vector<std::vector<int64_t>>* usable_bands(const std::vector<std::vector<int64_t>>* bands, int NB, int nc) {
-    if (bands == nullptr) {
+    if (bands == nullptr || (int)bands->size() != NB) {
         return nullptr;
     }
-    const int B = (int)(*bands)[0].size() - 1;
-    if ((int)bands->size() != NB || nc % B || nc < B) {
-        return nullptr;
+    for (const auto& b : *bands) {
+        const int B = (int)b.size() - 1;
+        if (nc % B || nc < B) {
+            return nullptr;
+        }
     }
     return bands;
 }
@@ -186,10 +189,10 @@ Plan Plan::stencil(const Level& L, int ncores, const Dev& D, bool defer) {
             p.nat.assign(p.nc + 1, 0);
         }
         p.compact(maxp, lo, ln, l1);
-        if (defer || p.max_neighbours() <= MAX_NB || nreq == 1) {
+        if (defer || p.max_neighbours() <= MAX_NB || p.nc == 1) {
             return p;
         }
-        nreq = std::max(1, (int)(nreq * 0.75));
+        nreq = std::max(1, (int)(p.nc * 0.75));  // from the cores used: nreq may be above the block-size clamp
     }
 }
 

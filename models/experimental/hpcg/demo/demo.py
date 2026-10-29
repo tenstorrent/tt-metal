@@ -11,7 +11,7 @@ gflops is the raw rate: HPCG's flop count over the timed iterations. cg_start_ms
 
 Where a CPU reference residual is known (CPU_REFERENCE_RESIDUAL_50), it also prints hpcg_rating_gflops, the
 formula of HPCG's ReportResults.cpp for a long run. One CG set is timed as CG.cpp times it: the CG start, then the
-k iterations this solver needs to reach the reference residual (cg_set_s, best of 3). Credited work per set =
+k iterations this solver needs to reach the reference residual, at least 50 (cg_set_s, best of 3). Credited work per set =
 (k iterations + the CG start) * 50 / k flops; time per set = cg_set_s + (setup time) / 10. Setup here is building the
 matrix, index tables and programs on the host (HPCG's GenerateProblem + OptimizeProblem).
 """
@@ -102,8 +102,9 @@ def main(nx, iters):
             hit = [k + 1 for k, r in enumerate(hist) if r <= CPU_REFERENCE_RESIDUAL_50[nx]]
             out["iterations_to_cpu_reference_residual"] = hit[0] if hit else None
             if hit:
-                k = hit[0]
-                # one CG set as HPCG times it: the CG start and k iterations
+                # one CG set as HPCG times it: the CG start and k iterations, at least 50 (main.cpp's optNiters starts
+                # at refMaxIters = 50, so a solver that converges sooner still runs 50)
+                k = max(hit[0], 50)
                 per_set = min(solve(k, True)[0] for _ in range(3))
                 # ReportResults.cpp: credited flops = (k iterations + the CG start) * 50 / k
                 credit = (k * flops + speed_of_light.hpcg_start_flops(nx)) * 50 / k

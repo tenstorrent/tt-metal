@@ -119,9 +119,9 @@ class SparseRowPlan:
                 host_tables,
                 defer_exchange,
             )
-            if not exchange or defer_exchange or int(np.diff(p._nbr_csr[1]).max(initial=0)) <= MAX_NB or nc == 1:
+            if not exchange or defer_exchange or int(np.diff(p._nbr_csr[1]).max(initial=0)) <= MAX_NB or p.nc == 1:
                 return p
-            nc = max(1, int(nc * 0.75))
+            nc = max(1, int(p.nc * 0.75))  # from the cores used: nc may be above _init's block-size clamp
 
     def __init__(self, *a, **k):
         pass
@@ -152,7 +152,9 @@ class SparseRowPlan:
         NB = len(out_blocks)
         lens = [e - s for s, e in out_blocks]
         nc = max(1, min(ncores, max(-(-l // ALIGN) for l in lens)))
-        if bands is not None and (len(bands) != NB or nc % (len(bands[0]) - 1) or nc < len(bands[0]) - 1):
+        # bands only when the cores divide evenly over each block's bands (blocks can differ: on an odd nx the even-y
+        # colours have one band more than the odd-y ones)
+        if bands is not None and (len(bands) != NB or any(nc % (len(b) - 1) or nc < len(b) - 1 for b in bands)):
             bands = None
         lib = native.lib()
         own = self._ownership(lib, out_blocks, bands, nc)

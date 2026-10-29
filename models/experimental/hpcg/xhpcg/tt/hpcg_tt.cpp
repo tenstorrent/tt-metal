@@ -296,7 +296,9 @@ int optimize(const SparseMatrix& A, const Vector& b) {
     if (g.size != 1 || g.nx != g.ny || g.nx != g.nz || g.nx % 8 != 0) {
         HPCG_fout << "hpcg_tt: needs one process and an nx = ny = nz grid with nx a multiple of 8" << std::endl;
         std::fprintf(stderr, "hpcg_tt: needs one process and an nx = ny = nz grid with nx a multiple of 8\n");
-        return 1;
+        // HPCG's main.cpp ignores OptimizeProblem's return value: going on, every CG call would return at once with no
+        // time, and main.cpp's number of CG sets (total_runtime / worst CG time) would divide by 0
+        std::exit(1);
     }
     g_state = std::make_unique<State>();
     State& S = *g_state;

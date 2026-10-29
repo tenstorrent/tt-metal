@@ -12,7 +12,7 @@ Every matrix and vector pass is a custom op (tt/custom_ops), including the final
 start (start()) and every iteration run on the device only and are trace-capturable; the CG scalars stay on device.
 """
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 
 import numpy as np
 import ttnn
@@ -108,9 +108,22 @@ class HPCG:
         self, device, nx, bands=None, order=COLOUR_ORDER, kernel_debug=False, level_cores=None, host_tables=False
     ):
         """host_tables: build the matrix and its offset tables on the host and upload them (the reference path)
-        instead of generating them on the device (tt/custom_ops/stencil_matrix)."""
+        instead of generating them on the device (tt/custom_ops/stencil_matrix). Without the compiled host helper
+        the host tables are used whatever host_tables says: device generation is planned by the helper."""
         if nx % 8:
             raise ValueError(f"nx must be a multiple of 8 (4 multigrid levels), got {nx}")
+        host_tables = host_tables or native.lib() is None
+        launched = []  # generation launches handed to _LAUNCHER
+        try:
+            self._setup(device, nx, bands, order, kernel_debug, level_cores, host_tables, launched)
+        finally:
+            # a launch still running on the worker thread must not outlive a failed setup (the caller then closes
+            # the device)
+            wait(launched)
+        for f in launched:  # every generation launch is enqueued (and its errors raised) before any other launch
+            f.result()
+
+    def _setup(self, device, nx, bands, order, kernel_debug, level_cores, host_tables, launched):
         self.device = device
         g = device.compute_with_storage_grid_size()
         nc = g.x * g.y
@@ -124,7 +137,8 @@ class HPCG:
         # (the fine level's reuses the program), while this thread goes on. A launch is handed over only after its
         # table upload returned, so the upload is ahead of it in the queue
         gen = None if host_tables else _LAUNCHER
-        launched = [] if gen is None else [gen.submit(warm_up, device, min(nc, lc[0]))]
+        if gen is not None:
+            launched.append(gen.submit(warm_up, device, min(nc, lc[0])))
         tables0 = None
         if host_tables:
             self.levels = build(nx, bands, slot_stride, tables=True)
@@ -287,8 +301,6 @@ class HPCG:
             # r.z = inf + 0 + ... = inf whatever r.z held before (so start() can run again before an iteration)
             rtz_inf=DotFinishOp(device, self._inf_slot, 1, self.rtz),
         )
-        for f in launched:  # every generation launch is enqueued (and its errors raised) before any other launch
-            f.result()
 
     def spmv(self, l):
         """A plain z -> Az launch of level l (used by tests and diagnostics, built on first use)."""
