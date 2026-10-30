@@ -28,8 +28,8 @@
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
-#include "ops/conv3d_op.hpp"
 #include "ops/chunk_gated_delta_rule_op.hpp"
+#include "ops/conv3d_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
@@ -64,11 +64,8 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
-<<<<<<< HEAD
-    m.def_submodule("conv");
-=======
     m.def_submodule("chunk_gated_delta_rule");
->>>>>>> 425e9caed9 (Add ttml chunk_gated_delta_rule fw and bw)
+    m.def_submodule("conv");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");

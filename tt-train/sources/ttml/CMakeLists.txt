@@ -49,11 +49,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
-<<<<<<< HEAD
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/conv3d_op.cpp
-=======
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/chunk_gated_delta_rule_op.cpp
->>>>>>> f20516fb2c (Add save_for_backward and fp32 gates in bw to chunk_gated_delta_rule, fix CB wrap bugs)
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/conv3d_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
