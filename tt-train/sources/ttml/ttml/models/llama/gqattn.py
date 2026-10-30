@@ -110,7 +110,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         self,
         input: ttml.autograd.Tensor,
         mask: ttml.autograd.Tensor,
-        position_ids: Optional[ttml.autograd.Tensor] = None,
+        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
     ) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
@@ -142,7 +142,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: ttml.models.KvCache,
         layer_idx: int,
         new_tokens: int,
-        position_ids: Optional[ttml.autograd.Tensor] = None,
+        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
     ) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
@@ -195,7 +195,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         layer_idx: Optional[int] = None,
         new_tokens: Optional[int] = None,
-        position_ids: Optional[ttml.autograd.Tensor] = None,
+        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
             return self.forward_no_kv(input, mask, position_ids)

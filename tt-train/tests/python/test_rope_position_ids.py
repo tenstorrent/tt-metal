@@ -58,14 +58,17 @@ def test_rope_position_ids_matches_per_row_scalar_rope(head_dim, seq_len):
     params = ttml.ops.rope.build_rope_params(MAX_SEQ_LEN, head_dim)
     shifted = STARTS + 1
 
-    ids = _ids(STARTS, seq_len)
+    ids_tensor = _ids(STARTS, seq_len)
+    ids = ttml.ops.rope.RotaryEmbeddingPositionIds(ids_tensor)
     # The second pass reads the cached rows.
     for num_heads in HEAD_COUNTS + HEAD_COUNTS:
         _assert_matches_scalar_rope(params, ids, STARTS, num_heads, seq_len, head_dim, rng)
 
-    ids.set_value(_ids(shifted, seq_len).get_value())
+    ids_tensor.set_value(_ids(shifted, seq_len).get_value())
+    ids.update(ids_tensor)
     for num_heads in HEAD_COUNTS:
         _assert_matches_scalar_rope(params, ids, shifted, num_heads, seq_len, head_dim, rng)
 
+    new_ids = ttml.ops.rope.RotaryEmbeddingPositionIds(_ids(shifted, seq_len))
     for num_heads in HEAD_COUNTS:
-        _assert_matches_scalar_rope(params, _ids(shifted, seq_len), shifted, num_heads, seq_len, head_dim, rng)
+        _assert_matches_scalar_rope(params, new_ids, shifted, num_heads, seq_len, head_dim, rng)

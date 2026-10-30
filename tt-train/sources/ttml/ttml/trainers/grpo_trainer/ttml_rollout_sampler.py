@@ -176,13 +176,13 @@ class TTMLRolloutSampler(RolloutSampler):
             return self._model(x, mask, kv_cache=kv, new_tokens=new_tokens, position_ids=position_ids)
         return self._model(x, mask, past_key_values=kv, position_ids=position_ids)
 
-    def _decode_position_ids(self, positions: np.ndarray) -> "ttml.autograd.Tensor":
+    def _decode_position_ids(self, positions: np.ndarray) -> "ttml.ops.rope.RotaryEmbeddingPositionIds":
         """``[B, query_rows]`` RoPE positions: row ``b`` starts at ``positions[b]``."""
         query_rows = TILE_SIZE if self._kind == "llama" else 1
         ids = positions[:, None] + np.arange(query_rows)[None, :]
         ids = np.minimum(ids, self._max_seq_len - 1).astype(np.uint32)
-        return ttml.autograd.Tensor.from_numpy(
-            ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
+        return ttml.ops.rope.RotaryEmbeddingPositionIds(
+            ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper)
         )
 
     def _cache_position(self, kv: Any) -> int:
@@ -456,7 +456,7 @@ class TTMLRolloutSampler(RolloutSampler):
                     # on the Qwen3 path.
                     if self._kind == "llama":
                         deallocate_tensors([token_input])
-                    deallocate_tensors([decode_mask, position_ids, logits, sampled, nlog_2d])
+                    deallocate_tensors([decode_mask, position_ids.get_ids(), logits, sampled, nlog_2d])
                     last_input = ttml.autograd.Tensor(last_token_col, False)
 
                     # Chunked async stop detection: every CHUNK steps, sync the

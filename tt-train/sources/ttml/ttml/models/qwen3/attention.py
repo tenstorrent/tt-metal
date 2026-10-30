@@ -81,7 +81,7 @@ class Qwen3Attention(AbstractModuleBase):
         attention_mask: Optional[ttml.autograd.Tensor] = None,
         past_key_values=None,
         position_offset: int = 0,
-        position_ids: Optional[ttml.autograd.Tensor] = None,
+        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
     ):
         q = self.q_proj(hidden_states)
         # Single fused KV matmul produces the [K | V] tensor directly

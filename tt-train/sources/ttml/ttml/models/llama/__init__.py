@@ -280,7 +280,7 @@ class Llama(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         kv_cache: Optional[ttml.models.KvCache] = None,
         new_tokens: Optional[int] = None,
-        position_ids: Optional[ttml.autograd.Tensor] = None,
+        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
     ) -> ttml.autograd.Tensor:
         # Token IDs must be padded to the tile boundary so the embedding lookup
         # produces a tile-aligned tensor.  The padding is stripped after lookup.
