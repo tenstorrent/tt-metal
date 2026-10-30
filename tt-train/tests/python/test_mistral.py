@@ -347,6 +347,25 @@ def _out_only_grad(layer, r_np, d_np, dout_np):
     return dr
 
 
+@pytest.mark.parametrize("transpose_b", [True, False], ids=["w [N, K] (x @ A^T)", "w [K, N] (g @ B)"])
+@pytest.mark.parametrize("n_cols", [16, 32, 64])
+@pytest.mark.parametrize("k,batches", [(HIDDEN, 1), (8192, 2)], ids=["K=5120, 32 tile-rows", "K=8192, 64 tile-rows"])
+def test_skinny_matmul_matches_torch(k, batches, n_cols, transpose_b):
+    """`ttml.ops.metal.skinny_matmul` (iteration 10: K split over the cores for a rank-wide W) against torch fp64 at
+    the LoRA shapes: both W layouts, one and two output tile columns (N = 16 / 32 / 64), the ragged 13-slice split of
+    K = 5120 and the even one of K = 8192, and 64 tile-rows (cores with two work items)."""
+    rng = seeded(10)
+    x_np = bf16(rng.normal(0.0, 1.0, (1, batches, SEQ, k)))
+    w_np = bf16(rng.normal(0.0, 0.05, (1, 1, n_cols, k) if transpose_b else (1, 1, k, n_cols)))
+    out = ttml.ops.metal.skinny_matmul(to_device(x_np).get_value(), to_device(w_np).get_value(), transpose_b)
+    out_np = to_host(out)
+    wr = t(w_np[0, 0])
+    ref = (t(x_np) @ (wr.T if transpose_b else wr)).numpy()
+    rep = Report(f"skinny_matmul K={k} N={n_cols} transpose_b={transpose_b} batches={batches}")
+    rep.check("out", out_np, ref, 0.9999, 1e-2)
+    rep.done()
+
+
 def test_fused_residual_norm_model_matches_the_block_path():
     """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
     the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number

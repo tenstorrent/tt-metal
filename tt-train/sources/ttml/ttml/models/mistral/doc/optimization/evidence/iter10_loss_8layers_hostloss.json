@@ -1,0 +1,95 @@
+{
+ "args": {
+  "model_path": "mistralai/Mistral-Small-24B-Base-2501",
+  "revision": "b0a2e4ed093c26997495ae625528f81ea04b749f",
+  "data": null,
+  "layers": 8,
+  "tp": 1,
+  "seq_len": 1024,
+  "batch": 1,
+  "steps": 10,
+  "warmup_steps": 2,
+  "lr": 0.0001,
+  "weight_decay": 0.0,
+  "rank": 16,
+  "alpha": 32.0,
+  "random_init": false,
+  "random_data": false,
+  "seed": 42,
+  "track_memory": false,
+  "mem_probe": false,
+  "no_fused_lora": false,
+  "no_allcore_rmsnorm": false,
+  "no_fused_residual_norm": false,
+  "no_transposed_weights": false,
+  "host_loss": true,
+  "loss_log": "/home/ttuser/agobeljic/tt-metal/tt-train/sources/ttml/ttml/models/mistral/doc/optimization/evidence/iter10_loss_8layers_hostloss.json",
+  "data_log": null,
+  "dump_lora_init": null
+ },
+ "layers": 8,
+ "flops_per_step": 21473225867264,
+ "peak_tflops": 148.5,
+ "steps": [
+  {
+   "step": 1,
+   "loss": 12.125,
+   "ms": 872.7900641970336,
+   "host_loss": 12.111037254333496
+  },
+  {
+   "step": 2,
+   "loss": 11.875,
+   "ms": 786.8941021151841,
+   "host_loss": 11.856138229370117
+  },
+  {
+   "step": 3,
+   "loss": 11.3125,
+   "ms": 790.9126579761505,
+   "host_loss": 11.316326141357422
+  },
+  {
+   "step": 4,
+   "loss": 10.4375,
+   "ms": 788.397850934416,
+   "host_loss": 10.414944648742676
+  },
+  {
+   "step": 5,
+   "loss": 9.6875,
+   "ms": 792.2669807448983,
+   "host_loss": 9.717473983764648
+  },
+  {
+   "step": 6,
+   "loss": 9.875,
+   "ms": 786.0033847391605,
+   "host_loss": 9.88145637512207
+  },
+  {
+   "step": 7,
+   "loss": 9.25,
+   "ms": 788.5434399358928,
+   "host_loss": 9.227319717407227
+  },
+  {
+   "step": 8,
+   "loss": 8.6875,
+   "ms": 799.0697361528873,
+   "host_loss": 8.680255889892578
+  },
+  {
+   "step": 9,
+   "loss": 8.9375,
+   "ms": 794.1949716769159,
+   "host_loss": 8.964635848999023
+  },
+  {
+   "step": 10,
+   "loss": 8.5625,
+   "ms": 793.9048353582621,
+   "host_loss": 8.590476989746094
+  }
+ ]
+}

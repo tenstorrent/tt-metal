@@ -1,0 +1,23 @@
+=== iter10 8 layers real weights, host loss 2026-10-30T11:03:09Z
+rc=0
+step   10/10  loss 8.5625  host fp32 loss 8.5905     793.9 ms
+8 of 40 layers, tp 1: 791.7 ms/step over 8 steps (best 786.0), 27.1 TFLOP/s, MFU 18.27%
+compare rc=0
+max |diff| 0.0273 (tol 0.1), mean +0.0056, signs +8/-2
+bf16-params replay vs unrounded torch: max |diff| 0.2150, mean -0.0155
+PASS
+=== iter10 TP=4 40 layers real weights 2026-10-30T11:04:13Z
+rc=0
+Mistral: 40 of 40 layers, hidden 5120, heads 32/8 x 128, intermediate 32768, vocab 131072, seq 1024, batch 1
+step    1/10  loss 0.4414     788.8 ms
+step    2/10  loss 0.3281     540.2 ms
+step    3/10  loss 0.2520     544.9 ms
+step    4/10  loss 0.2051     537.9 ms
+step    5/10  loss 0.1406     544.5 ms
+step    6/10  loss 0.2754     542.5 ms
+step    7/10  loss 0.3418     541.7 ms
+step    8/10  loss 0.2676     545.6 ms
+step    9/10  loss 0.3105     542.8 ms
+step   10/10  loss 0.4473     543.9 ms
+40 of 40 layers, tp 4: 543.0 ms/step over 8 steps (best 537.9), 177.5 TFLOP/s, MFU 29.88%
+=== iter10 loss chain finished 2026-10-30T11:13:18Z
