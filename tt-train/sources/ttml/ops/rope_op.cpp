@@ -241,6 +241,22 @@ RopeRowsCache::Rows gather_rows(const RotaryEmbeddingParams& params, const ttnn:
     return {gather(params.cos_table), sin, ttnn::neg(sin)};
 }
 
+const RopeRowsCache::Rows& get_rope_rows(
+    const RotaryEmbeddingParams& params, const autograd::TensorPtr& position_ids, uint32_t num_heads) {
+    const auto& ids = position_ids->get_value();
+    auto& cache = *params.rows_cache;
+    if (cache.position_ids != position_ids || cache.position_ids_value_id != ids.tensor_id) {
+        cache.position_ids = position_ids;
+        cache.position_ids_value_id = ids.tensor_id;
+        cache.rows_by_head_count.clear();
+    }
+    auto it = cache.rows_by_head_count.find(num_heads);
+    if (it == cache.rows_by_head_count.end()) {
+        it = cache.rows_by_head_count.emplace(num_heads, gather_rows(params, ids, num_heads)).first;
+    }
+    return it->second;
+}
+
 }  // namespace
 
 autograd::TensorPtr rope(
@@ -267,18 +283,7 @@ autograd::TensorPtr rope(
         "RoPE position_ids are not supported with context parallelism");
     TT_FATAL(params.rows_cache, "RoPE position_ids require rope_params from build_rope_params");
 
-    auto& cache = *params.rows_cache;
-    if (cache.position_ids != position_ids || cache.position_ids_value_id != ids.tensor_id) {
-        cache.position_ids = position_ids;
-        cache.position_ids_value_id = ids.tensor_id;
-        cache.rows_by_head_count.clear();
-    }
-    const uint32_t num_heads = input_shape[1];
-    auto it = cache.rows_by_head_count.find(num_heads);
-    if (it == cache.rows_by_head_count.end()) {
-        it = cache.rows_by_head_count.emplace(num_heads, gather_rows(params, ids, num_heads)).first;
-    }
-    const auto rows = it->second;
+    const auto& rows = get_rope_rows(params, position_ids, input_shape[1]);
 
     auto out = autograd::create_tensor(rotate_per_head(input->get_value(), rows.cos, rows.sin, params.trans_mat));
 
