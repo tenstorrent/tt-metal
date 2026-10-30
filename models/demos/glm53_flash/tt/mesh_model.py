@@ -41,6 +41,7 @@ from models.demos.glm53_flash.tt.trace_prefill import (
     WaveTraceInputs,
     pick_prefill_length,
     supported_prefill_lengths,
+    wave_trace_taps_enabled,
 )
 
 # the eager prefill's chunk-length buckets live in the ttnn-free tt/vllm_config.py (the served warm-up ladder walks
@@ -562,11 +563,21 @@ class GLM53MeshModel:
             host[r, : valids[r]] = ids.to(torch.int32)
         return self.embedding.tokens_to_host(host.reshape(-1)), valids
 
+    def wave_taps_host(self, T: int, row: int) -> list[torch.Tensor]:
+        """The captured wave's per-layer output streams of ``row`` after its last replay (GLM53_WAVE_TRACE_TAPS=1):
+        one host tensor [T, hidden] per layer, in layer order; empty without the taps."""
+        inp = self.wave_traces[T]
+        return [self.mesh.to_host(t, rows=0)[row].reshape(inp.T, -1) for t in inp.taps or ()]
+
     def _wave_graph(self, inp: WaveTraceInputs):
         """The traced wave graph on the persistent inputs ``inp`` + ``self.wave_slot`` (no host value of the wave
         inside): embedding -> every layer (the device-slot wave form) -> the head on each row's selected token."""
         slot = self.wave_slot
         info = WaveInfo(T=inp.T, starts=(0,) * self.mesh.rows, valids=inp.valids, start_t=inp.starts, end_t=inp.ends)
+        keep = wave_trace_taps_enabled()  # the per-layer diagnostic: every layer's output stays allocated in the trace
+        for t in (inp.taps or [])[:-1]:  # a previous (eager) build of this graph; its last stream was the caller's
+            ttnn.deallocate(t)
+        inp.taps = [] if keep else None
         streams = self.embedding(inp.ids)  # [1,1,T,16384] per row: its own chunk
         for dec in self.layers:
             out = dec.prefill_wave_traced(
@@ -576,7 +587,10 @@ class GLM53MeshModel:
                 ring_sel=inp.ring_sel,
                 row_mask=inp.row_mask if pad_mask_enabled() else None,
             )
-            ttnn.deallocate(streams)
+            if keep:
+                inp.taps.append(out)
+            else:
+                ttnn.deallocate(streams)
             streams = out
         if self.head is None:
             return streams

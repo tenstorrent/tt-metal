@@ -301,7 +301,25 @@ def test_wave_first_token_vs_hf(mesh_device):
             f"traced wave ({T_wave} per row)",
             lambda: model.prefill_traced_wave(_wave(model, {r: (prompt, 0) for r in range(rows)}, user=0)),
         )
+        taps_all = model.wave_taps_host(T_wave, lone)  # GLM53_WAVE_TRACE_TAPS=1: per-layer streams of row `lone`
         alone = model.prefill_traced_wave(_wave(model, {lone: (prompt, 0)}, user=0))
+        if taps_all:  # the lone-member form vs the all-rows form, layer by layer (the same prompt on the same row)
+            taps_alone = model.wave_taps_host(T_wave, lone)
+            first_diff = None
+            for li, (ta, tb) in enumerate(zip(taps_all, taps_alone)):
+                eq = torch.equal(ta, tb)
+                p_l = pcc(ta.float(), tb.float())
+                d = (ta.float() - tb.float()).abs()
+                if not eq and first_diff is None:
+                    first_diff = li
+                logger.info(
+                    f"taps ({T_wave} per row) layer {li}: all-rows vs lone on row {lone}: equal {eq}, pcc {p_l:.6f}, "
+                    f"max |diff| {d.max().item():.4g} at token {int(d.amax(dim=1).argmax())}, mean |diff| {d.mean().item():.3g}"
+                )
+            logger.info(
+                f"taps ({T_wave} per row): first layer whose output differs between the forms: {first_diff} "
+                f"of {len(taps_all)} (None = bit-identical through every layer)"
+            )
         p_tr = pcc(traced[0][1], all_rows[0][1])
         p_tr_sp = pcc(traced[0][1], logits_sp)
         p_alone = pcc(alone[lone][1], traced[lone][1])

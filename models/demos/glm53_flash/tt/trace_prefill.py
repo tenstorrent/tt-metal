@@ -39,6 +39,7 @@ survive the replays of other traces; the last layer's ``streams`` stay the captu
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -318,6 +319,17 @@ class WaveSlot:
         self.user, self.idle = user, idle
 
 
+WAVE_TRACE_TAPS_ENV = "GLM53_WAVE_TRACE_TAPS"
+
+
+def wave_trace_taps_enabled(env=None) -> bool:
+    """``GLM53_WAVE_TRACE_TAPS=1``: the traced wave keeps every layer's output stream allocated (``WaveTraceInputs.taps``,
+    ``GLM53MeshModel.wave_taps_host``) so a test can diff two forms of the same wave layer by layer (the 128-row trace's
+    lone-member form vs its all-rows form at depth). Diagnostic only: ~T x hidden x 2 bytes per layer per chip."""
+    env = os.environ if env is None else env
+    return str(env.get(WAVE_TRACE_TAPS_ENV, "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class WaveTraceInputs:
     """The persistent inputs of one traced wave length ``T`` (rows per mesh row; every member at start 0)."""
@@ -336,6 +348,7 @@ class WaveTraceInputs:
     valids: tuple = ()
     trace_id: object = None
     streams: ttnn.Tensor | None = None
+    taps: list | None = None  # GLM53_WAVE_TRACE_TAPS=1: every layer's output stream, kept alive inside the trace
 
     @classmethod
     def allocate(cls, mesh: GLMMesh, T: int, hidden: int, vocab: int | None) -> "WaveTraceInputs":
