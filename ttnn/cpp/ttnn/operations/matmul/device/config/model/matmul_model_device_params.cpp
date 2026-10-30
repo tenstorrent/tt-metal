@@ -9,8 +9,8 @@
 namespace ttnn::operations::matmul::model {
 namespace {
 
-// L1 model v12 tables (outputs/tegraph/l1/v12.pkl), generated; values are exact (hex floats), the decimal is the
-// Python repr. Rows: h, w, fidelity, calls, Kref, F1, F2(kw=1), F2(kw=4), XP points (kw, value), XR points.
+// L1 compute model tables, measured on the device; values are exact (hex floats), with the shortest round-trip decimal
+// alongside. Rows: h, w, fidelity, calls, Kref, F1, F2(kw=1), F2(kw=4), XP points (kw, value), XR points.
 // clang-format off
 // o_c, pack = p0 + p1 * h * w (cycles)
 constexpr double kL1OverheadPerSubblock = 0x1.51344d1344d20p+4;  // 21.075268817204346
@@ -133,9 +133,9 @@ constexpr DeviceParams kBlackholeP150{
         },
 };
 
-// Blackhole Galaxy: all 12 unharvested Tensix columns are workers (on p150 the 12th goes to dispatch). The bank does
-// not record which columns each Galaxy chip harvested, so the p150 pattern is assumed (Python reference: bh_glx in
-// bench/m2x2/equations.py); configs up to 11 columns are placed exactly as on p150.
+// Blackhole Galaxy: all 12 unharvested Tensix columns are workers (on p150 the 12th goes to dispatch). Which columns
+// each Galaxy chip harvested isn't known here, so the p150 pattern is assumed; configs up to 11 columns are placed
+// exactly as on p150.
 constexpr DeviceParams make_blackhole_galaxy() {
     DeviceParams d = kBlackholeP150;
     d.name = "blackhole_galaxy";

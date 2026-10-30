@@ -143,9 +143,8 @@ std::vector<char> slurp(const std::filesystem::path& p) {
     return {std::istreambuf_iterator<char>(f), {}};
 }
 
-// Parity against LightGBM on real feature rows. The model and rows derive from internal data and are not
-// checked in: set TT_GBDT_PARITY_DIR to a directory holding model.blob (export_gbdt.py --format blob),
-// rows.bin (row-major float64, num_features per row) and ref.bin (Booster.predict(rows, raw_score=True)).
+// Parity against LightGBM on feature rows, when TT_GBDT_PARITY_DIR names a directory holding model.blob,
+// rows.bin (row-major float64, num_features per row) and ref.bin (LightGBM's Booster.predict(rows, raw_score=True)).
 TEST(GbdtModel, ParityWithLightGBM) {
     const char* dir = std::getenv("TT_GBDT_PARITY_DIR");
     if (dir == nullptr) {

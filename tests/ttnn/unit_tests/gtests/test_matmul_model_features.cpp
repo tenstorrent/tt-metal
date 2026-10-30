@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Device-free smoke test of the matmul config model's input side (matmul_model_features.hpp); its bit-exact parity
-// with the Python reference is checked outside the repository (the rows derive from internal data).
+// Device-free smoke test of the matmul config model's input side (matmul_model_features.hpp).
 
 #include <gtest/gtest.h>
 

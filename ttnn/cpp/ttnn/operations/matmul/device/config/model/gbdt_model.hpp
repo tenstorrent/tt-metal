@@ -11,13 +11,13 @@
 #include <string>
 #include <vector>
 
-// Evaluator for a LightGBM gradient-boosted tree ensemble (numerical splits only), exported by
-// tt-matmul-predictor's bench/export/export_gbdt.py. predict() reproduces LightGBM's
+// Evaluator for a LightGBM gradient-boosted tree ensemble (numerical splits only), exported to the blob format read
+// below. predict() reproduces LightGBM's
 // Booster.predict(raw_score=True) bit for bit: same split rule, same missing-value handling and the
 // same summation order over trees.
 namespace ttnn::operations::matmul::model {
 
-// decision bits (the exporter's compaction of LightGBM's decision_type)
+// decision bits (the blob's compaction of LightGBM's decision_type)
 inline constexpr std::uint8_t kGbdtDefaultLeft = 1u << 0;
 inline constexpr std::uint8_t kGbdtMissingShift = 1;
 inline constexpr std::uint8_t kGbdtMissingNone = 0;
@@ -63,7 +63,7 @@ private:
     std::uint32_t leaf_of(std::size_t t, const double* x) const;
 };
 
-// Owning storage for a model read from the exporter's binary blob (--format blob / cpp-blob).
+// Owning storage for a model read from a binary blob.
 class GbdtModelStorage {
 public:
     // nullopt, with the reason in `error`, for a malformed or truncated blob

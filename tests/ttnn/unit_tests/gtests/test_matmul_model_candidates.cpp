@@ -59,8 +59,8 @@ const auto kIn0 = Family::k1DMcastIn0;
 const auto kIn1 = Family::k1DMcastIn1;
 const auto kReuse = Family::kReuse;
 
-// Expected lists: tt-matmul-predictor bench/unified/ryan.py proposals() (the Python port of the same EnumeratingSource,
-// itself checked against the C++ selector's recorded candidates), Blackhole 11x10 grid, everything in DRAM.
+// Expected lists: the candidates the #58143 selector's enumeration gives for these matmuls, Blackhole 11x10 grid,
+// everything in DRAM.
 
 TEST(MatmulModelCandidates, SmallMatchesReference) {  // 64x256 @ 256x128 bf16
     const auto got = rows(enumerate_candidates(desc(2, 8, 4), HardwareDesc::blackhole(11, 10, kBudget)));
@@ -302,6 +302,18 @@ TEST(MatmulModelCandidates, AllPassTheDeviceOpRules) {
         }
     }
     EXPECT_GT(checked, 50000u);
+}
+
+TEST(MatmulModelCandidates, MakeCandidateMatchesTheEnumerator) {  // the hook scores the default config this way
+    const MatmulDesc p = desc(64, 128, 448, 2, 2);
+    const auto hw = HardwareDesc::blackhole(11, 10, kBudget);
+    for (const auto& c : enumerate_candidates(p, hw)) {
+        const Candidate made = make_candidate(p, hw, c.family, c.blocking, c.fuse_batch);
+        EXPECT_EQ(made.cores, c.cores);
+        EXPECT_EQ(made.fuse_batch, c.fuse_batch);
+        EXPECT_EQ(made.grid_x, c.grid_x);
+        EXPECT_EQ(made.grid_y, c.grid_y);
+    }
 }
 
 TEST(MatmulModelCandidates, Unsupported) {

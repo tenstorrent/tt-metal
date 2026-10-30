@@ -57,8 +57,8 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
 
 ## How it chooses
 
-1. **Candidates.** `matmul_candidates.{hpp,cpp}` ports the `EnumeratingSource` of Ryan Miller's #57884 selector
-   (tt-metal `4b385bbeace`) for interleaved tensors.
+1. **Candidates.** `matmul_candidates.{hpp,cpp}` ports the candidate enumeration of the default-config selector
+   proposed in #58143, for interleaved tensors.
    - It covers 2D, 1D (in0 and in1 multicast) and Reuse layouts on the device grid and on the grid one column
      narrower, with several K depths, output blocks and subblocks per layout. The narrower grid helps when a
      dimension splits into awkward per-core tile counts on the full grid (#62076: N = 448 tiles over 11 columns is 41
@@ -68,16 +68,21 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
 2. **Scores.** `matmul_model_features.{hpp,cpp}` computes an analytic base latency and 57 features per candidate.
    `gbdt_model.{hpp,cpp}` evaluates the LightGBM residual. The prediction is `base_ns * exp(gbdt(features))`.
 3. **Precision.** The model changes only the program config: output dtype, math fidelity and accumulation stay what
-   the caller asked for, and the K blocking (`in0_block_w`) stays the default selection's. The K blocking is the one
-   part of a config that changes how partial sums are rounded: between K blocks they leave DST and are summed in L1
-   (packer L1 accumulation) or kept in the output format, in 16 bits or fewer without fp32 accumulation. Neither more
-   nor fewer K blocks is reliably more accurate (1024^3 bf16, HiFi2: PCC 0.99996 at the default's 32 K blocks, 0.99984
-   at 2; gpt-oss LM heads, bfp8, LoFi: 0.99985 with the default's K blocking, 0.999824 with 90 K blocks and 0.999857 with 30). So only
-   candidates with the default config's `in0_block_w` are scored, and a matmul's result with the flag on is the same,
-   bit for bit, as with it off. When the default config has no K blocking, the default runs. The default's K blocking
-   depends on live L1, so a cached pick is checked against it again when that changes.
-4. **Pick.** The best-predicted candidate that fits the live L1 budget is used; ties keep candidate order. It is
-   checked once with the device op's own validation (`validate_on_program_cache_miss`) before it is used. If no
+   the caller asked for. Its K blocking (`in0_block_w`) can differ from the default's, and the K blocking changes how
+   partial sums are rounded: between K blocks they leave DST and are summed in L1 (packer L1 accumulation) or kept in
+   the output format, in 16 bits or fewer without fp32 accumulation. So a result with the flag on can differ slightly
+   from the default's, in either direction. On 303 matmuls from current models (Blackhole Galaxy, random inputs, PCC
+   against an fp32 reference) the change was within ±1e-5 on 149, better on 23, worse by up to 1e-4 on 101, by 1e-4
+   to 1e-3 on 29 and by 1.3e-3 on one; with fp32 accumulation it was never worse. One case is bounded: with a bfp8_b
+   or bfp4_b output and neither packer L1 nor fp32 accumulation, partial sums are re-quantized to the output format at
+   every K block, so only candidates with no more K blocks than the default's config are kept. The default's K
+   blocking depends on live L1, so a cached pick is checked against it again when that changes.
+4. **Pick.** The default selection's own config is scored with the candidates when it is one of the modeled layouts
+   (2D without transpose_mcast, 1D without gather_in0, Reuse). If the model predicts it fastest, or predicts no
+   candidate at least 2% faster than it, the default runs; picks predicted within 2% of the default are within the
+   model's error. When the default config can't be scored (MultiCore, or a layout the model doesn't cover), no margin
+   applies. Otherwise the best-predicted candidate that fits the live L1 budget is used; ties keep candidate order. It
+   is checked once with the device op's own validation (`validate_on_program_cache_miss`) before it is used. If no
    candidate fits, none can be scored, or validation rejects the pick, the default selection runs.
 5. **Cache.** Picks are cached process-wide for the loaded model, keyed on the call's full signature. On every hit the cached pick is re-checked against the current L1 budget (and the precision bound), and
    a pick that found no candidate for lack of L1 is made again once more L1 is free.
@@ -97,24 +102,17 @@ candidate.
 `matmul_model.blob` (12 MB: 3000 GBDT trees of 255 leaves) is not in the repository. It is a one-layer OCI artifact,
 `ghcr.io/tenstorrent/tt-metal/matmul-model`, and CMake fetches it at configure time by its sha256 (an OCI layer's digest
 is the sha256 of its content, so the download is pinned and verified) into `runtime/matmul_model/`, like the SFPI
-toolchain; it is installed and packaged in the wheel at the same path under the runtime root. A failed fetch (offline,
-`-DTT_MATMUL_MODEL_FETCH=OFF`) is a CMake warning: without the blob, turning the model on logs a warning and keeps the
-default configs. To use a local blob instead, set `matmul_model_path` (or `TT_MATMUL_MODEL_BLOB` for the tests).
+toolchain; it is installed and packaged in the wheel at the same path under the runtime root. A failed fetch fails
+configure; `-DTT_MATMUL_MODEL_FETCH=OFF` builds without the blob, and then turning the model on logs a warning and keeps
+the default configs. A file at the target path with a different sha256 is deleted before fetching. To use a local blob
+instead, set `matmul_model_path` (or `TT_MATMUL_MODEL_BLOB` for the tests).
 
-Replace it only with a retrained model; the analytic constants below must match the model it was trained with. It is
-produced from the model repository `tt-matmul-predictor`:
-
-```
-mmodel export ...                                                    # the repository's export entry point
-python -m bench.export.export_gbdt <lightgbm_model.txt> model.blob --format blob   # the command it runs
-```
-
-The blob carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on
+Replace it only with a retrained model; the analytic constants below must match the model it was trained with. The blob
+is a LightGBM model exported to the format `gbdt_model.cpp` reads. It carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on
 other features is refused) and the sha256 of the LightGBM model it was exported from. The current blob: file sha256
 `7dc37af22b6ae0d2ecb4f415a14cdc7e9b6e0208ee2ac2c2aacd049576ee9ae2`, model sha256
 `46dc43100ba9d1bdd6d30e408d23c7012a5e535cefab4d32ddb04910f1ba73a5` (logged at load), trained on device-time
-measurements of matmul program configs on Blackhole p150 (11x10 grid); the training data and training code live in
-`tt-matmul-predictor`. The analytic part (`matmul_model_features.cpp`,
+measurements of matmul program configs on Blackhole p150 (11x10 grid). The analytic part (`matmul_model_features.cpp`,
 `matmul_model_device_params.cpp`) is code. Its constants must match the model the blob was trained with.
 
 To publish a new blob, push it as a new tag and update the sha256 in `../../../CMakeLists.txt` (the matmul op's):

@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 #include <fmt/format.h>
@@ -34,9 +35,14 @@ namespace ttnn::operations::matmul::model {
 
 namespace {
 
-// Headroom kept free below the L1 budget, for allocator alignment and small factory-side buffers (as the #57884
+// Headroom kept free below the L1 budget, for allocator alignment and small factory-side buffers (as the #58143
 // selector this enumerator comes from)
 constexpr std::uint32_t kL1HeadroomBytes = 16 * 1024;
+
+// The model switches from the default config only when it predicts the default takes at least this many times as long
+// as its pick: picks predicted within 2% of the default are within the model's error. When the default config can't be
+// scored (MultiCore, or a layout the model doesn't cover), no margin applies.
+constexpr double kMinPredictedGain = 1.02;
 
 thread_local std::string last;
 
@@ -99,6 +105,14 @@ std::optional<DataType> model_dtype(tt::tt_metal::DataType t) {
         case tt::tt_metal::DataType::INT32:
         case tt::tt_metal::DataType::FP8_E4M3:
         case tt::tt_metal::DataType::INT8:
+        case tt::tt_metal::DataType::MXFP8_E4M3:
+        case tt::tt_metal::DataType::MXFP8_E5M2:
+        case tt::tt_metal::DataType::MXFP6_E2M3:
+        case tt::tt_metal::DataType::MXFP6_E3M2:
+        case tt::tt_metal::DataType::MXFP4:
+        case tt::tt_metal::DataType::MXINT8:
+        case tt::tt_metal::DataType::MXINT4:
+        case tt::tt_metal::DataType::MXINT2:
         case tt::tt_metal::DataType::INVALID: return std::nullopt;
     }
     TT_THROW("Unreachable");
@@ -314,42 +328,101 @@ std::uint32_t l1_cb_budget(const Tensor& a, const MatmulDesc& p, bool out_in_l1,
     return static_cast<std::uint32_t>(budget > kL1HeadroomBytes ? budget - kL1HeadroomBytes : 0);
 }
 
-// K tiles per K block of the config matmul's default selection would use, if that config has K blocks
-std::optional<std::uint32_t> default_in0_block_w(
+// The program config matmul's default selection uses for this call (prim::matmul's get_program_config)
+MatmulProgramConfig default_config(
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
     const ttnn::prim::MatmulParams& attributes) {
     const std::uint32_t bias_tile_bytes =
         bias.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(bias->dtype())) : 0;
-    const MatmulProgramConfig config = ttnn::operations::matmul::get_program_config(
+    return ttnn::operations::matmul::get_program_config(
         a, b, attributes.transpose_a, attributes.transpose_b, bias_tile_bytes, attributes);
-    return std::visit(
-        [](const auto& c) -> std::optional<std::uint32_t> {
-            if constexpr (requires { c.in0_block_w; }) {
+}
+
+// K tiles per K block of the default config, if it has K blocks. The MultiCore config (the default's fallback)
+// accumulates all of K in DST and packs each output tile once: one K block of Kt.
+std::optional<std::uint32_t> default_in0_block_w(const MatmulProgramConfig& defaults, std::uint32_t Kt) {
+    const auto in0_block_w = std::visit(
+        [Kt](const auto& c) -> std::optional<std::uint32_t> {
+            if constexpr (std::is_same_v<std::decay_t<decltype(c)>, MatmulMultiCoreProgramConfig>) {
+                return Kt;
+            } else if constexpr (requires { c.in0_block_w; }) {
                 return static_cast<std::uint32_t>(c.in0_block_w);
             } else {
                 return std::nullopt;
             }
         },
-        config);
+        defaults);
+    return in0_block_w && *in0_block_w > 0 ? in0_block_w : std::nullopt;
 }
 
-// The K blocking a pick must use: the default selection's config's in0_block_w (README, "Precision"; the model scores
-// time, not accuracy). The K blocking is the one part of a config that changes how partial sums are rounded: between K
-// blocks they leave DST and are summed in L1 (packer L1 accumulation) or kept in the output format, in 16 bits or fewer
-// without fp32 accumulation. Neither more nor fewer K blocks is reliably more accurate (1024^3 bf16, HiFi2: PCC 0.99996
-// with the default's 32 K blocks, 0.99984 with 2; gpt-oss LM heads, 32x2880 @ 2880x32768 and x65536, bfp8, LoFi:
-// 0.99985 with the default's, 0.999824 with 90 and 0.999857 with 30), so a pick keeps the default's and its result is
-// the default's, bit for bit. nullopt when the default config has no K blocking (no pick). It depends on live L1
-// (get_max_l1_space), so a cached pick is checked again when that changes.
-std::optional<std::uint32_t> required_in0_block_w(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<const Tensor>& bias,
-    const ttnn::prim::MatmulParams& attributes) {
-    const auto in0_block_w = default_in0_block_w(a, b, bias, attributes);
-    return in0_block_w && *in0_block_w > 0 ? in0_block_w : std::nullopt;
+std::uint32_t k_blocks(const MatmulDesc& p, std::uint32_t in0_block_w) {
+    return (p.Kt + in0_block_w - 1) / in0_block_w;
+}
+
+// The most K blocks a pick may use, or nullopt when no bound applies (README, "Precision"; the model scores time, not
+// accuracy). The K blocking is the part of a config that changes how partial sums are rounded, so a pick's result can
+// differ slightly from the default's. One case is bounded: without packer L1 or fp32 accumulation the factories keep
+// partial sums in the output format between K blocks, so with a block-float output every K block after the first
+// re-quantizes them, and a pick uses at most the default config's K blocks (0, no pick, when the default has no K
+// blocking to compare with). The default config depends on live L1 (get_max_l1_space), so a cached pick is checked
+// again when that changes.
+std::optional<std::uint32_t> max_k_blocks(const MatmulDesc& p, const MatmulProgramConfig& defaults) {
+    if (p.packer_l1_acc || p.fp32_dest_acc || (p.out != DataType::kBfloat8B && p.out != DataType::kBfloat4B)) {
+        return std::nullopt;
+    }
+    const auto in0_block_w = default_in0_block_w(defaults, p.Kt);
+    return in0_block_w ? k_blocks(p, *in0_block_w) : 0;
+}
+
+// The default config as a candidate the model scores alongside the enumerated ones, when it is one of the modeled
+// layouts (2D without transpose_mcast, 1D without gather_in0, Reuse) and has no fused activation: the model's pick has
+// to beat it in the model's own prediction, or the default runs.
+std::optional<Candidate> default_candidate(const MatmulProgramConfig& defaults, const MatmulDesc& p, HardwareDesc hw) {
+    return std::visit(
+        [&](const auto& c) -> std::optional<Candidate> {
+            using C = std::decay_t<decltype(c)>;
+            constexpr bool k2D = std::is_same_v<C, MatmulMultiCoreReuseMultiCastProgramConfig>;
+            constexpr bool k1D = std::is_same_v<C, MatmulMultiCoreReuseMultiCast1DProgramConfig>;
+            constexpr bool kReuse = std::is_same_v<C, MatmulMultiCoreReuseProgramConfig>;
+            if constexpr (k2D || k1D || kReuse) {
+                Blocking b;
+                b.in0_block_w = static_cast<std::uint32_t>(c.in0_block_w);
+                b.out_subblock_h = static_cast<std::uint32_t>(c.out_subblock_h);
+                b.out_subblock_w = static_cast<std::uint32_t>(c.out_subblock_w);
+                b.per_core_M = static_cast<std::uint32_t>(c.per_core_M);
+                b.per_core_N = static_cast<std::uint32_t>(c.per_core_N);
+                hw.grid_x = static_cast<std::uint32_t>(c.compute_with_storage_grid_size.x);
+                hw.grid_y = static_cast<std::uint32_t>(c.compute_with_storage_grid_size.y);
+                Family family = Family::kReuse;
+                bool fuse_batch = true;
+                if constexpr (k2D || k1D) {
+                    if (c.fused_activation.has_value()) {
+                        return std::nullopt;
+                    }
+                    b.out_block_h = static_cast<std::uint32_t>(c.out_block_h);
+                    b.out_block_w = static_cast<std::uint32_t>(c.out_block_w);
+                    fuse_batch = c.fuse_batch;
+                }
+                if constexpr (k2D) {
+                    if (c.transpose_mcast) {
+                        return std::nullopt;
+                    }
+                    family = Family::k2D;
+                }
+                if constexpr (k1D) {
+                    if (c.gather_in0) {
+                        return std::nullopt;
+                    }
+                    family = c.mcast_in0 ? Family::k1DMcastIn0 : Family::k1DMcastIn1;
+                }
+                return make_candidate(p, hw, family, b, fuse_batch);
+            } else {
+                return std::nullopt;
+            }
+        },
+        defaults);
 }
 
 MatmulProgramConfig to_program_config(const Candidate& c) {
@@ -471,13 +544,14 @@ std::optional<MatmulProgramConfig> choose(
     const auto cached = picks.find(key);
     // A pick that failed for lack of L1 is made again once more L1 is free
     if (cached && !(cached->failed_budget && budget > *cached->failed_budget)) {
-        // The pick kept to the default's K blocking in the L1 it was made in; with other L1 the default's may differ
+        // The pick kept to the precision bound in the L1 it was made in; with other L1 the default's K blocking may
+        // differ
         if (cached->candidate && cached->max_l1_space != max_l1_space) {
-            const auto required = required_in0_block_w(a, b, bias, attributes);
-            if (required != cached->candidate->blocking.in0_block_w) {
+            const auto limit = max_k_blocks(call->desc, default_config(a, b, bias, attributes));
+            const std::uint32_t blocks = k_blocks(call->desc, cached->candidate->blocking.in0_block_w);
+            if (limit && blocks > *limit) {
                 last = fmt::format(
-                    "default: cached pick's in0_block_w {} is not the default config's now",
-                    cached->candidate->blocking.in0_block_w);
+                    "default: cached pick's {} K blocks are more than the default config's {} now", blocks, *limit);
                 return std::nullopt;
             }
         }
@@ -490,14 +564,22 @@ std::optional<MatmulProgramConfig> choose(
         // The reuse factory doesn't fuse a row bias (matmul post-processes it for an explicit Reuse config)
         std::erase_if(candidates, [](const Candidate& c) { return c.family == Family::kReuse; });
     }
-    // Keep only the candidates with the default's K blocking (required_in0_block_w)
+    // Keep only the candidates within the precision bound (max_k_blocks), and score the default config with them
+    // (default_candidate)
+    std::optional<std::size_t> default_index;
     if (!candidates.empty()) {
-        if (const auto required = required_in0_block_w(a, b, bias, attributes)) {
-            std::erase_if(candidates, [&](const Candidate& c) { return c.blocking.in0_block_w != *required; });
-            none_left = fmt::format("no candidate fits L1 with the default config's in0_block_w {}", *required);
-        } else {
-            candidates.clear();
-            none_left = "the default config has no K blocking to keep";
+        const MatmulProgramConfig defaults = default_config(a, b, bias, attributes);
+        if (const auto limit = max_k_blocks(call->desc, defaults)) {
+            std::erase_if(
+                candidates, [&](const Candidate& c) { return k_blocks(call->desc, c.blocking.in0_block_w) > *limit; });
+            none_left = *limit > 0
+                            ? fmt::format("no candidate fits L1 with at most the default config's {} K blocks", *limit)
+                            : "block-float output and the default config has no K blocking to compare with";
+        }
+        const auto own = default_candidate(defaults, call->desc, call->hw);
+        if (own && !candidates.empty()) {
+            default_index = candidates.size();
+            candidates.push_back(*own);
         }
     }
     const std::vector<double> predicted = m->predict_ns(call->problem, candidates, call->arch);
@@ -505,7 +587,27 @@ std::optional<MatmulProgramConfig> choose(
     pick.description = candidates.empty() ? none_left : "the model can't score any candidate";
     std::size_t rejected_for_l1 = 0;
     bool rejected_by_validation = false;
+    bool default_predicted_fastest = false;
     for (std::size_t i : rank_by_prediction(predicted)) {
+        if (default_index && i != *default_index && predicted[*default_index] < kMinPredictedGain * predicted[i]) {
+            pick.description = fmt::format(
+                "the model predicts {:.0f} ns for its best candidate and {:.0f} ns for the default config, less than "
+                "{:.0f}% apart",
+                predicted[i],
+                predicted[*default_index],
+                100 * (kMinPredictedGain - 1));
+            default_predicted_fastest = true;
+            break;
+        }
+        if (i == default_index) {
+            pick.description = fmt::format(
+                "the model predicts the default config fastest ({:.0f} ns, rank {} of {} candidates)",
+                predicted[i],
+                rejected_for_l1 + 1,
+                candidates.size());
+            default_predicted_fastest = true;
+            break;
+        }
         const Candidate& c = candidates[i];
         const std::uint32_t bytes = circular_buffer_bytes(call->desc, call->hw, c);
         if (bytes > budget) {
@@ -528,18 +630,20 @@ std::optional<MatmulProgramConfig> choose(
         pick.cb_bytes = bytes;
         pick.max_l1_space = max_l1_space;
         pick.description = fmt::format(
-            "{} (predicted {:.0f} ns, rank {} of {} candidates)",
+            "{} (predicted {:.0f} ns, rank {} of {} candidates{})",
             config,
             predicted[i],
             rejected_for_l1 + 1,
-            candidates.size());
+            candidates.size(),
+            default_index ? fmt::format("; default config predicted {:.0f} ns", predicted[*default_index]) : "");
         break;
     }
-    if (!pick.candidate && !rejected_by_validation && rejected_for_l1 > 0) {
+    if (!pick.candidate && !rejected_by_validation && !default_predicted_fastest && rejected_for_l1 > 0) {
         pick.description = fmt::format("all {} scored candidates need more L1 than is free", rejected_for_l1);
     }
     // Retried once more L1 is free: with more L1 there are more candidates, including ones within the precision bound
-    if (!pick.candidate && !rejected_by_validation && (candidates.empty() || rejected_for_l1 > 0)) {
+    if (!pick.candidate && !rejected_by_validation && !default_predicted_fastest &&
+        (candidates.empty() || rejected_for_l1 > 0)) {
         pick.failed_budget = budget;
     }
     // Time of this selection; later calls reuse the pick and its description

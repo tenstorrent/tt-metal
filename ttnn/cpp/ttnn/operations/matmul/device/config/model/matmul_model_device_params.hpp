@@ -4,16 +4,14 @@
 
 #pragma once
 
-// Device parameters of the matmul config model (v1c input side): everything that is a property of the chip (worker
-// grid, physical NoC placement of the workers and DRAM endpoints, clock, NoC / DRAM bandwidth) plus the constants
-// fitted on that chip (fpmodel v18r14 constants.json) and the L1 per-core compute cost tables (L1 model v12). A new
-// device is a new DeviceParams entry; nothing else in the model is device specific.
+// Device parameters of the matmul config model: everything that is a property of the chip (worker grid, physical NoC
+// placement of the workers and DRAM endpoints, clock, NoC / DRAM bandwidth) plus the constants fitted on that chip and
+// the L1 per-core compute cost tables. A new device is a new DeviceParams entry; nothing else in the model is device
+// specific.
 //
 // Entries: Blackhole p150 (the 11x10 worker grid the model was trained on) and Blackhole Galaxy (12x10; the p150 entry
-// plus the 12th Tensix column, as the Python reference's bh_glx arch; the model has no 12-column training rows). Its
-// numbers are copied bit-exactly from the Python reference (bench/models/fpmodel_adapter.py,
-// outputs/overnight/fpmodel/fpmodel/model7.py SPEC, nocload.py ARCH["bh"], bankload.py NB["bh"],
-// matmul-model-data/models/v18r14/bh/constants.json, outputs/tegraph/l1/v12.pkl); do not edit them without retraining.
+// plus the 12th Tensix column; the model has no 12-column training rows). The numbers are exactly the ones the model
+// was trained with; do not edit them without retraining.
 
 #include <array>
 #include <cstddef>
@@ -31,7 +29,7 @@ enum class Fidelity : std::uint8_t { kLoFi, kHiFi2, kHiFi3, kHiFi4 };
 // Math phases per tile product at a fidelity (LoFi 1 ... HiFi4 4)
 std::uint32_t fidelity_phases(Fidelity f);
 
-// Constants fitted on the device (fpmodel v18r14, constants.json). Units as in model7.CONSTANTS: "cycles" are device
+// Constants fitted on the device. Units: "cycles" are device
 // clock cycles, rates are fractions of the spec rate unless stated.
 struct FittedConstants {
     double dram_eff{};    // achievable fraction of spec DRAM read bandwidth
@@ -40,7 +38,7 @@ struct FittedConstants {
     double lat_dram{};    // cycles: one batch of DRAM page reads, issue to barrier
     double lat_l1{};      // cycles: one batch of interleaved-L1 page reads
     double launch_us{};   // us: program launch + kernel prologue/epilogue
-    double tile_rt{};     // cycles: MultiCore factory tile read (unused: MultiCore is not ported)
+    double tile_rt{};     // cycles: MultiCore factory tile read (unused: MultiCore is not modeled)
     double link_eff{};    // achievable fraction of a NoC link's rate
     double bank_frac{};   // DRAM bandwidth one bank serves, fraction of the chip's
     double burst_KB{};    // KB per reader per barrier at which interleaved-L1 bandwidth halves
@@ -66,7 +64,7 @@ struct FittedConstants {
     double pad_elem{};    // cycles per element the in0 reader zero-fills in a partial K tile
 };
 
-// L1 model v12: per (subblock h, w, fidelity) measured compute costs, in cycles. Points tables are indexed by
+// L1 compute model: per (subblock h, w, fidelity) measured compute costs, in cycles. Points tables are indexed by
 // in0_block_w (kw) and interpolated (see matmul_model_features.cpp, l1_cycles).
 struct L1ShapeCosts {
     static constexpr std::size_t kMaxPoints = 8;
@@ -92,7 +90,7 @@ struct L1CostTables {
     double overhead_per_subblock{};  // o_c, cycles
     double pack_p0{};                // pack(hw) = pack_p0 + pack_p1 * hw, cycles
     double pack_p1{};
-    double block_overhead{};  // o_blk, cycles (50 in the reference)
+    double block_overhead{};  // o_blk, cycles
     std::span<const L1ShapeCosts> shapes;
 };
 
@@ -116,8 +114,8 @@ struct DeviceParams {
     double clock_hz{};             // Tensix clock
     double noc_bytes_per_cycle{};  // per-core NoC rate and per-link rate, bytes / cycle
     double dram_GBs{};             // spec DRAM bandwidth, GB/s (1e9 bytes)
-    FittedConstants c;           // fitted on this device
-    L1CostTables l1;             // L1 per-core compute model tables
+    FittedConstants c;             // fitted on this device
+    L1CostTables l1;               // L1 per-core compute model tables
 };
 
 // The parameter table of a device. Throws std::invalid_argument for an arch without an entry.

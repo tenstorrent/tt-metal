@@ -4,16 +4,14 @@
 
 #pragma once
 
-// Input side of the matmul config model v1c: (matmul problem, candidate program config) -> the analytic base latency
-// `base_ns` and the 57 features the LightGBM residual consumes. Prediction = base_ns * exp(gbdt(features)).
+// Input side of the matmul config model: (matmul problem, candidate program config) -> the analytic base latency
+// `base_ns` and the 57 features the GBDT residual consumes. Prediction = base_ns * exp(gbdt(features)).
 //
-// Ported from the Python reference (tt-matmul-predictor: bench/unified/data.py features() + bench/unified/v1c.py fz()):
-//   base_ns, x_*  fpmodel v18r14's model7 equation with the frozen constants (EXTRA=wfam,reusetail,pack32), its NoC
-//                 link load (nocload.py) with transposed-2D multicast routed as transposed (bench/curated/fp_tmc.py),
-//                 its DRAM bank model (bankload.py) and its 36 mechanism features (resid_cv.features)
-//   y_*           the equation's per-resource terms (bench/curated/fpterms.py, bench/unified/v1.py term_feats)
-//   z_*           the L1 v12 per-core compute model (bench/unified/l1fast.py, bench/unified/v1c.py l1_feats)
-// The C++ is meant to be the single source of truth for these numbers (the training repo calls it via a binding).
+//   base_ns, x_*  an analytic latency equation with constants fitted on the device, its NoC link load (transposed 2D
+//                 multicast routed as transposed), its DRAM bank model and 36 mechanism features
+//   y_*           the equation's per-resource terms
+//   z_*           the L1 per-core compute model
+// The features must be exactly the ones the model was trained on: do not change them without retraining.
 // Std library only; no ttnn types (an adapter from ttnn tensors / program configs lives elsewhere).
 //
 // Units: sizes in elements unless stated; the model works in 32x32 tiles internally (ceil(dim / 32)); times in ns
@@ -54,7 +52,7 @@ enum class Activation : std::uint8_t { kNone, kRelu, kSfpu };
 
 // Program config family: MatmulMultiCoreReuseMultiCastProgramConfig (k2D), ...MultiCast1DProgramConfig with
 // mcast_in0 = true (k1DMcastIn0) / false (k1DMcastIn1), MatmulMultiCoreReuseProgramConfig (kReuse).
-// (The plain MultiCore factory is not ported.)
+// (The plain MultiCore factory is not modeled.)
 enum class Family : std::uint8_t { k2D, k1DMcastIn0, k1DMcastIn1, kReuse };
 
 // The matmul problem: C[batch, M, N] = A[batch, M, K] x B[K, N] (+ bias) (+ activation). M, K, N are the logical
@@ -96,7 +94,7 @@ enum class ScoreStatus : std::uint8_t {
     kInvalidProblem,           // M, K, N or batch is 0
     kGridExceedsDevice,        // grid_x / grid_y larger than the device worker grid
     kNonPositiveBlock,         // per_core_M, per_core_N or in0_block_w is 0
-    kInvalidSubblock,          // out_subblock_h / w is 0 (Python would give a non-finite base)
+    kInvalidSubblock,          // out_subblock_h / w is 0 (the equation would give a non-finite base)
     kNeedsMoreCores,           // the config's output blocks need more cores than its grid
     kTransposedExceedsDevice,  // 2D transpose_mcast placement does not fit the device grid
     kNonFinite,                // the equation returned a non-finite value
@@ -104,10 +102,10 @@ enum class ScoreStatus : std::uint8_t {
 std::string_view to_string(ScoreStatus s);
 
 inline constexpr std::size_t kNumFeatures = 57;
-// Feature names in the booster's order (outputs/unified/models/v1c_s*.txt feature_names).
+// Feature names in the model's order (a blob with other names is refused at load).
 extern const std::array<std::string_view, kNumFeatures> kFeatureNames;
 
-// The equation's per-K-step resource terms, cycles (fpterms.py): the in0 / in1 sender's fetch and multicast, the
+// The equation's per-K-step resource terms, cycles: the in0 / in1 sender's fetch and multicast, the
 // chip-wide DRAM / L1 bound, the busiest NoC link, compute and the output block write.
 struct EquationTerms {
     double fetch0{}, mcast0{}, fetch1{}, mcast1{}, chip{}, link{}, comp{}, write{}, read{};
@@ -117,7 +115,7 @@ struct ModelInput {
     ScoreStatus status = ScoreStatus::kOk;  // anything but kOk: the row cannot be scored (base_ns and x_/y_ NaN)
     double base_ns = 0.0;
     EquationTerms terms{};
-    double l1_cycles = 0.0;  // L1 v12 per-core compute cycles (NaN outside its measured tables; independent of status)
+    double l1_cycles = 0.0;  // L1 per-core compute cycles (NaN outside its measured tables; independent of status)
     std::array<double, kNumFeatures> features{};  // NaN = missing (LightGBM's missing value)
 };
 

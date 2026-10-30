@@ -25,7 +25,7 @@
 namespace ttnn::operations::matmul::model {
 
 // The matmul config model: the analytic base latency and features (matmul_model_features.hpp) and the GBDT residual
-// read from a blob (bench/export/export_gbdt.py --format blob in tt-matmul-predictor). Prediction for a candidate:
+// read from a blob (README, "The model blob"). Prediction for a candidate:
 // base_ns * exp(gbdt(features)).
 class ConfigModel {
 public:
@@ -55,7 +55,7 @@ std::vector<std::size_t> rank_by_prediction(std::span<const double> predicted_ns
 struct Pick {
     std::optional<Candidate> candidate;
     std::uint32_t cb_bytes = 0;
-    // get_max_l1_space when the pick was made: the default's K blocking, which a pick keeps, depends on it
+    // get_max_l1_space when the pick was made: the default's K blocking (the precision bound) depends on it
     std::uint32_t max_l1_space = 0;
     std::string description;
     // No candidate, for lack of L1: the per-core budget it had (the pick is made again when more is free)

@@ -10,9 +10,9 @@
 
 #include <tt_stl/assert.hpp>
 
-// Parity with the Python reference is bit-for-bit only if the compiler evaluates every expression as written: no
-// fused multiply-add contraction (build with -ffp-contract=off on GCC) and no -ffast-math. Expressions below keep the
-// reference's operation order on purpose; do not "simplify" them.
+// The features match the ones the model was trained on bit for bit only if the compiler evaluates every expression as
+// written: no fused multiply-add contraction (build with -ffp-contract=off on GCC) and no -ffast-math. Expressions
+// below keep the operation order the model was trained with on purpose; do not "simplify" them.
 #if defined(__clang__)
 #pragma STDC FP_CONTRACT OFF
 #endif
@@ -134,14 +134,14 @@ namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kInf = std::numeric_limits<double>::infinity();
 
-// Python's builtin max (and numba's): the first argument unless a later one compares greater.
-inline double pymax(double a, double b) { return b > a ? b : a; }
-inline double pymax(double a, double b, double c) { return pymax(pymax(a, b), c); }
-// np.maximum / np.minimum (NaN propagating).
-inline double npmax(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a >= b ? a : b); }
-inline double npmin(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a <= b ? a : b); }
+// max that keeps the first argument unless a later one compares greater (NaN handling depends on the order).
+inline double first_max(double a, double b) { return b > a ? b : a; }
+inline double first_max(double a, double b, double c) { return first_max(first_max(a, b), c); }
+// max / min that propagate NaN.
+inline double nan_max(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a >= b ? a : b); }
+inline double nan_min(double a, double b) { return (std::isnan(a) || std::isnan(b)) ? kNaN : (a <= b ? a : b); }
 
-// model7: 0 DRAM interleaved, 1 L1 interleaved, 2 sharded
+// Placement code: 0 DRAM interleaved, 1 L1 interleaved, 2 sharded
 int src_code(MemLayout m) {
     switch (m) {
         case MemLayout::kDramInterleaved: return 0;
@@ -155,7 +155,7 @@ int src_code(MemLayout m) {
 
 double tiles_of(std::uint32_t v) { return std::ceil(static_cast<double>(v) / kTileDim); }
 
-// ---------------------------------------------------------------- model7.geometry (one row)
+// ---------------------------------------------------------------- geometry (one row)
 struct Geometry {
     Family fam{};
     double Mt{}, Kt{}, Nt{}, B{}, kb{}, obh{}, obw{}, sbh{}, sbw{};
@@ -193,14 +193,14 @@ Geometry geometry(const MatmulProblem& p, const MatmulCandidate& c) {
     const double grid = static_cast<double>(c.grid_x) * static_cast<double>(c.grid_y);
     const double bsf = pcM > g.Mt ? std::floor(pcM / g.Mt) : 1.0;
     const double rblocks = std::ceil(g.B * g.Mt / pcM) * std::ceil(g.Nt / pcN);
-    const double rcores = npmin(rblocks, grid);
+    const double rcores = nan_min(rblocks, grid);
     g.cores = is2d ? R2 * C2 : in0 ? P0 : in1 ? P1 : rcores;
     g.rx0 = is2d ? C2 - 1 : in0 ? P0 - 1 : 0.0;
     g.rx1 = is2d ? R2 - 1 : in1 ? P1 - 1 : 0.0;
     g.rd0 = is2d ? R2 : in0 ? 1.0 : in1 ? P1 : rcores;
     g.rd1 = is2d ? C2 : in0 ? P0 : in1 ? 1.0 : rcores;
     if (reuse) {
-        obh = npmin(pcM, g.Mt);
+        obh = nan_min(pcM, g.Mt);
         obw = pcN;
     }
     const double rounds = std::ceil(rblocks / rcores);
@@ -222,7 +222,7 @@ Geometry geometry(const MatmulProblem& p, const MatmulCandidate& c) {
     g.tb_p = acc32 ? 4096.0 : (l1acc ? 2048.0 : g.tb_o);
     const double nK = g.nK;
     const bool l1on = l1acc && (g.bias ? nK > 1 : nK > 2);
-    g.reloads = l1on ? (g.bias ? 0.0 : 1.0) : npmax(nK - 1, 0.0);
+    g.reloads = l1on ? (g.bias ? 0.0 : 1.0) : nan_max(nK - 1, 0.0);
     g.sfpu = p.activation == Activation::kSfpu;
     g.ph = fidelity_phases(p.fidelity);
     g.src_a = src_code(p.a_mem);
@@ -233,7 +233,7 @@ Geometry geometry(const MatmulProblem& p, const MatmulCandidate& c) {
     return g;
 }
 
-// ---------------------------------------------------------------- nocload.py: NoC link loads per K step
+// ---------------------------------------------------------------- NoC link loads per K step
 // Link array: (noc, axis, x, y) -> index ((noc * 2 + axis) * X + x) * Y + y.
 class LinkGrid {
 public:
@@ -254,9 +254,9 @@ struct Xy {
 };
 
 inline int inc(int v, int n) { return v + 1 == n ? 0 : v + 1; }  // (v + 1) % n for 0 <= v < n
-inline int dec(int v, int n) { return v == 0 ? n - 1 : v - 1; }  // Python's (v - 1) % n
+inline int dec(int v, int n) { return v == 0 ? n - 1 : v - 1; }  // (v - 1) mod n for 0 <= v < n
 
-// _route: NOC0 goes +x then +y, NOC1 goes -y then -x, both wrapping
+// Unicast route: NOC0 goes +x then +y, NOC1 goes -y then -x, both wrapping
 void route(LinkGrid& L, int noc, Xy s, Xy t, double b) {
     int x = s.x, y = s.y;
     if (noc == 0) {
@@ -280,7 +280,7 @@ void route(LinkGrid& L, int noc, Xy s, Xy t, double b) {
     }
 }
 
-// _mcast over the physical rectangle [x0..x1] x [y0..y1]
+// Multicast over the physical rectangle [x0..x1] x [y0..y1]
 void mcast_route(LinkGrid& L, int noc, Xy s, int x0, int x1, int y0, int y1, double b) {
     if (noc == 0) {
         route(L, 0, s, {x0, y0}, b);
@@ -317,7 +317,7 @@ Xy phys(const DeviceParams& d, int i, int j) {
     return {static_cast<int>(d.worker_cols[i]), static_cast<int>(d.worker_rows[j])};
 }
 
-// _read: one byte read by `reader`, spread evenly over the interleaved banks (DRAM) or over every worker (L1)
+// One byte read by `reader`, spread evenly over the interleaved banks (DRAM) or over every worker (L1)
 void read_route(LinkGrid& L, const DeviceParams& d, int noc, Xy reader, int src) {
     if (src == 0) {
         const double share = 1.0 / static_cast<double>(d.num_banks);
@@ -337,7 +337,7 @@ void read_route(LinkGrid& L, const DeviceParams& d, int noc, Xy reader, int src)
     }
 }
 
-// unit_loads (and fp_tmc.unit_loads_t for transposed 2D): link loads per byte of one in0 / in1 block
+// Link loads per byte of one in0 / in1 block (transposed 2D multicast routed as transposed)
 ModelCache::Lanes unit_loads(
     const DeviceParams& d, Family fam, bool transposed, int R, int C, int P, int gx, int gy, int src_a, int src_b) {
     LinkGrid U0(d), U1(d);
@@ -431,13 +431,13 @@ double link_bytes(const DeviceParams& d, const Geometry& g, const MatmulCandidat
     double best = -kInf;
     for (const auto& [u0, u1] : *lanes) {
         const double v = b0 * u0 + b1 * u1;
-        best = npmax(best, v);
+        best = nan_max(best, v);
     }
     return best;
 }
 
-// ---------------------------------------------------------------- bankload.py: DRAM banks touched per K step
-// _rows: row (or column) indices one K step touches, readers per_core apart, capped at 48 distinct
+// ---------------------------------------------------------------- DRAM banks touched per K step
+// Row (or column) indices one K step touches, readers per_core apart, capped at 48 distinct
 std::vector<std::int64_t> touched_rows(
     std::int64_t readers, std::int64_t per_core, std::int64_t block, std::int64_t total) {
     std::vector<std::int64_t> idx;
@@ -491,9 +491,9 @@ void bank_loads(const DeviceParams& d, const MatmulProblem& p, const MatmulCandi
     g.bk_b = p.transpose_b ? banks_touched(n, Kt, cols, 1, kb) : banks_touched(n, 1, cols, Nt, kb);
 }
 
-// ---------------------------------------------------------------- model7.predict (one row, the terms v18r14 uses)
-// On: link bank sat burst spill mcast pack call write epilogue issue pad msync mcrate corecc reusesync dramw shardhop
-// + EXTRA wfam reusetail pack32. Off: everything else (their branches are not ported).
+// ---------------------------------------------------------------- the latency equation (one row)
+// Terms: link bank sat burst spill mcast pack call write epilogue issue pad msync mcrate corecc reusesync dramw
+// shardhop wfam reusetail pack32. No other terms are modeled.
 struct Prediction {
     double t, read, comp, write, nK, nob;
     double fetch0, mcast0, fetch1, mcast1, chip, lk;
@@ -508,22 +508,23 @@ Prediction predict(const DeviceParams& d, const Geometry& g) {
     const double kb = g.kb, obh = g.obh, obw = g.obw, sbh = g.sbh, sbw = g.sbw, nsb = g.nsb, nK = g.nK;
     const double b0 = obh * kb * g.tb_a, b1 = kb * obw * g.tb_b;
 
-    const double ea = npmin(1.0, g.bk_a * p.bank_frac);
-    const double eb = npmin(1.0, g.bk_b * p.bank_frac);
+    const double ea = nan_min(1.0, g.bk_a * p.bank_frac);
+    const double eb = nan_min(1.0, g.bk_b * p.bank_frac);
     const double cg0 = 1 + b0 / (p.burst_KB * 1e3);
     const double cg1 = 1 + b1 / (p.burst_KB * 1e3);
 
     auto fetch = [&](double nbytes, int src, double readers, double eff, double cg, double tile) {
-        const double r = npmax(readers, 1.0);
+        const double r = nan_max(readers, 1.0);
         const double floor = nbytes / tile * p.issue;
         const double noc_rd = r > 1 ? d.noc_bytes_per_cycle * p.noc_eff_cc : noc;
         const double cgd = 1.0, xs = 0.0;
-        const double dr = npmax(p.lat_dram + nbytes * cgd / noc_rd, xs * p.lat_dram + nbytes * r * cgd / (dram * eff));
-        const double l1 = npmax(p.lat_l1 + nbytes / noc, xs * p.lat_l1 + nbytes * r * cg / l1bw);
-        return src == 0 ? npmax(dr, floor) : src == 1 ? npmax(l1, floor) : 0.0;
+        const double dr =
+            nan_max(p.lat_dram + nbytes * cgd / noc_rd, xs * p.lat_dram + nbytes * r * cgd / (dram * eff));
+        const double l1 = nan_max(p.lat_l1 + nbytes / noc, xs * p.lat_l1 + nbytes * r * cg / l1bw);
+        return src == 0 ? nan_max(dr, floor) : src == 1 ? nan_max(l1, floor) : 0.0;
     };
     auto mcast = [&](double nbytes, double rx) {
-        const double rate = d.noc_bytes_per_cycle * npmax(p.mc_eff0 - p.mc_eff_rx * rx, 0.05);
+        const double rate = d.noc_bytes_per_cycle * nan_max(p.mc_eff0 - p.mc_eff_rx * rx, 0.05);
         return rx > 0 ? p.lat_mcast + rx * p.ack_rx + nbytes / rate : 0.0;
     };
 
@@ -538,13 +539,13 @@ Prediction predict(const DeviceParams& d, const Geometry& g) {
                  db = g.rd1 * b1 * static_cast<double>(g.src_b == 0);
     const double la = g.rd0 * b0 * static_cast<double>(g.src_a == 1),
                  lb = g.rd1 * b1 * static_cast<double>(g.src_b == 1);
-    double chip = npmax((da + db) / dram, (la * cg0 + lb * cg1) / l1bw);
-    chip = npmax(chip, npmax(da / (dram * ea), db / (dram * eb)));
-    double read = npmax(npmax(step0, step1), chip);
+    double chip = nan_max((da + db) / dram, (la * cg0 + lb * cg1) / l1bw);
+    chip = nan_max(chip, nan_max(da / (dram * ea), db / (dram * eb)));
+    double read = nan_max(nan_max(step0, step1), chip);
     double shared = chip;
     const double lk = g.link * (g.fam == Family::kReuse ? p.reuse_link : 1.0);
-    read = npmax(read, lk / (d.noc_bytes_per_cycle * p.link_eff));
-    shared = npmax(shared, lk / (d.noc_bytes_per_cycle * p.link_eff));
+    read = nan_max(read, lk / (d.noc_bytes_per_cycle * p.link_eff));
+    shared = nan_max(shared, lk / (d.noc_bytes_per_cycle * p.link_eff));
     o.chip = chip;
     o.lk = lk;
 
@@ -557,8 +558,8 @@ Prediction predict(const DeviceParams& d, const Geometry& g) {
     const double fixed = kb * p.call;
     const double tiles = obh * obw;
     const double reload = g.reloads * (nsb * p.rl_init + (g.tb_p >= 4096 ? tiles * p.u2d : 0.0));
-    const double stage = npmax(math, pack) + 0.0;
-    double comp = nsb * (stage + fixed) + reload / npmax(nK, 1.0);
+    const double stage = nan_max(math, pack) + 0.0;
+    double comp = nsb * (stage + fixed) + reload / nan_max(nK, 1.0);
     double epi = g.bias ? tiles * g.tb_o / p.pack_Bpc : 0.0;
     epi = epi + (g.sfpu ? tiles * p.sfpu_tile : 0.0);
 
@@ -571,7 +572,7 @@ Prediction predict(const DeviceParams& d, const Geometry& g) {
                       : g.fam == Family::k1DMcastIn1 ? p.wf_in1
                                                      : 1.0;
     dram_w = dram_w * wf;
-    const double rate_w = npmin(noc, dram_w / (npmax(g.cores, 1.0) * cw));
+    const double rate_w = nan_min(noc, dram_w / (nan_max(g.cores, 1.0) * cw));
     const double write = g.dst_o == 0   ? nsb * p.lat_write + wbytes / rate_w
                          : g.dst_o == 1 ? nsb * p.lat_l1 + wbytes / noc
                                         : 0.0;
@@ -580,7 +581,7 @@ Prediction predict(const DeviceParams& d, const Geometry& g) {
     comp = comp + sync;
     comp = comp + ((g.src_a == 2 && g.rx0 > 0) ? p.lat_shard : 0.0);  // shardhop
     const double ks = 0.0;
-    const double piped = read + (nK - 1) * (npmax(read, comp) + ks) + comp;
+    const double piped = read + (nK - 1) * (nan_max(read, comp) + ks) + comp;
     const double serial = nK * (read + comp);
     double block = (g.dbuf ? piped : serial) + epi + write;
     const double lat0 = g.src_a == 0 ? p.lat_dram : g.src_a == 1 ? p.lat_l1 : 0.0;
@@ -591,8 +592,8 @@ Prediction predict(const DeviceParams& d, const Geometry& g) {
         const double ft = g.rtail;
         const double f0 = fetch(b0, g.src_a, g.rd0 * ft, ea, cg0, g.tb_a);
         const double f1 = fetch(b1, g.src_b, g.rd1 * ft, eb, cg1, g.tb_b);
-        const double read_t = npmax(npmax(f0, f1), shared * ft);
-        const double saved = (read - read_t) + npmax(nK - 1, 0.0) * (npmax(read, comp) - npmax(read_t, comp));
+        const double read_t = nan_max(nan_max(f0, f1), shared * ft);
+        const double saved = (read - read_t) + nan_max(nK - 1, 0.0) * (nan_max(read, comp) - nan_max(read_t, comp));
         core = core - g.rbsf * saved;
     }
     o.t = p.launch_us * 1e3 + core / clk * 1e9;
@@ -604,7 +605,7 @@ Prediction predict(const DeviceParams& d, const Geometry& g) {
     return o;
 }
 
-// ---------------------------------------------------------------- L1 v12 per-core compute model (l1fast.py)
+// ---------------------------------------------------------------- L1 per-core compute model
 const L1ShapeCosts* l1_shape(const L1CostTables& t, std::uint32_t h, std::uint32_t w, Fidelity f) {
     for (const auto& s : t.shapes) {
         if (s.h == h && s.w == w && s.fidelity == f) {
@@ -614,8 +615,8 @@ const L1ShapeCosts* l1_shape(const L1CostTables& t, std::uint32_t h, std::uint32
     return nullptr;
 }
 
-// np.interp(x, ks, vs) on sorted ks (NaN when the table has no points)
-double np_interp(
+// Linear interpolation of vs over sorted ks at x, held constant beyond the ends (NaN when the table has no points)
+double interp(
     double x,
     std::uint32_t n,
     const std::array<std::uint32_t, L1ShapeCosts::kMaxPoints>& ks,
@@ -647,7 +648,7 @@ double np_interp(
     return r;
 }
 
-// l1fast._run: the subblock-level compute / pack recurrence over nb K blocks of S subblocks. Pe(q) is the pack end of
+// The subblock-level compute / pack recurrence over nb K blocks of S subblocks. Pe(q) is the pack end of
 // subblock-step q; only Pe(q - 1), Pe(q - 2) and Pe(q - S) are read, so a power-of-two ring of > max(S, 2) slots holds
 // them.
 double l1_run(
@@ -680,25 +681,26 @@ double l1_run(
             const std::int64_t q = k * S + j;
             const double dst = q >= 2 ? P[static_cast<std::size_t>(q - 2) & mask] : -kInf;
             if (k == 0) {
-                Ce = pymax(Ce, dst) + work + o_c;
+                Ce = first_max(Ce, dst) + work + o_c;
             } else {
                 double first = 0.0;
                 if (k == 1 && j == 0) {
                     first = S > 1 ? f2 : f1;
                 }
                 const double ob = (j == 0 ? oblk : 0.0) + first;
-                const double ready = pymax(Ce + ob + xr, P[static_cast<std::size_t>(q - S) & mask] + ob + xp, dst + xr);
+                const double ready =
+                    first_max(Ce + ob + xr, P[static_cast<std::size_t>(q - S) & mask] + ob + xp, dst + xr);
                 Ce = ready + work + o_c;
             }
             const double prev = q >= 1 ? P[static_cast<std::size_t>(q - 1) & mask] : -kInf;
-            P[static_cast<std::size_t>(q) & mask] = pymax(prev, Ce) + pack;
+            P[static_cast<std::size_t>(q) & mask] = first_max(prev, Ce) + pack;
         }
     }
     return P[static_cast<std::size_t>(n - 1) & mask];
 }
 
 double l1_cycles(const DeviceParams& d, const MatmulProblem& p, const MatmulCandidate& c, ModelCache* cache) {
-    if (p.fidelity == Fidelity::kHiFi3) {  // l1feat.FID: no HiFi3 tables
+    if (p.fidelity == Fidelity::kHiFi3) {  // no HiFi3 tables
         return kNaN;
     }
     const std::uint32_t h = c.out_subblock_h, w = c.out_subblock_w, kwi = c.in0_block_w;
@@ -741,13 +743,14 @@ double l1_cycles(const DeviceParams& d, const MatmulProblem& p, const MatmulCand
     if (s->has_f1) {
         f1 = s->f1;
     } else {
-        f1 = s->has_f2_kw4 ? s->f2_kw4 : ((has_f2 && f2 != 0.0) ? f2 : 0.0);  // F2.get(key + (4,), f2 or 0.0)
+        f1 = s->has_f2_kw4 ? s->f2_kw4
+                           : ((has_f2 && f2 != 0.0) ? f2 : 0.0);  // the kw=4 cost, else the kw=1 cost, else 0
     }
     if (!has_f2) {
         f2 = f1;
     }
-    const double xp = np_interp(kw, s->n_xp, s->xp_kw, s->xp), xr = np_interp(kw, s->n_xr, s->xr_kw, s->xr);
-    const double xp1 = np_interp(1.0, s->n_xp, s->xp_kw, s->xp), xr1 = np_interp(1.0, s->n_xr, s->xr_kw, s->xr);
+    const double xp = interp(kw, s->n_xp, s->xp_kw, s->xp), xr = interp(kw, s->n_xr, s->xr_kw, s->xr);
+    const double xp1 = interp(1.0, s->n_xp, s->xp_kw, s->xp), xr1 = interp(1.0, s->n_xr, s->xr_kw, s->xr);
     thread_local std::vector<double> ring;
     const double o_c = d.l1.overhead_per_subblock, oblk = d.l1.block_overhead;
     const double a = l1_run(kw, nb, S, s->calls, o_c, pack, xp, xr, f1, f2, oblk, ring);
@@ -759,7 +762,7 @@ double l1_cycles(const DeviceParams& d, const MatmulProblem& p, const MatmulCand
     return cycles;
 }
 
-// ---------------------------------------------------------------- scorability (fpmodel_adapter._prepare, TMC on)
+// ---------------------------------------------------------------- scorability
 ScoreStatus check(const DeviceParams& d, const MatmulProblem& p, const MatmulCandidate& c) {
     if (p.M == 0 || p.K == 0 || p.N == 0 || p.batch == 0) {
         return ScoreStatus::kInvalidProblem;
@@ -809,7 +812,7 @@ ModelInput compute_model_input(
     out.base_ns = kNaN;
     out.terms = {kNaN, kNaN, kNaN, kNaN, kNaN, kNaN, kNaN, kNaN, kNaN};
 
-    // z_l1c is computed for every row (as the reference does); z_l1_over_comp needs the equation's compute term
+    // z_l1c is computed for every row (as in training); z_l1_over_comp needs the equation's compute term
     out.l1_cycles = l1_cycles(device, problem, candidate, cache);
     out.features[55] = std::log(out.l1_cycles);
 
@@ -827,10 +830,10 @@ ModelInput compute_model_input(
     }
     out.base_ns = pr.t;
 
-    // resid_cv.features: the 36 mechanism features
+    // The 36 mechanism features
     auto& f = out.features;
     const double read = pr.read, comp = pr.comp, write = pr.write, nK = pr.nK;
-    const double loop = read + npmax(nK - 1, 0.0) * npmax(read, comp) + comp;
+    const double loop = read + nan_max(nK - 1, 0.0) * nan_max(read, comp) + comp;
     const double tot = loop + write + 1.0;
     f[0] = fam_code(g.fam);
     f[1] = g.kb;
@@ -863,17 +866,17 @@ ModelInput compute_model_input(
     f[28] = read * nK / tot;
     f[29] = write / tot;
     f[30] = std::log((read + 1) / (comp + 1));
-    f[31] = std::log(npmax(pr.t, 1.0) / 1e3);
+    f[31] = std::log(nan_max(pr.t, 1.0) / 1e3);
     f[32] = g.B;
     f[33] = g.Mt;
     f[34] = g.Kt;
     f[35] = g.Nt;
 
-    // fpterms.terms: the per-resource terms (cycles per K step)
+    // The per-resource terms (cycles per K step)
     const double lk = pr.lk / (device.noc_bytes_per_cycle * device.c.link_eff);
     const double f0 = pr.fetch0, m0 = pr.mcast0, f1 = pr.fetch1, m1 = pr.mcast1, chip = pr.chip;
     out.terms = {f0, m0, f1, m1, chip, lk, comp, write, read};
-    const double step = npmax(read, comp) + 1.0;
+    const double step = nan_max(read, comp) + 1.0;
     const std::array<double, 8> raw = {f0, m0, f1, m1, chip, lk, comp, write};
     for (std::size_t i = 0; i < raw.size(); ++i) {
         f[36 + i] = std::log1p(raw[i]);
@@ -891,19 +894,19 @@ ModelInput compute_model_input(
         }
         f[51] = static_cast<double>(arg);
     }
-    f[52] = lk / (npmax(npmax(f0 + m0, f1 + m1), chip) + 1.0);
-    // v1.term_feats: from the log1p'd terms, round-tripped through expm1 as the reference does
+    f[52] = lk / (nan_max(nan_max(f0 + m0, f1 + m1), chip) + 1.0);
+    // Equation-term features: from the log1p'd terms, round-tripped through expm1 as in training
     {
         auto t = [&](std::size_t i) { return std::expm1(f[36 + i]); };
         const double tf0 = t(0), tm0 = t(1), tf1 = t(2), tm1 = t(3), tchip = t(4), tlink = t(5), tcomp = t(6);
-        const double others = npmax(npmax(npmax(tcomp, tchip), tf0 + tm0), tf1 + tm1);
+        const double others = nan_max(nan_max(nan_max(tcomp, tchip), tf0 + tm0), tf1 + tm1);
         std::array<double, 5> st = {tcomp, tchip, tf0 + tm0, tf1 + tm1, tlink};
         std::sort(st.begin(), st.end());
         f[53] = std::log((tlink + 1) / (others + 1));
         f[54] = std::log((st[4] + 1) / (st[3] + 1));
-        // v1c.l1_feats
+        // L1 compute features
         const double ccomp = tcomp * nK;
-        f[56] = std::log(out.l1_cycles / npmax(ccomp, 1e-9));
+        f[56] = std::log(out.l1_cycles / nan_max(ccomp, 1e-9));
     }
     return out;
 }

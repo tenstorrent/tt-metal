@@ -16,15 +16,12 @@
 
 #include <tt_stl/assert.hpp>
 
-// Ported from tt-metal 4b385bbeace (Ryan Miller, #57884), ttnn/cpp/ttnn/operations/matmul/device/:
-//   config/enumerating_source.cpp       EnumeratingSource (k_depths, output_blocks, subblock_variants, layouts)
-//   config/factory_blocking_source.cpp  HeuristicBlocking / HeuristicSubblock / HeuristicFamily, FactoryBlockingSource
-//   config/roofline_estimator.cpp       the roofline the family policy ranks with
-//   config/matmul_auto_config.cpp       circular_buffer_bytes, factory_limit_error
-//   factory/matmul_buffers.cpp          the factories' circular buffer sizes
-// with the paths for sharded tensors, sub-devices, global CBs and tiles other than 32x32 removed (the selector only
-// runs on interleaved 32x32-tile matmuls), and Blackhole's parameters (FactoryBlockingSource BH overrides) fixed.
-// The blocking rules a sharded layout imposes (BlockRules) are therefore always the defaults and are dropped.
+// Ported from the default-config selector proposed in #58143: its candidate enumeration (K depths, output blocks,
+// subblock variants, layouts), its blocking, subblock and family heuristics, the roofline the family heuristic ranks
+// with, its L1 limit check and the factories' circular buffer sizes, with the paths for sharded tensors, sub-devices,
+// global CBs and tiles other than 32x32 removed (the selector only runs on interleaved 32x32-tile matmuls), and
+// Blackhole's parameters (FactoryBlockingSource BH overrides) fixed. The blocking rules a sharded layout imposes
+// (BlockRules) are therefore always the defaults and are dropped.
 namespace ttnn::operations::matmul::model {
 
 namespace {
@@ -882,6 +879,12 @@ std::vector<Candidate> enumerate_candidates(const MatmulDesc& p, const HardwareD
         }
     }
     return result;
+}
+
+Candidate make_candidate(
+    const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch) {
+    const bool fuse = family == Family::kReuse ? true : fuse_batch;
+    return {family, b, cores_used(p, hw, family, b, fuse), hw.grid_x, hw.grid_y, fuse};
 }
 
 MatmulCandidate to_model_candidate(const Candidate& c) {

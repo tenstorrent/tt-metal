@@ -4,9 +4,9 @@
 
 #pragma once
 
-// The candidate program configs the matmul config model ranks: a port of the EnumeratingSource of Ryan Miller's
-// default-config selector (#57884; tt-metal 4b385bbeace, config/enumerating_source.cpp and the FactoryBlockingSource,
-// heuristic policies, roofline and factory buffer sizes it is built on), restricted to interleaved A, B and output.
+// The candidate program configs the matmul config model ranks: a port of the candidate enumeration of the
+// default-config selector proposed in #58143 (and the blocking heuristics, roofline and factory buffer sizes it is
+// built on), restricted to interleaved A, B and output.
 //
 // Layouts are the ones the heuristic FactoryBlockingSource asks its blocking policy for (one grid per family, the
 // device's), plus each multicast layout with the batch looped over instead of fused. Within a layout: the K depths
@@ -91,6 +91,11 @@ std::vector<Candidate> enumerate_candidates(const MatmulDesc& p, const HardwareD
 // awkward per-core tile counts on the full grid often splits well on one column less (#62076: N = 448 tiles over 11
 // columns is 41 per core, a prime, which forces 1x41 output blocks), and the model scores both.
 std::vector<Candidate> enumerate_candidates_with_narrower_grid(const MatmulDesc& p, const HardwareDesc& hw);
+
+// A config of one of the enumerated families as a candidate on `hw`'s grid, to score a config the enumerator didn't
+// emit (the default selection's). Reuse ignores out_block_* and fuse_batch.
+Candidate make_candidate(
+    const MatmulDesc& p, const HardwareDesc& hw, Family family, const Blocking& b, bool fuse_batch);
 
 // The candidate as the model's input.
 MatmulCandidate to_model_candidate(const Candidate& c);

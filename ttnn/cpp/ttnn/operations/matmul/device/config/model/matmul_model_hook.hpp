@@ -13,7 +13,7 @@
 // The opt-in model selector's entry point (ttnn.CONFIG.matmul_model_config, README.md in this directory).
 namespace ttnn::operations::matmul::model {
 
-// The program config the matmul config model picks for this matmul, or nullopt to keep today's default selection.
+// The program config the matmul config model picks for this matmul, or nullopt to keep the default selection.
 // Called once per matmul by ttnn.matmul / ttnn.linear / ttnn.addmm (bound_matmul) with the inputs and normalized
 // attributes (create_matmul_attributes) they pass to the device op, and only when no program config was given.
 // Returns nullopt, without loading anything, when ttnn.CONFIG.matmul_model_config is off. Never throws.

@@ -1311,7 +1311,7 @@ void py_module(nb::module_& mod) {
 
         What the opt-in matmul config model (ttnn.CONFIG.matmul_model_config) did on this thread's last matmul
         called without a program_config: "model: <program config>" when the model chose the config, or
-        "default: <reason>" when today's default selection ran. Empty while the flag has been off.
+        "default: <reason>" when the default selection ran. Empty while the flag has been off.
     )doc");
 
     // Bind create_matmul_attributes helper

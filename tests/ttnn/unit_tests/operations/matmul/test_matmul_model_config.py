@@ -20,6 +20,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.comparison import comp_pcc
 
 last_pick = ttnn.operations.matmul.matmul_model_last_pick
+
+
+def model_decided(pick):
+    """The model scored the call: it picked a config, or it predicted no candidate enough faster than the default
+    config (README, "Pick") and kept that. Not: a fallback before scoring (unsupported call, no model, no candidate)."""
+    return pick.startswith("model: ") or pick.startswith("default: the model predicts")
+
+
 MODEL_BLOB = os.environ.get("TT_MATMUL_MODEL_BLOB") or str(ttnn.CONFIG.matmul_model_path)
 
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="the matmul config model covers Blackhole only")
@@ -95,7 +103,7 @@ CASES = [
         False,
         True,
     ),
-    # Squares with packer L1 accumulation, where other K blocking than the default's changes PCC (README, "Precision")
+    # Squares with packer L1 accumulation, where the model's K blocking costs the most PCC (README, "Precision")
     (
         (1, 1, 1024, 1024),
         (1, 1, 1024, 1024),
@@ -117,27 +125,30 @@ CASES = [
 ]
 
 
+# How far below the flag-off PCC the flag-on PCC may be on these cases. The model may use other K blocking than the
+# default, which changes how partial sums are rounded (README, "Precision"): the largest drop measured on these cases on
+# a Blackhole Galaxy is 1.2e-4 (1024^3 bf16, HiFi2, packer L1 accumulation). A fixed PCC bar loose enough for every
+# case would miss a regression of that size.
+PCC_MARGIN = 2e-4
+
+
 @pytest.mark.parametrize("a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b", CASES)
 def test_model_config_pcc(device, model_on, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b):
     with ttnn.manage_config("matmul_model_config", False):
         _, default = run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b)
     expected, got = run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b)
     pick = last_pick()
-    assert pick.startswith("model: "), f"the model should choose for this interleaved matmul: {pick}"
+    assert model_decided(pick), f"the model should decide for this interleaved matmul: {pick}"
     assert_with_pcc(expected, got, 0.99 if dtype_b == ttnn.bfloat8_b else 0.999)
-    # The model keeps the default config's K blocking, the one part of a config that changes rounding (README,
-    # "Precision"), so its result is the default's bit for bit; a PCC margin would let a precision change through
-    assert torch.equal(got, default), (
-        f"the result differs from the default's: PCC {comp_pcc(expected, got)[1]:.6f} with the model, "
-        f"{comp_pcc(expected, default)[1]:.6f} without ({pick})"
-    )
+    pcc_off, pcc_on = comp_pcc(expected, default)[1], comp_pcc(expected, got)[1]
+    assert pcc_on >= pcc_off - PCC_MARGIN, f"PCC {pcc_on:.6f} with the model, {pcc_off:.6f} without ({pick})"
 
 
 def test_model_picks_for_a_plain_matmul(device, model_on):
     run_matmul(
         device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
     )
-    assert last_pick().startswith("model: "), last_pick()
+    assert model_decided(last_pick()), last_pick()
     # The second call is a cache hit with the same pick
     first = last_pick()
     run_matmul(
@@ -164,12 +175,12 @@ def test_model_reloads_when_the_path_changes(device, model_on, tmp_path):
         assert last_pick() == "default: model not loaded", last_pick()
         shutil.copyfile(MODEL_BLOB, late)
         run_matmul(*args)
-        assert last_pick().startswith("model: "), last_pick()
+        assert model_decided(last_pick()), last_pick()
     with ttnn.manage_config("matmul_model_path", "/nonexistent/matmul_model.blob"):
         run_matmul(*args)
         assert last_pick() == "default: model not loaded", last_pick()
     run_matmul(*args)
-    assert last_pick().startswith("model: "), last_pick()
+    assert model_decided(last_pick()), last_pick()
 
 
 def test_model_keeps_default_for_sharded(device, model_on):
@@ -188,7 +199,7 @@ def test_model_keeps_default_for_sharded(device, model_on):
 
 
 def test_model_keeps_default_for_broadcast_a(device, model_on):
-    """A broadcast over a batched B: the model describes one batch count, so it keeps today's default."""
+    """A broadcast over a batched B: the model describes one batch count, so it keeps the default."""
     torch.manual_seed(0)
     a = torch.randn(1, 1, 32, 64).bfloat16()
     b = torch.randn(1, 4, 64, 64).bfloat16()
@@ -248,14 +259,14 @@ def test_block_float_output_keeps_precision(device, model_on):
         device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=False
     )
     out = ttnn.matmul(ta, tb, dtype=ttnn.bfloat8_b, compute_kernel_config=config)
-    assert last_pick().startswith("model: "), last_pick()
+    assert model_decided(last_pick()), last_pick()
     assert_with_pcc(ttnn.to_torch(ta).float() @ ttnn.to_torch(tb).float(), ttnn.to_torch(out), 0.99)
 
 
 def test_broadcast_bias_with_preallocated_output(device, model_on):
     """A bias that broadcasts the matmul to a larger final output is added after the matmul, and the preallocated
     output is the final one, not the matmul's: the model must choose for the matmul's own output, as the device op
-    gets it (review of #62197). Same result as with the flag off."""
+    gets it. PCC within PCC_MARGIN of the flag-off result."""
     torch.manual_seed(0)
     a = torch.randn(1, 1, 32, 64).bfloat16()
     b = torch.randn(1, 1, 64, 64).bfloat16()
@@ -269,8 +280,11 @@ def test_broadcast_bias_with_preallocated_output(device, model_on):
     with ttnn.manage_config("matmul_model_config", False):
         default = run()
     got = run()
-    assert last_pick().startswith("model: "), last_pick()
-    assert torch.equal(got, default)
+    assert model_decided(last_pick()), last_pick()
+    assert (
+        comp_pcc(a.float() @ b.float() + bias.float(), got)[1]
+        >= comp_pcc(a.float() @ b.float() + bias.float(), default)[1] - PCC_MARGIN
+    )
     assert_with_pcc(a.float() @ b.float() + bias.float(), got, 0.999)
 
 
@@ -295,7 +309,7 @@ def test_preallocated_l1_output_is_not_counted_twice(device, model_on):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.matmul(ta, tb, memory_config=ttnn.L1_MEMORY_CONFIG, optional_output_tensor=out)
-    assert last_pick().startswith("model: "), last_pick()
+    assert model_decided(last_pick()), last_pick()
     assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out), 0.99)
 
 
