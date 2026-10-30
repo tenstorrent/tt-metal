@@ -46,7 +46,7 @@
 //
 // Not supported (rejected by matches_quasar_native_slice, which is narrower than matches_metal_v2_slice
 // in op, dtype and broadcast but also admits DRAM shards -- see below): row-major (non-tile)
-// layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Every mix of
+// layout, where-op, quantization, and mixed lhs/rhs dtype. Every mix of
 // interleaved, L1-sharded and DRAM-sharded operands IS handled: each operand is borrowed where the anchor
 // holds it, and moves over the NoC through its sharding-aware TensorAccessor otherwise. A borrowed operand is
 // tiled: L1-sharded (height/block/width) or L1-interleaved.
@@ -154,10 +154,17 @@ DfbKernelSources select_dfb_kernel_sources(bool is_sfpu) {
 
 // The mode of a and of b (kernels_qsr/common/operand_walk.hpp) for the op's subtile broadcast type.
 // matches_quasar_native_slice admits only the types that have a mode here; any other is a broken precondition.
-// A SCALAR operand whose every dim is 1, `a_one_value` or `b_one_value`, is one value for the whole op: VALUE.
+// A SCALAR operand whose every dim is 1, `a_one_value` or `b_one_value`, is one value for the whole op: VALUE. So is
+// the scalar argument of tensor-scalar, which takes b's place.
 std::array<OperandMode, 2> operand_modes(
     SubtileBroadcastType subtile_broadcast_type, bool is_scalar, bool a_one_value, bool b_one_value) {
-    TT_FATAL(!is_scalar, "binary_ng Quasar-native: tensor-scalar does not run native; the gate refuses it");
+    if (is_scalar) {
+        TT_FATAL(
+            subtile_broadcast_type == SubtileBroadcastType::NONE,
+            "binary_ng Quasar-native: tensor-scalar with subtile broadcast type {}; the gate admits NONE only",
+            static_cast<int>(subtile_broadcast_type));
+        return {OperandMode::FULL, OperandMode::VALUE};
+    }
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE: return {OperandMode::FULL, OperandMode::FULL};
         case SubtileBroadcastType::ROW_A: return {OperandMode::ROW, OperandMode::FULL};
@@ -376,26 +383,32 @@ std::optional<BorrowAnchor> slice_anchor(
 // The borrow decision of the legacy binary_ng in eltwise/binary_ng (its is_native_L1_sharding and get_shard_specs, not
 // the copies in this op). For two inputs of one shape: a sharded output, one memory config for a and b, no DRAM
 // operand, every sharded input on the output's grid, and one shard spec on all three where a shard is uneven. Beside a
-// broadcast: only an even L1 height shard of a, with the output's shard spec, beside an unsharded COL or SCALAR b.
-// The legacy binary_ng then runs on the output's shard grid.
-bool legacy_borrows_output_shard(const Tensor& a, const Tensor& b, const Tensor& c) {
+// broadcast: only an even L1 height shard of a, with the output's shape and shard spec, beside an unsharded COL or
+// SCALAR b. Beside a scalar (b is nullptr): an even L1 shard of a with the output's shard spec. The legacy binary_ng
+// then runs on the output's shard grid.
+bool legacy_borrows_output_shard(const Tensor& a, const Tensor* b, const Tensor& c) {
     const MemoryConfig& a_config = a.memory_config();
     const MemoryConfig& c_config = c.memory_config();
     if (!c_config.is_sharded() || !c_config.shard_spec().has_value()) {
         return false;
     }
-    if (a.logical_shape() != b.logical_shape()) {
+    if (b == nullptr) {
+        return a_config.is_sharded() && a_config.buffer_type() == BufferType::L1 &&
+               c_config.buffer_type() == BufferType::L1 && a_config.shard_spec().has_value() &&
+               *a_config.shard_spec() == *c_config.shard_spec() && !is_uneven(a.tensor_spec());
+    }
+    if (a.logical_shape() != b->logical_shape()) {
         const SubtileBroadcastType type = get_subtile_broadcast_type(
-            a.logical_shape()[-2], a.logical_shape()[-1], b.logical_shape()[-2], b.logical_shape()[-1]);
+            a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         const bool col_or_scalar_b = type == SubtileBroadcastType::COL_B || type == SubtileBroadcastType::SCALAR_B;
         const bool a_shards_like_c = a_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
                                      a_config.buffer_type() == BufferType::L1 &&
                                      c_config.buffer_type() == BufferType::L1 && a_config.shard_spec().has_value() &&
                                      *a_config.shard_spec() == *c_config.shard_spec();
-        return col_or_scalar_b && a.logical_shape() == c.logical_shape() && !b.memory_config().is_sharded() &&
+        return col_or_scalar_b && a.logical_shape() == c.logical_shape() && !b->memory_config().is_sharded() &&
                a_shards_like_c && !is_uneven(a.tensor_spec());
     }
-    if (a_config != b.memory_config()) {
+    if (a_config != b->memory_config()) {
         return false;
     }
     const auto in_dram = [](const MemoryConfig& config) { return config.buffer_type() == BufferType::DRAM; };
@@ -417,7 +430,7 @@ bool legacy_borrows_output_shard(const Tensor& a, const Tensor& b, const Tensor&
 // The number of clusters that the legacy binary_ng uses for this op: the clusters that hold the output's shards where
 // it borrows them, else its split of the output tiles over the worker grid. No anchor runs on fewer. A cluster's cost
 // per tile is about the same borrowed or over the NoC, so a program on fewer clusters takes longer.
-uint32_t legacy_cluster_count(const Tensor& a, const Tensor& b, const Tensor& c, const CoreRangeSet& worker_grid) {
+uint32_t legacy_cluster_count(const Tensor& a, const Tensor* b, const Tensor& c, const CoreRangeSet& worker_grid) {
     if (legacy_borrows_output_shard(a, b, c)) {
         const std::optional<BufferDistributionSpec>& distribution = c.buffer()->buffer_distribution_spec();
         TT_FATAL(distribution.has_value(), "binary_ng Quasar-native: an L1-sharded output has no distribution spec");
@@ -437,14 +450,15 @@ uint32_t legacy_cluster_count(const Tensor& a, const Tensor& b, const Tensor& c,
 // which never changes after the device opens.
 BorrowAnchor select_borrow_anchor(
     const Tensor& a,
-    const Tensor& b,
+    const Tensor* b,
     const Tensor& c,
     const std::array<bool, 3>& borrowable,
     const CoreRangeSet& worker_grid,
     const NativeTuning& tuning,
     TailRings tail_rings,
     PadSlots pad_slots) {
-    const std::array<const Tensor*, 3> operands{&a, &b, &c};
+    // A scalar b is nullptr, which `borrowable` never marks, so no anchor reads it.
+    const std::array<const Tensor*, 3> operands{&a, b, &c};
     const uint32_t compute_threads = native_compute_threads(tuning);
     const uint32_t min_clusters = legacy_cluster_count(a, b, c, worker_grid);
     const auto eligible = [&](const BorrowAnchor& anchor) {
@@ -477,7 +491,7 @@ BorrowAnchor select_borrow_anchor(
     for (std::optional<BorrowAnchor> candidate :
          {shard_anchor(c, operands, borrowable, worker_grid),
           borrowable[0] ? shard_anchor(a, operands, borrowable, worker_grid) : std::nullopt,
-          borrowable[1] ? shard_anchor(b, operands, borrowable, worker_grid) : std::nullopt,
+          borrowable[1] ? shard_anchor(*b, operands, borrowable, worker_grid) : std::nullopt,
           slice_anchor(operands, borrowable, worker_grid)}) {
         if (!candidate.has_value() || candidate->num_borrowed() == 0 || !eligible(*candidate) ||
             (pad_slots == PadSlots::kNone && candidate->has_pad_slots)) {
@@ -528,9 +542,9 @@ ProgramArtifacts create_native_artifacts(
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
     Tensor& c) {
     const Tensor& a = tensor_args.input_tensor_a;
-    // Tensor-scalar: no input_tensor_b. The writer fills the RHS DFB (in1) once from the packed scalar,
-    // so `b` is absent -- every b-derived value below is guarded on is_scalar (b_dtype is derived, the
-    // in1 DFB is a 1-tile non-borrowed ring, and the reader drops its in1 producer/binding).
+    // Tensor-scalar: no input_tensor_b. b is the scalar argument, one value for the whole op (VALUE): the reader fills
+    // one full tile per compute thread of in1 from the packed scalar. Every b-derived value below is guarded on
+    // is_scalar: b_dtype is derived, and b has no tensor binding.
     const bool is_scalar = !tensor_args.input_tensor_b.has_value();
     TT_FATAL(
         !is_scalar || op.scalar.has_value(),
@@ -570,7 +584,7 @@ ProgramArtifacts create_native_artifacts(
     // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
     // `b`, so b_dtype is derived as follows: the
     // scalar is packed as bf16 for block-float a, else the sfpu path keeps a_dtype, else bf16. b_tile
-    // borrows a's tile geometry (a single bf16 scalar tile). ---
+    // borrows a's tile geometry. ---
     const DataType a_dtype = a.dtype();
     const DataType b_dtype =
         is_scalar ? ((op.is_sfpu && !is_block_float(a_dtype)) ? a_dtype : DataType::BFLOAT16) : b_opt->dtype();
@@ -706,7 +720,7 @@ ProgramArtifacts create_native_artifacts(
                                  compute_defines.contains("PACK_RELU");
     const BorrowAnchor anchor = select_borrow_anchor(
         a,
-        *b_opt,
+        is_scalar ? nullptr : &*b_opt,
         c,
         {a_identity, b_identity, true},
         op.worker_grid,
@@ -886,9 +900,7 @@ ProgramArtifacts create_native_artifacts(
     // A VALUE operand's ring holds one full tile per compute thread, as a tail ring does; its reader threads fill one
     // entry per tile counter. Never borrowed.
     const uint32_t a_entries = value_a ? compute_threads : (a_borrowed ? c_main_tiles : in_entries);
-    // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or slice, or
-    // the derived NoC ring.
-    const uint32_t b_entries = is_scalar ? 1u : (value_b ? compute_threads : (b_borrowed ? c_main_tiles : in_entries));
+    const uint32_t b_entries = value_b ? compute_threads : (b_borrowed ? c_main_tiles : in_entries);
     const uint32_t c_entries = c_borrowed ? c_main_tiles : out_entries;
 
     // The FPU kernel expands a ROW operand into its staging ring; the SFPU kernel expands it straight into DST.
@@ -965,6 +977,10 @@ ProgramArtifacts create_native_artifacts(
     reader_defines["SRC_SHARDED"] = a_borrowed ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_borrowed ? "1" : "0";
     reader_defines["HAS_SHARDING"] = has_sharding ? "1" : "0";
+    // The VALUE of tensor-scalar comes from the packed scalar, not from a tensor's page 0.
+    if (is_scalar) {
+        reader_defines["B_VALUE_FROM_SCALAR"] = "1";
+    }
     std::map<std::string, std::string> writer_defines = make_dataflow_defines(b_dtype);
     writer_defines["DST_SHARDED"] = c_borrowed ? "1" : "0";
     writer_defines["HAS_SHARDING"] = has_sharding ? "1" : "0";
@@ -1064,17 +1080,14 @@ ProgramArtifacts create_native_artifacts(
     if (!a_borrowed || tail_tiles > 0) {
         reader_tensor_bindings.push_back(m2::TensorBinding{T_A, "in0"});
     }
-    // Scalar: the reader produces in0 only; in1 is produced by the writer (the scalar fill), so it gets
-    // neither a "in1" DFB producer binding nor a T_B tensor binding.
+    // A scalar b has no tensor, so no T_B binding; the reader still produces in1, with the scalar.
     if (!is_scalar && (!b_borrowed || tail_tiles > 0)) {
         reader_tensor_bindings.push_back(m2::TensorBinding{T_B, "in1"});
     }
     m2::Group<m2::DFBBinding> reader_dfb_bindings;
     if (has_main_ring) {
         reader_dfb_bindings.push_back(m2::ProducerOf(IN0, "in0"));
-        if (!is_scalar) {
-            reader_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
-        }
+        reader_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
     }
     if (tail_tiles > 0) {
         reader_dfb_bindings.push_back(m2::ProducerOf(IN0_TAIL, "in0_tail"));
@@ -1100,6 +1113,9 @@ ProgramArtifacts create_native_artifacts(
         "n_stride_b",
         "c_stride_b",
         "src_num_tiles_b"};
+    if (is_scalar) {
+        reader_rt_names.push_back("packed_scalar");
+    }
     // A mapped program's reader also takes the tile-dim and dim -6 strides of both Maps, and the output's dim -6.
     if (mapped) {
         for (const char* name :
@@ -1128,24 +1144,15 @@ ProgramArtifacts create_native_artifacts(
     if (!c_borrowed || tail_tiles > 0) {
         writer_tensor_bindings.push_back(m2::TensorBinding{T_C, "out"});
     }
-    // Scalar: the writer is ALSO the producer of the in1 DFB (it fills the single scalar tile), so it
-    // gets a "in1" producer binding and a leading "packed_scalar" runtime arg. Tensor-tensor keeps the
-    // out-drain-only writer unchanged.
     m2::Group<m2::DFBBinding> writer_dfb_bindings;
     if (has_main_ring) {
         writer_dfb_bindings.push_back(m2::ConsumerOf(OUT, "out"));
-    }
-    if (is_scalar) {
-        writer_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
     }
     if (tail_tiles > 0) {
         writer_dfb_bindings.push_back(m2::ConsumerOf(OUT_TAIL, "out_tail"));
     }
     m2::Group<std::string> writer_rt_names = {
         "start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"};
-    if (is_scalar) {
-        writer_rt_names.insert(writer_rt_names.begin(), "packed_scalar");
-    }
     if (walk_pads) {
         writer_rt_names.push_back("valid_rows");
         writer_rt_names.push_back("valid_cols");
@@ -1293,8 +1300,8 @@ ProgramArtifacts create_native_artifacts(
     const uint32_t isclose_rtol_bits = std::bit_cast<uint32_t>(op.rtol);
     const uint32_t isclose_atol_bits = std::bit_cast<uint32_t>(op.atol);
 
-    // Scalar packed to the in1 data format for the writer's one-time fill (mirrors the descriptor
-    // scalar packing). Same value on every core. Quant never reaches this factory (gated out).
+    // The scalar, packed in a's format, which the gate makes the format of in1, for the reader's fill (as
+    // production's binary_ng packs it). The same value on every cluster. Quant never reaches this factory (gated out).
     const uint32_t packed_scalar = is_scalar ? pack_scalar_runtime_arg(*op.scalar, a.dtype(), /*is_quant*/ false) : 0u;
 
     std::set<CoreRange> target_ranges;
@@ -1365,7 +1372,7 @@ ProgramArtifacts create_native_artifacts(
         }
 
         if (is_scalar) {
-            writer_args["packed_scalar"][node] = packed_scalar;
+            reader_args["packed_scalar"][node] = packed_scalar;
         }
         writer_args["start_tile_id"][node] = c_start_id;
         writer_args["dst_num_tiles"][node] = c_num_tiles_core;
@@ -1397,8 +1404,8 @@ ProgramArtifacts create_native_artifacts(
         .target_nodes = target_nodes,
     };
 
-    // Scalar has no `b` tensor, so it declares only T_A / T_C (the in1 DFB is writer-filled, not
-    // backed by a TensorParameter).
+    // A scalar has no b tensor, so it declares only T_A and T_C: the reader fills the in1 DFB from the packed
+    // scalar, and no TensorParameter backs it.
     m2::Group<m2::TensorParameter> tensor_params = {{.unique_id = T_A, .spec = a.tensor_spec()}};
     if (!is_scalar) {
         tensor_params.push_back({.unique_id = T_B, .spec = b_opt->tensor_spec()});

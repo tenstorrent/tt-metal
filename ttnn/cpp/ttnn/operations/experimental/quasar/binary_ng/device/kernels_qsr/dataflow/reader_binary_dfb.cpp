@@ -37,6 +37,10 @@
 // The inputs that this reader reads per tile: not borrowed, and not one value for the whole op.
 #define A_PER_TILE (!SRC_SHARDED && !A_VALUE)
 #define B_PER_TILE (!SRC_SHARDED_B && !B_VALUE)
+// The VALUE b of tensor-scalar comes from the packed scalar: b has no tensor.
+#ifndef B_VALUE_FROM_SCALAR
+#define B_VALUE_FROM_SCALAR 0
+#endif
 
 void kernel_main() {
     // A borrowed ring drains when its object leaves scope, so it lives to kernel exit: the compute pops a borrowed
@@ -134,24 +138,27 @@ void kernel_main() {
 #if !SRC_SHARDED
     const uint32_t src_tile_bytes = dfb_in0.get_entry_size();
 #endif
-#if !SRC_SHARDED_B
+#if !SRC_SHARDED_B && !B_VALUE_FROM_SCALAR
     const uint32_t src_tile_bytes_b = dfb_in1.get_entry_size();
 #endif
 #if !SRC_SHARDED
     const auto src = TensorAccessor(tensor::in0);
 #endif
-#if !SRC_SHARDED_B
+#if !SRC_SHARDED_B && !B_VALUE_FROM_SCALAR
     const auto src_b = TensorAccessor(tensor::in1);
 #endif
 
 #if A_VALUE || B_VALUE
     // A VALUE operand is one value for the whole op, in a ring of one full tile per compute thread. This thread fills
-    // the entry of each tile counter it round-robins, once: page 0 lands in the entry, and its first element fills the
-    // tile. The fill is a CPU store to L1, so it runs inside scoped_write_lock, whose release fences and flushes the
-    // stores before push_back credits the entry. A thread with no tiles fills its entries too: each compute thread
-    // waits for one.
+    // the entry of each tile counter it round-robins, once: from the packed scalar of tensor-scalar, or with page 0 of
+    // a tensor whose every dim is 1. The first element of that page then fills the tile. The fill is a CPU store to L1,
+    // so it runs inside scoped_write_lock, whose release fences and flushes the stores before push_back credits the
+    // entry. A thread with no tiles fills its entries too: each compute thread waits for one.
     {
         constexpr uint32_t num_tcs = get_arg(args::num_tcs);
+#if B_VALUE_FROM_SCALAR
+        const uint32_t packed_scalar = get_arg(args::packed_scalar);
+#endif
         for (uint32_t c = 0; c < num_tcs; ++c) {
 #if A_VALUE
             dfb_in0.reserve_back(1);
@@ -167,9 +174,15 @@ void kernel_main() {
             dfb_in1.reserve_back(1);
             {
                 const auto lock = dfb_in1.scoped_write_lock(1);
+#if B_VALUE_FROM_SCALAR && defined(FILL_WITH_VALUE_FLOAT_B)
+                FILL_WITH_VALUE_FLOAT_B(lock.get_ptr(), __builtin_bit_cast(float, packed_scalar));
+#elif B_VALUE_FROM_SCALAR
+                FILL_WITH_VALUE_B(lock.get_ptr(), packed_scalar);
+#else
                 noc.async_read(src_b, dfb_in1, src_tile_bytes_b, {.page_id = 0}, {.offset_bytes = 0});
                 noc.async_read_barrier();
                 FILL_TILE_WITH_FIRST_ELEMENT_B(lock.get_ptr());
+#endif
             }
             dfb_in1.push_back(1);
 #endif
