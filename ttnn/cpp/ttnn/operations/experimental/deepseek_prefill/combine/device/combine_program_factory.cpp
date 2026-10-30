@@ -157,7 +157,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const bool local_only = num_links == 0;
     TT_FATAL(
         !local_only || ((mesh_device->shape().mesh_size() == 1 ||
-                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                         (operation_attributes.axis.has_value() && *operation_attributes.axis <= 1 &&
+                          mesh_device->shape()[*operation_attributes.axis] == 1)) &&
                         operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
         "Zero-link prefill combine requires a singleton communication domain, dispatch_group_size=1, and Linear "
         "topology");

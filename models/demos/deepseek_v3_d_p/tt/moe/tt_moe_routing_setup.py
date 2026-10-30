@@ -117,6 +117,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 
 
 class MoERoutingOutputs(NamedTuple):
@@ -187,7 +188,7 @@ class TtMoERoutingSetup(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0) if sp_axis == 0 else (0, None)
+                mesh_device, mesh_shape=mesh_device.shape, dims=mesh_shard_dims(0, 1 - sp_axis)
             ),
         )
 
@@ -236,7 +237,7 @@ class TtMoERoutingSetup(LightweightModule):
             mesh_mapper = ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 mesh_shape=self.mesh_device.shape,
-                dims=(0, None) if self.sp_axis == 0 else (None, 0),
+                dims=mesh_shard_dims(0, self.sp_axis),
             )
             ttnn_top_k_experts_indices = ttnn.from_torch(
                 ttnn_top_k_experts_indices,
