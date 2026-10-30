@@ -1701,7 +1701,7 @@
     # HF_HOME -- symlink it to the pre-staged Weka cache so it resolves offline (no-op for the rest).
     mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/weka/model-weights/video/huggingface ~/.cache/huggingface' || true
     # One multihost-ci-sc1 leg runs every LTX component test on the 4x8 galaxy (bh_sc1).
-    # Block tests use random weights; audio/upsampler resolve offline from the Weka cache.
+    # Block tests use random weights; the 22B av model case, audio and upsampler resolve offline from the Weka cache.
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || exit $?; }
     # Cheap/CPU/block tests first so a slow later test can never starve them out of the leg timeout.
@@ -1710,7 +1710,8 @@
     run models/tt_dit/tests/models/ltx/test_rope_ltx.py
     run models/tt_dit/tests/models/ltx/test_attention_ltx.py     -k "4x8sp1tp0nl2_line_is_fsdp0"
     # video block; ckpt_fast pins one checkpoint_variant (video ignores it -> avoids redundant skips).
-    run models/tt_dit/tests/models/ltx/test_transformer_ltx.py   -k "4x8sp1tp0nl2_ring_is_fsdp0 and video and ckpt_fast"
+    # One av case (model, stage_1) loads the real 22B distilled checkpoint and checks PCC against diffusers.
+    run models/tt_dit/tests/models/ltx/test_transformer_ltx.py   -k "4x8sp1tp0nl2_ring_is_fsdp0 and ckpt_fast and (video or (av and stage_1 and test_ltx_transformer_model))"
     run models/tt_dit/tests/models/ltx/test_ltx_lora_ondevice.py -k "bh_4x8sp1tp0"
     run models/tt_dit/tests/models/ltx/test_latent_upsampler.py  -k "4x8h0w1nl2_line"
     # heavier last. VAE: drop the 145-frame full-res decode (e2e-scale, >20 min); 9f-2K still covers decode.
