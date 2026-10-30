@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
 from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
 
 from tracy.process_model_log import (
@@ -24,6 +24,25 @@ def assert_quality(torch_output, tt_output):
         "pcc": pcc_val,
         "relative_rmse": relative_rmse_val,
     }
+
+
+# Fused activations that take parameters: (ttnn activation factory, torch reference). Each changes a
+# large share of a randn matmul output (standard deviation sqrt(K)): hardshrink with lambda = 16 zeroes
+# about 40% of it at K = 1024, so a tile row the activation skips shows up in the PCC.
+FUSED_PARAM_ACTIVATIONS = {
+    "hardshrink": (
+        lambda: ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSHRINK, 16.0),
+        lambda x: torch.nn.functional.hardshrink(x, lambd=16.0),
+    ),
+    "threshold": (
+        lambda: ttnn.UnaryWithParam(ttnn.UnaryOpType.THRESHOLD, 0.0, -1.0),
+        lambda x: torch.nn.functional.threshold(x, 0.0, -1.0),
+    ),
+    "square": (
+        lambda: ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE),
+        torch.square,
+    ),
+}
 
 
 def run_test_linear_impl(
@@ -43,12 +62,15 @@ def run_test_linear_impl(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     core_grid=None,
+    throttle_level=None,
 ):
     core_grid = core_grid or device.compute_with_storage_grid_size()
 
     activation_fn = None
     if activation == "gelu":
         activation_fn = (ttnn.UnaryOpType.GELU, False)
+    elif activation in FUSED_PARAM_ACTIVATIONS:
+        activation_fn = FUSED_PARAM_ACTIVATIONS[activation][0]()
     else:
         assert activation is None, f"Unsupported activation: {activation}"
 
@@ -59,6 +81,8 @@ def run_test_linear_impl(
 
         if activation == "gelu":
             torch_output = torch.nn.functional.gelu(torch_output)
+        elif activation in FUSED_PARAM_ACTIVATIONS:
+            torch_output = FUSED_PARAM_ACTIVATIONS[activation][1](torch_output)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -67,6 +91,8 @@ def run_test_linear_impl(
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
     )
+    if throttle_level is not None:
+        compute_config.throttle_level = throttle_level
 
     matmul_config = ttnn.MinimalMatmulConfig(
         M_block_size=M_block_size,
@@ -448,6 +474,42 @@ def test_linear_core_grid(device, core_grid):
     M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
     check_result = run_test_linear(
         device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, core_grid=core_grid
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+# minimal_matmul runs the fused activation's init once, then matmul_block_init before every block. On
+# Wormhole with more than 48 cores and a non-zero throttle level, that matmul init programs ADDR_MOD_6 for
+# the throttled MOP (MM_THROTTLE). These activations' SFPU bodies walk Dest two rows at a time and, outside
+# that define, advance it through ADDR_MOD_6 from their own init; under it they must advance Dest
+# explicitly, or every activation call after the first block rewrites the tile's first rows.
+@pytest.mark.parametrize("activation", list(FUSED_PARAM_ACTIVATIONS))
+def test_linear_throttled_fused_activation(device, activation):
+    grid = device.compute_with_storage_grid_size()
+    if not is_wormhole_b0() or grid.x * grid.y <= 48:
+        pytest.skip("matmul throttling (MM_THROTTLE) applies only to Wormhole with more than 48 cores")
+    M, K, N = 1024, 1024, 1024
+    # bf16-exact operands and HiFi4 make the device matmul match the torch reference up to accumulation
+    # order, so no output lands on the other side of an activation's cut-off by rounding alone.
+    torch_input = torch.randn((M, K), dtype=torch.float32).bfloat16().float()
+    weight_input = torch.randn((K, N), dtype=torch.float32).bfloat16().float()
+    check_result = run_test_linear_impl(
+        device=device,
+        torch_input=torch_input,
+        weight_input=weight_input,
+        bias_input=None,
+        tt_input=ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+        tt_weight=ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+        tt_bias=None,
+        M_block_size=2,
+        K_block_size=2,
+        N_block_size=2,
+        subblock_h=2,
+        subblock_w=2,
+        activation=activation,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        throttle_level=ttnn.ThrottleLevel(1),
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
