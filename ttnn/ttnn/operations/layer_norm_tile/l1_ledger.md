@@ -1,65 +1,75 @@
-# L1 Ledger: layer_norm (layer_norm_tile)
+# L1 Ledger: layer_norm_tile
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: `row` (extent `block_rows`) and `w` (extent `block_w_tiles`), from `op_design.md` Blocking Model.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes from `op_design.md`:
+`tile_rows` (extent `block_height`, runtime extent `block_rows <= block_height`) and `W` (extent
+`Wt = tensor_w_tiles`, whole, never split). `intra_tile_rows` is fixed at the tile height (32) and is
+spanned by every tile-shaped page; it is not repeated per row below.
 
-Page sizes: `T_in = T_aff = T_out = 2048` (bf16 tile). `T_int` = 4096 when `fp32_dest_acc_en` (Float32), else 2048 (Float16_b).
+`T_in` = bf16 tile = 2048 B. `T_acc` = 4096 B (Float32) when `fp32_dest_acc_en`, else 2048 B (Float16_b).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_tiles` | `input_depth_blocks * block_rows * block_w_tiles` | `block_rows * block_w_tiles` (P1 waits the whole block), plus 1 prefetched block when `input_depth_blocks = 2` | `{row: spans -> block_rows, w: spans -> block_w_tiles}` | bf16 (input tensor data; carries no accumulation, so it is not subject to the DEST-width rule) | reader | compute | load_block to P2 | Not with `cb_centered`: under fp32 DEST the formats differ (bf16 vs Float32). Under bf16 DEST an in-place P2 would make compute a second producer of a CB the reader is refilling (ownership violation). Capacity above the live set is double buffering for block prefetch (`input_depth_blocks`), and is set to 1 when the core has a single block. |
-| `cb_gamma_rows` | `block_w_tiles` | `block_w_tiles` (row 0 of each tile) | `{row: streams (constant across all blocks), w: spans -> block_w_tiles}` | gamma dtype (bf16; tensor data) | reader | compute | kernel | Could merge with `cb_beta_rows` into one `2*block_w_tiles` CB via `TileAddressing::Offset`. That saves 0 bytes (same capacity sum), so they stay separate (one tensor per CB). Not aliasable with anything: live for the whole kernel. |
-| `cb_beta_rows` | `block_w_tiles` | `block_w_tiles` | `{row: streams (constant), w: spans -> block_w_tiles}` | beta dtype (bf16; tensor data) | reader | compute | kernel | see `cb_gamma_rows` |
-| `cb_row_stat` | `block_rows` | `block_rows` | `{row: spans -> block_rows, w: streams (collapsed to 1 tile per row)}` | `intermediate_format` (Float32 if fp32 DEST, else Float16_b) | compute | compute | P1 to P2 (mean), then P3 to P4 (sumsq, DEST-accumulated per tile-row and packed once) | **Shares with itself across two disjoint uses** (mean, then sumsq): same producer/consumer, same shape and format, sequential lifetimes with balanced push/pop. Not with `cb_rstd`: P4 reads `cb_row_stat` while writing `cb_rstd` (concurrent; the reduce asserts input != output). |
-| `cb_rstd` | `block_rows` | `block_rows` | `{row: spans -> block_rows, w: streams (collapsed)}` | `intermediate_format` | compute | compute | P4 to P5 | Concurrent with `cb_row_stat` during P4 (see above). Disjoint from P1's mean in time, but that use is already folded into `cb_row_stat`. |
-| `cb_centered` | `block_rows * block_w_tiles` | `block_rows * block_w_tiles` (P3 reads the whole block resident; P5/P6 rewrite it in place) | `{row: spans -> block_rows, w: spans -> block_w_tiles}` | `intermediate_format` | compute | compute | P2 to P7 | Already absorbs three phase boundaries in place (P5 scale, P6 gamma; P7 packs straight to the destination). Not with `cb_input_tiles` (format / ownership, above). Not with `cb_output_tiles`: the writer is its consumer, so an in-place final pass would give it two consumers. Single-buffered: one compute thread cannot pipeline blocks. |
-| `cb_output_tiles` | `output_depth_rows * block_w_tiles` | `block_w_tiles` (one writer batch) + one tile-row being packed, when the core owns more than one tile-row | `{row: streams (window of output_depth_rows tile-rows), w: spans -> block_w_tiles}` | bf16 (op output dtype) | compute | writer | P7 to store_block | Capacity above one tile-row is double buffering (`output_depth_rows = min(2, rows per core)`), so P7 packs row r+1 while the writer drains row r. Clamped to 1 when every core owns a single tile-row (R <= num_cores): the second slot could never be live (verifier fix, mirrors `input_depth_blocks`). Packed per tile, drained per tile-row, so it never needs to span `row`. No aliasing: live for every block. |
+| `cb_input_tiles` | `input_depth * block_height * Wt` | no residual: `block_rows * Wt` (whole block resident through `mean_block`); residual: 1 tile on the consumer side | `{tile_rows: spans -> block_height, W: spans -> Wt}` | bf16 (tensor dtype) | reader | compute | `load_block` .. `center_block` (no residual) / `add_residual_block` (residual) | Not shared: it is reader-produced, and every candidate partner (`work`, `stats`) is compute-produced, so aliasing would give the bytes two producers. Capacity above the residual-path live set is the reader prefetch of a whole block in one pass; `input_depth = 2` only when a next block exists (double buffering). |
+| `cb_residual_tiles` | `HAS_RESIDUAL * input_depth * block_height * Wt` | 1 tile consumer-side (streamed by `add_residual_block`) | `{tile_rows: spans -> block_height, W: spans -> Wt}` | bf16 | reader | compute | `load_block` .. `add_residual_block` | Not shared: concurrent with `cb_input_tiles` (both streamed by the same phase) and reader-produced. Capacity above live set = whole-block reader prefetch so the reader fills input and residual tile-rows in one barrier; a `Wt`-tile window is the nearby alternative (overlap lamp scope). |
+| `cb_gamma_rows` | `Wt` | `Wt` (all tile-columns re-read by every `scale_block`) | `{tile_rows: streams -> 0 (constant over rows), W: spans -> Wt}` | bf16 | writer | compute | kernel | Not shared: live for the whole kernel, overlapping every other CB. Also serves as the never-read scaler id of `mean_block`/`rstd_block` (no allocation). |
+| `cb_beta_rows` | `Wt` | `Wt` | `{tile_rows: streams -> 0, W: spans -> Wt}` | bf16 | writer | compute | kernel | Not shared: kernel lifetime, concurrent with `cb_gamma_rows` (both resident). |
+| `cb_xsum` (alias group `work`) | `block_height * Wt` (group total) | `block_rows * Wt` | `{tile_rows: spans -> block_height, W: spans -> Wt}` | `T_acc` | compute | compute | `add_residual_block` .. `center_block` | **Shares** the `work` allocation with `cb_centered`, `cb_normed`, `cb_scaled` (lockstep alias, identical page size and quanta). No traffic without residual. |
+| `cb_centered` (alias group `work`) | same allocation | `block_rows * Wt` (resident through `sumsq_block`) | `{tile_rows: spans -> block_height, W: spans -> Wt}` | `T_acc` | compute | compute | `center_block` .. `normalize_block` | **Shares** `work`. Not aliased with `cb_input_tiles` (reader-produced, see above). |
+| `cb_normed` (alias group `work`) | same allocation | `block_rows * Wt` at most (streamed into `scale_block`) | `{tile_rows: spans -> block_height, W: spans -> Wt}` | `T_acc` | compute | compute | `normalize_block` .. `scale_block` | **Shares** `work`. |
+| `cb_scaled` (alias group `work`) | same allocation | `block_rows * Wt` at most | `{tile_rows: spans -> block_height, W: spans -> Wt}` | `T_acc` | compute | compute | `scale_block` .. `shift_block` | **Shares** `work`. Not packed straight into `cb_output_tiles`: `shift_block` is a second FPU binary that needs its operand in a CB (dest-reuse fusion is the Phase E perf lamp). |
+| `cb_mean` (alias group `stats`) | `block_height` (group total) | `block_rows` (helper bulk-reserves all outputs) | `{tile_rows: spans -> block_height, W: streams -> 1 (collapsed)}` | `T_acc` | compute | compute | `mean_block` .. `center_block` | **Shares** the `stats` allocation with `cb_sumsq`, `cb_rstd`. Not folded into `work`: different page count and it is live while `work` is full. |
+| `cb_sumsq` (alias group `stats`) | same allocation | `block_rows` | `{tile_rows: spans -> block_height, W: streams -> 1}` | `T_acc` | compute | compute | `sumsq_block` .. `rstd_block` | **Shares** `stats`. Not folded into DEST across both phases: the within-tile collapse is a separate helper call (no SFPU reduce chain element exists). |
+| `cb_rstd` (alias group `stats`) | same allocation | `block_rows` | `{tile_rows: spans -> block_height, W: streams -> 1}` | `T_acc` | compute | compute | `rstd_block` .. `normalize_block` | **Shares** `stats`; entry `o` is packed only after entry `o` of `cb_sumsq` was unpacked (same output). |
+| `cb_output_tiles` | `OUTPUT_DEPTH * Wt` | `Wt` per side (compute fills tile-row `r+1` while the writer drains `r`) | `{tile_rows: streams -> OUTPUT_DEPTH, W: spans -> Wt}` | bf16 | compute | writer | per tile-row | Not shared: writer-consumed and concurrent with every compute phase of the next tile-row; capacity above `Wt` is double buffering. |
 
-No reduce-scaler CB: AccumulateViaAdd on the aligned W never reads the scaler (`reduce_helpers_compute.inl:320-337`), and 1/W is an SFPU scalar multiply.
+Allocations: 7 with residual (`cb_input_tiles`, `cb_residual_tiles`, `cb_gamma_rows`, `cb_beta_rows`, `work`, `stats`, `cb_output_tiles`), 6 without. No scaler / mask CB exists (aligned `AccumulateViaAdd` never waits one).
 
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `block_w_tiles` = `tensor_w_tiles` | 24 under contract; `<= W_TILES_RESIDENT_MAX = 32` | `validate()`: `W % 32 == 0 and ceil(W/32) <= 32` (regime `row-split-resident-w`) |
-| `block_rows` | `<= BLOCK_ROWS_MAX = 1` (implementer: lowered from 2 per the design's overlap lamp; measured faster on every multi-row shape) | host: `block_rows = min(core_rows_g1, BLOCK_ROWS_MAX)` |
-| `input_depth_blocks` | in {1, 2} | host: `min(2, max_num_blocks)`, with `max_num_blocks = ceil(core_rows_g1 / block_rows)` |
-| `output_depth_rows` | in {1, 2} | host: `min(OUTPUT_DEPTH_ROWS = 2, max_num_blocks * block_rows)` |
-| `T_int` | in {2048, 4096} | `fp32_dest_acc_en` |
+| `Wt = tensor_w_tiles` | 24 | validate: `W == 768` domain, `W % 32 == 0` |
+| `block_height` | `1 <= block_height <= min(max_core_rows_tiles, block_height_cap(input_depth))` | `derive_blocking()` in `op_design.md`; validate requires `block_height_cap(INPUT_DEPTH_MAX) >= 1` |
+| `block_rows` | `1 <= block_rows <= block_height` | per-block runtime extent (`last_block_extent` on the final block) |
+| `input_depth` | `{1, 2}` | 1 iff `max_core_rows_tiles <= block_height_cap(1)` |
+| `HAS_RESIDUAL` | `{0, 1}` | `residual_input_tensor is not None` |
+| `OUTPUT_DEPTH` | 2 | host constant |
+| `T_acc` | `{2048, 4096}` | `fp32_dest_acc_en` |
+| `CB_L1_BUDGET_BYTES` | 786,432 | host constant; leaves >= 600 KiB of the ~1.4 MiB usable BH L1 for L1-interleaved tensor banks (~56 KiB per tensor per core at `B*S = 4096`) |
 
-## Total per-core footprint
+## Footprint
 
 ```
-F = input_depth_blocks * block_rows * block_w_tiles * T_in        # scales with block_rows, block_w_tiles, input depth
-  + 2 * block_w_tiles * T_aff                                     # scales with block_w_tiles only
-  + 2 * block_rows * T_int                                        # scales with block_rows
-  + block_rows * block_w_tiles * T_int                            # scales with block_rows, block_w_tiles
-  + output_depth_rows * block_w_tiles * T_out                     # scales with block_w_tiles, output depth (1 or 2)
+total = block_height * ( Wt * (input_depth * T_in * (1 + HAS_RESIDUAL) + T_acc) + T_acc )   # scales with block_height, input_depth, HAS_RESIDUAL, T_acc
+      + Wt * T_in * (2 + OUTPUT_DEPTH)                                                       # fixed: gamma, beta, output window
 ```
 
-| Case (fp32 DEST, `block_w_tiles = 24`) | F |
-|----------------------------------------|---|
-| `block_rows = 1`, depth 1, output depth 1 (R <= num_cores; **built** for R = 32..110) | 48 + 96 + 8 + 96 + 48 = **296 KB** |
-| `block_rows = 1`, depth 2 (R > num_cores; **built default** for R = 128, 248) | 96 + 96 + 8 + 96 + 96 = **392 KB** |
-| `block_rows = 2`, depth 1 (knob range, not built at `BLOCK_ROWS_MAX = 1`) | 96 + 96 + 16 + 192 + 96 = **496 KB** |
-| `block_rows = 2`, depth 2 (knob range, not built) | 192 + 96 + 16 + 192 + 96 = **592 KB** |
-| bound (`block_w_tiles = 32`, `block_rows = 2`, depth 2) | 256 + 128 + 16 + 256 + 128 = **784 KB** |
-
-Under bf16 DEST, the `T_int` terms halve.
+| Configuration | `block_height` | `input_depth` | Bytes |
+|---------------|----------------|---------------|-------|
+| fp32, residual (worst Phase 0) | 2 | 1 | 598,016 |
+| fp32, no residual | 2 | 1 | 499,712 |
+| bf16 DEST, residual | 2 | 1 | 495,616 |
+| fp32, residual, multi-block (`(256,1,16,768)` on 110 cores) | 1 | 2 | 495,616 |
 
 ## Data-movement budget
 
-`R = tensor_row_tiles`, `P` = participating cores (`min(R, grid cores)`), tile = 2 KB.
+Tier: input / residual / output pages live in remote L1 banks, so the expensive crossing is the NoC hop
+to the computing core; TILE gamma/beta are in DRAM. Example shape `(8, 1, 512, 768)` with residual:
+`tensor_bytes = 128 tile-rows * 24 * 2048 = 6,291,456 B`; 110-core grid, all 110 cores active (128 tile-rows).
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| input | 0 (L1-interleaved). Each tile crosses the NoC from its L1 bank **once**: `R * 48 KB`. | whole `w` resident per block, so the mean, center, variance and normalize passes all read core-local L1 (no re-read) | 0 |
-| output | 0 (L1-interleaved). Each tile is written over the NoC once: `R * 48 KB`. | packed straight to `cb_output_tiles` from the last phase | 0 |
-| gamma | `affine-tile`: `P * 24 * (512 + 64) B` from DRAM (`P * 13.5 KB` on BH): **one** read per tile spanning face 0 and face-1 row 0. The grid-wide fetch is bound by DRAM request count, not bytes; halving requests measured faster than 2 x 64 B reads. `affine-rm`: 0 DRAM, `P * 1.5 KB` over the NoC from L1 (2 x 32 B reads per tile). | row-0-only read (valid 64 B per tile), read once per core and resident for the kernel; each core starts at its own column | 0 |
-| beta | same as gamma | same | 0 |
-| mean / sumsq / rstd / xc | 0 | core-local intermediates | 0 |
+| input | 0 DRAM; 1 NoC crossing per tile (6 MiB) | whole `W` resident per block, so mean, variance and normalize all read the one resident copy | none |
+| residual | 0 DRAM; 1 NoC crossing per tile (6 MiB) | folded into `cb_xsum` once, never re-read | none |
+| gamma | TILE/DRAM: 1 crossing per active core of 24 x 128 B = 3 KiB (330 KiB total); RM/L1: 24 x 64 B = 1.5 KiB per core (165 KiB total) | reuse-shared operand fetched per core (row 0 only, not whole 2 KiB tiles: whole tiles would be 48 KiB per core) | none |
+| beta | same as gamma | same | none |
+| output | 0 DRAM; 1 NoC crossing per tile (6 MiB) | written once from the resident block | none |
 
-Totals on the 110-core Blackhole grid at R = 128, P = 110: NoC-from-L1 input 6 MB, output 6 MB; affine 330 KB from L1 (RM form), or 2.9 MB from DRAM (TILE form, 576 B per tile read). At R = 32, P = 32: 1.5 MB, 1.5 MB, 96 KB / 864 KB.
+Totals for the example: NoC 18 MiB (in + res + out) + 0.33-0.66 MiB affine rows; DRAM 0 (RM gamma) or 0.66 MiB (TILE gamma).
 
-> Cheapest-traffic split considered: `row` (tile-rows across cores, whole W resident). Implemented: `row`. It is the cheapest: the only split with zero cross-core traffic and single-crossing input/output. The `w-split-combine` alternative adds about `R * k * 4 KB` of partial-tile gather/mcast plus 2 semaphore rounds per block and saves only `P * 3 KB * (1 - 1/k)` of affine reads. It is deferred because its only gain is occupancy in the `R < num_cores` class (positive reason in the regime table). The affine replication (`P * 3 KB` vs. 3 KB minimum) is the one above-minimum term. Mcast was rejected because those reads are latency-bound and already hidden behind block-0 compute. **Measured (implementer, BH 110 cores):** the TILE-DRAM fetch is NOT fully hidden at P = 110 (R = 128: ~42.5 us vs ~35 us for the RM-L1 form), so `affine-read-once-mcast` is a live refinement candidate for the TILE-DRAM form.
-
-**Measured (verifier ablation, BH p100a, default config, RM-L1 affine unless noted):** DM-only (compute stubbed to CB handshakes) R = 32 / 64 / 128 / 248: 4.5 / 9.0 / 17.2 / 27.0 us; compute-only (input/output NoC skipped) 10.2 / 10.2 / 19.8 / 29.4 us; full 14.2 / 19.1-20.9 / 31.4-34.5 / 46-54 us. Aggregate input+output NoC throughput saturates near 700-900 GB/s, so the data-movement term grows with participating cores, and on one-tile-row cores it serializes with compute (R = 64: 9.0 + 10.2 ~ full). The TILE-DRAM affine fetch costs ~15 us of DM time at P = 110 (DM-only R = 128: 32.2 vs 17.2 us).
+> Cheapest-traffic split considered: `tile_rows` across cores (`row_resident`) - delta 0 bytes per tier.
+> Implemented: `tile_rows` across cores. It is also the cheapest-traffic split. The only above-minimum
+> term is the per-core affine-row fetch (`affine_mcast`, deferred: the fetch runs on the writer during
+> the reader's block-0 fetch and compute's pre-affine phases, so it is off the critical path). The
+> `w_split_combine` regime adds traffic (+2 (k-1) T_acc per core per tile-row) and is deferred for the
+> occupancy reason stated in the regime table, not for traffic.
