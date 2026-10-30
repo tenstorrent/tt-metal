@@ -129,7 +129,6 @@ with overlap off, are not.
 
 Set only what is specific to the deployment:
 
-- `PREFILL_NUM_USERS`, when the decode side caps slots below the variant's count.
 - `PREFILL_H2D_SERVICE_ID`, matching the producer.
 - Migration: `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1`,
   `PREFILL_MIGRATION_TABLE_PATH` on storage all hosts share, and
