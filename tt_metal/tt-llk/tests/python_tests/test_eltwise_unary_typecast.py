@@ -31,22 +31,34 @@ from helpers.llk_params import (
     ApproximationMode,
     BlocksCalculationAlgorithm,
     DestAccumulation,
+    FastMode,
     MathOperation,
+    PerfRunType,
+    StableSort,
+    Transpose,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    FAST_MODE,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
+    NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    STABLE_SORT,
     TILE_COUNT,
     TYPECAST_FORMATS,
+    TYPECAST_PERF_MODE,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     DestSync,
     generate_input_dim,
 )
@@ -571,12 +583,20 @@ def _build_typecast_config(
     dest_acc: DestAccumulation,
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
-    src_A: torch.Tensor,
+    src_A: torch.Tensor | None,
     tile_cnt_A: int,
-    src_B: torch.Tensor,
+    src_B: torch.Tensor | None,
     tile_cnt_B: int,
     twos_complement: bool = False,
-) -> TestConfig:
+    *,
+    is_perf: bool = False,
+    run_types: list[PerfRunType] | None = None,
+    loop_factor: int = 1,
+    iterations: int = 8,
+):
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
     #    Int32/UInt32/Float32, so is_unpacker_format_conversion_supported_dest
@@ -598,24 +618,40 @@ def _build_typecast_config(
         BlocksCalculationAlgorithm.Standard,
     )
 
-    configuration = TestConfig(
-        "sources/eltwise_unary_typecast_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
-            # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
-            # (input, output) pair that selects the concrete typecast kernel.
-            MATH_OP(mathop=MathOperation.Typecast),
-            TYPECAST_FORMATS(formats.input_format, formats.output_format),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
+    templates = [
+        APPROX_MODE(approx_mode),
+        # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
+        # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
+        # (input, output) pair that selects the concrete typecast kernel.
+        MATH_OP(mathop=MathOperation.Typecast),
+        TYPECAST_FORMATS(formats.input_format, formats.output_format),
+        TYPECAST_PERF_MODE(is_perf),
+        ITERATIONS(iterations),
+        FAST_MODE(FastMode.No),
+        STABLE_SORT(StableSort.No),
+    ]
+    runtimes = [
+        TILE_COUNT(tile_cnt_A),
+        LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces=4),
+        UNPACK_TRANS_FACES(Transpose.No),
+        UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+    ]
+    if not is_perf:
+        templates.insert(0, generate_input_dim(input_dimensions, input_dimensions))
+        runtimes.extend(
+            [
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ]
+        )
+
+    test_config_kwargs = {
+        "test_name": "sources/eltwise_unary_typecast_test.cpp",
+        "formats": formats,
+        "templates": templates,
+        "runtimes": runtimes,
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -626,8 +662,14 @@ def _build_typecast_config(
             tile_count_res=tile_cnt_A,
             twos_complement=twos_complement,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
 
     # pack_src fix for the SFPU typecast.

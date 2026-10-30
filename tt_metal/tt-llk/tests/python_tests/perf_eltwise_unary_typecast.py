@@ -15,9 +15,8 @@ optimized) and once with TT_METAL_DISABLE_SFPLOADMACRO=1 (macro OFF, baseline)
 
 Unlike test_perf_eltwise_unary_sfpu (which dispatches a single MathOperation),
 typecast is selected by the (IN, OUT) DataFormat pair via typecast_tile<IN, OUT>
-/ the shared SfpuType::typecast dispatch, so this module uses the dedicated
-typecast perf kernel sources/eltwise_unary_typecast_perf.cpp with the
-TYPECAST_FORMATS(in, out) template.
+/ the shared SfpuType::typecast dispatch. Functional and performance tests use
+the same sources/eltwise_unary_typecast_test.cpp kernel.
 """
 
 import pytest
@@ -25,30 +24,11 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
-    FastMode,
-    MathOperation,
     PerfRunType,
-    StableSort,
-    Transpose,
 )
 from helpers.param_config import parametrize
-from helpers.perf.core import PerfConfig
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    FAST_MODE,
-    ITERATIONS,
-    LOOP_FACTOR,
-    MATH_OP,
-    NUM_FACES,
-    STABLE_SORT,
-    TILE_COUNT,
-    TYPECAST_FORMATS,
-    UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHIN_FACE,
-)
-from test_eltwise_unary_typecast import _preserve_fp32_precision
+from test_eltwise_unary_typecast import _build_typecast_config
 
 # The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
 # including the paths re-introduced by issue #46751.
@@ -111,73 +91,26 @@ def test_perf_eltwise_unary_typecast(
     formats = InputOutputFormat(input_format, output_format)
 
     # Calculate tile count from input dimensions
-    tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
+    tile_count_A, tile_count_B, _ = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    # Unpack straight into Dest when the input is 32-bit: the unpacker has no
-    # SrcA/SrcB path for Int32/UInt32/Float32, so cunpack_common asserts
-    # unpack_to_dest for them (matches the functional typecast test). The perf
-    # kernel keeps the unpack-A acc_to_dest template arg false so this is legal
-    # even when dest_acc=Yes. For 16-bit inputs the data is copied SrcA -> Dest
-    # by the math datacopy A2D before the SFPU typecast runs.
-    # UInt8 endpoints also unpack to Dest, as the functional test's _preserve_fp32_precision rule says.
-    unpack_to_dest = input_format.is_32_bit() or _preserve_fp32_precision(formats)
-
-    configuration = PerfConfig(
-        "sources/eltwise_unary_typecast_perf.cpp",
+    configuration = _build_typecast_config(
         formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        None,
+        tile_count_A,
+        None,
+        tile_count_B,
+        is_perf=True,
         run_types=[
             PerfRunType.L1_TO_L1,
             PerfRunType.MATH_ISOLATE,
         ],
-        templates=[
-            # Emits SFPU_UNARY_OPERATION = SfpuType::typecast so the kernel goes
-            # through the shared unary-SFPU dispatch; TYPECAST_FORMATS supplies the
-            # (input, output) pair that selects the concrete typecast kernel.
-            MATH_OP(mathop=MathOperation.Typecast),
-            TYPECAST_FORMATS(input_format, output_format),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            FAST_MODE(FastMode.No),
-            STABLE_SORT(StableSort.No),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count_A),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            input_format,
-            None,
-            input_format,
-            output_format,
-            tile_count_A=tile_count_A,
-            tile_count_B=tile_count_B,
-            tile_count_res=tile_count_A,
-        ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        loop_factor=loop_factor,
+        iterations=iterations,
     )
-
-    # pack_src fix for the SFPU typecast (mirrors test_eltwise_unary_typecast).
-    #
-    # The generic format inference models pack_src from the *input* (what the
-    # unpacker writes to Dest). For a typecast the SFPU overwrites Dest with the
-    # *output* value, so the packer must read the output's register
-    # representation, not the input's. In 16-bit Dest mode (dest_acc=No) the
-    # inferred pack_src would otherwise stay equal to the input format and the
-    # pack would be rejected (e.g. UInt16 -> UInt32 is not a supported packer
-    # conversion). For dest_acc=Yes the 32-bit gasket converts from Dest and the
-    # inference already yields the output format, so no patch is needed there.
-    if dest_acc == DestAccumulation.No:
-        pack_src = (
-            DataFormat.Float16_b if output_format.is_block_float() else output_format
-        )
-        for fmt_config in configuration.formats_config:
-            fmt_config.pack_src = pack_src
 
     configuration.run(perf_report)
