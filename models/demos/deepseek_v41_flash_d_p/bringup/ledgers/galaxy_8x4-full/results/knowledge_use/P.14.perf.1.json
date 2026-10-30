@@ -1,0 +1,68 @@
+{
+ "used": [
+  {
+   "id": "DS41-146",
+   "how": "the fused tail's address-keyed 16-entry cache was the target: ShapeKeyedTailA2A keys on shapes and patches y / se / out; perf_prepared_all.py reproduces the shift with a buffer allocated mid-forward (off 1-2 rebuilds, on 0)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-135",
+   "how": "the patch-count guard copied from ckv_bfp4's prepared path: prepare is accepted only when patch_count equals the descriptor's address slots, else that shape falls back to the old path",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-131",
+   "how": "kept ONE prepared tail program shared by all 40 layers (addresses patched) instead of one per layer, which P.3 measured slower",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-66",
+   "how": "census treated fabric_reduce_scatter / fabric_all_gather separately: the RS is the Python prepared op (0 calls left a chunk), fabric_all_gather the C++ op",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "no entry says which bring-up ops are C++ bindings and which are Python ProgramDescriptor ops (ttnn/ttnn/bringup/__init__.py PYTHON_OPS vs bringup_nanobind.cpp); the brief listed rms_norm / mhc_pre / mhc_post / fabric_all_gather / moe_grouped_topk / update_padded_kv_cache as Python candidates, but all are C++ device ops now",
+  "the orchestrator's measure --task (quick) on the 8x4 full model needs ~10 min and is cut by the 10-minute foreground shell cap in its teardown (P.5, P.11, P.12, P.13, P.14): the metrics are written but the cards are marked dirty"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the change re-keys a cache and patches addresses (tt/prepared_tail.py)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "census (BREADCRUMBS P.14, /scratch/dnijemcevic/p14/census_on.log): 0 ttnn.generic_op calls a warm chunk; every Python-built program (fused head, fused tail, sparse_all_gather_2d, ckv_bfp4, bfp_round) dispatches via run_prepared, host us a call listed; the tail now keyed on shapes. Still address-keyed (prepared, hits in steady state; code outside this step's paths): fused head skey, sparse_all_gather_2d descriptor cache"
+  }
+ ],
+ "cited_only": [
+  "DS41-171"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.14",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T03:41:25",
+  "head": "94b6a4eb9d0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.14.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_prepared_all.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/prepared_tail.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
