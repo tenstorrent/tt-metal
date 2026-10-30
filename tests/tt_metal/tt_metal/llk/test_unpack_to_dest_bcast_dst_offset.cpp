@@ -110,7 +110,7 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload workload;
-    Program program = tt_metal::CreateProgram();
+    Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

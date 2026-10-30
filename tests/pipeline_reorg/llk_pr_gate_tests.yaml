@@ -128,7 +128,7 @@
   cmd: |
     set -euo pipefail
     cd tests
-    ./run_ttsim_regression.sh -a quasar -n 32 -t 5 --no-html -- --splits 2 --group 1
+    ./run_ttsim_regression.sh -a quasar -n 32 -t 10 --no-html -- --splits 2 --group 1
   skus:
     sim_quasar_xl:
       timeout: 15
@@ -145,7 +145,7 @@
   cmd: |
     set -euo pipefail
     cd tests
-    ./run_ttsim_regression.sh -a quasar -n 32 -t 5 --no-html -- --splits 2 --group 2
+    ./run_ttsim_regression.sh -a quasar -n 32 -t 10 --no-html -- --splits 2 --group 2
   skus:
     sim_quasar_xl:
       timeout: 15

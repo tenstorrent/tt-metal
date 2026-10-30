@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -59,11 +60,16 @@ from helpers.utils import passed_test
         else [DestAccumulation.No, DestAccumulation.Yes]
     ),
     dest_sync=[DestSync.Full, DestSync.Half],
+    # Unpack-to-dest only: with no sections, only the semaphore setup runs, and every thread must still finish.
+    zero_tiles=lambda formats: (
+        [False, True] if formats.input_format.is_32_bit() else [False]
+    ),
 )
 def test_semaphore_sync_quasar(
     formats,
     dest_acc,
     dest_sync,
+    zero_tiles,
 ):
 
     pool_type = ReducePool.Sum
@@ -83,9 +89,7 @@ def test_semaphore_sync_quasar(
     # result in srcA should be multiplied by 1 for pool_type = sum
     src_B = torch.full((1024,), 1)
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     if unpack_to_dest:
         # Datacopy through DEST: the unpacker writes the tiles, math only forwards the semaphores, pack reads them back.
         generate_golden = get_golden_generator(DataCopyGolden)
@@ -121,7 +125,7 @@ def test_semaphore_sync_quasar(
             DEST_SYNC(dest_sync),
         ],
         runtimes=[
-            TILE_COUNT(tile_cnt),
+            TILE_COUNT(0 if zero_tiles else tile_cnt),
             TEST_FACE_DIMS(),
             NUM_FACES(),
         ],
@@ -140,6 +144,8 @@ def test_semaphore_sync_quasar(
     )
 
     res_from_L1 = configuration.run().result
+    if zero_tiles:
+        return
 
     assert len(res_from_L1) == len(
         golden_tensor

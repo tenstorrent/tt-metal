@@ -33,7 +33,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
     CoreRangeSet core_ranges{core};
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_data_format);

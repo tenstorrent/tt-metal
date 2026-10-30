@@ -136,7 +136,7 @@ jobs:
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
-          CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
+          CT_VERSION="23"
           {
             echo "CTCACHE_S3_BUCKET=ctcache"
             echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"

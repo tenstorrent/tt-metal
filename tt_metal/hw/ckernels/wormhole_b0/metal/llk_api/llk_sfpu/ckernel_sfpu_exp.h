@@ -11,7 +11,7 @@
 // clang-format off: sfpi.h before polyval (polyval uses sfpi_inline); matches blackhole ordering
 #include "sfpi.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"
@@ -209,22 +209,53 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-template <bool unsafe = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+// base_two = true computes 2^a instead of e^a. The reduction is then exact: j = round(a) and
+// a - j are both representable, so the only rounding before the polynomial is one multiply by
+// ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
+// and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
+//
+// The base-e range-reduction constants (1/ln2, -ln2_hi, -ln2_lo) are typed arguments. None of
+// them is bf16- or fp16-exact, so each float literal of the one-argument form costs an upper and
+// lower SFPLOADI pair, six SFPLOADIs per row, as the eight LRegs cannot hold them across rows.
+// calculate_exponential passes the EXP_FP32_*_LREG slots instead, which exp_init programs.
+constexpr float EXP_FP32_LOG2E = 1.442695f;
+constexpr float EXP_FP32_NEG_LN2_HI = -6.93145752e-1f;
+constexpr float EXP_FP32_NEG_LN2_LO = -1.42860677e-6f;
+
+// The programmable-constant slots that hold those three constants for calculate_exponential's
+// fp32 path: exp_init writes, and calculate_exponential reads, each constant through its alias.
+constexpr auto EXP_FP32_LOG2E_LREG = sfpi::vConstFloatPrgm0;       // LREG12
+constexpr auto EXP_FP32_NEG_LN2_HI_LREG = sfpi::vConstFloatPrgm1;  // LREG13
+constexpr auto EXP_FP32_NEG_LN2_LO_LREG = sfpi::vConstFloatPrgm2;  // LREG14
+
+template <bool unsafe = false, bool base_two = false, typename K0 = float, typename K1 = float, typename K2 = float>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(
+    sfpi::vFloat a,
+    K0 k_log2e = EXP_FP32_LOG2E,
+    K1 k_neg_ln2_hi = EXP_FP32_NEG_LN2_HI,
+    K2 k_neg_ln2_lo = EXP_FP32_NEG_LN2_LO) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
-    // j = round(a / ln2)
-    // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
-    sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
+    if constexpr (base_two) {
+        // j = round(a), f = (a - j) * ln2
+        r = 1.37805939e-3f;
+        sm = sfpi::convert<sfpi::vSMag16>(a, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
+        f = (a - j) * 6.93147182e-1f;
+    } else {
+        // j = round(a / ln2)
+        // interleaved with first coefficient of polynomial
+        j = k_log2e * a;
+        r = 1.37805939e-3f;
+        sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+        j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
-    // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+        // f = a - i*j (two-part cody-waite)
+        f = j * k_neg_ln2_hi + a;
+        f = j * k_neg_ln2_lo + f;
+    }
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
     // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
@@ -273,6 +304,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
+
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN: unlike the
+// base-e form, no multiply precedes the rounding. The only caller, logaddexp2, zeroes NaN gaps
+// first. |x| >= 32768 saturates the rounding and gets the guards' +Inf / +0, the exact result.
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
+}
 
 /*
  * Implementation of _sfpu_exp_21f_bf16_ (same algorithm) with TTI intrinsics
@@ -395,7 +433,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
         TTI_SFP_STOCH_RND(
             sfpi::SFPSTOCHRND_RND_EVEN,
             0,
-            p_sfpu::LREG0,
+            p_sfpu::LCONST_0,
             p_sfpu::LREG0,
             p_sfpu::LREG0,
             sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
@@ -453,13 +491,24 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     return val;
 }
 
-template <bool SCALE_EN, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std::uint32_t exp_base_scale_factor) {
+// SCALE_EN multiplies the input by the bf16 scale before the exp. The fp32 path forwards k_log2e,
+// k_neg_ln2_hi and k_neg_ln2_lo to _sfpu_exp_fp32_accurate_ (float literals by default, or the
+// EXP_FP32_*_LREG slots); the bf16 path (_sfpu_exp_21f_bf16_) has its own constants and ignores them.
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, typename K0 = float, typename K1 = float, typename K2 = float>
+sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(
+    sfpi::vFloat val,
+    const std::uint32_t exp_base_scale_factor,
+    [[maybe_unused]] K0 k_log2e = EXP_FP32_LOG2E,
+    [[maybe_unused]] K1 k_neg_ln2_hi = EXP_FP32_NEG_LN2_HI,
+    [[maybe_unused]] K2 k_neg_ln2_lo = EXP_FP32_NEG_LN2_LO) {
     if constexpr (SCALE_EN) {
         val = val * sfpi::sFloat16b(exp_base_scale_factor);
     }
-    sfpi::vFloat result = _sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
-    return result;
+    if constexpr (is_fp32_dest_acc_en) {
+        return _sfpu_exp_fp32_accurate_(val, k_log2e, k_neg_ln2_hi, k_neg_ln2_lo);
+    } else {
+        return _sfpu_exp_accurate_<false>(val);
+    }
 }
 
 template <
@@ -474,10 +523,16 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
+            // The range-reduction constants come from LREG12..14 (programmed by exp_init), not from
+            // six SFPLOADIs per row.
             for (int d = 0; d < ITERATIONS; d++) {
                 sfpi::vFloat val = sfpi::dst_reg[0];
-                sfpi::dst_reg[0] =
-                    _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
+                sfpi::dst_reg[0] = _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(
+                    val,
+                    exp_base_scale_factor,
+                    EXP_FP32_LOG2E_LREG,
+                    EXP_FP32_NEG_LN2_HI_LREG,
+                    EXP_FP32_NEG_LN2_LO_LREG);
                 sfpi::dst_reg++;
             }
         }
@@ -489,7 +544,8 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             TTI_SFPNOP;  // SFPMAD must not read LREG0 before the SFPSWAP result lands (SFPSWAP + SFPNOP costs no cycle)
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             sfpi::dst_reg++;
@@ -615,7 +671,8 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg[0] preserves sign, copies e/m from lreg[1]
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
@@ -1023,10 +1080,11 @@ void exp_init() {
             sfpi::vConstFloatPrgm0 = 1.4426950216293334961f;
             sfpi::vConstFloatPrgm1 = 4.791750143340323e-15f;
         } else {
-            // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
-            // reciprocal LLK for negative inputs, so its constants must be
-            // primed here.
-            sfpu_reciprocal_init<false>();
+            // LREG12..14 = 1/ln2, -ln2_hi, -ln2_lo, the range-reduction constants calculate_exponential
+            // passes to _sfpu_exp_fp32_accurate_. The fp32 path contains no reciprocal.
+            EXP_FP32_LOG2E_LREG = EXP_FP32_LOG2E;
+            EXP_FP32_NEG_LN2_HI_LREG = EXP_FP32_NEG_LN2_HI;
+            EXP_FP32_NEG_LN2_LO_LREG = EXP_FP32_NEG_LN2_LO;
         }
     }
 }

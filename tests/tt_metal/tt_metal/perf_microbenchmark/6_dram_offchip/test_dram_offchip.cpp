@@ -42,7 +42,7 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -400,7 +400,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     const tt::DataFormat& tile_format,
     const uint32_t& access_type,
     const std::vector<uint32_t>& compile_args) {
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;
