@@ -64,6 +64,18 @@ def resident_decode_enabled(env=None) -> bool:
     return str(env.get(RESIDENT_ENV, "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
+SLOT_MASK_ENV = "GLM53_DECODE_SLOT_MASK"
+
+
+def slot_mask_enabled(env=None) -> bool:
+    """``GLM53_DECODE_SLOT_MASK=1`` (resident decode only): the step's live mask is the KDA decode program's per-user
+    write gate, so a parked slot (a prompt between two of its chunks, an idle slot) keeps its KDA state and history
+    byte for byte through the step; the mesh model then declares ``supports_slot_mask`` and the served adapter runs
+    decode steps while slots are mid-prefill (the prefill / decode interleave, doc/mesh/resident_decode.md step 4)."""
+    env = os.environ if env is None else env
+    return str(env.get(SLOT_MASK_ENV, "0")).strip().lower() in ("1", "true", "yes", "on")
+
+
 def position_fields(positions: Sequence[int], kpool: int, dense_max_pos: int) -> dict[str, list[int]]:
     """The per-user position-derived host values of the direct path: ``positions``, ``pool_ids`` (position //
     kpool), ``ring_slots`` (position % kpool) and ``dense_positions`` (min(position, dense_max_pos))."""

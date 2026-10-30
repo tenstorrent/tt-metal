@@ -2036,11 +2036,17 @@ class GLM53FlashForCausalLM:
         try:
             is_tokens = sampling_params is not None
             if reload_inputs:
-                live, feed_tokens, feed_positions, rows = self._stage_rows(
+                live, feed_tokens, feed_positions, rows, busy = self._stage_rows(
                     tokens, positions, page_table, sampling_params
                 )
-                park = self.apc.park_positions() if self.apc is not None else None
-                ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions, park=park)
+                park = dict(self.apc.park_positions()) if self.apc is not None else {}
+                for s in busy:
+                    # a slot between two chunks of its prompt parks at its prefilled end, out of the live mask: the
+                    # KDA write gate leaves its state alone and the DSA row / pool the step writes at that position
+                    # are rewritten by the next chunk, which starts there (GLM53MeshModel.supports_slot_mask)
+                    st = self.slots.physical(s)
+                    park[(st.row, st.user)] = st.prefilled_to
+                ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions, park=park or None)
                 t0 = time.perf_counter()
                 self._load_inputs(ids_feed, pos_feed, live)
             else:  # the resident chain: the device holds this step's ids / positions already (nothing uploaded)
@@ -2125,7 +2131,8 @@ class GLM53FlashForCausalLM:
     def _stage_rows(self, tokens: torch.Tensor, positions: torch.Tensor, page_table, sampling_params):
         """The per-row bookkeeping of one decode submission (plain or verify): the live wire rows (position >= 0),
         their anchor token / position per logical slot (phase and contiguity checks, the block-table check), the row
-        map, and the mid-prefill guard. ``tokens`` / ``positions`` are the ``[B_pad]`` column-0 values."""
+        map, and the mid-prefill slots (``busy``: refused unless the model's decode step takes the slot mask, then
+        parked by the caller). ``tokens`` / ``positions`` are the ``[B_pad]`` column-0 values."""
         wire = int(tokens.shape[0])
         if wire > self.slots.n:
             raise ValueError(f"{wire} decode rows exceed the {self.slots.n} logical slots")
@@ -2167,7 +2174,7 @@ class GLM53FlashForCausalLM:
                 f"decode step while slots {busy} are mid-prefill: run with decode_interleave_enabled=false until "
                 "the mesh model's decode step takes an active-slot mask"
             )
-        return live, feed_tokens, feed_positions, rows
+        return live, feed_tokens, feed_positions, rows, busy
 
     def _live_flat(self, live: list[int]) -> list[bool]:
         """One flag per physical user slot: the slots the live logical slots occupy (every replica row)."""
@@ -2303,7 +2310,7 @@ class GLM53FlashForCausalLM:
             remap = [int(v) for v in torch.as_tensor(slot_remap).reshape(-1).tolist()]
             applied_moves = self.slots.apply_remap(remap)
         try:
-            live, feed_tokens, feed_positions, rows = self._stage_rows(
+            live, feed_tokens, feed_positions, rows, _busy = self._stage_rows(
                 tokens[:, 0], positions[:, 0], page_table, sampling_params
             )
             drafted = [i for i in live if valid[i] > 0]

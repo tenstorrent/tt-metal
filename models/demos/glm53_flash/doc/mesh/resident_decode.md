@@ -125,3 +125,19 @@ Cost: the chunk-end carry write and the chunk-start read already exist (they tar
 prompt-end write adds ~34 MiB per prompt per chip. Gain: decoders keep stepping between prefill chunks (one step per
 chunk under vLLM's chunked prefill: the catalog's chunk size then trades burst TTFT against decode continuity). Needs
 the resident live mask (step 1) and the traced step's tolerance of a parked slot, which is today's parking.
+
+### Step 4 implementation, model side (2026-10-30 02:40, device validation pending)
+
+The `kda_decode` program already has a per-user write gate (its gated twin, built for the speculative commit: a
+gated-off user's recurrent state and conv history are left byte for byte, the kernels read the gate page at run time
+so one trace replays with any gate). The interleave therefore needs no in-flight carry: under
+`GLM53_DECODE_SLOT_MASK=1` (resident decode, the block KDA path, no user partition) the resident feedback owns one
+`[Bt, 32]` int32 gate page per chip (`DecodePositions.write_gate`, refreshed with the live mask on every reload), the
+decoder layers run the gated twin, and `GLM53MeshModel.supports_slot_mask` is true. The adapter then runs a decode
+step while slots are mid-prefill: each such slot is parked at its prefilled end (32-aligned: every chunk but the
+last ends on a tile) with the pad id and live 0, so its KDA state is not written, its position does not advance, and
+the DSA latent row / pool entry the step writes at that position are rewritten by the next chunk, which starts
+there. Idle slots are gated off the same way. Host tests: the guard test runs the step under the mask and checks the
+park. To validate on the mesh (after the capstone): a chunked prefill of one slot with decode steps of the others
+between its chunks, ids identical to the uninterleaved run; then the gated twin's step cost at batch 32 / 128
+(A/B arm) and `decode_interleave_enabled: true` in the catalog.

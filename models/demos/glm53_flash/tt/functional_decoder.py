@@ -162,6 +162,9 @@ class DecodePositions:
     # attends every user, dense or sparse, inside one trace-safe graph (default); ``GLM53_SPARSE_DECODE=eager``
     # keeps the dense flash-MLA + per-user eager sparse rows instead (A/B reference)
     sparse: SparseDecodeMeta | None = None
+    # [Bt, 32] int32 ROW_MAJOR per chip (``custom_ops.kda_decode`` gate page): word ``u`` = the KDA write gate of user
+    # ``u`` (0: the slot is parked, its recurrent state and conv history are left as they are); None: every user written
+    write_gate: ttnn.Tensor | None = None
 
 
 @dataclass

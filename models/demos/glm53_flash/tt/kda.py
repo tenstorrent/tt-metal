@@ -692,17 +692,23 @@ class TtKDA(LightweightModule):
         return y, new_state
 
     # ----------------------------------------------------------------- decode
-    def decode_forward(self, x: ttnn.Tensor, state: KdaState, *, inplace: bool = True) -> tuple[ttnn.Tensor, KdaState]:
+    def decode_forward(
+        self, x: ttnn.Tensor, state: KdaState, *, inplace: bool = True, gate: ttnn.Tensor | None = None
+    ) -> tuple[ttnn.Tensor, KdaState]:
         """x: [1, 1, B, hidden] bf16 TILE, one token per user. Returns y [1, 1, B, hidden] and the
         state after the token: ``inplace`` (default) updates ``state``'s tensors in place and returns
-        the same object (trace-safe); otherwise returns a fresh ``KdaState``. Composite v1 (design 5.3)."""
+        the same object (trace-safe); otherwise returns a fresh ``KdaState``. Composite v1 (design 5.3).
+        ``gate`` (the block path only): the ``[Bt, 32]`` int32 ROW_MAJOR per-user write gate page of the
+        ``kda_decode`` program (0 = the user's state and history are left as they are: a parked slot)."""
         B = x.shape[-2]
         H, K, V = self.H, self.K, self.V
         BH = B * H
         if state.recurrent.shape[0] != B:
             raise ValueError(f"state batch {state.recurrent.shape[0]} != input batch {B}")
         if self.fused_decode == "block":
-            return self._block_decode(x, state, inplace)
+            return self._block_decode(x, state, inplace, gate)
+        if gate is not None:
+            raise NotImplementedError("the per-user write gate needs the block KDA decode (GLM53_KDA_FUSED=1)")
 
         # --- projections + causal conv (kernel 4) over the 3-row history + current token
         qkv = self.lin_qkv(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,3*QKV]
@@ -761,10 +767,13 @@ class TtKDA(LightweightModule):
         new_recurrent = ttnn.reshape(S, [B, H, K, V])
         return self._output(x, ttnn.reshape(o, [1, B, H, V]), og, new_conv, state, new_recurrent, inplace)
 
-    def _block_decode(self, x: ttnn.Tensor, state: KdaState, inplace: bool) -> tuple[ttnn.Tensor, KdaState]:
+    def _block_decode(
+        self, x: ttnn.Tensor, state: KdaState, inplace: bool, gate: ttnn.Tensor | None = None
+    ) -> tuple[ttnn.Tensor, KdaState]:
         """The 5-op decode block: qkv matmul, two gate matmuls, ONE ``kda_decode`` program (conv, norms,
         gates, recurrence, gated RMSNorm; state + conv history in place; bf16 TILE output), o_proj.
-        ``inplace=False`` runs on copies of the state tensors (the program always updates its inputs in place)."""
+        ``inplace=False`` runs on copies of the state tensors (the program always updates its inputs in place).
+        ``gate``: the program's gated twin runs instead (a gated-off user's state / history untouched)."""
         rec, conv = state.recurrent, state.convolution
         if not inplace:
             rec, conv = ttnn.clone(rec), ttnn.clone(conv)
@@ -781,7 +790,8 @@ class TtKDA(LightweightModule):
             self.device,
             ttnn.DRAM_MEMORY_CONFIG,
         )  # [1,1,B,H*V] bf16 TILE: the program's pre-allocated output (the o_proj input)
-        self.kda_decode(qkv, g2, conv, rec, self.taps_blk, self.chan_consts, self.o_norm_w32, self.selectors, o)
+        prog = self.kda_decode if gate is None else self.kda_gated_program()
+        prog(qkv, g2, conv, rec, self.taps_blk, self.chan_consts, self.o_norm_w32, self.selectors, o, gate=gate)
         ttnn.deallocate(qkv)
         ttnn.deallocate(g1)
         ttnn.deallocate(g2)
@@ -791,6 +801,15 @@ class TtKDA(LightweightModule):
         if inplace:
             return y, state
         return y, KdaState(recurrent=rec, convolution=conv)
+
+    def kda_gated_program(self):
+        """``kda_decode``'s gated twin (``KdaDecode(gated=True)``: the per-user write gate page as one more input;
+        the speculative commit's program), built once; its kernels compile at the first launch, so the served
+        warm-up's eager step under ``GLM53_DECODE_SLOT_MASK=1`` precedes the captures."""
+        prog = getattr(self, "_kda_gated", None)
+        if prog is None:
+            prog = self._kda_gated = self.kda_decode.gated_twin()
+        return prog
 
     def _output(self, x, oh, og, new_conv, state: KdaState, new_recurrent, inplace: bool):
         """Gated RMSNorm per head (rmsnorm(o) * w * sigmoid(gate)), o_proj, TP all-reduce and the state

@@ -406,6 +406,13 @@ class GLM53MeshModel:
         ):
             self.packed.unpack(ids_dev, positions)
 
+    @property
+    def supports_slot_mask(self) -> bool:
+        """The decode step leaves a parked slot's KDA state and history untouched (``GLM53_DECODE_SLOT_MASK=1`` under
+        resident decode: the live mask is the ``kda_decode`` write gate), so the served adapter may run decode steps
+        while a slot is mid-prefill, parked at its prefilled end (``GLM53FlashForCausalLM._stage_rows``)."""
+        return self.resident is not None and getattr(self.resident, "gate", None) is not None
+
     def advance_positions_host(self, live: list[bool] | None = None) -> None:
         """The host mirror of the resident step's device-side advance (``ResidentDecodeFeedback.advance``):
         ``positions.host`` and the sparse regime bookkeeping follow the live slots by one (``live`` None = the mask

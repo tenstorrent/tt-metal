@@ -449,6 +449,7 @@ class _FakeMeshModel:
         self.next_start = [0] * max_batch  # the chunked-prefill cursor per slot (``rewind_user``)
         # GLM53_RESIDENT_DECODE: the step feeds its own ids back and advances the live positions (the device side)
         self.resident = os.environ.get(RESIDENT_ENV, "0") == "1"
+        self.supports_slot_mask = False  # GLM53MeshModel: the live mask gates the KDA state writes (parked slots)
         self._live: list[bool] | None = None
 
     # trace management
@@ -927,6 +928,21 @@ def test_chunked_prefill_contiguity_and_the_mid_prefill_guard():
             reload_sampling_params=False,
             reset_sampling_state=False,
         )
+    # with the slot mask (GLM53MeshModel.supports_slot_mask: the decode step leaves a parked slot's KDA state alone)
+    # the step runs: slot 0 is parked at its prefilled end with the pad id, out of the live set, its table untouched
+    m.supports_slot_mask = True
+    a.decode_forward(
+        torch.tensor([[0], [9], [0], [0]], dtype=torch.int32),
+        torch.tensor([-1, 40, -1, -1]),
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
+    )
+    f0, f1 = a.slots.flat_indices(0)[0], a.slots.flat_indices(1)[0]
+    assert m._fed_pos[f0] == 16384 and int(m._fed_ids[f0]) == a.slots.g.pad_token_id and m._fed_pos[f1] == 40
+    assert s.phase == "prefill" and s.prefilled_to == 16384 and a.slots.physical(1).position == 41
+    m.supports_slot_mask = False
     # a non-contiguous continuation is refused; the contiguous one runs as one eager chunk of 16484 tokens
     with expect_error(RuntimeError, "not contiguous"):
         a.prefill_forward(ids, prompt_lens=[L], start_pos=torch.tensor([16000]), empty_slots=[0])

@@ -31,7 +31,11 @@ import ttnn
 from models.demos.glm53_flash.tt.dsa import SPARSE_BOUND_ENV, SparseDecodeMeta, dense_exact_max_pos
 from models.demos.glm53_flash.tt.functional_decoder import DecodePositions
 from models.demos.glm53_flash.tt.mesh import GLMMesh
-from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV, resident_decode_enabled  # noqa: F401 (re-export)
+from models.demos.glm53_flash.tt.packed_inputs import (  # noqa: F401 (RESIDENT_ENV re-exported)
+    RESIDENT_ENV,
+    resident_decode_enabled,
+    slot_mask_enabled,
+)
 
 
 class ResidentDecodeFeedback:
@@ -66,6 +70,16 @@ class ResidentDecodeFeedback:
         # the fp32 TILE shadows: [1, 1, 1, users_per_chip] per chip, placed like the position fields
         self.pos_f = self._upload([float(p) for p in positions.host])
         self.live_f = self._upload([1.0] * self.total)
+        # GLM53_DECODE_SLOT_MASK=1: the live mask as the KDA decode program's per-user write gate (``DecodePositions.
+        # write_gate``): one [Bt, 32] int32 ROW_MAJOR page per chip (the row's users; replicated over the TP columns)
+        self.gate: ttnn.Tensor | None = None
+        if slot_mask_enabled():
+            if self.partition:
+                raise NotImplementedError("the decode slot mask is not wired for the user-partitioned cache")
+            self.gate = self.mesh.upload(
+                self._gate_page(self.live_host), ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+            positions.write_gate = self.gate
 
     # ------------------------------------------------------------------------------------------ host side
     def _mapper(self):
@@ -84,6 +98,26 @@ class ResidentDecodeFeedback:
             ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper()), dst
         )
 
+    def _gate_page(self, live: list[bool]) -> torch.Tensor:
+        """``[rows * Bt, 32]`` int32: mesh row ``r``'s pages (word ``u`` of page ``tb`` = user ``32 tb + u`` of the row,
+        1 = written), split over the rows (``custom_ops.kda_decode`` reads page ``tb`` for tile row ``tb``)."""
+        words = 32
+        B = self.users_per_row
+        Bt = -(-B // words)
+        page = torch.zeros(self.mesh.rows, Bt * words, dtype=torch.int32)
+        flags = torch.tensor([1 if v else 0 for v in live], dtype=torch.int32).reshape(self.mesh.rows, B)
+        page[:, :B] = flags
+        return page.reshape(self.mesh.rows * Bt, words)
+
+    def _refresh_gate(self, live: list[bool]) -> None:
+        host = ttnn.from_torch(
+            self._gate_page(live),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self.mesh.shard_2d(0, None),
+        )
+        ttnn.copy_host_to_device_tensor(host, self.gate)
+
     def host_load(self, host_positions: list[int], live: list[bool] | None) -> None:
         """A transition: the shadows take the host's positions and live mask (the persistent field tensors and
         ``ids_dev`` are written by the caller's reload: ``GLM53MeshModel.load_decode_inputs``)."""
@@ -95,6 +129,8 @@ class ResidentDecodeFeedback:
         self._refresh(self.pos_f, [float(p) for p in host_positions])
         self._refresh(self.live_f, [1.0 if v else 0.0 for v in live])
         self.live_host = live
+        if self.gate is not None:
+            self._refresh_gate(live)
 
     # ---------------------------------------------------------------------------------------- device side
     def _put(self, v: ttnn.Tensor, dst: ttnn.Tensor, dtype, *, column: bool) -> None:
