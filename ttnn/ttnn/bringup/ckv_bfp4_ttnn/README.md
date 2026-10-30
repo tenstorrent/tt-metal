@@ -88,7 +88,7 @@ rounded = ttnn.bringup.ckv_bfp4(ckv_bf16_tile, rows, row0, rounded=True, prepare
 64 / 2560 / 5120 (bfloat8_b: 32 / 64 / 2176), other rows untouched, rounded == the records' values, deterministic (A,
 B, A x5); prepared=True over 5 calls (other row0, inputs, tables) byte-equal to the generic_op path, prepared once.
 test_ckv_bfp8_prefix_compact: prefix / compact (generic and prepared) equal the two-call default path and the host
-rule on the defined bytes.
+rule on the defined bytes. test_ckv_bfp4_compact_rounded: compact + rounded on bfloat4_b records (P.11's call).
 `tests/unit/test_bfp_round.py`: bfloat4_b / bfloat8_b values == the host rule at 4 shapes, in place at a tile row with
 the rest untouched, deterministic, the refusals; compact == the default path (new and in place).
 The device rounding facts: `models/demos/deepseek_v41_flash_d_p/tests/test_bfp_packer_rounding.py`.
@@ -98,4 +98,6 @@ deepseek_v41_flash_d_p (CKV_FORMAT=bfp4_rows: the compressed-KV attention table;
 CKV_BFP4_PREPARED=on, P.7; lowbit phase 1, not wired yet: WINDOW_KV_FORMAT=bfp8_rows (bfloat8_b records),
 INDEX_K_FORMAT / INDEX_Q_FORMAT=bfp4 (bfp_round)). Under LOWBIT_HOST=on (P.12): the window blocks' carry + chunk in
 one call (prefix, compact; tt/attention._put_blocks) and bfp_round compact into each indexer layer's persistent
-outputs (tt/indexer.TtIndexer._round).
+outputs (tt/indexer.TtIndexer._round). Under CKV_PACK_BEFORE_GATHER=on (P.11): each chip packs its own rows before the
+all_gather, compact at row0 0 into load-time local buffers - compressed KV records with rounded=True
+(tt/compressor.TtCompressor._write_packed), window blocks and carry blocks (tt/attention.TtWindowAttention._window_packed).

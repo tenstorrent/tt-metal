@@ -238,3 +238,30 @@ def test_ckv_bfp8_prefix_compact(device, npre, n, row0, compact, blocks, prepare
     if prepared:
         mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
         assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
+
+
+@pytest.mark.parametrize("prepared", [False, True], ids=["generic", "prepared"])
+@pytest.mark.parametrize("n", [320, 640])
+def test_ckv_bfp4_compact_rounded(device, n, prepared):
+    """compact with rounded=True on bfloat4_b row records at row0 0 (deepseek_v41_flash_d_p P.11,
+    CKV_PACK_BEFORE_GATHER: each chip packs its own 320 / 640 compressed rows into a local record buffer): the records
+    and the rounded output equal the default path and the host rule; with prepared, a second call at other inputs
+    (a new rounded output address) stays equal and the program could be prepared."""
+    for call in range(2 if prepared else 1):
+        x = _inputs(n, 13 * n + call)
+        ckv = ttnn.from_torch(x.reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        a, b = (
+            ttnn.from_torch(torch.full((1, 1, n, 320), FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
+            for _ in range(2)
+        )
+        ra = ttnn.bringup.ckv_bfp4(ckv, a, 0, rounded=True)
+        rb = ttnn.bringup.ckv_bfp4(ckv, b, 0, rounded=True, compact=True, prepared=prepared)
+        exp = ref.encode_rows(x)
+        gb = ttnn.to_torch(b).view(torch.uint8).reshape(n, 320)
+        assert torch.equal(gb, exp), f"call {call}: compact records differ from the host rule"
+        assert torch.equal(ttnn.to_torch(a).view(torch.uint8).reshape(n, 320), gb), f"call {call}: compact != default"
+        assert torch.equal(ttnn.to_torch(ra), ttnn.to_torch(rb)), f"call {call}: rounded outputs differ"
+        assert torch.equal(ttnn.to_torch(rb).reshape(n, 512).float(), ref.decode_rows(exp)), "rounded != records"
+    if prepared:
+        mod = importlib.import_module("ttnn.bringup.ckv_bfp4_ttnn.ckv_bfp4")
+        assert list(mod._PREPARED.values())[-1][1] is not None, "the program could not be prepared (patch count)"
