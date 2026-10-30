@@ -29,7 +29,7 @@ jobs:
       image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         with:
           fetch-depth: 1
 
@@ -72,7 +72,7 @@ jobs:
       image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         with:
           fetch-depth: 1
 
@@ -126,7 +126,7 @@ jobs:
     needs: summary
     steps:
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         with:
           fetch-depth: 1
       - name: Report status

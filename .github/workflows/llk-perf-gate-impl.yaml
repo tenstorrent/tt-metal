@@ -133,7 +133,7 @@ jobs:
       gate_exit_code: ${{ steps.compare.outputs.gate_exit_code }}
     steps:
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         # Only the scripts, with no history and no blobs. The full clone took up to 13 of
         # the 15 minutes an ubuntu-slim job gets. The warehouse step fetches the history it needs.

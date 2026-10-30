@@ -47,7 +47,7 @@ jobs:
       other-logs-index-path: ${{ steps.fetch.outputs.other-logs-index-path }}
       last-success-timestamps-path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
@@ -168,7 +168,7 @@ jobs:
       has_failed_workflows: ${{ steps.set-outputs.outputs.has_failed_workflows }}
       has_regressions: ${{ steps.set-outputs.outputs.has_regressions }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
@@ -293,7 +293,7 @@ jobs:
       slack_ts_map: ${{ steps.slack-report.outputs.slack_ts_map }}
       slack_notification_status: ${{ steps.slack-status.outputs.status }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
@@ -341,7 +341,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions

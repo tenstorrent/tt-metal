@@ -112,7 +112,7 @@ on:
       # (prefilter.test.js). Sparse checkout of that directory only, from the default
       # branch (schedule / workflow_dispatch / issue_comment never check out PR code).
       # Same pinned checkout as sanity-tests-slack-notify.yaml.
-      uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+      uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
       timeout-minutes: 5
       with:
         sparse-checkout: |

@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         with:
           sparse-checkout: |
             .github
@@ -50,7 +50,7 @@ jobs:
       - name: Verify all checkout consumers use cachew
         run: python3 .github/scripts/utils/cachew_checkout.py --check
       - name: Obtain the exact checkout implementation under test
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         with:
           repository: actions/checkout
           ref: de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -72,7 +72,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Bootstrap the action definition
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         with:
           cachew-url: ${{ inputs.cachew-url }}
           sparse-checkout: .github/actions/cachew-checkout

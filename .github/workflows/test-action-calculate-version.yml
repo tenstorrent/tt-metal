@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0  # Fetch all history for git tag operations
@@ -141,7 +141,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -250,7 +250,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -400,7 +400,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -555,7 +555,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -626,7 +626,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -685,7 +685,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -915,7 +915,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0

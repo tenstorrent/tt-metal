@@ -46,7 +46,7 @@ jobs:
       caller-id: ${{ format('{0}/run-{1}/attempt-{2}', github.workflow, github.run_id, github.run_attempt) }}
     steps:
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
 
       - name: Install registry parser dependency
@@ -160,7 +160,7 @@ jobs:
     needs: inspect-trace-selection-registry
     runs-on: ubuntu-slim
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@b4bd422967a6297fd5586d8aacd8b72ea17433cd # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |
