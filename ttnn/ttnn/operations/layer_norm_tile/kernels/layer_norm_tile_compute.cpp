@@ -89,6 +89,32 @@ void kernel_main() {
         rsqrt_tile(dst_idx);
     };
 
+#ifdef LAYER_NORM_ABLATE_COMPUTE
+    // Perf ablation: same per-CB page counts as the real schedule, no math.
+    {
+        DataflowBuffer input_tiles(cb_input_tiles);
+        DataflowBuffer residual_tiles(cb_residual_tiles);
+        for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+            const uint32_t block_rows = (block_idx + 1 == num_blocks) ? last_block_extent : block_height;
+            for (uint32_t row = 0; row < block_rows; ++row) {
+                input_tiles.wait_front(tensor_w_tiles);
+                input_tiles.pop_front(tensor_w_tiles);
+                if constexpr (has_residual) {
+                    residual_tiles.wait_front(tensor_w_tiles);
+                    residual_tiles.pop_front(tensor_w_tiles);
+                }
+                output_tiles.reserve_back(tensor_w_tiles);
+                output_tiles.push_back(tensor_w_tiles);
+            }
+        }
+        gamma_rows.wait_front(tensor_w_tiles);
+        beta_rows.wait_front(tensor_w_tiles);
+        gamma_rows.pop_front(tensor_w_tiles);
+        beta_rows.pop_front(tensor_w_tiles);
+        return;
+    }
+#endif
+
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const uint32_t block_rows = (block_idx + 1 == num_blocks) ? last_block_extent : block_height;
         const auto block_grid = IterationShape::grid(block_rows, tensor_w_tiles);

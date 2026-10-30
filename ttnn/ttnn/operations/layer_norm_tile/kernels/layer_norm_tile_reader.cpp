@@ -30,10 +30,12 @@ void kernel_main() {
     auto read_tile_row = [&](const auto& accessor, uint32_t cb, uint32_t first_page) {
         cb_reserve_back(cb, tensor_w_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb);
+#ifndef LAYER_NORM_ABLATE_READS  // perf ablation: keep the CB handshake, drop the NoC payload
         for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
             noc_async_read(accessor.get_noc_addr(first_page + col), l1_write_addr, tile_bytes);
             l1_write_addr += tile_bytes;
         }
+#endif
     };
 
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {

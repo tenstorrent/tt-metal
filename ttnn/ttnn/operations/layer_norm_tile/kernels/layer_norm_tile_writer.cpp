@@ -115,10 +115,12 @@ void kernel_main() {
             const uint32_t first_page = (block_first_row + row) * tensor_w_tiles;
             cb_wait_front(cb_output_tiles, tensor_w_tiles);
             uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
+#ifndef LAYER_NORM_ABLATE_WRITES  // perf ablation: keep the CB handshake, drop the NoC payload
             for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
                 noc_async_write(l1_read_addr, output_accessor.get_noc_addr(first_page + col), output_tile_bytes);
                 l1_read_addr += output_tile_bytes;
             }
+#endif
             noc_async_writes_flushed();
             cb_pop_front(cb_output_tiles, tensor_w_tiles);
         }
