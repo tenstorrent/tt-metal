@@ -142,6 +142,14 @@ struct PersistedTl1Region {
     std::vector<uint32_t> expected;
 };
 
+// Declares cluster and soc, so it has to be a macro. Skips and fails like MIMIR_REQUIRE_IDENTITY followed by
+// MIMIR_HOST_ONLY_GUARD.
+#define MIMIR_HOST_ONLY_PREAMBLE(require_uncore_released)            \
+    MIMIR_REQUIRE_IDENTITY();                                        \
+    const Cluster& cluster = MetalContext::instance().get_cluster(); \
+    const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);  \
+    MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, require_uncore_released)
+
 class MimirHostDramView : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(MimirHostDramView, PatternReadback) {
@@ -149,10 +157,7 @@ TEST_P(MimirHostDramView, PatternReadback) {
     skip_unless_mimir_local_package();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const uint32_t view = GetParam();
-    MIMIR_REQUIRE_IDENTITY();
-    const Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, false);
+    MIMIR_HOST_ONLY_PREAMBLE(false);
 
     const uint64_t unreserved = dram_unreserved_base();
     uint32_t tag = 0;
@@ -213,10 +218,7 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
     skip_unless_mimir_local_package();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const uint32_t view = GetParam();
-    MIMIR_REQUIRE_IDENTITY();
-    const Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, false);
+    MIMIR_HOST_ONLY_PREAMBLE(false);
 
     const size_t boundary_words = kBoundaryTransferBytes / sizeof(uint32_t);
     const uint64_t unique_offset = dram_unreserved_base();
@@ -299,27 +301,23 @@ INSTANTIATE_TEST_SUITE_P(
 TEST(MimirHostDram, ReconnectPersists) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    MIMIR_REQUIRE_IDENTITY();
-    const Cluster& metal_cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& metal_soc = metal_cluster.get_soc_desc(kChipId);
-    MIMIR_HOST_ONLY_GUARD(metal_cluster, metal_soc, kChipId, true);
+    MIMIR_HOST_ONLY_PREAMBLE(true);
 
-    const MimirTopology topology = topology_from(metal_soc);
+    const MimirTopology topology = topology_from(soc);
     const uint64_t unreserved = dram_unreserved_base();
     std::vector<MimirAnchor> persisted_anchors;
     std::vector<uint32_t> persisted_cces = {kTl1CceIndex};
     if (topology.num_mimirs > 1) {
-        const std::vector<uint32_t> mimir_one_views = dram_views_for_channel(metal_soc, 1);
+        const std::vector<uint32_t> mimir_one_views = dram_views_for_channel(soc, 1);
         ASSERT_FALSE(mimir_one_views.empty()) << "no DRAM view on Mimir 1";
         const uint32_t mimir_one_view = mimir_one_views.front();
-        const std::vector<MimirAnchor> mimir_one_anchors =
-            mimir_dram_anchors(metal_soc, mimir_one_view, unreserved, true);
+        const std::vector<MimirAnchor> mimir_one_anchors = mimir_dram_anchors(soc, mimir_one_view, unreserved, true);
         persisted_anchors.push_back(mimir_one_anchors.front());
         const uint32_t mimir_one_cce = cce_index_for(1, 0);
         ASSERT_LT(mimir_one_cce, topology.num_cces) << "no CCE on Mimir 1";
         persisted_cces.push_back(mimir_one_cce);
     }
-    for (const MimirAnchor& anchor : mimir_dram_anchors(metal_soc, kPersistView, unreserved, true)) {
+    for (const MimirAnchor& anchor : mimir_dram_anchors(soc, kPersistView, unreserved, true)) {
         persisted_anchors.push_back(anchor);
     }
 
@@ -376,10 +374,7 @@ TEST(MimirHostDram, ReconnectPersists) {
 TEST(MimirHostDram, HostSideRejections) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    MIMIR_REQUIRE_IDENTITY();
-    const Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, true);
+    MIMIR_HOST_ONLY_PREAMBLE(true);
     const uint64_t mimir_window_bytes = tt::umd::mimir_local_address_windows(soc).dram_stride;
     const uint64_t l1_noc_offset = MetalContext::instance().hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 

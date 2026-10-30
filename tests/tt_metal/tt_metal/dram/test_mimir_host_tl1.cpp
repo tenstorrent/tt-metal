@@ -37,6 +37,15 @@ constexpr uint32_t kBoundaryTagsPerCce = 256;
 constexpr uint32_t kVisibilityGuardTagBase = 0x400;
 constexpr uint32_t kRejectSentinelTagBase = 0x800;
 
+// Declares chip, cluster and soc, so it has to be a macro. Skips and fails like MIMIR_REQUIRE_IDENTITY followed by
+// MIMIR_HOST_ONLY_GUARD with the uncore required to be released.
+#define MIMIR_HOST_ONLY_PREAMBLE()                               \
+    MIMIR_REQUIRE_IDENTITY();                                    \
+    constexpr ChipId chip = 0;                                   \
+    Cluster& cluster = MetalContext::instance().get_cluster();   \
+    const metal_SocDescriptor& soc = cluster.get_soc_desc(chip); \
+    MIMIR_HOST_ONLY_GUARD(cluster, soc, chip, /*require_uncore_released=*/true)
+
 uint64_t cce_tl1_begin() {
     return MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
 }
@@ -272,12 +281,7 @@ TEST(MimirHostTl1, Tl1MapLayout) {
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    MIMIR_REQUIRE_IDENTITY();
-
-    constexpr ChipId chip = 0;
-    Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(chip);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, chip, /*require_uncore_released=*/true);
+    MIMIR_HOST_ONLY_PREAMBLE();
 
     const Hal& hal = MetalContext::instance().hal();
     const std::vector<Tl1Region> regions = cce_tl1_regions();
@@ -347,12 +351,7 @@ TEST_P(MimirHostTl1Cce, PerCceVisibility) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    MIMIR_REQUIRE_IDENTITY();
-
-    constexpr ChipId chip = 0;
-    Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(chip);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, chip, /*require_uncore_released=*/true);
+    MIMIR_HOST_ONLY_PREAMBLE();
 
     const uint64_t tl1_begin = cce_tl1_begin();
     const uint64_t tl1_end = cce_tl1_end();
@@ -420,12 +419,7 @@ TEST(MimirHostTl1, BoundaryAndIsolation) {
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    MIMIR_REQUIRE_IDENTITY();
-
-    constexpr ChipId chip = 0;
-    Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(chip);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, chip, /*require_uncore_released=*/true);
+    MIMIR_HOST_ONLY_PREAMBLE();
 
     std::set<uint64_t> edges;
     for (const Tl1Region& region : cce_tl1_regions()) {
@@ -483,12 +477,7 @@ TEST(MimirHostTl1, HostSideRejections) {
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    MIMIR_REQUIRE_IDENTITY();
-
-    constexpr ChipId chip = 0;
-    Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(chip);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, chip, /*require_uncore_released=*/true);
+    MIMIR_HOST_ONLY_PREAMBLE();
 
     const uint64_t l1_noc_offset = MetalContext::instance().hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
     const uint64_t first_address_past_cce = l1_noc_offset + cce_tl1_end();
@@ -556,12 +545,7 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    MIMIR_REQUIRE_IDENTITY();
-
-    constexpr ChipId chip = 0;
-    Cluster& cluster = MetalContext::instance().get_cluster();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(chip);
-    MIMIR_HOST_ONLY_GUARD(cluster, soc, chip, /*require_uncore_released=*/true);
+    MIMIR_HOST_ONLY_PREAMBLE();
 
     const CceFwManifest& manifest = build_cce_fw_manifest(MetalContext::instance(), chip);
     const dev_msgs::Factory& factory =

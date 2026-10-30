@@ -23,6 +23,7 @@
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
+#include "tt_metal/tt_metal/dram/mimir_remote_test.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 
 // The Glean MM-6 plan names dram_neighbour, dram_sharded, one_packet, interleaved, direct_write and the PCIe-style
@@ -1027,17 +1028,13 @@ std::vector<MixedTransfer> plan_mixed_transfers(
 
 // Local DRAM, remote DRAM and remote TL1 writes on different harts, in both directions, in one program. The remote
 // DRAM writes have alias decoys. A second program then reads every destination back into TL1 B.
-TEST(MimirRemoteMixed, Concurrent) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
+TEST_F(MimirRemoteMixed, Concurrent) {
     const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_mimirs < 2) {
         GTEST_SKIP() << "Remote DRAM needs two Mimirs; the descriptor has one.";
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -1061,7 +1058,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         if (transfer.target == MixedTransfer::Target::RemoteTl1) {
             write_cce_tl1(device, transfer.dest_cce, transfer.dest_tl1_offset, guard);
         } else {
-            mimir_contract::write_gddr_view(device_closer.mesh(), transfer.dest_view, transfer.dest_view_offset, guard);
+            mimir_contract::write_gddr_view(mesh(), transfer.dest_view, transfer.dest_view_offset, guard);
         }
         if (transfer.target != MixedTransfer::Target::LocalDram) {
             log_transfer(transfer.record);
@@ -1069,7 +1066,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         }
         if (transfer.target == MixedTransfer::Target::RemoteDram) {
             const RemoteDramRun run = make_run(
-                device_closer.mesh(),
+                mesh(),
                 device,
                 mimir_index_for_cce(transfer.source_cce),
                 location_for_cce(transfer.source_cce),
@@ -1114,7 +1111,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         }
     }
     if (!decoys.empty()) {
-        const RemoteDramRun decoy_run = make_run(device_closer.mesh(), device, 0, 0, decoys.front().view);
+        const RemoteDramRun decoy_run = make_run(mesh(), device, 0, 0, decoys.front().view);
         write_guards(decoy_run, decoys);
     }
 
@@ -1138,12 +1135,12 @@ TEST(MimirRemoteMixed, Concurrent) {
                     ? fmt::format("local DRAM from CCE {} hart {}", transfer.source_cce, transfer.hart)
                     : transfer.record.to_string();
             ok = read_dram_and_expect(
-                     device_closer.mesh(), transfer.dest_view, transfer.dest_view_offset, transfer.pattern, context) &&
+                     mesh(), transfer.dest_view, transfer.dest_view_offset, transfer.pattern, context) &&
                  ok;
         }
     }
     if (!decoys.empty()) {
-        const RemoteDramRun decoy_run = make_run(device_closer.mesh(), device, 0, 0, decoys.front().view);
+        const RemoteDramRun decoy_run = make_run(mesh(), device, 0, 0, decoys.front().view);
         ok = check_guards(decoy_run, decoys) && ok;
     }
     if (!ok) {
@@ -1224,11 +1221,9 @@ TEST(MimirRemoteMixed, Concurrent) {
     }
 }
 
-class MimirRemoteDram : public ::testing::TestWithParam<RemoteDramViewParam> {};
+class MimirRemoteDram : public MimirRemoteParamTest<RemoteDramViewParam> {};
 
 TEST_P(MimirRemoteDram, WriteFromTl1) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemoteDramViewParam param = GetParam();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = view_skip_reason(topology, param);
@@ -1236,13 +1231,10 @@ TEST_P(MimirRemoteDram, WriteFromTl1) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    const RemoteDramRun run =
-        make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, param.view);
+    const RemoteDramRun run = make_run(mesh(), device, param.source_mimir, param.source_location, param.view);
     const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, run.dest_view, run.unreserved, false);
     uint32_t next_guard_tag = 1;
     for (uint32_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
@@ -1253,8 +1245,6 @@ TEST_P(MimirRemoteDram, WriteFromTl1) {
 }
 
 TEST_P(MimirRemoteDram, ReadToTl1) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemoteDramViewParam param = GetParam();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = view_skip_reason(topology, param);
@@ -1262,13 +1252,10 @@ TEST_P(MimirRemoteDram, ReadToTl1) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    const RemoteDramRun run =
-        make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, param.view);
+    const RemoteDramRun run = make_run(mesh(), device, param.source_mimir, param.source_location, param.view);
     const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, run.dest_view, run.unreserved, false);
     uint32_t next_guard_tag = 1;
     for (uint32_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
@@ -1279,8 +1266,6 @@ TEST_P(MimirRemoteDram, ReadToTl1) {
 }
 
 TEST_P(MimirRemoteDram, Tl1RoundTrip) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemoteDramViewParam param = GetParam();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = view_skip_reason(topology, param);
@@ -1288,13 +1273,10 @@ TEST_P(MimirRemoteDram, Tl1RoundTrip) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    const RemoteDramRun run =
-        make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, param.view);
+    const RemoteDramRun run = make_run(mesh(), device, param.source_mimir, param.source_location, param.view);
     const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, run.dest_view, run.unreserved, false);
     uint32_t next_guard_tag = 1;
     for (uint32_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
@@ -1337,14 +1319,12 @@ RunOutcome check_slice_traffic(
         next_guard_tag);
 }
 
-class MimirRemoteDramTrafficMatrix : public ::testing::TestWithParam<RemoteDramSourceParam> {};
+class MimirRemoteDramTrafficMatrix : public MimirRemoteParamTest<RemoteDramSourceParam> {};
 
 // Every size and alignment case at one anchor per remote view. Each window starts and ends at least 64 B inside the
 // anchor, so its guards are inside the anchor too. The channel slice cases run at that anchor and at the view-end
 // anchor.
 TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemoteDramSourceParam param = GetParam();
     const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = source_skip_reason(topology, param.source_mimir, param.source_location);
@@ -1352,9 +1332,7 @@ TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     uint32_t case_index = 0;
@@ -1363,8 +1341,7 @@ TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
         if (topology.view_mimir[view] == param.source_mimir) {
             continue;
         }
-        const RemoteDramRun run =
-            make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, view);
+        const RemoteDramRun run = make_run(mesh(), device, param.source_mimir, param.source_location, view);
         const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, view, run.unreserved, false);
         const MimirAnchor& anchor = anchor_named(anchors, "unres_g0");
         for (uint32_t size_bytes : kTrafficSizeBytes) {
