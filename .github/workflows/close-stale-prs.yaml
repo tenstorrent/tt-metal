@@ -41,15 +41,18 @@ jobs:
                 nodes {
                   number
                   createdAt
-                  timelineItems(last: 30, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ISSUE_COMMENT, PULL_REQUEST_REVIEW, PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT]) {
+                  timelineItems(last: 30, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ISSUE_COMMENT, PULL_REQUEST_REVIEW, PULL_REQUEST_COMMIT, HEAD_REF_FORCE_PUSHED_EVENT, REOPENED_EVENT, READY_FOR_REVIEW_EVENT]) {
+                    filteredCount
                     nodes {
                       __typename
                       ... on LabeledEvent { createdAt actor { login } }
                       ... on UnlabeledEvent { createdAt actor { login } }
-                      ... on IssueComment { createdAt author { login } }
+                      ... on IssueComment { createdAt lastEditedAt author { login } editor { login } }
                       ... on PullRequestReview { createdAt author { login } }
-                      ... on PullRequestCommit { commit { committedDate } }
+                      ... on PullRequestCommit { commit { pushedDate committedDate } }
                       ... on HeadRefForcePushedEvent { createdAt actor { login } }
+                      ... on ReopenedEvent { createdAt actor { login } }
+                      ... on ReadyForReviewEvent { createdAt actor { login } }
                     }
                   }
                 }
@@ -59,20 +62,20 @@ jobs:
           GQL
           )
 
-          # Normalizes each timeline event to (actor, date) and drops the excluded bot's events.
+          # Normalizes each timeline event to (actor, date), preferring comment edits over original posts, and drops the excluded bot's events.
           jq_filter='
             .data.repository.pullRequests.nodes[] |
             . as $pr |
             ($pr.timelineItems.nodes
               | map({
-                  actor: (.actor.login // .author.login // ""),
-                  date: (.createdAt // .commit.committedDate // "")
+                  actor: (.editor.login // .actor.login // .author.login // ""),
+                  date: (.lastEditedAt // .createdAt // .commit.pushedDate // .commit.committedDate // "")
                 })
               | map(select(.actor != $bot and .date != ""))
               | map(.date)
-              | (if length > 0 then max else null end)
+              | (if length > 0 then max else "-" end)
             ) as $lastReal |
-            [($pr.number | tostring), ($lastReal // $pr.createdAt), $pr.createdAt] | @tsv
+            [($pr.number | tostring), $lastReal, $pr.createdAt, ($pr.timelineItems.filteredCount | tostring), ($pr.timelineItems.nodes | length | tostring)] | @tsv
           '
 
           closed=0
@@ -89,13 +92,22 @@ jobs:
             has_next=$(echo "$resp" | jq -r '.data.repository.pullRequests.pageInfo.hasNextPage')
             cursor=$(echo "$resp" | jq -r '.data.repository.pullRequests.pageInfo.endCursor')
 
-            while IFS=$'\t' read -r number last_real created_at; do
+            while IFS=$'\t' read -r number last_real created_at filtered_count fetched_count; do
               [[ -z "$number" ]] && continue
 
               created_epoch=$(date -u -d "$created_at" +%s)
               if (( created_epoch > cutoff_epoch )); then
                 stop_paging=true
                 continue
+              fi
+
+              # Only treat "no non-bot events" as zero activity when the fetched window covers the PR's entire timeline.
+              if [[ "$last_real" == "-" ]]; then
+                if (( filtered_count > fetched_count )); then
+                  echo "Skipping PR #$number: no non-bot events in last $fetched_count of $filtered_count timeline items; older activity unknown"
+                  continue
+                fi
+                last_real="$created_at"
               fi
 
               last_epoch=$(date -u -d "$last_real" +%s)
@@ -109,9 +121,10 @@ jobs:
               fi
 
               echo "Closing stale PR #$number (last real activity: $last_real, created: $created_at)"
+              # Close first so a failed close doesn't leave label/comment activity that resets the staleness clock.
+              gh pr close "$number" --repo "$REPO"
               gh pr edit "$number" --repo "$REPO" --add-label stale
               gh pr comment "$number" --repo "$REPO" --body "$CLOSE_MSG"
-              gh pr close "$number" --repo "$REPO"
               closed=$((closed + 1))
             done < <(echo "$resp" | jq -r --arg bot "$EXCLUDED_BOT" "$jq_filter")
 
