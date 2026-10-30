@@ -72,6 +72,7 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - Hard constraints (user, 2026-10-30): HiFi4 + fp32 accumulate (no lower fidelity evaluated); result = full-model TP=4 MFU only; a kernel-level item every iteration; a stage-review pass is a checkpoint, not a stop; one change per commit.
 - Loss match on this path (after 14): 8-layer host loss max |diff| 0.0294 vs torch fp64 (tol 0.10); TP=4 real-weight trajectory as the baseline's (526.1 ms warm).
 - Reviews: round 3 more-work-needed, answered in the follow-up; round 4 five P3 doc / test items fixed; round 5 clean-pass; round 6 (iterations 9-10) items answered, clean-pass on re-check; round 7 (iterations 11-12, `review_round7.md`) two P2 doc / hygiene items answered, re-check pending.
+- State after iteration 20 (`../perf_analysis.md`, "State after iteration 20"): the owned kernels are at their exact-fp32 ceilings (~10 ms/step left in them); the gap to 40 % MFU (~90 ms) is the ttnn base matmuls (63 % of the step at 63-85 % of peak) and the chip clock skew behind the collectives (10 %).
 - Remaining ranking (`../perf_analysis.md`, "Ranked cost table", after iteration 18, ms/step/chip): base matmuls ~206 (w2 forward at 63 % of peak, the rest 76-85 %), collectives 41-79 (transfer at the library optimum, chip skew on top, overlap untried), LoRA adapters ~34, norms ~26, SDPA ~25, layout ~17, SwiGLU ~14, fixed ~8, adds ~3.
 
 ## Exit (2026-10-29, after iteration 3)

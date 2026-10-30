@@ -259,6 +259,22 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Verification**: norm op bit-exact vs the two-phase op at the model shape (`O/iter19_norm_check.log`); matmul config within one bf16 ulp of ttnn's default (accumulation order), so the loss match was rerun: PASS (8-layer host loss vs torch max |diff| 0.0298, tol 0.1, `O/iter19_loss_comparison.txt`; TP=4 real-weight trajectory 0.4434 -> 0.3281 -> ... -> 0.4473 vs 0.4414 -> ... -> 0.4492 before the config, `O/iter19_full_tp4_real.log`); harness 47 passed (2 new `skinny_contract` cases); TP gradient check PASS.
 - **Evidence**: `O/iter19_build_check{,2,3,4}.log`, `O/iter19_norm_check.{py,log}`, `O/iter19_norm_tests.log`, `O/iter19_w2_ktail_bench.{py,log}`, `O/iter19_w2_sweep2d.{py,log}`, `O/iter19_matmul_sweep2d.py`, `O/iter19_sweep2d_*.log`, `O/iter19_baseline_check.{py,log}`, `O/iter19_ab_check.{py,log}`, `O/iter19.sh`, `O/iter19_chain.log`, `O/iter19_harness.log`, `O/iter19_tp_grad_check_tp4.log`, `O/iter19_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter19_loss_comparison.txt`, `O/iter19_full_tp4_real.log`.
 
+## State after iteration 20 (2026-10-30 night): where the remaining time is
+
+Chip 0, run B / iteration 19 profiles, cycle-time per 40-layer step (~410 ms of kernels; wall 495 ms at ~1.1 GHz):
+
+| share | item | ceiling under the hard constraints | lever |
+|---|---|---|---|
+| 63 % | base matmuls (ttnn) at 63-85 % of HiFi4 peak | ttnn's program configs; 1D and 2D sweeps exhausted except the w2 forward (taken, iteration 19) | ttnn matmul kernel work (outside ttml), or fewer FLOPs (K-concat tail: +1.2 % FLOPs) |
+| 10 % | collectives = waiting for the slowest chip (clock skew 1.03-1.16 GHz across chips) | transfer itself 4.0 ms per 4 layers at the library optimum | overlap with independent backward work (two command queues / async CCL), or a cooler / evenly clocked box |
+| 6 % | SDPA fwd + bwd at ~10 % of FLOP peak | one Q tile row per item, 4-tile K chunks: pinned by the four fp32 DEST tiles per acquire (exp tiles, score tiles) | bf16 P / scores in DEST (a precision change the constraints forbid), or multi-row items with 2-tile chunks (~10-20 %, ~1 ms/step) |
+| 6 % | RMSNorm fwd + bwd, exact fp32 SFPU per tile | 126 / 165 us per call vs 100 / 125 us bandwidth rooflines; FPU routes round fp32 (iteration 20) | none exact; -1 ms/step at most |
+| 8 % | LoRA adapters | wide products at 85-88 % of bandwidth, narrow ones launch-bound | fewer launches (fuse dA / dB pairs): ~1 ms/step |
+| 4 % | layout (K-concats 0.56 ms per 4 layers at 433 GB/s, transposes) | the concats are at bandwidth | producers writing into the wide buffer (changes LoRA A's stored shape / the optimizer): ~5 ms/step |
+| 3 % | SwiGLU | bwd at 343 GB/s | - |
+
+The kernel-boost loop (iterations 15-20) took the owned kernels to their exact-fp32 ceilings: SDPA forward -39 %, RMSNorm backward -28 %, norm forward -10 %, LoRA products -19 %; the TP=4 step went 536.1 -> 495.4 ms (30.27 -> 32.75 % MFU). Reaching 40 % (405 ms) needs ~90 ms more: that is the ttnn matmul efficiency (76 -> 90 % of peak would give ~45 ms) and the chip skew (~40 ms), not the remaining ttml kernels (~10 ms in total at their ceilings).
+
 ## Loop exit (2026-10-29, after iteration 3) and resumed state
 
 - Exit condition met: 1339 ms cycle-time (2/4/8/16 fit 1345.8; 16 layers 563.6 ms device / 694.4 wall at 1100 MHz, 24.8 GiB) vs the 1620 ms target, 17 % under; wall 1661-1739 vs 2006-2101 ms at the run's clocks (ratio 0.83); stretch 1259 ms 6 % away. Overhead threshold 1 % = 13 ms.
