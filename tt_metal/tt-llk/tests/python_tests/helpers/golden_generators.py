@@ -374,9 +374,8 @@ def sfpu_clamp(value: float, low: float, high: float) -> float:
     """clamp under the SFPU's total order, in the kernel's order of operations.
 
     Metal `calculate_clamp` and `calculate_hardtanh` (`sfpi::clamp`) are both this same
-    max-then-min composition of SFPSWAP min/max, so one golden models both. Both skip a NaN
-    lane and leave it in Dst, as torch.clamp returns a NaN input unchanged; the bare
-    composition would land a +NaN on *high* and a -NaN on *low*.
+    max-then-min composition of SFPSWAP min/max, so one golden models both. Both leave a
+    NaN lane in Dst unchanged.
     """
     if math.isnan(value):
         return value
@@ -2341,8 +2340,9 @@ def ema_down_columns(x: torch.Tensor, chain_rows: int = None) -> torch.Tensor:
 @register_golden
 class UnarySFPUGolden:
     # Ops whose NaN result carries a real sign, because the kernel moves the sign bit rather
-    # than generating a NaN: Neg flips it, Abs clears it, Identity passes it through, and
-    # Fmod copies the dividend's sign onto the remainder, including a NaN. For every
+    # than generating a NaN: Neg flips it, Abs clears it, Identity passes it through,
+    # Fmod copies the dividend's sign onto the remainder, including a NaN, and the
+    # max/min/clamp kernels leave a NaN input in Dst untouched. For every
     # other op the sign of a NaN result is unspecified and torch picks it inconsistently, so
     # the golden canonicalises it and asserts the sign only where it means something.
     _NAN_SIGN_TRANSPARENT_OPS = frozenset(
@@ -2351,6 +2351,10 @@ class UnarySFPUGolden:
             MathOperation.Abs,
             MathOperation.Identity,
             MathOperation.Fmod,
+            MathOperation.UnaryMax,
+            MathOperation.UnaryMin,
+            MathOperation.Clamp,
+            MathOperation.Hardtanh,
         }
     )
 
@@ -3649,15 +3653,13 @@ class UnarySFPUGolden:
         return 1.0 if x == self._UNARY_COMP_THRESHOLD else 0.0
 
     def _unary_max(self, x):
-        # calculate_unary_max_min skips a NaN lane, leaving x in Dst whatever its sign; the
-        # bare SFPSWAP would return the scalar for a -NaN.
+        # calculate_unary_max_min leaves a NaN x in Dst, sign included.
         if math.isnan(x):
             return x
         return sfpu_max(x, self._UNARY_MAX_MIN_VALUE)
 
     def _unary_min(self, x):
-        # As _unary_max; the bare SFPSWAP would return the scalar for a +NaN, the maximum
-        # under the total order.
+        # As _unary_max.
         if math.isnan(x):
             return x
         return sfpu_min(x, self._UNARY_MAX_MIN_VALUE)
@@ -4485,10 +4487,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     # The ops whose NaN result is a selected operand rather than a computed one: binary_max_min
     # returns one of its inputs, so its NaN is the datum it was handed and the sign can be
-    # asserted (on Blackhole the selection goes through SFPMAD, and _max/_min model the +NaN
-    # that it emits). Everything else builds the result through the datapath, where an emitted
-    # NaN's sign is not the operand's. An exclusion list, so the composition ops (div, fmod, remainder,
-    # xlogy, pow, atan2) can't be silently dropped -- their NaN is as computed as add's.
+    # asserted (_max/_min model the +NaN of the Blackhole SFPLOADMACRO path). Everything else
+    # builds the result through the datapath, where an emitted NaN's sign is not the operand's.
+    # An exclusion list, so the composition ops (div, fmod, remainder, xlogy, pow, atan2) can't
+    # be silently dropped -- their NaN is as computed as add's.
     _NAN_SIGN_SELECTED_OPS = frozenset(
         {
             MathOperation.SfpuBinaryMax,
@@ -4649,11 +4651,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         )
 
     def _max(self, t1, t2):
-        # calculate_binary_max_min swaps under the total order, then keeps the discarded
-        # operand where that one is NaN. So a NaN in either operand propagates, and the NaN
-        # returned is the selected operand's, sign included: the minimum under the total
-        # order when both are NaN. Blackhole's SFPLOADMACRO path makes that selection through
-        # SFPMAD, which emits the canonical NaN, so there every NaN result is +NaN.
+        # calculate_binary_max_min swaps, then keeps the discarded operand where that one is
+        # NaN: a NaN propagates, and with two NaNs the total order's minimum is returned.
         if self._is_float(t1):
             lo = sfpu_min_elementwise(t1, t2)
             hi = sfpu_max_elementwise(t1, t2)
@@ -4672,7 +4671,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     @staticmethod
     def _max_min_nan(result):
-        if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+        # Blackhole's SFPLOADMACRO path selects through SFPMAD, which emits the canonical +NaN.
+        if (
+            get_chip_architecture() == ChipArchitecture.BLACKHOLE
+            and os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
+        ):
             return torch.where(torch.isnan(result), float("nan"), result)
         return result
 
