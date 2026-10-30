@@ -11,7 +11,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import BinarySFPUGolden, get_golden_generator
-from helpers.llk_params import MathOperation
+from helpers.llk_params import MathOperation, format_dict
 from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
