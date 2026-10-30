@@ -19,11 +19,12 @@
 #include <tt-metalium/experimental/telemetry_sample.hpp>
 #include <tt_stl/fmt.hpp>
 
+namespace device_observability = tt::tt_metal::experimental::device_observability;
 namespace streaming_profiler = tt::tt_metal::experimental::streaming_profiler;
 
 int main() {
-    streaming_profiler::Callback callback = streaming_profiler::RegisterCallback(
-        [](const streaming_profiler::Batch<streaming_profiler::TelemetrySample>& batch) {
+    device_observability::Callback callback = device_observability::RegisterCallback(
+        [](const device_observability::Batch<streaming_profiler::TelemetrySample>& batch) {
             const auto steady_to_system = std::chrono::system_clock::now().time_since_epoch() -
                                           std::chrono::steady_clock::now().time_since_epoch();
 

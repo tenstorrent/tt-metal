@@ -13,7 +13,8 @@
 #include "hostdevcommon/telemetry_sample.hpp"
 
 void kernel_main() {
-    using namespace tt::tt_metal::experimental::streaming_profiler;
+    using namespace tt::tt_metal::experimental::device_observability;
+    using tt::tt_metal::experimental::streaming_profiler::TelemetryMetadata;
     const uint32_t samples = get_arg_val<uint32_t>(0);
     const uint32_t interval_cycles = get_arg_val<uint32_t>(1);
     const uint32_t bytes_per_sample = get_arg_val<uint32_t>(2);

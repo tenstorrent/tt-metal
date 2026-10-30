@@ -15,6 +15,9 @@
 //
 // This API is experimental and may change or be removed without notice.
 //
+//     using namespace tt::tt_metal::experimental::device_observability;
+//     using tt::tt_metal::experimental::streaming_profiler::TelemetrySample;
+//
 //     Callback callback = RegisterCallback(
 //         [](const Batch<TelemetrySample>& batch) {
 //             for (const TelemetrySample& sample : batch.records<TelemetrySample>()) {
@@ -30,7 +33,7 @@ namespace tt::tt_metal::experimental::streaming_profiler {
 using TelemetryValue = std::variant<uint64_t, double>;
 
 /** @brief A telemetry sample: a metric's value, sent with TelemetryMetadata. */
-using TelemetrySample = Record<TelemetryValue, TelemetryMetadata>;
+using TelemetrySample = device_observability::Record<TelemetryValue, TelemetryMetadata>;
 
 /** @brief The prefix every telemetry metric's name starts with. */
 inline constexpr std::string_view kTelemetryNamePrefix = "tt_";

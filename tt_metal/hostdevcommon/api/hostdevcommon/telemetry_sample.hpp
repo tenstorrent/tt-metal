@@ -18,7 +18,7 @@ namespace tt::tt_metal::experimental::streaming_profiler {
  * those two, so a call site that passes any other type, a uint32_t included, never reaches it.
  */
 struct TelemetryMetadata {
-    String name;
+    device_observability::String name;
 };
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler
