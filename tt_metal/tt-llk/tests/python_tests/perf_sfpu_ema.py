@@ -19,12 +19,9 @@ Both DEST widths are swept; the Float32 form unpacks straight to Dest and has no
 
 
 import pytest
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import (
-    ApproximationMode,
-    DestAccumulation,
-    Transpose,
-)
+from helpers.llk_params import ApproximationMode, Transpose
 from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig, PerfRunType
 from helpers.stimuli_config import StimuliConfig
@@ -46,20 +43,13 @@ EMA_ALPHA = 0.25
 EMA_BETA = 1.0 - EMA_ALPHA
 
 
-def _dest_acc_modes(formats):
-    # A Float32 input reaches the kernel through unpack to DEST, which needs a 32-bit DEST.
-    if formats.input_format.is_32_bit():
-        return [DestAccumulation.Yes]
-    return [DestAccumulation.No, DestAccumulation.Yes]
-
-
 @pytest.mark.perf
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
     ],
-    dest_acc=lambda formats: _dest_acc_modes(formats),
+    dest_acc=get_valid_dest_accumulation_modes,
     loop_factor=[16],  # amortise profiler overhead
     input_dimensions=[[128, 64]],  # tile_cnt: 8
 )

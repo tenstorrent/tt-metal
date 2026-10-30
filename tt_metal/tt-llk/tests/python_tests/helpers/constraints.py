@@ -25,8 +25,8 @@ def get_valid_dest_accumulation_modes(formats):
 
     Constraints (all architectures):
     - Dest accumulation must be ENABLED for the following format combination:
-        - Input format is 32bit integer format
-        Reason: HW limitation, Unpacker cannot unpack 32bit integer formats into SrcA and SrcB registers
+        - Input format is 32-bit
+        Reason: HW limitation, Unpacker cannot unpack 32-bit formats into SrcA and SrcB registers
 
     Constraints (Wormhole/Blackhole only):
     - Dest accumulation must be ENABLED for the following format combinations:
@@ -47,7 +47,7 @@ def get_valid_dest_accumulation_modes(formats):
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = formats.input, formats.output
 
-    if in_fmt in [DataFormat.Int32, DataFormat.UInt32]:
+    if in_fmt.is_32_bit():
         return [DestAccumulation.Yes]
 
     if chip_arch == ChipArchitecture.QUASAR:
@@ -74,14 +74,6 @@ def get_valid_dest_accumulation_modes(formats):
             return [DestAccumulation.Yes]
 
     return [DestAccumulation.No, DestAccumulation.Yes]
-
-
-def dest_acc_modes_forcing_32bit_input(formats) -> List[DestAccumulation]:
-    """[Yes] for a 32-bit input (it can't go through a 16-bit Dest), else
-    get_valid_dest_accumulation_modes(formats)."""
-    if formats.input_format.is_32_bit():
-        return [DestAccumulation.Yes]
-    return get_valid_dest_accumulation_modes(formats)
 
 
 def distinct_dest_accumulation_modes(formats, modes):
@@ -165,16 +157,6 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
 
 
 def get_valid_eltwise_binary_math_fidelities(formats, math_op=None):
-    """
-    Math fidelities the eltwise binary tests sweep, by input data format:
-    - Int8 and block-float (Bfp*) inputs: LoFi only
-    - Float16_b: LoFi or HiFi2
-    - Float32: HiFi3 and HiFi4
-    - anything else: all four
-
-    Math fidelity > LoFi is only supported for Elwmul (hardware constraint),
-    so non-multiply ops are restricted to LoFi regardless of format.
-    """
     if math_op is not None and math_op != MathOperation.Elwmul:
         return [MathFidelity.LoFi]
     input_format = formats.input_format

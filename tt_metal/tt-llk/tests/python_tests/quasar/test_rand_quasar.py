@@ -48,6 +48,7 @@ from helpers.tile_constants import (
     FACE_C_DIM,
     MAX_NUM_FACES,
 )
+from helpers.utils import result_tensor
 
 
 # rand has no element-wise golden, so these check its properties: range, uniformity, per-lane and
@@ -294,9 +295,9 @@ def _rand_config(
 
 def _run_rand(configuration, format_variant: QuasarSfpuVariant, element_count: int):
     res_from_L1 = configuration.run().result
-    values = torch.tensor(
-        res_from_L1, dtype=format_dict[format_variant.formats.output_format]
-    ).to(torch.float64)
+    values = result_tensor(res_from_L1, format_variant.formats.output_format).to(
+        torch.float64
+    )
     assert (
         values.numel() == element_count
     ), f"result has {values.numel()} elements, expected {element_count}"

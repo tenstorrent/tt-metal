@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-from helpers.constraints import dest_acc_modes_forcing_32bit_input
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -53,7 +53,7 @@ from helpers.utils import passed_test, result_tensor
     )
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
     + input_output_formats([DataFormat.Float32, DataFormat.Int32], same=True),
-    dest_acc=dest_acc_modes_forcing_32bit_input,
+    dest_acc=get_valid_dest_accumulation_modes,
     dest_sync=[DestSync.Full, DestSync.Half],
     # Unpack-to-dest only: with no sections, only the semaphore setup runs, and every thread must still finish.
     zero_tiles=lambda formats: (

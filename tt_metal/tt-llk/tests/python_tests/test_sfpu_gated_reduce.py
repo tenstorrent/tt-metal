@@ -31,6 +31,7 @@ from helpers.test_variant_parameters import (
     fp32_bits,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+from helpers.utils import result_tensor
 
 pytestmark = blackhole_only
 
@@ -108,7 +109,7 @@ def _run(
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
     actual = (
-        torch.tensor(config.run().result, dtype=format_dict[formats.output_format])
+        result_tensor(config.run().result, formats.output_format)
         .float()
         .reshape_as(expected)
     )

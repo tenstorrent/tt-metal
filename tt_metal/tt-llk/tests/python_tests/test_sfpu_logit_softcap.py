@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
-from helpers.constraints import dest_acc_modes_forcing_32bit_input
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM, truncate_to_bfloat16
 from helpers.llk_params import DestAccumulation
@@ -80,7 +80,7 @@ def _assert_matches(golden, res, output_format, flat: bool, context: str) -> Non
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    dest_acc=dest_acc_modes_forcing_32bit_input,
+    dest_acc=get_valid_dest_accumulation_modes,
     input_range=INPUT_RANGES,
     cap=CAPS,
 )

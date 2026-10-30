@@ -201,7 +201,7 @@ THROTTLE_DIMS = ([32, 32], [32, 32])
     throttle_level=THROTTLE_LEVELS,
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
     formats=THROTTLE_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=DEST_ACC_MODES,
 )
 def test_matmul_custom_throttle(
     throttle_level,

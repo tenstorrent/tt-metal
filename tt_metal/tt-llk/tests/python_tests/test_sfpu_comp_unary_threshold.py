@@ -29,7 +29,6 @@ from helpers.llk_params import (
     DestAccumulation,
     MathOperation,
     VectorMode,
-    format_dict,
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -43,6 +42,7 @@ from helpers.test_variant_parameters import (
     fp32_bits,
     generate_input_dim,
 )
+from helpers.utils import result_tensor
 
 # Quasar has no _calculate_comp_unary_.
 pytestmark = skip_for_quasar
@@ -140,9 +140,8 @@ def test_sfpu_comp_unary_threshold(mathop, threshold):
         compile_time_formats=True,
     )
 
-    res = torch.tensor(
-        configuration.run().result[:ELEMENTS_PER_TILE],
-        dtype=format_dict[formats.output_format],
+    res = result_tensor(
+        configuration.run().result[:ELEMENTS_PER_TILE], formats.output_format
     ).to(torch.float32)
 
     golden = _TORCH_COMPARE[mathop](

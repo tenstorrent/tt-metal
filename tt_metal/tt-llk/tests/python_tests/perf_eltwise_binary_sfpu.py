@@ -141,7 +141,7 @@ _SHALLOW_SWEEP = dict(
     ),
     bcast_dim=[LlkBroadcastType.None_],
     mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=DEST_ACC_MODES,
     input_dimensions=[[64, 32], [128, 32]],
 )
 

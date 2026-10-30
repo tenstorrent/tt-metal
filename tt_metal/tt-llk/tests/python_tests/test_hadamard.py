@@ -47,9 +47,6 @@ TILE_SLOT_ELEMENTS = 1024
 
 NORM_SCALE = 1.0 / math.sqrt(128.0)
 
-# All four fidelities. LoFi issues one MVMUL per matmul pass; HiFi2/3/4 all issue two with the
-# asymmetric phase step, so they are expected to be indistinguishable in most tests.
-
 
 def _sylvester(order):
     """The Sylvester Hadamard matrix, as float32."""
@@ -176,6 +173,8 @@ def _assert_close(device, expected, output_format, what):
     )
 
 
+# LoFi issues one MVMUL per matmul pass; HiFi2/3/4 issue two with the asymmetric
+# phase step, so they are expected to be indistinguishable in most tests.
 @parametrize(fidelity=ALL_MATH_FIDELITIES, normalize=[False, True], num_tiles=[1, 8])
 def test_hadamard_h128(fidelity, normalize, num_tiles):
     inputs = _signs(seed=101, count=num_tiles)

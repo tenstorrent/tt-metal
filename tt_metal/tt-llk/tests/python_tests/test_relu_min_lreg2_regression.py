@@ -38,7 +38,6 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     VectorMode,
-    format_dict,
 )
 from helpers.sfpu_dispatch_constants import RELU_MIN_THRESHOLD
 from helpers.stimuli_config import StimuliConfig
@@ -51,6 +50,7 @@ from helpers.test_variant_parameters import (
     fp32_bits,
     generate_input_dim,
 )
+from helpers.utils import result_tensor
 
 pytestmark = [skip_for_blackhole, skip_for_quasar]
 
@@ -114,9 +114,8 @@ def test_relu_min_ignores_stale_lreg2():
         compile_time_formats=True,
     )
 
-    res = torch.tensor(
-        configuration.run().result[:ELEMENTS_PER_TILE],
-        dtype=format_dict[formats.output_format],
+    res = result_tensor(
+        configuration.run().result[:ELEMENTS_PER_TILE], formats.output_format
     ).to(torch.float32)
 
     golden = torch.maximum(src_A, torch.tensor(RELU_MIN_THRESHOLD))

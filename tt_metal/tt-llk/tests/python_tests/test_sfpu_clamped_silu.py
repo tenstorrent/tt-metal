@@ -24,7 +24,7 @@ provides an init.
 
 import torch
 from conftest import skip_for_wormhole
-from helpers.constraints import dest_acc_modes_forcing_32bit_input
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIM, round_to_dest_width
 from helpers.llk_params import format_dict
@@ -155,7 +155,7 @@ def _run(formats, dest_acc, op, scalars, input_range):
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    dest_acc=dest_acc_modes_forcing_32bit_input,
+    dest_acc=get_valid_dest_accumulation_modes,
     op=ALL_OPS,
     scalars=lambda op: _op_scalars(op),
     input_range=lambda op: _op_ranges(op),
