@@ -54,6 +54,8 @@ DeformConvShapes derive_shapes(
     const ModulatedDeformConv2dOperation::operation_attributes_t& attrs,
     const ModulatedDeformConv2dOperation::tensor_args_t& args) {
     check_input_tensor(args.input, "input", args.input, /*may_be_sharded=*/true);
+    // The compute kernel calls the Blackhole and Wormhole SFPU functions directly.
+    TT_FATAL(args.input.device()->arch() != tt::ARCH::QUASAR, "{} is not supported on Quasar", op);
     check_input_tensor(args.offset_mask, "offset_mask", args.input);
 
     const auto [k_h, k_w] = attrs.kernel_size;
