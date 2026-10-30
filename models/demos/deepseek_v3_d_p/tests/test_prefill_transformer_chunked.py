@@ -228,8 +228,10 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations.
-    (61, 11, 10): [0.391, 0.389, 0.416, 0.446, 0.475, 0.504, 0.532, 0.561, 0.601, 0.634, 0.666],
+    # 55k / code_debug, TP-deduped KV cache; medians over nine post-warmup iterations. Recentered to the
+    # per-chunk median of three runs (main nightlies 40820921702 / 41006018386, CI run 40938491128): every
+    # chunk came in 3-11% under the previous centre, early chunks the most.
+    (61, 11, 10): [0.347, 0.355, 0.390, 0.417, 0.449, 0.479, 0.502, 0.533, 0.573, 0.609, 0.643],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
@@ -245,7 +247,9 @@ UNTRACED_PERF_MARGIN = 0.05
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
     # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
-    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
+    # Recentered again to main nightly 41006018386 / job 123903564091 (CI run 40938491128 matches to 1 ms):
+    # every chunk 5-6% under the previous centre.
+    (78, 11, 10): [0.388, 0.387, 0.392, 0.391, 0.397, 0.396, 0.393, 0.394, 0.401, 0.406, 0.412],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 

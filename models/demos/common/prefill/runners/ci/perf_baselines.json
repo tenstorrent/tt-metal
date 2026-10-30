@@ -22,9 +22,9 @@
       "sc1": {
         "probe": "@250k",
         "14kw": {
-          "throughput_tok_s": 2421,
-          "ttft_s": 60.11,
-          "chunk_time_ms": 2174
+          "throughput_tok_s": 2436,
+          "ttft_s": 59.45,
+          "chunk_time_ms": 2165
         }
       }
     },
@@ -45,9 +45,9 @@
       "sc1": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 6264,
-          "ttft_s": 126.02,
-          "chunk_time_ms": 815
+          "throughput_tok_s": 6508,
+          "ttft_s": 120.56,
+          "chunk_time_ms": 787
         }
       }
     },
