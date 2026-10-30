@@ -184,5 +184,17 @@ inline void calculate_rand(const std::uint32_t from, std::uint32_t scale) {
     }
 }
 
+// Compute API entry points (rand_tile_init / rand_tile, as named on Blackhole / Wormhole).
+
+template <bool APPROXIMATION_MODE>
+inline void rand_init(const std::uint32_t seed) {
+    init_rand<APPROXIMATION_MODE>(seed);
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void rand(const std::uint32_t from, const std::uint32_t scale) {
+    calculate_rand<APPROXIMATION_MODE, ITERATIONS>(from, scale);
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

@@ -462,6 +462,14 @@ public:
             .get_fabric_max_payload_size_bytes();
     }
 
+    size_t get_channel_buffer_size_bytes() const override {
+        return tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device_);
+    }
+
+    tt::tt_fabric::Topology get_fabric_topology() const override {
+        return tt::tt_fabric::get_fabric_topology(*mesh_device_);
+    }
+
     bool is_2D_routing_enabled() const override {
         return tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
     }
@@ -519,6 +527,8 @@ public:
     }
 
     tt::ARCH get_arch() const { return mesh_device_->arch(); }
+
+    tt::tt_metal::distributed::MeshDevice& get_mesh_device() const { return *mesh_device_; }
 
     uint32_t get_max_connections_per_device() const override {
         auto arch = get_arch();

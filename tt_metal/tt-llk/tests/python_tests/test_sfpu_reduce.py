@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -40,7 +42,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 max_tiles = 4
 
@@ -306,10 +308,7 @@ def test_sfpu_reduce(
     reduced_extent,
 ):
 
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     if (
         mathop == MathOperation.ReduceRow
@@ -439,7 +438,7 @@ def test_sfpu_reduce(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if mathop == MathOperation.ReduceColumn:
@@ -568,7 +567,7 @@ def _run_integer_reduce(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     if tile is not None:
@@ -945,7 +944,7 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
     # Does the fold itself produce a NaN, before the pack path substitutes an infinity for it?
@@ -994,11 +993,7 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     format, and both are cells the measured matrix accepts.
     """
 
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
 
     # The pipeline gate, same as every other cat-B consumer in this repo. Asserted rather than
     # assumed: if the measured matrix ever stops accepting one of these two cells, this test must
@@ -1163,7 +1158,7 @@ def _run_integer_column_average(grid: torch.Tensor, data_format: DataFormat):
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
     return res_tensor[0].to(torch.int64)
 

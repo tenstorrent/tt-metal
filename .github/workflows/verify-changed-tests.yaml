@@ -170,7 +170,7 @@ jobs:
       leg-count: ${{ steps.gate.outputs.leg-count }}
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           # Full history: the gate diffs against the merge base with main.
@@ -224,6 +224,8 @@ jobs:
       build-inplace-wheel: true
       tracy: false
       skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
+      # UMD legs run binaries from build/test/umd/, which only a build-umd-tests build has.
+      build-umd-tests: ${{ contains(needs.scope.outputs.matrix, 'build/test/umd/') }}
 
   build-profiler:
     name: Build (profiler)
@@ -238,6 +240,8 @@ jobs:
       build-inplace-wheel: true
       tracy: true
       skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
+      # UMD legs run binaries from build/test/umd/, which only a build-umd-tests build has.
+      build-umd-tests: ${{ contains(needs.scope.outputs.matrix, 'build/test/umd/') }}
 
   fetch-ttsim:
     name: Fetch ttsim (${{ matrix.lib }})
@@ -257,7 +261,7 @@ jobs:
       queue: max
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -342,7 +346,7 @@ jobs:
         - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_hugepages' || '/dev/hugepages-1G:/dev/hugepages-1G' }}
         # Weights cache, selected by the SKU's weights-cache-mode exactly as the
         # owning pipeline selects it.
-        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:rw') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:rw' }}
+        - ${{ contains(join(matrix.leg.runs_on, ','), 'ubuntu-latest') && '/no_weights_cache' || (matrix.leg['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
       # Mount the Tenstorrent device only for silicon runners. The CPU-only pools have
       # no /dev/tenstorrent, so mounting it makes the job container fail to start. Every
       # deviceless sku contains "cpu" (github_hosted_cpu, cpu_medium, cpu_medium_prio) and
@@ -363,7 +367,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive

@@ -27,7 +27,6 @@ Run (real headline):
   REAL=1 PERF_SEQ=2048 TRACE_REGION=1000000000 HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3 pytest ...::test_model_fwd -s
 """
 
-import json
 import os
 
 import pytest
@@ -48,10 +47,11 @@ def _build_random_model(mesh, layers, experts, seq):
     from models.demos.minimax_m3.tt.ccl import CCLManager
     from models.demos.minimax_m3.tt.model import Model
     from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+    from models.demos.minimax_m3.utils.model_variant import load_config, with_layer_schedule
 
-    p = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M3", "config.json")
-    c = json.load(open(p))
-    c.update(num_hidden_layers=layers, num_local_experts=experts, use_qk_norm=False, attn_type_list=[1] * layers)
+    # The selected variant's config, every layer MoE MLP + dense attention (the weights built below).
+    c = with_layer_schedule(load_config(), [1] * layers, [0] * layers)
+    c.update(num_local_experts=experts)
     cfg = SimpleNamespace(**c)
     H, I, E, V = cfg.hidden_size, cfg.intermediate_size, experts, cfg.vocab_size
     qd, kvd = cfg.num_attention_heads * cfg.head_dim, cfg.num_key_value_heads * cfg.head_dim
@@ -68,6 +68,9 @@ def _build_random_model(mesh, layers, experts, seq):
         sd[pf + "post_attention_layernorm.weight"] = torch.ones(H, dtype=torch.bfloat16)
         sd[pf + "self_attn.q_proj.weight"], sd[pf + "self_attn.k_proj.weight"] = rn(qd, H), rn(kvd, H)
         sd[pf + "self_attn.v_proj.weight"], sd[pf + "self_attn.o_proj.weight"] = rn(kvd, H), rn(H, qd)
+        hd = cfg.head_dim  # QK-norm gains (gemma: zeros = identity scale)
+        sd[pf + "self_attn.q_norm.weight"] = torch.zeros(hd, dtype=torch.bfloat16)
+        sd[pf + "self_attn.k_norm.weight"] = torch.zeros(hd, dtype=torch.bfloat16)
         sd[pf + "block_sparse_moe.gate.weight"] = rn(E, H)
         sd[pf + "block_sparse_moe.e_score_correction_bias"] = torch.zeros(E, dtype=torch.bfloat16)
         for e in range(E):
@@ -90,8 +93,6 @@ def _build_random_model(mesh, layers, experts, seq):
 
 
 def _build_real_model(mesh, seq):
-    from transformers import AutoConfig
-
     from models.demos.minimax_m3.config import MeshConfig
     from models.demos.minimax_m3.tt.ccl import CCLManager
     from models.demos.minimax_m3.tt.model import Model
@@ -99,7 +100,7 @@ def _build_real_model(mesh, seq):
     from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
     ma = ModelArgs(mesh_device=mesh)
-    cfg = AutoConfig.from_pretrained(ma.model_path, trust_remote_code=True)
+    cfg = ma.hf_config
     sd = ModelArgs.load_state_dict(ma.weights_path)
     mesh_config = MeshConfig((4, 8), tp=8)
     ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)

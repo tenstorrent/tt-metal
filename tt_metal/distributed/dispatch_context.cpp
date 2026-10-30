@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "impl/context/context_types.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_device_view_impl.hpp"
 #include "mesh_command_queue.hpp"
@@ -169,7 +168,7 @@ DispatchContext& DispatchContext::get() {
 bool DispatchContext::is_fast_dispatch_session_active() const { return num_fd_inits_ > 0; }
 
 DispatchCoreAxis DispatchContext::get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const {
-    return MetalContext::instance(extract_context_id(mesh_device)).get_dispatch_core_config().get_dispatch_core_axis();
+    return mesh_device->impl().metal_context().get_dispatch_core_config().get_dispatch_core_axis();
 }
 
 void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_device) {
@@ -465,7 +464,7 @@ void DispatchContext::set_configure_only(distributed::MeshDevice* mesh_device, b
         !mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch(),
         "{} can only be called when Fast Dispatch is disabled.",
         __func__);
-    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
     sd_mesh_cq.set_configure_only(enable);
 }
 
@@ -474,7 +473,7 @@ void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice*
         !mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch(),
         "{} can only be called when Fast Dispatch is disabled.",
         __func__);
-    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
     sd_mesh_cq.enable_asynchronous_slow_dispatch();
 }
 
@@ -483,12 +482,12 @@ void DispatchContext::disable_asynchronous_slow_dispatch(distributed::MeshDevice
         !mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch(),
         "{} can only be called when Fast Dispatch is disabled.",
         __func__);
-    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
     sd_mesh_cq.disable_asynchronous_slow_dispatch();
 }
 
 bool DispatchContext::is_asynchronous_slow_dispatch_enabled(distributed::MeshDevice* mesh_device) const {
-    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());
+    auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue(0));
     return sd_mesh_cq.is_asynchronous_slow_dispatch_enabled();
 }
 

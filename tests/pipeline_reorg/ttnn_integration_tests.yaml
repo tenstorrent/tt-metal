@@ -36,7 +36,7 @@
       timeout: 30
     bh_p150b_civ2_viommu:
       timeout: 30
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: integration
   category: tutorials

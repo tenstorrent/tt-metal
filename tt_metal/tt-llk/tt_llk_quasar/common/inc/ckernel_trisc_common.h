@@ -45,6 +45,10 @@ constexpr static std::uint32_t NUM_FACES = 4;
 // Default number of tiles processed per one _llk_* execute call
 static constexpr std::uint32_t NUM_TILES = 1;
 
+// SET_SRC/DST_TILE_FACE_ROW_IDX carry an 18-bit value, but under FACE_SEL only 11 bits reach the counter: a larger face
+// index aliases back to an earlier tile.
+constexpr std::uint32_t FACE_SEL_IDX_LIMIT = 1u << 11;
+
 // Number of rows that can fit into Dest
 static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
 static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
@@ -170,6 +174,8 @@ inline std::uint32_t get_dest_max_tiles()
 template <std::uint8_t TRISC_ID>
 inline void _set_dest_section_base_(const std::uint32_t base_addr)
 {
+    static_assert(TRISC_ID < 4, "_set_dest_section_base_ takes a per-Neo thread id in [0, 3]");
+
     if constexpr (TRISC_ID == 0)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC0_Offset_ADDR32] = base_addr;
@@ -182,7 +188,7 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC2_Offset_ADDR32] = base_addr;
     }
-    else
+    else if constexpr (TRISC_ID == 3)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC3_Offset_ADDR32] = base_addr;
     }
@@ -292,17 +298,10 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     // - UNPACK_PACK = unpack->pack
     // - PACK_UNPACK = pack->unpack
-    // - UNPACK_INIT = unpack->math (startup barrier, see llk_sync.h)
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
-    // Startup barrier for the unpack-to-dest handshake. Each semaphore is seeded by the thread that posts it, in front of
-    // its first post: MATH_PACK by math, UNPACK_MATH / UNPACK_PACK by unpack. The unpack thread raises this one right
-    // after its seeds, and math passes it before its first wait on UNPACK_MATH, so no SEMWAIT is ever pending on a
-    // semaphore when its SEMINIT lands. Pack needs no barrier: its first get on UNPACK_PACK follows math's first
-    // MATH_PACK post, which follows the unpacker's first UNPACK_MATH post. Rest state 0.
-    constexpr static std::uint32_t UNPACK_INIT = 0; // unpack -> math: the unpack-posted semaphores are seeded
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

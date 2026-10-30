@@ -4,11 +4,11 @@
 
 // Experimental Start / Queue / Stop lifecycle API for the queueable Tensor
 // prefetcher (DRISC). A long-running DRISC kernel on every DRAM sender core
-// reads requests off a per-core H2D socket; each request identifies a
-// DRAM-sender GlobalCircularBuffer and a per-tensor work list. The host can
-// keep queueing new requests after Start returns; per-GCB ring-buffer state
-// (fifo_wr_ptr, pages_sent) is preserved in DRISC L1 so successive requests
-// can target different GCBs and switch back and forth across requests.
+// reads requests off a per-core H2D socket; each request names a set of
+// DRAM-sender PrefetcherPipes and a per-tensor work list. The host can keep
+// queueing new requests after Start returns; each pipe's ring state (write
+// cursors, credit counters) is preserved in its config page in DRISC L1, so
+// successive requests can target different pipe sets and switch back and forth.
 //
 // State (Program(s), sockets, host worker thread, held tensor refs) lives on
 // MeshDeviceImpl. Only one prefetcher may be active per mesh device at a time.
@@ -34,8 +34,6 @@ class MeshCoordinateRangeSet;
 }  // namespace distributed
 
 namespace experimental {
-
-class GlobalCircularBuffer;
 
 struct BlackholeTensorPrefetcherConfig {
     // GDDR Memory Controller Multi-Port Front End (MPFE) weighted round-robin service levels.
@@ -96,10 +94,11 @@ struct TensorPrefetcherGroupSelector {
 };
 
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
-// its K dimension into. `block_count` is used in place of the GCB ring size when
-// dividing K (k_block_w_tiles = ceil(K_tiles / block_count)), so different
-// tensors — within one request or across GCBs — can use different K-block
-// counts. The consuming matmul must wait_front(block_count) per layer.
+// its K dimension into (k_block_w_tiles = ceil(K_tiles / block_count) for a
+// K-row-major weight; a receiver-contiguous one needs block_count to divide K),
+// so different tensors — within one request or across pipe sets — can use
+// different K-block counts. The consuming matmul must wait_front(block_count)
+// per layer.
 //
 // Required `tensor` layout (validated at Queue time, when the request is
 // serialized):
@@ -108,7 +107,7 @@ struct TensorPrefetcherGroupSelector {
 //     the full K dimension and `N / num_dram_banks` columns),
 //   - tile-aligned in both K and N (shard_shape divisible by TILE_HEIGHT/WIDTH).
 // The per-bank N columns are further split evenly across that bank's receivers,
-// so `N_per_bank` (= N / num_dram_banks) must divide the GCB's receiver count:
+// so `N_per_bank` (= N / num_dram_banks) must divide that bank's receiver count:
 // receiver r in bank b owns columns
 // `[b*N_per_bank + r*N_per_recv, b*N_per_bank + (r+1)*N_per_recv)`, where
 // N_per_recv = N_per_bank / num_receivers_per_sender.
@@ -120,7 +119,7 @@ struct TensorPrefetcherInput {
     // the host-specified rotated order: at push step p, the receiver at global receiver
     // position r sources physical block (rotation[r] + p) mod block_count. This lets the
     // consuming matmul stream blocks in FIFO order and start before the whole tensor arrives
-    // (allowing a shallow GCB), and gives the host full control over which block leads each
+    // (allowing a shallow ring), and gives the host full control over which block leads each
     // receiver rather than fixing it to the topology position.
     //
     // When non-empty, `rotation` must have exactly `total_receivers` (== ring size ==
@@ -141,13 +140,13 @@ struct TensorPrefetcherInput {
 // drains the request queue. Returns immediately. No prefetch work is scheduled
 // yet — kernels park on socket_wait_for_pages.
 //
-// Each queued GCB selects which of the provisioned senders receive its PREFETCH
-// requests. Single-sender GCBs leave the second sender for each bank idle; dual-sender
-// GCBs use both.
+// Each queued pipe set selects which of the provisioned senders receive its PREFETCH
+// requests. Single-sender pipe sets leave the second sender for each bank idle;
+// dual-sender ones use both.
 //
-// Receiver count is owned by each GCB (read from the per-GCB sender state
-// block on every request), so a single prefetcher can serve GCBs with
-// different num_receivers values.
+// Receiver count is owned by each pipe (read from its sender config page on every
+// request), so a single prefetcher can serve pipe sets with different receiver
+// counts.
 //
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
@@ -157,8 +156,10 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 
 // Queue one prefetch request. Non-blocking.
 //
-//   - `gcb` must be a DRAM-sender GlobalCircularBuffer constructed against the
-//     same mesh device.
+//   - `prefetcher_pipes` must be every pipe of one CreatePrefetcherPipesForTensorPrefetcher result
+//     for the same mesh device, in any order. Each pipe carries its bank-local slab base. Consumers
+//     bind each pipe on its own receivers through ProgramRunArgs and read through the device-side
+//     experimental::PrefetcherPipe.
 //   - `device_subset` defaults to the full mesh when std::nullopt. Devices
 //     outside the subset do not process this request.
 //   - `input_tensors` is the full, flattened list of weight tensors to prefetch
@@ -167,8 +168,8 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     tensors for distinct model layers, or repeat a tensor to replay it. Tensors
 //     that share a layout are deduplicated on the wire, and a list that overflows
 //     one request page is transparently split across pages.
-//   - Per-GCB ring-buffer state is preserved across requests, so successive
-//     Queue calls against the same GCB resume where the previous call left off.
+//   - Each pipe's write cursors are preserved across requests, so successive Queue
+//     calls against the same pipes resume where the previous call left off.
 //   - Per-tensor `rotation` (on each TensorPrefetcherInput) is documented on that struct; a
 //     non-empty rotation enables streaming and sets the per-receiver delivery order, the only
 //     knob that varies delivery order within a request.
@@ -180,40 +181,23 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     whatever any command queue is doing. Pass `&mesh_device.mesh_command_queue()`
 //     to opt into capture on the calling thread's current queue.
 //
-// The caller is responsible for keeping the tensors in `input_tensors` and
-// `gcb` alive until Stop returns.
-void QueueTensorPrefetcherRequest(
-    distributed::MeshDevice& mesh_device,
-    const GlobalCircularBuffer& gcb,
-    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
-    const std::vector<TensorPrefetcherInput>& input_tensors,
-    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
-
-// Queue one prefetch request against PrefetcherPipes instead of a GlobalCircularBuffer. The target
-// object is what selects the delivery transport; everything else behaves as documented above, and
-// requests against a GCB and against PrefetcherPipes may be interleaved on one running prefetcher.
-//
-// `prefetcher_pipes` must be every pipe of one CreatePrefetcherPipesForTensorPrefetcher result for
-// the same mesh device, in any order. Each pipe carries its bank-local slab base. Consumers bind
-// each pipe on its own receivers through ProgramRunArgs and read through the device-side
-// experimental::PrefetcherPipe.
-//
-// Additional preconditions for this transport, all TT_FATAL with the offending values:
+// Further preconditions, all TT_FATAL with the offending values:
 //   - every pipe has a DRAM sender, comes from the same factory call, and shares one ring size;
 //     every pipe of that call is listed, each once;
 //   - receiver sets are disjoint across every pipe;
-//   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
-//     contiguous shard). One receiver per bank qualifies: a bank's whole shard is then that
-//     receiver's slab, which is why such a weight is read as receiver-contiguous here even though
-//     ttnn reports it as legacy WIDTH_SHARDED (the two layouts name the same bytes, and a GCB still
-//     reads it as K-row-major).
+//   - a K-row-major tensor (legacy WIDTH_SHARDED, one shard per bank sliced across that bank's
+//     receivers) needs one sender per bank, i.e. pipes created with support_multi_receiver_shards.
+//     One receiver per bank is the exception: a bank's whole shard is then that receiver's slab, so
+//     such a weight is read as receiver-contiguous (the two layouts name the same bytes).
 //
-// Everything else carries over: the streaming `rotation` works the same way it does for a GCB, and
-// a tensor's per-receiver block size need not equal the pipes' `entry_size` nor divide the ring --
+// A tensor's per-receiver block size need not equal the pipes' `entry_size` nor divide the ring --
 // the sender re-grids its write cursor per tensor, and any trailing remainder of the ring is a gap
 // both endpoints credit at the wrap. The ring itself is fixed at creation and never resizes, so
 // size it for the consumer: one block is enough for the transport, while a consumer that keeps a
 // block of lookahead (a streaming matmul) needs two.
+//
+// The caller is responsible for keeping the tensors in `input_tensors` and the
+// pipes alive until Stop returns.
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
