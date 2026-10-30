@@ -255,6 +255,23 @@ inline bool dfb_dm0_records_written(uint8_t issuers, uint32_t first_trid) {
     return true;
 }
 
+// DM0: empties the exit-record slots of every DFB side in `pending` (txn ids never flushed, of one role), so the
+// next launch cannot take a record left from this one as written. A side is left unflushed when its issuers had
+// nothing left to credit and went from DFB_DRAINING to DONE between two of DM0's polls.
+inline void dfb_dm0_discard_records(uint32_t pending) {
+    for (uint32_t unvisited = pending; unvisited != 0;) {
+        const uint32_t first_trid = static_cast<uint32_t>(__builtin_ctz(unvisited));
+        const volatile dfb_dm0_finish_info_t& finish = g_txn_dfb_descriptor[first_trid].finish;
+        unvisited &= ~(((1u << finish.num_txn_ids) - 1u) << first_trid);
+        for (uint32_t h = finish.issuer_hart_mask; h != 0; h &= h - 1) {
+            const uint32_t hart = static_cast<uint32_t>(__builtin_ctz(h));
+            *dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(
+                &g_dfb_exit_record[hart - dfb::FIRST_KERNEL_DM_HART][first_trid - DFB_TXN_ID_BASE])) =
+                DFB_EXIT_RECORD_NONE;
+        }
+    }
+}
+
 // DM0: flushes every DFB side in `pending` (txn ids not yet flushed, of one role) whose issuers are all
 // draining, given `ready` (bit per DM hart), and drops those txn ids from `pending`. A side's txn ids are one
 // ascending block, so its lowest pending txn id and its descriptor's count give the whole side. Returns

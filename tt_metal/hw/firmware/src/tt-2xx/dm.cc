@@ -274,6 +274,12 @@ inline void wait_subordinates_and_finish_dfbs(DfbImplicitSyncTxnMasks pending) {
     while (true) {
         const uint64_t dms = subordinate_sync->allDMs;
         if (dms == RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE && subordinates_done()) {
+            if ((pending.producer | pending.consumer) != 0) {
+                dfb_dm0_discard_records(pending.producer);
+                dfb_dm0_discard_records(pending.consumer);
+                // Land the empty slots before dispatch hears DONE and a kernel DM can write the next launch's records.
+                asm volatile("fence w, w" ::: "memory");
+            }
             break;
         }
         if ((pending.producer | pending.consumer) == 0) {
