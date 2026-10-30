@@ -64,6 +64,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "distributed/mesh_device_view_impl.hpp"
 #include "dispatch/simple_trace_allocator.hpp"
 #if defined(TT_UMD_BUILD_SIMULATION)
 #include "buffers/simulator_direct_write.hpp"
@@ -438,10 +439,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         TT_FATAL(!blocking, "Blocking is not supported when recording a trace.");
         trace_nodes_.push_back(MeshTraceNode{});
         auto& trace_node = trace_nodes_.back();
-        // Reuse what generate_dispatch_commands() resolved (it runs immediately before this, in
-        // EnqueueMeshWorkload). Recomputing it here dropped the "has any kernels at all" term, so a
-        // kernel-less workload captured a trace node claiming the prefetcher cache and then
-        // dereferenced its null kernels buffer.
+        // generate_dispatch_commands() made this decision when it built the command sequences the
+        // trace nodes start from, so trace capture reads it like eager enqueue does rather than
+        // re-deriving it. A workload with no kernel binaries has no kernels buffer to cache.
         bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
@@ -1732,10 +1732,11 @@ void FDMeshCommandQueue::record_end() {
                 ProgramBinaryStatus::Committed);
 
             // Per node, not hoisted above the loop: sub_device_id, and so num_available_worker_cores,
-            // is per node.
+            // is per node. The devices come from the view, not get_local_devices(): that cache is
+            // filled under the api lock, which record_end does not hold.
             const SubDeviceRecorder trace_sub_device_recorder(mesh_device_, sub_device_id);
             trace_sub_device_recorder.record(
-                mesh_device_->impl().get_local_devices(range), node.program_runtime_id, sub_device_id);
+                mesh_device_->get_view().impl().get_devices(range), node.program_runtime_id, sub_device_id);
 
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(

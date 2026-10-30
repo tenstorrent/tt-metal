@@ -3643,8 +3643,6 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     (void)ProgramImpl::finalize_program_offsets(
         extract_context_id(device), device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
-
-    set_finalized();
 }
 
 // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
@@ -3805,6 +3803,10 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             static_cast<uint32_t>(program->get_program_transfer_info().binary_data.size() * sizeof(uint32_t));
         program->kernel_bins_sizeB = binary_sizeB;
         max_program_sizeB = std::max(max_program_sizeB, binary_sizeB);
+        // Marked here, for every program in the span, so that no caller can leave one unfinalized:
+        // finalize_offsets() and LaunchProgram() re-lay out an unfinalized program standalone, which
+        // would replace the offsets it shares with the rest of a jointly laid out span.
+        program->set_finalized();
     }
     return max_program_sizeB;
 }

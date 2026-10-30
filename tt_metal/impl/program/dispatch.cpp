@@ -117,16 +117,6 @@ uint64_t dataflow_buffers_config_generation(
     return config_generation;
 }
 
-// A CB config payload carries the local configs from the front, indexed by buffer index, and the
-// remote configs from the back, so a remote buffer index counts down from max_dfbs. Both return an
-// offset in uint32 words from the start of the payload.
-constexpr uint32_t local_cb_config_slot(uint32_t buffer_index) {
-    return UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
-}
-constexpr uint32_t remote_cb_config_slot(uint32_t remote_offset_index, uint32_t max_dfbs, uint32_t buffer_index) {
-    return remote_offset_index + (max_dfbs - 1 - buffer_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
-}
-
 struct CommandConstants {
     NOC noc_index;
     uint32_t max_prefetch_command_size;
@@ -1382,8 +1372,8 @@ public:
                     if (min_remote_cb_start_index < max_dfbs) {
                         max_index = std::max(
                             max_index,
-                            remote_offset_index + (max_dfbs - min_remote_cb_start_index) *
-                                                      UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                            remote_cb_config_slot(remote_offset_index, max_dfbs, min_remote_cb_start_index) +
+                                UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                     }
                 }
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
@@ -2619,12 +2609,8 @@ void assemble_device_commands(
             tt::LogDispatch,
             "Go Signal:                {} bytes",
             program_command_sequence.go_msg_command_sequence.size_bytes());
-        uint32_t total_size = program_command_sequence.preamble_command_sequence.size_bytes() +
-                              program_command_sequence.runtime_args_sizeB +
-                              program_command_sequence.program_config_buffer_command_sequence.size_bytes() +
-                              program_command_sequence.program_binary_command_sequence.size_bytes() +
-                              program_command_sequence.launch_msg_command_sequence.size_bytes() +
-                              program_command_sequence.go_msg_command_sequence.size_bytes();
+        const uint32_t total_size = program_command_sequence.get_one_shot_fetch_size(
+            /*stall_first=*/false, /*stall_before_program=*/false, /*send_binary=*/true);
         log_trace(tt::LogDispatch, "TOTAL SIZE:               {} bytes", total_size);
         log_trace(tt::LogDispatch, "========== End Device Commands Assembly ==========");
         log_trace(tt::LogDispatch, "");

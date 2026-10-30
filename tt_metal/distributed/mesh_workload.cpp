@@ -497,12 +497,6 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         semaphores_getter,
         programs);
 
-    // The programs were laid out jointly above, so each one is finalized. Say so: finalize_offsets()
-    // and LaunchProgram() both re-lay out a program that still reports unfinalized, which would
-    // replace these joint offsets with standalone ones while dispatch keeps using the snapshot.
-    for (auto* program_impl : program_impls) {
-        program_impl->set_finalized();
-    }
     set_finalized(max_program_kernels_sizeB, mesh_device->id());
 }
 
