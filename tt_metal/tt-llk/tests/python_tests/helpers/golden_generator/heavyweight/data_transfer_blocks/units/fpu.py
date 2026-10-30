@@ -24,6 +24,7 @@ from ..storage import (
     dest_to_src_storage,
     mantissa_ties,
     to_dest_storage,
+    truncate_mantissa,
 )
 from .fidelity import (
     fidelity_phases,
@@ -51,12 +52,19 @@ class Fpu:
         l1: L1Support,
         *,
         mantissa_split: Optional[Tuple[int, int]] = None,
+        multiplier_srcA_bits: Optional[int] = None,
         dest_ties_away: Optional[bool] = None,
     ) -> None:
         # Mantissa bits the multiplier takes from each operand per phase, as
         # (srcA, srcB). None means this architecture's multiplier is not
         # modelled: multiplies are exact and math_fidelity is ignored.
         self.mantissa_split = mantissa_split
+
+        # Mantissa bits of srcA the multiplier can reach, which on some
+        # architectures is fewer than the register holds. None means all of
+        # them. It is the multiplier's reach rather than the register's width,
+        # so an add still sees the whole datum.
+        self.multiplier_srcA_bits = multiplier_srcA_bits
 
         # Rounding mode for a 16-bit Dest write: True for ties away from
         # zero, False for ties to even. None means this architecture's mode is
@@ -140,6 +148,10 @@ class Fpu:
 
         Non-finite operands are carried on the first phase and zeroed on the rest.
         """
+        if self.multiplier_srcA_bits is not None:
+            # Dropped before the split, so the bits the multiplier cannot reach
+            # are missing from both halves and no fidelity recovers them.
+            srcA = truncate_mantissa(srcA, self.multiplier_srcA_bits)
         a, b = operand_halves(srcA, srcB, self.mantissa_split, phase)
         return resolve_non_finite(a, b, srcA, srcB, phase)
 
