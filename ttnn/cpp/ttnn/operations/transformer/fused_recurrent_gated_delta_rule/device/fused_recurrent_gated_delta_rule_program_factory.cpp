@@ -50,8 +50,6 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t blk_page_bytes = ring ? blk_buf->aligned_page_size() : 0u;
 
     const uint32_t kv = Kt * Vt;
-    // The per-token scalar tiles (g, beta) are double-buffered when there is a next token to prefetch.
-    const uint32_t scalar_nbuf = T > 1 ? 2u : 1u;
 
     auto* device = in.q.device();
     const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -83,13 +81,13 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
                 .tile = TileDescriptor{dims[0], dims[1], /*transpose=*/false}}}}});
     };
 
-    // reader -> compute
-    add_cb(cb::qk16, Kt);
-    add_cb(cb::kT16, Kt);
-    add_cb(cb::qcol32, Kt);
-    add_cb(cb::v16, Vt);
-    add_cb(cb::gcol32, 1, scalar_nbuf);
-    add_cb(cb::bcol16, 1, scalar_nbuf);
+    // reader -> compute (the per-token tiles hold token_cb_nbuf tokens so the reader runs a token ahead)
+    add_cb(cb::qk16, Kt, cb::token_cb_nbuf);
+    add_cb(cb::kT16, Kt, cb::token_cb_nbuf);
+    add_cb(cb::qcol32, Kt, cb::token_cb_nbuf);
+    add_cb(cb::v16, Vt, cb::token_cb_nbuf);
+    add_cb(cb::gcol32, 1, cb::token_cb_nbuf);
+    add_cb(cb::bcol16, 1, cb::token_cb_nbuf);
     add_cb(cb::S, kv);
     add_cb(cb::ones32, 1);
     add_cb(cb::zero32, 1);

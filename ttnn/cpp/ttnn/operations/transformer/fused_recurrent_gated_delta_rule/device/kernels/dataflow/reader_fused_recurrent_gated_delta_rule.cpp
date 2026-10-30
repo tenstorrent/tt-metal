@@ -26,14 +26,6 @@ namespace cb = gdn_decode_cb;
 
 namespace {
 
-// Fill `n_words` 32-bit words at L1 byte address `addr` with `value`.
-void fill_words(uint32_t addr, uint32_t n_words, uint32_t value) {
-    const CoreLocalMem<volatile uint32_t> p(addr);
-    for (uint32_t i = 0; i < n_words; i++) {
-        p[i] = value;
-    }
-}
-
 constexpr uint32_t one_f32 = 0x3f800000u;
 
 }  // namespace
@@ -83,27 +75,40 @@ void kernel_main() {
     CircularBuffer cb_g(cb::gcol32), cb_b(cb::bcol16), cb_S(cb::S), cb_ones(cb::ones32), cb_zero(cb::zero32);
 
     // ---- once at kernel start: constants and the zero paddings of every per-token CB ----------------------------
-    // Reserving the whole CB (nothing is pushed yet) gives the base of all its slots; the per-token reserve/push
-    // below then walks the same slots in order. The scalar CBs have two slots when T > 1 (prefetch of the next token).
-    const uint32_t scalar_nbuf = T > 1 ? 2u : 1u;
-    cb_qk.reserve_back(Kt);
-    fill_words(cb_qk.get_write_ptr(), Kt * tb16 / 4, 0);
-    cb_kT.reserve_back(Kt);
-    fill_words(cb_kT.get_write_ptr(), Kt * tb16 / 4, 0);
-    cb_qc.reserve_back(Kt);
-    fill_words(cb_qc.get_write_ptr(), Kt * tb32 / 4, 0);
-    cb_v.reserve_back(Vt);
-    fill_words(cb_v.get_write_ptr(), Vt * tb16 / 4, 0);
-    cb_g.reserve_back(scalar_nbuf);
-    fill_words(cb_g.get_write_ptr(), scalar_nbuf * tb32 / 4, 0);
-    cb_b.reserve_back(scalar_nbuf);
-    fill_words(cb_b.get_write_ptr(), scalar_nbuf * tb16 / 4, 0);
-    cb_ones.reserve_back(1);
-    fill_words(cb_ones.get_write_ptr(), tb32 / 4, one_f32);
-    cb_ones.push_back(1);
+    // Reserving the whole CB (nothing is pushed yet) gives the base of all its slot sets (token_cb_nbuf of them);
+    // the per-token reserve/push below walks them in a fixed order, so a padding zeroed here stays zero. The zeroing
+    // is the NoC's (a RISC word loop over these 60 KB costs ~30 us).
+    constexpr uint32_t nb = cb::token_cb_nbuf;
+    cb_qk.reserve_back(nb * Kt);
+    noc.async_write_zeros(cb_qk, nb * Kt * tb16);
+    cb_kT.reserve_back(nb * Kt);
+    noc.async_write_zeros(cb_kT, nb * Kt * tb16);
+    cb_qc.reserve_back(nb * Kt);
+    noc.async_write_zeros(cb_qc, nb * Kt * tb32);
+    cb_v.reserve_back(nb * Vt);
+    noc.async_write_zeros(cb_v, nb * Vt * tb16);
+    cb_g.reserve_back(nb);
+    noc.async_write_zeros(cb_g, nb * tb32);
+    cb_b.reserve_back(nb);
+    noc.async_write_zeros(cb_b, nb * tb16);
     cb_zero.reserve_back(1);
-    fill_words(cb_zero.get_write_ptr(), tb32 / 4, 0);
+    noc.async_write_zeros(cb_zero, tb32);
+    noc.write_zeros_l1_barrier();
     cb_zero.push_back(1);
+    // ones32: the RISC writes the first 8 rows (512 B), the NoC replicates them into the other 7 x 512 B.
+    cb_ones.reserve_back(1);
+    {
+        const uint32_t base = cb_ones.get_write_ptr();
+        const CoreLocalMem<volatile uint32_t> p(base);
+        for (uint32_t i = 0; i < 512 / 4; i++) {
+            p[i] = one_f32;
+        }
+        for (uint32_t off = 512; off < tb32; off += 512) {
+            noc_async_read(get_noc_addr(base), base + off, 512);
+        }
+        noc_async_read_barrier();
+    }
+    cb_ones.push_back(1);
 
     // ---- initial state S (once) -- the host always provides it (zeros if absent). In ring mode the block is idx[h]
     // instead of h (caller contract: see the Python binding).
