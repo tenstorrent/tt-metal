@@ -432,7 +432,9 @@ def test_packed_decode_inputs_bit_identical(mesh_device, monkeypatch, partition)
                     continue
                 rec = dec._user_recurrent(dec.kda_batched.recurrent, 0)
                 conv = dec._require_weights().attn.user_conv_state(dec.kda_batched, 0)
-                out.append((ttnn.to_torch(rec).clone(), ttnn.to_torch(conv).clone()))
+                # every chip's shard (a mesh tensor needs a composer; the per-chip reads are the test's own idiom)
+                shards = lambda t: torch.stack([ttnn.to_torch(x) for x in model.mesh.device_tensors(t)])  # noqa: E731
+                out.append((shards(rec).clone(), shards(conv).clone()))
                 ttnn.deallocate(rec)
                 ttnn.deallocate(conv)
             return out
