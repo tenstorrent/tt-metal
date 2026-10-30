@@ -24,8 +24,7 @@ class DeepSeekV3Config:
     NUM_EXPERTS_PER_TOKEN = 8
     # Depth of the MoE forwarding buffers. Any value would make model functional,
     # but larger values make it faster and consume more DRAM, so it's a compromise.
-    COMBINE_FWD_VC_PAGES = 64
-    DISPATCH_FWD_VC_PAGES = 64
+    MOE_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 8
     NUM_LIMITED_GROUPS = 4

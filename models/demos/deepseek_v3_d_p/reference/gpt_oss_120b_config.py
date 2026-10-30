@@ -43,8 +43,7 @@ class GptOss120BConfig:
     NUM_EXPERTS_PER_TOKEN = 4
     # Depth of the MoE forwarding buffers. Any value would make model functional,
     # but larger values make it faster and consume more DRAM, so it's a compromise.
-    COMBINE_FWD_VC_PAGES = 48
-    DISPATCH_FWD_VC_PAGES = 48
+    MOE_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 0
     # GPT-OSS routes with no expert groups; selection is a plain top-k over all experts.
     NUM_EXPERT_GROUPS = 1

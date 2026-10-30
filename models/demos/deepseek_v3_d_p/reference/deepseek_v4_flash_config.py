@@ -33,8 +33,7 @@ class DeepSeekV4FlashConfig:
     NUM_EXPERTS_PER_TOKEN = 6
     # Depth of the MoE forwarding buffers. Any value would make model functional,
     # but larger values make it faster and consume more DRAM, so it's a compromise.
-    COMBINE_FWD_VC_PAGES = 64
-    DISPATCH_FWD_VC_PAGES = 64
+    MOE_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.
     NUM_EXPERT_GROUPS = 1

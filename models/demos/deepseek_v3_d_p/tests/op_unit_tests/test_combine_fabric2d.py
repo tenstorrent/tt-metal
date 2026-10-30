@@ -45,7 +45,7 @@ DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 
 # These cases are synthetic rather than any one model, but they route top-8 over an 8-chip dispatch
-# group, which is the shape the models carrying COMBINE_FWD_VC_PAGES = 67 have -- so this takes 67.
+# group, which is the shape the models carrying MOE_FWD_VC_PAGES = 67 have -- so this takes 67.
 # Correctness does not depend on it: the forwarding region is split by movement class, so no size can
 # deadlock the ring, which is why one value serves every case here. Taking the smaller region is the
 # more demanding choice of the two, so these cases cover the shallower channels rather than avoid them.

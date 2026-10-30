@@ -369,7 +369,7 @@ class TtDispatch2dModule(LightweightModule):
             buffers: (forwarding, staging) DRAM buffers the op stages tokens in, from
                 TT_CCL.get_dispatch_fabric2d_buffers for these arguments. None leaves them to the op,
                 which allocates them at its first cache miss and keeps one pair per cached program.
-            fwd_vc_pages: Pages one forwarding channel holds, the model's DISPATCH_FWD_VC_PAGES. None
+            fwd_vc_pages: Pages one forwarding channel holds, the model's MOE_FWD_VC_PAGES. None
                 takes the op's default. `buffers` must be sized for the same value.
 
         Note there is no dispatch_group_size (the op takes the ring from cluster_axis and the mesh

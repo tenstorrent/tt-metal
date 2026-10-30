@@ -37,7 +37,7 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
                                   No value can deadlock the ring -- the region is split by movement
                                   class -- so this trades DRAM against throughput and nothing else.
                                   Where that curve bends differs per model, so it comes from the model
-                                  config (COMBINE_FWD_VC_PAGES) rather than being fixed here.
+                                  config (MOE_FWD_VC_PAGES) rather than being fixed here.
 
         dispatched_buffer and dispatched_metadata are 1 in every dim before the last two, as dispatch
         leaves them, so their second-to-last dim is dispatch's max_dispatch_buffer_token_size. A token

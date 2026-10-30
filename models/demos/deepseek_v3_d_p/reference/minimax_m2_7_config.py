@@ -24,8 +24,7 @@ class MiniMaxM27Config:
     NUM_EXPERTS_PER_TOKEN = 8
     # Depth of the MoE forwarding buffers. Any value would make model functional,
     # but larger values make it faster and consume more DRAM, so it's a compromise.
-    COMBINE_FWD_VC_PAGES = 80
-    DISPATCH_FWD_VC_PAGES = 80
+    MOE_FWD_VC_PAGES = 80
     NUM_SHARED_EXPERTS = 0  # shared_intermediate_size = 0
     # MiniMax routes with a single expert group -> gate collapses to plain top-k.
     NUM_EXPERT_GROUPS = 1
