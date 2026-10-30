@@ -127,6 +127,10 @@ public:
     MemoryBlockTable get_memory_block_table(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
+    // Allocated [begin, end) ranges in address order. Unlike extract_state, touching ranges are not coalesced.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_allocated_ranges(
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
+
     void shrink_size(
         DeviceAddr shrink_size,
         bool bottom_up = true,

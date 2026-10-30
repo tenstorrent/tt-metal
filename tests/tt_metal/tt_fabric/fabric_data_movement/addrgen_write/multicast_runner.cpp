@@ -205,7 +205,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
 
     for (size_t i = 0; i < dst_coords.size(); ++i) {
-        receiver_progs.emplace_back(tt::tt_metal::CreateProgram());
+        receiver_progs.emplace_back(tt::tt_metal::CreateProgram(*mesh));
         auto rx_wait_k = tt::tt_metal::CreateKernel(
             receiver_progs.back(),
             std::string(KDIR) + "rx_addrgen.cpp",  // Unified receiver kernel
@@ -231,7 +231,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     }
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
-    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram(*mesh);
     const uint32_t CB_ID = tt::CBIndex::c_0;
     // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
     // Use source aligned page size (reader reads from DRAM buffer with DRAM alignment)
@@ -317,7 +317,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     auto pick_link = [&](Dist::MeshCoordinate mc, uint32_t& out_link_idx) {
         auto dst_fn = coord_to_fabric_id(std::move(mc));
-        auto links = tt::tt_fabric::get_forwarding_link_indices(src_fn, dst_fn);
+        auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, src_fn, dst_fn);
         if (links.empty()) {
             ADD_FAILURE() << "No forwarding link from src to representative";
             return false;

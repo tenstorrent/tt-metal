@@ -18,6 +18,7 @@
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -348,7 +349,7 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
     if (!view.contains(coord) || !view.is_local(coord)) {
         return device;
     }
-    return a.device()->get_device(coord);
+    return tt::tt_metal::internal::get_device(*a.device(), coord);
 }
 
 void get_max_page_size_and_num_pages(
@@ -437,7 +438,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
                         continue;
                     }
-                    // All readers use AllocatorBank on the same NOC and therefore target the same
+                    // All readers address the bank by allocator bank id on the same NOC and therefore target the same
                     // firmware-approved endpoint. Place additional readers near the bank's primary
                     // reader to minimize NOC hops without routing one NOC to multiple endpoints.
                     // This factory shares one logical reader placement across the mesh, as it

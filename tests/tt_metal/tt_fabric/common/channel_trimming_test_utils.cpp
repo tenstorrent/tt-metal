@@ -51,7 +51,8 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         connection_dst = FabricNodeId(src_fabric_node_id.mesh_id, first_hop_neighbors[0]);
     }
 
-    const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, connection_dst);
+    const auto& available_links = get_forwarding_link_indices(
+        *BaseFabricFixture::devices_map_.at(src_physical), src_fabric_node_id, connection_dst);
     if (available_links.empty()) {
         return UnicastTrafficResult{{}, {}, FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), 0, true};
     }
@@ -86,7 +87,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     }
 
     // Create sender program
-    auto sender_program = tt_metal::CreateProgram();
+    auto sender_program = tt_metal::CreateProgram(*sender_device);
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
@@ -123,7 +124,7 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     // Create receiver program
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
 
-    auto receiver_program = tt_metal::CreateProgram();
+    auto receiver_program = tt_metal::CreateProgram(*receiver_device);
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",

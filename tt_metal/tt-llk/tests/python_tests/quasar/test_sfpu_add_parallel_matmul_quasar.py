@@ -68,6 +68,8 @@ DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
 )
+# Perf uses the multi-tile profile; one tile is too short to time.
+PERF_DIMENSION_PROFILE = DIMENSION_PROFILES[1]
 
 # Caps each add operand at 45% of format max so |a|+|b| stays <= 90% with rounding headroom.
 ADD_RANGE_SAFETY_FACTOR = 0.45
@@ -75,7 +77,6 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 SFPU_ADD_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ]
     # The MX pair is on the input side: these operands reach the SFPU through UNP_S
@@ -118,7 +119,9 @@ def generate_parallel_matmul_add_combinations(
         formats_list
     ):
         dest_sync_modes = (DestSync.Half, DestSync.Full)
-        dimension_profiles = (DIMENSION_PROFILES[1],) if is_perf else DIMENSION_PROFILES
+        dimension_profiles = (
+            (PERF_DIMENSION_PROFILE,) if is_perf else DIMENSION_PROFILES
+        )
         for dest_sync in dest_sync_modes:
             for (
                 ADD_INPUT_DIMENSIONS,

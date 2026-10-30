@@ -145,8 +145,10 @@ template <
     untilize_config::InitUninitMode init_uninit_mode,
     untilize_config::WaitMode wait_mode,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
-    untilize_config::RemapMode remap_mode>
-ALWI void untilize(uint32_t num_blocks) {
+    untilize_config::RemapMode remap_mode,
+    typename InDFB,
+    typename OutDFB>
+ALWI void untilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks) {
     // Compile-time validation
     static_assert(
         input_dfb != output_dfb, "Untilize cannot be done in-place: input_dfb and output_dfb must be different");
@@ -195,15 +197,14 @@ ALWI void untilize(uint32_t num_blocks) {
     // UPFRONT WAITING (if requested)
     // =================================================================
 
-    // Construct DataflowBuffer objects for sync operations
-    DataflowBuffer in_dfb(input_dfb);
-    DataflowBuffer out_dfb(output_dfb);
+    // The caller's buffers, bound by reference; untilize() never constructs a DataflowBuffer of its own
+    // (on Quasar one drains when it goes out of scope).
+    ASSERT(in_dfb.get_id() == input_dfb);
+    ASSERT(out_dfb.get_id() == output_dfb);
 
-    // Validate DFB capacity — placed AFTER DataflowBuffer construction. The constructor runs
-    // dfb_ensure_ready(), which blocks until this buffer's producer has published its tile-counter
-    // state (buf_capacity). get_dfb_num_pages() reads buf_capacity, so before construction it races
-    // the producer's publish and can read a stale/zero capacity (a false trip surfacing only under
-    // timing shifts). See tilize_helpers.inl for the full rationale.
+    // Validate DFB capacity. The caller's DataflowBuffer constructors already ran dfb_ensure_ready(),
+    // which blocks until this buffer's producer has published its tile-counter state (buf_capacity,
+    // read by get_dfb_num_pages()), so this cannot race the publish. See tilize_helpers.inl.
     // Guarded because get_local_cb_interface() references cb_interface, which is
     // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
     PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));

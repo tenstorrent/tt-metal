@@ -19,6 +19,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
@@ -50,7 +51,8 @@ RecvAsyncConnections collect_recv_async_connections(
 
     // TODO #24995: Find appropriate receiver cores and fabric node IDs based on mesh socket configuration
     for (const auto& connection : socket_connection_config) {
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        if (tt::tt_metal::internal::get_device(*socket_mesh_device, connection.receiver_core.device_coord)->id() ==
+            target_device->id()) {
             connections.receiver_core_coords.push_back(connection.receiver_core.core_coord);
             connections.receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));
@@ -89,6 +91,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
 
     const auto& mesh_socket = operation_attributes.mesh_socket;
     const auto& output_tensor = tensor_args;
+    const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(output_tensor, mesh_dispatch_coordinate, "recv_async");
 
@@ -108,8 +111,8 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
     {
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
         const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
-        auto available_link_indices =
-            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+        auto available_link_indices = tt::tt_fabric::get_forwarding_link_indices(
+            *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
         uint32_t num_available_links = available_link_indices.size();
 
         TT_FATAL(
@@ -244,8 +247,8 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
                 num_pages_remainder = pages_for_this_core % num_pages_per_packet;
             }
 
-            auto link_indices =
-                tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+                *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
@@ -351,8 +354,8 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
                     mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
             }
 
-            auto link_indices =
-                tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+            auto link_indices = tt::tt_fabric::get_forwarding_link_indices(
+                *socket_mesh_device, receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];

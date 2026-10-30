@@ -14,6 +14,7 @@
 #include "internal/risc_attribs.h"
 #include "internal/tt-1xx/cache.h"
 #include "api/debug/assert.h"
+#include "internal/debug/shared_noc_cmd_buf.h"
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
@@ -134,6 +135,11 @@ inline __attribute__((always_inline)) void set_noc_counter_val(uint32_t noc, uin
 
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
+#if defined(DEBUG_SANITIZE_SHARED_NOC_CMD_BUF)
+    if (addr == NOC_CMD_CTRL) {
+        debug_sanitize_shared_noc_cmd_buf(noc, buf);
+    }
+#endif
     uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     *ptr = val;

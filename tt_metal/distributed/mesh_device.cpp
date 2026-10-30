@@ -101,7 +101,7 @@ int generate_unique_mesh_id() {
 
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_default_thread_pool(
-    ContextId context_id, const std::vector<IDevice*>& physical_devices) {
+    ContextId context_id, const std::vector<Device*>& physical_devices) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
@@ -112,7 +112,7 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(
 // Helper function to verify all devices in the MeshDevice have the same value
 template <typename F>
 decltype(auto) validate_and_get_reference_value(
-    const std::vector<IDevice*>& devices, F&& func, const std::source_location& loc = std::source_location::current()) {
+    const std::vector<Device*>& devices, F&& func, const std::source_location& loc = std::source_location::current()) {
     if (devices.empty()) {
         TT_THROW("{} [{}:{}] failed: MeshDevice has no devices", loc.function_name(), loc.file_name(), loc.line());
     }
@@ -178,7 +178,7 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
         /* init_profiler */ false,
         /* initialize_fabric_and_dispatch_fw */ false);
     const bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
-    for (IDevice* device : ctx.device_manager()->get_all_active_devices()) {
+    for (Device* device : ctx.device_manager()->get_all_active_devices()) {
         if (!is_galaxy || !device->is_mmio_capable()) {
             opened_local_devices_.emplace(device->id(), device);
         }
@@ -187,16 +187,16 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {
             auto* device = opened_local_devices_.at(*device_id);
-            devices_.push_back(MaybeRemoteDevice::local(device));
+            devices_.push_back(MaybeRemote<Device*>::local(device));
         } else {
-            devices_.push_back(MaybeRemoteDevice::remote());
+            devices_.push_back(MaybeRemote<Device*>::remote());
         }
     }
 }
 
 MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
     if (!opened_local_devices_.empty()) {
-        std::vector<IDevice*> devices_to_close;
+        std::vector<Device*> devices_to_close;
         devices_to_close.reserve(opened_local_devices_.size());
         for (auto& [id, device] : opened_local_devices_) {
             devices_to_close.push_back(device);
@@ -217,11 +217,11 @@ MeshDeviceImpl::ScopedDevices::~ScopedDevices() {
     }
 }
 
-const std::map<ChipId, IDevice*>& MeshDeviceImpl::ScopedDevices::opened_local_devices() const {
+const std::map<ChipId, Device*>& MeshDeviceImpl::ScopedDevices::opened_local_devices() const {
     return opened_local_devices_;
 }
 
-const std::vector<MaybeRemote<IDevice*>>& MeshDeviceImpl::ScopedDevices::root_devices() const { return devices_; }
+const std::vector<MaybeRemote<Device*>>& MeshDeviceImpl::ScopedDevices::root_devices() const { return devices_; }
 
 uint8_t MeshDeviceImpl::num_hw_cqs() const {
     if (mesh_properties_.has_value()) {
@@ -274,7 +274,7 @@ uint32_t MeshDeviceImpl::dram_size_per_channel() const {
         local_devices_, [](const auto* device) { return device->dram_size_per_channel(); });
 }
 
-IDevice* MeshDeviceImpl::reference_device() const { return local_devices_.at(0); }
+Device* MeshDeviceImpl::reference_device() const { return local_devices_.at(0); }
 
 std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
     this->validate_sub_device_manager_tracker();
@@ -522,7 +522,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
-        dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
+        device->set_mesh_device(mesh_device);
     }
 
     mesh_device->pimpl_->distributed_context_->barrier();
@@ -842,16 +842,16 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     auto end_coordinate = MeshCoordinate(end_coords);
 
     // Create mesh device view for the submesh.
-    std::vector<MaybeRemote<IDevice*>> submesh_devices;
+    std::vector<MaybeRemote<Device*>> submesh_devices;
     std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
     const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
     submesh_devices.reserve(submesh_range.shape().mesh_size());
     submesh_fabric_node_ids.reserve(submesh_range.shape().mesh_size());
     for (const auto& coord : submesh_range) {
         if (view_->impl().is_local(coord)) {
-            submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->impl().get_device(coord)));
+            submesh_devices.push_back(MaybeRemote<Device*>::local(view_->impl().get_device(coord)));
         } else {
-            submesh_devices.push_back(MaybeRemote<IDevice*>::remote());
+            submesh_devices.push_back(MaybeRemote<Device*>::remote());
         }
         submesh_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
     }
@@ -879,7 +879,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     // TODO #20966: Remove these calls
     if (!submesh->pimpl_->get_device_ids().empty()) {
         for (auto* device : submesh->pimpl_->get_devices()) {
-            dynamic_cast<Device*>(device)->set_mesh_device(submesh);
+            device->set_mesh_device(submesh);
         }
     }
 
@@ -928,7 +928,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
 
 MeshDeviceImpl::~MeshDeviceImpl() = default;
 
-IDevice* MeshDeviceImpl::get_device(ChipId physical_device_id) const {
+Device* MeshDeviceImpl::get_device(ChipId physical_device_id) const {
     for (auto* device : local_devices_) {
         if (device->id() == physical_device_id) {
             return device;
@@ -937,7 +937,7 @@ IDevice* MeshDeviceImpl::get_device(ChipId physical_device_id) const {
     TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
 }
 
-std::vector<IDevice*> MeshDeviceImpl::get_devices() const {
+std::vector<Device*> MeshDeviceImpl::get_devices() const {
     // A mesh legitimately returns no *local* devices when its view spans device slots that
     // are all remote — e.g. a create_submeshes() tile whose devices live on another host/rank.
     // Various teardown paths iterate get_devices() over such submeshes, so only assert when
@@ -949,23 +949,23 @@ std::vector<IDevice*> MeshDeviceImpl::get_devices() const {
     return local_devices_;
 }
 
-const std::vector<IDevice*>& MeshDeviceImpl::get_local_devices(const MeshCoordinateRange& range) const {
+const std::vector<Device*>& MeshDeviceImpl::get_local_devices(const MeshCoordinateRange& range) const {
     if (auto entry = local_devices_by_range_.find(range); entry != local_devices_by_range_.end()) {
         return entry->second;
     }
     // Resolve before inserting: get_devices() raises for a range outside the mesh, and an entry
     // inserted ahead of it would leave an empty device list cached for that range, which reads as
     // "nothing to dispatch to" rather than as the error it is.
-    auto devices = view_->get_devices(range);
+    auto devices = view_->impl().get_devices(range);
     return local_devices_by_range_.emplace(range, std::move(devices)).first->second;
 }
 
 // TODO: Remove this function once we have a proper view interface
-IDevice* MeshDeviceImpl::get_device(size_t row_idx, size_t col_idx) const {
+Device* MeshDeviceImpl::get_device(size_t row_idx, size_t col_idx) const {
     return get_device(MeshCoordinate{static_cast<uint32_t>(row_idx), static_cast<uint32_t>(col_idx)});
 }
 
-IDevice* MeshDeviceImpl::get_device(const MeshCoordinate& coord) const { return view_->impl().get_device(coord); }
+Device* MeshDeviceImpl::get_device(const MeshCoordinate& coord) const { return view_->impl().get_device(coord); }
 
 tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate& coord) const {
     return view_->get_fabric_node_id(coord);
@@ -1082,7 +1082,7 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
-    std::vector<MaybeRemote<IDevice*>> new_device_order;
+    std::vector<MaybeRemote<Device*>> new_device_order;
     std::vector<tt::tt_fabric::FabricNodeId> new_fabric_node_ids;
     new_device_order.reserve(num_devices);
     new_fabric_node_ids.reserve(num_devices);
@@ -1090,8 +1090,8 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
         auto line_coords = view_->get_line_coordinates();
         for (const auto& coord : line_coords) {
             new_device_order.push_back(
-                view_->impl().is_local(coord) ? MaybeRemote<IDevice*>::local(this->get_device(coord))
-                                              : MaybeRemote<IDevice*>::remote());
+                view_->impl().is_local(coord) ? MaybeRemote<Device*>::local(this->get_device(coord))
+                                              : MaybeRemote<Device*>::remote());
             new_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
         }
     } else {
@@ -1109,8 +1109,8 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
                 view_->shape());
             new_device_order.push_back(
                 new_mapped_devices.device_ids[i].is_local()
-                    ? MaybeRemote<IDevice*>::local(get_device(*new_mapped_devices.device_ids[i]))
-                    : MaybeRemote<IDevice*>::remote());
+                    ? MaybeRemote<Device*>::local(get_device(*new_mapped_devices.device_ids[i]))
+                    : MaybeRemote<Device*>::remote());
         }
         new_fabric_node_ids = std::move(new_mapped_devices.fabric_node_ids);
     }
@@ -1146,7 +1146,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
         // TODO #20966: Remove these calls
         for (auto* device : local_devices_) {
-            dynamic_cast<Device*>(device)->set_mesh_device(parent_mesh_);
+            device->set_mesh_device(parent_mesh_);
         }
 
         // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation
@@ -1181,10 +1181,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         for (auto* device : local_devices_) {
-            if (auto* physical_device = dynamic_cast<Device*>(device)) {
-                // Ensure slow dispatch is disabled regardless of current state
-                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
-            }
+            // Ensure slow dispatch is disabled regardless of current state
+            device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
         }
 
         mesh_command_queues_.clear();
@@ -1211,7 +1209,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
-    // we still wait for the kernel's natural num_layers exit so the GCB / receivers it
+    // we still wait for the kernel's natural num_layers exit so the pipes / receivers it
     // touches remain valid until it returns.
     if (tensor_prefetcher_) {
         if (tensor_prefetcher_->is_active()) {
@@ -1224,8 +1222,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         tensor_prefetcher_.reset();
     }
 
-    // DRISC L1 arena is torn down after the prefetcher manager so any GCB-owned
-    // allocation handles have already been released (GCBs are user-owned and the
+    // DRISC L1 arena is torn down after the prefetcher manager so any pipe-owned
+    // allocation handles have already been released (pipes are user-owned and the
     // user's invariant is to destroy them before close).
     drisc_l1_arena_.reset();
 
@@ -1535,7 +1533,7 @@ std::unordered_map<uint32_t, CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to
     // If `coord` maps to a local device, use it. Otherwise (a remote device) fall back to an arbitrary
     // local device's assignment; this is a best-effort approximation that is exact only when the mesh
     // is homogeneously harvested. Fail only when there is no local device to fall back to.
-    IDevice* device = nullptr;
+    Device* device = nullptr;
     if (view_->impl().is_local(coord)) {
         device = view_->impl().get_device(coord);
     } else {
@@ -1795,7 +1793,7 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         this->mesh_id_,
         *(active_sub_device_manager->id()));
     // Re-send any Tensor prefetcher requests captured during this trace's capture, before
-    // dispatching the trace so the host worker can begin filling the GCB as the consuming
+    // dispatching the trace so the host worker can begin filling the pipes as the consuming
     // program is dispatched. No-op (and no manager created) when the prefetcher is unused.
     if (tensor_prefetcher_) {
         tensor_prefetcher_->replay_trace(trace_id);
@@ -1884,9 +1882,7 @@ bool MeshDeviceImpl::initialize_impl(
         }
     } else {
         for (auto* device : this->get_devices()) {
-            if (auto* physical_device = dynamic_cast<Device*>(device)) {
-                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(true);
-            }
+            device->set_smc_dispatch_telemetry_slow_dispatch_enabled(true);
         }
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
@@ -1896,7 +1892,7 @@ bool MeshDeviceImpl::initialize_impl(
     Inspector::mesh_device_initialized(this);
 
     // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
-    // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
+    // cores so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
     if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
     }
@@ -2370,9 +2366,10 @@ void MeshDevice::reset_sub_device_stall_group() { pimpl_->reset_sub_device_stall
 uint32_t MeshDevice::num_sub_devices() const { return pimpl_->num_sub_devices(); }
 bool MeshDevice::is_mmio_capable() const { return pimpl_->is_mmio_capable(); }
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
-std::vector<IDevice*> MeshDevice::get_devices() const { return pimpl_->get_devices(); }
-IDevice* MeshDevice::get_device(ChipId physical_device_id) const { return pimpl_->get_device(physical_device_id); }
-IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return pimpl_->get_device(coord); }
+std::vector<IDevice*> MeshDevice::get_devices() const {
+    auto devices = pimpl_->get_devices();
+    return {devices.begin(), devices.end()};
+}
 tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {
     return pimpl_->get_fabric_node_id(coord);
 }

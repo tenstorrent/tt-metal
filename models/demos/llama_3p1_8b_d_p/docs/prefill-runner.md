@@ -14,8 +14,7 @@ The local default is 2048 tokens; CI selects 32768 tokens.
 | --- | --- |
 | Runtime contracts | The engine owns the input/cache. Compile warmup leaves no logical user prefix. All 32 layer acknowledgements follow device synchronization. Failed work cannot acknowledge success. |
 | `test_kv_cache_table.py` | Every one of 65,536 synthetic cache pages maps to the expected slot, layer, head and token position. Serialization preserves addresses and ownership. Real QKV/RoPE writes are readable through the table. |
-| `test_producer_runner_pcc[llama31]` | The producer sends the saved token IDs through the common runner. K and V for all 32 layers meet PCC ≥ 0.99 against the saved reference. Uses the common completion drain before readback and the existing fixture teardown. |
-| `run_multirank_pcc.sh llama31 sc1` | The standard launcher discovers the Galaxy, publishes the address table, checks the rank verdict for the configured active slots, and uses the shared shutdown path. |
+| `run_multirank_pcc.sh llama31 sc1` | The producer sends the saved token IDs through the common runner. K and V for all 32 layers meet PCC ≥ 0.99 against the saved reference. The standard launcher discovers the Galaxy, publishes the address table, checks the rank verdict for the configured active slots, and uses the shared shutdown path. |
 
 The SC1 tests validate the prefill source and table readback in a separate
 producer process. They do not transfer the cache to a second Galaxy or validate
@@ -52,29 +51,19 @@ Set this cache directory to persistent writable storage to retain generated
 fallbacks between jobs. Shared input goldens are never overwritten. The prompt
 file must contain enough text when generating longer references.
 
-The reuse policy is shared in `common/prefill/runners/trace_utils.py` and is also
-used by the common prompt-driven producer/runner test. Other models supply their
-own reference generator and, where needed, cache-format validation.
+The reuse policy is shared in `common/prefill/runners/trace_utils.py`. Other models
+supply their own reference generator and, where needed, cache-format validation.
 
-The direct pytest entry point remains available for local debugging:
-
-```bash
-export PREFILL_MODEL=llama_3p1_8b
-export PREFILL_TRACE_DIR=/path/to/golden
-python3 -m pytest -v --tt-arch blackhole \
-  'models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc[llama31]'
-```
-
-To exercise both allocated slots, set `PREFILL_PRODUCER_NUM_USERS=2`. One trace
-can be reused for both; use `PREFILL_PRODUCER_SLOT_TRACES=/path/A,/path/B` with
+To exercise both allocated slots, set `PREFILL_PRODUCER_NUM_USERS=2`; to allocate
+more, also set `PREFILL_NUM_USERS` (for example both to 4). One trace can be
+reused for every slot; use `PREFILL_PRODUCER_SLOT_TRACES=/path/A,/path/B` with
 different prompts to detect swapped slot identities. The synthetic table tests
 continue to check both allocated slots even when the model accuracy test uses one.
 
-The direct fixture uses the scenario in `tests/utils.py`; the standard launcher
-sources the model's `scripts/ci/runner_config.sh`. Both derive shape defaults from
-the model manifest and use the same reference validator. The direct test starts
-standalone child processes; the standard launcher also exercises tt-run discovery
-and MPI placement. Both use the common completion and teardown behavior.
+The standard launcher sources the model's `scripts/ci/runner_config.sh`, which
+derives shape defaults from the model manifest and validates the reference with the
+scenario in `tests/utils.py`. It exercises tt-run discovery, MPI placement, and the
+common completion and teardown behavior.
 
 For a local installation, set `TTRUN_DIR` to the directory containing its MPI
 `hostfile`; the default is `/etc/ttop`. `PREFILL_TCP_INTERFACE` selects the TCP
@@ -98,7 +87,8 @@ Reference validation runs on the MPI worker, where the model's Python dependenci
 ## Address-table contract
 
 The table contains 16 configurations, ordered `k_h0` through `k_h7`, then
-`v_h0` through `v_h7`. Each describes 32 layers, two slots and the configured token capacity.
+`v_h0` through `v_h7`. Each describes 32 layers, the `PREFILL_NUM_USERS` slots (two by default)
+and the configured token capacity.
 A page contains 32 tokens × 128 head elements: four BFP8 tiles, each 1088 bytes,
 for a total of 4352 bytes. K is stored after RoPE in Meta-interleaved order.
 
@@ -131,7 +121,7 @@ synthetic address test remains the focused 2K case. The standard launcher passed
 all-layer K/V PCC at 2K, 4K, 8K, 16K, 32K and 64K with one active slot, using
 prefixes of the saved 128K reference. Twelve consecutive 4K runs also passed
 without resets between runs. These checks use the unchanged PCC threshold of
-0.99. Two allocated slots remain a model constraint.
+0.99.
 
 ## Real loopback migration remains a separate gate
 
