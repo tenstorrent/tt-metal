@@ -154,3 +154,12 @@ def test_stochastic_round_is_exact_on_bf16_and_seeded():
     merged = weight.float() + 1e-3 * torch.randn(4096, generator=generator)
     first = _round_bf16_stochastic(merged, torch.Generator().manual_seed(0))
     assert torch.equal(first, _round_bf16_stochastic(merged, torch.Generator().manual_seed(0)))
+
+
+def test_stochastic_round_keeps_signed_zeros_infinities_and_nan():
+    special = torch.tensor([0.0, -0.0, float("inf"), float("-inf")]).repeat(1 << 12)
+    rounded = _round_bf16_stochastic(special, torch.Generator().manual_seed(0)).float()
+    assert torch.equal(rounded, special)
+    assert torch.equal(torch.signbit(rounded), torch.signbit(special))
+    nan = torch.full((1 << 12,), float("nan"))
+    assert _round_bf16_stochastic(nan, torch.Generator().manual_seed(0)).isnan().all()
