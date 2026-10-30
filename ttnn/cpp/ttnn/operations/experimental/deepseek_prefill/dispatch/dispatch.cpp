@@ -41,7 +41,8 @@ std::array<ttnn::Tensor, 2> dispatch(
     // A singleton communication axis has no peers, even when other axes have devices.
     // Preserve omitted-axis behavior and the existing local worker pipeline.
     const bool singleton_domain =
-        mesh_device->shape().mesh_size() == 1 || (cluster_axis == 0 && mesh_device->shape()[0] == 1);
+        mesh_device->shape().mesh_size() == 1 ||
+        (cluster_axis.has_value() && *cluster_axis <= 1 && mesh_device->shape()[*cluster_axis] == 1);
     const bool local_only = singleton_domain && dispatch_group_size == 1;
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(
