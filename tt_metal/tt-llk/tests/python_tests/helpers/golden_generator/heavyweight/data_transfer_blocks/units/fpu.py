@@ -40,12 +40,22 @@ class Fpu:
     """What the FPU computes, and what its writes cost."""
 
     def __init__(
-        self, l1: L1Support, *, mantissa_split: Optional[Tuple[int, int]] = None
+        self,
+        l1: L1Support,
+        *,
+        mantissa_split: Optional[Tuple[int, int]] = None,
+        dest_ties_away: bool = False,
     ) -> None:
         # Mantissa bits the multiplier takes from each operand per phase, as
         # (srcA, srcB). None means this architecture's multiplier is not
         # modelled: multiplies are exact and math_fidelity is ignored.
         self.mantissa_split = mantissa_split
+
+        # Rounding mode for a 16-bit Dest write. False is the IEEE default,
+        # ties to even. Blackhole rounds ties away from zero, which only shows
+        # up where the dropped bits are exactly half an ULP.
+        self.dest_ties_away = dest_ties_away
+
         self.l1 = l1
 
     # ------------------------------------------------------------------
@@ -184,7 +194,7 @@ class Fpu:
         self.l1.check_dest_format(dest_format)
         if current is not None:
             values = self._accumulate(values, current)
-        return to_dest_storage(values, dest_format)
+        return to_dest_storage(values, dest_format, self.dest_ties_away)
 
     @staticmethod
     def _accumulate(values: torch.Tensor, current: torch.Tensor) -> torch.Tensor:

@@ -234,7 +234,11 @@ class BlackholeArch(ArchGolden):
 
     l1 = _BLACKHOLE_L1
     unpack = Unpack(_BLACKHOLE_L1)
-    fpu = Fpu(_BLACKHOLE_L1)
+    # A 16-bit Dest write rounds ties away from zero here, not to even. Only
+    # visible where the dropped bits are exactly half an ULP, which an add or
+    # subtract of two datums already on the Dest grid hits often. Measured on
+    # a card; Wormhole is left at the IEEE default because nobody has checked.
+    fpu = Fpu(_BLACKHOLE_L1, dest_ties_away=True)
     pack = Pack(_BLACKHOLE_L1)
 
 
