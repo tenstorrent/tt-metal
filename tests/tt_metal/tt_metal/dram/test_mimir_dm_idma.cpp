@@ -115,8 +115,6 @@ bool is_remote_case(IdmaCase idma_case) {
 uint32_t remote_source_cce() { return sibling_cce(0); }
 uint32_t remote_destination_cce() { return next_mimir_cce(0); }
 
-// Topology first, then mimir_remote_preflight_result() for remote cases, which reads the Cluster. Both run before any
-// device is opened.
 std::string idma_skip_reason(IdmaCase idma_case) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
         return watcher_reason;
@@ -129,11 +127,8 @@ std::string idma_skip_reason(IdmaCase idma_case) {
     if (idma_case == IdmaCase::LocalGddr1 && dram_views_for_channel(configured_soc_desc(), 0).size() < 2) {
         return "Mimir 0 has one DRAM view; LocalGddr1 needs a second.";
     }
-    if (is_remote_case(idma_case)) {
-        if (topology.num_mimirs < 2) {
-            return "Remote iDMA cases need a 2x descriptor (two Mimirs).";
-        }
-        return mimir_remote_preflight_result();
+    if (is_remote_case(idma_case) && topology.num_mimirs < 2) {
+        return "Remote iDMA cases need a 2x descriptor (two Mimirs).";
     }
     return "";
 }
@@ -556,6 +551,9 @@ TEST_P(MimirDmIdma, Copy) {
     const IdmaCase idma_case = GetParam();
     if (const std::string skip_reason = idma_skip_reason(idma_case); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
+    }
+    if (is_remote_case(idma_case)) {
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();

@@ -265,10 +265,7 @@ TEST_P(MimirHostDramView, PatternReadback) {
     if (view >= topology.num_views) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_views << " DRAM views.";
     }
-    const std::string& identity_mismatch = mimir_identity_result();
-    if (!identity_mismatch.empty()) {
-        GTEST_SKIP() << identity_mismatch;
-    }
+    MIMIR_REQUIRE_IDENTITY();
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
     MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, false);
@@ -337,10 +334,7 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
     if (view >= topology.num_views) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_views << " DRAM views.";
     }
-    const std::string& identity_mismatch = mimir_identity_result();
-    if (!identity_mismatch.empty()) {
-        GTEST_SKIP() << identity_mismatch;
-    }
+    MIMIR_REQUIRE_IDENTITY();
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
     MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, false);
@@ -429,10 +423,7 @@ INSTANTIATE_TEST_SUITE_P(
 TEST(MimirHostDram, ReconnectPersists) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    const std::string& identity_mismatch = mimir_identity_result();
-    if (!identity_mismatch.empty()) {
-        GTEST_SKIP() << identity_mismatch;
-    }
+    MIMIR_REQUIRE_IDENTITY();
     const Cluster& metal_cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& metal_soc = metal_cluster.get_soc_desc(kChipId);
     MIMIR_HOST_ONLY_GUARD(metal_cluster, metal_soc, kChipId, true);
@@ -510,10 +501,7 @@ TEST(MimirHostDram, ReconnectPersists) {
 TEST(MimirHostDram, HostSideRejections) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    const std::string& identity_mismatch = mimir_identity_result();
-    if (!identity_mismatch.empty()) {
-        GTEST_SKIP() << identity_mismatch;
-    }
+    MIMIR_REQUIRE_IDENTITY();
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
     MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, true);

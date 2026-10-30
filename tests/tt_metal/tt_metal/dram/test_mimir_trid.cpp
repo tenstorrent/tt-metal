@@ -1825,9 +1825,7 @@ protected:
         if (topology_from(configured_soc_desc()).num_mimirs < 2) {
             GTEST_SKIP() << "Remote trid cases need a 2x descriptor (two Mimirs).";
         }
-        if (const std::string preflight = mimir_remote_preflight_result(); !preflight.empty()) {
-            GTEST_SKIP() << preflight;
-        }
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
 
     void TearDown() override { close_device(); }
@@ -2038,9 +2036,7 @@ protected:
         if (num_cces <= std::max({route.sender_cce, route.receiver_cce, route.stream_cce})) {
             GTEST_SKIP() << "WithPrefetcher needs a 2x descriptor; this one exposes " << num_cces << " CCEs.";
         }
-        if (const std::string preflight = mimir_remote_preflight_result(); !preflight.empty()) {
-            GTEST_SKIP() << preflight;
-        }
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     }
 };
 

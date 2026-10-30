@@ -377,10 +377,6 @@ std::string identity_mismatch_text(const Cluster& cluster, const metal_SocDescri
 
 // Host suites: identity, then every setup and CCE remap register against Chippy.
 std::string identity_result() {
-    const std::string watcher_reason = mimir_watcher_skip_reason();
-    if (!watcher_reason.empty()) {
-        return watcher_reason;
-    }
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(0);
     const std::string identity = identity_mismatch_text(cluster, soc);
@@ -393,10 +389,6 @@ std::string identity_result() {
 
 // Remote suites, before CreateDevice: identity, then SS_BAR, ATT and interleave. No DMRISC registers.
 std::string preflight_result() {
-    const std::string watcher_reason = mimir_watcher_skip_reason();
-    if (!watcher_reason.empty()) {
-        return watcher_reason;
-    }
     const Cluster& cluster = MetalContext::instance().get_cluster();
     const metal_SocDescriptor& soc = cluster.get_soc_desc(0);
     const std::string identity = identity_mismatch_text(cluster, soc);

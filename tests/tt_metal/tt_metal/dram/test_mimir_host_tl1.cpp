@@ -365,9 +365,7 @@ TEST_P(MimirHostTl1Cce, PerCceVisibility) {
     if (cce_index >= topology.num_cces) {
         GTEST_SKIP() << "Descriptor exposes only " << topology.num_cces << " CCEs.";
     }
-    if (!mimir_identity_result().empty()) {
-        GTEST_SKIP() << mimir_identity_result();
-    }
+    MIMIR_REQUIRE_IDENTITY();
 
     constexpr ChipId chip = 0;
     Cluster& cluster = MetalContext::instance().get_cluster();
@@ -440,9 +438,7 @@ TEST(MimirHostTl1, BoundaryAndIsolation) {
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    if (!mimir_identity_result().empty()) {
-        GTEST_SKIP() << mimir_identity_result();
-    }
+    MIMIR_REQUIRE_IDENTITY();
 
     constexpr ChipId chip = 0;
     Cluster& cluster = MetalContext::instance().get_cluster();
@@ -505,9 +501,7 @@ TEST(MimirHostTl1, HostSideRejections) {
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    if (!mimir_identity_result().empty()) {
-        GTEST_SKIP() << mimir_identity_result();
-    }
+    MIMIR_REQUIRE_IDENTITY();
 
     constexpr ChipId chip = 0;
     Cluster& cluster = MetalContext::instance().get_cluster();
@@ -580,9 +574,7 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
-    if (!mimir_identity_result().empty()) {
-        GTEST_SKIP() << mimir_identity_result();
-    }
+    MIMIR_REQUIRE_IDENTITY();
 
     constexpr ChipId chip = 0;
     Cluster& cluster = MetalContext::instance().get_cluster();
