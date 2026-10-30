@@ -37,7 +37,8 @@ struct BuildEnvInfo {
     std::string firmware_root_path;
 };
 
-// Singleton class to generate and hold build environments, build keys, and build states.
+// Generates and holds build environments, build keys, and build states. Each MetalContext owns one, built from that
+// context's HAL; standalone tools (offline compile, precompile_fw) construct their own.
 class BuildEnvManager {
 public:
     explicit BuildEnvManager(const Hal& hal);
@@ -47,30 +48,12 @@ public:
     BuildEnvManager(BuildEnvManager&&) = delete;
     BuildEnvManager& operator=(BuildEnvManager&&) = delete;
 
-    // Returns the per-context BuildEnvManager for the supplied ContextId, seeding its HAL on
-    // first call from that ContextId's MetalContext. Each ContextId gets its own
-    // BuildEnvManager instance so that contexts with different dispatch configurations
-    // (e.g. silicon vs mock) do not share device_id_to_build_env_ slots and overwrite each
-    // other's build_keys. Required to fix the mock/silicon coexistence regression
-    // (#38445 follow-up).
+    // Deprecated: use MetalContext::build_env_manager(). Returns the BuildEnvManager owned by the live MetalContext
+    // for `context_id`; fatal if that context does not exist.
     static BuildEnvManager& get_instance(ContextId context_id);
 
-    // Legacy no-arg accessor that returns the DEFAULT_CONTEXT_ID instance. Asserts that the
-    // default context's BuildEnvManager has been seeded (driven by MetalContext::create_*),
-    // which is true for every reader that runs after the default-context MetalEnv has been
-    // constructed. Callers that may run under a non-default ContextId must use the
-    // get_instance(ContextId) overload instead.
+    // Deprecated: use MetalContext::build_env_manager(). Equivalent to get_instance(DEFAULT_CONTEXT_ID).
     static BuildEnvManager& get_instance();
-
-    // Internal seeding entry: seeds the BuildEnvManager slot for the given ContextId with the
-    // supplied HAL on first call, no-op thereafter. Takes a HAL by reference so callers that
-    // already hold g_instance_mutex (e.g. MetalContext::create_*) can seed without re-entering
-    // MetalContext::instance(ContextId). Idempotent and thread-safe.
-    static void seed_if_unseeded_with_hal(ContextId context_id, const Hal& hal);
-
-    // Frees the per-context slot so a recycled context_id seeds fresh on next create.
-    // No-op on an unseeded slot.
-    static void destroy_for_context(ContextId context_id);
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.  This requires a live device to be available at device_id.
