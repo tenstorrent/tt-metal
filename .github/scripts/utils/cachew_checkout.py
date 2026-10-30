@@ -86,6 +86,8 @@ def tracked_consumers(root):
     paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
     for value in paths:
         path = Path(value)
+        if value.startswith(EXCLUDED_PREFIXES):
+            continue
         parts = path.parts
         if ".github" not in parts:
             continue
