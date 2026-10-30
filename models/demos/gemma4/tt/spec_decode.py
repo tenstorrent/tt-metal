@@ -199,20 +199,22 @@ class SpeculativeDecoder:
         # batched packed verify). Captured once, replayed per iter (prefill never
         # traced). See _capture_fused_trace_batched / _generate_fused_traced_batched.
         self._fused_trace_batched = None
-        # Seed mode for the fused greedy trace. "shift" (default) is the fast
-        # production mode: it reuses the previous verify hidden row as an
-        # approximate drafter seed and repairs the anchor KV at the next verify.
-        # "reseed" is the exact assistant contract: run a batch=1 target seed
-        # inside the fused trace before drafting, so the drafter sees the current
-        # anchor's exact target hidden/KV. It raises acceptance, but the extra
-        # target forward currently costs more than it saves; keep it as an A/B
-        # correctness/reference mode via GEMMA4_SPEC_FUSED_RESEED=1.
+        # Seed mode for the fused greedy trace. "shift" (default) seeds the next
+        # drafter round with one verify hidden row (see _fused_shift_seed below)
+        # and repairs the anchor KV at the next verify. "reseed" runs a batch=1
+        # target forward on the new anchor inside the fused trace before
+        # drafting, so the drafter sees that anchor's own hidden/KV. It costs an
+        # extra target forward and accepts less than the `current` row (E2B, K=3:
+        # 1.16/3 vs 1.24/3); keep it as an A/B mode via GEMMA4_SPEC_FUSED_RESEED=1.
         self._fused_reseed = os.environ.get("GEMMA4_SPEC_FUSED_RESEED", "0") == "1"
-        # Cheap approximate seed-row selection for fused shift mode. `next` is
-        # the original position-aligned row p+m+1. `current` uses row m (usually
-        # the last matched target row), and `last_accepted` uses row m-1 when at
-        # least one draft was accepted. These are A/B knobs for acceptance vs
-        # seed quality without paying a full target reseed.
+        # Verify row that seeds the next drafter round in shift mode, on every
+        # fused route (single-user and batched, traced and eager). `current`
+        # (row m) pairs the new anchor g[m] with the hidden state that predicted
+        # it, as HF's MTP candidate generator does (hidden_states[n_matches] with
+        # the last token). `next` (row m+1) is at the anchor's position but has
+        # read the rejected draft; `last_accepted` uses row m-1. Measured, K=3,
+        # current vs next accepted: E2B single-user 1.14/3 vs 0.79/3 (8 prompts),
+        # E2B batched B=8 1.09/3 vs 0.78/3, 12B single-user 1.66/3 vs 1.13/3.
         self._fused_shift_seed = os.environ.get("GEMMA4_SPEC_FUSED_SHIFT_SEED", "current")
         self._last_route = None
         self._last_metrics = None
@@ -295,8 +297,8 @@ class SpeculativeDecoder:
             return min(accepted, K)
         if self._fused_shift_seed == "last_accepted":
             return max(min(accepted, K) - 1, 0)
-        # Default: position-aligned next row. When all K drafts are accepted,
-        # there is no row K+1, so fall back to row K.
+        # `next`: row m+1. When all K drafts are accepted there is no row K+1,
+        # so fall back to row K.
         return min(accepted + 1, K)
 
     # ── device-tensor builders ────────────────────────────────────────────
@@ -1479,8 +1481,8 @@ class SpeculativeDecoder:
 
         Each iteration reads back only the ``2K+1`` token ids; the drafter
         recurrence (argmax + re-embed) and the verify-input assembly stay on
-        device. The next drafter seed is SHIFT-mode: the verify hidden at the new
-        anchor position ``p+m+1`` (slice ``vhidden[m+1]``) — no extra reseed
+        device. The next drafter seed is the verify hidden row chosen by
+        ``_fused_shift_seed_row`` (row ``m`` by default) — no extra reseed
         forward, so the whole iteration is one device program (this is the eager
         twin of the fused trace). Returns ``(generated_ids, accepts_per_iter)``.
         PLI targets compute PLI on device in either verify layout.
@@ -2643,7 +2645,7 @@ class SpeculativeDecoder:
                 g = [gids[b * P + j] for j in range(P)]
                 m = next((i for i in range(K) if drafts[i] != g[i]), K)
                 committed = drafts[:m] + [g[m]]
-                rows_b.append(min(m + 1, K))
+                rows_b.append(self._fused_shift_seed_row(m, K))
                 if done[b]:
                     continue
                 accepts[b].append(m)
@@ -2733,8 +2735,7 @@ class SpeculativeDecoder:
             for b in range(B):
                 row_logits = [vlogits[b * P + j] for j in range(P)]
                 m, committed = self._accept_greedy(drafts_b[b], row_logits)
-                # next drafter seed (shift): position-aligned hidden row min(m+1,K).
-                row = min(m + 1, K)
+                row = self._fused_shift_seed_row(m, K)
                 new_h = ttnn.clone(ttnn.slice(vhidden, [0, 0, b * P + row, 0], [1, 1, b * P + row + 1, backbone]))
                 anchor_h[b].deallocate(True)
                 anchor_h[b] = new_h
