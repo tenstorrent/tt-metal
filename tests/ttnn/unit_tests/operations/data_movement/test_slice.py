@@ -1518,6 +1518,41 @@ def test_slice_subcores(input_shape, dim, start, end, step, layout, args_as_tens
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("pad_value", [None, 0.0])
+def test_slice_full_range_preallocated_subcores(device, layout, dtype, pad_value):
+    """A full-range destination copy must honor the grid and preserve stored bits."""
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 1))])
+    manager = device.create_sub_device_manager([ttnn.SubDevice([grid])], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        tiny = torch.finfo(dtype).tiny
+        values = [0.0, -0.0, float("inf"), float("-inf"), tiny, -tiny, tiny / 2, -tiny / 2]
+        expected = torch.tensor(values, dtype=dtype).repeat(1024).reshape(1, 1, 64, 128)
+        # Convert the layout on the host so device tilization cannot normalize
+        # negative zero or subnormal values before the slice under test.
+        source = ttnn.to_device(ttnn.from_torch(expected, layout=layout), device)
+        destination = ttnn.empty_like(source)
+        address = destination.buffer_address()
+        bits = torch.int16 if dtype == torch.bfloat16 else torch.int32
+        for _ in range(2):
+            result = ttnn.slice(
+                source,
+                [0, 0, 0, 0],
+                list(source.shape),
+                output_tensor=destination,
+                sub_core_grids=grid,
+                pad_value=pad_value,
+            )
+            assert result.buffer_address() == address
+            actual = ttnn.to_torch(destination).contiguous()
+            assert torch.equal(actual.view(bits), expected.view(bits))
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
 @pytest.mark.parametrize(
     "input_shape, begins, ends, num_cores_x, num_cores_y, shard_shape, shard_layout",
     [

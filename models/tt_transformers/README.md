@@ -190,6 +190,8 @@ The above examples are run in `ModelOptimizations.performance` mode. You can ove
 
 NOTE: trace region sizes are declared in [`models/model_trace_region_sizes.yaml`](../model_trace_region_sizes.yaml) and resolved at device-open time via [`get_supported_trace_region_size`](demo/trace_region_config.py) (which delegates to [`resolve_trace_region_size`](../demos/utils/trace_region_sizes.py)). A `(model, SKU)` pair without a YAML entry is not an error: resolution logs an info message and falls back to `TRACE_REGION_SIZE_DYNAMIC` (`0`, dynamic allocation). Add an explicit entry when a model needs a fixed reserved trace region.
 
+See [text generator trace I/O](tt/trace_io.md) for preparation order, shared buffers, and borrowed output lifetimes.
+
 ## Details
 
 ### Extra compatibility settings for non-Llama models

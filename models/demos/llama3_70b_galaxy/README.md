@@ -1,5 +1,7 @@
 # Llama3.3-70
 
+See [trace I/O lifetime](tt/trace_io.md) for preparation and borrowed device-output ownership.
+
 ## Platforms:
     Galaxy (WH)
 
@@ -174,14 +176,14 @@ Qwen3-32B is served by the same Galaxy generator; select it with `TT_QWEN3_TEXT_
 HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "Qwen/Qwen3-32B" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 184915840}}'
 ```
 
-On a Blackhole Galaxy the decode path runs column-axis collectives that require a 2D-torus fabric (1D fabrics fail on the cross-column route), so swap the fabric config and worker L1 size:
+On a Blackhole Galaxy the decode path runs column-axis collectives that require a 2D-torus fabric (1D fabrics fail on the cross-column route), so use the following fabric and L1 settings. The small L1 pool keeps cached collective semaphores separate from prefill workspace and is required when enabling the Qwen prefetcher (`QWEN_BH_PREFETCHER=1`):
 ```
-HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "Qwen/Qwen3-32B" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "trace_region_size": 184915840}}'
+HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "Qwen/Qwen3-32B" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "l1_small_size": 16384, "trace_region_size": 184915840}}'
 ```
 
 For a quick offline sanity check without the HTTP server, use the offline example with the same flags (the async engine is required for lane-DP):
 ```
-HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy python plugins/vllm-tt-plugin/examples/offline_inference_tt.py --model "Qwen/Qwen3-32B" --async_engine --data_parallel_size 4 --max_seqs_in_batch 8 --greedy_sampling --max_tokens 32 --max_model_len 4096 --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "trace_region_size": 184915840}}'
+HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=<qwen_cache_dir> MESH_DEVICE=TG TT_QWEN3_TEXT_VER=qwen3_32b_galaxy python plugins/vllm-tt-plugin/examples/offline_inference_tt.py --model "Qwen/Qwen3-32B" --async_engine --data_parallel_size 4 --max_seqs_in_batch 8 --greedy_sampling --max_tokens 32 --max_model_len 4096 --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_2D_TORUS_XY", "worker_l1_size": 1345000, "l1_small_size": 16384, "trace_region_size": 184915840}}'
 ```
 
 After the server is up and running you can interact with it by sending prompt files.

@@ -845,10 +845,9 @@ class Model:
         """Row-parallel batched prefill: 1 user per row per iteration.
 
 
-        Allocation only -- do not compile from here. Compiling a decode program at this point makes the
-        capture below deadlock in the MoE dispatch, and compiling one before any prefill has run deadlocks
-        in the MoE combine's global-semaphore setup instead. That is why the rest of decode trace setup
-        still happens later, in the decode loop, with this trace already live.
+        The generator prepares decode programs and persistent I/O before entering
+        this method. Its prefill capture closes I/O preparation, so the first
+        decode must reuse those prepared buffers rather than allocate lazily.
 
         ``empty_slots``: optional list of decoder slot ids, one per input user.
         If supplied, users are first reordered so that array-index ``i`` lands

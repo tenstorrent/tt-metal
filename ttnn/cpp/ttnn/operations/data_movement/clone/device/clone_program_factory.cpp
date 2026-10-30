@@ -81,14 +81,17 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
              core_group_1_result,
              core_group_2_result,
              num_units_per_core_group_1_result,
-             num_units_per_core_group_2_result] = split_work_to_cores(compute_with_storage_grid_size, num_units);
+             num_units_per_core_group_2_result] =
+                operation_attributes.sub_core_grids.has_value()
+                    ? split_work_to_cores(*operation_attributes.sub_core_grids, num_units)
+                    : split_work_to_cores(compute_with_storage_grid_size, num_units);
         num_cores = num_cores_result;
         all_cores = all_cores_result;
         core_group_1 = core_group_1_result;
         core_group_2 = core_group_2_result;
         num_units_per_core_group_1 = num_units_per_core_group_1_result;
         num_units_per_core_group_2 = num_units_per_core_group_2_result;
-        cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y);
+        cores = corerange_to_cores(all_cores, num_cores, false);
     }
 
     auto alignment = input.buffer()->alignment();
@@ -257,10 +260,10 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
     KernelRunArgs writer_ra{.kernel = WRITER};
 
     uint32_t start_id = 0;
-    uint32_t num_cores_group_1 = core_group_1.num_cores();
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
-        uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
+        uint32_t num_units_per_core =
+            core_group_1.contains(core) ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
         if (is_sharded) {
             if (tilized) {
