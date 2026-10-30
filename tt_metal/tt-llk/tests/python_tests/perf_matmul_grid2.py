@@ -284,6 +284,7 @@ def test_perf_matmul_grid2(
                     dims.ct_dim,
                     dims.kt_dim,
                     throttle=throttle,
+                    l1_acc=l1_acc == L1Accumulation.Yes,
                 )
             ),
             MATMUL_L1_ACC(l1_acc),

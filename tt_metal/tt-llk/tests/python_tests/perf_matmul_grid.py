@@ -272,6 +272,7 @@ def test_perf_matmul_grid(
                     dims.ct_dim,
                     dims.kt_dim,
                     throttle=throttle,
+                    l1_acc=l1_acc == L1Accumulation.Yes,
                 )
             ),
             MATMUL_L1_ACC(l1_acc),
@@ -283,7 +284,7 @@ def test_perf_matmul_grid(
         DEST_SYNC(dest_sync),
         THROTTLE_LEVEL(throttle),
         *form_keys,
-        MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle)),
+        MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle, l1_acc=l1_acc == L1Accumulation.Yes)),
         MATMUL_L1_ACC(l1_acc),
     ]
 
