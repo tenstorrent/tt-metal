@@ -14,9 +14,14 @@
 // With PIN_ROWS > 0 the pin tensor holds one entry per row instead (PIN_ROWS uint32, read whole): q = pin[i], and a
 // SENTINEL entry pins nothing (the decode tile: entry u is user u's newest row, or the sentinel when it is idle).
 //
+// Bound (runtime arg 7, TT_V41_PREFILL_INDEX_BOUND): with 1 the
+// outputs past the pinned one (segments starting after the row's newest element, i.e. rows the query may not see)
+// are written -inf, so an unmasked score (the kernel's output without the additive visibility mask) selects as the
+// masked one did. 0: as before (the input carries the mask, or the pin is a column within a gathered superblock).
+//
 // compile_time_args = [cb_out, cb_pin, SEG, BLOCK, OUT_WIDTH, VALID_OUT, PIN_ROWS, TensorAccessorArgs(out)...,
 //                      TensorAccessorArgs(pin)...]
-// runtime args      = [dst_addr, row_start, row_count, chunks_per_row, pin_addr, pin_base, pin_mask]
+// runtime args = [dst_addr, row_start, row_count, chunks_per_row, pin_addr, pin_base, pin_mask, bound]
 
 #include <cstdint>
 
@@ -31,6 +36,7 @@ void kernel_main() {
     const uint32_t pin_addr = get_arg_val<uint32_t>(4);
     const uint32_t pin_base = get_arg_val<uint32_t>(5);
     const uint32_t pin_mask = get_arg_val<uint32_t>(6);
+    const uint32_t bound = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_pin = get_compile_time_arg_val(1);
@@ -50,6 +56,8 @@ void kernel_main() {
     constexpr uint32_t OUT_PER_CHUNK = BLOCK * 32 * PER_TILE;
     constexpr uint32_t TILE_U16 = 32 * 32;
     constexpr uint16_t POS_INF = 0x7F80;
+    constexpr uint16_t NEG_INF = 0xFF80;
+    constexpr uint32_t NO_PIN = 0xFFFFFFFFu;
 
     const auto out = TensorAccessor(out_args, dst_addr);
     DataflowBuffer res(cb_out);
@@ -68,7 +76,7 @@ void kernel_main() {
     for (uint32_t row = row_start; row < row_start + row_count; ++row) {
         const uint32_t q = PIN_ROWS == 0 ? query_first + row : pins[row];
         const uint32_t e = (pin_base + q) & pin_mask;
-        const uint32_t pin_col = (q != SENTINEL || PIN_ROWS == 0) && e / SEG < VALID_OUT ? e / SEG : 0xFFFFFFFFu;
+        const uint32_t pin_col = (q != SENTINEL || PIN_ROWS == 0) && e / SEG < VALID_OUT ? e / SEG : NO_PIN;
         const uint64_t row_addr = out.get_noc_addr(row, 0);
         for (uint32_t c = 0; c < chunks; ++c) {
             const uint32_t first = c * OUT_PER_CHUNK;
@@ -89,6 +97,12 @@ void kernel_main() {
             res.pop_front(RESULTS);
             if (pin_col >= first && pin_col < first + OUT_PER_CHUNK) {
                 dst[pin_col - first] = POS_INF;
+            }
+            if (bound != 0 && pin_col != NO_PIN && pin_col + 1 < first + OUT_PER_CHUNK) {
+                // the segments after the pinned one hold rows past the query: not visible
+                for (uint32_t o = pin_col + 1 > first ? pin_col + 1 : first; o < first + OUT_PER_CHUNK; ++o) {
+                    dst[o - first] = NEG_INF;
+                }
             }
             if (first < OUT_WIDTH) {
                 const uint32_t n = OUT_WIDTH - first < OUT_PER_CHUNK ? OUT_WIDTH - first : OUT_PER_CHUNK;

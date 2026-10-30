@@ -32,6 +32,7 @@ reference masks the rest to -inf), so on long rows it scores only those rows (``
 a gather of its candidate blocks are cheaper (``SPARSE_SCORE_MIN_WIDTH``).
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -62,6 +63,19 @@ GATHER_INDEX_WIDTH = 60 * 32
 # (LB 2x4, 640 rows at 56,320 columns: direct top-512 1.43 ms; gather_runs of all 2048 blocks 0.62 ms + top-512 of
 # 16,384 0.31 ms + the id mapping; the gather's sequential row read and the direct top-k both grow with the row)
 SUBSET_TOPK_MIN_WIDTH = 1 << 15
+# TT_V41_PREFILL_INDEX_BOUND=1: in generic mode the ratio-1
+# candidate source selects over its unmasked score when its selection runs through the candidate blocks (the long
+# buckets): ``segment_max`` writes -inf for the segments past the row's pin and ``gather_runs`` for the gathered
+# elements past it, which is where the additive visibility mask was read, so the chunk's ratio-1 mask build (three
+# passes over rows x W) and the row-major add a layer (~12 ms a 1M-bucket chunk) go. Bit-identical
+# selections but for the sign of a zero score (the add turned a -0.0 into +0.0; both are ties). Default off.
+INDEX_BOUND = "TT_V41_PREFILL_INDEX_BOUND"
+
+
+def prefill_index_bound() -> bool:
+    return os.environ.get(INDEX_BOUND, "0") == "1"
+
+
 # A candidate index source scores only its candidate rows (``candidate_scores``: a per-query gather of its 16,384
 # index-K rows, a fixed ~2.7 GB per chip at 640 queries, plus a relayout of the visible index-K) from this score width
 # up; below it the full-row score (index-K read once per query tile-row) and ``gather_runs`` of its candidate blocks are
@@ -310,18 +324,21 @@ class TtV41Indexer(LightweightModule):
         q = self.qdq(self.rope(q, cos, sin))
         return q, self._query_shard(self.ccl.tp_all_reduce(ttnn.linear(x, self.weights_proj)))
 
-    def scores(self, x, qr, index_k, tables, start: int, length: int, index_k_tiled=None):
+    def scores(self, x, qr, index_k, tables, start: int, length: int, index_k_tiled=None, masked: bool = True):
         """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] row-major,
         ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major DRAM-interleaved,
         -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows).
         ``index_k_tiled``: the state's tiled twin of ``index_k`` with a zero tile past its rows
         (``V41PrefillState.index_k_tiled``), read instead of ``index_k`` by the generic path under the chunk's shared
-        masks (``V41ChunkTables.chunk_mask``)."""
+        masks (``V41ChunkTables.chunk_mask``). ``masked=False`` (generic only, ``TT_V41_PREFILL_INDEX_BOUND``): the
+        kernel's output as it is, the columns at or past a query's visible count unmasked: the caller's selection
+        bounds them (``select`` with ``bounded``)."""
         visible, width = self._width(start, length, tables)
         q, w = self._query(x, qr, tables, start)
         q_rows = q.shape[2]
-        mask = tables.chunk_mask(self.ratio, width + 32) if tables.generic else None
-        if mask is not None and index_k_tiled is not None:
+        assert masked or (tables.generic and index_k_tiled is not None), "an unmasked score needs the generic path"
+        mask = tables.chunk_mask(self.ratio, width + 32) if tables.generic and masked else None
+        if (mask is not None or not masked) and index_k_tiled is not None:
             # the tiled prefix with its pad tile in one slice (TT_V41_PREFILL_MASK_ONCE)
             k = ttnn.slice(index_k_tiled, [0, 0, 0, 0], [1, 1, width + 32, self.head_dim])
         else:
@@ -333,6 +350,10 @@ class TtV41Indexer(LightweightModule):
             # row; K is padded by one zero tile for it), and the rows a query may not see (at or past its visible
             # count, a device input) are masked over the whole score: one add, the same graph at every start
             score = self._score(q, k, w, chunk_start_idx=width)  # [1, 1, q_rows, width + 32]
+            if not masked:
+                # TT_V41_PREFILL_INDEX_BOUND: no mask build, no add; the selection kernels bound the rows past
+                # each query's pin (``candidates`` and ``_topk_in_blocks`` with ``bounded``)
+                return score, visible
             if mask is not None:
                 # the chunk's shared row-major mask (TT_V41_PREFILL_MASK_ONCE): the add runs row-major on the
                 # kernel's output, no layout round trip of the score, no mask build a layer
@@ -368,24 +389,26 @@ class TtV41Indexer(LightweightModule):
 
     # ---- selection (B11 candidates, B12 top-k) on a row-major score [1, 1, R, W] (W a multiple of 32) ----
 
-    def candidates(self, score, tables, start: int) -> CandidateBlocks:
+    def candidates(self, score, tables, start: int, bounded: bool = False) -> CandidateBlocks:
         """B11 on the candidate source's score: per query the CANDIDATE_TOPK_BLOCKS best blocks by max score, its
-        newest row's block pinned in (``v41.select_candidate_blocks``)."""
+        newest row's block pinned in (``v41.select_candidate_blocks``). ``bounded``: the score is unmasked
+        (``scores`` with ``masked=False``) and the kernels write -inf past each row's pin instead."""
         block, k = self.config.CANDIDATE_BLOCK_SIZE, self.config.CANDIDATE_TOPK_BLOCKS
         width = score.shape[3]
         if width // block <= k:
+            assert not bounded, "an unmasked score needs the candidate blocks' selection"
             return CandidateBlocks(None)
         assert start % SUPERBLOCK == 0, f"chunk start {start} does not begin a superblock"
         (pin, pin_base), every = tables.pin(start), 0xFFFFFFFF
         if width // SUPERBLOCK <= k:
             # one level: block maxima of the whole row (block ids in order), the newest row's block pinned to +inf
-            return CandidateBlocks(_topk(segment_max(score, block, pin, pin_base, every), k))
+            return CandidateBlocks(_topk(segment_max(score, block, pin, pin_base, every, bound=bounded), k))
         # two levels: the top-k blocks lie in the top-k superblocks by max (the newest row's superblock pinned first);
         # their rows are gathered in rank order and ranked by block max, the newest row pinned again in rank 0 (at
         # column (start + q) % 32; chunk starts and per-chip query offsets are multiples of 32)
         per = SUPERBLOCK // block
-        sb = _topk(segment_max(score, SUPERBLOCK, pin, pin_base, every), k)  # sentinels gather -inf superblocks
-        rows = gather_runs(score, sb, SUPERBLOCK)
+        sb = _topk(segment_max(score, SUPERBLOCK, pin, pin_base, every, bound=bounded), k)  # sentinels: -inf sbs
+        rows = gather_runs(score, sb, SUPERBLOCK, *((pin, pin_base) if bounded else ()))
         pos = ttnn.to_layout(_topk(segment_max(rows, block, pin, pin_base, SUPERBLOCK - 1), k), ttnn.TILE_LAYOUT)
         rank = _min(ttnn.bitwise_right_shift(pos, per.bit_length() - 1), k - 1)  # pos = rank * per + sub-block
         c = ttnn.to_layout(_gather_cols(sb, ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT)
@@ -460,11 +483,12 @@ class TtV41Indexer(LightweightModule):
         ids_rep = ttnn.concat([ids_u] * n, dim=2)
         return ttnn.slice(self._topk_in_rows(rows_n, ids_rep, k), [0, 0, 0, 0], [1, 1, 1, k])
 
-    def _topk_in_blocks(self, score, ids, k: int):
+    def _topk_in_blocks(self, score, ids, k: int, pin=None):
         """Top-k rows of ``score`` among each query's candidate blocks ``ids`` [1, 1, R, K] uint32 row-major (sentinel
-        tail) -> [1, 1, R, k] uint32 row-major row ids (sentinel tail)."""
+        tail) -> [1, 1, R, k] uint32 row-major row ids (sentinel tail). ``pin`` (``V41ChunkTables.pin``: the page and
+        its base) bounds an unmasked score at each row's newest element."""
         # rank r's rows at [r * block, (r + 1) * block); sentinels -inf
-        return self._topk_in_rows(gather_runs(score, ids, self.config.CANDIDATE_BLOCK_SIZE), ids, k)
+        return self._topk_in_rows(gather_runs(score, ids, self.config.CANDIDATE_BLOCK_SIZE, *(pin or ())), ids, k)
 
     def _topk_in_rows(self, rows, ids, k: int):
         """Top-k of the candidate ``rows`` [1, 1, R, K * block] (rank r's block at [r * block, (r + 1) * block)) ->
@@ -626,18 +650,23 @@ class TtV41Indexer(LightweightModule):
             assert isinstance(candidates, CandidateBlocks) and candidates.ids is None, "published blocks: in blocks"
         return self._merge_split(rows, k, chunk_cols), published
 
-    def select(self, score, tables, start: int, visible: int, candidates: CandidateBlocks | None = None):
+    def select(
+        self, score, tables, start: int, visible: int, candidates: CandidateBlocks | None = None, bounded: bool = False
+    ):
         """B11-B12 on this index source's score (``scores``) -> (top-k rows [1, 1, R, k] uint32 row-major with a
-        sentinel tail, the published ``CandidateBlocks`` of the candidate source or None)."""
+        sentinel tail, the published ``CandidateBlocks`` of the candidate source or None). ``bounded``: the score is
+        the candidate source's unmasked one (``_bounded``), selected through its candidate blocks with the kernels
+        writing -inf past each row's pin."""
         k = min(self.config.INDEX_TOPK, visible)
         published = None
         if self.is_candidate_source:
-            published = self.candidates(score, tables, start)
+            published = self.candidates(score, tables, start, bounded)
             in_blocks = self.config.CANDIDATE_TOPK_BLOCKS > k  # its top-k rows lie in its top-k blocks
             if published.ids is not None and in_blocks and score.shape[3] > SUBSET_TOPK_MIN_WIDTH:
                 best = _round_up(k + 1, 4)  # the pinned block + its top-k blocks, whole tiles of candidate rows
                 ids = ttnn.slice(published.ids, [0, 0, 0, 0], [1, 1, published.ids.shape[2], best])
-                return self._topk_in_blocks(score, ids, k), published
+                return self._topk_in_blocks(score, ids, k, tables.pin(start) if bounded else None), published
+            assert not bounded, "an unmasked score needs the candidate blocks' selection"
         elif self.uses_candidates:
             assert isinstance(candidates, CandidateBlocks), "a candidate index source needs the published candidates"
             if candidates.ids is not None:
@@ -660,5 +689,19 @@ class TtV41Indexer(LightweightModule):
         if self.uses_candidates and candidates.ids is not None and width >= SPARSE_SCORE_MIN_WIDTH:
             rows = self.candidate_rows(x, qr, index_k, tables, start, candidates.ids)
             return self._topk_in_rows(rows, candidates.ids, min(self.config.INDEX_TOPK, visible)), None
-        score, visible = self.scores(x, qr, index_k, tables, start, length, index_k_tiled)
-        return self.select(score, tables, start, visible, candidates)
+        bounded = self._bounded(tables, width, visible, index_k_tiled)
+        score, visible = self.scores(x, qr, index_k, tables, start, length, index_k_tiled, masked=not bounded)
+        return self.select(score, tables, start, visible, candidates, bounded)
+
+    def _bounded(self, tables, width: int, visible: int, index_k_tiled) -> bool:
+        """Whether this chunk's score of this source goes unmasked (``TT_V41_PREFILL_INDEX_BOUND``): the generic
+        ratio-1 candidate source under the shared masks, at a width where ``select`` runs through the candidate
+        blocks (two levels or one, then the top-k among the published blocks), which is where the kernels bound the
+        rows past each query's pin. The score is ``width + 32`` wide in generic mode (the pad tile)."""
+        if not (prefill_index_bound() and tables.generic and index_k_tiled is not None):
+            return False
+        if not (self.is_candidate_source and self.ratio == 1):
+            return False
+        w, k = width + 32, min(self.config.INDEX_TOPK, visible)
+        blocks = w // self.config.CANDIDATE_BLOCK_SIZE
+        return blocks > self.config.CANDIDATE_TOPK_BLOCKS > k and w > SUBSET_TOPK_MIN_WIDTH

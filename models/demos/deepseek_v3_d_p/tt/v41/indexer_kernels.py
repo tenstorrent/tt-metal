@@ -78,14 +78,15 @@ def _pin_rows(pin, rows: int) -> int:
     return pin.shape[3]
 
 
-def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int):
+def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int, bound: bool = False):
     """Row-major bf16 ``x`` [1, 1, R, W] (DRAM-interleaved, W a multiple of 32) -> row-major bf16
     [1, 1, R, round_up(W / seg, 32)]: output j of row i is ``max(x[i, seg * j : seg * (j + 1)])`` (-inf past W / seg),
     except the row's pinned output: +inf at ``e // seg`` with ``e = (pin_base + q_i) & pin_mask`` when ``e < W``,
     ``q_i`` the chunk query index of the chip's row i (``pin``: ``V41ChunkTables.query_first()``), or, with a per-row
-    ``pin`` (``_pin_rows``), ``q_i = pin[i]`` (none when it is the sentinel). ``seg`` 8 or 32. One fused op
-    (kernels/segmax_*): per 4096-element chunk a tilize and a MAX row reduce (for 8, after adding four column
-    masks)."""
+    ``pin`` (``_pin_rows``), ``q_i = pin[i]`` (none when it is the sentinel). ``bound``: the outputs after the pinned
+    one are -inf (the segments past the row's newest element: rows the query may not see; for an unmasked score,
+    ``TT_V41_PREFILL_INDEX_BOUND``). ``seg`` 8 or 32. One fused op (kernels/segmax_*): per 4096-element chunk a
+    tilize and a MAX row reduce (for 8, after adding four column masks)."""
     assert seg in (8, 32)
     _check_row_major(x, ttnn.bfloat16, "segment_max input")
     rows, width = x.shape[2], x.shape[3]
@@ -105,7 +106,16 @@ def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int):
     reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for (cx, cy), (first, count) in zip(coords, _split(rows, len(coords))):
         reader_args[cx][cy] = [x.buffer_address(), first, count, width * 2]
-        writer_args[cx][cy] = [out.buffer_address(), first, count, chunks, pin.buffer_address(), pin_base, pin_mask]
+        writer_args[cx][cy] = [
+            out.buffer_address(),
+            first,
+            count,
+            chunks,
+            pin.buffer_address(),
+            pin_base,
+            pin_mask,
+            int(bound),
+        ]
         compute_args[cx][cy] = [count * chunks]
     kernels = [
         ttnn.KernelDescriptor(
@@ -147,16 +157,21 @@ def segment_max(x, seg: int, pin, pin_base: int, pin_mask: int):
     return ttnn.generic_op([x, pin, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
 
-def gather_runs(x, ids, run: int):
+def gather_runs(x, ids, run: int, pin=None, pin_base: int = 0):
     """Row-major bf16 ``x`` [1, 1, R, W] and uint32 ``ids`` [1, 1, R, K] (both DRAM-interleaved) -> row-major bf16
     [1, 1, R, K * run]: run r of row i is ``x[i, run * c : run * (c + 1)]`` for ``c = ids[i, r]``, -inf where
-    ``c >= W / run`` (the sentinel included). ``run`` 8 or 32 (16- or 64-byte runs). One data-movement op
-    (kernels/gather_runs.cpp) on both RISC-Vs of every core: each source row is read once, sequentially."""
+    ``c >= W / run`` (the sentinel included). ``run`` 8 or 32 (16- or 64-byte runs). With ``pin`` (the per-chip
+    ``V41ChunkTables.query_first()`` page), the elements past the row's newest one, ``pin_base + pin[0] + i``, are
+    -inf as well (the rows the query may not see; for an unmasked score, ``TT_V41_PREFILL_INDEX_BOUND``). One
+    data-movement op (kernels/gather_runs.cpp) on both RISC-Vs of every core: each source row is read once,
+    sequentially."""
     assert run in (8, 32)
     _check_row_major(x, ttnn.bfloat16, "gather_runs input")
     _check_row_major(ids, ttnn.uint32, "gather_runs ids")
     rows, width, k = x.shape[2], x.shape[3], ids.shape[3]
     assert ids.shape[2] == rows and width % 32 == 0
+    if pin is not None:
+        assert _pin_rows(pin, rows) == 0, "gather_runs bounds by the per-chip query_first page"
     run_bytes = run * 2
     assert -(-width * 2 // GATHER_SEGMENT_BYTES) <= GATHER_MAX_SEGMENTS, f"row width {width} is too wide"
     device = x.device()
@@ -169,8 +184,9 @@ def gather_runs(x, ids, run: int):
         ttnn.TensorAccessorArgs(x).get_compile_time_args()
         + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+        + ttnn.TensorAccessorArgs(ids if pin is None else pin).get_compile_time_args()  # unbounded: a placeholder
     )
-    scratch = 64 + GATHER_SEGMENT_BYTES + k * run_bytes + 2 * k * 4
+    scratch = 64 + 64 + GATHER_SEGMENT_BYTES + k * run_bytes + 2 * k * 4  # the pin page first
     kernels = []
     for risc, config in enumerate((ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor())):
         args = ttnn.RuntimeArgs()
@@ -184,18 +200,21 @@ def gather_runs(x, ids, run: int):
                 count,
                 width // run,
                 width * 2,
+                0 if pin is None else pin.buffer_address(),
+                pin_base,
             ]
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=f"{_KERNEL_DIR}/gather_runs.cpp",
                 core_ranges=cores,
-                compile_time_args=[risc, run_bytes, k, GATHER_SEGMENT_BYTES] + accessors,
+                compile_time_args=[risc, run_bytes, k, GATHER_SEGMENT_BYTES, int(pin is not None)] + accessors,
                 runtime_args=args,
                 config=config,
             )
         )
     cbs = [_cb(risc, scratch, cores, page=scratch) for risc in (0, 1)]
-    return ttnn.generic_op([x, ids, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    inputs = [x, ids, out] if pin is None else [x, ids, pin, out]  # the output last
+    return ttnn.generic_op(inputs, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
 
 CANDSCORE_BLOCK = 8  # rows per candidate block (CANDIDATE_BLOCK_SIZE)

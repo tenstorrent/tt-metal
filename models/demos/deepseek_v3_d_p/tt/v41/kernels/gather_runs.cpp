@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Row-local gather of fixed-length runs (DeepSeek-V4.1 candidate selection, tt/v41/indexer_kernels.py gather_runs):
-//   out[i, r * RUN : (r + 1) * RUN] = src[i, ids[i, r] * RUN : (ids[i, r] + 1) * RUN]   (-inf if ids[i, r] >= nruns)
+//   out[i, r * RUN: (r + 1) * RUN] = src[i, ids[i, r] * RUN: (ids[i, r] + 1) * RUN] (-inf if ids[i, r] >= nruns)
 // src bf16 row-major [R, W] and out bf16 row-major [R, K * RUN] DRAM-interleaved (one page per row), ids uint32
 // row-major [R, K] (one page per row; the 0xFFFFFFFF sentinel reads as -inf). RUN_BYTES is 16 (blocks of 8) or 64
 // (superblocks of 32). Data movement only: runs on both RISC-Vs of a core (each its own row range and scratch CB).
@@ -13,9 +13,14 @@
 // runs are copied into the output row, which is written once. The runs are bucketed by segment first (a counting
 // sort of r by segment), so every run is visited once.
 //
-// compile_time_args = [cb_scratch, RUN_BYTES, K, SEG_BYTES, TensorAccessorArgs(src)..., TensorAccessorArgs(ids)...,
-//                      TensorAccessorArgs(out)...]
-// runtime args      = [src_addr, ids_addr, out_addr, row_start, row_count, nruns, row_bytes]
+// Bound (BOUND = 1, TT_V41_PREFILL_INDEX_BOUND): the elements of a
+// gathered run past the row's newest element e = pin_base + pin[0] + i (pin the per-chip query_first page, i the row:
+// the rows the query may not see) are written -inf, so an unmasked score (the kernel's output without the additive
+// visibility mask) gathers as the masked one did. BOUND = 0: as before (the pin accessor args are a placeholder).
+//
+// compile_time_args = [cb_scratch, RUN_BYTES, K, SEG_BYTES, BOUND, TensorAccessorArgs(src)...,
+//                      TensorAccessorArgs(ids)..., TensorAccessorArgs(out)..., TensorAccessorArgs(pin)...]
+// runtime args = [src_addr, ids_addr, out_addr, row_start, row_count, nruns, row_bytes, pin_addr, pin_base]
 
 #include <cstdint>
 
@@ -30,25 +35,40 @@ void kernel_main() {
     const uint32_t row_count = get_arg_val<uint32_t>(4);
     const uint32_t nruns = get_arg_val<uint32_t>(5);
     const uint32_t row_bytes = get_arg_val<uint32_t>(6);
+    const uint32_t pin_addr = get_arg_val<uint32_t>(7);
+    const uint32_t pin_base = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(0);
     constexpr uint32_t RUN_BYTES = get_compile_time_arg_val(1);
     constexpr uint32_t K = get_compile_time_arg_val(2);
     constexpr uint32_t SEG_BYTES = get_compile_time_arg_val(3);  // a multiple of 64
-    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr bool BOUND = get_compile_time_arg_val(4) != 0;
+    constexpr auto src_args = TensorAccessorArgs<5>();
     constexpr auto ids_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
+    constexpr auto pin_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr uint32_t RUN_U32 = RUN_BYTES / 4;
+    constexpr uint32_t RUN_ELEMS = RUN_BYTES / 2;
     constexpr uint32_t MAX_SEGS = 64;
     constexpr uint32_t NEGINF_PAIR = 0xFF80FF80u;
+    constexpr uint32_t NEGINF_HIGH = 0xFF800000u;
 
     const auto src = TensorAccessor(src_args, src_addr);
     const auto ids = TensorAccessor(ids_args, ids_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
-    // scratch (64-byte aligned): segment (SEG_BYTES) | output row (K * RUN_BYTES) | ids row (K * 4) | order (K * 4)
+    // scratch (64-byte aligned): pin page (64) | segment (SEG_BYTES) | output row (K * RUN_BYTES) | ids row (K * 4) |
+    // order (K * 4)
     DataflowBuffer scratch(cb_scratch);
-    const uint32_t seg_l1 = (scratch.get_write_ptr() + 63) & ~63u;
+    const uint32_t pin_l1 = (scratch.get_write_ptr() + 63) & ~63u;
+    const uint32_t seg_l1 = pin_l1 + 64;
+    uint32_t query_first = 0;
+    if constexpr (BOUND) {
+        const auto pin = TensorAccessor(pin_args, pin_addr);
+        noc_async_read(pin.get_noc_addr(0, 0), pin_l1, 32);
+        noc_async_read_barrier();
+        query_first = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pin_l1);
+    }
     const uint32_t out_l1 = seg_l1 + SEG_BYTES;
     const uint32_t ids_l1 = out_l1 + K * RUN_BYTES;
     volatile tt_l1_ptr uint32_t* id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_l1);
@@ -59,6 +79,7 @@ void kernel_main() {
     const uint32_t segs = (row_bytes + SEG_BYTES - 1) / SEG_BYTES;  // <= MAX_SEGS (checked by the host)
     uint32_t bucket[MAX_SEGS + 1];
     for (uint32_t row = row_start; row < row_start + row_count; ++row) {
+        const uint32_t newest = pin_base + query_first + row;  // the row's newest visible element (BOUND)
         noc_async_read(ids.get_noc_addr(row, 0), ids_l1, K * 4);
         const uint64_t row_noc = src.get_noc_addr(row, 0);
         noc_async_write_barrier();  // the previous row's output has left L1
@@ -102,8 +123,20 @@ void kernel_main() {
             for (; next < end; ++next) {
                 const uint32_t r = order[next];
                 const uint32_t from = (id[r] * RUN_BYTES - first) / 4;
-                for (uint32_t w = 0; w < RUN_U32; ++w) {
-                    dst[r * RUN_U32 + w] = seg[from + w];
+                const uint32_t col0 = id[r] * RUN_ELEMS;
+                if (!BOUND || col0 + RUN_ELEMS - 1 <= newest) {
+                    for (uint32_t w = 0; w < RUN_U32; ++w) {
+                        dst[r * RUN_U32 + w] = seg[from + w];
+                    }
+                } else {
+                    // the run straddles or passes the row's newest element: its later elements are not visible
+                    for (uint32_t w = 0; w < RUN_U32; ++w) {
+                        const uint32_t col = col0 + 2 * w;  // the word's low half; its high half is col + 1
+                        const uint32_t v = seg[from + w];
+                        dst[r * RUN_U32 + w] = col > newest       ? NEGINF_PAIR
+                                               : col + 1 > newest ? ((v & 0xFFFFu) | NEGINF_HIGH)
+                                                                  : v;
+                    }
                 }
             }
         }
