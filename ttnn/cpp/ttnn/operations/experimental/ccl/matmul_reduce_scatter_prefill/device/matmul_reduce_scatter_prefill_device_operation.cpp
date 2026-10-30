@@ -27,14 +27,30 @@ bool is_one_of(DataType dtype, std::initializer_list<DataType> allowed) {
     return std::find(allowed.begin(), allowed.end(), dtype) != allowed.end();
 }
 
-// DRAM or L1: the reader's TensorAccessor addresses either bank kind
-void check_interleaved_tile(const Tensor& t, std::string_view what) {
+// DRAM or L1 interleaved, or (allow_dram_width_sharded) DRAM width-sharded with whole-height shards: the reader's
+// TensorAccessor addresses any of them by page id
+void check_tile_operand(const Tensor& t, std::string_view what, bool allow_dram_width_sharded) {
     const MemoryConfig& mc = t.memory_config();
+    const bool interleaved = (mc.buffer_type() == BufferType::DRAM || mc.buffer_type() == BufferType::L1) &&
+                             mc.memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    const bool dram_width_sharded = allow_dram_width_sharded && mc.buffer_type() == BufferType::DRAM &&
+                                    mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
     TT_FATAL(
-        (mc.buffer_type() == BufferType::DRAM || mc.buffer_type() == BufferType::L1) &&
-            mc.memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "matmul_reduce_scatter_prefill: {} must be DRAM or L1 interleaved",
-        what);
+        interleaved || dram_width_sharded,
+        "matmul_reduce_scatter_prefill: {} must be DRAM or L1 interleaved{}, got {}",
+        what,
+        allow_dram_width_sharded ? ", or DRAM width-sharded" : "",
+        mc);
+    if (dram_width_sharded) {
+        TT_FATAL(mc.shard_spec().has_value(), "matmul_reduce_scatter_prefill: {} needs a shard spec", what);
+        const uint32_t height = t.padded_shape()[-2];
+        TT_FATAL(
+            mc.shard_spec()->shape[0] == height,
+            "matmul_reduce_scatter_prefill: {} shards must span its whole height {}, got shard shape {}",
+            what,
+            height,
+            mc.shard_spec()->shape);
+    }
     TT_FATAL(t.layout() == Layout::TILE, "matmul_reduce_scatter_prefill: {} must be TILE layout", what);
     // the planner and the kernels assume 32 x 32 tiles of 16 x 16 faces in the default order
     const Tile& tile = t.tensor_spec().tile();
@@ -160,8 +176,8 @@ void check_operands(
         a_shape);
     TT_FATAL(w_shape.rank() == 2, "matmul_reduce_scatter_prefill: W must be (K, N), got {}", w_shape);
     TT_FATAL(a_shape[-1] == w_shape[0], "matmul_reduce_scatter_prefill: K mismatch, A {} vs W {}", a_shape, w_shape);
-    check_interleaved_tile(input_tensor, "input_tensor");
-    check_interleaved_tile(weight, "weight");
+    check_tile_operand(input_tensor, "input_tensor", false);
+    check_tile_operand(weight, "weight", true);
     TT_FATAL(
         !memory_config.has_value() || memory_config->memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "matmul_reduce_scatter_prefill: a sharded output memory_config is not supported");

@@ -224,6 +224,54 @@ def test_l1_operands(mesh_device, case, a_mem, w_mem):
     )
 
 
+def dram_width_sharded(mesh_device, K, N):
+    """W as models hold decode weights (DRAM-sharded matmul): one whole-K column slice per DRAM bank."""
+    banks = mesh_device.dram_grid_size().x
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+    width = -(-N // (32 * banks)) * 32
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(grid, [K, width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+# W DRAM width-sharded (the layout of a model that keeps one weight copy for decode and prefill): every flow the
+# planner picks - unchunked resident and stream, chunks that miss L1, chunks the cost model picks, scatter on M, the
+# folded 1D grid - and a width that leaves banks with a partial or no shard.
+DRAM_SHARDED_W_CASES = [
+    "kimi_k27_o_proj",
+    "kimi_k3_dense_ffn_stream",
+    "chunked_n",
+    "chunked_mn",
+    "llama_70b_wo_prefill",
+    "mimo_v2_o_proj",
+    "kimi_k27_o_proj_decode",
+    "glm5_indexer_wk_narrow_n",
+]
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("name", DRAM_SHARDED_W_CASES)
+def test_dram_sharded_weight(mesh_device, name):
+    a_shape, w_shape, scatter_dim, dtype, weight_dtype = MODEL_CASES[name]
+    for _ in range(2):  # the second call is a program-cache hit with a new W buffer
+        run_case(
+            mesh_device,
+            a_shape,
+            w_shape,
+            cluster_axis=1,
+            scatter_dim=scatter_dim,
+            topology=ttnn.Topology.Ring,
+            dtype=dtype,
+            weight_dtype=weight_dtype,
+            num_links=2,
+            w_memory_config=dram_width_sharded(mesh_device, *w_shape),
+        )
+
+
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [line_device_params()], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], ids=["1x2", "1x4"], indirect=True)
@@ -338,17 +386,27 @@ def test_refusals(mesh_device, expect_error, overrides, message):
     [
         ("tiny_tile", "default 32x32 tile"),
         ("device_shard", "stored on every device"),
+        ("w_height_sharded", "or DRAM width-sharded"),
     ],
 )
 def test_operand_placement_refusals(mesh_device, expect_error, kind, message):
-    """Operands the op cannot address: non-default tiles and one device's shard of a mesh tensor. (Operands on another
-    mesh are refused too, but a second same-shape mesh on a 4-chip box is a full-mesh submesh, whose close aborts the
-    session once the parent has dispatched.)"""
+    """Operands the op cannot address: non-default tiles, one device's shard of a mesh tensor and a height-sharded W.
+    (Operands on another mesh are refused too, but a second same-shape mesh on a 4-chip box is a full-mesh submesh, whose
+    close aborts the session once the parent has dispatched.)"""
     mesh_shape = tuple(mesh_device.shape)
     a = random_stacked(mesh_shape, (1, 1, 640, 2048), seed=0)
     w = random_stacked(mesh_shape, (2048, 7168), seed=1)
     ta = to_mesh(a, mesh_device, ttnn.bfloat16, tile=ttnn.Tile((16, 32)) if kind == "tiny_tile" else None)
-    tw = to_mesh(w, mesh_device, ttnn.bfloat8_b)
+    w_mem = ttnn.DRAM_MEMORY_CONFIG
+    if kind == "w_height_sharded":  # K split across the DRAM banks
+        banks = mesh_device.dram_grid_size().x
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+        w_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(grid, [2048 // banks, 7168], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+    tw = to_mesh(w, mesh_device, ttnn.bfloat8_b, memory_config=w_mem)
     kwargs = dict(cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring, num_links=2)
     if kind == "device_shard":
         ta = ttnn.get_device_tensors(ta)[0]
