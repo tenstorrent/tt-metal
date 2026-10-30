@@ -31,11 +31,9 @@ class DeepSeekV4ProConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 6
-    # Pages per combine_fabric2d forwarding channel, trading DRAM against throughput:
-    # within noise of every deeper setting at ring8 / 5k.
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
     COMBINE_FWD_VC_PAGES = 48
-    # Pages per dispatch_fabric2d forwarding channel. Shallowest depth inside 5% at
-    # ring8 / 5k: +1.8% balanced, +4.9% hot_expert.
     DISPATCH_FWD_VC_PAGES = 48
     NUM_SHARED_EXPERTS = 1
     # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.

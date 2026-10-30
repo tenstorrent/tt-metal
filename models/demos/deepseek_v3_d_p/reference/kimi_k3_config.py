@@ -61,11 +61,9 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
-    # Pages per combine_fabric2d forwarding channel, trading DRAM against throughput:
-    # within noise of every deeper setting at ring8 / 5k.
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
     COMBINE_FWD_VC_PAGES = 64
-    # Pages per dispatch_fabric2d forwarding channel. Shallowest depth inside 5% at
-    # ring8 / 5k: -3.7% balanced, +4.7% hot_expert.
     DISPATCH_FWD_VC_PAGES = 64
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the

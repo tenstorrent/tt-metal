@@ -43,11 +43,9 @@ class GLM53Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Pages per combine_fabric2d forwarding channel, trading DRAM against throughput:
-    # within noise of every deeper setting at ring8 / 5k.
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
     COMBINE_FWD_VC_PAGES = 64
-    # Pages per dispatch_fabric2d forwarding channel. Shallowest depth inside 5% at
-    # ring8 / 5k: balanced is there by 48, hot_expert binds and is not until here.
     DISPATCH_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1

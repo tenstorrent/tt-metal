@@ -240,8 +240,8 @@ class TtMoe(LightweightModule):
         max_gate_seq_len_per_chip: Optional[int] = None,
         overlap_routed_expert_with_combine: Optional[bool] = False,
         moe_transport: Optional[str] = "direct",
-        combine_fwd_reduction: Optional[int] = None,
         dispatch_fwd_vc_pages: Optional[int] = None,
+        combine_fwd_vc_pages: Optional[int] = None,
     ):
         """
         Initialize TtMoe module.
@@ -355,7 +355,7 @@ class TtMoe(LightweightModule):
                 num_experts_per_tok <= DISPATCH_FABRIC2D_MAX_TOPK, and a fabric max payload that fits
                 a whole routed_emb_dim bf16 token padded to 64 B plus a 64 B routing tail: open the
                 mesh with init_helpers.moe_fabric_payload_size for a model that opts in.
-            combine_fwd_reduction: combine_fabric2d's fwd_reduction, the model's COMBINE_FWD_REDUCTION.
+            combine_fwd_vc_pages: combine_fabric2d's fwd_vc_pages, the model's COMBINE_FWD_VC_PAGES.
                 Needed only when the transport resolves to "fabric2d".
             dispatch_fwd_vc_pages: dispatch_fabric2d's fwd_vc_pages, the model's DISPATCH_FWD_VC_PAGES.
                 None takes the op's default.
@@ -398,8 +398,8 @@ class TtMoe(LightweightModule):
                 fabric2d_error = f"fabric2d runs a ring on axis 0, but the axis-0 topology is {self.row_topology}"
             elif metadata_len != 3:
                 fabric2d_error = f"the fabric2d ops write 3 metadata fields per token, got {metadata_len=}"
-            elif combine_fwd_reduction is None:
-                fabric2d_error = "combine_fabric2d needs combine_fwd_reduction"
+            elif combine_fwd_vc_pages is None:
+                fabric2d_error = "combine_fabric2d needs combine_fwd_vc_pages"
             else:
                 fabric2d_error = fabric2d_setup_error(
                     mesh_device,
@@ -598,7 +598,7 @@ class TtMoe(LightweightModule):
                 experts_per_chip=experts_per_chip,
                 num_experts_per_tok=num_experts_per_tok,
                 seq_len_per_chip=seq_len_per_chip,
-                fwd_reduction=combine_fwd_reduction,
+                fwd_vc_pages=combine_fwd_vc_pages,
                 emb_dim=self.routed_emb_dim,
                 cluster_axis=0,
                 num_links=self.row_num_links,
