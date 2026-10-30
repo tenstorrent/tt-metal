@@ -249,7 +249,6 @@ bool WriteToDeviceL1(
     CoreType core_type) {
     ZoneScoped;
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
@@ -289,7 +288,6 @@ bool ReadFromDeviceL1(
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
                 device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
@@ -311,7 +309,6 @@ bool ReadFromDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
     if constexpr (emule::kEmuleAsanBuild) {
-        emule::check_host_l1_alignment(device, address, size, "ReadFromDeviceL1");
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(device->id(), address, address + size);
         }

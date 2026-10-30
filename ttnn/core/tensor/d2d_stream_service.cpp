@@ -39,6 +39,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/math.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -104,7 +105,7 @@ std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     std::vector<uint32_t> zero_words(num_words * word_stride_bytes / sizeof(uint32_t), 0);
     std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
     for (const auto& [coord, core] : service_cores) {
-        auto* d = mesh->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh, coord);
         const DeviceAddr addr = svc.allocate_l1(d, core, num_words * word_stride_bytes);
         tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), zero_words);
         addrs.emplace(coord, addr);
@@ -483,7 +484,7 @@ struct ServiceCoreReleaseGuard {
         }
         auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
         for (const auto& [coord, core] : cores) {
-            svc.release(mesh->get_device(coord), {core});
+            svc.release(tt::tt_metal::internal::get_device(*mesh, coord), {core});
         }
     }
 };
@@ -907,14 +908,14 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
             std::vector<uint32_t> terminate_word{kTerminateValue};
             for (const auto& [coord, addr] : impl_->termination_addrs) {
                 tt::tt_metal::detail::WriteToDeviceL1(
-                    mesh->get_device(coord),
+                    tt::tt_metal::internal::get_device(*mesh, coord),
                     impl_->service_cores.at(coord),
                     static_cast<uint32_t>(addr),
                     terminate_word);
             }
             tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
             for (const auto& [coord, core] : impl_->service_cores) {
-                svc.wait_done(mesh->get_device(coord), core);
+                svc.wait_done(tt::tt_metal::internal::get_device(*mesh, coord), core);
             }
         }
         impl_->workload.reset();
@@ -922,22 +923,28 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
         // 2. Free the service-core L1 words (termination + data_ready_counter).
         if (mesh != nullptr) {
             for (const auto& [coord, addr] : impl_->termination_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->data_ready_counter_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->link_grant_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->go_count_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->done_count_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->metadata_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
         }
 
@@ -945,7 +952,7 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
         impl_->socket.reset();
         if (mesh != nullptr) {
             for (const auto& [coord, core] : impl_->service_cores) {
-                svc.release(mesh->get_device(coord), {core});
+                svc.release(tt::tt_metal::internal::get_device(*mesh, coord), {core});
             }
         }
     } catch (const std::exception& e) {
@@ -1070,14 +1077,14 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
             std::vector<uint32_t> terminate_word{kTerminateValue};
             for (const auto& [coord, addr] : impl_->termination_addrs) {
                 tt::tt_metal::detail::WriteToDeviceL1(
-                    mesh->get_device(coord),
+                    tt::tt_metal::internal::get_device(*mesh, coord),
                     impl_->service_cores.at(coord),
                     static_cast<uint32_t>(addr),
                     terminate_word);
             }
             tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
             for (const auto& [coord, core] : impl_->service_cores) {
-                svc.wait_done(mesh->get_device(coord), core);
+                svc.wait_done(tt::tt_metal::internal::get_device(*mesh, coord), core);
             }
         }
         impl_->workload.reset();
@@ -1085,16 +1092,20 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
         // 2. Free the service-core L1 words (termination + consumed_counter).
         if (mesh != nullptr) {
             for (const auto& [coord, addr] : impl_->termination_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->consumed_counter_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->stage_gate_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
             for (const auto& [coord, addr] : impl_->link_grant_addrs) {
-                svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                svc.deallocate_l1(
+                    tt::tt_metal::internal::get_device(*mesh, coord), impl_->service_cores.at(coord), addr);
             }
         }
 
@@ -1103,7 +1114,7 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
         impl_->socket.reset();
         if (mesh != nullptr) {
             for (const auto& [coord, core] : impl_->service_cores) {
-                svc.release(mesh->get_device(coord), {core});
+                svc.release(tt::tt_metal::internal::get_device(*mesh, coord), {core});
             }
         }
     } catch (const std::exception& e) {
@@ -1199,7 +1210,8 @@ D2DStageGateDescriptor D2DStreamServiceReceiver::get_stage_gate_descriptor(
     auto* mesh = impl_->mesh_device.get();
     return D2DStageGateDescriptor{
         .fabric_node_id = mesh->get_fabric_node_id(coord),
-        .service_core_noc = mesh->get_device(coord)->worker_core_from_logical_core(impl_->service_cores.at(coord)),
+        .service_core_noc = tt::tt_metal::internal::get_device(*mesh, coord)
+                                ->worker_core_from_logical_core(impl_->service_cores.at(coord)),
         .gate_base_addr = base,
     };
 }
@@ -1210,7 +1222,10 @@ void D2DStreamServiceReceiver::set_stage_gate(
     std::vector<uint32_t> word{
         static_cast<uint32_t>(open ? d2d_stream::GateState::Open : d2d_stream::GateState::Closed)};
     tt::tt_metal::detail::WriteToDeviceL1(
-        impl_->mesh_device->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), word);
+        tt::tt_metal::internal::get_device(*impl_->mesh_device, coord),
+        impl_->service_cores.at(coord),
+        static_cast<uint32_t>(addr),
+        word);
 }
 
 bool D2DStreamServiceReceiver::is_stage_gate_open(
@@ -1218,7 +1233,7 @@ bool D2DStreamServiceReceiver::is_stage_gate_open(
     const DeviceAddr addr = impl_->stage_gate_addr(coord, gate, "is_stage_gate_open");
     std::vector<uint32_t> word;
     tt::tt_metal::detail::ReadFromDeviceL1(
-        impl_->mesh_device->get_device(coord),
+        tt::tt_metal::internal::get_device(*impl_->mesh_device, coord),
         impl_->service_cores.at(coord),
         static_cast<uint32_t>(addr),
         sizeof(uint32_t),
@@ -1527,7 +1542,7 @@ std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
                 .compile_args = ct_args,
                 .defines = {{"LEASE_MODE", is_wait ? "0" : "1"}}});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto svc_phys = device->worker_core_from_logical_core(svc_core);
         const std::vector<uint32_t> rt_args = {
             static_cast<uint32_t>(svc_phys.x),
@@ -1611,7 +1626,7 @@ SenderSideResources build_sender_side(
     // only a config buffer — no data FIFO.
     const DeviceAddr socket_lo = sender_socket.get_config_buffer()->address();
     for (const auto& coord : coords) {
-        svc.reserve_l1_to_top(mesh->get_device(coord), service_cores.at(coord), socket_lo);
+        svc.reserve_l1_to_top(tt::tt_metal::internal::get_device(*mesh, coord), service_cores.at(coord), socket_lo);
     }
 
     auto termination_addrs = allocate_service_core_words(mesh, service_cores);
@@ -1633,7 +1648,7 @@ SenderSideResources build_sender_side(
         const uint32_t aligned_md = common.metadata_span_bytes;
         std::vector<uint32_t> zero(aligned_md / sizeof(uint32_t), 0u);
         for (const auto& coord : coords) {
-            auto* d = mesh->get_device(coord);
+            auto* d = tt::tt_metal::internal::get_device(*mesh, coord);
             const CoreCoord core = service_cores.at(coord);
             const DeviceAddr addr = svc.allocate_l1(d, core, aligned_md);
             tt::tt_metal::detail::WriteToDeviceL1(d, core, static_cast<uint32_t>(addr), zero);
@@ -1651,7 +1666,7 @@ SenderSideResources build_sender_side(
     for (const auto& coord : coords) {
         const Buffer* send_buf = backing.mesh_buffer().get_device_buffer(coord);
         TT_FATAL(send_buf != nullptr, "D2DStreamService: sender device buffer missing for coord {}", coord);
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const CoreCoord service_core = service_cores.at(coord);
 
         const auto sender_node = mesh->get_fabric_node_id(coord);
@@ -1785,7 +1800,7 @@ ReceiverSideResources build_receiver_side(
     const DeviceAddr socket_lo =
         std::min(receiver_socket.get_config_buffer()->address(), receiver_socket.get_data_buffer()->address());
     for (const auto& coord : coords) {
-        svc.reserve_l1_to_top(mesh->get_device(coord), service_cores.at(coord), socket_lo);
+        svc.reserve_l1_to_top(tt::tt_metal::internal::get_device(*mesh, coord), service_cores.at(coord), socket_lo);
     }
 
     auto termination_addrs = allocate_service_core_words(mesh, service_cores);
@@ -1839,7 +1854,7 @@ ReceiverSideResources build_receiver_side(
     for (const auto& coord : coords) {
         const Buffer* recv_buf = backing.mesh_buffer().get_device_buffer(coord);
         TT_FATAL(recv_buf != nullptr, "D2DStreamService: receiver device buffer missing for coord {}", coord);
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const CoreCoord service_core = service_cores.at(coord);
 
         const auto receiver_node = mesh->get_fabric_node_id(coord);

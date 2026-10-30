@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import math
 import os
 
 import numpy as np
+import PIL
 import pytest
 import torch
 from loguru import logger
@@ -15,6 +17,7 @@ import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.events import log_event_section
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 from models.tt_dit.utils.vbench import assert_vbench_quality
@@ -25,6 +28,80 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
+from .common import DEMO_PROMPT, check_first_frame_matches_seed, check_output_sanity, demo_image
+
+PROMPTS = {
+    "t2v": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+    "i2v": DEMO_PROMPT,
+}
+
+# I2V runs with the official I2V example's settings (Wan-Video/Wan2.2 README and
+# wan/configs/wan_i2v_A14B.py): size, flow shift, boundary and seed. The image is the repo's demo photo
+# instead of the example's.
+OFFICIAL_FLOW_SHIFT = 5.0
+OFFICIAL_BOUNDARY_RATIO = 0.9  # the checkpoint's model_index.json
+OFFICIAL_SEED = 0
+
+
+def official_size(max_area: int, image: PIL.Image.Image) -> tuple[int, int]:
+    """Wan's image2video.py: the image's aspect ratio at max_area, in whole latent patches."""
+    aspect = image.height / image.width
+    lat_h = round(math.sqrt(max_area * aspect) // 8 // 2 * 2)
+    lat_w = round(math.sqrt(max_area / aspect) // 8 // 2 * 2)
+    return lat_w * 8, lat_h * 8
+
+
+# Sanity check: the mean CLIP score must clear a floor well below normal output. No timing here: this
+# test also runs in the unit legs, under the watcher; timing is gated in test_performance_wan.py.
+CLIP_THRESHOLDS = {
+    "t2v": 30.0,  # observed ~37
+    # Set while the I2V seed image was a synthetic fractal, which dominated the frames; only
+    # near-random output fails it.
+    "i2v": 15.0,
+}
+
+# These thresholds are deliberately loose, they're just to catch a broken pipeline
+# (garbage, static or blurry output)
+#
+# This test runs a single prompt at a single seed, and is therefore too sensitive
+# to numeric fluctuation to support strict thresholds; the multi-prompt, multi-seed gate
+# is in test_performance_wan.py. RUN_VBENCH=0 skips this one where that gate runs instead.
+VBENCH_THRESHOLDS = {
+    "t2v": {
+        720: {
+            "subject_consistency": 0.8,
+            "background_consistency": 0.8,
+            "motion_smoothness": 0.9,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.5,
+        },
+        480: {
+            "subject_consistency": 0.8,
+            "background_consistency": 0.8,
+            "motion_smoothness": 0.9,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.45,
+        },
+    },
+    # I2V uses ONLY subject_consistency + background_consistency. They measure intra-video feature
+    # consistency (does the content stay coherent frame-to-frame), which still catches a pipeline
+    # that emits incoherent/garbage output. The other VBench dimensions were dropped while the CI seed
+    # was a synthetic fractal, for which `dynamic_degree` (RAFT optical-flow "is it moving") reads ~0
+    # and `imaging_quality` (MUSIQ, trained on natural photos) reads ~0.30 regardless of correctness.
+    # Floors are provisional: set below one observed i2v run on the fractal seed (subject≈0.75,
+    # background≈0.89); tighten/loosen as runs on the official image accrue. Keyed by the
+    # parametrized resolution; I2V generates at the official size of about the same area.
+    "i2v": {
+        720: {
+            "subject_consistency": 0.70,
+            "background_consistency": 0.80,
+        },
+        480: {
+            "subject_consistency": 0.70,
+            "background_consistency": 0.82,
+        },
+    },
+}
 
 
 @pytest.mark.parametrize(
@@ -46,11 +123,11 @@ from ....utils.test import (
     ids=[
         "2x2sp0tp1nl2_linear_is_fsdp1",
         "2x4sp0tp1nl1_linear_is_fsdp1",
-        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4
+        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
         "4x8sp1tp0nl4_ring_is_fsdp1",  # WH (ring) on 4x8
         "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
         "4x8sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x8
-        "4x32sp1tp0nl2_ring_is_fsdp0",
+        "4x32sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x32 quad galaxy
         "2x4sp0tp1nl1_linear_is_fsdp1_bf8_lofi",  # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
     ],
     indirect=["mesh_device", "device_params"],
@@ -66,6 +143,7 @@ from ....utils.test import (
         "resolution_720p",
     ],
 )
+@pytest.mark.parametrize("model_type", ["t2v", "i2v"], ids=["t2v", "i2v"])
 def test_pipeline_inference(
     mesh_device,
     mesh_shape,
@@ -78,9 +156,16 @@ def test_pipeline_inference(
     height,
     is_fsdp,
     quant_config_name,
+    model_type,
     no_prompt,
     request,
 ):
+    # The BH 4x8 ring and the bf8 LoFi rows were only brought up for T2V.
+    if model_type == "i2v" and (
+        quant_config_name is not None or (mesh_shape == (4, 8) and topology == ttnn.Topology.Ring and not is_fsdp)
+    ):
+        pytest.skip("not brought up for I2V")
+
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -94,6 +179,23 @@ def test_pipeline_inference(
 
     num_frames = 81
     num_inference_steps = 40
+    resolution = height
+
+    if model_type == "i2v":
+        pipeline_cls = WanPipelineI2V
+        seed_image = demo_image() if no_prompt else PIL.Image.open("./prompt_image.png").convert("RGB")
+        width, height = official_size(width * height, seed_image)
+        seed_image = seed_image.resize((width, height))
+        image_prompt = [ImagePrompt(image=seed_image, frame_pos=0)]
+        guidance_scale, guidance_scale_2 = 3.5, 3.5
+        sampler_kwargs = {"flow_shift": OFFICIAL_FLOW_SHIFT, "boundary_ratio": OFFICIAL_BOUNDARY_RATIO}
+        default_seed = OFFICIAL_SEED
+    else:
+        pipeline_cls = WanPipeline
+        image_prompt = None
+        guidance_scale, guidance_scale_2 = 4.0, 3.0
+        sampler_kwargs = {}
+        default_seed = 42
 
     h_factor = tuple(mesh_device.shape)[tp_axis]
     w_factor = tuple(mesh_device.shape)[sp_axis]
@@ -101,7 +203,7 @@ def test_pipeline_inference(
     vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
     encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
 
-    pipeline = WanPipeline(
+    pipeline = pipeline_cls(
         device=mesh_device,
         config=WanPipelineConfig.default(
             mesh_shape=mesh_device.shape,
@@ -112,7 +214,10 @@ def test_pipeline_inference(
             dynamic_load=dynamic_load,
             topology=topology,
             is_fsdp=is_fsdp,
-            checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            model_type=model_type,
+            checkpoint_name=(
+                "Wan-AI/Wan2.2-I2V-A14B-Diffusers" if model_type == "i2v" else "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+            ),
             height=height,
             width=width,
             num_frames=num_frames,
@@ -123,19 +228,24 @@ def test_pipeline_inference(
         qc = getattr(QuantConfig, quant_config_name)()
         set_quant_config(pipeline, qc)
 
-    prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+    prompt = PROMPTS[model_type]
+
+    def output_filename(number):
+        return f"wan_{model_type}_{width}x{height}_{number}.mp4"
 
     def run(*, prompt, number, seed):
-        logger.info(f"Running inference with prompt: '{prompt}'")
+        logger.info(f"Running {model_type} inference with prompt: '{prompt}'")
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
         with torch.no_grad():
             frames = pipeline(
                 prompts=[prompt],
+                image_prompt=image_prompt,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
-                guidance_scale=4.0,
-                guidance_scale_2=3.0,
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+                **sampler_kwargs,
                 output_type="uint8",
                 on_event=log_event_section,
             )
@@ -151,13 +261,15 @@ def test_pipeline_inference(
 
         # Remove batch dimension
         frames = frames[0]
-        output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
         if int(ttnn.distributed_context_get_rank()) == 0:
+            if model_type == "i2v":
+                check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
+                check_first_frame_matches_seed(frames, seed_image=seed_image, width=width, height=height)
             try:
                 from models.tt_dit.utils.video import export_to_video
 
-                export_to_video(frames, output_filename, fps=16)
-                logger.info(f"Saved video to: {output_filename}")
+                export_to_video(frames, output_filename(number), fps=16)
+                logger.info(f"Saved video to: {output_filename(number)}")
             except ImportError:
                 logger.info("Could not export video - imageio_ffmpeg not available")
         else:
@@ -165,7 +277,8 @@ def test_pipeline_inference(
 
         return frames
 
-    def check_output_with_clip(prompt, frames, clip_threshold=36.0):
+    def check_output_with_clip(prompt, frames):
+        clip_threshold = CLIP_THRESHOLDS[model_type]
         if int(ttnn.distributed_context_get_rank()) == 0:
             # Sample ~8 evenly-spaced frames from the video
             total_frames = frames.shape[0]
@@ -191,38 +304,30 @@ def test_pipeline_inference(
                 f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
             )
 
-    # These thresholds are deliberately loose, they're just to catch a broken pipeline
-    # (garbage, static or blurry output)
-    #
-    # This test runs a single prompt at a single seed, and is therefore too sensitive
-    # to numeric fluctuation to support strict thresholds; those should be in perf tests.
-    vbench_thresholds_by_height = {
-        720: {
-            "subject_consistency": 0.8,
-            "background_consistency": 0.8,
-            "motion_smoothness": 0.9,
-            "dynamic_degree": 1.0,
-            "imaging_quality": 0.5,
-        },
-        480: {
-            "subject_consistency": 0.8,
-            "background_consistency": 0.8,
-            "motion_smoothness": 0.9,
-            "dynamic_degree": 1.0,
-            "imaging_quality": 0.45,
-        },
-    }
-
     def check_output_with_vbench(prompt, number):
+        if os.environ.get("RUN_VBENCH", "1") == "0":
+            logger.info("RUN_VBENCH=0, skipping VBench quality gate")
+            return
         if int(ttnn.distributed_context_get_rank()) == 0:
-            output_filename = f"wan_t2v_{width}x{height}_{number}.mp4"
-            thresholds = vbench_thresholds_by_height[height]
-            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+            thresholds = VBENCH_THRESHOLDS[model_type][resolution]
+            assert_vbench_quality(output_filename(number), prompt=prompt, thresholds=thresholds)
+
+    def check_all(prompt, number, frames):
+        # Run every check before failing, so one run reports all of them.
+        failures = []
+        for check in (
+            lambda: check_output_with_clip(prompt, frames),
+            lambda: check_output_with_vbench(prompt, number),
+        ):
+            try:
+                check()
+            except AssertionError as error:
+                failures.append(str(error))
+        assert not failures, "\n".join(failures)
 
     if no_prompt:
-        frames = run(prompt=prompt, number=0, seed=42)
-        check_output_with_clip(prompt, frames)
-        check_output_with_vbench(prompt, 0)
+        frames = run(prompt=prompt, number=0, seed=default_seed)
+        check_all(prompt, 0, frames)
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -231,5 +336,4 @@ def test_pipeline_inference(
             if prompt[0] == "q":
                 break
             frames = run(prompt=prompt, number=i, seed=i)
-            check_output_with_clip(prompt, frames)
-            check_output_with_vbench(prompt, i)
+            check_all(prompt, i, frames)
