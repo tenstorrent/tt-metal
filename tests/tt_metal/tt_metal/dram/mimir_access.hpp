@@ -61,6 +61,8 @@ inline constexpr uint64_t kTl1HartWindowOffset = 0x1000;
 inline constexpr uint64_t kTl1HartWindowBytes = 0x40000;
 inline constexpr uint64_t kTl1DoneBlockOffset = 0x1000;
 inline constexpr uint64_t kTl1DataOffset = 0x2000;
+static_assert(kTl1DataOffset < kTl1HartWindowBytes);
+inline constexpr uint64_t kTl1HartDataBytes = kTl1HartWindowBytes - kTl1DataOffset;
 inline constexpr uint64_t kTl1RemoteLandingOffset = 0x27C000;
 inline constexpr uint64_t kTl1RemoteLandingSlotBytes = 0x4000;
 
@@ -88,6 +90,11 @@ inline uint64_t tl1_remote_landing(uint32_t source_cce_index, uint32_t hart) {
 
 inline void check_tl1_layout() {
     const uint64_t harts = cce_hart_count();
+    TT_FATAL(
+        harts * kTl1EchoSlotBytes <= kTl1HartWindowOffset,
+        "echo slots end at test offset 0x{:x}, past the first hart window at 0x{:x}",
+        harts * kTl1EchoSlotBytes,
+        kTl1HartWindowOffset);
     TT_FATAL(
         kTl1HartWindowOffset + harts * kTl1HartWindowBytes <= kTl1RemoteLandingOffset,
         "hart windows end at test offset 0x{:x}, past the remote landing offset 0x{:x}",
