@@ -543,6 +543,25 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
     };
     const auto u = rows0(per_j.tiles, 0), o = rows0(per_j.tiles, 1);
     const double err_u = max_rel_err(u, ref_u), err_o = max_rel_err(o, ref_o);
+    // the adopted form (section 8 of the contract: one constants tile ebc16, mul_col_bcast_band0, 4-row helpers)
+    // directly against the double reference as well
+    const auto u3 = rows0(one_const.tiles, 0), o3 = rows0(one_const.tiles, 1);
+    const double err_u3 = max_rel_err(u3, ref_u), err_o3 = max_rel_err(o3, ref_o);
+    bool pad3 = true;
+    for (uint32_t j = 0; j < VT; j++) {
+        pad3 = pad3 && rows_are_pos_zero(one_const.tiles[2 * j], 32, 1, 16) &&
+               rows_are_pos_zero(one_const.tiles[2 * j + 1], 32, 1, 16);
+    }
+    EXPECT_LT(err_u3, 5e-3);
+    EXPECT_LT(err_o3, 5e-3);
+    EXPECT_TRUE(pad3) << "ebc16 form: u16 / out16 rows 1..15 are not exactly zero";
+    log_info(
+        tt::LogTest,
+        "vector pass, ebc16 + mul_col_bcast_band0 form (3 copy_tiles per tile): max rel err vs double u {:.2e} o "
+        "{:.2e}; u16 and out16 rows 1..15 exactly zero {}",
+        err_u3,
+        err_o3,
+        pad3);
     bool u_pad_zero = true, o_pad_zero = true;
     for (uint32_t j = 0; j < VT; j++) {
         u_pad_zero = u_pad_zero && rows_are_pos_zero(per_j.tiles[2 * j], 32, 1, 16);
@@ -597,6 +616,61 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuVectorPass) {
         double(one_const.cycles) / (kReps * VT),
         double(full_tile.cycles) / kReps,
         double(full_tile.cycles) / (kReps * VT));
+}
+
+// ---- (c') the vector pass's single constants tile, built in DEST by the constants pass -----------------------------
+TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuBuildEbc16) {
+    // A: the real tiles (ecol32 with exp(0) = 1 off column 0, bcol16 zero off column 0, ccol32 all c); the device-built
+    //    tile must equal the host-built ebc16 the vector-pass test consumes.
+    const VectorInputs x = make_vector_inputs(11);
+    const auto ops = vector_operands(x, 0.0f);
+    const auto expected_a = sfpu_untilize(ops.ebc16.data.data(), kT16x32);
+    auto a = run(
+        this->devices_.at(0),
+        {.variant = 6, .inputs = {ops.ecol32, ops.bcol16, ops.ccol32}, .out_spec = kT16x32, .out_tiles_per_rep = 2});
+    ASSERT_EQ(a.tiles.size(), 2u);
+    const bool a_free = bits_equal(a.tiles[0], expected_a), a_inplace = bits_equal(a.tiles[1], expected_a);
+    EXPECT_TRUE(a_free) << "build_ebc16 into a free slot differs from the host-built ebc16";
+    EXPECT_TRUE(a_inplace) << "build_ebc16 in place (slot_e) differs from the host-built ebc16";
+
+    // B: random values everywhere the helper must not read (every element off column 0 and rows 4..31 of the
+    //    sources), a distinct value per row in column 0 rows 0..3 of each source: all 512 elements checked.
+    std::mt19937 gen(31);
+    const auto e_t = random_tile(kT32, gen, 1.0f), b_t = random_tile(kT16x32, gen, 1.0f),
+               c_t = random_tile(kT32, gen, 1.0f);
+    std::vector<float> expected_b(kT16x32.elems(), 0.0f);
+    for (uint32_t r = 0; r < 4; r++) {
+        expected_b[(r + 0) * 32] = e_t[r * 32];
+        expected_b[(r + 4) * 32] = b_t[r * 32];
+        expected_b[(r + 8) * 32] = c_t[r * 32];
+    }
+    auto b =
+        run(this->devices_.at(0),
+            {.variant = 6,
+             .inputs = {one_tile(e_t, kT32), one_tile(b_t, kT16x32), one_tile(c_t, kT32)},
+             .out_spec = kT16x32,
+             .out_tiles_per_rep = 2});
+    ASSERT_EQ(b.tiles.size(), 2u);
+    uint32_t mism_free = 0, mism_inplace = 0;
+    for (uint32_t i = 0; i < kT16x32.elems(); i++) {
+        mism_free += std::bit_cast<uint32_t>(b.tiles[0][i]) != std::bit_cast<uint32_t>(expected_b[i]);
+        mism_inplace += std::bit_cast<uint32_t>(b.tiles[1][i]) != std::bit_cast<uint32_t>(expected_b[i]);
+    }
+    EXPECT_EQ(mism_free, 0u) << "build_ebc16 (free slot) read or left something it should not";
+    EXPECT_EQ(mism_inplace, 0u) << "build_ebc16 (in place) read or left something it should not";
+    const bool repeatable = bits_equal(a.first, a.tiles) && bits_equal(b.first, b.tiles);
+    EXPECT_TRUE(repeatable);
+    log_info(
+        tt::LogTest,
+        "build_ebc16: equals the host-built ebc16 of the vector pass (into a free slot {}, in place {}); with random "
+        "values off column 0 rows 0..3 of the sources, mismatching elements of 512: free slot {}, in place {}; "
+        "repeatable {}; cycles per rep (3 copies + 2 builds + 2 packs) {:.0f}",
+        a_free,
+        a_inplace,
+        mism_free,
+        mism_inplace,
+        repeatable,
+        double(b.cycles) / kReps);
 }
 
 // ---- (d) exact exp on a column tile ------------------------------------------------------------------------------

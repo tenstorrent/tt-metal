@@ -22,6 +22,8 @@
 //   5  exact exp:         c_0 = gcol32, c_1 = a 32x32 data tile; out[0] = exp(gcol32), out[1] = data (.) col(out[0])
 //                         MODE 0: exp over the whole tile (VectorMode::RC), MODE 1: faces 0 and 2 only (VectorMode::C),
 //                         MODE 2: column 0 only (exp_col0_exact)
+//   6  build ebc16:       c_0 = ecol32, c_1 = bcol16, c_2 = ccol32 copied into slots 0, 1, 2; out[0] = build_ebc16 into
+//                         the free slot 3, out[1] = build_ebc16 in place in slot 0 (two 16x32 tiles per repetition)
 // Compile-time args: VARIANT, MODE, REPS, VT. Runtime arg 0: L1 address of the stats buffer (two 32-bit stamps).
 
 #include <cstdint>
@@ -255,6 +257,27 @@ void kernel_main() {
             tile_regs_wait();
             pack_out(0, 0);
             pack_out(1, 1);
+            tile_regs_release();
+            out.push_back(2);
+        }
+        stamp(1);
+    } else if constexpr (VARIANT == 6) {
+        in0.wait_front(1);
+        in1.wait_front(1);
+        in2.wait_front(1);
+        stamp(0);
+        for (uint32_t r = 0; r < REPS; r++) {
+            out.reserve_back(2);
+            tile_regs_acquire();
+            copy_in(cb_in0, 0, 0);                     // ecol32 (32x32)
+            copy_in(cb_in1, 0, 1);                     // bcol16 (16x32)
+            copy_in(cb_in2, 0, 2);                     // ccol32 (32x32)
+            gdn_decode_sfpu::build_ebc16(0, 1, 2, 3);  // into the free slot 3 (ecol32 in slot 0 stays packable)
+            gdn_decode_sfpu::build_ebc16(0, 1, 2);     // in place in slot 0
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_out(3, 0);
+            pack_out(0, 1);
             tile_regs_release();
             out.push_back(2);
         }
