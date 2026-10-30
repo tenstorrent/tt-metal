@@ -7,8 +7,8 @@ Two ``ttnn.generic_op`` programs per call (the trace captures both), sharing a p
 allocates once (``allocate_scratch``) and passes in:
 
 1. partials (``kernels/*_partials.cpp``): every (row, KV group, unit) of fixed ``unit`` tokens is assigned to a
-   core by the planner's static mapping (``planner.py``: unit-major round robin over the grid, independent of
-   ``cur_pos``). A core walks its units in a fixed order; per live unit it runs the stock flash-decode recurrence
+   core by the planner's static mapping (``planner.py``: core ``(u mod M + row*G + group) mod n_cores``, so a
+   row's units sit on consecutive cores whatever the padded batch; independent of ``cur_pos``). A core walks its units in a fixed order; per live unit it runs the stock flash-decode recurrence
    (``sdpa_flash_decode.cpp``'s chunk body on ``compute_common.hpp``) over the unit's fixed ``chunk``-token
    sub-chunks in ascending order, fp32 statistics and accumulator, masking the chunk that holds ``cur_pos`` (and
    the window start on a sliding layer) exactly as the stock kernels mask it, and writes the unit's (m, l, O) as
@@ -19,12 +19,13 @@ allocates once (``allocate_scratch``) and passes in:
 Because every unit partial is computed by identical code on identical data in one fixed order, and the merge
 order is fixed by the unit indices, the result cannot depend on which core computed what or on the padded batch.
 The chunk is the largest of ``planner.CHUNK_LADDER`` that fits the arch's L1 (head dim and cache format decide
-it, never the batch or the grid); the unit is derived from the grid and the context (``planner.derive_unit``: the
-smallest chunk multiple whose count at the page table's reach is at most the grid's cores, at most 4096 -- 2048
-on a 13x10 Blackhole grid, 4096 on the Wormhole 8x8; one chunk on a sliding layer), so a lone row at the full
-context puts one unit on (nearly) every core. Grid, chunk and context are build constants of a chip: every
-decode graph of one build shares them, and a row's bits are the same in every graph; a different grid (another
-harvesting, another arch) is a different unit and different bits unless ``GEMMA4_SDPA_SPLITFREE_UNIT`` pins it.
+it, never the batch or the grid); the unit is 4096 tokens (one chunk on a sliding layer): a lone 256K row runs
+64 units on 64 cores of any grid. ``GEMMA4_SDPA_SPLITFREE_UNIT=grid`` derives the unit from the grid instead
+(``planner.derive_unit``: one unit per core for a lone row at the full context, 2048 tokens on 13x10) -- measured
+slower on a 12x10 P150 (256K lone row 1.58 vs 1.31 ms, 128K 1.11 vs 1.05) because the combine merges a row's
+partials serially (~13 us each); it becomes the default once the combine is a tree. Unit and chunk are build
+constants, so every decode graph of one build shares them and a row's bits are the same in every graph (a
+different unit, e.g. ``=grid`` on another grid, is different bits).
 
 Contract (the stock ``paged_scaled_dot_product_attention_decode`` call of ``tt/attention/decode.py``):
 ``q [1, B <= 32, Hq <= 32, D]`` bf16 TILE interleaved (DRAM or L1), ``k / v [blocks, nkv, block, D]`` bf16 or
@@ -334,9 +335,10 @@ class SdpaDecodeSplitfree:
             DHt // out_sub_w,
             out_sub_w,
             plan.pair_space,
-            0,
+            plan.stride,
+            plan.stride_inv,
         ]
-        assert len(prefix) == 24
+        assert len(prefix) == 25
         defines = [
             ("EXP_APPROX_MODE", "0"),
             ("SUB_EXP_GRANULARITY", str(gran)),

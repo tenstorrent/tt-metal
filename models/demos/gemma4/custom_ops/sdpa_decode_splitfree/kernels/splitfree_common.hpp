@@ -9,7 +9,7 @@
 
 namespace sf {
 
-constexpr uint32_t CT_ACCESSORS = 24;  // first TensorAccessorArgs index
+constexpr uint32_t CT_ACCESSORS = 25;  // first TensorAccessorArgs index
 
 constexpr uint32_t B = get_compile_time_arg_val(0);         // padded batch rows (<= 32)
 constexpr uint32_t G = get_compile_time_arg_val(1);         // local KV groups this call attends
@@ -33,8 +33,9 @@ constexpr uint32_t QK_IN1_SUB = get_compile_time_arg_val(18);
 constexpr uint32_t QK_SUB_W = get_compile_time_arg_val(19);
 constexpr uint32_t OUT_IN1_SUB = get_compile_time_arg_val(20);
 constexpr uint32_t OUT_SUB_W = get_compile_time_arg_val(21);
-constexpr uint32_t PAIRS = get_compile_time_arg_val(22);  // M * B * G
-constexpr uint32_t CT_RESERVED = get_compile_time_arg_val(23);
+constexpr uint32_t PAIRS = get_compile_time_arg_val(22);   // M * B * G
+constexpr uint32_t STRIDE = get_compile_time_arg_val(23);  // the unit class stride over the cores (coprime with NCORES)
+constexpr uint32_t STRIDE_INV = get_compile_time_arg_val(24);  // STRIDE^-1 mod NCORES (0 on one core)
 
 constexpr uint32_t CHUNK = SK * 32;
 constexpr uint32_t UNIT = CHUNK * NSUB;
@@ -119,13 +120,18 @@ inline bool chunk_has_window_mask(const Row& r, uint32_t j) {
 }
 inline bool chunk_has_tail_mask(const Row& r, uint32_t j) { return j == r.tail_chunk; }
 
-// Walks this core's units in the one order the three kernels of phase 1 share: ascending pair p (= u' * BG + bg,
-// p == core mod NCORES), then the units u = u' + k * M of the row's live range, ascending. f(b, g, bg, u, row).
+// Walks this core's units in the one order the three kernels of phase 1 share: ascending pair bg, the unit class
+// u' of (bg, core) solving (u' * STRIDE + bg) mod NCORES == core (STRIDE coprime with NCORES, so a row's M unit
+// classes land on M distinct cores whatever B and G: a lone row in a padded batch spreads over min(M, NCORES)
+// cores, not NCORES / gcd(B * G, NCORES); STRIDE >= B * G keeps the rows of one unit class on distinct cores),
+// then the units u = u' + k * M of the row's live range, ascending. f(b, g, bg, u, row).
 template <typename F>
 inline void for_each_unit(uint32_t core, const uint32_t* pos, F&& f) {
-    for (uint32_t p = core; p < PAIRS; p += NCORES) {
-        const uint32_t up = p / BG;
-        const uint32_t bg = p - up * BG;
+    for (uint32_t bg = 0; bg < BG; ++bg) {
+        const uint32_t up = (((core + NCORES - (bg % NCORES)) % NCORES) * STRIDE_INV) % NCORES;
+        if (up >= M) {
+            continue;
+        }
         const uint32_t b = bg / G;
         const Row r = row_of(pos[b]);
         if (!r.live) {

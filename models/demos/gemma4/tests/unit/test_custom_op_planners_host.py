@@ -6,6 +6,8 @@
     pytest models/demos/gemma4/tests/unit/test_custom_op_planners_host.py --noconftest -p no:cacheprovider
 """
 
+import math
+
 import pytest
 
 from models.demos.gemma4.custom_ops import grid as g
@@ -213,10 +215,8 @@ def test_splitfree_mapping_covers_every_pair_once_and_balances(grid, batch):
     """Every (row, group, unit) is assigned exactly once by a function of the geometry alone (never of cur_pos);
     a lone row at 256K and 32 rows at 256K land within one unit per core of each other."""
     plan = _plan(grid, batch)
-    unit = {(8, 8): 4096, (13, 10): 2048}[grid]  # derive_unit: one unit per core for a lone row at 256K
-    assert plan.fits and plan.chunk == 256 and plan.unit == unit and plan.nsub == unit // 256
-    units = CTX_256K // unit
-    assert plan.max_units == units and plan.n_slots == units and plan.modulus == min(plan.n_cores, units)
+    assert plan.fits and plan.chunk == 256 and plan.unit == 4096 and plan.nsub == 16 and not plan.grid_unit
+    assert plan.max_units == 64 and plan.n_slots == 64 and plan.modulus == min(plan.n_cores, 64)
     # the same (b, g, u) always goes to the same core, whatever the positions are
     cores = {(b, 0, u): plan.core_of(b, 0, u) for b in range(batch) for u in range(plan.max_units)}
     assert all(0 <= c < plan.n_cores for c in cores.values())
@@ -225,11 +225,12 @@ def test_splitfree_mapping_covers_every_pair_once_and_balances(grid, batch):
     for c in range(plan.n_cores):
         units = plan.units_of_core(c, full)
         assert all(cores[(b, g, u)] == c for b, g, u in units)
-        assert units == sorted(units, key=lambda t: (t[2] % plan.modulus) * batch + t[0] * plan.groups + t[1])
+        assert units == sorted(units, key=lambda t: (t[0] * plan.groups + t[1], t[2]))  # ascending bg, then u
         seen += units
     assert sorted(seen) == [(b, 0, u) for b in range(batch) for u in range(plan.max_units)]
     counts = [len(plan.units_of_core(c, full)) for c in range(plan.n_cores)]
-    assert max(counts) - min(counts) <= 1 and sum(counts) == batch * plan.max_units
+    # the stride windows tile the grid within two units per core (32 x 64 = 2048 pairs: 15..17 on 130 cores)
+    assert max(counts) - min(counts) <= 2 and sum(counts) == batch * plan.max_units
     # the mapping is the same under a different cur_pos: only the live subset changes
     short = [plan.unit - 1] * batch  # one live unit per row
     assert all(plan.core_of(b, 0, 0) == cores[(b, 0, 0)] for b in range(batch))
@@ -243,23 +244,44 @@ def test_splitfree_mapping_covers_every_pair_once_and_balances(grid, batch):
 def test_splitfree_lone_row_spreads_over_the_grid(grid):
     plan = _plan(grid, 1)
     busy = [c for c in range(plan.n_cores) if plan.units_of_core(c, [CTX_256K - 1])]
-    # one unit per core: 128 of the 130 Blackhole cores (2048-token units), all 64 Wormhole cores (4096)
-    assert len(busy) == plan.max_units == {(8, 8): 64, (13, 10): 128}[grid] and len(busy) >= 0.98 * plan.n_cores
+    assert len(busy) == 64  # 64 units of 4096 tokens, one per core, on both grids
     assert max(len(plan.units_of_core(c, [CTX_256K - 1])) for c in range(plan.n_cores)) == 1
-    # the unit follows the grid: the harvested Blackhole grids (P300 12x10 / 11x10, a 10x10) and a one-core
-    # grid (the cap); the env pins it (the old 4096 default: a lone 256K row on 64 cores whatever the grid)
+    # the same lone row inside a padded batch: its units sit on consecutive cores (core = (u' + bg) mod n), so
+    # the busy core count is the same for B = 1, 8 and 32 on every grid (the earlier p = u'*BG + bg mapping
+    # collapsed a B=32 lone row onto n / gcd(32, n) cores: 15 of 120, 65 of 130, 2 of 64)
+    for hg in (grid, (12, 10), (11, 10)):
+        for batch in (8, 32):
+            bp = _plan(hg, batch)
+            pos = [CTX_256K - 1] + [-1] * (batch - 1)
+            bb = [c for c in range(bp.n_cores) if bp.units_of_core(c, pos)]
+            assert len(bb) == min(64, bp.n_cores) and max(len(bp.units_of_core(c, pos)) for c in bb) == 1
+            assert bp.stride >= batch and math.gcd(bp.stride, bp.n_cores) == 1
+            assert bp.stride * bp.stride_inv % bp.n_cores == 1
+            assert bp.core_of(3, 0, 5) == (5 * bp.stride + 3) % bp.n_cores
+    assert sp.unit_stride(32, 130) == (33, pow(33, -1, 130)) and sp.unit_stride(32, 120) == (37, pow(37, -1, 120))
+    assert sp.unit_stride(32, 64) == (33, pow(33, -1, 64)) and sp.unit_stride(1, 130) == (1, 1)
+    assert sp.unit_stride(8, 120) == (11, pow(11, -1, 120)) and sp.unit_stride(4, 1) == (1, 0)
+    # GEMMA4_SDPA_SPLITFREE_UNIT=grid derives the unit from the grid: one unit per core at the full context (128
+    # of 130 cores with 2048 tokens; the harvested 12x10 / 11x10 / 10x10 and a one-core grid, the cap); measured
+    # slower than 4096 on a 12x10 P150 (the serial combine), so it is a mode, not the default
+    gp = _plan(grid, 1, env={sp.UNIT_ENV: "grid"})
+    gb = [c for c in range(gp.n_cores) if gp.units_of_core(c, [CTX_256K - 1])]
+    assert gp.grid_unit and (gp.unit, len(gb)) == {(8, 8): (4096, 64), (13, 10): (2048, 128)}[grid]
+    assert len(gb) >= 0.98 * gp.n_cores and gp.scratch_tiles_bound == gp.batch * gp.groups * gp.n_cores * 18
     assert sp.derive_unit(256, CTX_256K, 130) == 2048 and sp.derive_unit(256, CTX_256K, 64) == 4096
     assert sp.derive_unit(256, CTX_256K, 120) == 2304 and sp.derive_unit(256, CTX_256K, 110) == 2560
     assert sp.derive_unit(256, CTX_256K, 100) == 2816 and sp.derive_unit(256, CTX_256K, 1) == 4096
     assert sp.derive_unit(256, 4096, 130) == 256 and sp.derive_unit(128, CTX_256K, 64) == 4096
     assert sp.derive_unit(256, 1 << 20, 130) == 4096
     for hg, unit, units in (((12, 10), 2304, 114), ((11, 10), 2560, 103), ((10, 10), 2816, 94)):
-        hp = _plan(hg, 1)
+        hp = _plan(hg, 1, env={sp.UNIT_ENV: "grid"})
         hb = [c for c in range(hp.n_cores) if hp.units_of_core(c, [CTX_256K - 1])]
         assert (hp.unit, hp.max_units, len(hb)) == (unit, units, units) and len(hb) >= 0.9 * hp.n_cores
-    pinned = _plan(grid, 1, env={sp.UNIT_ENV: "4096"})
-    assert pinned.unit == 4096 and pinned.max_units == 64
-    assert len([c for c in range(pinned.n_cores) if pinned.units_of_core(c, [CTX_256K - 1])]) == 64
+    pinned = _plan(grid, 1, env={sp.UNIT_ENV: "2048"})
+    assert pinned.unit == 2048 and pinned.max_units == 128 and not pinned.grid_unit
+    assert len([c for c in range(pinned.n_cores) if pinned.units_of_core(c, [CTX_256K - 1])]) == min(
+        128, pinned.n_cores
+    )
     # at 1M tokens every core of the grid carries units (the cap keeps the unit at 4096: 256 units)
     big = _plan(grid, 1, ctx=1 << 20)
     assert big.max_units == 256 and big.modulus == min(big.n_cores, 256)
@@ -268,8 +290,8 @@ def test_splitfree_lone_row_spreads_over_the_grid(grid):
 
 
 def test_splitfree_chunks_and_masks_follow_cur_pos_like_the_stock():
-    plan = _plan((13, 10), 1, env={sp.UNIT_ENV: "4096"})  # the arithmetic below at the pinned 4096 unit
-    derived = _plan((13, 10), 1)  # the grid-derived unit halves it: unit u holds chunks [8u, 8u+7]
+    plan = _plan((13, 10), 1)  # the arithmetic below at the default 4096 unit
+    derived = _plan((13, 10), 1, env={sp.UNIT_ENV: "grid"})  # the grid-derived unit halves it: chunks [8u, 8u+7]
     assert derived.unit == 2048 and derived.live_units(4095) == range(0, 2)
     assert derived.unit_chunks(1, 4095) == range(8, 16) and derived.unit_chunks(0, 4095) == range(0, 8)
     assert derived.live_units(CTX_256K - 1) == range(0, 128) and derived.combine_order(0, 0, 4095) == [(0, 0), (1, 1)]
@@ -312,13 +334,12 @@ def test_splitfree_sliding_layer(grid):
 def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
     """The chunk is decided by head dim, cache format and arch (never batch or grid): bfp8 at head_dim 512 takes
     256 on both archs; bf16 still fits 256 on Blackhole (1,362,048 of 1,369,560 B with the fp32 scores and scaler CBs) and
-    drops to 128 on Wormhole; the env caps it; the unit follows the grid, never the batch."""
+    drops to 128 on Wormhole; the env caps it; the unit stays 4096 (``=grid`` derives it, never the batch)."""
     bfp8 = {(g, b): _plan(g, b) for g in GRIDS for b in (1, 32)}
-    assert {p.chunk for p in bfp8.values()} == {256}
-    assert {g: p.unit for (g, _b), p in bfp8.items()} == {(8, 8): 4096, (13, 10): 2048}
+    assert {p.chunk for p in bfp8.values()} == {256} and {p.unit for p in bfp8.values()} == {4096}
     assert all(p.fits for p in bfp8.values())
     bf16 = sp.plan_splitfree((13, 10), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", env={})
-    assert bf16.chunk == 256 and bf16.unit == 2048 and bf16.fits and bf16.partial_cb_bytes == 1_362_048
+    assert bf16.chunk == 256 and bf16.unit == 4096 and bf16.fits and bf16.partial_cb_bytes == 1_362_048
     bf16_qk = sp.plan_splitfree((13, 10), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", env={sp.QK_FP32_ENV: "0"})
     assert bf16_qk.qk_tile_bytes == 2048 and bf16_qk.partial_cb_bytes == 1_343_616 and bf16_qk.chunk == 256
     wh = sp.plan_splitfree((8, 8), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", arch="Arch.WORMHOLE_B0", env={})
@@ -337,35 +358,35 @@ def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
     )
     assert sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0) == 852_096
     assert p.combine_cb_bytes == sp.combine_cb_bytes(16, 128) == 340_096
-    assert "chunk 256 x 8 = unit 2048, 128 units, 128 slots" in p.describe()
+    assert "chunk 256 x 16 = unit 4096, 64 units, 64 slots" in p.describe()
 
 
 def test_splitfree_scratch_sizes_of_the_galaxy_builds():
-    """Per engine (one chip), 32 padded rows at 256K: one slot per unit x 18 fp32 tiles per row for the
-    head_dim-512 global layers = 128 slots (2048-token units) = 288 MiB on the 13x10 grid, 64 slots = 144 MiB on
-    the Wormhole 8x8, whatever the local head count; the sliding layers (head_dim 256, 2 local KV groups) need
-    12.5 MiB, so one model scratch takes the global figure. The unit follows the grid and the context, so a
-    shorter build keeps about the same scratch (units x rows x groups x 18 tiles)."""
+    """Per engine (one chip), 32 padded rows at 256K: 64 slots x 18 fp32 tiles per row for the head_dim-512
+    global layers = 144 MiB whatever the local head count or the grid; the sliding layers (head_dim 256, 2 local
+    KV groups) need 12.5 MiB, so one model scratch takes the global figure. Under ``=grid`` the scratch takes
+    one slot per core (288 MiB on 13x10) so a call on a narrower page table (a smaller unit, up to n_cores
+    units) still fits."""
     p31 = _plan((13, 10), 32, groups=1, hpg=4)  # 31B TP8 global: 4 local q heads, one replicated KV head
     p12 = _plan((13, 10), 32, groups=1, hpg=2)  # 12B TP8 global: 2 local q heads
-    assert p31.scratch_tiles == p12.scratch_tiles == 32 * 128 * 18 == 73728
-    assert p31.scratch_bytes == 73728 * 4096 == 301_989_888
-    assert _plan((8, 8), 32, groups=1, hpg=4).scratch_tiles == 32 * 64 * 18 == 36864  # 144 MiB on Wormhole
+    assert p31.scratch_tiles == p12.scratch_tiles == 32 * 64 * 18 == 36864
+    assert p31.scratch_bytes == 36864 * 4096 == 150_994_944 and p31.scratch_tiles_bound == 36864
+    assert _plan((8, 8), 32, groups=1, hpg=4).scratch_tiles == 36864
     sliding = _plan((13, 10), 32, groups=2, hpg=2, head_dim=256, window=1024)
     assert sliding.scratch_tiles == 32 * 2 * 5 * 10 == 3200 and sliding.scratch_bytes == 13_107_200
     specs = [(1, 4, 512, None), (2, 2, 256, 1024)]
-    # the model's scratch takes one slot per core (130 on 13x10): a call on a narrower page table than the
-    # model's maximum derives a smaller unit with up to n_cores units (33280 tokens: 130 units of 256), and fits
-    assert p31.scratch_tiles_bound == 32 * 130 * 18 == 74880 and sliding.scratch_tiles_bound == 3200
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env={}) == 74880
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env={}) == 36864
     assert sp.scratch_tiles_for((8, 8), 32, specs, CTX_256K, kv_dtype="BFLOAT16", env={}) == 36864
-    assert sp.scratch_tiles_for((13, 10), 1, specs, CTX_256K, env={}) == 130 * 18
-    narrow = _plan((13, 10), 32, ctx=33280)
+    assert sp.scratch_tiles_for((13, 10), 1, specs, CTX_256K, env={}) == 64 * 18
+    gm = {sp.UNIT_ENV: "grid"}
+    g31 = _plan((13, 10), 32, groups=1, hpg=4, env=gm)
+    assert (g31.unit, g31.scratch_tiles, g31.scratch_tiles_bound) == (2048, 32 * 128 * 18, 32 * 130 * 18)
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env=gm) == 74880
+    narrow = _plan((13, 10), 32, ctx=33280, env=gm)
     assert (narrow.unit, narrow.max_units, narrow.scratch_tiles) == (256, 130, 74880)
-    assert all(_plan((13, 10), 32, ctx=c).scratch_tiles <= 74880 for c in range(4096, CTX_256K + 1, 4096))
-    # a 128K build keeps the slot count (1024-token units); the 31B at TP4 (8 local q heads over one KV group)
-    # needs the same
-    assert sp.scratch_tiles_for((13, 10), 32, [(1, 8, 512, None)], CTX_256K // 2, env={}) == 32 * 130 * 18
+    assert all(_plan((13, 10), 32, ctx=c, env=gm).scratch_tiles <= 74880 for c in range(4096, CTX_256K + 1, 4096))
+    # a 128K build halves it; the 31B at TP4 (8 local q heads over one KV group) needs the same
+    assert sp.scratch_tiles_for((13, 10), 32, [(1, 8, 512, None)], CTX_256K // 2, env={}) == 32 * 32 * 18
     # the model's own sizing (attach_sdpa_splitfree_scratch, also run by the vLLM generator once the plugin's
     # caches exist): the covered layers and their per-chip specs of the 12B (16 q / 8 kv heads, head_dim 256 /
     # 512 global, window 1024, 48 layers in the 5:1 pattern) at TP4 and TP8, mode "1" (global) and "2" (all)
@@ -388,10 +409,10 @@ def test_splitfree_scratch_sizes_of_the_galaxy_builds():
     )
     covered, specs = splitfree_layer_specs(hf, 48, 4, "1")
     assert covered == {i for i in range(48) if i % 6 == 5} and specs == [(2, 2, 512, None)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 130 * 18  # 585 MiB at TP4
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 64 * 18  # 288 MiB at TP4
     covered, specs = splitfree_layer_specs(hf, 48, 4, "2")
     assert covered == set(range(48)) and specs == [(2, 2, 256, 1024), (2, 2, 512, None)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 130 * 18  # the global figure
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 64 * 18  # the global figure
     assert splitfree_layer_specs(hf, 48, 8, "1")[1] == [(1, 2, 512, None)]
     assert splitfree_layer_specs(hf, 12, 16, "2")[1] == [(1, 1, 256, 1024), (1, 1, 512, None)]  # kv replicated
     assert splitfree_layer_specs(hf, 48, 4, "0") == (set(), [])
