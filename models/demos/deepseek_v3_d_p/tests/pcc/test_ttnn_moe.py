@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_sp_mesh_composer,
     get_tp_mesh_composer,
     routed_expert_combine_overlap_arg,
+    routed_expert_combine_overlap_eager_enabled,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
@@ -142,6 +143,7 @@ def run_model(
     score_func=None,
     skip_upstream_reference=False,
     overlap_routed_expert_with_combine=False,
+    overlap_routed_expert_with_combine_eager=False,
     moe_transport="direct",
     combine_fwd_reduction=None,
 ):
@@ -169,6 +171,7 @@ def run_model(
     None keeping the gate config's default. ``skip_upstream_reference`` drops the vendored-model
     cross-check. ``overlap_routed_expert_with_combine`` goes straight to TtMoe: off unless the caller passes
     routed_expert_combine_overlap_arg for a model that opts in (Kimi K2.7, GLM 5.3, Mistral Small 4).
+    ``overlap_routed_expert_with_combine_eager`` (routed_expert_combine_overlap_eager_enabled: Kimi K2.7, GLM 5.3),
     ``moe_transport`` and ``combine_fwd_reduction`` go straight to TtMoe too.
 
     A HASH_HOST / HASH_DEVICE ``gate_fallback_mode`` selects hash routing: the tid2eid table and
@@ -566,6 +569,7 @@ def run_model(
         latent_use_norm=latent_use_norm,
         rms_norm_eps=rms_norm_eps,
         overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
+        overlap_routed_expert_with_combine_eager=overlap_routed_expert_with_combine_eager,
         moe_transport=moe_transport,
         combine_fwd_reduction=combine_fwd_reduction,
     )
@@ -1081,6 +1085,7 @@ def test_glm_moe(
         is_balanced=is_balanced,
         padded_percent=padded_percent,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
+        overlap_routed_expert_with_combine_eager=routed_expert_combine_overlap_eager_enabled(GLM53Config),
     )
 
 
@@ -1113,6 +1118,7 @@ def test_glm_moe_fabric2d(variant, config_only, mesh_device, device_params, num_
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
+        overlap_routed_expert_with_combine_eager=routed_expert_combine_overlap_eager_enabled(GLM53Config),
         moe_transport="fabric2d",
         combine_fwd_reduction=GLM53Config.COMBINE_FWD_REDUCTION,
     )
@@ -1231,6 +1237,7 @@ def test_kimi_moe(
         gate_fallback_mode=gate_fallback_mode,
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(KimiK27Config),
+        overlap_routed_expert_with_combine_eager=routed_expert_combine_overlap_eager_enabled(KimiK27Config),
     )
 
 
@@ -1260,6 +1267,7 @@ def test_kimi_moe_fabric2d(variant, config_only, mesh_device, device_params, num
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         request=request,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(KimiK27Config),
+        overlap_routed_expert_with_combine_eager=routed_expert_combine_overlap_eager_enabled(KimiK27Config),
         moe_transport="fabric2d",
         combine_fwd_reduction=KimiK27Config.COMBINE_FWD_REDUCTION,
     )

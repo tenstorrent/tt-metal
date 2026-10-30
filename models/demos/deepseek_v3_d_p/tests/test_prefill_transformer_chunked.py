@@ -287,30 +287,29 @@ MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] 
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power (run 41067008100 / job 124125611317), with the routed expert overlapped
-    # with combine_fabric2d. Host-dispatch bound and flat with depth, so this row catches an
-    # eager-dispatch regression and cannot see MLA.
+    # Cut on bh_sc1_high_power, run 36924348392. Host-dispatch bound and flat with depth, so this
+    # row catches an eager-dispatch regression and cannot see MLA.
     (36, 20, 10): [
-        0.266,
-        0.266,
-        0.263,
-        0.263,
-        0.264,
-        0.264,
-        0.260,
-        0.264,
-        0.259,
-        0.261,
-        0.264,
-        0.266,
-        0.263,
-        0.264,
-        0.261,
-        0.262,
-        0.263,
-        0.260,
-        0.260,
-        0.261,
+        0.380,
+        0.379,
+        0.379,
+        0.377,
+        0.376,
+        0.376,
+        0.380,
+        0.383,
+        0.393,
+        0.379,
+        0.379,
+        0.383,
+        0.381,
+        0.381,
+        0.378,
+        0.384,
+        0.378,
+        0.381,
+        0.386,
+        0.381,
     ],
 }
 
