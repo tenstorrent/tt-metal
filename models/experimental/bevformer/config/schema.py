@@ -86,6 +86,10 @@ class ModelConfig:
             )
         if self.num_levels < len(self.out_indices):
             raise ValueError("fpn.num_levels must be at least the number of backbone.out_indices")
+        if self.num_levels > 4:
+            raise ValueError("fpn.num_levels must not exceed the model's four level embeddings")
+        if self.embed_dims != 256:
+            raise ValueError("transformer.embed_dims must be 256 to match the FPN output width")
         if self.embed_dims % self.num_heads:
             raise ValueError("transformer.embed_dims must be divisible by transformer.num_heads")
         if any(low >= high for low, high in zip(self.point_cloud_range[:3], self.point_cloud_range[3:], strict=True)):
