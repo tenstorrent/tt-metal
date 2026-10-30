@@ -24,8 +24,6 @@ from ttexalens.tt_exalens_lib import (
 )
 
 from .device_io import read_from_device, write_words_to_device
-from .llk_params import BriscCmd
-from .logger import logger
 from .target_config import TestTargetConfig
 
 
@@ -47,9 +45,6 @@ class LLKAssertException(Exception):
 
 
 KERNEL_COMPLETE = 0xFF
-
-# Must match BRISC_BOOT_READY_SENTINEL in tests/helpers/src/brisc.cpp.
-BRISC_BOOT_READY_SENTINEL = 0xB001CAFE
 
 
 class BootMode(Enum):
@@ -255,87 +250,27 @@ def commit_tensix_soft_reset(
     )
 
 
-common_counter = 0
+def soft_reset_bits(location: str = "0,0") -> int:
+    """RISCV_DEBUG_REG_SOFT_RESET_0, a register: the host reads it while a kernel runs without touching L1."""
+    return get_register_store(location, 0).read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
 
-# The test firmware mirrors the completion flags and the BRISC counter into overlay registers (host_signal in boot.h),
-# so waiting on a kernel never reads its L1. Simulator targets keep the L1 path.
-HOST_SIGNAL_BRISC_COUNTER_SLOT = 3
-HOST_SIGNAL_MASK = 0xFFFFFF
-# boot.h host_signal: STREAM_SCRATCH of overlay stream <slot>
+
+# boot.h host_signal on Wormhole and Blackhole: STREAM_SCRATCH_0 of overlay stream 0, where BRISC marks a launch done.
 _NOC_OVERLAY_START_ADDR = 0xFFB40000
-_NOC_STREAM_REG_SPACE_SIZE = 0x1000
 _HOST_SIGNAL_SCRATCH_INDEX = {
     ChipArchitecture.WORMHOLE: 248,
     ChipArchitecture.BLACKHOLE: 36,
 }
+HOST_SIGNAL_MASK = 0xFFFFFF
 
 
-def host_signal_address(slot: int) -> int | None:
-    """Address of host signal slot, or None when this target signals through L1 only."""
+def launch_done_address() -> int | None:
+    """Wormhole and Blackhole silicon: the overlay register BRISC marks a launch done in (None on simulators)."""
     index = _HOST_SIGNAL_SCRATCH_INDEX.get(get_chip_architecture())
     target = TestTargetConfig._instance
     if index is None or (target is not None and target.run_simulator):
         return None
-    return _NOC_OVERLAY_START_ADDR + slot * _NOC_STREAM_REG_SPACE_SIZE + index * 4
-
-
-def commit_brisc_command(
-    location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
-):
-    global common_counter
-
-    if common_counter & 1:
-        write_words_to_device(location, Mailboxes.BriscCommand1.value, [command.value])
-    else:
-        write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
-
-    common_counter += 1
-    counter_addr = host_signal_address(HOST_SIGNAL_BRISC_COUNTER_SLOT)
-    mask = HOST_SIGNAL_MASK if counter_addr is not None else 0xFFFFFFFF
-    if counter_addr is None:
-        counter_addr = Mailboxes.BriscCounter.value
-    end_time = time.time() + timeout
-    while time.time() < end_time:
-        temp_value = read_word_from_device(location, counter_addr, 0)
-        if temp_value == common_counter & mask:
-            return
-
-    logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
-
-    raise TimeoutError(
-        (
-            f"Polling brisc command timed out | Python counter: {common_counter} | Brisc Counter: {temp_value} | "
-            f"Start counter: 0x{read_from_device(location, Mailboxes.BriscBread0.value, 0)} | "
-            f"Reset counter: 0x{read_from_device(location, Mailboxes.BriscBread1.value, 0)} | "
-            f"Reset register: 0x{get_register_store(location, 0).read_register('RISCV_DEBUG_REG_SOFT_RESET_0')}"
-        )
-    )
-
-
-def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
-    """Block until BRISC firmware has signalled it is in the polling loop.
-
-    On silicon this returns in microseconds. On TTSim, each read advances the
-    simulator clock, so this loop is what actually drives BRISC through its
-    init sequence to the point where it is safe for the host to write the
-    first command.
-    """
-    end_time = time.time() + timeout
-    while time.time() < end_time:
-        if (
-            read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
-            == BRISC_BOOT_READY_SENTINEL
-        ):
-            return
-
-    last_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
-    soft_reset = get_register_store(location, 0).read_register(
-        "RISCV_DEBUG_REG_SOFT_RESET_0"
-    )
-    raise TimeoutError(
-        f"BRISC firmware did not signal boot-ready within {timeout}s | "
-        f"BriscCounter=0x{last_value:08x} | Reset register=0x{soft_reset:08x}"
-    )
+    return _NOC_OVERLAY_START_ADDR + index * 4
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):

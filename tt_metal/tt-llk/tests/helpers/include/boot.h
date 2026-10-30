@@ -51,8 +51,8 @@ TT_ALWAYS_INLINE void configure_gathering()
 }
 
 #if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
-// STREAM_SCRATCH_0 of overlay streams 0..3 (24 bits, host readable): TRISC completion flags in slots 0..2 and the
-// BRISC command counter in slot 3, so the host can wait on a kernel without reading its L1.
+// STREAM_SCRATCH_0 of overlay stream 0 (24 bits, host readable, outside L1 and the Tensix register bus): BRISC marks the
+// launch done there (brisc.cpp), so the host waits on a kernel without touching anything the kernel uses.
 namespace host_signal
 {
 #if defined(ARCH_WORMHOLE)
@@ -60,15 +60,11 @@ constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 248;
 #else
 constexpr std::uint32_t STREAM_SCRATCH_REG_INDEX = 36;
 #endif
-constexpr std::uint32_t NOC_OVERLAY_START_ADDR    = 0xFFB40000;
-constexpr std::uint32_t NOC_STREAM_REG_SPACE_SIZE = 0x1000;
-constexpr std::uint32_t BRISC_COUNTER_SLOT        = 3;
+constexpr std::uint32_t NOC_OVERLAY_START_ADDR = 0xFFB40000;
 
-TT_ALWAYS_INLINE void write([[maybe_unused]] std::uint32_t slot, [[maybe_unused]] std::uint32_t value)
+TT_ALWAYS_INLINE volatile std::uint32_t* launch_done()
 {
-#if !defined(TT_METAL_TTSIM) // ttsim models no overlay registers; the host polls L1 there
-    *reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + slot * NOC_STREAM_REG_SPACE_SIZE + STREAM_SCRATCH_REG_INDEX * 4) = value;
-#endif
+    return reinterpret_cast<volatile std::uint32_t*>(NOC_OVERLAY_START_ADDR + STREAM_SCRATCH_REG_INDEX * 4);
 }
 } // namespace host_signal
 #endif
@@ -190,6 +186,7 @@ TT_ALWAYS_INLINE void device_setup()
 }
 
 constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
+constexpr std::uint32_t BRISC_SOFT_RESET_MASK = 0x0800;
 
 #ifndef ARCH_QUASAR
 
@@ -226,17 +223,6 @@ TT_ALWAYS_INLINE void clear_trisc_soft_reset()
     soft_reset &= ~TRISC_SOFT_RESET_MASK;
     ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
 
-    do
-    {
-        asm volatile("nop");
-    } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != soft_reset);
-}
-
-TT_ALWAYS_INLINE void set_triscs_soft_reset()
-{
-    std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
-    soft_reset |= TRISC_SOFT_RESET_MASK;
-    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
     do
     {
         asm volatile("nop");
