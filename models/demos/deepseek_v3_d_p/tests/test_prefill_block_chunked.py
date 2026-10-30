@@ -1332,7 +1332,7 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
     logger.success(f"random chunked block layer {layer_idx} bit-identical across {num_iterations} iterations")
 
 
-@pytest.mark.parametrize("num_iterations", [2], ids=["iter2"])
+@pytest.mark.parametrize("num_iterations", [2, 100], ids=["iter2", "iter100"])
 @pytest.mark.parametrize("n_chunks", [2], ids=["chunks2"])
 @pytest.mark.parametrize("layer_idx", [0, 1], ids=["dense_L0", "moe_L1"])
 @pytest.mark.parametrize(
@@ -1368,7 +1368,7 @@ def test_kimi_prefill_block_chunked_random(
     )
 
 
-@pytest.mark.parametrize("num_iterations", [2], ids=["iter2"])
+@pytest.mark.parametrize("num_iterations", [2, 100], ids=["iter2", "iter100"])
 @pytest.mark.parametrize("n_chunks", [2], ids=["chunks2"])
 @pytest.mark.parametrize("layer_idx", [0, 6, 3], ids=["dense_L0", "moe_full_L6", "moe_shared_L3"])
 @pytest.mark.parametrize(
