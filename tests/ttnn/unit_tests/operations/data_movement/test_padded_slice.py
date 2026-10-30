@@ -194,11 +194,12 @@ def test_padded_slice_rm_block_sharded_unaligned_start(device, begins, ends, sha
 
 
 # Last-dim offset on Quasar: shard width equal to the sliced width (read bound only) and wider than it
-# (the pad-row tail is zero-filled).
-@pytest.mark.parametrize("shard_width", (48, 64))
-def test_quasar_padded_slice_rm_last_dim_offset(device, shard_width):
+# (the pad-row tail is zero-filled). A 128 B shard row is 64 B aligned, so only the start offset
+# (32 B / 16 B) decides whether Blackhole's 64 B DRAM alignment needs the non-aligned reader.
+@pytest.mark.parametrize("begin, shard_width", ((16, 48), (16, 64), (8, 64)))
+def test_quasar_padded_slice_rm_last_dim_offset(device, begin, shard_width):
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
-    begins, ends, shard_shape = [0, 0, 0, 16], [1, 1, 64, 64], (8, shard_width)
+    begins, ends, shard_shape = [0, 0, 0, begin], [1, 1, 64, begin + 48], (8, shard_width)
     tt_input, output_mem_config, expected = _last_dim_padded_slice_setup(device, begins, ends, shard_shape, core_grid)
     actual = ttnn.experimental.quasar.padded_slice(
         tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config

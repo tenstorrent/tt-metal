@@ -234,7 +234,10 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         output_row_size_bytes,
         dst_buffer_alignment);
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
-    const bool is_non_aligned = (output_row_size_bytes % alignment) != 0;
+    // A start that isn't aligned to the source buffer needs the non-aligned path too: the aligned path would
+    // issue a NoC read from the misaligned address, which a DRAM source (64 B on Blackhole) rounds down.
+    const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
+    const bool is_non_aligned = (output_row_size_bytes % alignment) != 0 || (begins_bytes % src_buffer_alignment) != 0;
 
     // The shard row is wider than the slice row (channels padded to the shard alignment): the reader
     // zero-fills each row's tail from a zeroed scratchpad, which the shared factory's pad-row writer did.
@@ -335,7 +338,6 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         a, output, output_tensor_start, actual_output_shape, iter_cores);
 
     const uint32_t start_addr = a.buffer()->address();
-    const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
     const uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
     ProgramRunArgs run_args;
