@@ -111,6 +111,18 @@ def run_prefill_ladder(
 CONTINUATION_TAIL = 128
 
 
+def continuation_tails(chunk: int, padded_len: Callable[[int], int], *, skip_chunk: bool = False) -> List[int]:
+    """Every length an eager continuation past a cached prefix can take: the padded prefill buckets ``padded_len``
+    maps a remnant of 1..``chunk`` tokens to (128, 1024, 2048, ... up to the chunk; ``get_padded_prefill_len``), each
+    its own program set (the chunk length is a compile-time argument of the attention kernels). The served
+    12B QB2 paid 4.0 s on the first 1026-token remnant past a 4096-token first chunk (padded to 2048, a length the
+    ISL ladder never runs), 2026-10-30. ``skip_chunk`` drops the chunk-long tail (the ladder's second chunk of an
+    ISL above the chunk already ran it)."""
+    chunk = int(chunk)
+    tails = sorted({int(padded_len(n)) for n in range(1, chunk + 1)})
+    return [t for t in tails if t <= chunk and not (skip_chunk and t == chunk)]
+
+
 def warmup_page_table_with_real_blocks(page_table, pool_blocks: Optional[int] = None):
     """A mock page table with real block ids: the stock warmup table is all zeros, and block 0 is vLLM's null block,
     so the continuation's prior-window reads (``_paged_tail_block_range`` drops leading null blocks and finds no
@@ -136,34 +148,37 @@ def _kv_pool_blocks(kv_cache, model_id) -> Optional[int]:
 
 
 def run_prefix_continuation_warmup(
-    generator, kv_cache, prefill_forward: Callable, *, chunk: int, tail: int = CONTINUATION_TAIL
+    generator, kv_cache, prefill_forward: Callable, *, chunk: int, tail: int = CONTINUATION_TAIL, tails=None
 ) -> bool:
-    """Run one eager batch-1 prefill of ``tail`` tokens past ``chunk`` cached tokens (``start_pos=[chunk]``) on every
-    data-parallel model of ``generator``, once per process: the shape a prefix-cache hit prefills in serving. The
-    continuation is eager by design and its first use compiled on the request that hit the cache (the 12B QB2's
-    first cached request took 2.7 s against 0.6 s for the next, 2026-10-30). The mock page table carries real
-    block ids (``warmup_page_table_with_real_blocks``) so the continuation runs the same programs a served hit
-    runs (the prior window read from the paged cache). Returns whether it ran: with paged attention off (no page
-    table) there is no cached prefix to continue from."""
+    """Run one eager batch-1 prefill of each tail length past ``chunk`` cached tokens (``start_pos=[chunk]``) on every
+    data-parallel model of ``generator``, once per process: the shapes a prefix-cache hit (or a scheduler chunk past
+    the first) prefills in serving. ``tails`` defaults to ``[tail]``; the warmup sweep passes every reachable padded
+    length (``continuation_tails``). The continuation is eager by design and its first use compiled on the request
+    that hit the cache (the 12B QB2's first cached request took 2.7 s against 0.6 s for the next, 2026-10-30). The
+    mock page table carries real block ids (``warmup_page_table_with_real_blocks``) so the continuation runs the same
+    programs a served hit runs (the prior window read from the paged cache). Returns whether it ran: with paged
+    attention off (no page table) there is no cached prefix to continue from."""
     if getattr(generator, "_warmed_prefix_continuation", False):
         return False
     generator._warmed_prefix_continuation = True
+    tails = [int(tail)] if tails is None else [int(t) for t in tails]
     for model_id in range(generator.data_parallel):
-        warmup_args = generator._mock_tokens(1, int(chunk) + int(tail), kv_cache, model_id)
-        if warmup_args.get("page_table") is None:
-            logger.warning("Skipping the prefix-cache continuation warmup: paged attention off (no page table)")
-            return False
-        warmup_args["page_table"] = warmup_page_table_with_real_blocks(
-            warmup_args["page_table"], pool_blocks=_kv_pool_blocks(kv_cache, model_id)
-        )
-        logger.info("Warming up the eager prefix-cache continuation: {} tokens past {} cached", tail, chunk)
-        prefill_forward(
-            **warmup_args,
-            kv_cache=kv_cache,
-            start_pos=[int(chunk)],
-            enable_trace=False,
-            model_id_warmup=model_id,
-            sampling_params=None,
-            warmup_prefill=False,
-        )
+        for t in tails:
+            warmup_args = generator._mock_tokens(1, int(chunk) + t, kv_cache, model_id)
+            if warmup_args.get("page_table") is None:
+                logger.warning("Skipping the prefix-cache continuation warmup: paged attention off (no page table)")
+                return False
+            warmup_args["page_table"] = warmup_page_table_with_real_blocks(
+                warmup_args["page_table"], pool_blocks=_kv_pool_blocks(kv_cache, model_id)
+            )
+            logger.info("Warming up the eager prefix-cache continuation: {} tokens past {} cached", t, chunk)
+            prefill_forward(
+                **warmup_args,
+                kv_cache=kv_cache,
+                start_pos=[int(chunk)],
+                enable_trace=False,
+                model_id_warmup=model_id,
+                sampling_params=None,
+                warmup_prefill=False,
+            )
     return True

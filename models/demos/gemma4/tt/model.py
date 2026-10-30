@@ -2211,6 +2211,7 @@ class Gemma4Model:
                 seq_len=per_user_seq_len,
                 legacy_table=page_table,
                 legacy_mapper=pt_mapper,
+                max_seq_len=getattr(self, "max_seq_len", None),
             )
 
         self._prefill_input_ids_torch = tokens_torch

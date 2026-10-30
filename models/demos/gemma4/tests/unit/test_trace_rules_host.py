@@ -17,12 +17,14 @@ from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin a
 from models.demos.gemma4.tt.generator import filter_warmup_sampling_params
 from models.demos.gemma4.tt.warmup_isls import (
     ENV_VAR,
+    continuation_tails,
     parse_warmup_isls,
     run_prefill_ladder,
     run_prefix_continuation_warmup,
     warmup_page_table_with_real_blocks,
     warmup_prefill_isls,
 )
+from models.tt_transformers.tt.common import get_padded_prefill_len
 
 
 class _View:
@@ -536,22 +538,30 @@ def test_ladder_runs_once_per_process_and_per_model():
     assert len(gen.calls) == 4
 
 
-def test_prefix_continuation_warmup_prefills_a_tail_past_one_chunk_once_per_process():
+def test_prefix_continuation_warmup_prefills_every_reachable_tail_past_one_chunk_once_per_process():
     calls = []
 
     def prefill_forward(**kwargs):
         calls.append(kwargs)
 
+    # every padded length a remnant past a cached prefix can take (get_padded_prefill_len), each a program set of
+    # its own: the served 12B QB2 paid 4.0 s on its first 2048-token tail, a length the ISL ladder never runs
+    assert continuation_tails(4096, get_padded_prefill_len) == [128, 1024, 2048, 4096]
+    assert continuation_tails(4096, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048]
+    assert continuation_tails(2048, get_padded_prefill_len) == [128, 1024, 2048]
+    assert continuation_tails(8192, get_padded_prefill_len, skip_chunk=True) == [128, 1024, 2048, 4096]
     gen = _FakeGenerator(data_parallel=2)
-    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
-    assert [c["start_pos"] for c in calls] == [[4096], [4096]], "one continuation per model, past one chunk"
-    assert all(c["tokens"] == (1, 4096 + 128) and c["enable_trace"] is False for c in calls)
-    assert [c["model_id_warmup"] for c in calls] == [0, 1] and all(c["kv_cache"] == "kv" for c in calls)
+    tails = [128, 1024, 2048]
+    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096, tails=tails)
+    assert [c["start_pos"] for c in calls] == [[4096]] * 6, "every tail per model, past one chunk"
+    assert [c["tokens"] for c in calls] == [(1, 4096 + t) for _ in range(2) for t in tails]
+    assert all(c["enable_trace"] is False and c["kv_cache"] == "kv" for c in calls)
+    assert [c["model_id_warmup"] for c in calls] == [0] * 3 + [1] * 3
     # the mock user holds real block ids: a zero table (the null block) never reads the prior window at boot, so
     # the served hit compiled the continuation's programs on the first cached request
-    for c in calls:
+    for c, t in zip(calls, tails * 2):
         table = c["page_table"]
-        assert tuple(table.shape) == (1, 33) and bool((table > 0).all()), "non-zero block ids for the mock user"
+        assert tuple(table.shape) == (1, (4096 + t) // 128) and bool((table > 0).all()), "non-zero block ids"
         assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
     # the pool bound: ids wrap inside [1, pool) when the kv pool is known; real tables and fakes pass through
     assert warmup_page_table_with_real_blocks(torch.zeros(1, 6, dtype=torch.int32), pool_blocks=4).tolist() == [
@@ -562,6 +572,10 @@ def test_prefix_continuation_warmup_prefills_a_tail_past_one_chunk_once_per_proc
     calls.clear()
     assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
     assert calls == [], "once per process"
+    single = _FakeGenerator(data_parallel=1)
+    assert run_prefix_continuation_warmup(single, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert [c["tokens"] for c in calls] == [(1, 4096 + 128)], "the default tail is the short hit"
+    calls.clear()
     off = _FakeGenerator(data_parallel=1, paged=False)
     assert not run_prefix_continuation_warmup(off, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
     assert calls == [], "no cached prefix to continue from with paged attention off"

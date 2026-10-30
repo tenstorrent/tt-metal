@@ -897,6 +897,22 @@ def test_continuation_window_plan_is_a_fixed_number_of_sticks_and_covers_the_win
     cut = continuation_mod.continuation_window_table
     assert cut(torch.tensor([[7, 8, 9]]), 0, 8).tolist() == [[7, 8, 9, 0, 0, 0, 0, 0]]
     assert cut(torch.tensor([[7, 8, 9]]), 0, 8, valid_cols=2).tolist() == [[7, 8, 0, 0, 0, 0, 0, 0]]
+    # the global layers' table: the context's block count (one K extent, hence one SDPA binary, for every prompt
+    # length), never below the device table's width, at the stick multiple; without a context the width itself
+    cont = continuation_mod.PrefillContinuation(
+        "mesh", None, chunk_start=2432, seq_len=128, legacy_table=torch.arange(1, 67).view(1, 66), max_seq_len=131072
+    )
+    full = cont.for_layer(0).padded_table(66, 64)
+    assert (
+        full.shape == (1, 2048)
+        and full.host[0, :66].tolist() == list(range(1, 67))
+        and int(full.host[0, 66:].max()) == 0
+    )
+    assert cont.for_layer(0).padded_table(2100, 64).shape == (1, 2104)
+    plain = continuation_mod.PrefillContinuation(
+        "mesh", None, chunk_start=2432, seq_len=128, legacy_table=torch.ones(1, 66)
+    )
+    assert plain.for_layer(0).padded_table(66, 64).shape == (1, 72)
     # the SDPA chunk fit: capped at the hit alignment, shrunk to a 32-multiple divisor of an off-grid start
     cfg = SimpleNamespace(
         compute_with_storage_grid_size="grid", q_chunk_size=256, k_chunk_size=128, exp_approx_mode=False

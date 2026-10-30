@@ -240,9 +240,22 @@ class PrefillContinuation:
     identity so the layers of one group share two uploads. ``release`` frees everything after the layer loop.
     """
 
-    def __init__(self, mesh_device, mesh_mapper, *, chunk_start, seq_len, legacy_table=None, legacy_mapper=None):
+    def __init__(
+        self,
+        mesh_device,
+        mesh_mapper,
+        *,
+        chunk_start,
+        seq_len,
+        legacy_table=None,
+        legacy_mapper=None,
+        max_seq_len=None,
+    ):
         self.chunk_start = int(chunk_start)
         self.seq_len = int(seq_len)
+        # The served context: the global layers' full table is padded to its block count so the chunked SDPA's
+        # K extent (a compile-time kernel argument, one binary per distinct value) is the same for every prompt.
+        self.max_seq_len = int(max_seq_len) if max_seq_len else None
         self.mesh_device = mesh_device
         self._mapper = mesh_mapper
         self._legacy = None
@@ -314,15 +327,21 @@ class PrefillContinuation:
             self._cache[cache_key] = dev
         return dev
 
-    def padded_table(self, layer_idx, width):
+    def padded_table(self, layer_idx, width, block_size=None):
         """The group's whole table (``width`` columns, zero-padded) at the stick multiple, for the global layers'
         chunked SDPA when the device table's own width is not one (the generator sizes it to the prompt's blocks);
-        None without a host table."""
+        None without a host table. With the context length and the layer's ``block_size`` the width is the
+        context's block count: the SDPA kernels are compiled per K extent (``Sq + cols * block``), so a width that
+        followed the prompt would compile the global layers again for every prompt-length class (the legacy
+        int-start path did so for every position: 1.4-2.1 s per new hit on the 12B QB2, 2026-10-30)."""
         group = self._group(layer_idx)
         if group is None:
             return None
         key, table, layout, mapper = group
-        cols = pad_page_table_cols(max(int(width), int(table.shape[-1])))
+        cols = max(int(width), int(table.shape[-1]))
+        if self.max_seq_len and block_size:
+            cols = max(cols, -(-self.max_seq_len // int(block_size)))
+        cols = pad_page_table_cols(cols)
         cache_key = (key, "full", int(cols))
         dev = self._cache.get(cache_key)
         if dev is None:
@@ -410,5 +429,5 @@ class LayerContinuation:
     def sliding_inputs(self, block_size, sliding_window, align):
         return self._parent.sliding_inputs(self.layer_idx, block_size, sliding_window, align)
 
-    def padded_table(self, width):
-        return self._parent.padded_table(self.layer_idx, width)
+    def padded_table(self, width, block_size=None):
+        return self._parent.padded_table(self.layer_idx, width, block_size)

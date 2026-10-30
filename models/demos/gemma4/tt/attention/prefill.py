@@ -1626,7 +1626,7 @@ def _prefill_forward_single(
             if width == pad_page_table_cols(width):
                 base_offset = continuation.start_tensor
             else:
-                padded = continuation.padded_table(width)
+                padded = continuation.padded_table(width, effective_block_size(k_cache, config.head_dim, nkv_local))
                 if padded is not None:
                     sdpa_table, base_offset = padded, continuation.start_tensor
         tt_sdpa = chunked_prefill_sdpa(
