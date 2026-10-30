@@ -8,6 +8,7 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -80,9 +81,11 @@ autograd::TensorPtr make_param(const ttnn::Tensor& grad) {
     return param;
 }
 
-ttnn::Tensor shard(const xt::xarray<float>& full) {
+// Without a cluster axis the tensor is sharded across every device and carries a single placement for the whole
+// mesh, as GPT-2's TP linears are.
+ttnn::Tensor shard(const xt::xarray<float>& full, std::optional<int> cluster_axis = kClusterAxis) {
     auto* device = &autograd::ctx().get_device();
-    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, kShardDim, kClusterAxis);
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, kShardDim, cluster_axis);
     return core::from_xtensor(full, device, ttnn::Layout::TILE, mapper.get());
 }
 
@@ -277,6 +280,22 @@ TEST_F(ClipGradNormTpTest, UnalignedShapes) {
     verify(grads, norm, max_norm);
 }
 
+// Sharded grads whose params carry a single placement for the whole mesh, as GPT-2's TP linears produce.
+TEST_F(ClipGradNormTpTest, CollapsedShardPlacement) {
+    auto grads = make_grads({}, std::vector<Shape>(2, Shape{1U, 1U, 32U, 32U}));
+    for (size_t i = 0; i < 2; ++i) {
+        auto full = random_bf16_exact({1U, 1U, 32U, 32U * kTpSize});
+        grads.sharded_params[fmt::format("sharded_{}", i)] = make_param(shard(full, /*cluster_axis=*/std::nullopt));
+        grads.sharded_full.push_back(std::move(full));
+    }
+    ASSERT_EQ(grads.sharded_params.at("sharded_0")->get_value().tensor_topology().placements().size(), 1U);
+    const float max_norm = 0.5F * reference_norm(grads);
+
+    auto norm = core::clip_grad_norm_tp(grads.sharded_params, grads.replicated_params, max_norm, kClusterAxis);
+
+    verify(grads, norm, max_norm);
+}
+
 // Column-parallel (dim 2) and row-parallel (dim 3) grads are clipped in one step3 launch, which relabels its outputs
 // with the union of its inputs' placements; each grad must keep its own label.
 TEST_F(ClipGradNormTpTest, PreservesGradTopology) {
@@ -378,6 +397,16 @@ TEST_F(ClipGradNormTpTest, RejectsInvalidArguments) {
     EXPECT_THAT(
         [&] { core::clip_grad_norm_tp({}, sharded, 1.0F, kClusterAxis); },
         ThrowsMessage<std::logic_error>(HasSubstr("is passed as replicated but is sharded")));
+
+    // Only cluster_axis is reduced, so a parameter sharded on another mesh axis would get a per-device norm.
+    EXPECT_THAT(
+        [&] { core::clip_grad_norm_tp(sharded, replicated, 1.0F, /*cluster_axis=*/0U); },
+        ThrowsMessage<std::logic_error>(HasSubstr("is sharded on mesh axis 1, but only cluster_axis 0 is reduced")));
+    serialization::NamedParameters collapsed;
+    collapsed["collapsed"] = make_param(shard(random_bf16_exact({1U, 1U, 32U, 32U * kTpSize}), std::nullopt));
+    EXPECT_THAT(
+        [&] { core::clip_grad_norm_tp(collapsed, {}, 1.0F, /*cluster_axis=*/0U); },
+        ThrowsMessage<std::logic_error>(HasSubstr("is sharded across all 2 devices")));
 
     auto with_duplicate = replicated;
     with_duplicate["duplicate"] = sharded.begin()->second;
