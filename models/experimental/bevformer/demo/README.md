@@ -205,21 +205,49 @@ used only to keep the structure readable; real inference requires calibrated pro
 All frames selected for one run must share `scene_token`. At least `--num-frames + 1` frames are
 required because the first establishes the temporal BEV and is not included in the results.
 
-An existing trusted MMDetection3D camera info pickle can be converted without dataset-specific
-inference code:
+### Prepare a manifest locally
+
+The demo accepts JSON manifests only. It never loads pickle metadata.
+
+Prepare the manifest outside the tt-metal repository:
+
+1. Generate the dataset metadata locally.
+2. Use only metadata you generated or verified.
+3. Never load a downloaded, untrusted pickle.
+4. Run conversion inside the dataset environment.
+5. Write JSON matching the schema above.
+6. Pass JSON through `--dataset`.
+7. Pass the image root through `--dataset-root`.
+
+Example local conversion command:
 
 ```sh
-python -m models.experimental.bevformer.demo.convert_info \
-  --config models/experimental/bevformer/config/bevformer_base.json \
+python /path/to/local/convert_info.py \
   --input /path/to/infos_val.pkl \
   --output /path/to/sequence.json \
-  --strip-prefix /path/to/dataset
+  --strip-prefix /path/to/dataset/root \
+  --camera-order CAM_FRONT CAM_FRONT_RIGHT CAM_FRONT_LEFT \
+                 CAM_BACK CAM_BACK_LEFT CAM_BACK_RIGHT \
+  --can-bus-dims 18
 ```
 
-The converter looks cameras up by name and writes them in the config's `camera_order`, which must
-match the order used while training the camera embeddings. Use `--dataset-root` at inference time
-to resolve the converted relative paths. Because pickle loading can execute code, only convert
-metadata from a trusted source.
+The local converter must preserve these contracts:
+
+- `camera_order` exactly matches the selected model config.
+- Every frame contains exactly those camera names.
+- Every camera provides one readable image path.
+- Every camera provides one numeric `4x4` `lidar2img` matrix.
+- Matrices target each source image's original dimensions.
+- `can_bus` contains the configured number of values.
+- `can_bus` stores absolute frame state.
+- `scene_token` groups frames into independent sequences.
+- `timestamp` defines chronological order within each scene.
+- Relative image paths resolve below `--dataset-root`.
+- Absolute image paths remain valid without `--dataset-root`.
+- Each run needs `--num-frames + 1` frames.
+
+The demo selects one scene and sorts its timestamps. It reserves the first selected frame for
+temporal preparation. The remaining frames produce outputs and timing samples.
 
 ## Checkpoint-backed real sequence
 
