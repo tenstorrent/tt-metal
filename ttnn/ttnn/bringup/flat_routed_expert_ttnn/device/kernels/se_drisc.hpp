@@ -105,6 +105,11 @@ inline void se_drisc_write(uint32_t src, uint32_t xy, uint32_t addr, uint32_t by
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     noc_nonposted_writes_num_issued[noc] += 1;
     noc_nonposted_writes_acked[noc] += 1;
+    // (the stock NoC calls never write the high register - they assume it zero: a 0x20 left here sends this RISC's
+    // later writes on this buffer, in this kernel or the core's next program, to the DRISC L1 window of their target -
+    // e.g. the next program's DRAM writes into a DRISC's L1. Back to zero once the command has left the buffer)
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, 0);
 }
 
 // Atomic increment of a DRISC L1 word (non-posted: noc_async_atomic_barrier covers it). NOC0 only, as the write.
@@ -128,5 +133,7 @@ inline void se_drisc_inc(uint32_t xy, uint32_t addr, uint32_t incr) {
     NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_AT_DATA, incr);
     NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_CMD_CTRL, 0x1);
     noc_nonposted_atomics_acked[noc] += 1;
+    while (!noc_cmd_buf_ready(noc, write_at_cmd_buf));  // (the high register back to zero: as se_drisc_write)
+    NOC_CMD_BUF_WRITE_REG(noc, write_at_cmd_buf, NOC_TARG_ADDR_MID, 0);
 }
 #endif
