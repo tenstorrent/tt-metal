@@ -125,6 +125,16 @@ class BROADCAST_TYPE(TemplateParameter):
 
 
 @dataclass
+class SEED_BROADCAST_TYPE(TemplateParameter):
+    """Broadcast type of the plain pass that seeds Dest before an ``ACC_TO_DEST`` broadcast pass."""
+
+    seed_broadcast_type: BroadcastType
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SEED_BROADCAST_TYPE = ckernel::BroadcastType::{self.seed_broadcast_type.value};"
+
+
+@dataclass
 class SFPU_BCAST_DIM(TemplateParameter):
     """Dest-side SFPU row/col broadcast for ``sfpu_binary_bcast_test.cpp``.
 

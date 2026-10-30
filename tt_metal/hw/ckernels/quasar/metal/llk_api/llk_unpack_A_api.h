@@ -55,7 +55,8 @@ inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
  * `_llk_unpack_unary_operand_init_` targets UNP_A.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
- * @tparam acc_to_dest: Unused on Quasar in dest-reuse path; kept for API parity
+ * @tparam acc_to_dest: On the broadcast path, zero SrcA per tile so math can accumulate the broadcast into dest; must
+ * match llk_math_eltwise_unary_datacopy_init. Rejected on the dest-reuse path and ignored on the plain unary path
  * @tparam binary_reuse_dest: Dest reuse mode; when not NONE, selects the dest-reuse sub-path
  * @tparam unpack_to_dest: When true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
  * format
@@ -65,7 +66,7 @@ inline constexpr ckernel::trisc::BfdResource unpack_a_bfd_resource() {
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest /*maybe_unused*/ = false,
+    bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_init(
@@ -128,7 +129,8 @@ inline void llk_unpack_A_init(
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest>(bfd_id, 1);
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest, acc_to_dest>(
+                bfd_id, 1 /*num_tiles*/);
         }
     }
 }

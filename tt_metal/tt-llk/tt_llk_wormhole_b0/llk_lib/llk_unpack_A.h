@@ -179,7 +179,7 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
-        static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
+        // The zeroed SrcA bank serves ELWADD for both the plain and the acc_to_dest broadcast.
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
@@ -266,6 +266,8 @@ inline void _llk_unpack_A_mop_config_(
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
+ * @note For BType != NONE, pass the same acc_to_dest as @ref _llk_math_eltwise_unary_datacopy_init_ and
+ *       @ref _llk_math_eltwise_unary_datacopy_ on the math thread; a mismatch drops the accumulation or hangs on SrcA.
  * @ref _llk_unpack_A_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
  */
@@ -344,6 +346,8 @@ inline void _llk_unpack_A_init_(
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
  *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
+ * @note For BType != NONE, pass the same acc_to_dest as @ref _llk_math_eltwise_unary_datacopy_init_ and
+ *       @ref _llk_math_eltwise_unary_datacopy_ on the math thread; a mismatch drops the accumulation or hangs on SrcA.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <

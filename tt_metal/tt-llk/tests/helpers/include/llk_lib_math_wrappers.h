@@ -31,20 +31,27 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type      = BroadcastType::NONE,
     bool is_int_fpu_en                  = false,
-    PackMode pack_mode /*maybe_unused*/ = PackMode::Default>
+    PackMode pack_mode /*maybe_unused*/ = PackMode::Default,
+    bool acc_to_dest                    = false>
 inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize || pack_mode == PackMode::Tilize,
         "Wormhole B0 LLK tests: math datacopy init wrapper accepts PackMode::Default, PackMode::Untilize, or PackMode::Tilize (tilize is ignored on WH)");
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en>(num_faces, dst_format);
+    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, acc_to_dest>(num_faces, dst_format);
 }
 
-template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+template <
+    DataCopyType type,
+    DstSync Dst,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool unpack_to_dest            = false,
+    bool acc_to_dest               = false>
 inline void _llk_math_eltwise_unary_datacopy_wrapper_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
-    _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(dst_index, src_format, dst_format);
+    _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest, acc_to_dest>(dst_index, src_format, dst_format);
 }
 
 template <bool is_fp32_dest_acc_en /*maybe_unused*/, bool transpose_of_faces = true, bool is_32bit = false>
@@ -70,20 +77,28 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en             = false,
-    PackMode pack_mode             = PackMode::Default>
+    PackMode pack_mode             = PackMode::Default,
+    bool acc_to_dest               = false>
 inline void _llk_math_eltwise_unary_datacopy_init_wrapper_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole LLK tests: math datacopy init wrapper supports PackMode::Default or PackMode::Tilize");
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(num_faces, dst_format);
+    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode, acc_to_dest>(num_faces, dst_format);
 }
 
-template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
+template <
+    DataCopyType type,
+    DstSync Dst,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool unpack_to_dest            = false,
+    bool acc_to_dest               = false>
 inline void _llk_math_eltwise_unary_datacopy_wrapper_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
-    _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(dst_index, src_format, dst_format, num_faces);
+    _llk_math_eltwise_unary_datacopy_<type, Dst, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest, acc_to_dest>(
+        dst_index, src_format, dst_format, num_faces);
 }
 
 template <bool is_fp32_dest_acc_en, bool transpose_of_faces = true, bool is_32bit = false>
