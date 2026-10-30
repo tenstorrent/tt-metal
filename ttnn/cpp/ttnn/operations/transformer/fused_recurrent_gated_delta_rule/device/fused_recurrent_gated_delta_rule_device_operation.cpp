@@ -88,7 +88,7 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.q, "q", {BHT, 1u, K});
     check(in.k, "k", {BHT, 1u, K});
     check(in.v, "v", {BHT, 1u, V});
-    check(in.decay, "decay", {BHT, 1u, 1u});
+    check(in.decay, "g", {BHT, 1u, 1u});  // the log decay; the kernel takes exp(g)
     check(in.beta, "beta", {BHT, 1u, 1u});
     // Ring mode: initial_state is the [BH*T,K,V] ring (also the in-place state output); otherwise [BH,K,V].
     const bool ring = in.initial_state_block_idx.has_value();
