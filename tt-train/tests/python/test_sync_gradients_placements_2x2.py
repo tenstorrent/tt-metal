@@ -16,7 +16,6 @@ from sync_gradients_placements_common import (
     DIM,
     NATIVE,
     TP_SHARDED_SUFFIXES,
-    TPBlock,
     _assert_mean_over_axis,
     _assert_per_axis_labels,
     _backward,
@@ -28,6 +27,7 @@ from sync_gradients_placements_common import (
     _shards,
     is_sharded_on_axis,
 )
+from tp_block import TPBlock
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -58,7 +58,7 @@ class TestDPxTP:
         """Batch sharded along "dp", TP weights sharded along "tp": every parameter is reduced along "dp" only, the
         result averages over the dp axis, reads Replicate there and keeps Shard on the tp axis for TP parameters."""
         dp, tp = dp_tp_mesh.axis_index("dp"), dp_tp_mesh.axis_index("tp")
-        model = TPBlock()
+        model = TPBlock(DIM)
         params = model.parameters()
         _backward(model, _input((dp_tp_mesh.axis_size("dp"), 1, DIM, DIM), dp_tp_mesh.axis_mapper("dp", tdim=0)))
 

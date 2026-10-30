@@ -10,7 +10,7 @@ import numpy as np
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, RowParallelLinear
+from ttml.modules import AbstractModuleBase, LinearLayer
 
 DIM = 64  # tile-aligned per device after a 2-way split
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
@@ -18,20 +18,7 @@ NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 is_sharded_on_axis = ttml.core.distributed.is_sharded_on_axis
 
 
-class TPBlock(AbstractModuleBase):
-    """Replicated linear -> column-parallel (weight Shard(2), bias Shard(3) on tp) -> row-parallel (weight Shard(3),
-    bias replicated)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.inp = LinearLayer(DIM, DIM)
-        self.up = ColumnParallelLinear(DIM, DIM, has_bias=True)
-        self.down = RowParallelLinear(DIM, DIM, has_bias=True, input_is_parallel=True)
-
-    def forward(self, x):
-        return self.down(self.up(self.inp(x)))
-
-
+# The parameters of tp_block.TPBlock that are sharded on the tp axis.
 TP_SHARDED_SUFFIXES = ("up/weight", "up/bias", "down/weight")
 
 

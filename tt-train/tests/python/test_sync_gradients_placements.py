@@ -26,7 +26,6 @@ from sync_gradients_placements_common import (
     NATIVE,
     TP_SHARDED_SUFFIXES,
     Model,
-    TPBlock,
     _assert_mean_over_axis,
     _assert_per_axis_labels,
     _backward,
@@ -38,6 +37,7 @@ from sync_gradients_placements_common import (
     _shards,
     is_sharded_on_axis,
 )
+from tp_block import TPBlock
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -62,7 +62,7 @@ def ddp_mesh(fresh_device_mesh):
 class TestTP:
     def test_tp_params_read_sharded_on_tp_only(self, tp_mesh):
         tp, dp = tp_mesh.axis_index("tp"), tp_mesh.axis_index("dp")
-        model = TPBlock()
+        model = TPBlock(DIM)
         params = model.parameters()
         x = _input((1, 1, DIM, DIM))
         assert len(_placements(x.get_value(NATIVE))) == 2, "a tensor created without a mapper is labelled per axis"
@@ -121,7 +121,7 @@ class TestTP:
         TP-sharded gradient holds a different piece on each device and comes back bit for bit. Negative control:
         without the per-parameter filter, each TP shard was averaged with the other device's."""
         tp = tp_mesh.axis_index("tp")
-        model = TPBlock()
+        model = TPBlock(DIM)
         params = model.parameters()
         _backward(model, _input((1, 1, DIM, DIM)))
         before = {name: _shards(t.get_grad()) for name, t in params.items()}
