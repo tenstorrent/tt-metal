@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HAL Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@80..100,500..700&family=JetBrains+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600&display=swap">
+<style>
+/* Layout: slate header band with the 32-slot strip, then editor (left) and compiled sequence (right); stacks below 1000px.
+   Palette: cool slate neutrals, copper accent (the colour of the die's interconnect), semantic amber/red/blue kept apart from it. */
+:root {
+  --bg: #eef1f5;
+  --surface: #ffffff;
+  --sunken: #e6eaf0;
+  --line: #d3d9e2;
+  --ink: #141a24;
+  --muted: #5a6476;
+  --band: #182131;
+  --band-ink: #e7ebf2;
+  --band-muted: #9aa6ba;
+  --accent: #b4572a;
+  --accent-hover: #9c4820;
+  --accent-ink: #ffffff;
+  --accent-soft: #f6e4da;
+  --slot-empty: #2a3446;
+  --slot-fill: #d9824f;
+  --warn: #946200;
+  --warn-soft: #f8ecd2;
+  --bad: #b3243a;
+  --bad-soft: #f8dde1;
+  --info: #2f5fb8;
+  --info-soft: #dfe8f8;
+  --rt: #946200;
+  --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "Source Sans 3", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e121a; --surface: #151b26; --sunken: #0b0f16; --line: #263043; --ink: #e3e8f0; --muted: #8e99ad;
+    --band: #0a0d13; --band-ink: #e3e8f0; --band-muted: #8090a8;
+    --accent: #e2895a; --accent-hover: #eea07a; --accent-ink: #1a0f08; --accent-soft: #3a2316;
+    --slot-empty: #1e2737; --slot-fill: #e2895a;
+    --warn: #e7b04f; --warn-soft: #362812; --bad: #f37d8e; --bad-soft: #3c1820; --info: #8db2f2; --info-soft: #18243b; --rt: #e7b04f;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e121a; --surface: #151b26; --sunken: #0b0f16; --line: #263043; --ink: #e3e8f0; --muted: #8e99ad;
+  --band: #0a0d13; --band-ink: #e3e8f0; --band-muted: #8090a8;
+  --accent: #e2895a; --accent-hover: #eea07a; --accent-ink: #1a0f08; --accent-soft: #3a2316;
+  --slot-empty: #1e2737; --slot-fill: #e2895a;
+  --warn: #e7b04f; --warn-soft: #362812; --bad: #f37d8e; --bad-soft: #3c1820; --info: #8db2f2; --info-soft: #18243b; --rt: #e7b04f;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+.gutterx { padding-left: max(20px, env(safe-area-inset-left, 0px)); padding-right: max(20px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1480px; margin: 0 auto; }
+
+/* Header band */
+.band { background: var(--band); color: var(--band-ink); padding-block: calc(env(safe-area-inset-top, 0px) + 18px) 18px; }
+.band .wrap { display: grid; gap: 12px; }
+.title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+h1 { margin: 0; font-family: var(--font-display); font-stretch: 85%; font-weight: 700; font-size: 28px; letter-spacing: -0.005em; }
+h1 b { color: var(--slot-fill); font-weight: 700; }
+.tag { font-family: var(--font-mono); font-size: 12px; color: var(--band-muted); }
+.band p { margin: 0; color: var(--band-muted); max-width: 86ch; font-size: 14.5px; }
+.band code { font-family: var(--font-mono); font-size: 13px; color: var(--band-ink); }
+.strip { display: grid; grid-template-columns: repeat(32, minmax(0, 1fr)); gap: 3px; max-width: 760px; }
+.strip i { aspect-ratio: 1; border-radius: 2px; background: var(--slot-empty); display: block; transition: background 0.2s ease; }
+.strip i.on { background: var(--slot-fill); }
+.strip i.start { box-shadow: 0 0 0 1.5px var(--band-ink); }
+.strip-label { font-family: var(--font-mono); font-size: 11.5px; color: var(--band-muted); }
+
+main { padding-block: 20px 48px; }
+.grid { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 18px; align-items: start; }
+@media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.panel-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 14px;
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+}
+.panel-head h2 { margin: 0; font-family: var(--font-display); font-stretch: 90%; font-weight: 600; font-size: 15px; letter-spacing: 0.01em; }
+.hint { color: var(--muted); font-size: 13px; }
+.kbd { font-family: var(--font-mono); font-size: 11.5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--sunken); color: var(--ink); }
+.pad { padding: 14px 16px 16px; display: grid; gap: 16px; }
+.label { font-family: var(--font-display); font-stretch: 90%; font-weight: 600; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+/* Editor */
+.editor { display: grid; grid-template-columns: auto minmax(0, 1fr); background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.editor:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.gutter, textarea#body { font-family: var(--font-mono); font-size: 13px; line-height: 20px; padding: 12px 10px; margin: 0; }
+.gutter { color: var(--muted); text-align: right; user-select: none; white-space: pre; min-width: 4.5ch; overflow: hidden; border-right: 1px solid var(--line); opacity: 0.8; }
+.gutter .err { color: var(--bad); font-weight: 600; opacity: 1; }
+textarea#body { border: 0; outline: 0; resize: vertical; min-height: 380px; background: transparent; color: var(--ink); white-space: pre; overflow: auto; tab-size: 4; width: 100%; }
+
+/* Variables */
+.vars { display: grid; gap: 8px; }
+.vars-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.var-row { display: grid; grid-template-columns: 2.2rem minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.var-row .const { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); text-align: right; }
+.var-row.bad input { border-color: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.vars-empty { color: var(--muted); font-size: 13.5px; }
+input, select {
+  font: inherit; font-family: var(--font-mono); font-size: 13px; padding: 7px 9px; border-radius: 7px; min-width: 0; width: 100%;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+input:focus-visible, button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button { font: inherit; cursor: pointer; }
+.icon-btn { width: 32px; height: 32px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 17px; line-height: 1; }
+.icon-btn:hover { color: var(--bad); border-color: var(--bad); }
+.ghost-btn { justify-self: start; padding: 6px 12px; border-radius: 7px; border: 1px dashed var(--line); background: transparent; color: var(--accent); font-weight: 600; font-size: 14px; }
+.ghost-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.actions { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: end; justify-content: space-between; }
+.field { display: grid; gap: 4px; }
+.example-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.example-row select { width: auto; flex: 1 1 260px; }
+.go { padding: 9px 20px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 15px; }
+.go:hover { background: var(--accent-hover); }
+.go[disabled] { opacity: 0.65; cursor: progress; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; }
+pre.prelude { margin: 8px 0 0; padding: 10px 12px; background: var(--sunken); border-radius: 8px; font-family: var(--font-mono); font-size: 12px; overflow-x: auto; }
+
+/* Results */
+.result { padding: 14px 16px 16px; display: grid; gap: 12px; }
+.empty { color: var(--muted); margin: 0; }
+.diag { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--bad-soft); border-left: 3px solid var(--bad); font-family: var(--font-mono); font-size: 12px; white-space: pre-wrap; overflow-x: auto; }
+.diag.warn { background: var(--warn-soft); border-color: var(--warn); }
+.note { padding: 9px 12px; border-radius: 8px; border-left: 3px solid var(--info); background: var(--info-soft); font-size: 14px; }
+.note.warn { border-color: var(--warn); background: var(--warn-soft); }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.tab { font-family: var(--font-mono); font-size: 12.5px; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); display: inline-flex; gap: 8px; align-items: baseline; }
+.tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.tab .n { color: var(--muted); }
+.tab .c { font-weight: 600; color: var(--accent); }
+.summary { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+.big { font-family: var(--font-display); font-stretch: 85%; font-size: 40px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--accent); }
+.sub { color: var(--muted); font-size: 14px; }
+.fp { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+ul.when { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 2px; }
+ul.when code { font-family: var(--font-mono); font-size: 12.5px; }
+.snippet { position: relative; }
+.snippet pre { margin: 0; padding: 12px 70px 12px 12px; background: var(--sunken); border-radius: 8px; font-family: var(--font-mono); font-size: 12.5px; overflow-x: auto; }
+.copy { position: absolute; top: 8px; right: 8px; font-size: 12.5px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 740px; }
+th { text-align: left; font-family: var(--font-display); font-stretch: 90%; font-weight: 600; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 9px 10px; border-bottom: 1px solid var(--line); background: var(--sunken); white-space: nowrap; }
+td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+tbody tr:not(.ev):hover td { background: var(--accent-soft); }
+tr.ev td { background: var(--sunken); font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+tr.over td { background: var(--warn-soft); }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.slotnum { font-family: var(--font-mono); font-weight: 600; color: var(--accent); }
+.mnem { font-family: var(--font-mono); font-weight: 600; }
+.small { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.fields { font-family: var(--font-mono); font-size: 12px; display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.fields .k { color: var(--muted); }
+.fields .rt { color: var(--rt); font-weight: 600; }
+.rtexpr { font-family: var(--font-mono); font-size: 11.5px; color: var(--rt); margin-top: 2px; }
+.word { font-family: var(--font-mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.origin { font-size: 12.5px; }
+.origin .fn { font-family: var(--font-mono); font-weight: 600; }
+.origin .loc { font-family: var(--font-mono); color: var(--muted); font-size: 11.5px; }
+.origin code { display: block; color: var(--muted); font-family: var(--font-mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.origin.mine .fn { color: var(--accent); }
+details.ir { border: 1px solid var(--line); border-radius: 8px; }
+details.ir > summary { padding: 9px 12px; color: var(--ink); font-weight: 600; font-size: 14px; }
+details.ir > summary .hint { font-weight: 400; margin-left: 8px; }
+details.ir[open] > summary { border-bottom: 1px solid var(--line); }
+pre.ir { margin: 0; padding: 10px 0; max-height: 520px; overflow: auto; background: var(--sunken); border-radius: 0 0 8px 8px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; }
+pre.ir span.l { display: block; padding: 0 12px 0 26px; white-space: pre; position: relative; }
+pre.ir span.l.hit { background: var(--accent-soft); }
+pre.ir span.l.hit::before { content: "●"; position: absolute; left: 9px; color: var(--accent); font-size: 10px; }
+pre.ir .loc { color: var(--muted); opacity: 0.75; }
+pre.ir span.l.mm { background: var(--info-soft); }
+pre.ir span.l.mm::before { content: "○"; position: absolute; left: 9px; color: var(--info); font-size: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; padding: 2px; background: var(--sunken); gap: 2px; }
+.seg button { border: 0; background: transparent; color: var(--muted); padding: 5px 12px; border-radius: 6px; font-weight: 600; font-size: 13.5px; }
+.seg button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+tr.mmio td { background: var(--info-soft); }
+.badge { display: inline-block; font-family: var(--font-mono); font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--info); color: var(--surface); }
+.target { font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.cmp { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.cmp-head { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; padding: 9px 12px; }
+.cmp-head code { font-family: var(--font-mono); font-size: 13px; }
+.verdict { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.05em; }
+.verdict.same { background: var(--accent-soft); color: var(--accent); }
+.verdict.diff { background: var(--bad-soft); color: var(--bad); }
+.cmp-body { border-top: 1px solid var(--line); padding: 8px 12px 10px; display: grid; gap: 8px; }
+pre.diff { margin: 0; padding: 8px 0; background: var(--sunken); border-radius: 6px; font-family: var(--font-mono); font-size: 12px; overflow-x: auto; }
+pre.diff span { display: block; padding: 0 10px; white-space: pre; }
+pre.diff .del { background: var(--bad-soft); color: var(--bad); }
+pre.diff .add { background: var(--accent-soft); color: var(--accent); }
+pre.diff .hunk { color: var(--muted); }
+.fn-name { font-family: var(--font-mono); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .strip i { transition: none; } }
+</style>
+</head>
+<body>
+<header class="band gutterx">
+  <div class="wrap">
+    <div class="title-row">
+      <h1>HAL <b>Explorer</b></h1>
+      <span class="tag">Blackhole · lit HAL flags · -O3</span>
+    </div>
+    <p id="lede"></p>
+    <div class="strip" id="strip" aria-hidden="true"></div>
+    <div class="strip-label" id="strip-label">replay buffer · 32 slots · compile to see which slots fill</div>
+  </div>
+</header>
+
+<main class="gutterx">
+  <div class="wrap grid">
+    <section class="panel">
+      <div class="panel-head">
+        <div class="seg" role="tablist" aria-label="Input kind">
+          <button type="button" role="tab" id="mode-body" data-mode="body">Replay body</button>
+          <button type="button" role="tab" id="mode-code" data-mode="code">HAL code</button>
+        </div>
+        <span class="hint"><span class="kbd">Ctrl</span> + <span class="kbd">Enter</span> compiles</span>
+      </div>
+      <div class="pad">
+        <div class="example-row" id="example-box">
+          <label class="label" for="example">Load example</label>
+          <select id="example"><option value="">Choose an existing kernel rewritten in HAL…</option></select>
+        </div>
+        <div class="editor"><div class="gutter" id="gutter" aria-hidden="true">1</div><textarea id="body" spellcheck="false" autocomplete="off" aria-label="Code"></textarea></div>
+
+        <div class="vars" id="vars-box">
+          <div class="vars-head"><span class="label">Runtime variables</span><span class="hint">values the body can branch on or pass to HAL</span></div>
+          <div id="vars"></div>
+          <button class="ghost-btn" id="add-var" type="button">+ Add variable</button>
+        </div>
+        <datalist id="types">
+          <option value="bool"><option value="std::uint32_t"><option value="std::int32_t"><option value="std::uint16_t"><option value="std::uint8_t">
+        </datalist>
+
+        <div class="actions">
+          <label class="field" for="start" id="start-box"><span class="label">Start slot</span><input id="start" type="number" min="0" max="31" value="0" style="width: 9ch"></label>
+          <span class="hint" id="code-hint">Each function you define is analysed. Name a function <code>reference_&lt;name&gt;</code> to compare it with <code>&lt;name&gt;</code>.</span>
+          <button class="go" id="go" type="button">Compile</button>
+        </div>
+        <details>
+          <summary id="prelude-summary">What the code is compiled with</summary>
+          <pre class="prelude" id="prelude"></pre>
+        </details>
+      </div>
+    </section>
+
+    <section class="panel" aria-live="polite">
+      <div class="panel-head"><h2>Issued instructions</h2><span class="hint" id="result-hint"></span></div>
+      <div class="result" id="result"><p class="empty">Compile to see the instruction sequence.</p></div>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const PRELUDE = __PRELUDE__;
+  const KERNEL_EXAMPLES = __EXAMPLES__;
+  const DEFAULT_TEXT = {
+    body: `// llk_unpack_AB_matmul.h:64, HAL part: advance operand A's base address by one tile.
+constexpr auto reset_z = adc::AddrCounter {.channel0 = {.z = 0}, .channel1 = {.z = 0}}.for_clients<adc::Client::Unpacker0>();
+constexpr auto tmp     = hal::gpr<p_gpr_unpack::TMP0>();
+
+if (partial_face)
+{
+    counters::set<reset_z>();
+}
+cfg::read<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(tmp);
+scalar::add(tmp, hal::gpr<p_gpr_unpack::TILE_SIZE_A>(), tmp);
+sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::ScalarIdle>();
+cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Wait>(tmp);
+`,
+    code: KERNEL_EXAMPLES.pack_reduce_mask_clear ?? "void my_kernel()\n{\n}\n",
+  };
+  const LEDE = {
+    body: "Write what goes inside a <code>replay::record</code> lambda. The server compiles it and lists every Tensix instruction it issues, in order, read from the compiler's own output, with the replay slot each one lands in.",
+    code: "Write HAL functions, or include an LLK header and call an existing kernel. Every function you define is compiled and its Tensix instructions and MMIO accesses are listed in issue order. A function named <code>reference_&lt;name&gt;</code> is run on the same inputs as <code>&lt;name&gt;</code> and compared.",
+  };
+  const BUFFER_SLOTS = 32;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const body = $("body"), gutter = $("gutter"), start = $("start"), go = $("go"), result = $("result");
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  let mode = store.get("hal-explorer-mode") === "code" ? "code" : "body";
+  let errorLines = new Set(), badVariable = -1, last = null, groupIndex = 0, functionIndex = 0, irOpen = false;
+  let requestId = 0;
+  const textKey = (m) => (m === "body" ? "hal-replay-body" : "hal-explorer-code");
+
+  // Slot strip in the header
+  const strip = $("strip");
+  strip.innerHTML = Array.from({ length: BUFFER_SLOTS }, (_, i) => `<i title="slot ${i}"></i>`).join("");
+  function paintStrip(slot0, count) {
+    const cells = strip.children;
+    for (let i = 0; i < BUFFER_SLOTS; i++) cells[i].className = i === slot0 ? "start" : "";
+    if (typeof count === "number") for (let i = 0; i < Math.min(count, BUFFER_SLOTS); i++) cells[(slot0 + i) % BUFFER_SLOTS].classList.add("on");
+    $("strip-label").textContent = typeof count === "number"
+      ? `replay buffer · ${count === 0 ? "no slots filled" : `slots ${slot0}–${(slot0 + Math.min(count, BUFFER_SLOTS) - 1) % BUFFER_SLOTS} filled`}${count > BUFFER_SLOTS ? " (wrapped)" : ""}`
+      : count === null ? "replay buffer · slot use depends on a runtime loop" : "replay buffer · 32 slots · compile to see which slots fill";
+  }
+
+  // Editor
+  function paintGutter() {
+    const n = body.value.split("\n").length;
+    let out = "";
+    for (let i = 1; i <= n; i++) out += (errorLines.has(i) ? `<span class="err">${i}</span>` : i) + "\n";
+    gutter.innerHTML = out;
+    gutter.scrollTop = body.scrollTop;
+  }
+  body.addEventListener("input", () => { errorLines = new Set(); paintGutter(); store.set(textKey(mode), body.value); });
+  body.addEventListener("scroll", () => { gutter.scrollTop = body.scrollTop; });
+  body.addEventListener("keydown", (e) => {
+    if (e.key === "Tab" && !e.shiftKey) {
+      e.preventDefault();
+      body.setRangeText("    ", body.selectionStart, body.selectionEnd, "end");
+      body.dispatchEvent(new Event("input"));
+    }
+  });
+
+  // Mode
+  function setMode(next) {
+    mode = next;
+    requestId++;  // a response to the other mode's request is ignored
+    store.set("hal-explorer-mode", mode);
+    document.querySelectorAll(".seg button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.mode === mode)));
+    const isBody = mode === "body";
+    $("vars-box").hidden = !isBody;
+    $("start-box").hidden = !isBody;
+    $("code-hint").hidden = isBody;
+    $("example-box").hidden = isBody;
+    strip.hidden = !isBody;
+    $("strip-label").hidden = !isBody;
+    $("lede").innerHTML = LEDE[mode];
+    body.setAttribute("aria-label", isBody ? "Replay lambda body" : "HAL code");
+    $("prelude").textContent = isBody
+      ? PRELUDE.body + '\nextern "C" void hal_replay_body(const <type> <name>, ...)\n{\n    [&] { <body> }();\n}'
+      : PRELUDE.code + "\n// <your code>";
+    body.value = store.get(textKey(mode)) ?? DEFAULT_TEXT[mode];
+    errorLines = new Set();
+    last = null;
+    go.disabled = false;
+    go.textContent = "Compile";
+    paintGutter();
+    paintStrip(0, undefined);
+    $("result-hint").textContent = "";
+    result.innerHTML = '<p class="empty">Compile to see the instruction sequence.</p>';
+  }
+  document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => b.dataset.mode !== mode && setMode(b.dataset.mode)));
+
+  const exampleSelect = $("example");
+  exampleSelect.innerHTML += Object.keys(KERNEL_EXAMPLES).map((name) => `<option value="${esc(name)}">${esc(name)}</option>`).join("");
+  exampleSelect.addEventListener("change", () => {
+    const text = KERNEL_EXAMPLES[exampleSelect.value];
+    exampleSelect.value = "";
+    if (text === undefined) return;
+    body.value = text;
+    body.dispatchEvent(new Event("input"));
+    compile();
+  });
+
+  // Variables
+  let variables = [];
+  try {
+    const saved = JSON.parse(store.get("hal-replay-vars") ?? "null");
+    variables = Array.isArray(saved) ? saved : [{ type: "bool", name: "partial_face" }];
+  } catch { variables = [{ type: "bool", name: "partial_face" }]; }
+  let nextId = 0;
+  variables = variables
+    .filter((v) => v && typeof v === "object")
+    .map((v) => ({ id: nextId++, type: String(v.type ?? ""), name: String(v.name ?? "") }));
+  const saveVars = () => store.set("hal-replay-vars", JSON.stringify(variables.map(({ type, name }) => ({ type, name }))));
+
+  function renderVars() {
+    const box = $("vars");
+    if (!variables.length) {
+      box.innerHTML = '<p class="vars-empty">No runtime variables. Add one when the body uses a value known only at runtime.</p>';
+      return;
+    }
+    box.innerHTML = variables.map((v, i) => `
+      <div class="var-row${i === badVariable ? " bad" : ""}" data-id="${v.id}">
+        <span class="const">const</span>
+        <input id="var-type-${v.id}" list="types" placeholder="type" value="${esc(v.type)}" aria-label="Type of variable ${i + 1}" spellcheck="false" autocomplete="off">
+        <input id="var-name-${v.id}" placeholder="name" value="${esc(v.name)}" aria-label="Name of variable ${i + 1}" spellcheck="false" autocomplete="off">
+        <button class="icon-btn" type="button" aria-label="Remove variable ${i + 1}" title="Remove">×</button>
+      </div>`).join("");
+    box.querySelectorAll(".var-row").forEach((row) => {
+      const v = variables.find((x) => x.id === Number(row.dataset.id));
+      const [type, name] = row.querySelectorAll("input");
+      type.addEventListener("input", () => { v.type = type.value; saveVars(); });
+      name.addEventListener("input", () => { v.name = name.value; saveVars(); });
+      name.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); addVar(); } });
+      row.querySelector("button").addEventListener("click", () => {
+        variables = variables.filter((x) => x !== v);
+        badVariable = -1;
+        saveVars();
+        renderVars();
+      });
+    });
+  }
+  function addVar() {
+    const v = { id: nextId++, type: "std::uint32_t", name: "" };
+    variables.push(v);
+    saveVars();
+    renderVars();
+    $(`var-name-${v.id}`)?.focus();
+  }
+  $("add-var").addEventListener("click", addVar);
+
+  // Compile
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); compile(); }
+  });
+  go.addEventListener("click", compile);
+  start.addEventListener("input", () => last && last.ok && render());
+
+  async function compile() {
+    if (go.disabled) return;
+    const id = ++requestId;
+    go.disabled = true;
+    go.textContent = "Compiling…";
+    const sent = mode === "body" ? variables.filter((v) => v.name.trim()) : [];
+    let response;
+    try {
+      const reply = await fetch("/compile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, body: body.value, variables: sent.map(({ type, name }) => ({ type, name })) }),
+      });
+      response = await reply.json();
+    } catch (err) {
+      response = { ok: false, diagnostics: `Could not reach the server (${err.message}). Is server.py still running?` };
+    }
+    if (id !== requestId) return;  // a newer request or a mode switch superseded this one
+    go.disabled = false;
+    go.textContent = "Compile";
+    last = response;
+    errorLines = new Set((last.errors || []).filter((e) => e.file === "input").map((e) => e.line));
+    badVariable = -1;
+    const parameterError = (last.errors || []).find((e) => e.file === "parameters");
+    if (parameterError && sent[parameterError.line - 1]) badVariable = variables.indexOf(sent[parameterError.line - 1]);
+    const variableMatch = /^variable (\d+):/.exec(last.diagnostics || "");
+    if (variableMatch && sent[Number(variableMatch[1]) - 1]) badVariable = variables.indexOf(sent[Number(variableMatch[1]) - 1]);
+    paintGutter();
+    renderVars();
+    groupIndex = 0;
+    functionIndex = 0;
+    if (last.ok && last.comparisons) {
+      const failing = last.comparisons.find((c) => c.verdict !== "identical");
+      const index = failing ? last.functions.findIndex((f) => f.signature === failing.name) : -1;
+      if (index >= 0) functionIndex = index;
+    }
+    render();
+  }
+
+  // Rendering
+  const whenText = (conds) => conds.join(" && ") || "always";
+  const countOf = (g) => (g.count ?? g.count_text);
+
+  function fieldsHtml(insn) {
+    if (!insn.fields.length) return '<span class="small">no operands</span>';
+    return `<div class="fields">${insn.fields.map((f) =>
+      `<span><span class="k">${esc(f.name)}=</span><span class="${f.runtime ? "rt" : ""}">${f.runtime ? "rt" : esc(f.value)}</span></span>`).join("")}</div>` +
+      (insn.runtime_mask ? `<div class="rtexpr">runtime bits: ${esc(insn.runtime_expr)}</div>` : "");
+  }
+
+  function originHtml(o) {
+    if (!o) return '<span class="small">unknown</span>';
+    if (o.in_input) return `<div class="origin mine"><span class="fn">your line ${o.line}</span><code>${esc(o.text)}</code></div>`;
+    return `<div class="origin"><span class="fn">${esc(o.function ?? "?")}</span> <span class="loc">${esc(o.file)}:${o.line}</span><code>${esc(o.text)}</code></div>`;
+  }
+
+  function replayNote(r) {
+    if (!r) return "";
+    const range = r.count === null ? `${r.start ?? "?"}…` : `${r.start}–${(r.start + r.count - 1) % BUFFER_SLOTS}`;
+    const count = r.count ?? r.count_text;
+    return `<div class="small" style="color:var(--accent)">${r.load ? `records the next ${esc(count)} into slots ${esc(range)}` : `replays slots ${esc(range)}`}</div>`;
+  }
+
+  function gimpleHtml(lines) {
+    const rows = lines.map((l) => {
+      const html = esc(l.text).replace(/(\[[^\[\]]*?:\d+:\d+(?: discrim \d+)?\]|\[0:0\])/g, '<span class="loc">$1</span>');
+      const cls = l.mark === "insn" ? " hit" : l.mark ? " mm" : "";
+      return `<span class="l${cls}">${html}</span>`;
+    });
+    const hits = lines.filter((l) => l.mark === "insn").length;
+    const accesses = lines.filter((l) => l.mark === "mmio").length;
+    return `<details class="ir" id="ir"${irOpen ? " open" : ""}><summary>Compiler output (optimized GIMPLE)<span class="hint">● ${hits} Tensix instruction${hits === 1 ? "" : "s"}${accesses ? ` · ○ ${accesses} MMIO` : ""}, across all paths</span></summary><pre class="ir">${rows.join("")}</pre></details>`;
+  }
+
+  // The group tabs, summary, notes and table of one analysed function.
+  function functionHtml(fn, slot0) {
+    const groups = fn.groups;
+    if (!groups.length) return { html: '<p class="empty">No paths were found.</p>', count: undefined };
+    const g = groups[Math.min(groupIndex, groups.length - 1)];
+    const isBody = slot0 !== null;
+    const parts = [];
+    parts.push(...fn.warnings.map((w) => `<div class="note warn">${esc(w.message)}${w.origin ? ` (${esc(w.origin.file)}:${w.origin.line})` : ""}</div>`));
+    if (groups.length > 1) {
+      parts.push(`<div class="tabs" role="tablist">${groups.map((x, i) =>
+        `<button class="tab group-tab" role="tab" type="button" data-i="${i}" aria-selected="${x === g}"><span>${esc(whenText(x.when[0]))}</span>${x.when.length > 1 ? `<span class="n">+${x.when.length - 1}</span>` : ""}<span class="c">${esc(countOf(x))}</span></button>`).join("")}</div>`);
+    }
+    const fixedSlots = isBody && g.count !== null && g.count > 0 ? ` · slots ${slot0}–${(slot0 + g.count - 1) % BUFFER_SLOTS}` : "";
+    const mmio = g.sequence.filter((s) => s.kind === "mmio").length;
+    parts.push(`<div class="summary"><span class="big">${esc(countOf(g))}</span><span class="sub">Tensix instruction${g.count === 1 ? "" : "s"}${groups.length > 1 ? " in this case" : ""}${fixedSlots}${mmio ? ` · ${mmio} MMIO access${mmio === 1 ? "" : "es"}` : ""}</span><span class="fp" title="hash of the issued sequence">fingerprint ${esc(g.fingerprint)}</span></div>`);
+    if (g.when.length > 1 || g.when[0].length) {
+      const shown = g.when.slice(0, 12).map((c) => `<li><code>${esc(whenText(c))}</code></li>`).join("");
+      parts.push(`<details${g.when.length <= 4 ? " open" : ""}><summary>Issued when (${g.when.length} path${g.when.length === 1 ? "" : "s"})</summary><ul class="when">${shown}${g.when.length > 12 ? `<li>… and ${g.when.length - 12} more</li>` : ""}</ul></details>`);
+    }
+    const counts = new Set(groups.map(countOf));
+    if (isBody) {
+      if (counts.size > 1) parts.push(`<div class="note warn">The count depends on runtime values (${[...counts].map(esc).join(", ")}). A single compile-time BufferRange cannot fit every case.</div>`);
+      if (g.count === null) parts.push('<div class="note">This case contains a runtime loop; the count above is fitted from concrete runs. Slots after the first loop depend on the iteration count.</div>');
+      if (g.count === 0) parts.push('<div class="note warn">This case issues no Tensix instructions. A record with count ≥ 1 would capture whatever the caller issues next.</div>');
+      if (g.count > BUFFER_SLOTS) parts.push(`<div class="note warn">${g.count} instructions exceed the ${BUFFER_SLOTS}-slot buffer; slots wrap and earlier ones are overwritten. The compile-time record accepts at most ${BUFFER_SLOTS}.</div>`);
+      if (g.sequence.some((s) => s.replay)) parts.push('<div class="note warn">The body issues REPLAY instructions itself. They are counted and given slots here, but whether a REPLAY inside a recording is itself recorded is not modelled.</div>');
+      if (mmio) parts.push('<div class="note">MMIO accesses read or write memory-mapped registers (pc_buf_base, the config space, MOP config) directly. They issue no Tensix instruction, so they are not recorded into the replay buffer.</div>');
+      const snippet = counts.size === 1 && g.count >= 1 && g.count <= 64
+        ? `replay::record<replay::BufferRange {${slot0}, ${g.count}}>([&] { /* body */ });\nreplay::run<replay::BufferRange {${slot0}, ${g.count}}>();`
+        : `replay::record(replay::BufferRange {${slot0}, /* ${groups.map((x) => `${whenText(x.when[0])}${x.when.length > 1 ? " …" : ""}: ${countOf(x)}`).join("; ")} */}, [&] { /* body */ });`;
+      parts.push(`<div class="snippet"><pre id="snip">${esc(snippet)}</pre><button class="copy" type="button" id="copy">Copy</button></div>`);
+    }
+
+    const columns = isBody ? 6 : 5;
+    let n = 0, slotted = true;
+    const rowsOf = (sequence, depth) => sequence.map((s) => {
+      const indent = depth ? ` style="padding-left:${10 + depth * 18}px"` : "";
+      if (s.kind === "loop") {
+        slotted = false;
+        const bodies = s.variants.length
+          ? s.variants.map((v) => `<tr class="ev"><td colspan="${columns}"${indent}>&nbsp;&nbsp;when ${esc(v.when.map(whenText).join(" | "))}:</td></tr>${rowsOf(v.body, depth + 1)}`).join("")
+          : rowsOf(s.body, depth + 1);
+        return `<tr class="ev"><td colspan="${columns}"${indent}>loop, repeats while ${esc(s.repeat_while)} {</td></tr>${bodies}<tr class="ev"><td colspan="${columns}"${indent}>}</td></tr>`;
+      }
+      if (s.kind === "mmio") {
+        return `<tr class="mmio"><td class="num"${indent}>—</td>${isBody ? '<td class="num">—</td>' : ""}<td><span class="badge">MMIO ${esc(s.operation)}</span><div class="small">${esc(s.width)} bit</div></td><td><span class="target">${esc(s.target)}</span></td><td class="word">${esc(s.value_text)}</td><td>${originHtml(s.origin)}</td></tr>`;
+      }
+      const placed = !depth && slotted;
+      const index = placed ? n : "—";
+      if (placed) n++;
+      const slotCell = isBody ? `<td class="num slotnum">${placed ? (slot0 + index) % BUFFER_SLOTS : "—"}</td>` : "";
+      const via = { immediate: ".ttinsn immediate", store: "__instrn_buffer store", builtin: "compiler builtin" }[s.issue] ?? s.issue;
+      return `<tr class="${isBody && placed && index >= BUFFER_SLOTS ? "over" : ""}"><td class="num"${indent}>${index}</td>${slotCell}<td><span class="mnem">${esc(s.mnemonic)}</span>${replayNote(s.replay)}<div class="small">${esc(via)}</div></td><td>${fieldsHtml(s)}</td><td class="word">${esc(s.word_text)}</td><td>${originHtml(s.origin)}</td></tr>`;
+    }).join("");
+    const head = `<th>#</th>${isBody ? "<th>Slot</th>" : ""}<th>Instruction</th><th>Fields</th><th>Word</th><th>Issued by</th>`;
+    parts.push(`<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rowsOf(g.sequence, 0) || `<tr><td colspan="${columns}" class="empty">Nothing issued.</td></tr>`}</tbody></table></div>`);
+    if (fn.samples.length && groups.some((x) => x.count === null)) {
+      const rows = fn.samples.slice(0, 16).map((s) => `<li><code>${esc(Object.entries(s.inputs).map(([k, v]) => `${k}=${v}`).join(", ") || "no inputs")}</code> → ${s.count}${s.complete ? "" : " (stopped at a limit)"}</li>`).join("");
+      parts.push(`<details><summary>Concrete runs (${fn.samples.length} shown)</summary><ul class="when">${rows}</ul></details>`);
+    }
+    if (fn.gimple.length) parts.push(gimpleHtml(fn.gimple));
+    return { html: parts.join(""), count: g.count };
+  }
+
+  function comparisonHtml(c) {
+    const same = c.verdict === "identical";
+    const head = `<div class="cmp-head"><span class="verdict ${same ? "same" : "diff"}">${esc(c.verdict)}</span><code>${esc(c.name)}</code><span class="hint">vs <code>${esc(c.reference)}</code>${c.samples ? ` · ${c.samples} input vectors` : ""}</span></div>`;
+    const reasons = c.reasons.map((r) => `<div class="hint">${esc(r)}</div>`).join("");
+    let example = "";
+    if (c.counterexample) {
+      const inputs = Object.entries(c.counterexample.inputs).map(([k, v]) => `${k}=${v}`).join(", ") || "no inputs";
+      const lines = c.counterexample.diff.map((line) => {
+        const cls = line.startsWith("@@") ? "hunk" : line.startsWith("-") ? "del" : line.startsWith("+") ? "add" : "";
+        return `<span class="${cls}">${esc(line)}</span>`;
+      }).join("");
+      example = `<div class="hint">counterexample: <code>${esc(inputs)}</code> · <span style="color:var(--bad)">− reference</span> <span style="color:var(--accent)">+ rewrite</span></div><pre class="diff">${lines}</pre>`;
+    }
+    const content = reasons + example;
+    return `<div class="cmp">${head}${content ? `<div class="cmp-body">${content}</div>` : ""}</div>`;
+  }
+
+  function bind() {
+    $("ir")?.addEventListener("toggle", (e) => { irOpen = e.target.open; });
+    result.querySelectorAll(".group-tab").forEach((b) => b.addEventListener("click", () => { groupIndex = Number(b.dataset.i); render(); }));
+    result.querySelectorAll(".fn-tab").forEach((b) => b.addEventListener("click", () => { functionIndex = Number(b.dataset.i); groupIndex = 0; render(); }));
+    $("copy")?.addEventListener("click", async (e) => {
+      try { await navigator.clipboard.writeText($("snip").textContent); e.target.textContent = "Copied"; }
+      catch { const r = document.createRange(); r.selectNodeContents($("snip")); getSelection().removeAllRanges(); getSelection().addRange(r); }
+    });
+  }
+
+  function render() {
+    const slot0 = Math.min(BUFFER_SLOTS - 1, Math.max(0, Number(start.value) || 0));
+    if (!last || !last.ok || !last.functions || !last.functions.length) {
+      $("result-hint").textContent = "";
+      result.innerHTML = `<pre class="diag">${esc(last?.diagnostics || "Compilation failed.")}</pre>`;
+      paintStrip(slot0, undefined);
+      bind();
+      return;
+    }
+    const warnings = last.diagnostics ? `<pre class="diag warn">${esc(last.diagnostics)}</pre>` : "";
+    const fns = last.functions;
+    if (mode === "body") {
+      const fn = fns[0];
+      $("result-hint").textContent = `${fn.path_count} path${fn.path_count === 1 ? "" : "s"} · ${fn.groups.length} distinct sequence${fn.groups.length === 1 ? "" : "s"}`;
+      const view = functionHtml(fn, slot0);
+      paintStrip(slot0, view.count);
+      result.innerHTML = view.html + warnings;
+      bind();
+      return;
+    }
+    const fn = fns[Math.min(functionIndex, fns.length - 1)];
+    const failing = last.comparisons.filter((c) => c.verdict !== "identical").length;
+    $("result-hint").textContent = `${fns.length} function${fns.length === 1 ? "" : "s"}${last.comparisons.length ? ` · ${last.comparisons.length - failing}/${last.comparisons.length} comparisons identical` : ""}`;
+    const parts = last.comparisons.map(comparisonHtml);
+    if (fns.length > 1) {
+      parts.push(`<div class="tabs" role="tablist" aria-label="Functions">${fns.map((f, i) =>
+        `<button class="tab fn-tab" role="tab" type="button" data-i="${i}" aria-selected="${f === fn}"><span class="fn-name">${esc(f.signature)}</span></button>`).join("")}</div>`);
+    }
+    parts.push(`<div class="sub">Function <span class="fn-name">${esc(fn.signature)}</span> · ${fn.path_count} path${fn.path_count === 1 ? "" : "s"}</div>`);
+    parts.push(functionHtml(fn, null).html);
+    result.innerHTML = parts.join("") + warnings;
+    bind();
+  }
+
+  renderVars();
+  setMode(mode);
+})();
+</script>
+</body>
+</html>
