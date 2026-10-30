@@ -472,10 +472,9 @@ def populate_kv_chunk_address_table_block_cyclic(
         )
 
         if tp_axis is not None:
-            assert sp_axis == 0 and tp_axis == 1, (
-                f"TP-sharded KV chunk table requires the production (sp_axis=0, tp_axis=1) layout, "
-                f"got sp_axis={sp_axis}, tp_axis={tp_axis}"
-            )
+            assert (
+                tp_axis == 1 - sp_axis
+            ), f"TP-sharded KV chunk table needs distinct axes, got sp_axis={sp_axis}, tp_axis={tp_axis}"
         tp_factor = mesh_shape[tp_axis] if tp_axis is not None else 1
         tokens_per_device = tokens_per_chunk_local // tp_factor
         assert (
@@ -573,10 +572,9 @@ def populate_kv_chunk_address_table_block_cyclic(
     num_dram_banks = get_num_dram_banks(mesh_device)
 
     if tp_axis is not None:
-        assert sp_axis == 0 and tp_axis == 1, (
-            f"TP-sharded KV chunk table requires the production (sp_axis=0, tp_axis=1) layout, "
-            f"got sp_axis={sp_axis}, tp_axis={tp_axis}"
-        )
+        assert (
+            tp_axis == 1 - sp_axis
+        ), f"TP-sharded KV chunk table needs distinct axes, got sp_axis={sp_axis}, tp_axis={tp_axis}"
     tp_factor = mesh_shape[tp_axis] if tp_axis is not None else 1
     tokens_per_device = tokens_per_chunk_local // tp_factor  # 160 for 5k chunks on tp=4
     assert (
@@ -598,7 +596,10 @@ def populate_kv_chunk_address_table_block_cyclic(
                     for coord in _sp_row_coords(mesh_shape, sp_axis, row)
                 ]
             else:
-                fids = [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col))]
+                # TP rank `col` of SP row `row`, whichever mesh axis SP is on (as the stage_layout path above).
+                fids = [
+                    mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*_sp_row_coords(mesh_shape, sp_axis, row)[col]))
+                ]
             all_fabric_node_ids.extend(fids)
             device_group_idx[(row, col)] = lookup_table.add_device_group(fids)
 
