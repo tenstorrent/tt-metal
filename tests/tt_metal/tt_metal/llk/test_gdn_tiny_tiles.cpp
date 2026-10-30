@@ -248,7 +248,9 @@ RunResult run(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const
         reader_args.insert(reader_args.end(), {uint32_t(buf->address()), kDramBankId, op.ntiles});
     }
     const uint32_t out_tiles = c.reps * c.out_tiles_per_rep;
-    make_cb(16, c.out_spec, c.out_tiles_per_rep);
+    // The output CB holds every repetition so the pack thread never waits for the test writer (which drains one
+    // tile per NoC write + barrier); the cycle counts are then the compute pipeline's alone.
+    make_cb(16, c.out_spec, out_tiles);
     auto out_buffer = make_dram(out_tiles * c.out_spec.bytes());
     auto stats_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = kStatsBytes},

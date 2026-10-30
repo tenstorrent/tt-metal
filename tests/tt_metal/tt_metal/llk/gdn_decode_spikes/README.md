@@ -51,41 +51,41 @@ core per launch, ~2.8 us extrapolated to 110 cores), so the effect is a little s
 same kind: one unique runtime arg per core costs 2.5x the whole launch. The rule stands: unit ids from core coordinates
 and common args; buffers through CB aliasing and common args (S-6 item 8).
 
-## Spike A: tiny-tile matmuls (done)
+## Spike A: tiny-tile matmuls (done; cycle counts corrected 14:12)
 
 `tests/tt_metal/tt_metal/llk/test_gdn_tiny_tiles.cpp` + `test_kernels/compute/gdn_tiny_tiles.cpp` +
 `test_kernels/dataflow/reader_gdn_tiny_tiles.cpp` (spike branch; `unit_tests_llk --gtest_filter='*GdnTinyTiles*'`,
-4 tests, all logging). One core, K = V = 128 (4 x 4 fp32 tiles), HiFi4, fp32 DEST, `matmul_tiles` with the tile dims
-taken from the CB descriptors (`set_tile_dims`), 16 repetitions, MATH-thread wall clock.
+4 tests). One core, K = V = 128 (4 x 4 fp32 tiles), HiFi4, fp32 DEST, `matmul_tiles` with the tile dims taken from
+the CB descriptors (`set_tile_dims`), 16 repetitions, MATH-thread wall clock. The first run's cycle counts (~590 per
+S tile) were an artifact: the output CB held one repetition and the test writer drained it one 4 KB tile per NoC
+write + barrier, so the pack thread waited on the writer. With the output CB sized for all repetitions:
 
 | experiment | result |
 |---|---|
 | two-row read, in0 [q;k] as a **2x32 / 4x32 / 8x32** tile (partial face) x S 32x32 | **wrong values** (max rel err 0.8-1.0 vs double; k.k came out 0.49 for 1.0: half the terms lost), finite, not bit-equal to the padded form |
 | two-row read, in0 as **16x32** (the SDPA-decode shape) | **bit-identical** to the padded 32x32 in0; max rel err 1.33e-3; NaN in rows 2-15 leaves rows 0-1 unchanged |
-| cycles per in0-tile x S-tile product, in0 height 2 / 4 / 8 / 16 / 32 | 167 / 170 / 173 / 179 / 197 (gate was <= 24): the cost is the 4 KB fp32 S-tile unpack and the DEST pipeline, not the MVMUL row count |
+| cycles per in0-tile x S-tile product, in0 height 2 / 4 / 8 / 16 / 32 | 95 / 97 / 96 / **99** / 117; per output tile (4 products + pack) 396 at 16x32 |
 | rank-1 update, in0 k^T **32x16** x in1 u **16x32** onto an exactly seeded S tile | **bit-identical** to the padded 32x32 x 32x32 form; max rel err 3.8e-4 |
 | the same with a tf32 seed (copy_tile without UnpackToDestFp32, today's kernel) | max rel err 8.5e-4 (2.2x worse) |
 | NaN in k^T's padding columns, u's padding rows zero | no leak, bit-identical to the clean run (0 x NaN reads as 0 on the FPU) |
 | NaN in both paddings | finite but not bit-identical: garbage. Rule: zero at least one side; the plan's "u built in a zeroed DEST tile" suffices |
-| cycles per S tile, groups of 4: matmul alone tiny / padded; copy seed alone; copy + matmul | 525 / 540; 566; 592 (gate <= 48 was for the MVMUL alone) |
-| copy_tile of an fp32 tile with / without UnpackToDestFp32 | 0 / 16381 of 16384 words changed; 577 / 525 cycles per tile (copy + fp32 pack) |
-| scalar q.k with in0 2x32 / 16x32 / 32x32 | wrong / right / right (k.k 0.489 / 0.99898 / 0.99898 for 1.0) |
+| cycles per S tile, groups of 4: matmul alone tiny / padded; copy seed alone; copy + matmul + pack tiny / padded | **104 / 136; 187; 236 / 274** |
+| copy_tile of an fp32 tile with / without UnpackToDestFp32 | 0 / 16381 of 16384 words changed; 168 / 108 cycles per tile (copy + fp32 pack) |
+| scalar q.k with in0 2x32 / 16x32 / 32x32 (4 products + pack) | wrong / right / right; 470 / 482 / 555 cycles |
 
 Conclusions for step 1a:
 - **Partial-face in0 tiles (height < 16) are not usable from `matmul_tiles` on Blackhole** in this configuration
   (the in-tree tiny-tile matmul matrix was verified on Wormhole). The token vectors go in **16x32 tiles**: [q; k] in
-  rows 0-1 with zero padding, which is bit-identical to the padded form at 179 instead of 197 cycles per product.
-- The two-row read costs ~180 cycles per S tile whatever the in0 height, so the read pass is ~2.1 us per head-token
-  at Vtl 4 (16 products), bound by unpacking S, not by the MVMULs.
-- The rank-1 update with 32x16 / 16x32 operands works and saves only ~3 % over padded operands; its ~590 cycles per
-  S tile are the fp32 tile moving L1 -> DEST (copy seed) and DEST -> L1 (pack). The state write-back is the floor of
-  the update pass: ~16 x 590 = 9500 cycles = 7.0 us per head-token at Vtl 4, which matches today's "~7 us of math".
-  The hardware model's 96 cycles per S tile (S-6 item 3) is 6x too optimistic; the V-split (step 3) is the lever that
-  divides it, and the trajectory table's "after step 1" at B 1 should read ~15-20 us rather than 10-15.
+  rows 0-1 with zero padding, bit-identical to the padded form at 99 instead of 117 cycles per product.
+- The two-row read pass costs ~100 cycles per S-tile product whatever the in0 height, i.e. ~1600 cycles = 1.2 us per
+  head-token at Vtl 4 (16 products): bound by unpacking the 4 KB S tile, not by the MVMULs.
+- The rank-1 update with 32x16 / 16x32 operands works and saves 24 % over padded operands (136 -> 104 cycles for the
+  matmul, 274 -> 236 with the exact seed and the fp32 pack); the exact seed costs ~60 cycles per tile over the tf32
+  copy. The update pass is ~16 x 236 = 3800 cycles = 2.8 us per head-token at Vtl 4.
+- Per head-token at Vtl 4 the two passes come to ~4 us, the same order as the hardware model's tier B (4.7-5.9 us
+  with the SFPU decay); the model's cost constants hold, the plan's trajectory table stands.
 - Today's kernel seeds the rank-1 update through a tf32 copy (no UnpackToDestFp32) and also truncates the state in
   the FPU decay pass: two avoidable precision losses per token; the exact seed is a factory flag away (N-6 item).
-- The DEST pipeline moves an fp32 32x32 tile in or out at ~250-290 cycles, not the 64 cycles (64 B/cycle) assumed in
-  S-6 item 2; every per-token estimate that counts 4 KB tile moves should use the measured figure.
 
 ## Spike B / B2: in-place state pool (B in progress, B2 by inspection)
 
