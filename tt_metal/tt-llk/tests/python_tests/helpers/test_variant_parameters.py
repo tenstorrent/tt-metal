@@ -85,6 +85,16 @@ class RuntimeParameter(ABC):
 
 
 @dataclass
+class TYPECAST_PERF_MODE(TemplateParameter):
+    typecast_is_perf: bool
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr bool TYPECAST_IS_PERF = {str(self.typecast_is_perf).lower()};"
+        )
+
+
+@dataclass
 class THROTTLE_LEVEL(TemplateParameter):
     throttle_level: int = 0
 
