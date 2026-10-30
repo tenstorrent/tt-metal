@@ -30,26 +30,14 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(2, 0, 0x7f80);
         TTI_SFPNOP;
         TTI_SFPENCC(3, 0, 0, 10);
-        lltt::record(0, 10);
-        TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-        TTI_SFPSETSGN(0, 1, 1, 1);
-        TTI_SFPIADD(0, 2, 1, 6);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
+        lltt::record(0, 5);
         TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
         TTI_SFPSETSGN(0, 1, 1, 1);
         TTI_SFPIADD(0, 2, 1, 6);
         TTI_SFPSETCC(0, 1, 0, 6);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
         #pragma GCC unroll 0
-        for (int d = 0; d + 1 < ITERATIONS; d += 2) { lltt::replay(0, 10); }
-        if constexpr (ITERATIONS % 2 != 0) {
-            TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-            TTI_SFPSETSGN(0, 1, 1, 1);
-            TTI_SFPIADD(0, 2, 1, 6);
-            TTI_SFPSETCC(0, 1, 0, 6);
-            TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        }
+        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 5); }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -67,23 +55,13 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(2, 0, 0x7f80);
         TTI_SFPNOP;
         TTI_SFPENCC(3, 0, 0, 10);
-        lltt::record(0, 8);
-        TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-        TTI_SFPIADD(0, 2, 1, 6);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
+        lltt::record(0, 4);
         TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
         TTI_SFPIADD(0, 2, 1, 6);
         TTI_SFPSETCC(0, 1, 0, 6);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
         #pragma GCC unroll 0
-        for (int d = 0; d + 1 < ITERATIONS; d += 2) { lltt::replay(0, 8); }
-        if constexpr (ITERATIONS % 2 != 0) {
-            TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-            TTI_SFPIADD(0, 2, 1, 6);
-            TTI_SFPSETCC(0, 1, 0, 6);
-            TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        }
+        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -101,23 +79,13 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(2, 0, 0xff80);
         TTI_SFPNOP;
         TTI_SFPENCC(3, 0, 0, 10);
-        lltt::record(0, 8);
-        TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-        TTI_SFPIADD(0, 2, 1, 6);
-        TTI_SFPSETCC(0, 1, 0, 6);
-        TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
+        lltt::record(0, 4);
         TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
         TTI_SFPIADD(0, 2, 1, 6);
         TTI_SFPSETCC(0, 1, 0, 6);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
         #pragma GCC unroll 0
-        for (int d = 0; d + 1 < ITERATIONS; d += 2) { lltt::replay(0, 8); }
-        if constexpr (ITERATIONS % 2 != 0) {
-            TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-            TTI_SFPIADD(0, 2, 1, 6);
-            TTI_SFPSETCC(0, 1, 0, 6);
-            TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        }
+        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -135,23 +103,13 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(2, 0, 0x7f80);
         TTI_SFPNOP;
         TTI_SFPENCC(3, 0, 0, 10);
-        lltt::record(0, 8);
-        TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-        TTI_SFPSETSGN(0, 1, 1, 1);
-        TTI_SFPIADD(0, 2, 1, 2);
-        TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
+        lltt::record(0, 4);
         TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
         TTI_SFPSETSGN(0, 1, 1, 1);
         TTI_SFPIADD(0, 2, 1, 2);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
         #pragma GCC unroll 0
-        for (int d = 0; d + 1 < ITERATIONS; d += 2) { lltt::replay(0, 8); }
-        if constexpr (ITERATIONS % 2 != 0) {
-            TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-            TTI_SFPSETSGN(0, 1, 1, 1);
-            TTI_SFPIADD(0, 2, 1, 2);
-            TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        }
+        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
@@ -170,23 +128,13 @@ inline void _calculate_sfpu_isinf_isnan_()
         TTI_SFPLOADI(2, 8, 0x7f7f);
         TTI_SFPNOP;
         TTI_SFPENCC(3, 0, 0, 10);
-        lltt::record(0, 8);
-        TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-        TTI_SFPSETSGN(0, 1, 1, 1);
-        TTI_SFPIADD(0, 2, 1, 10);
-        TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
+        lltt::record(0, 4);
         TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
         TTI_SFPSETSGN(0, 1, 1, 1);
         TTI_SFPIADD(0, 2, 1, 10);
         TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
         #pragma GCC unroll 0
-        for (int d = 0; d + 1 < ITERATIONS; d += 2) { lltt::replay(0, 8); }
-        if constexpr (ITERATIONS % 2 != 0) {
-            TTI_SFPLOADMACRO((0 << 2) | 1, 0, ADDR_MOD_3, 0);
-            TTI_SFPSETSGN(0, 1, 1, 1);
-            TTI_SFPIADD(0, 2, 1, 10);
-            TTI_SFPSTORE(10, 0, ADDR_MOD_2, 0);
-        }
+        for (int d = 0; d + 0 < ITERATIONS; d += 1) { lltt::replay(0, 4); }
         TTI_SFPNOP;
         TTI_SFPCONFIG(0x000, 8, 1);
         TTI_SFPNOP;
