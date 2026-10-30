@@ -725,7 +725,16 @@ struct profileScope {
         // start and end markers: request (2 * PROFILER_L1_MARKER_UINT32_SIZE - 1) "additional" words. Checking for
         // the start alone lets a zone open at the last slot of the ring and its end marker overrun into the next
         // RISC's ring in L1 (stackSize only reserves the ends of zones that are already open).
-        if (bufferHasRoom<dispatch>(2 * PROFILER_L1_MARKER_UINT32_SIZE - 1)) {
+        constexpr uint32_t zone_words = 2 * PROFILER_L1_MARKER_UINT32_SIZE - 1;
+        if constexpr (dispatch == DoingDispatch::DISPATCH) {
+            // Dispatch rings are flushed by ~profileScope() once wIndex reaches the headroom. A zone that does not
+            // fit never gets there, so a ring sitting just below the threshold (e.g. at 494 after a 6-word record)
+            // would drop every following zone until some other writer flushes. Flush first, then re-check.
+            if (!bufferHasRoom<dispatch>(zone_words)) {
+                quick_push();
+            }
+        }
+        if (bufferHasRoom<dispatch>(zone_words)) {
             stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = true;
             mark_time_at_index_inlined(wIndex, timer_id);
