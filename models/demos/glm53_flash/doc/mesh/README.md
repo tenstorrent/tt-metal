@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 00:35: the confirmer runs, and dies on vLLM 0.30's block size; the placement evicted every prefix
+
+`needle1m_r5` (a 256-token answer): the 1 M prompt served again (TTFT 497 s, 66 ms per token) and answered with a
+repetition loop; its needle at depth 0.56 sits 457 K tokens before the question, the model's measured retrieval limit
+(~460 K); `needle1m_r6` at depth 0.9 decides model limit against served-path defect. `apc_r5`: the confirmer is finally
+installed in the engine-core process (the worker publishes it at `load_model`, the scheduler takes it: ccc57a5) and
+died on its first confirmed hit, `KVCacheManager.block_size` (vLLM 0.30 keeps the block size on the scheduler; the
+host fakes carried the attribute the real manager lacks): plugin 350dac6. Two more adapter findings from the same
+run: the host-store fallback pinned one snapshot entry whatever was requested (6e490e7d9e5 keeps the request), and
+under per-row ownership the wave-affine and SP-first placement rules re-took slot index 0 of rows 0.. for every new
+prompt, evicting the content a repeat would hit and rotating prompts across rows (9c2b47acf36: a slot without retained
+content first, then the least recently used prefix; pinned on a rows-independent geometry). `async_r3` (async + APC
+with two host entries + resident, stages a-e) runs next on the fixed plugin.
+
 ### 2026-10-29 23:50: the first served hits; the confirmer's process; async scheduling back on the plan
 
 `apc_r4`: stage b identical across rounds (the slot affinity), the first served hits (round-2 needle TTFT 10 s for the
