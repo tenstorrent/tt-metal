@@ -30,9 +30,9 @@ Run the commands below from inside the allocation.
 Same two processes as the perf run below (runner under `tt-run`, producer on rank 0's host); the producer
 reads the KV back and PCCs it against the golden trace. The runner always publishes a KV chunk table, at
 any rank count and with no flag: every rank joins the stage-layout all-gather, rank 0 writes ONE table
-spanning all layers, and each rank writes a rank-scoped device map (`<stem>_r<rank>.json`; the producer
-merges the local ones). Leave `PREFILL_ENABLE_MIGRATION` at `0` (mock migration) so the table stays on
-disk for the read-back instead of going to a migration worker. Multi-rank, point
+spanning all layers, and each host writes one plain-text device map holding the chips of every rank on
+that host (host-local `PREFILL_MIGRATION_DEVICE_MAP_PATH`, default `/tmp/prefill_device_map.txt`). Run
+one producer per host; it reads every stage on that host. Multi-rank, point
 `PREFILL_MIGRATION_TABLE_PATH` at shared storage — rank 0 writes it and every other host's producer reads
 it, so `/tmp` cannot work.
 On the producer (Process 2) add `PREFILL_PRODUCER_CHECK_PCC=1` and set `PREFILL_PRODUCER_MAX_REQUESTS=1`

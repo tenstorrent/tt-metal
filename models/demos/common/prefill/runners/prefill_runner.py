@@ -31,8 +31,7 @@ from models.demos.common.prefill.runners.layer_completion_layout import layer_co
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
 from models.demos.common.prefill.runners.migration import (
-    migration_file_export_enabled,
-    migration_publish_enabled,
+    migration_device_map_file_path,
     migration_table_path,
     setup_kv_chunk_table,
 )
@@ -1033,14 +1032,8 @@ def _print_config() -> None:
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
-        ("PREFILL_ENABLE_MIGRATION", str(int(migration_publish_enabled()))),
         ("PREFILL_MIGRATION_TABLE_PATH", migration_table_path()),
-        ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
-        ("PREFILL_MIGRATION_EXPORT_TO_FILE", os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")),
-        (
-            "PREFILL_MIGRATION_DEVICE_MAP_PATH",
-            os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "<transport-dependent default>"),
-        ),
+        ("PREFILL_MIGRATION_DEVICE_MAP_PATH", migration_device_map_file_path()),
     ]
     sep = "=" * 70
     lines = [sep, "prefill_runner configuration", sep]
@@ -1066,8 +1059,6 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "mtp_levels": MTP_LEVELS,
         "mtp_decode_levels": MTP_DECODE_LEVELS,
         "sparse_kv_cache_format": _sparse_kv_cache_format(),
-        "PREFILL_ENABLE_MIGRATION": migration_publish_enabled(),
-        "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -1250,9 +1241,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             logger.warning(f"[migration] removing stale shm {path} from a prior run")
             os.remove(path)
 
-    # The layer-ack channel goes up before the migration table is published: the source-side dgen
-    # worker attaches to it during its pipeline bring-up and only then issues the KV-manager connect
-    # that the migration layer needs before it can report WORKER_READY to wait_ready() below.
+    # The layer-ack channel goes up before the KV chunk table is written, so a consumer that starts on
+    # the table's arrival finds the channel already attachable.
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
     if use_d2h and getattr(runtime, "set_d2h_ack_service", None) is None:
         raise RuntimeError(
@@ -1337,7 +1327,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
     )
 
-    migration_endpoint = setup_kv_chunk_table(
+    setup_kv_chunk_table(
         runtime,
         kv_caches,
         mesh_device,

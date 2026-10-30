@@ -172,8 +172,7 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`).
 
         Return `[]` only for a cache layout with no table yet (GPT-OSS's bounded sliding cache): the
-        engine then serves without a table, which it allows single-rank with both
-        `PREFILL_ENABLE_MIGRATION` and `PREFILL_MIGRATION_EXPORT_TO_FILE` off, and rejects otherwise."""
+        engine then serves without a table, which it allows single-rank and rejects otherwise."""
 
     # If your merged table's second config is NOT a DSA index cache, override `cache_kind(config_id)`
     # on the ADAPTER (default: 0 = "kvpe", 1 = "index", else "other") so the producer and the
@@ -324,17 +323,16 @@ PREFILL_PRODUCER_CHUNKS=11 \
 ```
 
 **KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
-vs the golden trace, which reads the KV chunk table + device map the runner always publishes: run the
-runner with `PREFILL_ENABLE_MIGRATION=0` (the default, so the table stays on disk) and the producer with
-`PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
+vs the golden trace, which reads the KV chunk table + device map the runner always writes: run the
+producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
 recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
 the table and the device map, and every read-back runs in the reader's own process. The producer's reader
 knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
 layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
 
-**Live migration** — `PREFILL_ENABLE_MIGRATION=1` hands the same table to a migration worker instead
-and blocks on its ready, so the endpoint must be up (see
-`deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
+**Live migration** — the KV migration service reads the same two files: the table from
+`PREFILL_MIGRATION_TABLE_PATH` on shared storage, and each host's device map from the host-local
+`PREFILL_MIGRATION_DEVICE_MAP_PATH`.
 
 ## Checklist
 

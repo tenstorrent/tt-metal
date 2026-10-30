@@ -31,7 +31,7 @@ migration:
   table_queue: /mig_ep1_table
   resp_queue: /mig_ep1_resp
   table_path: /tmp/prefill_kv_chunk_table.pb
-  device_map_path: /tmp/prefill_kv_device_map.json
+  device_map_path: /tmp/prefill_device_map.txt
 
 env:
   PREFILL_SEND_SHUTDOWN: "0"

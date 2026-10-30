@@ -633,7 +633,6 @@ sets:
 
 | Setting | Why |
 |---|---|
-| `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1` | write the table and device map to files instead of handing them to a migration endpoint |
 | `PREFILL_MIGRATION_TABLE_PATH=${M3_KVM_TABLE_DIR}/m3_prefill_kv_chunk_table.pb` | expanded from the runner's environment |
 | `PREFILL_MIGRATION_DEVICE_MAP_PATH=/tmp/prefill_device_map.txt` | the device map holds host-local ASIC ids |
 | `M3_INDEX_CACHE_BF16=0` | decode stores index_k in bfp8 and the KVM copies raw bytes; the table builder rejects a bf16 index_k |

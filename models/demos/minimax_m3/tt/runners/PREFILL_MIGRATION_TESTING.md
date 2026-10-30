@@ -143,7 +143,7 @@ endpoint kills both workers.
 pkill -f migration_endpoint ; pkill prun ; pkill prted ; pkill prte
 rm -f /dev/shm/mig_ep1_* /dev/shm/ep_1_[ab]_* \
       /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* \
-      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.json /tmp/m3_migration_done.sentinel
+      /tmp/m3_kv_chunk_table.pb /tmp/m3_kv_device_map.txt /tmp/m3_migration_done.sentinel
 
 # ---- Terminal A — migration endpoint (leave running) ----
 cd /data/philei/tt-metal && ./m3_gate2_endpoint.sh
@@ -241,7 +241,7 @@ Same three-terminal flow as Gate 2 — the endpoint launch (`./m3_gate2_endpoint
 artifacts to the between-runs cleanup:
 
 ```bash
-rm -f /tmp/m3_kv_device_map_r*.json /data/philei/tmp/m3_kv_chunk_table_pp.pb
+rm -f /tmp/m3_kv_device_map.txt* /data/philei/tmp/m3_kv_chunk_table_pp.pb
 ```
 
 ```bash
@@ -347,11 +347,8 @@ exits mid-prefill; too high and it blocks on chunks that never come — no PCC e
 - **Config-id order is the src↔dst contract.** Loopback is self-consistent (one table is both source and
   destination). A real prefill→decode run needs the decode endpoint to publish its configs in the same order
   (`k_h0..N-1`, `v_h0..N-1`, `index_k`). Not exercised here.
-- **The JSON device map is written on BOTH paths now.** The real-migration branch delivers the map to the
-  workers over the client AND writes the sidecar, so producer-side `check_pcc` and the driver's
-  `--verify-migration` read-backs work in Gate 2 too. With num_ranks>1 each rank writes a rank-scoped
-  sidecar (`<stem>_r<rank>.json`); readers glob and merge them — clear stale `_r*.json` between runs whose
-  topology changed.
+- **The device map is one plain-text file per host.** Ranks sharing a host each write a `<path>.r<rank>`
+  sidecar and merge them into `<path>`, so every reader on that host sees all of its chips.
 - **Table build is ~9× the DeepSeek entry count** (9 configs, 691200 entries). It runs once at startup;
   slowness there is Python `table.set()` overhead, not a correctness problem.
 - `_migration_client not importable` → `PREFILL_MIGRATION_CLIENT_DIR` must point at `$MIG/python`, in the

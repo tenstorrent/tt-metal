@@ -62,12 +62,12 @@ export HOSTSP=<H0>:1,<H1>:1       # runner + driver: the --host list, passed to 
 Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (each SP shard
 stays 32-token-block aligned).
 
-**`PREFILL_ENABLE_MIGRATION` picks the table's consumer, not whether one is built.** Every run all-gathers
-the per-rank stage layouts and rank 0 builds one merged table spanning every rank's layers. `1` (Gate 2)
-hands it to a live migration worker over the client queues (`deliver_device_map_and_gather_stage_layouts`)
-and blocks on the worker's ready; `0` (Gate 1, mock migration) leaves it on disk for an offline reader such as
-`prefill_producer`. Both run on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
-read-back side.
+**The runner writes two files and never talks to a migration worker.** Every run all-gathers the per-rank
+stage layouts and rank 0 writes one merged table spanning every rank's layers to
+`PREFILL_MIGRATION_TABLE_PATH` (shared storage past one rank). Each host writes one plain-text device map
+holding the chips of every rank on that host to `PREFILL_MIGRATION_DEVICE_MAP_PATH` (host-local past one
+rank; default `/tmp/prefill_device_map.txt`). The KV migration service in deployment, `prefill_producer`
+and `migration_driver` all read those same two files.
 
 ---
 
@@ -98,11 +98,9 @@ global_env:
   PREFILL_H2D_SERVICE_ID: "my_prefill"
   PREFILL_NUM_USERS: "4"           # must cover every dst slot: src 0,1 -> dst 2,3
 
-  PREFILL_ENABLE_MIGRATION: "1"
-  PREFILL_MIGRATION_WAIT_READY_MS: "120000"   # worker handshake, AFTER attach succeeds
-  PREFILL_MIGRATION_ATTACH_WAIT_S: "0"        # seconds to wait for the shm queues to appear; 0/unset = forever
+  PREFILL_MIGRATION_ATTACH_WAIT_S: "0"        # driver: seconds to wait for the shm queues to appear; 0/unset = forever
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
-  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_device_map.txt"
   PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"      # endpoint default is /mig_ep<id>_{cmd,table,resp}
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
@@ -424,9 +422,8 @@ asserts when a chunk overruns the cache — it no longer derives from a chunk co
 In the binding, replace the migration block with:
 
 ```yaml
-  PREFILL_ENABLE_MIGRATION: "0"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
-  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_device_map.txt"
   PREFILL_NUM_USERS: "2"
 ```
 
@@ -446,16 +443,11 @@ python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIF
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default
 `0.93`).
 
-This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
-serialises the device map there too: **every rank on either path** publishes its own host-local JSON sidecar.
-It has to: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the
-migration client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
-`PREFILL_MIGRATION_EXPORT_TO_FILE=1` is the third transport — a plain-text map at
-`PREFILL_MIGRATION_DEVICE_MAP_PATH` for a worker that reads it off disk — and it suppresses the JSON sidecar,
-so a device-less read-back cannot run alongside it.
+The producer reads the per-host device map, so it sees every chip on its host. With several runner ranks on
+one galaxy, run one producer there (`-np 1`); it reads every stage on that host.
 
 A reader that polls 60 s and logs `device map ... not found; skipping KV read` loses every PCC and the
-`--dump-src-kv` reference with nothing raising; check the sidecar before suspecting the table. Beware the
+`--dump-src-kv` reference with nothing raising; check the map before suspecting the table. Beware the
 inverse too: a *stale* map left in `/tmp` by an earlier run makes the same misconfiguration look like it
 works. Gate 1 remains the cheapest way to separate a table problem from a transport problem.
 
