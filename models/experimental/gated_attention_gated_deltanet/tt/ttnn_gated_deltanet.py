@@ -11,6 +11,7 @@ import torch
 import ttnn
 
 from .ttnn_delta_rule_ops import (
+    gated_delta_rule_decode_head_batch_ttnn,
     recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
     recurrent_gated_delta_rule_decode_inplace_ttnn,
@@ -66,13 +67,12 @@ def _causal_conv1d_decode_t1_split(
 def _causal_conv1d_decode_t1_split_inplace(
     x, conv_state_list, kernel_size, device, memory_config=None, weight_taps=None, bias_dev=None
 ):
-    """Split-state T=1 conv; inplace copy for trace-stable addresses."""
+    """Split-state T=1 conv; inplace copy for trace-stable addresses. One addcmul per tap."""
     mc = memory_config
 
     out = ttnn.multiply(x, weight_taps[kernel_size - 1], memory_config=mc)
     for k in range(kernel_size - 1):
-        term = ttnn.multiply(conv_state_list[k], weight_taps[k], memory_config=mc)
-        out = ttnn.add(out, term, memory_config=mc)
+        out = ttnn.addcmul(out, conv_state_list[k], weight_taps[k], memory_config=mc)
 
     if bias_dev is not None:
         out = ttnn.add(out, bias_dev, memory_config=mc)
@@ -394,9 +394,12 @@ def gated_deltanet_forward_ttnn(
     mega_a_dim=None,
     mega_b_dim=None,
     mega_g_dim=None,
+    mega_tile_aligned=False,  # mega weight has a and b each zero-padded to whole tiles
     use_inplace_state=False,  # ttnn.copy for trace-stable state
     chunk_seq_masks=None,  # cached masks for gated_delta_attn_seq prefill
     valid_len=None,  # fixed-bucket padding; zeros padded positions in scan
+    decode_head_batch=False,  # B=1 T=1 in-place decode via gated_delta_rule_decode_head_batch_ttnn
+    decode_program_configs=None,  # optional {"mega"|"o": matmul program config} for T=1
 ):
     """Gated DeltaNet forward. mode: recurrent (decode T=1) or chunk (prefill T>1).
 
@@ -411,6 +414,7 @@ def gated_deltanet_forward_ttnn(
     mc = None if valid_len is not None else _seq_memory_config(T)
 
     ckc = compute_kernel_config
+    pcs = decode_program_configs if (decode_program_configs and T == 1) else {}
 
     # Mega-fused: one matmul for QKV+a+b+g (decode needs conv state; prefill needs fused taps)
     use_mega_fused = (
@@ -430,16 +434,38 @@ def gated_deltanet_forward_ttnn(
         and q_dim is not None
     )
 
+    head_batch_ok = (
+        decode_head_batch
+        and B == 1
+        and T == 1
+        and use_inplace_state
+        and recurrent_state is not None
+        and use_gate
+        and g_proj_weight is not None
+        and A_neg_precomputed is not None
+        and not allow_neg_eigval
+        and head_k_dim == head_v_dim
+    )
+
     if use_mega_fused:
-        mega_out = ttnn.linear(hidden_states, mega_fused_weight, memory_config=mc, compute_kernel_config=ckc)
-        # Split QKV | a | b | g
+        mega_out = ttnn.linear(
+            hidden_states,
+            mega_fused_weight,
+            memory_config=mc,
+            compute_kernel_config=ckc,
+            program_config=pcs.get("mega"),
+        )
+        # Split QKV | a | b | g (a and b padded to whole tiles when mega_tile_aligned)
+        a_span = -(-mega_a_dim // 32) * 32 if mega_tile_aligned else mega_a_dim
+        b_span = -(-mega_b_dim // 32) * 32 if mega_tile_aligned else mega_b_dim
+        b_start = mega_qkv_dim + a_span
         qkv = mega_out[:, :, :mega_qkv_dim]
         qkv = ttnn.to_layout(qkv, ttnn.TILE_LAYOUT)
         a_raw = mega_out[:, :, mega_qkv_dim : mega_qkv_dim + mega_a_dim]
         a_raw = ttnn.to_layout(a_raw, ttnn.TILE_LAYOUT)
-        b_raw = mega_out[:, :, mega_qkv_dim + mega_a_dim : mega_qkv_dim + mega_a_dim + mega_b_dim]
+        b_raw = mega_out[:, :, b_start : b_start + mega_b_dim]
         b_raw = ttnn.to_layout(b_raw, ttnn.TILE_LAYOUT)
-        gate_raw = mega_out[:, :, mega_qkv_dim + mega_a_dim + mega_b_dim :]
+        gate_raw = mega_out[:, :, b_start + b_span :]
         gate_raw = ttnn.to_layout(gate_raw, ttnn.TILE_LAYOUT)
         ttnn.deallocate(mega_out)
 
@@ -497,14 +523,15 @@ def gated_deltanet_forward_ttnn(
             new_conv_k = None
             new_conv_v = None
 
-        # Split QKV after conv
-        q = qkv[:, :, :q_dim]
-        k = qkv[:, :, q_dim : q_dim + k_dim]
-        v = qkv[:, :, q_dim + k_dim :]
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
-        ttnn.deallocate(qkv)
+        # Split QKV after conv (head-batch decode splits on the head dim instead)
+        if not head_batch_ok:
+            q = qkv[:, :, :q_dim]
+            k = qkv[:, :, q_dim : q_dim + k_dim]
+            v = qkv[:, :, q_dim + k_dim :]
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
+            k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
+            v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(qkv)
 
         # a/b/g already from mega projection
         _mega_extracted = True
@@ -656,6 +683,17 @@ def gated_deltanet_forward_ttnn(
             bias_dev=v_bias_dev,
         )
 
+    if head_batch_ok and _mega_extracted:
+        # b stays logits (sigmoid fused into its use); softplus fused into the dt_bias add.
+        softplus = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)
+        sp = ttnn.add(a_raw, dt_bias, activations=[softplus], memory_config=mc)
+        g = ttnn.multiply(A_neg_precomputed, sp, memory_config=mc)
+        o = gated_delta_rule_decode_head_batch_ttnn(
+            qkv, gate_raw, b_raw, g, recurrent_state, o_norm_weight, num_heads, num_v_heads, norm_eps, device
+        )
+        o = ttnn.linear(o, o_proj_weight, memory_config=mc, compute_kernel_config=ckc, program_config=pcs.get("o"))
+        return o, recurrent_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv_state
+
     # Reshape to heads (explicit mc keeps decode in L1)
     q = ttnn.reshape(q, [B, T, num_heads, head_k_dim], memory_config=mc)
     k = ttnn.reshape(k, [B, T, num_heads, head_k_dim], memory_config=mc)
@@ -758,6 +796,6 @@ def gated_deltanet_forward_ttnn(
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim], memory_config=mc)
     if mc is not None:
         o = ttnn.to_memory_config(o, mc)
-    o = ttnn.linear(o, o_proj_weight, memory_config=mc, compute_kernel_config=ckc)
+    o = ttnn.linear(o, o_proj_weight, memory_config=mc, compute_kernel_config=ckc, program_config=pcs.get("o"))
 
     return o, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv_state

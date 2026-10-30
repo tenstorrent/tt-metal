@@ -3,6 +3,7 @@
 """The Qwen3.5-9B gated full-attention layer — composes config/weights/prefill/decode."""
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.config import AttentionConfig
 from models.demos.blackhole.qwen36.tt.attention.decode import decode_forward
 from models.demos.blackhole.qwen36.tt.attention.prefill import prefill_forward
@@ -22,6 +23,17 @@ class Qwen36GatedAttention:
         self.config = config
 
         self.weights = load_attention_weights(mesh_device, state_dict, tensor_cache_path)
+        w = self.weights
+        self.decode_program_configs = {
+            name: pc
+            for name, weight, cores in (
+                ("q", w.q_proj, config.decode_q_cores),
+                ("k", w.k_proj, config.decode_kv_cores),
+                ("v", w.v_proj, config.decode_kv_cores),
+                ("o", w.o_proj, config.decode_o_cores),
+            )
+            if (pc := tpc.matmul_1d_decode_progcfg_for(mesh_device, weight, cores)) is not None
+        }
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -73,6 +85,7 @@ class Qwen36GatedAttention:
                 page_table=page_table,
                 paged_kv_cache_key=self.paged_kv_cache_key,
                 paged_kv_cache_value=self.paged_kv_cache_value,
+                program_configs=self.decode_program_configs,
             )
         elif self.use_paged_attention and T > 1 and chunk_page_table is not None:
             # Branch A — paged prefill

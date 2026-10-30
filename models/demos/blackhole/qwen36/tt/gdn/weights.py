@@ -224,6 +224,8 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         a_w = ttnn.to_torch(a_proj_weight)  # [4096, 32]
         b_w = ttnn.to_torch(b_proj_weight)  # [4096, 32]
         g_w = ttnn.to_torch(g_proj_weight)  # [4096, 4096]
+        if config.tile_aligned_mega:
+            a_w, b_w = (torch.nn.functional.pad(w_, (0, -w_.shape[1] % 32)) for w_ in (a_w, b_w))
         fused = torch.cat([qkv_w, a_w, b_w, g_w], dim=1).contiguous()
         return ttnn.from_torch(fused, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=mesh_device)
 

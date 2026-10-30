@@ -24,6 +24,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
 
     # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32, chunk_size=128).
     seq_masks = w.chunk_seq_masks_long
+    split_rows = gdn.conv_state_rows if mode == "recurrent" else None
 
     output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
         hidden_states=x,
@@ -68,13 +69,17 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         fused_conv_weight_taps=w.fused_conv_weight_taps,
         fused_conv_bias_dev=w.fused_conv_bias_dev,
         fused_conv_state=gdn.fused_conv_state,
+        fused_conv_state_split=split_rows,
         ab_proj_weight=w.ab_proj_weight,
         mega_fused_weight=w.mega_fused_weight,
         mega_qkv_dim=w.mega_qkv_dim,
         mega_a_dim=w.mega_a_dim,
         mega_b_dim=w.mega_b_dim,
         mega_g_dim=w.mega_g_dim,
+        mega_tile_aligned=gdn.cfg.tile_aligned_mega,
         use_inplace_state=True,
+        decode_head_batch=gdn.cfg.decode_head_batch,
+        decode_program_configs=gdn.decode_program_configs,
         chunk_seq_masks=seq_masks,
         valid_len=valid_len,
     )
@@ -84,9 +89,21 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
             new_state = ttnn.reshape(new_state, list(gdn.recurrent_state.shape))
         ttnn.copy(new_state, gdn.recurrent_state)
         ttnn.deallocate(new_state)
+    if split_rows is not None:
+        return output
     if new_fused_conv is not gdn.fused_conv_state:
         if new_fused_conv.layout != ttnn.TILE_LAYOUT:
             new_fused_conv = ttnn.to_layout(new_fused_conv, ttnn.TILE_LAYOUT)
         ttnn.copy(new_fused_conv, gdn.fused_conv_state)
         ttnn.deallocate(new_fused_conv)
+    if gdn.conv_state_rows is not None:
+        sync_conv_state_rows(gdn)
     return output
+
+
+def sync_conv_state_rows(gdn):
+    """Copy fused_conv_state [1, K-1, D] into the decode rows [1, 1, D] (after prefill or a restore)."""
+    for k, row in enumerate(gdn.conv_state_rows):
+        s_k = ttnn.to_layout(gdn.fused_conv_state[:, k : k + 1, :], ttnn.TILE_LAYOUT)
+        ttnn.copy(s_k, row)
+        ttnn.deallocate(s_k)

@@ -281,7 +281,11 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        p150_norm = getattr(self.args, "p150_decode_norm_config", None) if mode == "decode" else None
+        if p150_norm is not None:
+            attn_input = self._p150_decode_norm(self.attention_norm, x, p150_norm)
+        else:
+            attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -377,16 +381,42 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        # Single-P150 decode keeps the residual stream width-sharded for the norms (no reshard per norm).
+        res_kw = {"memory_config": p150_norm[0]} if p150_norm is not None else {}
+        h = ttnn.add(x, attn_output, **res_kw)
         ttnn.deallocate(attn_output)
 
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+        if p150_norm is not None:
+            ff_input = self._p150_decode_norm(self.ffn_norm, h, p150_norm)
+        else:
+            ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
 
-        output = ttnn.add(h, ff_output)
+        output = ttnn.add(h, ff_output, **res_kw)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
 
         return output
+
+    @staticmethod
+    def _p150_decode_norm(norm, x, config, out_memory_config=ttnn.L1_MEMORY_CONFIG):
+        """Single-P150 decode RMSNorm width-sharded across cores; returns interleaved in out_memory_config.
+
+        x may already be the width-sharded residual stream; it is then read in place and left alive."""
+        shard, program_config = config
+        x_is_sharded = x.memory_config().is_sharded()
+        x_sharded = x if x_is_sharded else ttnn.to_memory_config(x, shard)
+        out = norm(
+            x_sharded,
+            mode=Mode.DECODE,
+            in_sharded=True,
+            out_sharded=True,
+            norm_config={"sharded_program_config": program_config, "sharded_output_config": shard},
+        )
+        if not x_is_sharded:
+            ttnn.deallocate(x_sharded)
+        out_interleaved = ttnn.to_memory_config(out, out_memory_config)
+        ttnn.deallocate(out)
+        return out_interleaved

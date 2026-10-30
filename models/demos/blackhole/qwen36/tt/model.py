@@ -577,6 +577,13 @@ class Qwen36Model:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
             return self.norm(x, mode=Mode.DECODE, norm_config=nc)
+        p150_norm = getattr(self.args, "p150_decode_norm_config", None)
+        if p150_norm is not None:
+            # DRAM out: ttnn-auto picks a ~2x slower LM-head matmul for an L1 input.
+            out = Qwen36DecoderLayer._p150_decode_norm(self.norm, x, p150_norm, ttnn.DRAM_MEMORY_CONFIG)
+            if x.memory_config().is_sharded():
+                ttnn.deallocate(x)
+            return out
         return self.norm(x, mode=Mode.DECODE)
 
     @classmethod
@@ -4218,6 +4225,7 @@ class Qwen36Model:
                     {
                         "recurrent": ttnn.to_torch(dn.recurrent_state),
                         "conv": ttnn.to_torch(dn.fused_conv_state),
+                        "conv_rows": [ttnn.to_torch(r) for r in dn.conv_state_rows or ()],
                     }
                 )
         return saved
@@ -4239,4 +4247,10 @@ class Qwen36Model:
                 )
                 ttnn.copy(restored_conv, dn.fused_conv_state)
                 ttnn.deallocate(restored_conv)
+                for row, saved_row in zip(dn.conv_state_rows or (), saved["conv_rows"]):
+                    restored_row = ttnn.from_torch(
+                        saved_row, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+                    )
+                    ttnn.copy(restored_row, row)
+                    ttnn.deallocate(restored_row)
                 idx += 1

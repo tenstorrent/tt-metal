@@ -205,6 +205,9 @@ class Qwen36MLP:
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
+        p150_pcs = getattr(self.args, "p150_decode_mlp_progcfgs", None)
+        if p150_pcs is not None and T <= 1 and x.shape[-2] <= ttnn.TILE_SIZE:
+            return self._forward_p150_decode(x, ckc, p150_pcs)
         w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
         w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
         hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
@@ -218,6 +221,25 @@ class Qwen36MLP:
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
         output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
+        ttnn.deallocate(hidden)
+        return output
+
+    def _forward_p150_decode(self, x, ckc, progcfgs):
+        """Single-P150 decode: 1D mcast matmuls on explicit grids; needs interleaved in0.
+
+        SiLU runs as the multiply's pre-activation: fused into the gate matmul it cost ~8 us more."""
+        up_pc, down_pc = progcfgs
+        w = self.weights
+        x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG) if x.is_sharded() else x
+        mc = ttnn.L1_MEMORY_CONFIG
+        w1_out = ttnn.linear(x_il, w.w1, compute_kernel_config=ckc, program_config=up_pc, memory_config=mc)
+        w3_out = ttnn.linear(x_il, w.w3, compute_kernel_config=ckc, program_config=up_pc, memory_config=mc)
+        if x_il is not x:
+            ttnn.deallocate(x_il)
+        hidden = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
+        output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, program_config=down_pc, memory_config=mc)
         ttnn.deallocate(hidden)
         return output
 

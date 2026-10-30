@@ -510,6 +510,83 @@ def recurrent_gated_delta_rule_decode_inplace_ttnn(
     return o, state_buffer
 
 
+_HEAD_BATCH_NORM_SCALES = {}
+
+
+def _head_batch_norm_scales(device, K):
+    """Constant rms_norm weights folding l2-norm's K^-0.5 (k) and that times the K^-0.5 query scale (q)."""
+    key = (id(device), K)
+    if key not in _HEAD_BATCH_NORM_SCALES:
+
+        def full(value):
+            return ttnn.from_torch(torch.full([K], value), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        _HEAD_BATCH_NORM_SCALES[key] = (full(1.0 / K), full(K**-0.5))
+    return _HEAD_BATCH_NORM_SCALES[key]
+
+
+def gated_delta_rule_decode_head_batch_ttnn(
+    qkv, gate, b_logits, g, state_buffer, o_norm_weight, num_heads, num_v_heads, norm_eps, device, l2_eps=1e-6
+):
+    """B=1, T=1 decode, conv output to o_proj input: qkv [1,1,(2H+Hv)*D], gate [1,1,Hv*D] -> [1,1,Hv*D].
+
+    beta = sigmoid(b_logits), applied as a pre-activation where beta is used.
+
+    Heads stay on the batch dim ([1,H,1,D]): [1,1,H*D] -> [1,H,1,D] only relabels tiles, unlike the
+    [1,1,H,D] <-> [1,H,1,D] round trips of recurrent_gated_delta_rule_decode_ttnn. Same math as that path
+    plus rms_norm_gated_ttnn and the o clip; beta scales delta instead of the outer product, and the
+    state update is written straight into state_buffer.
+
+    q keeps its exact l2-norm and K^-0.5 scale: o is small enough that the o rms_norm epsilon matters.
+    """
+    _L1 = ttnn.L1_MEMORY_CONFIG
+    H, Hv = num_heads, num_v_heads
+    D = qkv.shape[-1] // (2 * H + Hv)
+    K = V = D
+    q_scale, k_scale = _head_batch_norm_scales(device, K)
+    qkv = ttnn.reshape(qkv, [1, 2 * H + Hv, 1, D], memory_config=_L1)
+    q = ttnn.slice(qkv, [0, 0, 0, 0], [1, H, 1, D], memory_config=_L1)
+    k = ttnn.slice(qkv, [0, H, 0, 0], [1, 2 * H, 1, D], memory_config=_L1)
+    v = ttnn.slice(qkv, [0, 2 * H, 0, 0], [1, 2 * H + Hv, 1, D], memory_config=_L1)
+    ttnn.deallocate(qkv)
+    if Hv > H:
+        q = ttnn.repeat_interleave(q, Hv // H, dim=1)
+        k = ttnn.repeat_interleave(k, Hv // H, dim=1)
+    q = ttnn.rms_norm(q, weight=q_scale, epsilon=l2_eps / K, memory_config=_L1)
+    k = ttnn.rms_norm(k, weight=k_scale, epsilon=l2_eps / K, memory_config=_L1)
+    g_b = ttnn.reshape(g, [1, num_v_heads, 1, 1], memory_config=_L1)
+    b_b = ttnn.reshape(b_logits, [1, num_v_heads, 1, 1], memory_config=_L1)
+
+    cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    outer_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    prog = _recurrent_read_query_program_config(device, K, V)
+
+    h = ttnn.multiply(state_buffer, g_b, input_tensor_b_activations=[ttnn.UnaryOpType.EXP], memory_config=_L1)
+    v_read = ttnn.matmul(k, h, memory_config=_L1, program_config=prog, compute_kernel_config=cfg)
+    delta = ttnn.multiply(
+        ttnn.subtract(v, v_read, memory_config=_L1),
+        b_b,
+        input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID],
+        memory_config=_L1,
+    )
+    outer = ttnn.matmul(k, delta, transpose_a=True, memory_config=_L1, compute_kernel_config=outer_cfg)
+    ttnn.add(h, outer, output_tensor=state_buffer)
+    ttnn.deallocate(h)
+    ttnn.deallocate(outer)
+    o = ttnn.matmul(q, state_buffer, memory_config=_L1, program_config=prog, compute_kernel_config=cfg)
+
+    # silu(clip(gate)) == clip(silu(gate)) for the +-1e4 bounds.
+    gate = ttnn.clip(ttnn.reshape(gate, [1, num_v_heads, 1, V], memory_config=_L1), min=-1e4, max=1e4)
+    o = ttnn.rms_norm(o, weight=o_norm_weight, epsilon=norm_eps, memory_config=_L1)
+    o = ttnn.multiply(o, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SILU], memory_config=_L1)
+    o = ttnn.clip(o, min=-1e4, max=1e4, memory_config=_L1)
+    return ttnn.reshape(o, [1, 1, num_v_heads * V], memory_config=_L1)
+
+
 def recurrent_gated_delta_rule_ttnn(
     q,
     k,

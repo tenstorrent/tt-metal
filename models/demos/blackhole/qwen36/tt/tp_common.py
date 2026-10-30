@@ -236,7 +236,9 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
-def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8):
+def create_matmul_1d_decode_progcfg(
+    m, k, n, num_cores, fused_activation=None, fp32_acc=True, grid_w=8, in0_block_w=None
+):
     """Explicit-grid 1D (mcast_in0) decode matmul progcfg on ~`num_cores` cores — small grids beat
     the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved.
 
@@ -250,7 +252,8 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
     k_tiles = math.ceil(k / TILE_SIZE)
     n_tiles = math.ceil(n / TILE_SIZE)
     # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
-    per_core_k = _find_largest_divisor(k_tiles)
+    per_core_k = in0_block_w or _find_largest_divisor(k_tiles)
+    assert k_tiles % per_core_k == 0, f"in0_block_w {per_core_k} must divide K tiles {k_tiles}"
     per_core_n = math.ceil(n_tiles / (cols * rows))
     cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
     sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
@@ -265,6 +268,16 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
         fuse_batch=True,
         fused_activation=fused_activation,
         mcast_in0=True,
+    )
+
+
+def matmul_1d_decode_progcfg_for(device, weight, num_cores):
+    """1D decode progcfg for x[32, K] @ weight[K, N] on `num_cores`; None (ttnn-auto) when num_cores is 0."""
+    if not num_cores:
+        return None
+    k, n = weight.shape[-2], weight.shape[-1]
+    return create_matmul_1d_decode_progcfg(
+        TILE_SIZE, k, n, num_cores=num_cores, grid_w=device.compute_with_storage_grid_size().x
     )
 
 

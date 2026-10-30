@@ -207,6 +207,7 @@ def gated_attention_forward_ttnn(
     chunk_page_table=None,  # [1, num_blocks_in_chunk] int32 — blocks for this chunk only
     chunk_start_idx=None,  # int — absolute position of this chunk in the full sequence
     chunk_start_idx_tensor=None,  # device tensor [1] int32 — runtime offset for trace-replay (flexible SDPA)
+    decode_program_configs=None,  # optional {"q"|"k"|"v"|"o": matmul program config} for T=1
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -241,7 +242,14 @@ def gated_attention_forward_ttnn(
 
     # Q projection: 2x wide
     ckc = compute_kernel_config
-    qg = ttnn.linear(hidden_states, q_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    pcs = decode_program_configs if (decode_program_configs and T == 1) else {}
+    qg = ttnn.linear(
+        hidden_states,
+        q_proj_weight,
+        compute_kernel_config=ckc,
+        memory_config=memory_config,
+        program_config=pcs.get("q"),
+    )
     qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
     # Split into query and gate
     query_states, gate = ttnn.chunk(qg, 2, dim=-1)
@@ -256,7 +264,13 @@ def gated_attention_forward_ttnn(
     query_states = ttnn.transpose(query_states, 1, 2)
 
     # K projection + norm + transpose to [B, H_kv, T, D]
-    key_states = ttnn.linear(hidden_states, k_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    key_states = ttnn.linear(
+        hidden_states,
+        k_proj_weight,
+        compute_kernel_config=ckc,
+        memory_config=memory_config,
+        program_config=pcs.get("k"),
+    )
     key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
     if norm_weights_pre_offset:
         key_states = ttnn.rms_norm(key_states, weight=k_norm_weight, epsilon=norm_eps)
@@ -265,7 +279,13 @@ def gated_attention_forward_ttnn(
     key_states = ttnn.transpose(key_states, 1, 2)
 
     # V projection + transpose to [B, H_kv, T, D]
-    value_states = ttnn.linear(hidden_states, v_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    value_states = ttnn.linear(
+        hidden_states,
+        v_proj_weight,
+        compute_kernel_config=ckc,
+        memory_config=memory_config,
+        program_config=pcs.get("v"),
+    )
     value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
     value_states = ttnn.transpose(value_states, 1, 2)
 
@@ -560,6 +580,8 @@ def gated_attention_forward_ttnn(
     ttnn.deallocate(gate)
 
     # Output projection
-    attn_output = ttnn.linear(attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config)
+    attn_output = ttnn.linear(
+        attn_output, o_proj_weight, compute_kernel_config=ckc, memory_config=memory_config, program_config=pcs.get("o")
+    )
 
     return attn_output, new_key, new_value

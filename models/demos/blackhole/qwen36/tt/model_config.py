@@ -175,6 +175,73 @@ class Qwen36ModelArgs(ModelArgs):
             self.is_galaxy = False
         if mesh_device is not None and self.num_devices > 1:
             self._init_tp_config(mesh_device)
+        p150_opt = self._p150_decode_opt_enabled(mesh_device)
+        self.p150_decode_opt = p150_opt
+        self.p150_decode_mlp_progcfgs = self._init_p150_decode_mlp_progcfgs(mesh_device) if p150_opt else None
+        self.p150_decode_norm_config = self._init_p150_decode_norm_config() if p150_opt else None
+        self.p150_decode_proj_cores = self.P150_DECODE_PROJ_CORES[(self.dim, self.hidden_dim)] if p150_opt else {}
+
+    # Single-P150 decode projection grids (1D mcast), keyed by (dim, hidden_dim); a missing key keeps ttnn-auto.
+    # Per-shape decode matmul core-count sweeps on P150 (o = GDN and attention o_proj).
+    P150_DECODE_PROJ_CORES = {
+        (2048, 6144): {"gdn_in": 64, "o": 64, "attn_q": 16, "attn_kv": 8},
+        (2560, 9216): {"o": 32, "attn_q": 40, "attn_kv": 16},
+    }
+
+    # Single-P150 decode MLP grids for Qwen3.5-2B / 4B, keyed by (dim, hidden_dim): (gate/up cores, down cores).
+    # From per-shape core-count sweeps on P150; ttnn-auto on these interleaved weights is 1.2-2.9x slower.
+    P150_DECODE_MLP_CORES = {(2048, 6144): (16, 55), (2560, 9216): (110, 33)}
+
+    # Decode RMSNorm width-sharded over this many cores (interleaved [32, dim] runs on one core).
+    P150_DECODE_NORM_CORES = 16
+
+    def _p150_decode_opt_enabled(self, mesh_device):
+        """Qwen3.5-2B / 4B on a single Blackhole P150, unless QWEN35_P150_DECODE_OPT=0."""
+        import ttnn
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        return (
+            (self.dim, getattr(self, "hidden_dim", None)) in self.P150_DECODE_MLP_CORES
+            and mesh_device is not None
+            and os.environ.get("QWEN35_P150_DECODE_OPT") != "0"
+            and mesh_device.get_num_devices() == 1
+            and mesh_device.arch() == ttnn.device.Arch.BLACKHOLE
+            and mesh_device.dram_grid_size().x == tpc.DRAM_CORES
+        )
+
+    def _init_p150_decode_norm_config(self):
+        """(width-shard memcfg, sharded program config) for the decode [32, dim] RMSNorm."""
+        import ttnn
+
+        cores = self.P150_DECODE_NORM_CORES
+        cols = min(cores, 8)
+        shard = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim // cores),
+            core_grid=ttnn.CoreGrid(y=cores // cols, x=cols),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(cols, cores // cols),
+            subblock_w=1,
+            block_h=1,
+            block_w=self.dim // 32 // cores,
+            inplace=False,
+        )
+        return shard, program_config
+
+    def _init_p150_decode_mlp_progcfgs(self, mesh_device):
+        """(gate/up, down) 1D decode progcfgs on a single Blackhole P150."""
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        gate_up_cores, down_cores = self.P150_DECODE_MLP_CORES[(self.dim, self.hidden_dim)]
+        grid_w = mesh_device.compute_with_storage_grid_size().x
+        m = tpc.TILE_SIZE
+        return (
+            tpc.create_matmul_1d_decode_progcfg(m, self.dim, self.hidden_dim, num_cores=gate_up_cores, grid_w=grid_w),
+            tpc.create_matmul_1d_decode_progcfg(m, self.hidden_dim, self.dim, num_cores=down_cores, grid_w=grid_w),
+        )
 
     def _init_tp_config(self, mesh_device):
         """Per-device sharded dims + DRAM matmul/mem configs for TP (num_devices>1)."""
