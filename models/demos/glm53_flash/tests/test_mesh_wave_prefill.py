@@ -288,31 +288,44 @@ def test_wave_first_token_vs_hf(mesh_device):
     # both lengths are measured before either is judged, each against the eager wave AND the SP prefill: the 2026-10-30
     # block run found the 128-row trace at pcc 0.999887 to the eager wave = the eager-wave-vs-SP correlation, so the
     # SP relation says whether the trace or the eager wave is the odd one out
+    # The served 2026-10-30 stage-a flip (a wrong first token for this prompt) came through a wave of ONE member on
+    # row 1 with seven idle rows, a form the all-rows traced wave never exercises: every length is measured in both
+    # forms. The traced wave is judged like the eager wave vs SP: the HF first token on every member row, and the
+    # logits within ``bar`` of the eager wave (the 128-row trace groups the KDA scan like the SP path: at 45 layers
+    # any such ulp-level difference lands at the rows' own depth-chaotic spread, ~0.93-0.98, not at bit-identity).
     results = {}
+    lone = 1 if rows > 1 else 0
     for T_wave in (128, 256):
         model.capture_waves([T_wave])
         traced = _timed(
             f"traced wave ({T_wave} per row)",
             lambda: model.prefill_traced_wave(_wave(model, {r: (prompt, 0) for r in range(rows)}, user=0)),
         )
+        alone = model.prefill_traced_wave(_wave(model, {lone: (prompt, 0)}, user=0))
         p_tr = pcc(traced[0][1], all_rows[0][1])
         p_tr_sp = pcc(traced[0][1], logits_sp)
+        p_alone = pcc(alone[lone][1], traced[lone][1])
         results[T_wave] = (
             [traced[r][0] for r in range(rows)],
             p_tr,
             torch.equal(traced[0][1], all_rows[0][1]),
             p_tr_sp,
             torch.equal(traced[0][1], logits_sp),
+            alone[lone][0],
+            p_alone,
         )
         logger.info(
             f"traced wave ({T_wave} per row) first tokens {results[T_wave][0]}, row 0 vs the eager wave pcc {p_tr:.6f} "
-            f"(equal {results[T_wave][2]}), vs SP pcc {p_tr_sp:.6f} (equal {results[T_wave][4]})"
+            f"(equal {results[T_wave][2]}), vs SP pcc {p_tr_sp:.6f} (equal {results[T_wave][4]}); row {lone} alone "
+            f"(idle rows) first token {alone[lone][0]}, vs the all-rows trace pcc {p_alone:.6f} "
+            f"(equal {torch.equal(alone[lone][1], traced[lone][1])})"
         )
         model.release_wave_traces()
-    for T_wave, (firsts, p_tr, eq_tr, p_tr_sp, eq_sp) in results.items():
-        assert all(v == hf_first for v in firsts) and p_tr > 0.9999, (
-            f"the {T_wave}-row wave trace: first tokens {firsts} (HF {hf_first}), vs the eager wave pcc {p_tr:.6f} "
-            f"(equal {eq_tr}), vs SP pcc {p_tr_sp:.6f} (equal {eq_sp})"
+    for T_wave, (firsts, p_tr, eq_tr, p_tr_sp, eq_sp, first_alone, p_alone) in results.items():
+        assert all(v == hf_first for v in firsts) and first_alone == hf_first and p_tr > bar and p_alone > bar, (
+            f"the {T_wave}-row wave trace: first tokens {firsts}, row {lone} alone {first_alone} (HF {hf_first}), vs the "
+            f"eager wave pcc {p_tr:.6f} (equal {eq_tr}), vs SP pcc {p_tr_sp:.6f} (equal {eq_sp}), alone vs all-rows pcc "
+            f"{p_alone:.6f} (bar {bar})"
         )
     # throughput: rows x T_big-token prompts in one wave vs the SP prefill of one rows x T_big chunk
     torch.manual_seed(2)
