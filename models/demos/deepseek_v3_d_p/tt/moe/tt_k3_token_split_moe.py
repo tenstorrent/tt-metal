@@ -109,12 +109,77 @@ def combine_port_cells(mesh_device, cells, torus):
     return {(v.x, v.y) for v in place_ports(mesh_device, chips_, cells).values()}
 
 
+def combine_port_count(mesh_device, cells, torus):
+    """The cells the ports-apart accumulators lose to ports: with per-chip roles (sparse_combine_rf, SPC_ACC_PERCHIP
+    default 1) a chip's own ports - the most any chip has - else every chip's (their union: 8 to 14 of GLM-5.3's 19
+    cells, per Galaxy). Per-chip roles need a cell no chip has a port on (the collector): else the union."""
+    from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
+
+    chips_, _, _ = mesh_plan(mesh_device, 2, torus)
+    pp = place_ports(mesh_device, chips_, cells)
+    union = {(v.x, v.y) for v in pp.values()}
+    if os.environ.get("SPC_ACC_PERCHIP", "1") != "1" or len(union) >= len(cells):
+        return len(union)
+    return max(len({(v.x, v.y) for k, v in pp.items() if k[0] == ch}) for ch in chips_)
+
+
 def planned_accumulators(mesh_device, plan, torus):
     """The combine's accumulator count in the ports-apart mode: every free cell not a port, at most A_MAX."""
     from ttnn.bringup.combine_rf.sparse_combine_rf import A_MAX
 
     cells = combine_cells(mesh_device, plan)
-    return min(A_MAX, len(cells) - len(combine_port_cells(mesh_device, cells, torus)))
+    return min(A_MAX, len(cells) - combine_port_count(mesh_device, cells, torus))
+
+
+WORDS_ROWS = 192  # (the writers' words: rows of 64 B a core on top of the exchange's per-call arena)
+
+
+def exchange_arena_reserve(mesh_device, plan, S, latent, torus, dispatch_in_program):
+    """Bytes a bank the exchange keeps below its arena over a call: whichever program's static CBs are larger - the
+    fused flat op's, or the sparse dispatch's on its port cores plus its per-call manifest - with the fused op's
+    reserve, + 1 KB (the arena is the largest free L1 block less this, less the words' rows)."""
+    from ttnn.bringup.combine_rf.sparse_all_gather_2d import static_cb_bytes
+    from ttnn.bringup.combine_rf.sparse_combine_rf import fused_arena_reserve
+
+    flat_cbs = int(plan["static_l1_bytes"])
+    if os.environ.get("K3_DISPATCH", "sparse") != "sparse":
+        return fused_arena_reserve(flat_cbs, l1=True) + 1024
+    R, C = tuple(mesh_device.shape)
+    ms = manifest_spec(mesh_device, S, num_links=2, torus=tuple(torus))
+    grp = 8 if 2 * latent <= 7168 else 2  # (dispatch()'s row group)
+    man_b = (int(ms[0][-1]) * 4 + 63) // 64 * 64
+    stat = static_cb_bytes(R * C, S, latent, group=grp)
+    if dispatch_in_program:  # (one program: the manifest above both kinds of static CBs)
+        return fused_arena_reserve(max(flat_cbs, stat), l1=True) + man_b + 1024
+    return fused_arena_reserve(max(flat_cbs, man_b + stat), l1=True) + 1024
+
+
+def plan_combine(mesh_device, plan, S, latent, torus, dispatch_in_program, margin=32 * 1024):
+    """The combine's accumulator count and mode, planned before the fused head bakes the count: sized as the exchange
+    will size it (combine_auto on the arena it will get: the largest free L1 block now less its reserve, less margin
+    for what the head and tail keep). The ports-apart mode (a chip's accumulators: its free cells not its own ports -
+    combine_port_count) where it fits - it is the faster one - else the accumulators on the ports' cells. (Without the
+    per-chip roles the accumulators avoid every chip's ports, a union that varies per Galaxy - 8 to 14 of GLM-5.3's 19
+    cells - and at 14, 5 accumulators no longer hold a landing slot per source chip.) -> (n_acc, mode)."""
+    from ttnn.bringup.combine_rf.sparse_combine_rf import combine_auto
+
+    R, C = tuple(mesh_device.shape)
+    cells = combine_cells(mesh_device, plan)
+    n_ports = combine_port_count(mesh_device, cells, torus)
+    mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    free = int(mv.largest_contiguous_bytes_free_per_bank) - margin
+    reserve = exchange_arena_reserve(mesh_device, plan, S, latent, torus, dispatch_in_program)
+    rows = (free - reserve) // 64 // 32 * 32 - WORDS_ROWS
+    why = []
+    for mode in ("ports apart", "acc_on_ports"):
+        auto = combine_auto(
+            R * C, S, latent, len(cells), n_ports, arena_bytes=rows * 64, l1=True, depth=8,
+            piece_max=max(7168, 2 * latent), mode=mode,
+        )  # fmt: skip
+        if auto["fits"]:
+            return auto["n_acc"], mode
+        why.append(auto["why"])
+    raise AssertionError(f"combine: does not fit ({len(cells)} cells, ~{rows * 64 >> 10} KB): {'; '.join(why)}")
 
 
 def random_k3_weights(d: K3Dims, pool_size=8, seed=0):
@@ -428,7 +493,7 @@ class TtK3TokenSplitMoE:
         # (the writers' words: 192 rows of 64 B a writer core at the top of the per-call arena, past what the flat op /
         # combine use - zeroed every call with the arena's runs, so nothing in them outlives a call; persistent L1 here
         # (12 KB a core, reserved on every core) clashed with the chunked model's attention circular buffers)
-        WR = 192
+        WR = WORDS_ROWS
         # routed_only: the x relays' words, persistent (the fused op otherwise allocates them per call, at an address the
         # program-cache key includes but the caller cannot see: _experts_combine predicts its hits)
         self.relay_words = None
@@ -555,23 +620,10 @@ class TtK3TokenSplitMoE:
         if (
             combine_auto_cfg
         ):  # (the arena takes the L1 left, less the flat program's static CBs: the combine sizes from it)
-            from ttnn.bringup.combine_rf.sparse_all_gather_2d import static_cb_bytes
-            from ttnn.bringup.combine_rf.sparse_combine_rf import fused_arena_reserve
-
             mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
             # (below the arena, over the call: the writers' words (allocated after it) and whichever program's CBs are
             # larger - the fused op's static CBs, or the dispatch's on its port cores plus its per-call manifest)
-            flat_cbs = int(plan["static_l1_bytes"])
-            disp = 0
-            if self.sparse_dispatch:
-                ms = manifest_spec(mesh_device, S, num_links=2, torus=self.torus)
-                grp = 8 if 2 * d.latent <= 7168 else 2  # (dispatch()'s row group)
-                disp = (int(ms[0][-1]) * 4 + 63) // 64 * 64 + static_cb_bytes(self.N, S, d.latent, group=grp)
-            reserve = fused_arena_reserve(max(flat_cbs, disp), l1=True) + 1024
-            if self.dispatch_in_program:  # (one program: the manifest above both kinds of static CBs)
-                man_b = (int(ms[0][-1]) * 4 + 63) // 64 * 64
-                stat = static_cb_bytes(self.N, S, d.latent, group=grp)
-                reserve = fused_arena_reserve(max(flat_cbs, stat), l1=True) + man_b + 1024
+            reserve = exchange_arena_reserve(mesh_device, plan, S, d.latent, self.torus, self.dispatch_in_program)
             left = (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32
             left -= WR  # (the words' rows on top)
             assert a_rows <= left, (
@@ -681,21 +733,25 @@ class TtK3TokenSplitMoE:
             from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
             from ttnn.bringup.combine_rf.sparse_combine_rf import combine_auto
 
-            port_cells = combine_port_cells(mesh_device, self.cells, self.torus)
+            n_ports = combine_port_count(mesh_device, self.cells, self.torus)
             piece = max(7168, 2 * d.latent)
             # (combine_accumulators: the count the caller planned with - the MoE block's fused head planner bakes it:
             # the ports-apart mode at exactly that many)
-            pin = dict(a_max=combine_accumulators, mode="ports apart") if combine_accumulators else {}
+            # (combine_accumulators: n, or (n, mode) - plan_combine's; n alone: the ports-apart mode)
+            acc_n, acc_mode = (
+                combine_accumulators if isinstance(combine_accumulators, tuple) else (combine_accumulators, "ports apart")
+            )
+            pin = dict(a_max=acc_n, mode=acc_mode) if acc_n else {}
             auto = combine_auto(
-                self.N, S, d.latent, len(self.cells), len(port_cells), arena_bytes=a_rows * 64, l1=True, depth=8,
+                self.N, S, d.latent, len(self.cells), n_ports, arena_bytes=a_rows * 64, l1=True, depth=8,
                 piece_max=piece, **pin,
             )  # fmt: skip
             assert auto[
                 "fits"
             ], f"combine: does not fit ({len(self.cells)} cells, {a_rows * 64 >> 10} KB): {auto['why']}"
             assert (
-                not combine_accumulators or auto["n_acc"] == combine_accumulators
-            ), f"combine: {auto['n_acc']} accumulators, {combine_accumulators} planned"
+                not acc_n or auto["n_acc"] == acc_n
+            ), f"combine: {auto['n_acc']} accumulators, {acc_n} planned ({acc_mode})"
             acc_on_ports = auto["acc_on_ports"]
             copt = dict(
                 n_acc=auto["n_acc"], depth=auto["depth"], inj_slots=auto["inj_slots"], local_keep=auto["local_keep"]
@@ -704,7 +760,7 @@ class TtK3TokenSplitMoE:
 
             lay_ = auto["layout"]
             logger.info(
-                f"K3 block combine (auto): {len(self.cells)} cells, {len(port_cells)} port cells, accumulators "
+                f"K3 block combine (auto): {len(self.cells)} cells, {n_ports} port cells a chip, accumulators "
                 f"{auto['n_acc']} (on the ports: {acc_on_ports}), landing pool {lay_['PSL']} slots (ring depth {lay_['D']}), "
                 f"injection ring {lay_['QP']}, local ring {lay_['QL']}; arena {a_rows * 64 >> 10} KB"
             )

@@ -483,11 +483,26 @@ void kernel_main() {
     }
     uint16_t chip_id[N];
     for (uint32_t i = 0; i < N; ++i) chip_id[i] = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
+#ifdef ACC_LUT
+    // (per-chip roles: a home chip's accumulator cells differ - its table entry home * A + o, x | y << 8, copied here)
+    const uint32_t lut_dram = get_arg_val<uint32_t>(a++), lut_l1 = get_arg_val<uint32_t>(a++);
+    {
+        const InterleavedAddrGen<true> lg = {.bank_base_address = lut_dram, .page_size = LUT_BYTES};
+        noc_async_read(get_noc_addr(0, lg), lut_l1, LUT_BYTES);
+        noc_async_read_barrier();
+    }
+    volatile tt_l1_ptr uint16_t* acc_lut = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(lut_l1);
+#define ACC_X(h, o) (acc_lut[(h) * A + (o)] & 0xFFu)
+#define ACC_Y(h, o) (acc_lut[(h) * A + (o)] >> 8)
+#else
     uint32_t ax[A], ay[A];
     for (uint32_t i = 0; i < A; ++i) {
         ax[i] = get_arg_val<uint32_t>(a++);
         ay[i] = get_arg_val<uint32_t>(a++);
     }
+#define ACC_X(h, o) ax[o]
+#define ACC_Y(h, o) ay[o]
+#endif
     // per source chip s: the port on s that feeds my chip on my link (where s's credits go); 0 if not mine to return
     uint32_t sx[N], sy[N];
     for (uint32_t i = 0; i < N; ++i) {
@@ -872,7 +887,7 @@ void kernel_main() {
         for (uint32_t pc = 0; pc < P; ++pc) {
             const uint32_t pb = (pc + 1 == P ? row_bytes - pc * PD : PD) + 32;
             auto* h = hdr_at(home, sent % NH);
-            h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(ax[o], ay[o], dst + pc * PS)}, pb);
+            h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(ACC_X(home, o), ACC_Y(home, o), dst + pc * PS)}, pb);
             const uint32_t t0 = TSX();
             cn.wait_for_empty_write_slot();
             p_slot += TSX() - t0;
@@ -1832,11 +1847,27 @@ def sparse_combine_rf_prepare(
     if PER_DIR:  # (one core per (chip, direction): link 0's; every link of the direction maps to it)
         port_core = {k: port_core[k[:2] + (0,)] for k in port_core}
     used_cores = {(c.x, c.y) for c in port_core.values()}
+    # (per-chip roles, ports apart: each chip's accumulators are the cells less ITS OWN ports - a cell may be a port on
+    # one chip and an accumulator on another, the senders address a home chip's accumulator through a table; the
+    # collector (the flat op's one counts core) is a cell no chip has a port on, accumulator 0 everywhere. Else (or
+    # SPC_ACC_PERCHIP=0) the same cells on every chip: the cells less every chip's ports - the union varies per Galaxy)
+    PERCHIP = not FUSED and os.environ.get("SPC_ACC_PERCHIP", "1") == "1"
+    acc_of = None
     if FUSED:
         acc_cores = [ttnn.CoreCoord(x, y) for x, y in aset_xy]
         used_cores = set()  # (the ports are accumulator cells)
+    elif PERCHIP:
+        never = [c for c in pool if c not in used_cores]
+        assert never, "combine: no cell free of every chip's ports (the collector's)"
+        own = {ch: {(c.x, c.y) for k, c in port_core.items() if k[0] == ch} for ch in chips}
+        acc_of = {ch: ([never[0]] + [c for c in pool if c not in own[ch] and c != never[0]])[:A0] for ch in chips}
+        A_ = min(len(v) for v in acc_of.values())
+        acc_of = {ch: [ttnn.CoreCoord(x, y) for x, y in v[:A_]] for ch, v in acc_of.items()}
+        acc_cores = acc_of[next(iter(chips))]  # (a representative: the count, the collector at index 0)
     else:
         acc_cores = [ttnn.CoreCoord(x, y) for x, y in pool if (x, y) not in used_cores][:A0]
+    accs_of = (lambda ch: acc_of[ch]) if PERCHIP else (lambda ch: acc_cores)  # noqa: E731
+    all_acc_xy = {(c.x, c.y) for ch in chips for c in accs_of(ch)}
     A = len(acc_cores)
     assert N <= 32 and A <= 16, (N, A)
     AP = (A + 3) // 4 * 4
@@ -1848,7 +1879,11 @@ def sparse_combine_rf_prepare(
     LAYR, LAYO, U0 = state_layout_ext(N, A, G_)
     SHW, PIG = state_layout_pig(N, A)
     GIDH, GREC = state_layout_grants(N, A, G_) if SHARED else (0, 0)
-    run_cells = dict(ports={k: (c.x, c.y) for k, c in port_core.items()}, accs=[(c.x, c.y) for c in acc_cores])
+    run_cells = dict(
+        ports={k: (c.x, c.y) for k, c in port_core.items()},
+        accs=[(c.x, c.y) for c in acc_cores],
+        accs_by_chip={ch: [(c.x, c.y) for c in accs_of(ch)] for ch in chips},
+    )
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     idx = lambda ch: ch[0] * C + ch[1]
@@ -1974,8 +2009,13 @@ def sparse_combine_rf_prepare(
         QP = min(QP, (arena_bytes - a_end - QL_F * ISLOT) // ISLOT - NSE)
         assert QL_F >= 2 and QP >= 8, f"acc_on_ports: local ring {QL_F} / injection ring {QP} slots"
     port_area = RINGS + ((QP + NSE) * ISLOT if l1 is not None else 0)  # (fused: after the accumulator's, see build)
+    # (per-chip roles: every home chip's accumulator cells, x | y << 8 a 16-bit entry, at the port's area end - the
+    # sender copies it there from DRAM at its start)
+    LUT_BYTES = al(2 * N * A) if PERCHIP else 0
+    lut_off = al(port_area)
+    port_area = lut_off + LUT_BYTES if PERCHIP else port_area
     area_bytes = max(acc_area, port_area)
-    all_cores = sorted(used_cores | {(c.x, c.y) for c in acc_cores})
+    all_cores = sorted(used_cores | all_acc_xy)
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in all_cores])
     if arena is None:
         key = (id(mesh_device), tuple(all_cores), "combine_rf", area_bytes)
@@ -2188,6 +2228,22 @@ def sparse_combine_rf_prepare(
     for ac in acc_cores:
         v = virt(ac)
         acc_xy += [v.x, v.y]
+    lut_t = None
+    if PERCHIP:  # (a home chip's accumulator o: entry idx(home) * A + o; replicated, one page)
+        lut = torch.zeros(LUT_BYTES // 2, dtype=torch.int32)
+        for ch in chips:
+            for o, ac in enumerate(accs_of(ch)):
+                v = virt(ac)
+                assert v.x < 256 and v.y < 256
+                lut[idx(ch) * A + o] = v.x | v.y << 8
+        lut_t = ttnn.from_torch(
+            (lut[0::2] | lut[1::2] << 16).reshape(1, -1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
     state = {}
 
     def arena_cbs(placed, arena_t):
@@ -2278,7 +2334,8 @@ def sparse_combine_rf_prepare(
             ]
             p_xy = {(c.x, c.y) for _, _, c in my}  # (this chip's port cores; fused: accumulator cells too)
             pset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for _, _, k in my])
-            aset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for k in acc_cores])
+            accs = accs_of(ch)  # (this chip's accumulator cells)
+            aset = ttnn.CoreRangeSet([ttnn.CoreRange(k, k) for k in accs])
             specs = [  # (cb, cores, total, format, page): CB_TAB first (both kinds), then each kind's own
                 (CB_TAB, pset.merge(aset), tab_cb, ttnn.uint32, tab_cb),
                 (CB_INJ, pset, 2 * inj_b * ISLOT, ttnn.uint32, ISLOT),
@@ -2341,7 +2398,7 @@ def sparse_combine_rf_prepare(
                 for j in range(n_pid):
                     v = virt(port_core[min(k for k in pids if pids[k] == j)])
                     la += [v.x, v.y, area + inj_off, QP, area + MISC + 512]
-                for i_, ac in enumerate(acc_cores):
+                for i_, ac in enumerate(accs):
                     v = virt(ac)
                     la += [v.x, v.y, area + loc_off, QL, area + MISC + (640 if FUSED else 512)]
                 l1_args.append(la)
@@ -2380,7 +2437,8 @@ def sparse_combine_rf_prepare(
                     if devplan is not None
                     else [len(inj[k]), n_ret[k]]
                 )
-                args = [area, mesh_id, idx(ch), li] + cnt_args + chip_ids + acc_xy
+                acc_args = [int(lut_t.buffer_address()), area + lut_off] if PERCHIP else acc_xy
+                args = [area, mesh_id, idx(ch), li] + cnt_args + chip_ids + acc_args
                 n_conn = len(ports[d]["links"]) if PER_DIR else 1
                 for i in range(N):
                     s = (i // C, i % C)
@@ -2402,7 +2460,7 @@ def sparse_combine_rf_prepare(
                         ttnn.setup_fabric_connection(node(ch), node(peer), ports[d]["links"][lj], program, core)
                     )
                 if FUSED:  # (the hand-off receiver's args, then the accumulator writer's)
-                    ai = [(c.x, c.y) for c in acc_cores].index((core.x, core.y))
+                    ai = [(c.x, c.y) for c in accs].index((core.x, core.y))
                     args += [len(wv), port_ids[ch][k], QP, int(l1["words"]), int(out.buffer_address())]
                     args += [len(range(ai, S, A)), ai] + wxy
                 if SE_ON:  # (the shared-expert rows: partials, count, staging, block rows, credits, owners)
@@ -2425,7 +2483,7 @@ def sparse_combine_rf_prepare(
                     pr_rt[core.x][core.y] = list(dpieces[ch]["rd"][(core.x, core.y)]) + list(pr_rt[core.x][core.y])
                 ps_rt[core.x][core.y] = args
             ar_rt, ac_rt, aw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-            for i, core in enumerate(acc_cores):
+            for i, core in enumerate(accs):
                 n_tok = len(range(i, S, A))
                 args = [
                     area,
@@ -2461,7 +2519,7 @@ def sparse_combine_rf_prepare(
                 ac_rt[core.x][core.y] = [0 if devplan is not None else n_rows, n_tok]
                 if not FUSED or (core.x, core.y) not in p_xy:  # (fused port cores: the sender writes)
                     aw_rt[core.x][core.y] = [int(out.buffer_address()), n_tok, i]
-            aw_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in acc_cores if not FUSED or (c.x, c.y) not in p_xy])
+            aw_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in accs if not FUSED or (c.x, c.y) not in p_xy])
             program.kernels = [
                 ttnn.KernelDescriptor(
                     kernel_source=ksrc["pr1"] if l1 is not None else srcs["pr"],
@@ -2476,7 +2534,7 @@ def sparse_combine_rf_prepare(
                     config=dm(R_R, noc_of[R_R]),
                 ),
                 ttnn.KernelDescriptor(
-                    kernel_source=ksrc["ps"],
+                    kernel_source=(f"#define ACC_LUT\n#define LUT_BYTES {LUT_BYTES}u\n" if PERCHIP else "") + ksrc["ps"],
                     source_type=st,
                     core_ranges=pset,
                     compile_time_args=[CB_INJ, row_bytes, SLOT, PSL, A, N, L, ISLOT]
@@ -2512,7 +2570,7 @@ def sparse_combine_rf_prepare(
             ]
             if FUSED:  # (no separate hand-off receiver: the sender runs it; no writer kernel on the port cores)
                 program.kernels = [k_ for k_ in program.kernels if k_.kernel_source != srcs["pr1"]]
-                if not p_xy.isdisjoint({(c.x, c.y) for c in acc_cores}) and len(p_xy) == len(acc_cores):
+                if not p_xy.isdisjoint({(c.x, c.y) for c in accs}) and len(p_xy) == len(accs):
                     program.kernels = [k_ for k_ in program.kernels if k_.kernel_source != srcs["aw"]]
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*ch), ttnn.MeshCoordinate(*ch))] = program
         return mesh_desc
@@ -2535,8 +2593,8 @@ def sparse_combine_rf_prepare(
     # trailers (a slot is taken when its trailer flags are set)
     trl = [pc * PS + (row_bytes - pc * PD if pc + 1 == NP else PD) for pc in range(NP)]
     zero_runs = {c: [(0, RINGS, 0, 1)] for c in used_cores}
-    for c in acc_cores:
-        zero_runs[(c.x, c.y)] = [(0, RINGS, 0, 1)] + [(RINGS + t, 32, SLOT, PSL) for t in trl]
+    for c in sorted(all_acc_xy):  # (per-chip roles: a cell an accumulator on any chip - zeroed the same on every chip)
+        zero_runs[c] = [(0, RINGS, 0, 1)] + [(RINGS + t, 32, SLOT, PSL) for t in trl]
 
     run.build = build
     run.build_l1 = build_l1

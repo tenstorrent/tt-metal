@@ -477,6 +477,15 @@ class TailA2A:
         prog = ttnn.ProgramDescriptor()
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         ports = ch["ports"]
+        # (this chip's port cores: the port kernels and their CB go only there - self.port_crs is the union over
+        # the chips (the allocations every chip shares), and a core that is a port on another chip only would run
+        # the port kernels with no runtime args here)
+        pcrs = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
+                for x, y in sorted({(c.x, c.y) for c in ports.values()})
+            ]
+        )
         pr_rt, ps_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         sc = self.sched
         for (j, d, l), core in ports.items():
@@ -544,7 +553,7 @@ class TailA2A:
         cbs.append(
             ttnn.CBDescriptor(
                 total_size=_ring_pages(2 * self.group * self.RP, [self.group * self.RP]) * self.page,
-                core_ranges=self.port_crs,
+                core_ranges=pcrs,
                 format_descriptors=[ttnn.CBFormatDescriptor(CB_CH, ttnn.bfloat16, self.page)],
             )
         )
@@ -586,7 +595,7 @@ class TailA2A:
             ttnn.KernelDescriptor(
                 kernel_source=_PORT_READER,
                 source_type=st,
-                core_ranges=self.port_crs,
+                core_ranges=pcrs,
                 compile_time_args=pct + acc(self.z),
                 runtime_args=pr_rt,
                 config=dm("RISCV_1", ttnn.NOC.NOC_0),
@@ -594,7 +603,7 @@ class TailA2A:
             ttnn.KernelDescriptor(
                 kernel_source=_PORT_SENDER,
                 source_type=st,
-                core_ranges=self.port_crs,
+                core_ranges=pcrs,
                 compile_time_args=pct + acc(out),
                 runtime_args=ps_rt,
                 config=dm("RISCV_0", ttnn.NOC.NOC_1),
