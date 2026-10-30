@@ -44,7 +44,7 @@ if [ "$(git -C "$checkout" rev-parse HEAD 2>/dev/null)" != "$ref" ] ||
     fi
     rm -rf "$checkout"
     git init -q "$checkout"
-    git -C "$checkout" fetch -q --depth 1 https://github.com/tenstorrent/tt-transformers.git "$ref"
+    git -C "$checkout" fetch -q --depth 1 https://github.com/mtairum/tt-transformers.git "$ref"
     git -C "$checkout" checkout -q --detach FETCH_HEAD
 fi
 if [ -n "$job_marker" ]; then
