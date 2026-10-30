@@ -127,8 +127,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr std::uint32_t num_faces = ckernel::TILE_NUM_FACES;
 #endif
-    constexpr bool is_int_fpu_en              = false;
-    const ckernel::TensorShape tensor_shape    = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    constexpr bool is_int_fpu_en            = false;
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
 
     {
         START_PERF_MEASURE("INIT")
