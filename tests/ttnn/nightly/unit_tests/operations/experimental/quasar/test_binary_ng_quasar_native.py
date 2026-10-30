@@ -21,7 +21,7 @@ thread and the writer threads that the 6 DM cores leave, and one of each where t
 operand in L1: batches of 8 tiles in the DM kernels, in rings of 16 entries per thread; in the compute, where each
 compute thread owns one tile counter of each ring, 4 tiles on the SFPU kernel (2 in fp32) and 8 on the FPU kernel at
 1,1,1, else the FPU kernel's share batch from 2 tiles per compute thread. Beside a DRAM operand: batches of 1, in
-rings of 2 entries per thread, except where every operand is interleaved and a compute thread draws 4 tiles or more.
+rings of 2 entries per thread, except where an input is in DRAM and a compute thread draws 4 tiles or more.
 The tests in this process use DRAM tensors. Each test
 predicts its output from its configuration: the tests in this process from the invocation's knobs, the arms from
 their own. A test that predicts wrong output is a strict expected failure, and it passes only on exactly the
@@ -1415,8 +1415,10 @@ def test_native_l1_interleaved_borrows_beside_dram(case, dms, cores):
         [case],
         expect="qsr",
         timeout=900,
+        # Batch 1 in every role: on ttsim the host profiler aborts on some batched programs.
         knobs={
             **_COMPUTE_BATCH_1,
+            "TTNN_QSR_DM_BATCH": "1",
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": str(dms),
             "ARM_EXPECT_NEOS": "4",
@@ -1808,7 +1810,7 @@ _MIXED_PAD_SLOTS = {
 }
 
 # R1C4W1-n1 puts one reader thread on four tile counters, so the shard walk takes the counter-major steps.
-# Beside DRAM the rule batches only all-interleaved operands, so rule-dm8-n1 sets a DM batch of 8 for these cases.
+# Beside DRAM the rule batches from a share of 4 tiles, so rule-dm8-n1 sets a DM batch of 8 for the smaller cases.
 _MIXED_CONFIGS = {
     "rule-n1": _COMPUTE_BATCH_1,
     "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
@@ -2088,8 +2090,10 @@ def test_native_mixed_layouts_route_by_the_anchor(case, dms, cores):
         [case],
         expect="qsr",
         timeout=900,
+        # Batch 1 in every role: on ttsim the host profiler aborts on some batched programs.
         knobs={
             **_COMPUTE_BATCH_1,
+            "TTNN_QSR_DM_BATCH": "1",
             "TT_METAL_DEVICE_PROFILER": "1",
             "ARM_EXPECT_DMS": str(dms),
             "ARM_EXPECT_NEOS": "4",
@@ -2126,6 +2130,33 @@ def test_native_rule_follows_a_set_compute_count():
         },
     )
     _check_arm(p, "C = 2 on the NoC path")
+
+
+# Mixed layouts batch by the share too: under an anchor its tiles per cluster, without one the split_work_to_cores
+# share. H.H.IL1, IL1.H.H and IL1.IL1.H borrow 8-tile slices, 2 per compute thread, so batch 2. H32.I.H32 (anchored)
+# and H.I.I (not) run 40 tiles per cluster beside DRAM, 10 per compute thread, so both batches are 8.
+_MIXED_SHARE_BATCHES = {
+    "H.H.IL1": (256, "in L1", 2, 8, 2),
+    "IL1.H.H": (256, "in L1", 2, 8, 2),
+    "IL1.IL1.H": (256, "in L1", 2, 8, 2),
+    "H32.I.H32": (1280, "beside DRAM", 10, 8, 8),
+    "H.I.I": (1280, "beside DRAM", 10, 8, 8),
+}
+_MIXED_PROGRAM_BATCHES = (
+    r"(\d+) tiles (beside DRAM|in L1), (\d+) per compute thread: dm_batch=(\d+) \(\w+\) tiles_per_cycle=(\d+)"
+)
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+def test_native_rule_batches_mixed_layouts_by_the_share():
+    shards = [case[0] for case in _MIXED_CASES if case[0][0] in _MIXED_SHARE_BATCHES]
+    p = _run_shard_arm(shards, expect="qsr", timeout=900, knobs={"TT_LOGGER_LEVEL": "info"})
+    _check_arm(p, "mixed layouts at the rule's share batch")
+    batches = [
+        (int(m[0]), m[1], int(m[2]), int(m[3]), int(m[4]))
+        for m in re.findall(_MIXED_PROGRAM_BATCHES, p.stdout + p.stderr)
+    ]
+    assert batches == [_MIXED_SHARE_BATCHES[shard[0]] for shard in shards], f"the mixed programs resolve {batches}"
 
 
 # Each case: the knobs, the values each program shape's part of the settings line must name with their
