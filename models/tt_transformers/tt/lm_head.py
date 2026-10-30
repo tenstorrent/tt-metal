@@ -11,6 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup
 
 
 def _lm_head_cache_file_name(
@@ -164,12 +165,22 @@ class LMHead(LightweightModule):
                         )
                     )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+        # LM-head fidelity comes from the LI_LM_HEAD OpGroup. The config's HiFi2 kernel differs from
+        # this module's original one, so keep the original kernel unless the config overrides HiFi2.
+        lm_head_fidelity = args.decoders_optimizations.decoder_optimizations[0].op_fidelity_settings.get(
+            OpGroup.LI_LM_HEAD, MathFidelitySetting.HIFI2
         )
+        if lm_head_fidelity == MathFidelitySetting.HIFI2:
+            self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        else:
+            self.compute_kernel_config = args.decoders_optimizations.get_math_fidelity(
+                decoder_id=0, op=OpGroup.LI_LM_HEAD, configuration=args
+            )
 
     def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
         """In-place replace every chunk of ``self.output_weights_dram_sharded``

@@ -128,6 +128,17 @@ class Attention(LightweightModule):
         self.li_qkv_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
         )
+        self.is_p150 = configuration.device_name == "P150"
+        # QKV decode matmul: bf16 dest accumulation (fp32_dest_acc_en off) doubles dest capacity
+        # and halves pack traffic for the DRAM-sharded decode matmul; K-accumulation stays in L1 via packer_l1_acc.
+        if self.is_p150 and self.li_qkv_decode_compute_kernel_cfg is not None:
+            _qkv_cfg = self.li_qkv_decode_compute_kernel_cfg
+            self.li_qkv_decode_compute_kernel_cfg = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=_qkv_cfg.math_fidelity,
+                math_approx_mode=_qkv_cfg.math_approx_mode,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=_qkv_cfg.packer_l1_acc,
+            )
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
@@ -590,11 +601,11 @@ class Attention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                    if weight_cache_path and not configuration.dummy_weights
-                    else None
-                ),
+                # Not cached: loading this tensor from a cache file onto the device
+                # hangs on this build (load_tensor_flatbuffer with a device, a
+                # 1024x8x32x256 BFLOAT8_B KV cache), while building the zeros on the
+                # host and moving them takes well under a second.
+                cache_file_name=None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -941,6 +952,23 @@ class Attention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
+        # The fused QKV is interleaved, so nlp_create_qkv_heads_decode runs on a single core (~14.8us).
+        # Width-sharding it across 64 cores with overlap_qk_coregrid=True runs it in ~8.9us.
+        # Single P150 only; the multi-device path deadlocked with this layout.
+        create_head_kwargs = {}
+        if self.is_p150 and self.args.num_devices == 1 and self.prefetcher is None and fqkv_shape[3] % (32 * 64) == 0:
+            xqkv_fused = ttnn.to_memory_config(
+                xqkv_fused,
+                ttnn.create_sharded_memory_config(
+                    shape=(32, fqkv_shape[3] // 64),
+                    core_grid=ttnn.CoreGrid(y=8, x=8),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+            )
+            create_head_kwargs["overlap_qk_coregrid"] = True
+
         (
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
@@ -950,6 +978,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
+            **create_head_kwargs,
         )
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)
@@ -1136,7 +1165,7 @@ class Attention(LightweightModule):
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                dtype=ttnn.bfloat8_b if (self.TG or self.is_p150) else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,

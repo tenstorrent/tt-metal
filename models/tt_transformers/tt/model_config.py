@@ -105,6 +105,7 @@ class OpGroup(Enum):
     LI_QKV_PREFILL = "li_qkv_prefill"
     LI_O_PREFILL = "li_o_prefill"
     SDPA_PREFILL = "sdpa_prefill"
+    LI_LM_HEAD = "li_lm_head"  # final vocab projection (logits), runs every decode token
     ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
 
 
@@ -422,6 +423,8 @@ class ModelOptimizations:
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                # LM head defaults to HiFi2 (preserves prior hardcoded lm_head.py behavior)
+                OpGroup.LI_LM_HEAD: MathFidelitySetting.HIFI2,
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
@@ -904,6 +907,10 @@ class ModelArgs:
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             self.prefill_rows = 8
             self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            # Sweep on P150 (QKV 32x3840x8192): the same 30 cores laid out 6x5 instead of 10x3
+            # runs the DRAM-sharded QKV matmul at ~90.6 us vs ~114 us, bit-exact.
+            if self.attn_input_grid.num_cores == 30 and self.device_name == "P150":
+                self.attn_input_grid = ttnn.CoreGrid(y=5, x=6)
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -919,6 +926,15 @@ class ModelArgs:
                 if self.is_galaxy
                 else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
             )
+            # Sweep on P150 (FF1/FF3 32x3840x15360): 6x5 grid with in0_block_w=2 ran 71.2 us vs 75.3 us on 8x5.
+            self.mlp_ff1_3_p150_6x5 = (
+                self.device_name == "P150"
+                and not self.is_galaxy
+                and self.mlp_core_grid.num_cores == 40
+                and self.dim % (ttnn.TILE_SIZE * 30) == 0
+            )
+            if self.mlp_ff1_3_p150_6x5:
+                self.mlp_core_grid = ttnn.CoreGrid(y=5, x=6)
 
             self.mlp2_core_grid = (
                 ttnn.CoreGrid(y=1, x=8)
@@ -1273,7 +1289,15 @@ class ModelArgs:
                 self.model_config["FFN_LN_AG_CONFIG"] = default_ln_ag
                 self.model_config["ATTN_AGMM_CONFIG"] = default_agmm
                 self.model_config["MLP_RS_CONFIG"] = default_mlp_rs
-                self.model_config["SAMPLING_AG_CONFIG"] = default_sampling_force_argmax
+                sampling_ag_config = dict(default_sampling_force_argmax)
+                # Single-device greedy can argmax the full logit width on-device (line 602 in
+                # tt_sampling.py: mask + untilize + ttnn.argmax, no all-gather, no 64K topk split).
+                # Enabling it avoids the per-token host round-trip of the full 262k-vocab logits.
+                # Multi-device (non-galaxy) greedy can do the same after the split-logit all-gather
+                # (which already runs for host sampling); env-gated (TT_GEMMA3_ODS=1) so default is unchanged.
+                if self.num_devices == 1 or (os.getenv("TT_GEMMA3_ODS", "0") == "1" and not self.is_galaxy):
+                    sampling_ag_config["allow_force_argmax"] = True
+                self.model_config["SAMPLING_AG_CONFIG"] = sampling_ag_config
 
             logger.info(f"Attention grid: {self.attn_input_grid}")
             logger.info(f"MLP grid: {self.mlp_core_grid}")
@@ -1448,14 +1472,40 @@ class ModelArgs:
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
+                elif getattr(self, "mlp_ff1_3_p150_6x5", False):
+                    return with_dram_sharded_cores_per_bank(
+                        ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                            in0_block_w=2,
+                            per_core_M=math.ceil(self.tile_padded_batch_rows / ttnn.TILE_SIZE),
+                            per_core_N=math.ceil(
+                                (self.hidden_dim // self.cluster_shape[1])
+                                / (ttnn.TILE_SIZE * self.mlp_core_grid.num_cores)
+                            ),
+                            fused_activation=None,
+                            num_workers_per_dram_bank=3,
+                        ),
+                        self.tile_padded_batch_rows,
+                        self.dim,
+                        self.hidden_dim // self.cluster_shape[1],
+                        self.mlp_core_grid.num_cores,
+                    )
                 else:
                     return self.dram_matmul_config(
                         m=self.tile_padded_batch_rows,
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
-                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
-                            TensorGroup.FF1_FF3, self.hidden_dim // self.cluster_shape[1]
+                        num_workers_per_dram_bank=(
+                            3
+                            if self.device_name == "P150"
+                            and math.ceil(
+                                (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_grid_size.x)
+                            )
+                            % 3
+                            == 0
+                            else self.get_dram_sharded_matmul_num_workers(
+                                TensorGroup.FF1_FF3, self.hidden_dim // self.cluster_shape[1]
+                            )
                         ),
                     )
         elif mode == Mode.PREFILL:
@@ -1518,13 +1568,38 @@ class ModelArgs:
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
+                elif (
+                    self.device_name == "P150"
+                    and self.mlp2_core_grid.num_cores == 40
+                    and (self.hidden_dim // self.cluster_shape[1]) // (ttnn.TILE_SIZE * 40) % 4 == 0
+                    and math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_grid_size.x)) % 3 == 0
+                ):
+                    # Sweep on P150 (FF2 32x15360x3840, 40 cores): in0_block_w=4 ran 127.3 us vs 131.5 us at 6.
+                    return with_dram_sharded_cores_per_bank(
+                        ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                            in0_block_w=4,
+                            per_core_M=math.ceil(self.tile_padded_batch_rows / ttnn.TILE_SIZE),
+                            per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * 40)),
+                            fused_activation=None,
+                            num_workers_per_dram_bank=3,
+                        ),
+                        self.tile_padded_batch_rows,
+                        self.hidden_dim // self.cluster_shape[1],
+                        self.dim,
+                        40,
+                    )
                 else:
                     return self.dram_matmul_config(
                         m=self.tile_padded_batch_rows,
                         k=self.hidden_dim // self.cluster_shape[1],
                         n=self.dim,
                         num_cores=self.mlp2_core_grid.num_cores,
-                        num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim),
+                        num_workers_per_dram_bank=(
+                            3
+                            if self.device_name == "P150"
+                            and math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_grid_size.x)) % 3 == 0
+                            else self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim)
+                        ),
                     )
         elif mode == Mode.PREFILL:
             if self.use_minimal_prefill_matmul(seq_len):
@@ -1795,7 +1870,7 @@ class ModelArgs:
             )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            exp_approx_mode=False,
+            exp_approx_mode=self.device_name == "P150",
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
         )
@@ -1868,14 +1943,30 @@ class ModelArgs:
                     untilize_out=True,
                 )
             else:
-                return self.dram_matmul_config(
+                _qkv_cfg = self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
                     k=self.dim,
                     n=self.qkv_size // self.num_devices,
                     num_cores=self.attn_input_grid.num_cores,
-                    num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
-                        TensorGroup.WQKV, self.qkv_size // self.num_devices
+                    num_workers_per_dram_bank=(
+                        2
+                        if self.device_name == "P150"
+                        and math.ceil((self.qkv_size // self.num_devices) / (ttnn.TILE_SIZE * self.dram_grid_size.x))
+                        % 2
+                        == 0
+                        else self.get_dram_sharded_matmul_num_workers(
+                            TensorGroup.WQKV, self.qkv_size // self.num_devices
+                        )
                     ),
+                )
+                # QKV decode: in0_block_w 8 measured slower than 4 (more trisc time); try the smaller K block 2.
+                return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=2,
+                    per_core_M=_qkv_cfg.per_core_M,
+                    per_core_N=_qkv_cfg.per_core_N,
+                    fused_activation=_qkv_cfg.fused_activation,
+                    num_workers_per_dram_bank=_qkv_cfg.num_workers_per_dram_bank,
+                    use_multicore_pipeline=_qkv_cfg.use_multicore_pipeline,
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
@@ -2168,6 +2259,22 @@ class ModelArgs:
         if mode == Mode.DECODE:
             if self.is_galaxy:
                 return None
+            elif self.device_name == "P150" and self.dim // ttnn.TILE_SIZE == 120:
+                # Sweep on P150 (WO 32x4096x3840): per_core_N=15 (8 workers), in0_block_w=8,
+                # 3 readers per bank ran 55.8 us vs 58.8 us, bit-exact.
+                return with_dram_sharded_cores_per_bank(
+                    ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                        in0_block_w=8,
+                        per_core_M=math.ceil(self.tile_padded_batch_rows / ttnn.TILE_SIZE),
+                        per_core_N=15,
+                        fused_activation=None,
+                        num_workers_per_dram_bank=3,
+                    ),
+                    self.tile_padded_batch_rows,
+                    (self.n_heads * self.head_dim) // self.num_devices,
+                    self.dim,
+                    self.n_heads // self.num_devices,
+                )
             else:
                 return self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
@@ -2546,11 +2653,14 @@ class ModelArgs:
                 untilize_out=True,
             )
         else:
+            # More readers per DRAM bank: LM head is compute-bound on 8 cores (1 worker per bank).
+            lm_head_tiles_per_bank = math.ceil(split_size / (ttnn.TILE_SIZE * self.dram_grid_size.x))
             return self.dram_matmul_config(
                 self.tile_padded_batch_rows,
                 self.dim,
                 split_size,
                 self.lm_head_core_grid.num_cores,
+                num_workers_per_dram_bank=(3 if self.device_name == "P150" and lm_head_tiles_per_bank % 3 == 0 else 1),
             )
 
     @lru_cache(maxsize=None)
@@ -2616,8 +2726,12 @@ class ModelArgs:
     # NOTE: These attention helpers are placed here for historical reasons
     def get_sharded_wo_ring_mem_config(self):
         """Get the memory config for WO weights in ring mode."""
+        # WO's contraction dim is the attention output width (n_heads*head_dim), which differs from
+        # the model dim for gemma3 (head_dim=256 => 16*256=4096 != dim=3840). Rows (k) are split by
+        # cluster_shape[0] and output cols (n) by cluster_shape[1] to match the 2D ring shard of the
+        # weight. For models where n_heads*head_dim == dim (e.g. Llama) this is identical to before.
         wo_shape_ring = (
-            self.dim // self.cluster_shape[0],
+            (self.n_heads * self.head_dim) // self.cluster_shape[0],
             self.dim // self.cluster_shape[1],
         )
         return self.create_dram_sharded_mem_config(
