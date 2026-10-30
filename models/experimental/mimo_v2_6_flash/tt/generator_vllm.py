@@ -1932,6 +1932,15 @@ class MiMoV2ForCausalLM:
         states = stream_states(seeds + [None] * (rows - n), pos.tolist())
         hosts, sampled = model.sampler.host_params(temperature, top_k, top_p, states=states)
         model.sampler.set_params(hosts)
+        if sampled:
+            # The copies must land before the step's other copies and the sampled replay are enqueued. Without this
+            # drain, a sampled replay behind them now and then breaks the replica's decode for good: every slot's
+            # logits turn flat or inf from then on, new requests included (4x8 Galaxy, SPEED-Bench 1k at c=16: a
+            # third of the requests garbled when every step reloads, 14 of 64 with the resident steps). The same
+            # copies ahead of the greedy trace never do; a lone 1 KB params copy does not; any extra 256-byte copy
+            # (the rng page, or a page nothing reads) does. The fault is below the model, in how the queue runs
+            # that sequence. One drain per reloading step of a sampling replica; steady steps copy nothing.
+            ttnn.synchronize_device(model.mesh_device)
         self.lane_sampled[lane] = sampled
 
     def read_decode_output(self, out, async_read=False, **kwargs):
