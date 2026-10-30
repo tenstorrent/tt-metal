@@ -216,7 +216,7 @@ class BlackholeEthCore(EthCore):
     PCS_STATUS = 0xFFB9800C  # live link status, up only when it equals 1
     ERR_STAT = 0xFFB980D8  # latched ETH_CTRL error status; reading does not clear it
     SOFT_RESET = 0xFFB121B0  # RISCV_DEBUG_REG_SOFT_RESET_0, a set bit holds that erisc in reset
-    ERISC_SOFT_RESET_BITS = (1 << 11, 1 << 18)  # erisc0 (BRISC bit), erisc1 (NCRISC bit)
+    ERISC_SOFT_RESET_BITS = (1 << 11, 1 << 12)  # erisc0 (BRISC bit), erisc1 (TRISC0 bit, UMD's RiscType::ERISC1)
     EXTRA_WORDS = (PCS_STATUS, ERR_STAT, SOFT_RESET)
 
     # Oldest eth FW these addresses hold for (UMD's minimum ERISC FW version).
