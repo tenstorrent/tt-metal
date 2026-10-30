@@ -8,16 +8,16 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 
-#include "attn_res_scores_device_operation_types.hpp"
+#include "attn_res_block_mix_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct AttnResScoresProgramFactory {
+struct AttnResBlockMixProgramFactory {
     using tensor_return_value_t = std::array<Tensor, 3>;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const AttnResScoresParams& operation_attributes,
-        const AttnResScoresInputs& tensor_args,
+        const AttnResBlockMixParams& operation_attributes,
+        const AttnResBlockMixInputs& tensor_args,
         tensor_return_value_t& tensor_return_value);
 };
 

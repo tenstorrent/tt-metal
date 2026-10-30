@@ -5,20 +5,21 @@
 #pragma once
 
 #include <array>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "attn_res_scores_device_operation_types.hpp"
-#include "attn_res_scores_program_factory.hpp"
+#include "attn_res_block_mix_device_operation_types.hpp"
+#include "attn_res_block_mix_program_factory.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct AttnResScoresDeviceOperation {
-    using operation_attributes_t = AttnResScoresParams;
-    using tensor_args_t = AttnResScoresInputs;
+struct AttnResBlockMixDeviceOperation {
+    using operation_attributes_t = AttnResBlockMixParams;
+    using tensor_args_t = AttnResBlockMixInputs;
     using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 3>;
     using tensor_return_value_t = std::array<Tensor, 3>;
-    using program_factory_t = std::variant<AttnResScoresProgramFactory>;
+    using program_factory_t = std::variant<AttnResBlockMixProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -30,7 +31,8 @@ struct AttnResScoresDeviceOperation {
 
 namespace ttnn::prim {
 
-std::array<Tensor, 3> attn_res_scores(
+std::array<Tensor, 3> attn_res_block_mix(
+    const std::vector<Tensor>& sealed,
     const Tensor& stats,
     uint32_t num_sites,
     float inv_hidden_size,

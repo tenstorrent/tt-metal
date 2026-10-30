@@ -1,7 +1,8 @@
 # Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for
 # this domain here without touching ttnn/CMakeLists.txt.
+add_subdirectory(attn_res_block_mix)
+add_subdirectory(attn_res_block_stats)
 add_subdirectory(attn_res_gather_softmax)
-add_subdirectory(attn_res_scores)
 add_subdirectory(attn_res_weighted_reduce_nc)
 add_subdirectory(combine)
 add_subdirectory(combine_fabric2d)
@@ -38,8 +39,9 @@ add_library(TTNN::Ops::Experimental::DeepSeekPrefill ALIAS ttnn_op_deepseek_pref
 target_link_libraries(
     ttnn_op_deepseek_prefill
     INTERFACE
+        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockMix
+        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockStats
         TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax
-        TTNN::Ops::Experimental::DeepSeekPrefill::AttnResScores
         TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d
@@ -83,8 +85,9 @@ target_link_libraries(
 target_sources(
     ttnn_op_deepseek_prefill
     INTERFACE
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockMix>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResBlockStats>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResGatherSoftmax>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResScores>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::AttnResWeightedReduceNc>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::CombineFabric2d>
