@@ -28,6 +28,8 @@ struct FusedRecurrentGatedDeltaRuleParams {
     uint32_t val_dim;  // V (multiple of 32)
     bool output_final_state;
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
+    bool inplace_final_state = false;  // spike B: the state is an L1-sharded pool, one [K,V] shard per head core,
+                                       // aliased by the state CB, updated in place and returned as the state output
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

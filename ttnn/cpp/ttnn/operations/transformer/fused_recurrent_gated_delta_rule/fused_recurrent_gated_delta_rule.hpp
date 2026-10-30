@@ -46,6 +46,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const std::optional<ttnn::Tensor>& initial_state_block_idx = std::nullopt,
     bool output_final_state = false,
     bool output_per_token_state = false,
+    bool inplace_final_state = false,
     bool use_qk_l2norm = false,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);

@@ -64,6 +64,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const std::optional<ttnn::Tensor>& initial_state_block_idx,
     bool output_final_state,
     bool output_per_token_state,
+    bool inplace_final_state,
     bool use_qk_l2norm,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -122,7 +123,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // reshape or typecast would break the in-place aliasing. The device op validates it.
     const bool ring = initial_state_block_idx.has_value();
     std::optional<ttnn::Tensor> s0 = initial_state;
-    if (!ring) {
+    // In-place pool (spike B): initial_state is the [BH,K,V] L1-sharded pool, passed through untouched.
+    if (!ring && !inplace_final_state) {
         if (initial_state.has_value()) {
             s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
         } else {
@@ -152,6 +154,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         T,
         want_state && !output_per_token_state,
         output_per_token_state,
+        inplace_final_state,
         out_mem,
         kernel_cfg);
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
@@ -164,8 +167,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     o = ttnn::to_layout(o, Layout::TILE);
 
     std::optional<ttnn::Tensor> state_opt;
-    if (ring) {
-        // res[1] is the caller's ring; return it as-is so the buffer stays aliased.
+    if (ring || inplace_final_state) {
+        // res[1] is the caller's ring / pool; return it as-is so the buffer stays aliased.
         state_opt = st;
     } else if (output_per_token_state) {
         // The writer lays per-token state out token-major, so the raw [BH*T,K,V] buffer already

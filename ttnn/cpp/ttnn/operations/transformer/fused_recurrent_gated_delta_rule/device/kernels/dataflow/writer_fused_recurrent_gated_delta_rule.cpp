@@ -22,8 +22,9 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
+    constexpr uint32_t inplace = get_compile_time_arg_val(3);  // the compute packs the final state into the pool
 
-    constexpr auto o_a = TensorAccessorArgs<3>();
+    constexpr auto o_a = TensorAccessorArgs<4>();
     constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);
@@ -59,7 +60,7 @@ void kernel_main() {
             write_from(cbst, st_acc, (t * BH + h) * kv, kv);  // state is token-major
         }
     }
-    if constexpr (!per_token) {
+    if constexpr (!per_token && !inplace) {
         write_from(cbst, st_acc, h * kv, kv);  // final state only
     }
 }

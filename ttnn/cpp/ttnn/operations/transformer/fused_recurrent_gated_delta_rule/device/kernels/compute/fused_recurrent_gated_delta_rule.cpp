@@ -166,6 +166,7 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
+    constexpr uint32_t inplace = get_compile_time_arg_val(3);  // the last token's state goes back into cb_S (the pool)
     const uint32_t T = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t kv = Kt * Vt;
@@ -176,10 +177,17 @@ void kernel_main() {
 
     CircularBuffer q(cb_q), k(cb_k), v(cb_v), decay(cb_decay), beta(cb_beta);
     CircularBuffer sd(cb_sd), vread(cb_vread), u(cb_u), kcol(cb_kcol);
+    if constexpr (inplace) {
+        // The pool shard is already in cb_S's L1: publish it from the pack thread, which is also the producer of the
+        // final state into the same CB, so the received count stays with one producer.
+        CircularBuffer pool(cb_S);
+        pool.reserve_back(kv);
+        pool.push_back(kv);
+    }
 
     for (uint32_t t = 0; t < T; t++) {
         const uint32_t cur_S_id = (t == 0) ? cb_S : ((t & 1u) ? cb_s2 : cb_s3);
-        const uint32_t nxt_S_id = (t & 1u) ? cb_s3 : cb_s2;
+        const uint32_t nxt_S_id = (inplace && t == T - 1) ? cb_S : ((t & 1u) ? cb_s3 : cb_s2);
         CircularBuffer cur_S(cur_S_id), nxt_S(nxt_S_id);
         const bool last = (t == T - 1);
 
@@ -211,7 +219,7 @@ void kernel_main() {
         kcol.wait_front(Kt);
 
         // S_new = sd + kcol (x) u -> nxt_S (and the state output, per token or last)
-        rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S_id, per_token || last);
+        rank1_update<Kt, Vt>(cb_sd, cb_kcol, cb_u, nxt_S_id, !inplace && (per_token || last));
         kcol.pop_front(Kt);
         u.pop_front(Vt);
         sd.pop_front(kv);

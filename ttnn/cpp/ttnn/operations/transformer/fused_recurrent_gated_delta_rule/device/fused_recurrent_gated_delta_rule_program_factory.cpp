@@ -53,6 +53,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
     const uint32_t per_token = attrs.output_per_token_state ? 1u : 0u;
+    const uint32_t inplace = attrs.inplace_final_state ? 1u : 0u;
     const bool ring = in.initial_state_block_idx.has_value();
     const uint32_t use_blk_idx = ring ? 1u : 0u;
     Buffer* blk_buf = ring ? in.initial_state_block_idx->buffer() : nullptr;
@@ -90,7 +91,18 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::v, Vt);
     add_cb(cb::decay, 1, T > 1 ? 2 : 1);
     add_cb(cb::beta, 1, T > 1 ? 2 : 1);
-    add_cb(cb::S, kv);
+    if (inplace) {
+        // The state CB aliases this core's shard of the L1 pool: the reader publishes it, the compute reads the
+        // state from it and packs the final state back into it, nothing copies it.
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = kv * ts,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb::S), .data_format = fmt, .page_size = ts}}},
+            .buffer = in.initial_state->buffer()});
+    } else {
+        add_cb(cb::S, kv);
+    }
     add_cb(cb::out, Vt, 2);
     add_cb(cb::state_out, kv, 2);
     add_cb(cb::s2, kv);
@@ -111,9 +123,9 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
-    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token};
+    const std::vector<uint32_t> compute_ct = {Kt, Vt, per_token, inplace};
 
-    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx};
+    std::vector<uint32_t> reader_ct = {Kt, Vt, use_blk_idx, inplace};
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
@@ -122,7 +134,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
     TensorAccessorArgs(blk_buf).append_to(reader_ct);
 
-    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token};
+    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token, inplace};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
 

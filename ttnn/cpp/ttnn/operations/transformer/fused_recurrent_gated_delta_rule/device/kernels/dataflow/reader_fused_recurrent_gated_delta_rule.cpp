@@ -19,8 +19,9 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t use_blk_idx = get_compile_time_arg_val(2);
+    constexpr uint32_t s_resident = get_compile_time_arg_val(3);  // the state CB aliases the L1 pool shard
 
-    constexpr auto q_a = TensorAccessorArgs<3>();
+    constexpr auto q_a = TensorAccessorArgs<4>();
     constexpr auto k_a = TensorAccessorArgs<q_a.next_compile_time_args_offset()>();
     constexpr auto v_a = TensorAccessorArgs<k_a.next_compile_time_args_offset()>();
     constexpr auto d_a = TensorAccessorArgs<v_a.next_compile_time_args_offset()>();
@@ -75,7 +76,11 @@ void kernel_main() {
         // Watcher-checked caller contract: the block belongs to head h and lies inside the ring.
         ASSERT(s0_block % BH == h && s0_block < T * BH);
     }
-    read_into(s0_acc, cb_S, s0_block * kv, kv);
+    if constexpr (!s_resident) {
+        read_into(s0_acc, cb_S, s0_block * kv, kv);
+    }
+    // s_resident: the state already sits in the CB's L1 and the compute's pack thread publishes it, so the CB has one
+    // producer (a second producer's local received-count would never be seen by the unpacker's final wait).
 
     for (uint32_t t = 0; t < T; t++) {
         const uint32_t block = h * T + t;

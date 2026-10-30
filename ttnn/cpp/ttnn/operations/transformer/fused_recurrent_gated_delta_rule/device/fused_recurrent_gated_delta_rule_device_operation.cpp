@@ -59,7 +59,10 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
             name);
         TT_FATAL(t.device() == device, "fused_recurrent_gated_delta_rule: {} must be on the same device as q", name);
         // DRAM or L1 is fine (the kernels address pages through TensorAccessor); sharding is not.
-        TT_FATAL(!t.is_sharded(), "fused_recurrent_gated_delta_rule: {} must be interleaved, not sharded", name);
+        TT_FATAL(
+            !t.is_sharded() || (attrs.inplace_final_state && std::string(name) == "initial_state"),
+            "fused_recurrent_gated_delta_rule: {} must be interleaved, not sharded",
+            name);
         TT_FATAL(t.layout() == Layout::TILE, "fused_recurrent_gated_delta_rule: {} must be TILE layout", name);
         TT_FATAL(
             t.dtype() == DataType::FLOAT32,
@@ -98,6 +101,19 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
             "initial_state",
             ring ? std::initializer_list<uint32_t>{BHT, K, V} : std::initializer_list<uint32_t>{attrs.BH, K, V});
     }
+    if (attrs.inplace_final_state) {
+        TT_FATAL(
+            in.initial_state.has_value() && in.initial_state->is_sharded() &&
+                in.initial_state->memory_config().buffer_type() == BufferType::L1,
+            "fused_recurrent_gated_delta_rule: inplace_final_state needs an L1-sharded initial_state");
+        TT_FATAL(
+            !attrs.output_per_token_state && !ring,
+            "fused_recurrent_gated_delta_rule: inplace_final_state excludes per-token states and ring mode");
+        const auto& ss = in.initial_state->memory_config().shard_spec();
+        TT_FATAL(
+            ss.has_value() && ss->shape[0] == K && ss->shape[1] == V && ss->grid.num_cores() == attrs.BH,
+            "fused_recurrent_gated_delta_rule: inplace_final_state needs one [K,V] shard per head");
+    }
     if (ring) {
         TT_FATAL(
             attrs.output_per_token_state,
@@ -135,6 +151,10 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::compute_output_specs(
     const auto layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     // o: [BH*T, 1, V]  (one row per (head, token); host folds to [B,T,HV,V]).
     ttnn::Shape o_shape({attrs.BH * attrs.T, 1, attrs.val_dim});
+    if (attrs.inplace_final_state) {
+        TT_FATAL(in.initial_state.has_value(), "fused_recurrent_gated_delta_rule: inplace_final_state needs the pool");
+        return {tt::tt_metal::TensorSpec(o_shape, layout), in.initial_state->tensor_spec()};
+    }
     if (in.initial_state_block_idx.has_value()) {
         // create_output_tensors runs before validate_on_program_cache_miss, so check before dereferencing.
         TT_FATAL(
@@ -157,7 +177,7 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::create_output_tensors(
     outs.reserve(specs.size());
     outs.push_back(create_device_tensor(specs[0], device));
     // Ring mode: the state output aliases the caller's ring (the adapter allows an output buffer to alias an input).
-    if (in.initial_state_block_idx.has_value()) {
+    if (in.initial_state_block_idx.has_value() || attrs.inplace_final_state) {
         outs.push_back(*in.initial_state);
     } else {
         outs.push_back(create_device_tensor(specs[1], device));
@@ -176,6 +196,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     uint32_t T,
     bool output_final_state,
     bool output_per_token_state,
+    bool inplace_final_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = FusedRecurrentGatedDeltaRuleDeviceOperation;
@@ -198,6 +219,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .val_dim = v_shape[2],
         .output_final_state = output_final_state,
         .output_per_token_state = output_per_token_state,
+        .inplace_final_state = inplace_final_state,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };
