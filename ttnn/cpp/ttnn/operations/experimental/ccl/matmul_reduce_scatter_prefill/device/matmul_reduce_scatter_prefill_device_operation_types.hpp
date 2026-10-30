@@ -39,7 +39,8 @@ struct MatmulReduceScatterPrefillInputs {
     const Tensor& input_tensor;
     const Tensor& weight;
     const std::optional<Tensor>& output_tensor;
-    // L1 finished slots + arrival zones, allocated by the entry for this call only (allocate_staging)
+    // L1 finished slots + arrival zones: the caller's staging_tensor, or allocated by the entry for this call only
+    // (allocate_staging)
     const Tensor& staging;
 };
 

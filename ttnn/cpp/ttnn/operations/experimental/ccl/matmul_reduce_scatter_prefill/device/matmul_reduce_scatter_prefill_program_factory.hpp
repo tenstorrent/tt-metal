@@ -84,7 +84,8 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 //     shape ran before capture.
 // Most of that cost was building the buffer configs, above all the sharding description over the full grid, on every
 // call. allocate_staging now builds them once per (mesh, size) as a PreparedTensorAllocation and allocates from it
-// through create_device_tensor, so a call pays only the allocation and the free.
+// through create_device_tensor, so a call pays only the allocation and the free. A caller that passes a staging_tensor
+// (matmul_reduce_scatter_prefill_staging) and keeps it pays neither, and owns its lifetime across a trace.
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles);
 // Lookup only (factory and the hit path); TT_FATAL when the entry has not created them.
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);

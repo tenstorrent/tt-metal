@@ -170,13 +170,21 @@ void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_miss(
         std::nullopt);
     check_operands(t.input_tensor, t.weight, attrs.output_memory_config);
     check_group(t.input_tensor, t.weight, static_cast<int32_t>(attrs.cluster_axis), attrs.scatter_dim);
+    // A caller's staging tensor reaches here too: check it is what matmul_reduce_scatter_prefill_staging allocates.
     const uint32_t staging_tiles = detail::staging_tiles(attrs.plan());
-    const auto& staging_shard = t.staging.memory_config().shard_spec();
+    const auto& staging_mem = t.staging.memory_config();
+    const auto& staging_shard = staging_mem.shard_spec();
+    const CoreCoord g = t.input_tensor.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        t.staging.memory_config().buffer_type() == BufferType::L1 && staging_shard.has_value() &&
+        t.staging.device() == t.input_tensor.device() && t.staging.dtype() == DataType::BFLOAT16 &&
+            t.staging.layout() == Layout::TILE && staging_mem.buffer_type() == BufferType::L1 &&
+            staging_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && staging_shard.has_value() &&
+            staging_shard->grid == CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1))) &&
             staging_shard->shape[0] == staging_tiles * tt::constants::TILE_HEIGHT,
-        "matmul_reduce_scatter_prefill: the staging tensor must be L1 sharded with {} tiles per core "
-        "(allocate_staging)",
+        "matmul_reduce_scatter_prefill: the staging tensor must be bfloat16 tiles on the input's mesh, L1 "
+        "height-sharded over the full {}x{} grid with {} tiles per core (matmul_reduce_scatter_prefill_staging)",
+        g.x,
+        g.y,
         staging_tiles);
     validate_output(attrs, t);
 }

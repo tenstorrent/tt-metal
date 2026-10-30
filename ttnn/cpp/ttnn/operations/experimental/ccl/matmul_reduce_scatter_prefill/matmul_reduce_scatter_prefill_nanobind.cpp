@@ -88,6 +88,10 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
                 and full sync are always on. Defaults to HiFi2.
             memory_config (ttnn.MemoryConfig, optional): interleaved output placement. Defaults to DRAM interleaved.
             output_tensor (ttnn.Tensor, optional): preallocated output matching the spec the op would allocate.
+            staging_tensor (ttnn.Tensor, optional): the call's L1 scratch, from
+                ``ttnn.experimental.matmul_reduce_scatter_prefill_staging`` with the same arguments. Keeping it across
+                calls saves an L1 allocation per call, and a trace that captured the call stays valid while it is held.
+                None allocates staging for this call and frees it once the call is enqueued.
 
         Returns:
             ttnn.Tensor: bfloat16 TILE output, the scattered dim divided by the group size.
@@ -106,7 +110,38 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
         nb::arg("num_links") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("staging_tensor") = nb::none());
+
+    ttnn::bind_function<"matmul_reduce_scatter_prefill_staging", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Allocates the staging tensor that ``ttnn.experimental.matmul_reduce_scatter_prefill`` uses for these arguments.
+
+        Pass it as ``staging_tensor`` to every call with the same input and weight shapes, dtypes, cluster_axis,
+        scatter_dim, topology and num_links. It holds L1 on every core of the grid for as long as it lives.
+
+        Args:
+            input_tensor (ttnn.Tensor): A, as passed to the op.
+            weight (ttnn.Tensor): W, as passed to the op.
+
+        Keyword Args:
+            cluster_axis (int): the mesh axis of the group (0 or 1).
+            scatter_dim (int, optional): -2 (M) or -1 (N). Defaults to -2.
+            topology (ttnn.Topology, optional): Linear or Ring. Defaults to Linear.
+            num_links (int, optional): fabric links per hop (1 or 2); None uses every usable link, up to 2.
+
+        Returns:
+            ttnn.Tensor: bfloat16 TILE, L1 height-sharded over the full compute grid.
+        )doc",
+        &ttnn::experimental::matmul_reduce_scatter_prefill_staging,
+        nb::arg("input_tensor"),
+        nb::arg("weight"),
+        nb::kw_only(),
+        nb::arg("cluster_axis"),
+        nb::arg("scatter_dim") = -2,
+        nb::arg("topology") = ttnn::ccl::Topology::Linear,
+        nb::arg("num_links") = nb::none());
 
     mod.def(
         "_matmul_reduce_scatter_prefill_last_plan",

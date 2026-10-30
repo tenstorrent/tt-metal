@@ -113,11 +113,8 @@ size_t usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster
     return it->second;
 }
 
-}  // namespace
-
-}  // namespace operations::experimental::ccl::matmul_reduce_scatter_prefill
-
-Tensor experimental::matmul_reduce_scatter_prefill(
+// The checks and the plan of a call; the op and matmul_reduce_scatter_prefill_staging size staging from the same plan.
+MatmulReduceScatterPrefillParams resolve_params(
     const Tensor& input_tensor,
     const Tensor& weight,
     int32_t cluster_axis,
@@ -125,10 +122,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     ttnn::ccl::Topology topology,
     const std::optional<int32_t>& num_links,
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor) {
-    using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
-    namespace mrs_detail = ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::detail;
+    const std::optional<MemoryConfig>& memory_config) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
@@ -149,9 +143,9 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const uint32_t N = weight.logical_shape()[-1];
 
     const bool ring = topology == ttnn::ccl::Topology::Ring && G >= 3;  // a 2-device ring is the line
-    const mrs_detail::ScheduleKind kind =
-        !ring ? mrs_detail::ScheduleKind::Line
-              : (G % 2 == 0 ? mrs_detail::ScheduleKind::RingBalanced : mrs_detail::ScheduleKind::RingUnbalanced);
+    const detail::ScheduleKind kind =
+        !ring ? detail::ScheduleKind::Line
+              : (G % 2 == 0 ? detail::ScheduleKind::RingBalanced : detail::ScheduleKind::RingUnbalanced);
     TT_FATAL(
         !ring || config_wraps(tt::tt_fabric::GetFabricConfig(), cluster_axis),
         "matmul_reduce_scatter_prefill: Ring along axis {} needs a fabric config that wraps it (active: {})",
@@ -174,7 +168,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const uint32_t Kt = K / TILE_WIDTH;
     const uint32_t Nt = N / TILE_WIDTH;
     const CoreCoord grid = mesh->compute_with_storage_grid_size();
-    const mrs_detail::PlanInputs plan_inputs{
+    const detail::PlanInputs plan_inputs{
         .G = G,
         .kind = kind,
         .L = L,
@@ -188,10 +182,10 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         .tA = static_cast<uint32_t>(input_tensor.buffer()->aligned_page_size()),
         .tW = static_cast<uint32_t>(weight.buffer()->aligned_page_size()),
         .scatter_dim = canonical_dim,
-        .budget = mesh->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) - mrs_detail::kL1Headroom,
+        .budget = mesh->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) - detail::kL1Headroom,
     };
 
-    MatmulReduceScatterPrefillParams params{
+    return MatmulReduceScatterPrefillParams{
         .cluster_axis = static_cast<uint32_t>(cluster_axis),
         .scatter_dim = canonical_dim,
         .topology = topology,
@@ -203,12 +197,56 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         .output_memory_config = out_mem,
         .plan_inputs = plan_inputs,
     };
+}
+
+}  // namespace
+
+}  // namespace operations::experimental::ccl::matmul_reduce_scatter_prefill
+
+Tensor experimental::matmul_reduce_scatter_prefill(
+    const Tensor& input_tensor,
+    const Tensor& weight,
+    int32_t cluster_axis,
+    int32_t scatter_dim,
+    ttnn::ccl::Topology topology,
+    const std::optional<int32_t>& num_links,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<Tensor>& staging_tensor) {
+    using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
+
+    const MatmulReduceScatterPrefillParams params = resolve_params(
+        input_tensor, weight, cluster_axis, scatter_dim, topology, num_links, compute_kernel_config, memory_config);
     record_last_plan(params);
+    auto* mesh = input_tensor.device();
     ensure_mesh_resources(mesh);
+    if (staging_tensor.has_value()) {
+        TT_FATAL(
+            staging_tensor->is_allocated() && staging_tensor->device() == mesh,
+            "matmul_reduce_scatter_prefill: staging_tensor must be allocated on the input's mesh "
+            "(matmul_reduce_scatter_prefill_staging)");
+        return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, *staging_tensor, params);
+    }
     // freed when this call returns, like any op intermediate (see allocate_staging), so it holds no L1 between calls
-    const Tensor staging = allocate_staging(mesh, mrs_detail::staging_tiles(params.plan()));
+    const Tensor staging = allocate_staging(mesh, detail::staging_tiles(params.plan()));
 
     return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, staging, params);
+}
+
+Tensor experimental::matmul_reduce_scatter_prefill_staging(
+    const Tensor& input_tensor,
+    const Tensor& weight,
+    int32_t cluster_axis,
+    int32_t scatter_dim,
+    ttnn::ccl::Topology topology,
+    const std::optional<int32_t>& num_links) {
+    using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
+
+    // the plan, so staging's size, does not depend on the compute config or the output placement
+    const MatmulReduceScatterPrefillParams params = resolve_params(
+        input_tensor, weight, cluster_axis, scatter_dim, topology, num_links, std::nullopt, std::nullopt);
+    return allocate_staging(input_tensor.device(), detail::staging_tiles(params.plan()));
 }
 
 }  // namespace ttnn

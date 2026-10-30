@@ -1006,9 +1006,9 @@ void MatmulReduceScatterPrefillMeshWorkloadFactory::override_runtime_arguments(
     // The key (attributes, plan inputs included, and the tensor specs) pins every compile-time arg and every per-core
     // slot, so a hit computes the call's values once and writes only what can move between calls into each program:
     // - A, W and the output: every call;
-    // - the staging tensor and the three CBs it backs: only when it moved (every call allocates its own staging, which
-    //   usually lands at the same address). Re-pointing a CB marks its dispatch config changed, so an unchanged CB
-    //   keeps its cached config;
+    // - the staging tensor and the three CBs it backs: only when it moved (a caller's staging tensor stays put, and
+    //   staging the entry allocates per call usually lands at the same address). Re-pointing a CB marks its dispatch
+    //   config changed, so an unchanged CB keeps its cached config;
     // - the global semaphores and the mailbox: never. They are created once per mesh (ensure_mesh_resources) and live
     //   as long as the mesh and its program cache, so create_descriptor's values stay right.
     //   port_sender_rt::ARRIVAL_ADDR (per core) is the same kind of address.

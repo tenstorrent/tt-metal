@@ -107,6 +107,7 @@ def run_case(
     weight_dtype=ttnn.bfloat8_b,
     num_links=None,
     output_tensor=False,
+    staging=False,
     calls=1,
 ):
     mesh_shape = tuple(mesh_device.shape)
@@ -122,6 +123,11 @@ def run_case(
         num_links=num_links,
         compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
     )
+    staging_tensor = None
+    if staging:
+        staging_tensor = ttnn.experimental.matmul_reduce_scatter_prefill_staging(
+            ta, tw, cluster_axis=cluster_axis, scatter_dim=scatter_dim, topology=topology, num_links=num_links
+        )
     preallocated = None
     if output_tensor:
         probe = ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, **kwargs)
@@ -131,7 +137,9 @@ def run_case(
     for _ in range(calls):
         if out is not None and preallocated is None:
             ttnn.deallocate(out)
-        out = ttnn.experimental.matmul_reduce_scatter_prefill(ta, tw, output_tensor=preallocated, **kwargs)
+        out = ttnn.experimental.matmul_reduce_scatter_prefill(
+            ta, tw, output_tensor=preallocated, staging_tensor=staging_tensor, **kwargs
+        )
     ttnn.synchronize_device(mesh_device)
     if preallocated is not None:
         assert out.buffer_address() == preallocated.buffer_address(), "the op did not write the preallocated output"
@@ -217,6 +225,31 @@ def test_output_tensor(mesh_device):
         topology=ttnn.Topology.Ring,
         output_tensor=True,
     )
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_staging_tensor(mesh_device):
+    """Repeated calls on a caller's staging tensor share one cached program and stay correct."""
+    kwargs = dict(cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring)
+    run_case(mesh_device, (1, 1, 640, 2048), (2048, 7168), staging=True, **kwargs)
+    entries = mesh_device.num_program_cache_entries()
+    run_case(mesh_device, (1, 1, 640, 2048), (2048, 7168), staging=True, calls=3, **kwargs)
+    assert mesh_device.num_program_cache_entries() == entries, "a repeated call built a new program"
+
+
+@skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [ring_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+def test_staging_tensor_refusal(mesh_device, expect_error):
+    mesh_shape = tuple(mesh_device.shape)
+    ta = to_mesh(random_stacked(mesh_shape, (1, 1, 640, 2048), seed=0), mesh_device, ttnn.bfloat16)
+    tw = to_mesh(random_stacked(mesh_shape, (2048, 7168), seed=1), mesh_device, ttnn.bfloat8_b)
+    with expect_error(RuntimeError, "staging tensor must be"):
+        ttnn.experimental.matmul_reduce_scatter_prefill(
+            ta, tw, cluster_axis=1, scatter_dim=-1, topology=ttnn.Topology.Ring, staging_tensor=ta
+        )
 
 
 @skip_for_wormhole_b0()
