@@ -425,6 +425,14 @@ and OSL 4096: per user B=8 c8 vs B=4 c4 128 48.5 / 73.0, 1024 47.2 / 64.9, 8192 
 
 **Catalog.** None of the set A variables is set in the B=8 catalog (`ttis_b8_final` at 948dfb83d, `workflows/model_specs/dev/llm.yaml`: checked 2026-10-29, absent): the entry is accepted, the switches are not on yet.
 
+## 8.14 HOSTOPT_WARM prefill fix (bugfix of 8.10, no new switch)
+
+**Cause.** `DSV41_HOSTOPT_WARM=1` pins the round thread to one core. Threads created while the pin was active (torch / prefill worker threads) inherited the one-core mask, so the prefill Engram gather ran on a single core (0.69 s instead of 0.17 s per replay at Up=2).
+
+**Fix** (`tt/hostopt.py`, commit 7ba1c4db0f5): `warm_stop` gives every thread that inherited the pin the full mask back; the round thread is re-pinned by `warm_start` as before. CPU test: `tests/test_hostopt_warm_release.py`.
+
+**Measured** (coordinator, server, outputs unchanged): 8 x 64k prefill 80.8 s -> 50.2 s, 8 x 32k about 40 s -> 26.7 s, 8 x 8k 10.9 s -> 8.45 s. Catalog unchanged: WARM stays on.
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
