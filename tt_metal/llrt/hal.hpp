@@ -38,6 +38,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/io_window_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
@@ -683,6 +684,9 @@ public:
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
     uint32_t get_dma_alignment() const;
+    // Smallest host-to-device write sent through PCIe DMA rather than MMIO, for a write requesting this ordering.
+    uint32_t get_dma_write_min_bytes(tt::umd::IoOrdering ordering) const;
+    bool supports_dma_reads() const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
@@ -900,8 +904,8 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
 
 inline uint32_t Hal::get_dma_alignment() const {
     switch (arch_) {
-        case tt::ARCH::WORMHOLE_B0: return 4;
-        // Only Wormhole B0 devices support DMA transfers today.
+        case tt::ARCH::WORMHOLE_B0:
+        case tt::ARCH::BLACKHOLE: return 4;
         default: return 1;
     }
 }

@@ -135,6 +135,7 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
         device_local_config.bottom_up,
         device_local_config.sub_device_id);
 
+    mesh_buffer->address_ = buffer->address();
     mesh_buffer->buffers_.at(coord) = distributed::MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
     return mesh_buffer;
 }

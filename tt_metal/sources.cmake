@@ -159,6 +159,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/blitz_decode_pipeline.hpp
     api/internal/cluster.hpp
     api/internal/cluster_noc_helpers.hpp
+    api/internal/mesh_device.hpp
     api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/disaggregation/kv_chunk_table_cache.hpp
     api/internal/fabric.hpp
@@ -228,7 +229,6 @@ set(TT_METAL_SOURCES
 
 set(JITAPI_FILES
     api/tt-metalium/buffer_types.hpp
-    api/tt-metalium/circular_buffer_constants.h
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     core_descriptors/blackhole_140_arch.yaml

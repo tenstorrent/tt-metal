@@ -87,8 +87,8 @@
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
 #include "kernel_compile_utils.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
@@ -808,8 +808,8 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         const size_t crta_words =
             static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
 
-        // Per-node RTAs: named count + per-node vararg count from the schema.
-        const size_t named_rta_words = schema->runtime_arg_names.size();
+        // Per-node RTAs: [ named | per-node tensor bindings | varargs ], with the vararg count from the schema.
+        const size_t rta_vararg_offset = kernel->get_rta_layout().vararg_section_offset;
 
         // Reserve unique RTAs first so set_common_runtime_args can validate against
         // max_runtime_args_per_core_ once CRTAs are installed.
@@ -819,7 +819,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
                 it != schema->num_runtime_varargs_per_node.end()) {
                 vararg_words = it->second;
             }
-            const size_t rta_words = named_rta_words + vararg_words;
+            const size_t rta_words = rta_vararg_offset + vararg_words;
             if (rta_words == 0) {
                 continue;
             }
