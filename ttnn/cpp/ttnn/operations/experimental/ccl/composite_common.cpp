@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/sub_device_scope.hpp"
 
 namespace composite_common {
 
@@ -75,6 +76,7 @@ ttnn::Tensor composite_reduce_scatter(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool use_l1_small_for_semaphores) {
     bool is_row_major = input_tensor.layout() == ttnn::Layout::ROW_MAJOR;
+    const auto carry = carry_sub_device(input_tensor, subdevice_id, "composite_reduce_scatter");
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
@@ -283,6 +285,17 @@ bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const 
     return false;
 }
 
+std::optional<ttnn::CompositeSubDevice> carry_sub_device(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    std::string_view operation_name) {
+    if (!subdevice_id.has_value() && !ttnn::in_sub_device_scope()) {
+        return std::nullopt;
+    }
+    return std::optional<ttnn::CompositeSubDevice>(
+        std::in_place, input_tensor.device(), ttnn::SubDeviceRequest{.sub_device = subdevice_id}, operation_name);
+}
+
 bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t dim) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -353,6 +366,7 @@ ttnn::Tensor composite_all_gather(
     std::optional<uint32_t> cluster_axis,
     bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto carry = carry_sub_device(input_tensor, subdevice_id, "composite_all_gather");
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
@@ -435,6 +449,7 @@ ttnn::Tensor composite_all_to_all(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    const auto carry = carry_sub_device(input_tensor, subdevice_id, "composite_all_to_all");
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 

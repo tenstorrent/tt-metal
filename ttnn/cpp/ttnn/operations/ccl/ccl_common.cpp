@@ -408,11 +408,26 @@ WorkerCoreSelection try_choose_worker_cores(
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
     CoreAllocationStrategy strategy) {
+    return try_choose_worker_cores(
+        num_links,
+        num_workers_per_link,
+        device->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX,
+            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0)),
+        core_grid_offset,
+        sub_core_grid,
+        strategy);
+}
+
+WorkerCoreSelection try_choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    const CoreRangeSet& worker_cores,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    const auto worker_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
     auto available_cores = worker_cores;
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
@@ -481,16 +496,10 @@ WorkerCoreSelection try_choose_worker_cores(
     return selection;
 }
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    distributed::MeshDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const CoreCoord core_grid_offset,
-    const std::optional<CoreRangeSet>& sub_core_grid,
-    CoreAllocationStrategy strategy) {
-    auto selection = try_choose_worker_cores(
-        num_links, num_workers_per_link, device, sub_device_id, core_grid_offset, sub_core_grid, strategy);
+namespace {
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> placeable_worker_cores(
+    WorkerCoreSelection selection, const CoreCoord core_grid_offset) {
     TT_FATAL(
         selection.all_placeable(),
         "Core grid offset {} pushed {} of the {} selected worker cores (first: {}) off the worker grid; kernels "
@@ -500,6 +509,35 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
         selection.cores.size(),
         selection.unplaceable_cores.front().str());
     return {std::move(selection.core_range_set), std::move(selection.cores)};
+}
+
+}  // namespace
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    distributed::MeshDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
+    return placeable_worker_cores(
+        try_choose_worker_cores(
+            num_links, num_workers_per_link, device, sub_device_id, core_grid_offset, sub_core_grid, strategy),
+        core_grid_offset);
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    const CoreRangeSet& worker_cores,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
+    return placeable_worker_cores(
+        try_choose_worker_cores(
+            num_links, num_workers_per_link, worker_cores, core_grid_offset, sub_core_grid, strategy),
+        core_grid_offset);
 }
 
 tt::tt_metal::KernelHandle generate_edm_kernel(

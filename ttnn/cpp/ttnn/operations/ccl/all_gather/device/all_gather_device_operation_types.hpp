@@ -12,6 +12,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -39,8 +40,8 @@ struct AllGatherParams {
     uint32_t num_devices = 0;  // number of devices participating in the collective
     size_t packet_size = 0;
 
-    // Worker-core selection.
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
+    // Worker-core selection: the sub-device the gather runs on, and the caller's sub_core_grid within it.
+    ttnn::AssignedSubDevice assigned_sub_device;
     std::optional<CoreRangeSet> sub_core_grid;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -54,7 +55,7 @@ struct AllGatherParams {
         "axis_num_links",
         "num_devices",
         "packet_size",
-        "subdevice_id",
+        "assigned_sub_device",
         "sub_core_grid");
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -68,7 +69,7 @@ struct AllGatherParams {
             axis_num_links,
             num_devices,
             packet_size,
-            subdevice_id,
+            assigned_sub_device,
             sub_core_grid);
     }
 

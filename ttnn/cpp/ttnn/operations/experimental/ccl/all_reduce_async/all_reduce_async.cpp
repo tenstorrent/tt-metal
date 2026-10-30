@@ -212,6 +212,9 @@ ttnn::Tensor all_reduce_async(
     bool composite_all_gather = composite_common::use_composite_all_gather(input_tensor, composite_dim);
     bool composite_reduce_scatter =
         composite_common::use_composite_reduce_scatter(input_tensor, composite_dim, std::nullopt);
+    // The typecasts launched below run on the sub-device the caller named; the sums and the other operations record
+    // none.
+    const auto carry = composite_common::carry_sub_device(input_tensor, worker_subdevice_id_opt, "all_reduce_async");
 
     // When input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops.
     // Convert to interleaved in this case; otherwise work directly with input_tensor.
@@ -374,6 +377,9 @@ ttnn::Tensor all_reduce_async(
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     uint32_t dim = ttnn::operations::experimental::ccl::detail::finding_scatter_dim(input_tensor, num_devices);
     const auto& initial_shape = input_tensor.logical_shape();
+    // The typecasts launched below run on the sub-device the caller named; the sums and the other operations record
+    // none.
+    const auto carry = composite_common::carry_sub_device(input_tensor, worker_subdevice_id_opt, "all_reduce_async");
 
     // Convert sharded tensors to interleaved because the shard specs are not compatible with composite intermediates.
     // Otherwise work directly with input_tensor.

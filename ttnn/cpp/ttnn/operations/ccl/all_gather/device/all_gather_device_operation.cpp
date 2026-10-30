@@ -338,6 +338,12 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const int32_t gather_dim_from_end =
         static_cast<int32_t>(logical_shape.get_normalized_index(dim)) - static_cast<int32_t>(logical_shape.rank());
 
+    AllGatherInputs tensor_args{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor};
+    auto assigned_sub_device = ttnn::assign_sub_device(
+        mesh_device,
+        {.sub_device = subdevice_id, .cores = sub_core_grid, .data = ttnn::l1_shard_cores(tensor_args, memory_config)},
+        "all_gather");
+
     return {
         AllGatherParams{
             gather_dim_from_end,
@@ -350,9 +356,9 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             axis_num_links,
             num_devices,
             packet_size,
-            subdevice_id,
+            std::move(assigned_sub_device),
             sub_core_grid},
-        AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
+        std::move(tensor_args)};
 }
 
 }  // namespace ttnn::operations::ccl

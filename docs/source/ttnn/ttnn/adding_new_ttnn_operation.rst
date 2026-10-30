@@ -225,6 +225,7 @@ Validation, output specs, factory selection and factories then take placement on
   ``split_work_to_cores(worker_cores, ...)`` (it need not start at (0, 0)), spec-less sharded outputs are
   synthesized with the ``CoreRangeSet`` overload of ``synthesize_output_shard_spec``, and a multicast grid
   is a rectangle inside ``worker_cores`` (``ttnn::rectangle_in``), never ``compute_with_storage_grid_size()``.
+  CCL worker cores come from ``ttnn::ccl::choose_worker_cores`` given ``worker_cores``.
 * ``id`` is for what is keyed by the lane: host synchronization and semaphores.
 * A path that reads or writes shards in place (native sharding, borrowed buffers) is taken only when the
   operation's own cores hold the shards; otherwise it reads and writes them over the NoC, or, with no such

@@ -5,6 +5,7 @@
 #include "all_gather.hpp"
 
 #include "device/all_gather_device_operation.hpp"
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -151,10 +152,18 @@ ttnn::Tensor all_gather(
     auto [use_composite, composite_reason] = use_composite_all_gather(input_tensor, dim, memory_config, cluster_axis);
     if (use_composite) {
         log_info(tt::LogOp, "Using slower composite all_gather: {}", composite_reason);
-        // NOTE: persistent_output_tensor and sub_core_grid have no equivalent in the composite
-        // path and are ignored here for now.
+        // NOTE: persistent_output_tensor has no equivalent in the composite path and is ignored here for now.
+        // sub_core_grid names the sub-device, as on the native path, but narrows nothing here: the operations that
+        // record a sub-device follow the guard over the whole sub-device, all_broadcast takes the resolved id passed
+        // down, and concat, which records none, runs where its own code puts it.
+        const ttnn::CompositeSubDevice composite(
+            input_tensor.device(),
+            {.sub_device = subdevice_id,
+             .cores = sub_core_grid,
+             .data = ttnn::l1_shard_cores(std::forward_as_tuple(input_tensor), memory_config)},
+            "all_gather");
         return composite_common::composite_all_gather(
-            input_tensor, dim, std::nullopt, std::nullopt, memory_config, subdevice_id, cluster_axis);
+            input_tensor, dim, std::nullopt, std::nullopt, memory_config, composite.assigned().id, cluster_axis);
     }
 
     return ttnn::prim::all_gather(

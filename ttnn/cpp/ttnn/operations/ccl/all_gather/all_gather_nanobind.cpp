@@ -46,8 +46,8 @@ void bind_all_gather(nb::module_& mod) {
             cluster_axis (int, optional): Axis on the 2D mesh device grid to gather along. Each of the non-cluster_axis dimensions perform independent all-gathers along the devices on the cluster_axis. Irrelevant for 1D mesh grids.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to the input tensor's memory config.
             output_tensor (ttnn.Tensor, optional): Pre-allocated output tensor, can improve performance if provided. This must be allocated before invoking any op to avoid races. Defaults to None (op allocates a new output tensor).
-            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores. Defaults to the first subdevice on the mesh device.
-            sub_core_grids (CoreRangeSet, optional): Restricts worker core selection to this sub-grid. Defaults to all cores on the chosen subdevice.
+            subdevice_id (ttnn.SubDeviceId, optional): The sub-device to run on. Defaults to the one a `ttnn.sub_device` scope, sub_core_grids or L1-sharded tensors name, or the only one; with several loaded and none named, the call raises.
+            sub_core_grids (CoreRangeSet, optional): Restricts worker core selection to this sub-grid, which must lie in one sub-device. Defaults to all cores of the chosen sub-device. On the composite path (taken when the native gather cannot write the output in place, e.g. a gather dimension that is not tile-aligned) it only names the sub-device.
             num_links (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
             topology (ttnn.Topology, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.
             chunks_per_sync (int, optional): Deprecated and ignored; retained for backward compatibility. Will be removed in a future release.

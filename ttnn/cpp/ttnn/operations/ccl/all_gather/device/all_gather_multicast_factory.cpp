@@ -162,8 +162,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
         min_num_links,
         num_workers_per_link,
-        input_tensor.device(),
-        operation_attributes.subdevice_id,
+        operation_attributes.assigned_sub_device.worker_cores,
         /*core_grid_offset=*/CoreCoord{0, 0},
         operation_attributes.sub_core_grid);
     TT_FATAL(
@@ -526,8 +525,8 @@ tt::tt_metal::WorkloadDescriptor AllGatherMulticastFactory::create_workload_desc
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    auto subdevice_id = operation_attributes.assigned_sub_device.id;
+    auto available_cores = operation_attributes.assigned_sub_device.worker_cores;
     if (operation_attributes.sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
     }

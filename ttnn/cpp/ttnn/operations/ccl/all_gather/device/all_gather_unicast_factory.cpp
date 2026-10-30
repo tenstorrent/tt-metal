@@ -33,8 +33,8 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    auto subdevice_id = operation_attributes.assigned_sub_device.id;
+    auto available_cores = operation_attributes.assigned_sub_device.worker_cores;
     if (operation_attributes.sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
     }
@@ -214,8 +214,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     [[maybe_unused]] auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
         num_links,
         num_cores_per_link,
-        mesh_device,
-        operation_attributes.subdevice_id,
+        operation_attributes.assigned_sub_device.worker_cores,
         /*core_grid_offset=*/CoreCoord{0, 0},
         operation_attributes.sub_core_grid);
     TT_FATAL(

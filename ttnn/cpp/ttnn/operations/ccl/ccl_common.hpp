@@ -121,6 +121,23 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
+// The same, from `worker_cores` (an operation's assigned sub-device's) instead of a sub-device's id.
+WorkerCoreSelection try_choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    const CoreRangeSet& worker_cores,
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    const CoreRangeSet& worker_cores,
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
+
 class EriscDatamoverBuilder;
 
 class LineTopology {

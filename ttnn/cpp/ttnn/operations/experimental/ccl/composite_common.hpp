@@ -8,6 +8,7 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp"
+#include "ttnn/assigned_sub_device.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -28,6 +29,14 @@ std::tuple<uint32_t, int32_t> normalize_dim_4d(uint32_t dim, uint32_t rank);
 bool use_composite_reduce_scatter(const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis);
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config);
 bool use_composite_all_gather(const ttnn::Tensor& input_tensor, int32_t dim);
+
+// While the result lives, the operations a composite collective launches that record a sub-device run on the one its
+// caller named (see ttnn::CompositeSubDevice). Inside a sub-device scope it also checks the call against the scope at
+// its entry and names the call in refusals. With none named and no scope open, nothing changes.
+[[nodiscard]] std::optional<ttnn::CompositeSubDevice> carry_sub_device(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    std::string_view operation_name);
 bool use_composite_all_to_all(
     const ttnn::Tensor& input_tensor,
     int32_t in_dim,

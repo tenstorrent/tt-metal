@@ -23,6 +23,10 @@ struct AllGatherDeviceOperation {
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using program_factory_t = std::variant<AllGatherMulticastFactory, AllGatherUnicastFactory>;
 
+    static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& attributes) {
+        return attributes.assigned_sub_device;
+    }
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
