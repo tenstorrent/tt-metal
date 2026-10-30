@@ -239,7 +239,7 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
 
     def run_order(order: str, prompts: list[tuple[int, torch.Tensor]]) -> dict:
         """``prompts``: (block, tokens). Returns per block the first token, the decode tokens, the slot's rows."""
-        rec = {"order": order, "finals": {}, "steps": [], "slots": {}}
+        rec = {"order": order, "finals": {}, "steps": [], "slots": {}, "bounds": {}}
         first: dict[int, int] = {}
         t_all = time.time()
         if order.startswith("serial"):
@@ -284,17 +284,20 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
         rec["tokens"] = tokens_out
         rec["slot_of"] = {b: model.slots[b] for b, _ in prompts}
         for b, t in prompts:
-            rec["slots"][b], rec["bounds"] = _slot_rows(
+            rec["slots"][b], rec["bounds"][b] = _slot_rows(
                 mesh_device, model.decoder.pool, model.slots[b], int(t.numel()), steps
             )
         return rec
 
-    def compare(cohort: int, name: str, want: dict, got: dict, prompts, gate: bool) -> dict:
+    def compare(cohort: int, name: str, want: dict, got: dict, prompts, control: dict | None) -> dict:
         """``got`` (an order) against ``want`` (the serial order): per block the first token, the decode tokens,
-        the prefill-written slot rows (the gate, with ``gate``) and the decode-written rows (reported)."""
+        the prefill-written slot rows and the decode-written rows. With ``control`` (the serial order's own repeat
+        compared the same way) this is the gate: the first token equal, and every prefill-row mismatch one the
+        serial path shows against itself (an eager final chunk of 2,052 tokens leaves its last ~770
+        rows and the rings different between two serial runs of the same prompt)."""
         out = {}
         for b, t in prompts:
-            prefill_bad, decode_bad = _compare(want["slots"][b], got["slots"][b], got["bounds"])
+            prefill_bad, decode_bad = _compare(want["slots"][b], got["slots"][b], got["bounds"][b])
             cmp = {
                 "first_equal": want["first"][b] == got["first"][b],
                 "tokens_equal": want["tokens"][b] == got["tokens"][b],
@@ -303,8 +306,11 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
                 "text_serial": model.tokenizer.decode([want["first"][b]] + want["tokens"][b]),
                 "text_got": model.tokenizer.decode([got["first"][b]] + got["tokens"][b]),
             }
+            if control is not None:
+                own = {x.split(":")[0] for x in control[str(b)]["slot_mismatches"]}
+                cmp["beyond_control"] = [x for x in prefill_bad if x.split(":")[0] not in own]
             out[str(b)] = cmp
-            if gate and not (cmp["first_equal"] and not cmp["slot_mismatches"]):
+            if control is not None and not (cmp["first_equal"] and not cmp["beyond_control"]):
                 failures.append(f"cohort {cohort} {name} block {b} ({int(t.numel())} tokens): {cmp}")
             logger.info(
                 f"defer-final cohort {cohort} {name} block {b} ({int(t.numel())} tokens): first equal"
@@ -338,7 +344,7 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
 
     failures = []
     offset = 0
-    control = os.environ.get("V41_DF_CONTROL", "0") == "1"  # the serial order twice on cohort 0: its own variation
+    control = os.environ.get("V41_DF_CONTROL", "1") == "1"  # the serial order twice per cohort: its own variation
     for cohort in range(2):
         prompts = []
         for i, n in enumerate(lengths):
@@ -347,14 +353,15 @@ def test_v41_defer_final(mesh_device, device_params, monkeypatch):
             offset += n + steps + 64
         serial = run_order("serial", prompts)
         rec = {"cohort": cohort, "blocks": [b for b, _ in prompts], "lengths": lengths, "serial": summary(serial)}
-        if control and cohort == 0:
+        own = None
+        if control:
             serial2 = run_order("serial2", prompts)
             rec["serial2"] = summary(serial2)
-            rec["compare_serial2"] = compare(cohort, "serial2", serial, serial2, prompts, gate=False)
+            own = rec["compare_serial2"] = compare(cohort, "serial2", serial, serial2, prompts, None)
             del serial2
         deferred = run_order("defer", prompts)
         rec["defer"] = summary(deferred)
-        rec["compare"] = compare(cohort, "defer", serial, deferred, prompts, gate=True)
+        rec["compare"] = compare(cohort, "defer", serial, deferred, prompts, own)
         result["cohorts"].append(rec)
         del serial, deferred
 
