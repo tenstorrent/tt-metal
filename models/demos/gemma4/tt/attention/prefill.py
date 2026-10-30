@@ -1093,6 +1093,19 @@ def _prefill_forward_single(
     # Hybrid kv-cache groups: ``chunk_page_table`` is sliced from the full-attention group's table, but a
     # sliding layer's blocks live in its own ``page_table``; slice that at the chunk's block range (eager only).
     _own_chunk_slice = None
+    # The continuation's host fill cut nulls the columns past the chunk's real blocks (``valid_cols``), so the
+    # padded chunk is written whole: the pad rows past the prompt land in the null block 0 and the fill runs one
+    # ``paged_fill_cache`` program per bucket instead of one per tile-rounded valid length (its writer compiles
+    # per input height: every new prompt length past the hit cost a kernel build, ~0.8-2 s, 2026-10-30).
+    _host_cut = None
+    _valid_cols = None
+    if valid_seq_len is not None and not isinstance(valid_seq_len, (list, tuple)):
+        try:
+            _valid_rows = min(int(valid_seq_len), int(hidden_states.shape[-2]))
+        except (TypeError, ValueError):
+            _valid_rows = None
+        if _valid_rows is not None and _valid_rows > 0:
+            _valid_cols = _valid_rows  # rows; converted to this layer's block grid below
     if (
         is_chunked
         and chunk_offset is not None
@@ -1112,7 +1125,16 @@ def _prefill_forward_single(
         _cols = max(1, -(-int(hidden_states.shape[-2]) // _bs)) if _bs > 0 else int(chunk_page_table.shape[-1])
         _c0 = chunk_offset // _bs if _bs > 0 else -1
         if _c0 >= 0 and _c0 + _cols <= int(page_table.shape[-1]):
-            _host_cut = continuation.fill_table(_bs, _c0, _cols) if eager_continuation else None
+            _host_cut = (
+                continuation.fill_table(
+                    _bs,
+                    _c0,
+                    _cols,
+                    valid_cols=(-(-_valid_cols // _bs) if (_valid_cols is not None and _bs > 0) else None),
+                )
+                if eager_continuation
+                else None
+            )
             if _host_cut is not None:
                 # The group's table cut on the host (a fixed shape); the device slice is keyed on the column.
                 fill_page_table = _host_cut
@@ -1351,7 +1373,9 @@ def _prefill_forward_single(
                 # through extra page-table columns; valid_seq_len caps the fill.
                 # Extra columns pad with 0 (vLLM null block).
                 k_fill, v_fill = tt_k, tt_v
-                if valid_seq_len is not None:
+                # The host fill cut already routes the rows past the prompt's blocks to the null block, so the
+                # padded chunk is filled whole (a fixed height per bucket; see ``_host_cut`` above).
+                if valid_seq_len is not None and _host_cut is None:
                     v = min(int(valid_seq_len), int(tt_k.shape[-2]))
                     # Tile-ceil so the writer sees a legal RM height; unused
                     # rows inside the last tile sit on pad columns (0).

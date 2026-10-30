@@ -336,15 +336,22 @@ class PrefillContinuation:
 
     # ── per-layer inputs ────────────────────────────────────────────────────────────────────────────────────────
 
-    def fill_table(self, layer_idx, block_size, first_col, cols):
+    def fill_table(self, layer_idx, block_size, first_col, cols, valid_cols=None):
         """This chunk's blocks on the layer's own block grid: columns ``[first_col, first_col + cols)`` of the
-        group's table (the host cut of what ``_own_chunk_slice`` sliced on device, keyed on the column)."""
+        group's table (the host cut of what ``_own_chunk_slice`` sliced on device, keyed on the column).
+
+        ``valid_cols`` (default ``cols``): the columns holding the chunk's real tokens; every later column is
+        the null block 0, so the padded chunk's rows past them are written there and the K/V fill can take the
+        whole padded chunk at one height per bucket (``paged_fill_cache`` compiles its writer per input height:
+        the per-prompt tile-rounded valid length keyed a kernel build on its first use, 2026-10-30)."""
         group = self._group(layer_idx)
         if group is None:
             return None
         key, table, layout, mapper = group
         valid, cols = int(cols), pad_page_table_cols(cols)  # null columns past the chunk's blocks (never written)
-        cache_key = (key, "fill", int(block_size), int(first_col), cols)
+        if valid_cols is not None:
+            valid = max(0, min(int(valid_cols), valid))
+        cache_key = (key, "fill", int(block_size), int(first_col), cols, valid)
         dev = self._cache.get(cache_key)
         if dev is None:
             host = continuation_window_table(table, first_col, cols, valid_cols=valid)
@@ -446,8 +453,8 @@ class LayerContinuation:
     def has_host_table(self):
         return self._parent.has_host_table(self.layer_idx)
 
-    def fill_table(self, block_size, first_col, cols):
-        return self._parent.fill_table(self.layer_idx, block_size, first_col, cols)
+    def fill_table(self, block_size, first_col, cols, valid_cols=None):
+        return self._parent.fill_table(self.layer_idx, block_size, first_col, cols, valid_cols=valid_cols)
 
     def sliding_inputs(self, block_size, sliding_window, align):
         return self._parent.sliding_inputs(self.layer_idx, block_size, sliding_window, align)
