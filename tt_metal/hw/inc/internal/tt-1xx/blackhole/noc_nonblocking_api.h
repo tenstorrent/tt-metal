@@ -228,6 +228,34 @@ inline __attribute__((always_inline)) constexpr uint32_t noc_cmd_buf_fifo_owned_
     return noc_cmd_buf_fifo_avail_field(0) | noc_cmd_buf_fifo_avail_field(1) | noc_cmd_buf_fifo_avail_field(2) |
            noc_cmd_buf_fifo_avail_field(3);
 }
+
+// Buffers that must be empty before a request on cmd_buf issues, as CMD_BUF_AVAIL fields.
+//
+// The FIFOs drain round-robin, so a request could overtake older requests queued in another buffer, while the NoC API
+// promises that same-VC requests leave in NOC_CMD_CTRL order. Kernels rely on it to send a semaphore or credit right
+// behind the data it covers, and those go out on the write-reg and atomic buffers. So only those wait, and only for
+// this RISC's write buffers; reads ride a different VC and were never ordered against writes.
+inline __attribute__((always_inline)) constexpr uint32_t noc_cmd_buf_fifo_drain_fields(uint32_t cmd_buf) {
+#if defined(NOC_MODE) && defined(COMPILE_FOR_BRISC)
+    if constexpr (NOC_MODE == DM_DYNAMIC_NOC) {
+        return cmd_buf == DYNAMIC_NOC_BRISC_AT_CMD_BUF ? noc_cmd_buf_fifo_avail_field(DYNAMIC_NOC_BRISC_WR_CMD_BUF) : 0;
+    }
+#elif defined(NOC_MODE) && defined(COMPILE_FOR_NCRISC)
+    if constexpr (NOC_MODE == DM_DYNAMIC_NOC) {
+        return cmd_buf == DYNAMIC_NOC_NCRISC_AT_CMD_BUF ? noc_cmd_buf_fifo_avail_field(DYNAMIC_NOC_NCRISC_WR_CMD_BUF)
+                                                        : 0;
+    }
+#endif
+    static_assert(BRISC_WR_CMD_BUF == NCRISC_WR_CMD_BUF && BRISC_WR_REG_CMD_BUF == NCRISC_WR_REG_CMD_BUF &&
+                  BRISC_AT_CMD_BUF == NCRISC_AT_CMD_BUF);
+    if (cmd_buf != BRISC_WR_REG_CMD_BUF && cmd_buf != BRISC_AT_CMD_BUF) {
+        return 0;
+    }
+    constexpr uint32_t write_fields = noc_cmd_buf_fifo_avail_field(BRISC_WR_CMD_BUF) |
+                                      noc_cmd_buf_fifo_avail_field(BRISC_WR_REG_CMD_BUF) |
+                                      noc_cmd_buf_fifo_avail_field(BRISC_AT_CMD_BUF);
+    return write_fields & ~noc_cmd_buf_fifo_avail_field(cmd_buf);
+}
 #endif
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
@@ -235,14 +263,10 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
     // With the FIFO on, NOC_CMD_CTRL reads ready as soon as a request is queued, so polling it overflows the FIFO and
     // drops requests (SYS-838). CMD_BUF_AVAIL holds the free entries of buffer N in bits [8N+4:8N], read from buffer
     // 0's window.
-    //
-    // The FIFOs drain round-robin, so a request could overtake older requests queued in another buffer, while the NoC
-    // API promises that same-VC requests leave in NOC_CMD_CTRL order. Issuing only once this RISC's other buffers are
-    // empty keeps that order; back-to-back requests on one buffer still queue up to the FIFO depth.
     uint32_t avail = NOC_CMD_BUF_READ_REG(noc, 0, CMD_BUF_AVAIL);
-    uint32_t own_field = noc_cmd_buf_fifo_avail_field(cmd_buf);
-    uint32_t other_fields = noc_cmd_buf_fifo_owned_fields() & ~own_field;
-    return (avail & own_field) != 0 && (avail & other_fields) == (NOC_CMD_BUF_FIFO_ALL_EMPTY & other_fields);
+    uint32_t drain_fields = noc_cmd_buf_fifo_drain_fields(cmd_buf);
+    return (avail & noc_cmd_buf_fifo_avail_field(cmd_buf)) != 0 &&
+           (avail & drain_fields) == (NOC_CMD_BUF_FIFO_ALL_EMPTY & drain_fields);
 #else
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 #endif
