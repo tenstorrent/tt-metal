@@ -112,6 +112,21 @@ RuntimeArgsColProxy = ttnn._ttnn.program_descriptor.RuntimeArgsColProxy
 SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
 ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
 MeshProgramDescriptor = ttnn._ttnn.program_descriptor.MeshProgramDescriptor
+
+# Metal 2.0 ProgramSpec types, for ttnn.generic_op(io_tensors, program_spec, run_args)
+DataMovementHardwareConfig = ttnn._ttnn.operations.generic.DataMovementHardwareConfig
+ComputeHardwareConfig = ttnn._ttnn.operations.generic.ComputeHardwareConfig
+DataflowBufferSpec = ttnn._ttnn.operations.generic.DataflowBufferSpec
+TensorParameter = ttnn._ttnn.operations.generic.TensorParameter
+DFBEndpointType = ttnn._ttnn.operations.generic.DFBEndpointType
+DFBAccessPattern = ttnn._ttnn.operations.generic.DFBAccessPattern
+DFBBinding = ttnn._ttnn.operations.generic.DFBBinding
+TensorBinding = ttnn._ttnn.operations.generic.TensorBinding
+KernelSpec = ttnn._ttnn.operations.generic.KernelSpec
+WorkUnitSpec = ttnn._ttnn.operations.generic.WorkUnitSpec
+ProgramSpec = ttnn._ttnn.operations.generic.ProgramSpec
+KernelRunArgs = ttnn._ttnn.operations.generic.KernelRunArgs
+ProgramSpecRunArgs = ttnn._ttnn.operations.generic.ProgramSpecRunArgs
 merge_program_descriptors = ttnn._ttnn.program_descriptor.merge_program_descriptors
 cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_from_sharded_tensor
 get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address

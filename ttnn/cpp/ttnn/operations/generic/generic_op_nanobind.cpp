@@ -11,6 +11,8 @@
 #include <nanobind/stl/vector.h>
 
 #include "generic_op.hpp"
+#include "generic_spec_op.hpp"
+#include "generic_spec_op_nanobind.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
@@ -35,6 +37,9 @@ void bind_generic_operation(nb::module_& mod) {
                 kernel specifications, computational buffer configurations, semaphores, and other execution
                 parameters. Use ProgramDescriptor for SPMD mode (same program on all devices) or
                 MeshProgramDescriptor for explicit per-device control.
+            program_spec (ttnn.ProgramSpec): Metal 2.0 alternative to program_descriptor, required on Quasar.
+                Runs the same program on all devices.
+            run_args (ttnn.ProgramSpecRunArgs): Runtime arg values and tensor bindings for program_spec.
 
         Returns:
             ttnn.Tensor: Handle to the output tensor.
@@ -57,7 +62,17 @@ void bind_generic_operation(nb::module_& mod) {
         nb::arg("io_tensors"),
         nb::arg("program_descriptor"));
 
-    ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload);
+    // Overload for a Metal 2.0 ProgramSpec (SPMD mode); the only route that runs on Quasar
+    bind_program_spec_types(mod);
+    auto program_spec_overload = ttnn::overload_t(
+        static_cast<Tensor (*)(
+            const std::vector<Tensor>&, const tt::tt_metal::experimental::ProgramSpec&, const ProgramSpecRunArgs&)>(
+            &ttnn::generic_op),
+        nb::arg("io_tensors"),
+        nb::arg("program_spec"),
+        nb::arg("run_args"));
+
+    ttnn::bind_function<"generic_op">(mod, doc.c_str(), mesh_program_overload, program_overload, program_spec_overload);
 
     mod.def(
         "compute_program_descriptor_hash",
