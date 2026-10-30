@@ -46,7 +46,6 @@ struct KernelPlan {
     uint32_t vc_pages = 0;
     uint32_t queue_filled_addr = 0;
     uint32_t queue_freed_addr = 0;
-    uint32_t final_arrived_addr = 0;
     uint32_t launch_credit_addr = 0;
     // The reader raises this when it will queue no more credits, so the opposite sender's courier knows
     // it may stop carrying them.

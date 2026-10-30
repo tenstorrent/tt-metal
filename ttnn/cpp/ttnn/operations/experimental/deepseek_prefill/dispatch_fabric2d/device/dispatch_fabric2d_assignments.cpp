@@ -261,37 +261,4 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
     return per_stream;
 }
 
-std::vector<dspf2d::ChunkDescriptor> incoming_final_descriptors(
-    const std::vector<uint32_t>& ring_chip_ids, StreamId stream, uint32_t my_pos, uint32_t num_links) {
-    const uint32_t extent = static_cast<uint32_t>(ring_chip_ids.size());
-    const int32_t travel = (stream % 2) == 0 ? 1 : -1;
-    const uint32_t upstream_pos = static_cast<uint32_t>(
-        (static_cast<int32_t>(my_pos) - travel + static_cast<int32_t>(extent)) % static_cast<int32_t>(extent));
-
-    std::vector<dspf2d::ChunkDescriptor> finals;
-    // The upstream chip's own share for this chip: its direct write, never staged in a fwd_section.
-    const auto upstream_work = generate_assignments(ring_chip_ids, upstream_pos, num_links);
-    for (const auto& a : upstream_work.at(stream)) {
-        if (!a.is_forward && a.dst_pos == my_pos) {
-            finals.push_back(dspf2d::ChunkDescriptor{
-                .origin_pos = upstream_pos, .dst_pos = my_pos, .split_idx = a.split_idx, .split_count = a.split_count});
-        }
-    }
-    // What it forwards for this chip: the descriptors its reader delivers rather than passing on.
-    for (const auto& d : forwarding_descriptors(stream, upstream_pos, extent, num_links)) {
-        if (d.dst_pos == my_pos) {
-            finals.push_back(d);
-        }
-    }
-    TT_FATAL(
-        finals.size() == own_assignments_per_stream(extent),
-        "dispatch_fabric2d: position {} stream {} receives {} final-write chunks, expected one per origin up to {} "
-        "hops upstream",
-        my_pos,
-        stream,
-        finals.size(),
-        own_assignments_per_stream(extent));
-    return finals;
-}
-
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

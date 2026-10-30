@@ -45,13 +45,6 @@ std::vector<dspf2d::ChunkDescriptor> forwarding_descriptors(
 std::vector<dspf2d::ChunkDescriptor> outgoing_descriptors(
     StreamId stream, uint32_t my_pos, uint32_t ring_extent, uint32_t num_links);
 
-// The chunks the upstream chip on `stream` writes straight into `my_pos`'s output, one per origin 1 .. extent/2 hops
-// upstream: its own share for this chip, then every chunk it forwards whose destination is this chip. Built from
-// generate_assignments and forwarding_descriptors for the upstream chip, the lists its program is built from, so the
-// receive count the reader derives from them is what the upstream sender sends.
-std::vector<dspf2d::ChunkDescriptor> incoming_final_descriptors(
-    const std::vector<uint32_t>& ring_chip_ids, StreamId stream, uint32_t my_pos, uint32_t num_links);
-
 // A fwd_section holds no per-chunk addresses, so a chunk is found by counting the chunks before it. What
 // a chip writes and what the downstream chip reads must therefore agree in descriptor identity and order,
 // or the reader waits for a chunk that is never written. The chips exchange nothing at run time, so this checks

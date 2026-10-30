@@ -30,7 +30,6 @@ struct SenderCtArgs {
         kFreedAddr,
         kDownstreamNocX,
         kDownstreamNocY,
-        kFinalSemAddr,
         kCreditNocX,
         kCreditNocY,
         kLaunchCreditAddr,
@@ -61,7 +60,6 @@ struct SenderCtArgs {
     uint32_t freed_addr;
     uint32_t downstream_noc_x;  // the downstream stream core
     uint32_t downstream_noc_y;
-    uint32_t final_sem_addr;  // the downstream reader's last-hop counter
     uint32_t credit_noc_x;  // the downstream chip's stream core that sends back to this chip
     uint32_t credit_noc_y;
     uint32_t launch_credit_addr;
@@ -98,7 +96,6 @@ struct SenderCtArgs {
         freed_addr(plan.queue_freed_addr),
         downstream_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         downstream_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        final_sem_addr(plan.final_arrived_addr),
         credit_noc_x(static_cast<uint32_t>(returning.worker_virtual.x)),
         credit_noc_y(static_cast<uint32_t>(returning.worker_virtual.y)),
         launch_credit_addr(plan.launch_credit_addr),
@@ -129,7 +126,6 @@ struct SenderCtArgs {
         w[kFreedAddr] = freed_addr;
         w[kDownstreamNocX] = downstream_noc_x;
         w[kDownstreamNocY] = downstream_noc_y;
-        w[kFinalSemAddr] = final_sem_addr;
         w[kCreditNocX] = credit_noc_x;
         w[kCreditNocY] = credit_noc_y;
         w[kLaunchCreditAddr] = launch_credit_addr;
@@ -171,7 +167,6 @@ struct SenderCtArgs {
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
         downstream_noc_x(get_compile_time_arg_val(kDownstreamNocX)),
         downstream_noc_y(get_compile_time_arg_val(kDownstreamNocY)),
-        final_sem_addr(get_compile_time_arg_val(kFinalSemAddr)),
         credit_noc_x(get_compile_time_arg_val(kCreditNocX)),
         credit_noc_y(get_compile_time_arg_val(kCreditNocY)),
         launch_credit_addr(get_compile_time_arg_val(kLaunchCreditAddr)),
