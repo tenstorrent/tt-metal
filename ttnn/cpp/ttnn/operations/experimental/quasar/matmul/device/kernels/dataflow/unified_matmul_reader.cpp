@@ -232,15 +232,14 @@ TT_KERNEL void reader(
                         A_receivers_ready.set(0);
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(A_slice.get_write_ptr()),
-                            MulticastEndpoint{},
+                            A_slice,
                             A_slice_tiles * A_tile_bytes,
                             A_mcast_num_dests,
                             {},
                             {.noc_x_start = A_mcast_sender_x,
                              .noc_y_start = A_mcast_sender_y,
                              .noc_x_end = A_mcast_end_x,
-                             .noc_y_end = A_mcast_end_y,
-                             .addr = A_slice.get_write_ptr()},
+                             .noc_y_end = A_mcast_end_y},
                             /*linked=*/true);
                         A_data_ready.set_multicast(
                             noc, A_mcast_sender_x, A_mcast_sender_y, A_mcast_end_x, A_mcast_end_y, A_mcast_num_dests);
@@ -254,15 +253,14 @@ TT_KERNEL void reader(
                         B_receivers_ready.set(0);
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(B_slice.get_write_ptr()),
-                            MulticastEndpoint{},
+                            B_slice,
                             B_slice_tiles * B_tile_bytes,
                             B_mcast_num_dests,
                             {},
                             {.noc_x_start = B_mcast_sender_x,
                              .noc_y_start = B_mcast_sender_y,
                              .noc_x_end = B_mcast_end_x,
-                             .noc_y_end = B_mcast_end_y,
-                             .addr = B_slice.get_write_ptr()},
+                             .noc_y_end = B_mcast_end_y},
                             /*linked=*/true);
                         B_data_ready.set_multicast(
                             noc, B_mcast_sender_x, B_mcast_sender_y, B_mcast_end_x, B_mcast_end_y, B_mcast_num_dests);
