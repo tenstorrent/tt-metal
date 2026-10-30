@@ -1046,3 +1046,18 @@ line that DRAM holds row records, tiles only in L1).
 - 02:10 P.11 committed (fa0921c6fa2, pushed). Merged lowbit @ 9e5e0556b80 (top-k fork) as 0b9fd49e26b (conflicts: nanobind registration + INDEX.md, both forks kept); ttnn rebuild (tmux build); chain launches --until P.14 on import exit 0 (P.13 then P.14), then the profile series again.
 - 03:10 P.13 ACCEPTED by the overseer (delegation: every accuracy metric within its limit, worst 0.93 of the margin vs 0.91 off; gate PASS). Top-k fork 1.5-2.4x faster a call (index r1 at 1M 9.24 -> 3.91 ms), ~35 ms device a chunk at 1M (agent's estimate), wall A/B 343.5 / 346.3. 90 of 102 metrics moved slightly (both directions): the fork breaks exact bf16 score ties differently (DS41-170), so different tied rows can make the top-512 set; neither op has a tie rule. Diagnostic min layer PCC 0.6087 -> 0.5784 (L39). For the owner's morning report.
 - 04:20 P.14 ACCEPTED by the overseer (delegation: removes program rebuilds, accuracy identical on 102 metrics, gate PASS, wall 350.9 / 353.8). Census: no generic_op left un-prepared; the fused MoE tail now builds one prepared program per shape (was keyed on addresses: 21-105 ms rebuilds after an address shift, DS41-146). Still keyed on addresses: the MoE fused head (40 x 0.73 ms host) and sparse_all_gather_2d (MoE dispatch). Host time is now mostly ~2,950 C++ op calls a chunk (fabric_all_gather 294 calls 35 ms, allocations 372 / 31 ms, slice 20 ms, update_padded_kv_cache 19 ms): DS41-171, fewer ops / allocations next. P.4 can be retried on this base.
+
+## 2026-10-30 05:40 HAND-OFF: overnight perf queue done (P.12, P.5, P.11, P.13, P.14 accepted; P.4 rejected); NOW profile
+Commits (pushed): P.12 351d4355952, P.4 rejected d2dc8639a5f (records), P.5 3b187dfdbdf, P.11 fa0921c6fa2, merge of the
+2x2's top-k fork 0b9fd49e26b, P.13 94b6a4eb9d0, P.14 ea453c05350.
+Profile NOW (ea453c05350, /scratch/dnijemcevic/posprof NOW*): device 197.0 / 206.5 / 213.5 / 218.8 / 244.4 ms and warm
+wall 321.3 / 354.4 / 345.6 / 347.8 / 353.1 ms at 0 / 51.2k / 102.4k / 204.8k / 512k (yesterday morning: device 217-282,
+wall 412-438). Indexer at 512k 60.6 -> 43.8 ms (P.13). Host-bound by ~125 ms: ~2,600 compiled op launches a chunk at
+~82 us (216 ms of 350), dealloc 27 ms, fused MoE head 27 ms. Page v4 https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc
+For the owner: P.13 changes the top-k tie order (DS41-170; diagnostic min layer PCC 0.609 -> 0.578, every metric within
+its limit); P.4's persistent CCL buffers can be retried now that the tail cache is shape-keyed (P.14), ~13 ms host;
+next host levers: fewer ops / allocations (DS41-171: 294 all-gathers 35 ms, 372 allocations 31 ms, slices 20 ms,
+cache writes 19 ms), the fused MoE head and sparse_all_gather_2d still keyed on addresses, or chunk trace capture.
+Open: decode team's answers (KV handover page https://claude.ai/artifact/V6jTfy2imD5wQz6UQXPPbR); F215 + official_floor
+CPU job (+ 2x2's swap limits lost at FIX.6); F216 (close FIX.11 / FIX.13); F227 (last-window limit); 2 pre-existing
+selftest failures. Remaining ledger: X.3 -> O.1 -> Z.1 -> F.1 (not launched; owner's call on what next).
