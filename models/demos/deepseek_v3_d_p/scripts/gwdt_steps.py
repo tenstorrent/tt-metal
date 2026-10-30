@@ -399,7 +399,7 @@ def mla_step(key: str, reps: int) -> Step:
         d = step_dir(ctx, key)
         sh(
             ctx,
-            "python tools/tt-triage.py --run=check_dram_health --disable-progress "
+            "python tools/tt-triage.py --run=check_dram_health --dev=all --disable-progress "
             f"--triage-summary-path={d / 'dram.txt'} --sqlite-output-path={d / 'dram.sqlite'}",
             d / "dram.log",
             timeout=600,
