@@ -99,13 +99,16 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2
 // kModeSharedWriter / kModeSharedReader (MimirCacheSharedL2, one writer and one reader on one CCE): the reader reads
 // its words (kArgDataOffset, kArgNumWords) cached (kStatusWarmOld) and sets the flag line (kArgFlagOffset) to
 // kFlagWarmed. The writer waits for it, stores the new values to its words (kArgDataOffset, kArgNumWords) cached,
-// `fence w, w`, then sets the flag to kFlagReady; kStatusUncachedBefore counts its words in TL1 then. It then
-// range-flushes its words in L2, drains the flush with an uncached read and a fence, and sets the next flag line to
+// `fence w, w`, then sets the flag to kFlagReady; kStatusUncachedBefore counts its words in TL1 then. It then runs
+// cflush.d.l1 per line of its words, sets the third flag line to kFlagReady and waits for kFlagWarmed there. Then it
+// range-flushes its words in L2, drains the flush with an uncached read and a fence, and sets the second flag line to
 // kFlagReady. The reader waits for the first kFlagReady and reads the whole region (kArgAuxOffset, kArgCount words,
 // old word i = kArgOldValue + i) cached with no cache operation (kStatusRegisterB counts words as expected: the
 // writer's words (kArgOtherOffset, kArgOtherWords) new, every other word old; kStatusRegisterA counts the writer's
-// words in TL1). It then waits for the second kFlagReady, invalidates every region line in L1 D$ and L2 and reads
-// the region cached again (kStatusMatches counts words as expected).
+// words in TL1). It waits for the third line's kFlagReady, runs cdiscard.d.l1 per region line and reads the region
+// cached through the shared L2 (kStatusRegisterC counts words as expected), then sets the third line to kFlagWarmed.
+// It then waits for the second kFlagReady, invalidates every region line in L1 D$ and L2 and reads the region cached
+// again (kStatusMatches counts words as expected).
 // kModeSharedConcurrentWriter (8-hart form): hart slot s of kArgNumHarts stores kFlagReady to flag line s and waits
 // for every flag line, then for kArgPasses passes stores kArgValue + (s << 16) + (pass << 8) + i to its kArgNumWords
 // words at kArgDataOffset + s * kArgStrideBytes cached, then `fence`, the L2 range flush of its words;

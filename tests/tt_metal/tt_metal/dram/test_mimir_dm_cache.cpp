@@ -1211,8 +1211,10 @@ protected:
 
     // WriterReader: the reader warms its words, the writer stores its words cached, `fence w, w` and sets the flag; the
     // reader reads the region cached with no cache operation, which is recorded only (it needs L1-to-L1 coherence that
-    // nothing has shown). The writer then range-flushes and drains its words and sets a second flag; the reader
-    // invalidates the region and must read the writer's words new, every other word old. EightWriters: every hart
+    // nothing has shown). The writer then runs cflush.d.l1 per line, with no L2 flush, and sets a third flag; the
+    // reader discards the region from its L1 D$ only and must read the writer's words new through the shared L2. The
+    // writer then range-flushes and drains its words and sets a second flag; the reader invalidates the region and
+    // must read the writer's words new, every other word old. EightWriters: every hart
     // stores its words for kSharedPasses passes at once, then flushes them; TL1 must hold every hart's last values
     // (SameLineSameOffset: each word is some hart's last value).
     void run_layout(const SharedLayout& layout) {
@@ -1281,6 +1283,9 @@ protected:
             ASSERT_EQ(reader[abi::kStatusCode], abi::kCodeDone) << label << ": reader " << mm41_detail(reader);
             EXPECT_EQ(reader[abi::kStatusWarmOld], layout.writer_words) << label << ": reader's warm read";
             EXPECT_EQ(writer[abi::kStatusCachedBefore], layout.writer_words) << label << ": writer's cached view";
+            EXPECT_EQ(reader[abi::kStatusRegisterC], kSharedRegionWords)
+                << label << ": reader's cached read after the writer's cflush.d.l1 and its own L1 D$ discard, with no "
+                << "L2 flush; " << mm41_detail(reader);
             EXPECT_EQ(reader[abi::kStatusMatches], kSharedRegionWords)
                 << label << ": reader's cached read after the writer's flush and its own invalidate; "
                 << mm41_detail(reader);
