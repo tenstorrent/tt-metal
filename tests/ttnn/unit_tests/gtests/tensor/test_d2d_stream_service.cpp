@@ -563,7 +563,7 @@ MeshWorkload make_remote_gate_opener_workload(
     const auto links = tt::tt_fabric::get_forwarding_link_indices(*opener_mesh, src_node, dst_node);
     TT_FATAL(!links.empty(), "no fabric route from the opener chip to the gate's chip");
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*opener_mesh);
     auto kernel = CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/tensor/kernels/stage_gate_remote_opener.cpp",
@@ -641,7 +641,7 @@ MeshWorkload make_sender_worker_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
 
         auto cb_cfg = CircularBufferConfig(tensor_page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, tensor_page_size);
@@ -698,7 +698,7 @@ MeshWorkload make_receiver_worker_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         std::vector<uint32_t> ct_args = {
             static_cast<uint32_t>(receiver->get_data_ready_sem_addr()),
             num_iters,
@@ -1255,7 +1255,7 @@ private:
 
         MeshWorkload workload;
         for (const auto& coord : coords_) {
-            auto program = CreateProgram();
+            auto program = CreateProgram(*mesh_);
             CreateCircularBuffer(
                 program,
                 CoreRange{worker_, worker_},
@@ -1527,7 +1527,7 @@ MeshWorkload make_receiver_consumer_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
 
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
@@ -1631,7 +1631,7 @@ MeshWorkload make_bridge_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
 
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
