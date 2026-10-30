@@ -11,6 +11,7 @@ the trip back to a src register costs.
 See `README.md`, "The FPU computes".
 """
 
+import warnings
 from typing import Optional, Tuple
 
 import torch
@@ -18,7 +19,12 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity, MathOperation
 
 from ..l1_support import L1Support
-from ..storage import dest_to_src_storage, to_dest_storage
+from ..storage import (
+    DEST_MANTISSA_BITS,
+    dest_to_src_storage,
+    mantissa_ties,
+    to_dest_storage,
+)
 from .fidelity import (
     fidelity_phases,
     flush_pre_carry_denormals,
@@ -27,6 +33,7 @@ from .fidelity import (
     resolve_non_finite,
     warn_unmodelled_split,
 )
+from .pack import UnmodelledHardwareWarning
 
 #: The element-wise operations the FPU performs on two src registers.
 _ELEMENTWISE = {
@@ -44,16 +51,17 @@ class Fpu:
         l1: L1Support,
         *,
         mantissa_split: Optional[Tuple[int, int]] = None,
-        dest_ties_away: bool = False,
+        dest_ties_away: Optional[bool] = None,
     ) -> None:
         # Mantissa bits the multiplier takes from each operand per phase, as
         # (srcA, srcB). None means this architecture's multiplier is not
         # modelled: multiplies are exact and math_fidelity is ignored.
         self.mantissa_split = mantissa_split
 
-        # Rounding mode for a 16-bit Dest write. False is the IEEE default,
-        # ties to even. Blackhole rounds ties away from zero, which only shows
-        # up where the dropped bits are exactly half an ULP.
+        # Rounding mode for a 16-bit Dest write: True for ties away from
+        # zero, False for ties to even. None means this architecture's mode is
+        # not pinned down, and there is no safe default to fall back on, so a
+        # write that actually lands on a tie warns rather than guessing.
         self.dest_ties_away = dest_ties_away
 
         self.l1 = l1
@@ -194,7 +202,37 @@ class Fpu:
         self.l1.check_dest_format(dest_format)
         if current is not None:
             values = self._accumulate(values, current)
-        return to_dest_storage(values, dest_format, self.dest_ties_away)
+        if self.dest_ties_away is None:
+            self._warn_unmodelled_ties(values, dest_format)
+        return to_dest_storage(values, dest_format, bool(self.dest_ties_away))
+
+    def _warn_unmodelled_ties(
+        self, values: torch.Tensor, dest_format: DataFormat
+    ) -> None:
+        """Say so when a Dest write lands on a tie and the mode is unknown.
+
+        Quiet until it matters: ties-to-even and ties-away agree everywhere
+        else, so an architecture with no pinned mode is still exactly right
+        until a datum lands half an ULP from both neighbours.
+        """
+        keep = DEST_MANTISSA_BITS.get(dest_format)
+        if keep is None or not values.is_floating_point():
+            return
+        ties = int(mantissa_ties(values, keep).sum())
+        if not ties:
+            return
+        warnings.warn(
+            f"{self.l1.name}'s rounding mode for a {dest_format} Dest write is "
+            f"not modelled, and {ties} of {values.numel()} datums landed "
+            f"exactly on a tie. These were rounded to nearest even, which is "
+            f"IEEE's rule and not necessarily this device's -- Blackhole "
+            f"rounds ties away from zero. Treat those datums as unverified.",
+            UnmodelledHardwareWarning,
+            # 4, not 3: the count starts at warnings.warn and has to reach
+            # past this method, src_to_dest and the blocks wrapper to land on
+            # whoever asked for the write.
+            stacklevel=4,
+        )
 
     @staticmethod
     def _accumulate(values: torch.Tensor, current: torch.Tensor) -> torch.Tensor:
