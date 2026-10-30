@@ -4,23 +4,27 @@
 """Per-link NoC demand over time from a tt-npe timeline: which links are oversubscribed, in which rows, when.
 
     noc_link_demand.py npe_timeline.json [--bin 4] [--top 12] [--rows 2,3] [--kinds NOC0_EAST,NOC1_WEST]
-                       [--threshold 100] [--clock-mhz 1350] [--csv links.csv]
+                       [--threshold 100] [--link-bw 60.9] [--clock-mhz 1350] [--csv links.csv]
 
 The timeline is what `tt_npe.py -e --timeline-json-filepath ...` emits when it replays a tt-metal NoC trace
 (see README.md). Its timestep_data[i].link_demand lists, for every link with traffic in timestep i,
-[chip, row, col, kind, demand%], where kind is one of
+[chip, row, col, kind, demand], where demand is the OFFERED rate in bytes per cycle (every active transfer
+contributes its injection rate; a contended transfer keeps offering while it is stretched, so demand above the
+link bandwidth means transfers are queueing on that link) and kind is one of
   NOC0_EAST / NOC0_SOUTH   the +x / +y hop out of (col, row) on NOC_0
   NOC1_WEST / NOC1_NORTH   the -x / -y hop out of (col, row) on NOC_1
   NOC0_IN / NOC1_IN        injection from the core's NIU into the NoC
   NOC0_OUT / NOC1_OUT      ejection from the NoC into the core
-and demand > 100 means more bytes were offered to the link in that timestep than it can carry (its queue grows).
-Coordinates are the trace's physical NoC coordinates (on Blackhole: workers at x = 1-7 / 10-16, y = 2-11; DRAM
-ports at x = 0 and x = 9).
+This script converts demand to percent of the link bandwidth (--link-bw in bytes per cycle; the device model's
+value by default: blackhole 60.9, wormhole_b0 30.0, quasar 243.6, taken from common_info.arch) and also reports
+utilization = min(demand, bandwidth), the delivered rate. Coordinates are the trace's physical NoC coordinates
+(on Blackhole: workers at x = 1-7 / 10-16, y = 2-11; DRAM ports at x = 0 and x = 9).
 
-Read this, not tt-npe's summary line: the summary averages link utilization over the whole run and every link,
-which hides a hand-off link that is above 100 % for half the run. This script reports, per link, the mean demand
-over the run, the number of timesteps above the threshold and the peak, then per physical row the oversubscribed
-link-timesteps per time window and by link kind, and for the rows asked for a per-column heatmap of each kind.
+Read this, not tt-npe's summary line: the summary averages utilization over the whole run and every link of the
+chip, which hides a hand-off link that is contended for half the run. This script reports, per link, the mean
+demand and utilization over the run, the number of timesteps above the threshold and the peak, then per physical
+row the oversubscribed link-timesteps per time window and by link kind, and for the rows asked for a per-column
+heatmap of each kind.
 """
 import argparse
 import collections
@@ -35,7 +39,10 @@ def main():
     ap.add_argument("--top", type=int, default=12, help="busiest links to list")
     ap.add_argument("--rows", default="", help="physical rows to print per-column heatmaps for (comma list)")
     ap.add_argument("--kinds", default="NOC0_EAST,NOC1_WEST,NOC0_OUT,NOC1_OUT", help="link kinds for the heatmaps")
-    ap.add_argument("--threshold", type=float, default=100.0, help="demand %% counted as oversubscribed")
+    ap.add_argument(
+        "--threshold", type=float, default=100.0, help="demand %% of link bandwidth counted as oversubscribed"
+    )
+    ap.add_argument("--link-bw", type=float, default=0.0, help="link bandwidth in bytes/cycle (default: the model's)")
     ap.add_argument("--clock-mhz", type=float, default=1350.0, help="core clock (Blackhole 1350, Wormhole 1000)")
     ap.add_argument("--csv", default="", help="write per-link, per-window mean demand and oversubscribed counts")
     a = ap.parse_args()
@@ -44,38 +51,49 @@ def main():
     tl = json.load(open(a.timeline))
     steps = tl["timestep_data"]
     cyc = tl["common_info"]["cycles_per_timestep"]
+    arch = tl["common_info"].get("arch", "")
+    bw = a.link_bw or {"blackhole": 60.9, "wormhole_b0": 30.0, "quasar": 243.6}.get(arch, 0.0)
+    if bw <= 0:
+        raise SystemExit(f"unknown arch {arch!r}: pass --link-bw (bytes per cycle)")
+    scale = 100.0 / bw  # bytes/cycle -> % of link bandwidth
     t_end = max(st["end_cycle"] for st in steps)
     nbin = int(t_end / clk / a.bin) + 1
     steps_per_bin = a.bin * clk / cyc
-    # link -> per window [sum of demand, oversubscribed timesteps, peak demand]
-    acc = collections.defaultdict(lambda: [[0.0, 0, 0.0] for _ in range(nbin)])
+    # link -> per window [sum of demand %, oversubscribed timesteps, peak demand %, sum of utilization %]
+    acc = collections.defaultdict(lambda: [[0.0, 0, 0.0, 0.0] for _ in range(nbin)])
     for st in steps:
         w = int(st["start_cycle"] / clk / a.bin)
         for _chip, row, col, kind, dem in st["link_demand"]:
+            d = dem * scale
             e = acc[(row, col, kind)][w]
-            e[0] += dem
-            e[1] += dem > a.threshold
-            e[2] = max(e[2], dem)
+            e[0] += d
+            e[1] += d > a.threshold
+            e[2] = max(e[2], d)
+            e[3] += min(d, 100.0)
     print(
-        f"timeline: {len(steps)} timesteps x {cyc} cycles = {t_end / clk:.1f} us at {clk:.0f} MHz; "
-        f"windows of {a.bin} us; threshold {a.threshold:.0f} %"
+        f"timeline: {len(steps)} timesteps x {cyc} cycles = {t_end / clk:.1f} us at {clk:.0f} MHz ({arch}, link "
+        f"{bw:g} B/cycle = {bw * clk / 1e3:.1f} GB/s); windows of {a.bin} us; oversubscribed = demand > {a.threshold:.0f} %"
     )
 
     # (a) the busiest links: mean demand over the run, oversubscribed timesteps, peak, and when
     ranked = []
     for link, wins in acc.items():
         mean = sum(w[0] for w in wins) / len(steps)
+        util = sum(w[3] for w in wins) / len(steps)
         over = sum(w[1] for w in wins)
         peak = max(w[2] for w in wins)
-        ranked.append((over, mean, peak, link))
+        ranked.append((over, mean, util, peak, link))
     ranked.sort(key=lambda r: (-r[0], -r[1]))
-    print(f"\n== busiest links (timesteps > {a.threshold:.0f} % | mean demand % over the run | peak %):")
-    for over, mean, peak, (row, col, kind) in ranked[: a.top]:
+    print(
+        f"\n== busiest links (timesteps > {a.threshold:.0f} % | mean offered demand % | mean utilization % | peak %):"
+    )
+    for over, mean, util, peak, (row, col, kind) in ranked[: a.top]:
         wins = acc[(row, col, kind)]
         hot = [i for i, w in enumerate(wins) if w[1] > 0]
         span = f"{hot[0] * a.bin:.0f}-{(hot[-1] + 1) * a.bin:.0f} us" if hot else "-"
         print(
-            f"  ({col:2d},{row:2d}) {kind:<11} over {over:5d}  mean {mean:6.1f}  peak {peak:6.0f}  oversubscribed in {span}"
+            f"  ({col:2d},{row:2d}) {kind:<11} over {over:5d}  demand {mean:6.1f}  util {util:5.1f}  peak {peak:6.0f}"
+            f"  oversubscribed in {span}"
         )
 
     # (b) per physical row: oversubscribed link-timesteps per window (all kinds), and by kind over the run
@@ -111,12 +129,32 @@ def main():
         with open(a.csv, "w", newline="") as f:
             wr = csv.writer(f)
             wr.writerow(
-                ["row", "col", "kind", "window_start_us", "mean_demand_pct", "oversubscribed_timesteps", "peak_pct"]
+                [
+                    "row",
+                    "col",
+                    "kind",
+                    "window_start_us",
+                    "mean_demand_pct",
+                    "mean_util_pct",
+                    "oversubscribed_timesteps",
+                    "peak_pct",
+                ]
             )
             for (row, col, kind), wins in sorted(acc.items()):
                 for i, w in enumerate(wins):
                     if w[0]:
-                        wr.writerow([row, col, kind, i * a.bin, round(w[0] / steps_per_bin, 2), w[1], round(w[2], 1)])
+                        wr.writerow(
+                            [
+                                row,
+                                col,
+                                kind,
+                                i * a.bin,
+                                round(w[0] / steps_per_bin, 2),
+                                round(w[3] / steps_per_bin, 2),
+                                w[1],
+                                round(w[2], 1),
+                            ]
+                        )
         print(f"\nwrote {a.csv}")
 
 

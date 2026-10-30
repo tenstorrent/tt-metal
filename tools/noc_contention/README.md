@@ -63,11 +63,18 @@ trace's physical NoC coordinates (Blackhole: workers x = 1–7 and 10–16, y = 
 
 ## What to know about the inputs
 
-- **tt-npe's summary hides the problem.** Its "congestion impact" and "max link util" average over the run and every
-  link; a hand-off link above 100 % demand for half the run showed as "congestion impact 0 %, max link util 9 %". Use
-  the per-timestep `link_demand`, which is what `noc_link_demand.py` reads.
-- **The link model is 32 B per cycle**, ≈ 43 GB/s at 1.35 GHz on Blackhole. That number is the one to compare a
-  traffic class against (7 producers × 92 KB per 12.3 µs ≈ 52 GB/s does not fit one link).
+- **tt-npe's summary hides the problem.** Its "avg / max link util" average over the run and every link of the chip,
+  most of which are idle; a hand-off link contended for 57 % of the run showed as "max link util 8.8 %". Use the
+  per-timestep `link_demand`, which is what `noc_link_demand.py` reads. Its "congestion impact" and "golden cycles"
+  are invalid for current tt-metal traces (golden cycles wrap to ~2^64: the kernel-zone timestamps are not picked up,
+  so the estimate has nothing to compare against).
+- **`link_demand` is in bytes per cycle, not percent.** It is the *offered* rate: every active transfer adds its
+  injection rate, and a transfer that is being stretched by contention keeps offering, so a link with two full-rate
+  transfers shows 2 × the link bandwidth. `noc_link_demand.py` divides by the device model's bandwidth
+  (`link_bandwidth` in `install/share/tt_npe/device/models/<arch>.yaml`: Blackhole 60.9 B/cycle ≈ 82 GB/s at
+  1.35 GHz, Wormhole 30.0) and also reports the delivered utilization, `min(demand, bandwidth)`. A link at
+  "136 % demand, 61 % utilization, contended 57 % of timesteps" delivers 61 % of its bandwidth and queues transfers
+  most of the time; the queueing is what stretches a 92 KB write from 1.7 µs to the 2.5–3.5 µs the kernels measure.
 - **A rectangle multicast is logged as one unicast per destination core**, so its link load is counted once per hop
   per destination (an overestimate on the shared hops) and the multicast link-utilization statistic stays 0.
 - **Semaphore increments and sets are not traced**: credits and flags are invisible. Their bytes are negligible,
@@ -97,15 +104,18 @@ over a credit / VALID hand-off; the receivers' scan chain is the critical path. 
 - The fix (PR #63364): put four of the seven producers west of the receivers writing on NOC_0 and three east on
   NOC_1 — two links into each receiver pair instead of one — and only two west in the port rows. BH 12
   151.2 → 143.6 µs, bit-identical.
-- Layer 2 then quantified what remained: with the solve, the NOC_1 link into a 2-west row's receivers at 83 % mean
-  demand and above 100 % in 2700 of 6420 timesteps (peaks 4–5×), the NOC_0 link into a 4-west row's receivers at
-  70–82 %; with the faster FPU-chain producers the same picture plus the kickoff read burst in the top rows. That
-  is why a 25 % shorter producer item bought nothing at this shape: the chain was eating link time, not item time.
-- Layer 3 priced the remaining lever: halving the hand-off bytes in the trace took every hand-off link out of
-  oversubscription (steady-state oversubscribed link-timesteps per row and 8 µs window 1500–3400 → 100–300); what
-  remained was the kickoff read burst through the DRAM-port columns and rows. fp16 then turned out to be refused at
-  kernel build (one exponent family per core) and bf16 is a numerics change, so the decision is the model owner's —
-  but the price was known before either was tried.
+- Layer 2 then quantified what remained: with the solve, the NOC_1 link into a 2-west row's receiver pair at
+  136 % offered demand, 61 % delivered, contended in 57 % of the timesteps with peaks of 6–8×; the NOC_0 link into a
+  4-west row's receivers at 123–135 % offered, 47–52 % delivered, contended 47–49 %; the NIU ejection into the
+  column-form heads' receivers at 72 % offered, 57 % delivered. With the faster FPU-chain producers the same
+  picture plus the kickoff read burst in the top rows. That is why a 25 % shorter producer item bought nothing at
+  this shape: every hand-off write was already queueing on its link.
+- Layer 3 priced the remaining lever: halving the hand-off bytes in the trace took the 2-west rows' NOC_1 link to
+  52 % offered / 40 % delivered / contended 32 % and the 4-west rows' NOC_0 links out of the top of the list (per row
+  and 8 µs window, oversubscribed link-timesteps 4000–8000 → 1500–2500 in steady state); what remained was the
+  kickoff read burst through the DRAM-port columns and rows. fp16 then turned out to be refused at kernel build (one
+  exponent family per core) and bf16 is a numerics change, so the decision is the model owner's — but the price
+  was known before either was tried.
 
 ## Using it on another kernel
 
@@ -126,4 +136,6 @@ over a credit / VALID hand-off; the receivers' scan chain is the critical path. 
 
 Routing facts to reason with on Blackhole: NOC_0 goes +x then +y, NOC_1 −x then −y, both wrap the torus; a
 transfer's whole route lies in the source row then the destination column; DRAM ports sit at x = 0 and x = 9 in
-every row 0–11, and which port a bank answers on depends on the NoC and the firmware's endpoint table.
+every row 0–11, and which port a bank answers on depends on the NoC and the firmware's endpoint table. A link
+carries 60.9 B per cycle in the model (≈ 82 GB/s); a core's NIU ejects into L1 at the same rate, so a core fed by
+many writers is capped at one link's worth whatever the placement.
