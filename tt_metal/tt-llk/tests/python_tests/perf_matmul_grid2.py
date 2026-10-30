@@ -260,14 +260,9 @@ def test_perf_matmul_grid2(
             k.force_form = ""
     # a cell that keeps main's form runs main's unpack and math bodies (llk_matmul_forms.h resolves the form key to 0); the pack form and the harness opt-ins stay
     main_templates = [
-        MATH_FIDELITY(math_fidelity),
         PACK_SRC_FROM_OUTPUT(),
-        DEST_SYNC(dest_sync),
-        THROTTLE_LEVEL(throttle),
         *form_keys,
         MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle, l1_acc=l1_acc == L1Accumulation.Yes)),
-        MATMUL_L1_ACC(l1_acc),
-        MATMUL_NB(num_blocks),
         *([MATMUL_WIDE_WALK()] if wide_walk else []),
     ]
 
@@ -275,12 +270,9 @@ def test_perf_matmul_grid2(
         "sources/matmul_test.cpp",
         formats,
         run_types,
-        templates=main_templates if main_form else [
-            MATH_FIDELITY(math_fidelity),
+        templates=[MATH_FIDELITY(math_fidelity), DEST_SYNC(dest_sync), THROTTLE_LEVEL(throttle), MATMUL_L1_ACC(l1_acc), MATMUL_NB(num_blocks), *(main_templates if main_form else [
             PACK_SRC_FROM_OUTPUT(),
             *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
-            DEST_SYNC(dest_sync),
-            THROTTLE_LEVEL(throttle),
             *MATMUL_STREAM_NARROW.for_block(
                 formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
                 math_fidelity=math_fidelity,
@@ -315,10 +307,8 @@ def test_perf_matmul_grid2(
                     l1_acc=l1_acc == L1Accumulation.Yes,
                 )
             ),
-            MATMUL_L1_ACC(l1_acc),
-            MATMUL_NB(num_blocks),
             *([MATMUL_WIDE_WALK()] if wide_walk else []),
-        ],
+        ])],
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),

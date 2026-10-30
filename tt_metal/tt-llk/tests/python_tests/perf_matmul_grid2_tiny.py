@@ -126,18 +126,15 @@ def test_perf_matmul_grid2_tiny(case, perf_report):
             k.force_form = ""
             k.pack_src_from_output = False
     # a cell that keeps main's form runs main's unpack and math bodies (llk_matmul_forms.h resolves the form key to 0)
-    main_templates = [MATH_FIDELITY(math_fidelity), MATMUL_OPERAND_SIZES(), DEST_SYNC(matmul_config.dest_sync), THROTTLE_LEVEL(throttle), *form_keys]
+    main_templates = [MATMUL_OPERAND_SIZES(), *form_keys]
 
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
         run_types,
-        templates=main_templates if main_form else [
-            MATH_FIDELITY(math_fidelity),
+        templates=[MATH_FIDELITY(math_fidelity), DEST_SYNC(matmul_config.dest_sync), THROTTLE_LEVEL(throttle), *(main_templates if main_form else [
             MATMUL_OPERAND_SIZES(),
             *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces, MATMUL_PHASE_ELIDE.keeps_requested(matmul_config.tile_dimensions, matmul_config.dest_sync, math_fidelity)),
-            DEST_SYNC(matmul_config.dest_sync),
-            THROTTLE_LEVEL(throttle),
             *MATMUL_STREAM_NARROW.for_block(
                 formats,
                 matmul_config.dest_acc,
@@ -220,7 +217,7 @@ def test_perf_matmul_grid2_tiny(case, perf_report):
                     dense_pages=True,
                 )
             ),
-        ],
+        ])],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),
             UNPACK_TRANS_FACES(transpose),
