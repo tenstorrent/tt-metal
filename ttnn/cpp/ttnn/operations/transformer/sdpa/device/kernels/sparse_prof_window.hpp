@@ -90,7 +90,8 @@ namespace sparse_prof {
 inline uint32_t totals[kTotals];
 
 inline __attribute__((always_inline)) uint32_t now() {
-    return reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L)[WALL_CLOCK_LOW_INDEX];
+    return reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+        RISCV_DEBUG_REG_WALL_CLOCK_L)[kernel_profiler::WALL_CLOCK_LOW_INDEX];
 }
 
 template <uint32_t idx>
