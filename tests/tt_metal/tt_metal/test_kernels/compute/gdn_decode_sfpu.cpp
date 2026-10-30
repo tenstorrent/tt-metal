@@ -24,6 +24,14 @@
 //                         MODE 2: column 0 only (exp_col0_exact)
 //   6  build ebc16:       c_0 = ecol32, c_1 = bcol16, c_2 = ccol32 copied into slots 0, 1, 2; out[0] = build_ebc16 into
 //                         the free slot 3, out[1] = build_ebc16 in place in slot 0 (two 16x32 tiles per repetition)
+//   7  scalar x tile:     c_0 = a 32x32 scalar tile (e at [0, 0]), c_1 = four random 32x32 tiles -> four tiles = data *
+//   e
+//                         MODE 0: today's form, mul_col_bcast<32> against a copy of c_0 in slot 3 (3 + 1 tiles, two
+//                         acquires) MODE 1: copy c_0 -> slot 0, load_scalar(0), then the four tiles in slots 0..3 in
+//                         ONE acquire
+//                                 with mul_loaded_scalar<32> (the scalar's slot is reused for data right away)
+//                         MODE 2: as MODE 1 without the scalar copy, the load and the multiplies (copies + packs alone)
+//                         MODE 3: as MODE 0 with mul_scalar_dst<32> (load + multiply per tile)
 // Compile-time args: VARIANT, MODE, REPS, VT. Runtime arg 0: L1 address of the stats buffer (two 32-bit stamps).
 
 #include <cstdint>
@@ -280,6 +288,60 @@ void kernel_main() {
             pack_out(0, 1);
             tile_regs_release();
             out.push_back(2);
+        }
+        stamp(1);
+    } else if constexpr (VARIANT == 7) {
+        in0.wait_front(1);
+        in1.wait_front(4);
+        stamp(0);
+        for (uint32_t r = 0; r < REPS; r++) {
+            out.reserve_back(4);
+            if constexpr (MODE == 0 || MODE == 3) {
+                for (uint32_t g = 0; g < 2; g++) {  // tiles 0..2 with the scalar in slot 3, then tile 3
+                    const uint32_t n = (g == 0) ? 3 : 1;
+                    tile_regs_acquire();
+                    copy_init(cb_in0);
+                    copy_tile(cb_in0, 0, 3);
+                    for (uint32_t i = 0; i < n; i++) {
+                        copy_tile(cb_in1, 3 * g + i, i);
+                    }
+                    for (uint32_t i = 0; i < n; i++) {
+                        if constexpr (MODE == 0) {
+                            gdn_decode_sfpu::mul_col_bcast<32>(i, 3);
+                        } else {
+                            gdn_decode_sfpu::mul_scalar_dst<32>(i, 3);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < n; i++) {
+                        pack_out(i, 3 * g + i);
+                    }
+                    tile_regs_release();
+                }
+            } else {
+                tile_regs_acquire();
+                copy_init(cb_in0);
+                if constexpr (MODE == 1) {
+                    copy_tile(cb_in0, 0, 0);
+                    gdn_decode_sfpu::load_scalar(0);  // slot 0 is reused for data right after
+                }
+                for (uint32_t i = 0; i < 4; i++) {
+                    copy_tile(cb_in1, i, i);
+                }
+                if constexpr (MODE == 1) {
+                    for (uint32_t i = 0; i < 4; i++) {
+                        gdn_decode_sfpu::mul_loaded_scalar<32>(i);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < 4; i++) {
+                    pack_out(i, i);
+                }
+                tile_regs_release();
+            }
+            out.push_back(4);
         }
         stamp(1);
     }
