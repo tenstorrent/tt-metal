@@ -281,18 +281,31 @@
   budget_type: unit
   category: moreh
 
-- name: ttnn nightly misc (rand, ssm and graph report) tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm tests/ttnn/nightly/unit_tests/base_functionality -xv -m "not disable_fast_runtime_mode" --timeout=600'
+- name: ttnn nightly misc (rand and ssm) tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
-      timeout: 15
+      timeout: 10
     wh_n300_civ2:
-      timeout: 15
+      timeout: 10
     bh_p100:
       timeout: 15
     bh_p150b_civ2:
       timeout: 15
   owner_id: U09BX3N0N95 # Mateusz Nowak
+  team: ttnn
+  budget_type: unit
+  category: misc
+
+# Own job so that a failure reaches the TTNN Visualizer team; the test runs on Wormhole B0 only
+- name: ttnn nightly graph report tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/base_functionality -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    wh_n300_civ2:
+      timeout: 10
+  owner_id: U087TD3Q57B # Scott Mountenay
   team: ttnn
   budget_type: unit
   category: misc
