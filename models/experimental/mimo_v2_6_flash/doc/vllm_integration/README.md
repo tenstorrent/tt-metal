@@ -141,6 +141,130 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
 - Clients on this host should use `127.0.0.1`: it has no `localhost` entry in /etc/hosts, and the async OpenAI
   client times out resolving it.
 
+## One engine per Galaxy row
+
+`--data-parallel-size 4` runs the four rows as lanes of one engine, and a step is all-prefill or all-decode for every
+lane: a prefill on one lane stops the other lanes' decode (on SPEED-Bench coding at c=16, prefill steps take 19-26% of
+the wall time). `serving/serve_rows.sh` runs four engines instead, each with `--data-parallel-size 1` on one row's 8
+chips (`TT_VISIBLE_DEVICES`, `MESH_DEVICE=(1,8)`, ports 8001-8004), behind `serving/lb.py` on port 8000. A row
+prefills while the others decode, and each engine's host work runs in its own process.
+
+The proxy routes by prefix, because each engine has its own prefix cache.
+- **Prefix key.** It hashes each request's prompt in 256-character chunks: the chat messages and tools, or a
+  completion prompt or its token ids, plus `cache_salt`.
+- **Index.** An LRU index of the chunk hashes records which engines served each prefix.
+- **Routing.** A request whose longest known prefix is at least 1024 characters goes to the least loaded engine
+  holding it. If that engine has more than 2 requests in flight above the least loaded engine, the request goes to
+  the least loaded engine instead, which then caches the prefix too. Any other request goes to the least loaded
+  engine.
+- **Health and metrics.** `/health` is 200 only when every engine is healthy. `/metrics` concatenates the engines'
+  metrics. `/lb/stats` shows the routing counters.
+- **Failover.** A request whose engine refuses the connection goes to another engine.
+
+```bash
+TT_METAL_HOME=<tt-metal build> PLUGIN_SRC=<vllm-tt-plugin at mimo-v2.6-flash/single-lane>/src VLLM=<venv>/bin/vllm \
+  MODEL=/path/to/MiMo-V2.6-Flash-MOPD SAMPLE_ON_DEVICE=decode_only MIMO_EXPERT_QUANT=gptq \
+  models/experimental/mimo_v2_6_flash/serving/serve_rows.sh <log dir> 32768
+```
+
+- **Plugin.** Branch `mimo-v2.6-flash/single-lane` of vllm-tt-plugin runs a model that declares
+  `folds_dp_into_lanes` as one lane at `--data-parallel-size 1`. Each engine then takes the lane path: stable slots,
+  chained verifies, sampled verifies accepted on device.
+  - Without it, an engine takes the plugin's single-engine path. Plain decode runs at the same speed there.
+  - MTP does not: verifies are not chained, and a sampled verify is accepted on the host in `logits` mode. MTP at
+    c=16 then served 992 tok/s greedy and 93 tok/s sampled.
+- **`OMP_NUM_THREADS=8` per engine** (the script's default). Torch's default pool has one thread per core. With four
+  engines, every small torch op on the step path waited on the other engines' spinning pools.
+  - A one-lane MTP verify step then took 61 ms instead of 23, with a 50 ms gap between verifies, and MTP at c=16
+    served 439 tok/s.
+  - Plain decode was not affected: a steady step replays its trace and runs almost no torch ops.
+- **Rows.** Chip ids depend on the machine, so `serve_rows.sh` finds each row's chips before it starts the engines,
+  with `serving/discover_rows.py` (it opens the whole mesh; set `ROW_DEVICES` to skip it). vllm-tt-plugin's standard DP
+  discovers its ranks' groups the same way.
+  - Four processes can each open one row at the same time: a ring all_gather and an all_reduce on every row are exact.
+  - tt-metal pins each chip's dispatch threads to core (local chip id) % N, which is the same set of cores in every
+    engine. Spreading them with a per-engine `LD_PRELOAD` offset made no difference.
+- **Startup** takes about 1.5 minutes, because each engine warms up 4 users of one replica. The 4-lane engine takes
+  about 4.5 minutes.
+- **Stop.** Each engine runs in its own process group (`setsid`). Stopping sends SIGTERM to every group, then SIGKILL
+  to what is left after `STOP_TIMEOUT` seconds (default 120), or 10 s after the last EngineCore is gone. When an engine
+  or the proxy exits, the script stops the rest and exits with that process's status.
+  - Not SIGINT: an engine started in the background inherits SIGINT ignored, and an EngineCore installs its handler
+    only once the model is loaded. A SIGINT 60 s into startup was ignored until the SIGKILL.
+  - On SIGTERM a loading EngineCore, the process holding the chips, exits at once. Its API server, still waiting for
+    the EngineCore's handshake in a blocking poll, cannot run its SIGTERM handler, and multiprocessing's resource
+    tracker ignores SIGTERM; both go with the SIGKILL.
+- **Cold TTNN cache.** The four engines share one `MIMO_TT_CACHE`, and `ttnn.as_tensor` writes a cache file in place.
+  Each cache tag (`top`, every layer, each MTP layer, DFlash) is therefore filled under a file lock
+  (`tt.common.cache_fill`): one engine converts and writes it, and the others wait, then load it. A complete tag takes
+  no lock.
+- **vLLM's own DP** (`--data-parallel-size 4` without the lane fold) is no alternative. For an MoE model vLLM runs the
+  DP ranks in lockstep (`DPEngineCoreProc`), and the plugin refuses standard DP for MoE.
+
+Measured 2026-10-28 with ttnn and model code at ae0a9130ab7 (the packed grouped verify, #63006), GPTQ BFP4 experts and
+`sample_on_device_mode` `decode_only`. The plugin was `mimo-v2.6-flash/single-lane` for the row engines and its base
+ee2b54f for the 4-lane engine.
+- Both engines ran `--max-num-batched-tokens 2048` (the script's default then) and the default KV budget (6.7 GB per
+  chip with the pair split). tt-inference-server's spec ships 4096-token chunks and sets 6.7. `serve_rows.sh` now
+  defaults to 4096 (`MNBT`); the numbers below are not re-measured at 4096.
+
+SPEED-Bench coding, 64 requests, 512 output tokens, c=16, 32K server:
+
+| | 4 lanes, one engine | 4 engines, one per row | |
+|---|---|---|---|
+| plain, greedy: output tok/s | 835.4 | 983.8 | +18% |
+| plain, T=1.0, top-p 0.95 | 785.5 | 1002.1 | +28% |
+| plain, TTFT mean | 577 ms | 421-453 ms | |
+| MTP (`MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=4`, K=1, 8 seqs per engine), greedy | 931.2 | 1178.6 | +27% |
+| MTP, T=1.0, top-p 0.95 | 883.8 | 1146.2 | +30% |
+| MTP, tokens per verify (greedy) | 1.91 | 1.92 | |
+| MTP, TTFT mean | 422 ms | 323 ms | |
+
+The 4-lane plain numbers are from the build before #63006. That change touches only the verify.
+
+16 prompts of 256K random token ids, 2048 output tokens each, c=16, MTP, 1M server:
+
+| | 4 lanes | 4 engines |
+|---|---|---|
+| all 16 done | 685 s | 320 s |
+| TTFT median / max | 494 / 661 s | 224 / 293 s |
+| prefill over the run | 6,122 tok/s | 13,122 tok/s |
+| decode window (all 16 decoding) | 1291.8 tok/s | 1301.0 tok/s |
+
+**tt-inference-server.** The release flow starts this deployment itself, on branch
+`mimo-v2.6-flash/row-engines` of tt-inference-server. A device spec's `submesh_engines: true` makes
+`vllm-tt-metal/src/run_vllm_api_server.py` split the mesh into `data_parallel_size` device groups, discovered at launch
+as the plugin's standard DP does (the four rows on a Galaxy), start one engine per group, and serve the same proxy
+(`engine_proxy.py`) on the service port, so every workflow talks to one endpoint.
+- **Checked on the host:** the launcher with the dev catalog's MiMo runtime spec (1M context) came up with all 4
+  engines healthy in 250 s. SPEED-Bench c=16 through it gave 958 tok/s greedy and 938 sampled, and SIGTERM stopped
+  every engine in 8 s. The MTP entry gave 1122 greedy and 1038 sampled. Every verify was accepted on device and 96%
+  were chained.
+- **Image:** it needs the vllm-tt-plugin branch above.
+
+Shared prefixes, through the proxy with and without prefix routing (`--min-match-chars` 1e12 turns it off):
+- Workload: 8 documents of 6000 random words (about 8K tokens), 4 questions each, sent question by question (a
+  document's requests are not adjacent), c=16, 32 output tokens. Each run used its own `cache_salt`, and the two
+  modes alternated, two runs each.
+- The plugin reports no prefix-cache counters on TT; the tokens actually prefilled come from the engines' MiMo
+  prefill timing lines.
+
+| | load only | prefix routing |
+|---|---|---|
+| wall time | 9.4 / 8.3 s | 7.7 / 6.5 s |
+| TTFT mean / median | 2.50 / 2.57 s, 2.27 / 2.29 s | 1.90 / 1.37 s, 1.94 / 1.62 s |
+| prompt tokens prefilled | 186,788 / 157,346 | 109,992 / 103,825 |
+
+Prefilling each document once would be about 70K tokens. The rest is requests that arrived while their document
+was still prefilling on the same engine, plus spills.
+
+Checks:
+- c=1 greedy on 16 prompts (63 to 60,000 tokens, 64 output tokens), served by rows 0 and 1, is identical to the
+  4-lane engine on the same build (16/16). Two 4-lane runs at c=16 agree on 7/16, from batch composition.
+- `MIMO_SPEC_CHAIN_CHECK=1` over 32 requests: 7552 chained drafts checked across the 4 engines, 0 differ.
+- Startup, a chat request through the proxy, the merged `/metrics`, and shutdown on SIGTERM work with the committed
+  script.
+
 ## KV cache
 
 `get_kv_cache_spec` reports a FullAttentionSpec for the 9 global layers and a SlidingWindowSpec for the 39 SWA
@@ -672,5 +796,10 @@ with one mechanism, for 1 and 3 MTP layers:
 - Slot parity of chunked prefill with `MIMO_KV_PAIR_SPLIT=0` (above).
 - Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
 - A 1M-token prompt, and the 1M server with the compact device RoPE tables (not yet run on hardware).
-- Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode).
+- Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode); one
+  engine per row ("One engine per Galaxy row") runs them at the same time on different rows.
+- Row engines:
+  - the plugin HTTP suite and an accuracy eval through the proxy (or a full TTI release run);
+  - DFlash;
+  - c=16 at 1M.
 - Tracing later prefill chunks and chunks longer than 512 tokens.

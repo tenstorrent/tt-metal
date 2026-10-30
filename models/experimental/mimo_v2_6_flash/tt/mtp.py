@@ -54,7 +54,6 @@ final norm feeds the target's LM head. Each layer's KV cache is a small ring add
 RoPE at the true position t (reference/spec_decode.py).
 """
 
-import os
 import time
 from dataclasses import dataclass
 
@@ -67,7 +66,7 @@ from ..reference.mtp_backfill import MTP_WINDOW
 from ..reference.spec_chain import stash_page
 from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_table_row, planned_drafts
 from ..reference.spec_inputs import pack_mtp_commits
-from .common import TILE, as_weight, cache_name, compute_config
+from .common import TILE, as_weight, cache_fill, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .greedy_head import GreedyHead
 from .mtp_backfill import MtpHistory
@@ -81,30 +80,29 @@ class TtMtpLayer:
         cfg, plan = model.cfg, model.plan
         self.index = layer
         tag = f"mtp{layer}_tp{plan.tp}"
-        done = cache_name(cache_dir, tag, "complete")
-        warm = done is not None and os.path.exists(done)
-        assert ckpt is not None or warm, "cold cache needs a checkpoint"
-        weights = None if warm else load_mtp_weights(ckpt, cfg, layer)
-        head = weights["head"] if weights is not None else {}
-        self.block = TtMiMoDecoderLayer(
-            plan,
-            cfg,
-            cfg.mtp_layer_index(layer),
-            weights,
-            model.rope_setups,
-            cache_dir=cache_dir,
-            attn_dtype=weight_dtype,
-            mlp_dtype=weight_dtype,
-        )
-        eps = cfg.layernorm_epsilon
-        self.enorm = TtRMSNorm(plan, head.get("enorm"), eps, cache_name(cache_dir, tag, "enorm"))
-        self.hnorm = TtRMSNorm(plan, head.get("hnorm"), eps, cache_name(cache_dir, tag, "hnorm"))
-        self.final_norm = TtRMSNorm(plan, head.get("final_layernorm"), eps, cache_name(cache_dir, tag, "final_norm"))
-        eh = head["eh_proj"].T.contiguous() if weights is not None else None  # [2 * hidden, hidden]
-        self.eh_proj = as_weight(eh, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, tag, "eh_proj"))
-        del weights, head, eh
-        if done is not None and not warm:
-            open(done, "w").close()
+        with cache_fill(cache_dir, tag) as need:
+            assert ckpt is not None or not need, "cold cache needs a checkpoint"
+            weights = load_mtp_weights(ckpt, cfg, layer) if need else None
+            head = weights["head"] if weights is not None else {}
+            self.block = TtMiMoDecoderLayer(
+                plan,
+                cfg,
+                cfg.mtp_layer_index(layer),
+                weights,
+                model.rope_setups,
+                cache_dir=cache_dir,
+                attn_dtype=weight_dtype,
+                mlp_dtype=weight_dtype,
+            )
+            eps = cfg.layernorm_epsilon
+            self.enorm = TtRMSNorm(plan, head.get("enorm"), eps, cache_name(cache_dir, tag, "enorm"))
+            self.hnorm = TtRMSNorm(plan, head.get("hnorm"), eps, cache_name(cache_dir, tag, "hnorm"))
+            self.final_norm = TtRMSNorm(
+                plan, head.get("final_layernorm"), eps, cache_name(cache_dir, tag, "final_norm")
+            )
+            eh = head["eh_proj"].T.contiguous() if weights is not None else None  # [2 * hidden, hidden]
+            self.eh_proj = as_weight(eh, plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, tag, "eh_proj"))
+            del weights, head, eh
         self.kv_cache = None
 
 

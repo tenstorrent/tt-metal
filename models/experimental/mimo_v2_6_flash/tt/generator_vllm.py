@@ -9,6 +9,11 @@ per row of the 4x8 mesh. Lane ``l`` owns the plugin's slots [l * per_lane, (l + 
 slots 0 .. per_lane - 1 of replica ``l``. Each lane has its own vLLM scheduler and block pool, so block ids are
 lane-local and each replica has its own KV storage.
 
+The four lanes of one engine prefill or decode together. ``serving/serve_rows.sh`` runs one engine per row instead
+(``--data-parallel-size 1`` on the row's chips, ``TT_VISIBLE_DEVICES``), behind a proxy, so a row prefills while the
+others decode. A plugin that runs a model folding DP into lanes as one lane at ``--data-parallel-size 1`` serves each
+of them through the same lane path (``dp`` 1).
+
 KV cache: vLLM owns the blocks. ``get_kv_cache_spec`` reports a FullAttentionSpec for the global layers and a
 SlidingWindowSpec for the SWA layers (the model attends a window of 128; the spec declares 128 + the chunk start
 alignment - 1, ``swa_spec_window``), both K 192 / V 128 at block size 64 (128 for the global layers with

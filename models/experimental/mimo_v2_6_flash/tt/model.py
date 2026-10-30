@@ -33,7 +33,7 @@ from ..reference.spec_decode import SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
 from . import attention as attention_lib
 from .attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split, page_table_width
-from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
+from .common import TILE, MeshPlan, as_weight, cache_fill, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import DeviceSampler
 from .greedy_head import GreedyHead
@@ -211,29 +211,27 @@ class TtMiMoModel:
             "full": MiMoRotarySetup(mesh_device, max_batch, head_dim, rope_dim, cfg.rope_theta),
         }
 
-        def warm(tag):
-            return cache_dir is not None and os.path.exists(cache_name(cache_dir, tag, "complete"))
-
-        def mark(tag):
-            if cache_dir is not None:
-                open(cache_name(cache_dir, tag, "complete"), "w").close()
-
-        top = "top"
-        need = not warm(top)
-        assert ckpt is not None or not need, "cold cache needs a checkpoint"
-        emb = ckpt.embedding().bfloat16() if need else None
-        self.embedding = as_weight(
-            emb, plan, plan.replicate(), ttnn.bfloat16, cache_name(cache_dir, "embedding"), layout=ttnn.ROW_MAJOR_LAYOUT
-        )
-        del emb
-        self.final_norm = TtRMSNorm(
-            plan, ckpt.final_norm() if need else None, cfg.layernorm_epsilon, cache_name(cache_dir, "final_norm")
-        )
-        lm = ckpt.lm_head().T.contiguous() if need else None
-        self.vocab_local = cfg.vocab_size // plan.tp
-        self.lm_head = as_weight(lm, plan, plan.shard(-1), lm_head_dtype, cache_name(cache_dir, f"lm_head_tp{plan.tp}"))
-        del lm
-        mark(top)
+        with cache_fill(cache_dir, "top") as need:
+            assert ckpt is not None or not need, "cold cache needs a checkpoint"
+            emb = ckpt.embedding().bfloat16() if need else None
+            self.embedding = as_weight(
+                emb,
+                plan,
+                plan.replicate(),
+                ttnn.bfloat16,
+                cache_name(cache_dir, "embedding"),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            del emb
+            self.final_norm = TtRMSNorm(
+                plan, ckpt.final_norm() if need else None, cfg.layernorm_epsilon, cache_name(cache_dir, "final_norm")
+            )
+            lm = ckpt.lm_head().T.contiguous() if need else None
+            self.vocab_local = cfg.vocab_size // plan.tp
+            self.lm_head = as_weight(
+                lm, plan, plan.shard(-1), lm_head_dtype, cache_name(cache_dir, f"lm_head_tp{plan.tp}")
+            )
+            del lm
 
         # Prepared bfloat4_b experts are their own cache files (moe.TtMiMoMoE), so their own layer tag.
         quant = expert_quant(expert_dtype)
@@ -245,22 +243,22 @@ class TtMiMoModel:
             # layout is rebuilt instead of loaded with tensors missing. Unchanged tensors (e.g. experts) are
             # still loaded from their cache files; lazy experts are only dequantized when they are missing.
             tag = f"layer{i}_tp{plan.tp}_{self.LAYER_CACHE_LAYOUT}{expert_tag}"
-            weights = None if warm(tag) else load_layer_weights(ckpt, cfg, i, lazy_experts=True)
-            self.layers.append(
-                TtMiMoDecoderLayer(
-                    plan,
-                    cfg,
-                    i,
-                    weights,
-                    self.rope_setups,
-                    cache_dir=cache_dir,
-                    attn_dtype=attn_dtype,
-                    mlp_dtype=mlp_dtype,
-                    expert_dtype=expert_dtype,
+            with cache_fill(cache_dir, tag) as need:
+                weights = load_layer_weights(ckpt, cfg, i, lazy_experts=True) if need else None
+                self.layers.append(
+                    TtMiMoDecoderLayer(
+                        plan,
+                        cfg,
+                        i,
+                        weights,
+                        self.rope_setups,
+                        cache_dir=cache_dir,
+                        attn_dtype=attn_dtype,
+                        mlp_dtype=mlp_dtype,
+                        expert_dtype=expert_dtype,
+                    )
                 )
-            )
-            del weights
-            mark(tag)
+                del weights
             logger.info(
                 f"[{tuple(mesh_device.shape)} id={id(mesh_device):x}] layer {i} ready in {time.time() - t0:.1f}s"
             )
@@ -1753,6 +1751,15 @@ class TtMiMoModel:
         """Replays the decode trace (``sample``: the sampled one); returns its output."""
         trace = self.decode_trace["sampled"] if sample else self.decode_trace
         assert trace is not None, "a sampled decode step needs the DeviceSampler's trace (vLLM mode)"
+        if sample:
+            # The sampled step replays only on an empty queue. Replayed behind commands still in flight (the last
+            # step's token read, a reload's copies), it now and then breaks the replica's decode for good: every
+            # slot's logits turn flat or inf from then on, new requests included, while its inputs, page tables and
+            # sampling parameters read back intact and the sampler draws correctly from what it is given (4x8
+            # Galaxy, SPEED-Bench 1k at c=16, T=1: 14 of 64 requests garbled). The greedy trace never does; any
+            # extra small copy ahead of the sampled one makes it more likely. The fault is below the model. The
+            # drain costs nothing measurable: the same run then garbles 0 of 64, streaming 897 chunks/s against 836.
+            ttnn.synchronize_device(self.mesh_device)
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return trace["output"]
 
