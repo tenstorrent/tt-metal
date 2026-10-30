@@ -331,6 +331,11 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--node-list",
+        default=None,
+        help="File of test node ids, one per line; only those tests run.",
+    )
+    parser.addoption(
         "--perf-splits",
         type=int,
         default=None,
@@ -735,6 +740,20 @@ def _select_tests_by_op(config, items):
     )
 
 
+def _select_node_list(config, items):
+    path = config.getoption("--node-list")
+    if not path:
+        return
+    wanted = {
+        line.strip() for line in Path(path).read_text().splitlines() if line.strip()
+    }
+    selected = [item for item in items if item.nodeid in wanted]
+    config.hook.pytest_deselected(
+        items=[item for item in items if item.nodeid not in wanted]
+    )
+    items[:] = selected
+
+
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
@@ -830,6 +849,7 @@ def pytest_collection_modifyitems(config, items):
     # Choose compile representatives only after other plugins apply selection filters.
     result = yield
     _select_tests_by_op(config, items)
+    _select_node_list(config, items)
     _split_by_cost(config, items)
     _restore_test_order(config, items)
 
