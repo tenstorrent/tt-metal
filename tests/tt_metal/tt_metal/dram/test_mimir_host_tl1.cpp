@@ -146,6 +146,8 @@ struct PreflightChunk {
 };
 
 constexpr uint8_t kPreflightPoisonByte = 0xE5;
+// Fills the aligned word around a sub-word chunk, so a write that zero-fills the rest of the word fails.
+constexpr uint32_t kPreflightNeighbourWord = 0x5A5A5A5Au;
 
 std::vector<uint32_t> words_of_bytes(const std::vector<uint8_t>& bytes) {
     std::vector<uint32_t> words(bytes.size() / sizeof(uint32_t));
@@ -337,6 +339,14 @@ TEST(MimirHostTl1, DiscoverCceTl1Map) {
             const MimirCceL1AddressInfo info = mimir_cce_l1_address(soc, chip, cce_index, region.begin, 4);
             log_info(tt::LogTest, "{} {}", region.name, info.host_string());
 
+            // The tag is the same on every run, so poison the word first or a dropped write passes on a rerun.
+            const std::vector<uint32_t> poison = {kVisibilityPoisonWord};
+            write_cce_tl1(cluster, chip, cce_index, region.begin, poison, Tl1Range::WholeTl1);
+            ASSERT_TRUE(compare_words(
+                fmt::format("CCE{} {} poison", cce_index, region.name),
+                poison,
+                read_cce_tl1(cluster, chip, cce_index, region.begin, 4, Tl1Range::WholeTl1)));
+
             const uint32_t tag = cce_index * kBoundaryTagsPerCce + static_cast<uint32_t>(index);
             const std::vector<uint32_t> expected = make_guard(tag, 1);
             write_cce_tl1(cluster, chip, cce_index, region.begin, expected, Tl1Range::WholeTl1);
@@ -460,6 +470,20 @@ TEST(MimirHostTl1, BoundaryAndIsolation) {
         }
     }
 
+    // A host-only process inherits these windows from the last one, so poison every window first or a dropped write
+    // passes on a rerun.
+    const std::vector<uint32_t> poison(kBoundaryWindowBytes / sizeof(uint32_t), kVisibilityPoisonWord);
+    for (const BoundaryWindow& window : windows) {
+        write_cce_tl1(cluster, chip, window.cce_index, window.tl1_offset, poison, Tl1Range::WholeTl1);
+    }
+    for (const BoundaryWindow& window : windows) {
+        ASSERT_TRUE(compare_words(
+            fmt::format("CCE{} TL1 0x{:x} boundary window poison", window.cce_index, window.tl1_offset),
+            poison,
+            read_cce_tl1(
+                cluster, chip, window.cce_index, window.tl1_offset, kBoundaryWindowBytes, Tl1Range::WholeTl1)));
+    }
+
     // Every CCE is written before any window is read, so a window that aliases another CCE or another window shows up.
     for (const BoundaryWindow& window : windows) {
         write_cce_tl1(cluster, chip, window.cce_index, window.tl1_offset, window.expected, Tl1Range::WholeTl1);
@@ -575,6 +599,16 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
         for (const PreflightChunk& chunk : chunks) {
             ASSERT_GT(chunk.size_bytes, 0u) << chunk.name;
             ASSERT_EQ(chunk.tl1_offset % chunk.alignment, 0u) << chunk.name;
+            if (chunk.size_bytes % sizeof(uint32_t) != 0) {
+                const uint64_t word_offset = chunk.tl1_offset & ~uint64_t{sizeof(uint32_t) - 1};
+                ASSERT_LE(chunk.tl1_offset - word_offset + chunk.size_bytes, sizeof(uint32_t)) << chunk.name;
+                const std::vector<uint32_t> neighbour_word = {kPreflightNeighbourWord};
+                write_cce_tl1(cluster, chip, cce_index, word_offset, neighbour_word, Tl1Range::WholeTl1);
+                ASSERT_TRUE(compare_words(
+                    fmt::format("CCE{} word around {} before the write", cce_index, chunk.name),
+                    neighbour_word,
+                    read_cce_tl1(cluster, chip, cce_index, word_offset, sizeof(uint32_t), Tl1Range::WholeTl1)));
+            }
             write_preflight_chunk(
                 cluster,
                 soc,
@@ -594,7 +628,16 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
                 EXPECT_TRUE(compare_words(
                     fmt::format("CCE{} {}", cce_index, chunk.name), words_of_bytes(expected), words_of_bytes(actual)));
             } else {
-                EXPECT_EQ(actual, expected) << "CCE" << cce_index << " " << chunk.name;
+                const uint64_t word_offset = chunk.tl1_offset & ~uint64_t{sizeof(uint32_t) - 1};
+                uint32_t expected_word = kPreflightNeighbourWord;
+                std::memcpy(
+                    reinterpret_cast<uint8_t*>(&expected_word) + (chunk.tl1_offset - word_offset),
+                    expected.data(),
+                    expected.size());
+                EXPECT_TRUE(compare_words(
+                    fmt::format("CCE{} {} and the rest of its word", cce_index, chunk.name),
+                    {expected_word},
+                    read_cce_tl1(cluster, chip, cce_index, word_offset, sizeof(uint32_t), Tl1Range::WholeTl1)));
             }
             if (chunk.go_message) {
                 dev_msgs::go_msg_t expected_go_message = factory.create<dev_msgs::go_msg_t>();
@@ -608,10 +651,19 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
             }
         }
 
+        // The runtime writes the reset vector once, to hart 0's register, and relies on it reaching all eight harts.
+        ASSERT_NO_FATAL_FAILURE(poison_cce_reset_vectors(cluster, chip, cce_index));
+        const Hal& hal = MetalContext::instance().hal();
+        const uint32_t fw_launch_addr_value =
+            hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, 0)
+                .fw_launch_addr_value;
+        cluster.write_reg(
+            &fw_launch_addr_value,
+            tt_cxy_pair(chip, cce_virtual_core(cluster, chip, cce_index)),
+            manifest.fw_launch_addr);
         const std::vector<uint64_t> reset_vectors = read_cce_reset_vectors(cluster, soc, chip, cce_index);
         for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
-            log_info(
-                tt::LogTest, "CCE{} hart {} reset vector 0x{:x} (logged only)", cce_index, hart, reset_vectors[hart]);
+            EXPECT_EQ(reset_vectors[hart], fw_launch_addr_value) << "CCE" << cce_index << " hart " << hart;
         }
     }
 }

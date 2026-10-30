@@ -50,7 +50,14 @@ TEST_P(CceSramRoundTripThroughMetalCluster, RoundTrip) {
     const CoreCoord cce = translated_dram_core(soc_desc, cce_index);
     constexpr uint64_t address = MEM_CCE_L1_NOC_OFFSET + kCceSramTestOffset;
     const uint32_t written = 0xC0FFEE01 + cce_index;
+    // A host-only process inherits this word from the last one, so poison it first or a dropped write passes on a
+    // rerun.
+    const uint32_t poison = ~written;
     uint32_t read_back = 0;
+
+    cluster.write_core(&poison, sizeof(poison), {chip_id, cce}, address);
+    cluster.read_core(&read_back, sizeof(read_back), {chip_id, cce}, address);
+    ASSERT_EQ(read_back, poison);
 
     cluster.write_core(&written, sizeof(written), {chip_id, cce}, address);
     cluster.read_core(&read_back, sizeof(read_back), {chip_id, cce}, address);
