@@ -24,9 +24,12 @@ global_env:
   # Dense TP dedup of the MLA KV cache (ring_mla split-KV) runs SP on mesh axis 0 only. The model
   # manifests turn it on for the 8x4 stages, and tt-run's global_env wins over a manifest.
   PREFILL_TP_SHARD_KV: "0"
+  # Half the 8x4 stages' 5120-token chunk: at SP=4 that keeps each chip at 640 tokens, the 8x4 per-chip
+  # workload its MLA SDPA and KDA configs are tuned for, and keeps per-stage chunk latency near 8x4's.
+  PREFILL_CHUNK_SIZE: "2560"
   PREFILL_MAX_SEQ_LEN: "10240"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   # PREFILL_PP_D2D_FIFO_BYTES stays at the runner's 256 B default. The receiver FIFO is L1 on the
-  # D2D worker cores, and at SP=4 (1280 tokens per chip) ring_mla's static CBs reach to within ~1.5 KB
-  # of the top of L1: 32 KB and 16 KB both clash on rank 1's first MLA layer.
+  # D2D worker cores, and with 5120-token chunks (1280 tokens per chip) ring_mla's static CBs reached
+  # to within ~1.5 KB of the top of L1: 32 KB and 16 KB both clashed on rank 1's first MLA layer.
   LOGURU_LEVEL: "INFO"
