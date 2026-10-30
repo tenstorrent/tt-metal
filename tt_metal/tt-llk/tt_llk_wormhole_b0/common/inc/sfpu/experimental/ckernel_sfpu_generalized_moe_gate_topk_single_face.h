@@ -27,6 +27,11 @@ constexpr std::uint32_t indices_offset  = scores_offset + dst_tile_offset;
 constexpr std::uint32_t bias_offset     = indices_offset + dst_tile_offset;
 constexpr std::uint32_t interm_offset   = bias_offset + dst_tile_offset;
 
+// The Prgm2 (LREG14) seed that sfpu_reciprocal_init<APPROXIMATION_MODE>() programs (its round_to_bf16=false seed;
+// ckernel_sfpu_recip.h). _init_generalized_moe_gate_topk programs all three seeds once per op; the gate's broadcast
+// SFPCONFIGs clobber only LREG14, so the normalization tails re-program just this one. Keep in sync with recip.h.
+constexpr float gmg_recip_seed_prgm2 = 2.121212482452392578125f;
+
 template <bool is_fp32_dest_acc_en, std::uint32_t offset = 0>
 inline void bitonic_topk_load16_concat_indices_single_face()
 {
@@ -374,6 +379,9 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
     _gmg_merge4_runs_raw<is_fp32_dest_acc_en, 0>();
 
     // ---- normalization tail: 1/(sum+eps)*scale, broadcast-multiply the top-8 scores ----
+    // Re-set the one reciprocal seed the broadcast clobbered (LREG14) while LREG0-3 are still free.
+    TTI_SFPCONFIG(0, 0xF, 1);
+    sfpi::vConstFloatPrgm2 = gmg_recip_seed_prgm2;
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
 
@@ -382,19 +390,16 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
     TTI_SFPNOP;
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // independent of the ADD above
     TTI_SFPNOP;
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
     TTI_SFPNOP;
+    // Round-trip the sum through Dst: the 16-bit store truncates it to bf16, which the normalization's results
+    // depend on (keeps the output bit-identical to the original store-and-reload sequence).
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
 
     // Calculate 1 / (sum + eps) * scale
-    // Store the value in lreg0 and reload later since the following instructions overwrite it
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    TTI_SFPCONFIG(0, 0xF, 1);
-    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0          = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value   = Converter::as_float(eps);
     l0                       = l0 + eps_value;
@@ -745,20 +750,19 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     }
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
+    TTI_SFPCONFIG(0, 0xF, 1);
+    sfpi::vConstFloatPrgm2 = gmg_recip_seed_prgm2;
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
     TTI_SFPNOP;
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0); // independent of the ADD above
     TTI_SFPNOP;
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
     TTI_SFPNOP;
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    TTI_SFPCONFIG(0, 0xF, 1);
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0); // bf16-truncating round trip, as in top8
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
@@ -780,10 +784,10 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _init_generalized_moe_gate_topk()
 {
-    // Intentional no-op: reciprocal is initialized inside top8 / finalize_ungrouped (not here). The gate
-    // uses reg 14 to broadcast, which would clobber the reciprocal constants if they were initialized ahead
-    // of time, so both WH and BH set them up within those fns. Kept (empty) because the topk_init wrapper
-    // chain calls it on both arches.
+    // Program the reciprocal seeds (LREG12-14) once per op. The gate broadcasts through LREG14 (SFPCONFIG), which
+    // clobbers only that one seed, so top8 / finalize_ungrouped re-set just LREG14 (gmg_recip_seed_prgm2) ahead of
+    // their normalization tail instead of re-running the full init there.
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 } // namespace sfpu
