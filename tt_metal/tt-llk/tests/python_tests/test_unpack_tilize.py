@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+import math
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_FACE,
@@ -15,6 +18,7 @@ from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -141,13 +145,25 @@ def unpack_tilize(
             src_A, input_dimensions, formats.output_format, num_faces=num_faces
         )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-    )
+    if is_perf:
+        configured_dest_acc = dest_acc if dest_acc is not None else DestAccumulation.No
+        configured_dest_acc = effective_dest_acc(
+            formats.input_format,
+            formats.output_format,
+            configured_dest_acc,
+        )
+        num_tiles_in_block = min(
+            tile_cnt_A, max_dest_tiles(configured_dest_acc, DestSync.Half)
+        )
+        num_blocks = math.ceil(tile_cnt_A / num_tiles_in_block)
+    else:
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+        )
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")

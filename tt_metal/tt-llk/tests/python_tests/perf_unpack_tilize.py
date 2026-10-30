@@ -4,6 +4,7 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
+from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from test_unpack_tilize import unpack_tilize
@@ -14,6 +15,10 @@ _PERF_RUN_TYPES = [
     PerfRunType.PACK_ISOLATE,
     PerfRunType.L1_CONGESTION,
 ]
+
+
+def _input_dimensions(rt_dim, ct_dim):
+    return [rt_dim * TILE_DIMENSIONS[0], ct_dim * TILE_DIMENSIONS[1]]
 
 
 @pytest.mark.perf
@@ -54,7 +59,7 @@ def test_perf_unpack_tilize_float(
 
     unpack_tilize(
         formats,
-        input_dimensions=[rt_dim * 32, ct_dim * 32],
+        input_dimensions=_input_dimensions(rt_dim, ct_dim),
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
@@ -83,7 +88,7 @@ def test_perf_unpack_tilize_int(
     unpack_tilize(
         formats,
         unpack_to_dest=True,
-        input_dimensions=[rt_dim * 32, ct_dim * 32],
+        input_dimensions=_input_dimensions(rt_dim, ct_dim),
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

@@ -39,6 +39,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
     const Operand& buffer_A          = params.buffer_A;
 #endif
+    // Functional runs use real buffers once; repeated perf runs use profiler ring addresses.
+    const bool use_perf_addresses = LOOP_FACTOR > 1;
 
     {
         START_PERF_MEASURE("INIT")
@@ -58,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 std::uint32_t read_offset = 0;
                 for (std::uint32_t i = 0; i < BLOCK_RT_DIM; ++i)
                 {
-                    const std::uint32_t tile_row_addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_INPUT_A, read_offset) : L1_ADDRESS(buffer_A[read_offset]);
+                    const std::uint32_t tile_row_addr = use_perf_addresses ? PERF_ADDRESS(PERF_INPUT_A, read_offset) : L1_ADDRESS(buffer_A[read_offset]);
                     for (std::uint32_t j = 0; j < BLOCK_CT_DIM; ++j)
                     {
                         _llk_unpack_tilize_wrapper_(
@@ -93,6 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces          = params.num_faces;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
 #endif
     const bool is_int_fpu_en = false;
 
@@ -124,19 +127,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
                     {
-                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        const std::uint32_t block_start      = block * NUM_TILES_IN_BLOCK;
+                        const std::uint32_t tiles_this_block = std::min(NUM_TILES_IN_BLOCK, TILE_CNT - block_start);
+                        for (std::uint32_t tile = 0; tile < tiles_this_block; ++tile)
                         {
-                            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                                tile, formats.math, formats.math);
+                            // With unpack-to-dest this acknowledges that Dest was consumed;
+                            // BroadcastType::NONE makes the wrapper synchronize without copying data.
+                            _llk_math_eltwise_unary_datacopy_wrapper_<
+                                DataCopyType::A2D,
+                                DstSync::SyncHalf,
+                                is_fp32_dest_acc_en,
+                                BroadcastType::NONE,
+                                unpack_to_dest>(tile, formats.math, formats.math, num_faces);
                         }
                     }
                 }
             }
             else
             {
-                const std::uint32_t num_tiles   = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
-                const std::uint32_t num_dvalids = _llk_unpack_tilize_num_dvalids_wrapper_(num_tiles, num_faces);
-                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * num_dvalids);
+                // Unpack emits this face-dependent dvalid count for exactly TILE_CNT tiles.
+                // Clearing both operand valids consumes the same handshake without math work.
+                const std::uint32_t num_dvalids = _llk_unpack_tilize_num_dvalids_wrapper_(TILE_CNT, num_faces);
+                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(LOOP_FACTOR * num_dvalids /* iterations */);
             }
         }
         else
@@ -145,8 +157,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
                 {
+                    const std::uint32_t block_start      = block * NUM_TILES_IN_BLOCK;
+                    const std::uint32_t tiles_this_block = std::min(NUM_TILES_IN_BLOCK, TILE_CNT - block_start);
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                    for (std::uint32_t tile = 0; tile < tiles_this_block; ++tile)
                     {
                         LLK_ASSERT(
                             (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -184,8 +198,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces          = params.num_faces;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
+    const std::uint32_t TILE_CNT           = params.TILE_CNT;
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
+    // Functional runs use real buffers once; repeated perf runs use profiler ring addresses.
+    const bool use_perf_addresses = LOOP_FACTOR > 1;
+    const auto output_address     = [&](std::uint32_t tile_index)
+    { return use_perf_addresses ? PERF_ADDRESS(PERF_OUTPUT, tile_index) : L1_ADDRESS(buffer_Res[tile_index]); };
     static constexpr bool UNTILIZE = false;
 
     {
@@ -219,14 +238,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                    const std::uint32_t block_start      = block * NUM_TILES_IN_BLOCK;
+                    const std::uint32_t tiles_this_block = std::min(NUM_TILES_IN_BLOCK, TILE_CNT - block_start);
+                    for (std::uint32_t tile = 0; tile < tiles_this_block; ++tile)
                     {
-                        const std::uint32_t res_tile_idx = block * NUM_TILES_IN_BLOCK + tile;
+                        const std::uint32_t res_tile_idx = block_start + tile;
                         LLK_ASSERT(
                             (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        const std::uint32_t output_addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, res_tile_idx) : L1_ADDRESS(buffer_Res[res_tile_idx]);
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile, output_addr);
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile, output_address(res_tile_idx));
                     }
                 }
             }
@@ -237,15 +257,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
                 {
+                    const std::uint32_t block_start      = block * NUM_TILES_IN_BLOCK;
+                    const std::uint32_t tiles_this_block = std::min(NUM_TILES_IN_BLOCK, TILE_CNT - block_start);
                     _llk_packer_wait_for_math_done_();
-                    for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                    for (std::uint32_t tile = 0; tile < tiles_this_block; ++tile)
                     {
-                        const std::uint32_t res_tile_idx = block * NUM_TILES_IN_BLOCK + tile;
+                        const std::uint32_t res_tile_idx = block_start + tile;
                         LLK_ASSERT(
                             (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                             "Block tile index exceeds maximum destination tiles");
-                        const std::uint32_t output_addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, res_tile_idx) : L1_ADDRESS(buffer_Res[res_tile_idx]);
-                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile, output_addr);
+                        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile, output_address(res_tile_idx));
                     }
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
