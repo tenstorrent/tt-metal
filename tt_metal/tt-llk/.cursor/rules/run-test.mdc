@@ -70,8 +70,7 @@ If `--arch` is not provided, infer in this order:
 
    1. Verify the venv exists at `tests/.venv/bin/activate`.
       If it does NOT exist, run from the tt-llk worktree root:
-          cd tests && CHIP_ARCH={arch} ./setup_testing_env.sh
-      The CHIP_ARCH env var is REQUIRED — setup builds arch-specific bits.
+          cd tests && source ./setup_external_testing_env.sh
 
    2. Then invoke the runner with the worktree path and arch:
           bash .cursor/scripts/run_test.sh {command} \
@@ -104,5 +103,4 @@ Reuse the same `llk-test-runner` agent for repeated test runs after a failure (u
 
 - **Never** call `pytest` directly. Always go through the script.
 - **Never** skip the venv check — the script exits 3 with a clear message, but the rule should detect-and-bootstrap rather than fail.
-- **Never** run setup with the wrong `CHIP_ARCH` — wrong-arch venvs silently produce broken builds.
 - **Never** run multiple simulator invocations in parallel from the same agent. The script's `flock` protects against concurrent agents, but a single agent should still serialise its own runs.
