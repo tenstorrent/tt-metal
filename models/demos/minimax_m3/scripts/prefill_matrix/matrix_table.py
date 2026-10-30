@@ -8,7 +8,7 @@ Idle-pipeline rows (mode "idle", one per timed iteration): median TTFT over iter
 one; cells run with ITERS=1 fall back to it) and new tok/s = new / median TTFT. Loaded rows (mode "loaded", one per
 cell): steady-state aggregate tok/s (fill/drain excluded), aggregate incl. tails, and per-request TTFT under load
 (median / p90). If a cell was measured more than once, the LAST loaded measurement wins. --markdown prints the tables
-in the layout of the tt-metal#57827 comments instead (CI job summary). Stdlib only."""
+as markdown instead (CI job summary). Stdlib only."""
 
 import argparse
 import csv
@@ -30,7 +30,7 @@ CSV_LOADED_KEYS = [k for _, k in LOADED_TABLES]
 
 MD_TOKS = lambda v: f"{v / 1000:.1f}k"  # noqa: E731
 MD_MS = lambda v: f"{v:.0f}"  # noqa: E731
-MD_LOADED_TABLES = [  # (title, JSONL key, cell format, folded) -- in the order of the #57827 comments
+MD_LOADED_TABLES = [  # (title, JSONL key, cell format, folded)
     ("Useful (new) tok/s, loaded pipeline, steady state", "steady_new_tps", MD_TOKS, False),
     ("TTFT under load, ms (median per request)", "ttft_under_load_ms_median", MD_MS, False),
     ("TTFT under load, p90 per request, ms", "ttft_under_load_ms_p90", MD_MS, True),
@@ -91,7 +91,7 @@ def table(title, cells, cached, news):
 
 
 def _cached_md(c):
-    """Cached row label of the #57827 tables: 0, 61k (p25), 311k (p75) for 311296."""
+    """Cached row label: 0, 61k (p25), 311k (p75) for 311296."""
     if not c:
         return "0"
     p = _pct(c, CACHED_PCT, CACHED_TOLERANCE)
@@ -99,7 +99,7 @@ def _cached_md(c):
 
 
 def md_table(title, cells, cached, news, fmt, folded=False):
-    """One #57827-style markdown table; a missing cell is x. ``folded`` puts it in a <details> block."""
+    """One markdown table; a missing cell is x. ``folded`` puts it in a <details> block."""
     lines = ["| cached \\ new | " + " | ".join(_lbl(n, NEW_PCT) for n in news) + " |", "|---" * (len(news) + 1) + "|"]
     for c in cached:
         vals = [fmt(cells[(c, n)]) if (c, n) in cells else "x" for n in news]

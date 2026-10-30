@@ -258,7 +258,6 @@ cleanup() {
   local rc=$?
   stop_runner || true
   if [ -s "${OUT}" ]; then
-    # Markdown in the #57827 table layout.
     python3 "${PKG_DIR}/matrix_table.py" "${OUT}" --markdown --csv "${OUT_DIR}/results_${STAGES}stage.csv" \
       > "${OUT_DIR}/tables.md" 2>&1 || true
     {
