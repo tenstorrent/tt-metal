@@ -19,7 +19,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include "distributed/mesh_device_impl.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // DEVICE_PRINT tests for DRAM programmable cores (DRISC, Blackhole only).
