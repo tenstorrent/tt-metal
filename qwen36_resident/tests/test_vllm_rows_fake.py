@@ -159,6 +159,7 @@ class FakePP:
         self.model, self.spans, self.interleaved, self.mark = model, 0, 0, None
         self.span_chunks = {}
         self.prompt_spans, self.handoffs = 0, []  # handoffs: (tokens, chunk, spans of that prompt)
+        self.batches = []  # prompts per run_batch call
 
     def pick_chunk(self, n):
         """a chunk dividing the unit, smaller for shorter prompts (as PPPrefill.pick_chunk)"""
@@ -187,6 +188,17 @@ class FakePP:
         assert drain or len(ids) % chunk == 0
         self.done = drain
 
+    def run_batch(self, items, model, chunk=None):
+        """PPPrefill.run_batch: whole prompts [(ids but the last, block table, slot)] at one chunk through one pass;
+        each slot ends as reset + run + handoff of its prompt alone (refused while a split prompt is partial)"""
+        assert self.ids is None or self.done or not self.ids, "run_batch while a split prompt is partial"
+        assert len({slot for _, _, slot in items}) == len(items), "run_batch: slots must be distinct"
+        for ids, block_table, slot in items:
+            self.reset()
+            self.run(ids, chunk=chunk)
+            self.handoff(model, len(ids), block_table=block_table, slot=slot)
+        self.batches.append(len(items))
+
     def handoff(self, model, n_tokens, block_table=None, slot=None):
         assert self.done and len(self.ids) == n_tokens, (self.done, len(self.ids), n_tokens)
         assert self.chunk == self.pick_chunk(n_tokens), f"{n_tokens} tokens run at chunk {self.chunk}"
@@ -213,6 +225,7 @@ MODEL_API = (
     "head_groups",
 )
 PP_API = ("pick_chunk", "reset", "run", "run_span", "handoff")
+PP_BATCH_API = PP_API + ("run_batch",)  # a PP prefill with PPPrefill.run_batch (lane prefill)
 
 
 class Contract:
@@ -232,12 +245,14 @@ class Contract:
         raise AttributeError(f"the adapter set {name} on {type(self._obj).__name__}")
 
 
-def make_adapter(max_seqs, unit, sample, vocab=V, max_len=4096, cls=ResidentRowsAdapter):
-    """the adapter on contract views of a fresh FakeModel / FakePP; returns (adapter, the raw FakeModel)"""
+def make_adapter(max_seqs, unit, sample, vocab=V, max_len=4096, cls=ResidentRowsAdapter, pp_batch=False):
+    """the adapter on contract views of a fresh FakeModel / FakePP (pp_batch: with run_batch); returns (adapter, the raw
+    FakeModel)"""
     n_slots = -(-max_seqs // ROWS) * ROWS
     model = FakeModel(n_slots, sample, vocab)
     pp = FakePP(unit, model)
-    engine = RowsEngine(Contract(model, MODEL_API), Contract(pp, PP_API), torch.eye(vocab), vocab, vocab, n_slots, unit)
+    pp_view = Contract(pp, PP_BATCH_API if pp_batch else PP_API)
+    engine = RowsEngine(Contract(model, MODEL_API), pp_view, torch.eye(vocab), vocab, vocab, n_slots, unit)
     return cls(engine, vocab, max_len, max_seqs, unit), model
 
 
@@ -251,13 +266,24 @@ class Req:
 class Sim:
     """vLLM's side of the contract, with the plugin's own slot bookkeeping"""
 
-    def __init__(self, seed, max_seqs=12, unit=128, nb=600, sample=False, max_len=2048, max_tokens=(1, 40), sync=False):
+    def __init__(
+        self,
+        seed,
+        max_seqs=12,
+        unit=128,
+        nb=600,
+        sample=False,
+        max_len=2048,
+        max_tokens=(1, 40),
+        sync=False,
+        pp_batch=False,
+    ):
         self.rng = random.Random(seed)
         # sync: the runner without async scheduling hands decode_forward's handle straight to
         # process_decode_output_host (finalize_decode); async: read_decode_output(async_read=True) first
         self.sync = sync
         self.max_tokens = max_tokens
-        self.adapter, self.model = make_adapter(max_seqs, unit, sample)
+        self.adapter, self.model = make_adapter(max_seqs, unit, sample, pp_batch=pp_batch)
         self.sample, self.unit, self.max_seqs, self.max_len = sample, unit, max_seqs, max_len
         self.runner = SimpleNamespace(
             tt_per_lane_max_num_seqs=max_seqs,
@@ -523,15 +549,18 @@ def _count_decodes(sim):
 
 
 @pytest.mark.parametrize("seed", range(6))
+@pytest.mark.parametrize("pp_batch", [False, True], ids=["pp-per-prompt", "pp-batch"])
 @pytest.mark.parametrize("sample", [False, True], ids=["host-sampled", "device-sampled"])
 @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
-def test_churn(seed, sample, sync):
-    sim = Sim(seed, sample=sample, sync=sync)
+def test_churn(seed, sample, sync, pp_batch):
+    sim = Sim(seed, sample=sample, sync=sync, pp_batch=pp_batch)
     n = _count_decodes(sim)
     stats = sim.run(700)
     assert stats["tokens"] > 1000 and stats["chunks"] > 5 and stats["finished"] > 10
-    assert set(sim.adapter.engine.pp._obj.span_chunks) == {64, 128}, "split prompts at both PP chunks"
+    pp = sim.adapter.engine.pp._obj
+    assert set(pp.span_chunks) == {64, 128}, "split prompts at both PP chunks"
     assert stats["preempted"] > 0 and stats["aborted"] > 0 and stats["skipped"] > 0 and n["remaps"] > 50
+    assert bool(pp.batches) == pp_batch, "steps with several whole prompts of one PP chunk share a PP pass"
 
 
 @pytest.mark.parametrize("seed", range(3))

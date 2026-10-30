@@ -104,7 +104,7 @@ def vllm_config(max_num_seqs, async_scheduling, device_sampling, cls=None, tt_ex
 class Engine:
     """vLLM's EngineCore loop over the real scheduler and runner (step / step_with_batch_queue)"""
 
-    def __init__(self, max_num_seqs, async_scheduling, device_sampling, num_blocks, tt_extra=None):
+    def __init__(self, max_num_seqs, async_scheduling, device_sampling, num_blocks, tt_extra=None, pp_batch=False):
         self.config = vllm_config(max_num_seqs, async_scheduling, device_sampling, tt_extra=tt_extra)
         self.vocab = self.config.model_config.get_vocab_size()
         kvc = KVCacheConfig(
@@ -125,7 +125,7 @@ class Engine:
             structured_output_manager=StructuredOutputManager(self.config),
         )
         self.adapter, self.model = make_adapter(
-            max_num_seqs, CHUNK_UNIT, device_sampling, self.vocab, MAX_LEN, cls=ResidentModel
+            max_num_seqs, CHUNK_UNIT, device_sampling, self.vocab, MAX_LEN, cls=ResidentModel, pp_batch=pp_batch
         )
         self.pp = self.adapter.engine.pp._obj  # the raw FakePP (the adapter sees its contract view)
         self.runner = TTModelRunner(self.config, None, "all", False, 1)
@@ -233,11 +233,12 @@ def drive(
     max_tokens=(1, 60),
     arrival=0.3,
     tt_extra=None,
+    pp_batch=False,
 ):
     rng = random.Random(seed)
     if num_blocks is None:
         num_blocks = max_num_seqs * MAX_LEN // BLOCK + 1
-    eng = Engine(max_num_seqs, async_scheduling, device_sampling, num_blocks, tt_extra=tt_extra)
+    eng = Engine(max_num_seqs, async_scheduling, device_sampling, num_blocks, tt_extra=tt_extra, pp_batch=pp_batch)
     reqs = {}
     pending = deque()
     for i in range(n_requests):
@@ -368,10 +369,11 @@ def plugin_has_gangs():
 
 
 @pytest.mark.parametrize("seed", range(3))
+@pytest.mark.parametrize("pp_batch", [False, True], ids=["pp-per-prompt", "pp-batch"])
 @pytest.mark.parametrize("device_sampling", [False, True], ids=["host-sampled", "device-sampled"])
 @pytest.mark.parametrize("async_scheduling", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("max_num_seqs", [8, 16])
-def test_prefill_gangs(max_num_seqs, async_scheduling, device_sampling, seed, monkeypatch):
+def test_prefill_gangs(max_num_seqs, async_scheduling, device_sampling, pp_batch, seed, monkeypatch):
     """the plugin's prefill gangs (resident-mu-sched): several whole prompts in one prefill step, also while others
     decode (up to prefill_gang_tokens; a longer first prompt splits as before) and in bursts (prefill_gang_idle_tokens):
     every completed output stays exact, prompts over the cap still split between decode launches"""
@@ -393,7 +395,10 @@ def test_prefill_gangs(max_num_seqs, async_scheduling, device_sampling, seed, mo
         n_requests=24,
         arrival=0.5,
         tt_extra={"prefill_gang_tokens": 1200, "prefill_gang_idle_tokens": 4000},
+        pp_batch=pp_batch,
     )
     assert done >= 20
     assert max(rows_per_call) > 1, "no step carried several prompts"
+    # with the PP prefill's run_batch, a step's whole prompts of one chunk share a pass (FakePP checks each handoff)
+    assert bool(eng.pp.batches) == pp_batch and all(n > 1 for n in eng.pp.batches)
     assert eng.pp.interleaved > 0, "no prompt over the cap was split between decode launches"

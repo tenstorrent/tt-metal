@@ -43,6 +43,8 @@ ROWS = 8  # users per launch: the rows-mode build is compiled at width 8 for eve
 SCHED_TRACE = os.environ.get("RESIDENT_SCHED_TRACE")
 # 0: one first-token launch per prompt (A/B) instead of one per launch for every prompt a step hands off
 FIRST_TOKEN_BATCH = os.environ.get("RESIDENT_FIRST_TOKEN_BATCH", "1") == "1"
+# 0: one PP pass per whole prompt (A/B) even where the PP prefill streams several through one pass (run_batch)
+PP_BATCH = os.environ.get("RESIDENT_PP_BATCH", "1") == "1"
 BLOCK = 64  # KV block (positions) = vLLM block_size
 CHUNK_UNIT = 1024  # the PP prefill's largest chunk: a split prompt resumes only at its multiples
 
@@ -238,17 +240,18 @@ class ResidentRowsAdapter:
 
         # whole prompts first, the first chunk of a split prompt last: a whole prompt restarts the PP pipeline; the
         # whole prompts' first tokens launch before the split prompt's span (its pipeline state stays untouched)
-        for group in (wholes, conts + firsts):
-            handed = []
-            for j in group:
-                ids = tokens[j, : ends[j]]
-                t0 = time.perf_counter()
-                h = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j], trace)
-                if trace is not None:
-                    trace[-1]["ms"] = round((time.perf_counter() - t0) * 1000, 2)
-                if h is not None:
-                    handed.append((j,) + h)
-            first_tokens(handed)
+        rows = [(j, tokens[j, : ends[j]], page_table[j], vslots[j], ends[j], totals[j]) for j in wholes]
+        first_tokens(self._prefill_wholes(rows, trace))
+        handed = []
+        for j in conts + firsts:
+            ids = tokens[j, : ends[j]]
+            t0 = time.perf_counter()
+            h = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j], trace)
+            if trace is not None:
+                trace[-1]["ms"] = round((time.perf_counter() - t0) * 1000, 2)
+            if h is not None:
+                handed.append((j,) + h)
+        first_tokens(handed)
         if trace is not None:
             with open(SCHED_TRACE, "a") as f:
                 line = dict(
@@ -265,32 +268,57 @@ class ResidentRowsAdapter:
             raise RuntimeError(f"PP chunk {c} does not divide the chunk unit {self.chunk}")
         return c
 
+    def _start_prompt(self, vslot):
+        """a fresh resident slot for a new prompt in vLLM slot vslot"""
+        if self.pp_partial is not None:
+            # a new prompt restarts the pipeline: the plugin must not start one while a split prompt is in flight
+            raise RuntimeError(f"a new prompt while the split prompt in resident slot {self.pp_partial[0]} is partial")
+        if self._row_order is None:
+            self._row_order = self.engine.row_order()
+            self.slots.set_row_order(self._row_order)
+        r = self.slots.assign(vslot)
+        self.live.discard(r)
+        return r
+
+    def _prefill_wholes(self, rows, trace=None):
+        """the whole prompts of a step, rows = [(row, prompt ids, block table row, vLLM slot, T, sequence total)],
+        each into a fresh slot. Prompts of the same PP chunk stream through one PP pass where the PP prefill can
+        (engine.prefill_batch: each slot gets what a pass of its prompt alone gives it), the others run one by one.
+        Returns what their first-token launches need, [(row, slot, last prompt token, its position, table row)]"""
+        handed, by_chunk = [], {}
+        for j, ids, table_row, vslot, T, total in rows:
+            if T != total:
+                raise RuntimeError(f"a whole prompt of {T} tokens in a sequence of {total}")
+            r = self._start_prompt(vslot)
+            if trace is not None:
+                trace.append(dict(start=0, end=T, total=total, final=True))
+            if T > 1:
+                by_chunk.setdefault(self._pp_chunk(T), []).append((ids[: T - 1], self._blocks_for(table_row, T), r))
+            else:
+                self.engine.clear_slot(r)
+            handed.append((j, r, int(ids[T - 1]), T - 1, table_row))
+        for c, items in by_chunk.items():
+            t0 = time.perf_counter()
+            if len(items) > 1 and self.engine.can_batch:
+                self.engine.prefill_batch(items, c)
+            else:
+                for ids, blocks, r in items:
+                    self.engine.prefill_whole(ids, r, blocks, c)
+            if trace is not None:
+                trace.append(dict(chunk=c, prompts=len(items), batched=len(items) > 1 and self.engine.can_batch))
+                trace[-1]["ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        return handed
+
     def _prefill_row(self, ids, table_row, vslot, start, end, final, total, trace=None):
-        """one row's PP work; a final row (its whole prompt handed off into its slot) returns what its first-token
-        launch needs, (resident slot, last prompt token, its position, block table row), a partial one None"""
+        """one row of a split prompt's PP work; its final chunk (the prompt handed off into its slot) returns what its
+        first-token launch needs, (resident slot, last prompt token, its position, block table row), others None"""
         C = self.chunk
         if trace is not None:
             trace.append(dict(start=start, end=end, total=total, final=final))
         if start == 0:
-            if self.pp_partial is not None:
-                # a new prompt restarts the pipeline: the plugin must not start one while a split prompt is in flight
-                raise RuntimeError(
-                    f"a new prompt while the split prompt in resident slot {self.pp_partial[0]} is partial"
-                )
-            if self._row_order is None:
-                self._row_order = self.engine.row_order()
-                self.slots.set_row_order(self._row_order)
-            r = self.slots.assign(vslot)
-            self.live.discard(r)
             if final:
-                T = end
-                if T != total:
-                    raise RuntimeError(f"a whole prompt of {T} tokens in a sequence of {total}")
-                if T > 1:
-                    self.engine.prefill_whole(ids[: T - 1], r, self._blocks_for(table_row, T), self._pp_chunk(T))
-                else:
-                    self.engine.clear_slot(r)
-                return r, int(ids[T - 1]), T - 1, table_row
+                raise RuntimeError("a whole prompt goes through _prefill_wholes")
+            r = self._start_prompt(vslot)
             if end % C:
                 raise RuntimeError(f"first chunk ends at {end}, not a multiple of the PP chunk unit {C}")
             c = self._pp_chunk(total)
@@ -522,6 +550,18 @@ class RowsEngine:
         self.pp.reset()
         self.pp.run(torch.as_tensor(ids), chunk=chunk)
         self.pp.handoff(self.model, len(ids), block_table=blocks, slot=r)
+
+    @property
+    def can_batch(self):
+        """whether the PP prefill streams several whole prompts through one pass (PPPrefill.run_batch)"""
+        return PP_BATCH and hasattr(self.pp, "run_batch")
+
+    def prefill_batch(self, items, chunk):
+        """items [(prompt ids but the last, block table, slot)] at one PP chunk: one PP pass, each prompt handed off
+        into its slot as reset + run + handoff of it alone would. The reset first: a split prompt the plugin aborted or
+        preempted mid-prefill is abandoned in the PP pipeline (the adapter only drops its pp_partial)"""
+        self.pp.reset()
+        self.pp.run_batch([(torch.as_tensor(ids), blocks, r) for ids, blocks, r in items], self.model, chunk=chunk)
 
     def prefill_begin(self, r):
         self.pp.reset()
