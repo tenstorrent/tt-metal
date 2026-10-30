@@ -1,0 +1,10 @@
+# Keep local raw profiler captures; commit compact evidence and selected reports.
+*.tracy
+.logs/
+reports/
+*.log
+ops.csv
+ops_perf_results*.csv
+decode_representative_ops.csv
+# Oversized provisional all-128-replay tables; representative tables are retained.
+tracy_candidates_v2/*/batch1/decode_perf_report.txt

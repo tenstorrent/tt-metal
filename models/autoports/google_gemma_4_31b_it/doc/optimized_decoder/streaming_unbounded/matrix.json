@@ -1,0 +1,14 @@
+[
+  {
+    "name": "sliding_streaming_unbounded",
+    "layer": 0,
+    "geometry": {
+      "final_sdpa_fp32": false,
+      "rebase": false
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": true,
+    "timeout": 600
+  }
+]

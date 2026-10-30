@@ -1,0 +1,12 @@
+{
+  "status": "stalled_before_prefill_result",
+  "pid": 170651,
+  "elapsed_seconds_over": 480,
+  "evidence": [
+    "sliding_long_triage.txt",
+    "sliding_long_triage2.txt",
+    "sliding_long_host_stack.txt"
+  ],
+  "action": "Terminated only owned test and paused queue after preserving live evidence; no reset yet",
+  "hypothesis": "Host fetch-queue reserve wait while device dispatch idle; AutoTriage investigating"
+}

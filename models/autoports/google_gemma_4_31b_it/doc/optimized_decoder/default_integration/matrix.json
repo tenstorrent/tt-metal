@@ -1,0 +1,50 @@
+[
+  {
+    "name": "default_layer0_batch1",
+    "layer": 0,
+    "batch": 1,
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": true,
+    "phases": [
+      "correctness"
+    ],
+    "timeout": 300
+  },
+  {
+    "name": "default_layer0_batch32",
+    "layer": 0,
+    "batch": 32,
+    "seq": 33,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs.pt",
+    "extended": false,
+    "phases": [
+      "correctness"
+    ],
+    "timeout": 300
+  },
+  {
+    "name": "default_layer5_batch1",
+    "layer": 5,
+    "batch": 1,
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs2050.pt",
+    "extended": true,
+    "phases": [
+      "correctness"
+    ],
+    "timeout": 300
+  },
+  {
+    "name": "default_layer5_batch32",
+    "layer": 5,
+    "batch": 32,
+    "seq": 33,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs.pt",
+    "extended": false,
+    "phases": [
+      "correctness"
+    ],
+    "timeout": 300
+  }
+]

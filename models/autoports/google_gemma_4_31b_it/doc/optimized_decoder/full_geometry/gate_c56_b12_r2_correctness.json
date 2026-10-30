@@ -1,0 +1,26 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tests.optimized_lifetime_candidate.LifetimeCandidate",
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_tokens": 33,
+  "decode_position": 33,
+  "prefill_pcc": 0.9999396795101567,
+  "decode_pcc": 0.9999608457728779,
+  "real_weights": true,
+  "input_source": "bringup/artifacts/optimized_decoder_layer5_inputs.pt",
+  "precision": [
+    "bfp4",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "all_rows",
+  "trace_replays": 4,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.999952059495692,
+  "deterministic": true,
+  "resume_pcc": null,
+  "boundaries": [],
+  "maximum_prefill_pcc": null
+}

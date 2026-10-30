@@ -1,0 +1,84 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tests.optimized_sdpa_candidate.SDPAPrefillCandidate",
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_tokens": 2049,
+  "decode_position": 2049,
+  "prefill_pcc": 0.9999339427042662,
+  "decode_pcc": 0.9999223640970814,
+  "real_weights": true,
+  "input_source": "bringup/artifacts/optimized_decoder_layer5_inputs2050.pt",
+  "distinct_request_inputs": false,
+  "precision": [
+    "bfp4",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "all_rows",
+  "trace_replays": 10,
+  "interleaved_prefill_cases": 6,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9999439834532495,
+  "deterministic": true,
+  "caller_prefill_input_unchanged": true,
+  "runtime_conversion_guards": true,
+  "resume_pcc": 0.9999938118830092,
+  "resume_results": [
+    {
+      "chunk_start": 32,
+      "pcc": 0.9999938118830092
+    },
+    {
+      "chunk_start": 96,
+      "pcc": 0.9999938737208562
+    },
+    {
+      "chunk_start": 128,
+      "pcc": 0.9999963348844075
+    },
+    {
+      "chunk_start": 1024,
+      "pcc": 1.0
+    }
+  ],
+  "boundaries": [
+    {
+      "length": 1,
+      "pcc": 0.9999614507584845
+    },
+    {
+      "length": 31,
+      "pcc": 0.9999409646637846
+    },
+    {
+      "length": 32,
+      "pcc": 0.9999557978510804
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999452493928429
+    },
+    {
+      "length": 1023,
+      "pcc": 0.9999466922801465
+    },
+    {
+      "length": 1024,
+      "pcc": 0.9999344718231366
+    },
+    {
+      "length": 1025,
+      "pcc": 0.9999474566802844
+    },
+    {
+      "length": 2049,
+      "pcc": 0.9999302184746816
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999596084630152
+    }
+  ],
+  "maximum_prefill_pcc": null
+}

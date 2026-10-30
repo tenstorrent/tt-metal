@@ -1,0 +1,450 @@
+[
+  {
+    "name": "packed_qkv_c8_b21",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "lifetime": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14,
+        "readers": 2
+      },
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "kv8": true,
+      "head_l1": true,
+      "decode_k": 64,
+      "prefill_q": 128,
+      "prefill_k": 128,
+      "sdpa_fidelity": "HiFi2",
+      "tune_prefill": true,
+      "prefill_block": 2,
+      "minimal": true,
+      "pack_prefill_only": true,
+      "pack_attention": true,
+      "direct_qkv": true,
+      "self_attn.qkv_proj": {
+        "cores": 8,
+        "block": 21,
+        "readers": 2
+      },
+      "output_padding": [
+        "self_attn.o_proj",
+        "mlp.down_proj"
+      ],
+      "minimal_block": [
+        4,
+        8,
+        16
+      ]
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": false,
+    "layer": 0
+  },
+  {
+    "name": "packed_qkv_c12_b14",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "lifetime": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14,
+        "readers": 2
+      },
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "kv8": true,
+      "head_l1": true,
+      "decode_k": 64,
+      "prefill_q": 128,
+      "prefill_k": 128,
+      "sdpa_fidelity": "HiFi2",
+      "tune_prefill": true,
+      "prefill_block": 2,
+      "minimal": true,
+      "pack_prefill_only": true,
+      "pack_attention": true,
+      "direct_qkv": true,
+      "self_attn.qkv_proj": {
+        "cores": 12,
+        "block": 14,
+        "readers": 2
+      },
+      "output_padding": [
+        "self_attn.o_proj",
+        "mlp.down_proj"
+      ],
+      "minimal_block": [
+        4,
+        8,
+        16
+      ]
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": false,
+    "layer": 0
+  },
+  {
+    "name": "packed_qkv_c24_b7",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "lifetime": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14,
+        "readers": 2
+      },
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "kv8": true,
+      "head_l1": true,
+      "decode_k": 64,
+      "prefill_q": 128,
+      "prefill_k": 128,
+      "sdpa_fidelity": "HiFi2",
+      "tune_prefill": true,
+      "prefill_block": 2,
+      "minimal": true,
+      "pack_prefill_only": true,
+      "pack_attention": true,
+      "direct_qkv": true,
+      "self_attn.qkv_proj": {
+        "cores": 24,
+        "block": 7,
+        "readers": 2
+      },
+      "output_padding": [
+        "self_attn.o_proj",
+        "mlp.down_proj"
+      ],
+      "minimal_block": [
+        4,
+        8,
+        16
+      ]
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": false,
+    "layer": 0
+  },
+  {
+    "name": "packed_qkv_c28_b6",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "lifetime": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14,
+        "readers": 2
+      },
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "kv8": true,
+      "head_l1": true,
+      "decode_k": 64,
+      "prefill_q": 128,
+      "prefill_k": 128,
+      "sdpa_fidelity": "HiFi2",
+      "tune_prefill": true,
+      "prefill_block": 2,
+      "minimal": true,
+      "pack_prefill_only": true,
+      "pack_attention": true,
+      "direct_qkv": true,
+      "self_attn.qkv_proj": {
+        "cores": 28,
+        "block": 6,
+        "readers": 2
+      },
+      "output_padding": [
+        "self_attn.o_proj",
+        "mlp.down_proj"
+      ],
+      "minimal_block": [
+        4,
+        8,
+        16
+      ]
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": false,
+    "layer": 0
+  },
+  {
+    "name": "packed_mlp_c56_b12_r3",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "lifetime": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14,
+        "readers": 2
+      },
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "kv8": true,
+      "head_l1": true,
+      "decode_k": 64,
+      "prefill_q": 128,
+      "prefill_k": 128,
+      "sdpa_fidelity": "HiFi2",
+      "tune_prefill": true,
+      "prefill_block": 2,
+      "minimal": true,
+      "pack_prefill_only": true,
+      "pack_mlp": true,
+      "mlp.gate_up_proj": {
+        "cores": 56,
+        "block": 12,
+        "readers": 3
+      },
+      "output_padding": [
+        "self_attn.o_proj",
+        "mlp.down_proj"
+      ],
+      "minimal_block": [
+        4,
+        8,
+        16
+      ]
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": false,
+    "layer": 0
+  },
+  {
+    "name": "packed_mlp_c28_b6_r2",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "lifetime": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16,
+        "readers": 2
+      },
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 6,
+        "readers": 2
+      },
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14,
+        "readers": 2
+      },
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "kv8": true,
+      "head_l1": true,
+      "decode_k": 64,
+      "prefill_q": 128,
+      "prefill_k": 128,
+      "sdpa_fidelity": "HiFi2",
+      "tune_prefill": true,
+      "prefill_block": 2,
+      "minimal": true,
+      "pack_prefill_only": true,
+      "pack_mlp": true,
+      "mlp.gate_up_proj": {
+        "cores": 28,
+        "block": 6,
+        "readers": 2
+      },
+      "output_padding": [
+        "self_attn.o_proj",
+        "mlp.down_proj"
+      ],
+      "minimal_block": [
+        4,
+        8,
+        16
+      ]
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": false,
+    "layer": 0
+  }
+]

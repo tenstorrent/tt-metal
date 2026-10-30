@@ -1,0 +1,26 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tests.optimized_topology_candidate.TopologyCandidate",
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "prefill_tokens": 2049,
+  "decode_position": 2049,
+  "prefill_pcc": 0.9995067623313812,
+  "decode_pcc": 0.9996952425995128,
+  "real_weights": true,
+  "input_source": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+  "precision": [
+    "bfp4",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "all_rows",
+  "trace_replays": 4,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9996613090884173,
+  "deterministic": true,
+  "resume_pcc": null,
+  "boundaries": [],
+  "maximum_prefill_pcc": null
+}

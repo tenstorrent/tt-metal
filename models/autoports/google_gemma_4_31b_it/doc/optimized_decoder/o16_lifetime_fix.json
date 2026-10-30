@@ -1,0 +1,26 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tests.optimized_layout_candidate.LayoutCandidate",
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "prefill_tokens": 33,
+  "decode_position": 33,
+  "prefill_pcc": 0.9993639768727856,
+  "decode_pcc": 0.9995749847521892,
+  "real_weights": true,
+  "input_source": "random activation diagnostic",
+  "precision": [
+    "bfp8",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "all_rows",
+  "trace_replays": 4,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9983147863350963,
+  "deterministic": true,
+  "resume_pcc": null,
+  "boundaries": [],
+  "maximum_prefill_pcc": null
+}

@@ -1,0 +1,355 @@
+{
+  "scope": "Warmed B1 whole-prefill host time including every chunk and final synchronization; excludes setup/input upload/first compilation. Not device telemetry or full-model TTFT.",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "source_hashes": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/time_optimized_prefill_lengths.py": "cd23b24b046fe32c1c10259b82c2bd402c846791a1405eb4981c3db7aa6953e9",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "820e9840990a7a16c90b2678f00e2ceaa446afee40bb493ee63d049ecab64ba3",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149"
+  },
+  "rows": [
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 33,
+      "batch": 1,
+      "physical_chunks": [
+        64
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        3.062260977458209,
+        3.0267839902080595,
+        3.0145510099828243
+      ],
+      "median_host_ms": 3.0267839902080595
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 1024,
+      "batch": 1,
+      "physical_chunks": [
+        1024
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        14.092916972003877,
+        14.148011978249997,
+        14.302966999821365
+      ],
+      "median_host_ms": 14.148011978249997
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 1025,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        32
+      ],
+      "chunk_count": 2,
+      "warmed_prefill_host_ms": [
+        17.054436961188912,
+        17.20614597434178,
+        17.296326986979693
+      ],
+      "median_host_ms": 17.20614597434178
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 2049,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        32
+      ],
+      "chunk_count": 3,
+      "warmed_prefill_host_ms": [
+        34.64840003289282,
+        34.687796025536954,
+        34.782085043843836
+      ],
+      "median_host_ms": 34.687796025536954
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 4096,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "chunk_count": 4,
+      "warmed_prefill_host_ms": [
+        74.14525403873995,
+        74.79297800455242,
+        75.08656702702865
+      ],
+      "median_host_ms": 74.79297800455242
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 33,
+      "batch": 1,
+      "physical_chunks": [
+        64
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        3.6485979799181223,
+        3.5725830239243805,
+        3.5754790296778083
+      ],
+      "median_host_ms": 3.5754790296778083
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 1024,
+      "batch": 1,
+      "physical_chunks": [
+        1024
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        5.460487969685346,
+        5.428467004094273,
+        5.398980982135981
+      ],
+      "median_host_ms": 5.428467004094273
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 1025,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        32
+      ],
+      "chunk_count": 2,
+      "warmed_prefill_host_ms": [
+        9.173758968245238,
+        9.084118995815516,
+        9.07070399262011
+      ],
+      "median_host_ms": 9.084118995815516
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 2049,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        32
+      ],
+      "chunk_count": 3,
+      "warmed_prefill_host_ms": [
+        14.731493021827191,
+        14.753684983588755,
+        14.717185986228287
+      ],
+      "median_host_ms": 14.731493021827191
+    },
+    {
+      "layer_type": "sliding_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 4096,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "chunk_count": 4,
+      "warmed_prefill_host_ms": [
+        22.549640969373286,
+        22.56204397417605,
+        22.588295047171414
+      ],
+      "median_host_ms": 22.56204397417605
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 33,
+      "batch": 1,
+      "physical_chunks": [
+        64
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        3.3674329752102494,
+        3.3379970118403435,
+        3.3362929825671017
+      ],
+      "median_host_ms": 3.3379970118403435
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 1024,
+      "batch": 1,
+      "physical_chunks": [
+        1024
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        17.263616027776152,
+        17.425202997401357,
+        17.442445969209075
+      ],
+      "median_host_ms": 17.425202997401357
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 1025,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        32
+      ],
+      "chunk_count": 2,
+      "warmed_prefill_host_ms": [
+        20.804708008654416,
+        20.732500997837633,
+        20.614845969248563
+      ],
+      "median_host_ms": 20.732500997837633
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 2049,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        32
+      ],
+      "chunk_count": 3,
+      "warmed_prefill_host_ms": [
+        43.7849200097844,
+        43.69726299773902,
+        43.40802098158747
+      ],
+      "median_host_ms": 43.69726299773902
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "FusedDecoder",
+      "logical_tokens": 4096,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "chunk_count": 4,
+      "warmed_prefill_host_ms": [
+        103.38392399717122,
+        102.98353096004575,
+        103.07316097896546
+      ],
+      "median_host_ms": 103.07316097896546
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 33,
+      "batch": 1,
+      "physical_chunks": [
+        64
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        4.12069697631523,
+        4.157638002652675,
+        4.063377971760929
+      ],
+      "median_host_ms": 4.12069697631523
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 1024,
+      "batch": 1,
+      "physical_chunks": [
+        1024
+      ],
+      "chunk_count": 1,
+      "warmed_prefill_host_ms": [
+        6.936288962606341,
+        6.901241955347359,
+        6.872787023894489
+      ],
+      "median_host_ms": 6.901241955347359
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 1025,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        32
+      ],
+      "chunk_count": 2,
+      "warmed_prefill_host_ms": [
+        11.123622010927647,
+        11.041276040486991,
+        11.025805957615376
+      ],
+      "median_host_ms": 11.041276040486991
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 2049,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        32
+      ],
+      "chunk_count": 3,
+      "warmed_prefill_host_ms": [
+        18.793828960042447,
+        18.892898049671203,
+        18.91917799366638
+      ],
+      "median_host_ms": 18.892898049671203
+    },
+    {
+      "layer_type": "full_attention",
+      "implementation": "OptimizedDecoder",
+      "logical_tokens": 4096,
+      "batch": 1,
+      "physical_chunks": [
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "chunk_count": 4,
+      "warmed_prefill_host_ms": [
+        32.29418897535652,
+        32.329214038327336,
+        32.46478200890124
+      ],
+      "median_host_ms": 32.329214038327336
+    }
+  ]
+}

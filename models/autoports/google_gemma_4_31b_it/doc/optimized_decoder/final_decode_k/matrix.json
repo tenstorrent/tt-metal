@@ -1,0 +1,25 @@
+[
+  {
+    "name": "full_default_k128",
+    "layer": 5,
+    "phases": [
+      "timing"
+    ]
+  },
+  {
+    "name": "full_k64",
+    "layer": 5,
+    "phases": [
+      "correctness",
+      "timing"
+    ],
+    "geometry": {
+      "final_sdpa_fp32": false,
+      "final_decode_k": 64
+    },
+    "seq": 4223,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs262144.pt",
+    "replays": 128,
+    "timeout": 600
+  }
+]

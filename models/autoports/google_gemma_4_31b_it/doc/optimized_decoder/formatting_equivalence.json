@@ -1,0 +1,145 @@
+{
+  "reason": "Repository pre-commit Black/isort normalization after validation; non-import AST and imported names/aliases preserved; ordering independently reviewed.",
+  "files": [
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/check_optimized_capture_cleanup.py",
+      "before_sha256": "c4d3f4dbf0b50dc6b7074b13cb9b50805b6243c817093f880c087bea6d070727",
+      "after_sha256": "8a133e2cd1c404ec6da2ca8bd7fa5c587f39f4246b0adec3fc52f43d4c30f2d9",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/optimized_base_candidate.py",
+      "before_sha256": "864065671e8ea24d3a6e6c6e5a879004e348ac0504883dfade336c28fd64bbcf",
+      "after_sha256": "a9065d4f9d82cec78b55d181f3e215b1ebacde11bb1eed6af1c747d79c6a8768",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py",
+      "before_sha256": "076e44335569d4a47c98d873c25ea638d6f6f040dff00da939f0aaa016112e6f",
+      "after_sha256": "483ff11a94ea93099ee4837a98f99f6759e53d355529d252946a2833b1c5b413",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/optimized_packing_candidate.py",
+      "before_sha256": "4ad671792171d49df6ef050f0e7fb7cb5b321d83469f8a0a8c754e59c719541e",
+      "after_sha256": "f78467e5818e3bcb778d5a5a5a828b667721f89430a976eb4c391865951b54c6",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/optimized_padding_candidate.py",
+      "before_sha256": "7aaf0331cc63d230785012d2bc4bbabcc83bc7fdc391ee5d68ca48ffa3e66df3",
+      "after_sha256": "d42f4f5a7ff4fd35b32a830e09cdaea4a63a9d18517a2d3432aea474682828ce",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/optimized_prefill_candidate.py",
+      "before_sha256": "58c9fadba9f6bb5d0a9bd9ad3660025d365989fe25547bf9b818e9adc626ba33",
+      "after_sha256": "332c457e26f74e0282259c5cd6bc600e7cb99f69ad71bc03978af0f01324cac5",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/optimized_sdpa_candidate.py",
+      "before_sha256": "3ee711062573f0c62d223ce4cf761689d990739c07cd3a52b363bd53323f541f",
+      "after_sha256": "7d513e8eaffec5d53e96ada5c5eb805c2289735cf256b6b2a30882acac74c2e5",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/profile_optimized_decoder.py",
+      "before_sha256": "c6097ffd4431700c5ab0c4ff14bd0b69f9a1d06b06a20d9e0bc0d84b2d9d3413",
+      "after_sha256": "77ff7e6e492ef1d726e44599847d639bd30e4adc9b078bcdec232af6f194748c",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/profile_optimized_readers.py",
+      "before_sha256": "80ebccb432c0c5f2ae4816691f498b29e052acec9c28d5029d5e628b039c2cd8",
+      "after_sha256": "718556caa2be23698327e051d96f85da4cf8049f710051e82dcb28a74092fdeb",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/record_decoder_activations.py",
+      "before_sha256": "23c2469a15ed1a206c5bcbce76ea8b4cc49cd75bf592f28600d134fb3c6e7a80",
+      "after_sha256": "4d16423050b9b34aa5d0af4af61971cc5505876fbca37a3b749043c4884d2d8c",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/run_optimized_matrix.py",
+      "before_sha256": "08be4aa5dc759696bf470853836972a299c82d93a06c543eb7c4a33421bcb767",
+      "after_sha256": "608b234b8106cc2437801cbe181ba98c54e41ab1a4989fc105cb7edb77752e19",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/run_optimized_reader_queue.py",
+      "before_sha256": "b44e01885848c15244dd143e1b56fcc63eea33f7a1103c485fd74def10683757",
+      "after_sha256": "0f374b7a5b61a9c9d7a61b39957afa3c82c12361ad558c270dc713a12617af4e",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/select_optimized_replay.py",
+      "before_sha256": "bda9a2cd6ed0b0ae699895223bf0f7cb9a9846b69906b4470777de9609864195",
+      "after_sha256": "9bd1a5e076793ba982ca464c2b1a9f42d8132bfd43364e36e6d991c5ec20213c",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/sweep_optimized_combined.py",
+      "before_sha256": "a587fe8bc450a53ca32bb6b56daebbbfc0e909a7ba07c25620fd41b7ad27c08d",
+      "after_sha256": "7a19d17451eb800e723da4efe6e00406207fa2ddcc1e91133e696b210a569d64",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/sweep_optimized_geometry.py",
+      "before_sha256": "cffab280adb9ae09bfe3f39772c6bb05e16ac7f54d98559d2c07b41d25ac6901",
+      "after_sha256": "8bac244e579edb1160d649dcf54019c3704e66e594abecc54e99bcc060a904bc",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/sweep_optimized_precision.py",
+      "before_sha256": "da7afd0d551e27b47cdfa171624f68b34a4cf9f0523fedddf226f2ede3cf1182",
+      "after_sha256": "21d027eebedfec7ca1cf1bc9dad8664fd0e49a6b81333e5a473e07b1c91b2620",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/test_optimized_decoder.py",
+      "before_sha256": "a36bca711aed2ac9925d0ca11edda6afb0fd50139eba97d59a80e102b7161bca",
+      "after_sha256": "7d2e8171b9249ad3ddc5acdea47c6ceba3d66d98619252032f7c5a310d7b3f8c",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/time_optimized_batch_chunks.py",
+      "before_sha256": "3a5fcb10ce87d5e4a0b212e4efba4d784722b70b01de2750072a8e9d8f7fb099",
+      "after_sha256": "b22a1c268fa7db2a7e5d7b86db7bb837e73ef44af452352957afdc7eda4da8e3",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tests/time_optimized_prefill_lengths.py",
+      "before_sha256": "cd23b24b046fe32c1c10259b82c2bd402c846791a1405eb4981c3db7aa6953e9",
+      "after_sha256": "312423778c11f874e12bba802ed0fc85dee74c258503fa24e1b0a46158851171",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    },
+    {
+      "file": "models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py",
+      "before_sha256": "820e9840990a7a16c90b2678f00e2ceaa446afee40bb493ee63d049ecab64ba3",
+      "after_sha256": "5267f1ee57d0f077e71357445e96e15b3851b022c5846eeb10b77566eb4b6ff6",
+      "non_import_ast_identical": true,
+      "imported_names_and_aliases_identical": true
+    }
+  ]
+}

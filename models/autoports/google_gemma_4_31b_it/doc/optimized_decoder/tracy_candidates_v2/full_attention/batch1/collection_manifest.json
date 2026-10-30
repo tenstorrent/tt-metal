@@ -1,0 +1,40 @@
+{
+  "command": [
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "-m",
+    "tracy",
+    "-r",
+    "-p",
+    "-v",
+    "--no-web-server",
+    "--op-support-count",
+    "16384",
+    "-o",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1",
+    "-m",
+    "models.autoports.google_gemma_4_31b_it.tests.profile_optimized_decoder",
+    "--layer",
+    "5",
+    "--batch",
+    "1",
+    "--result",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/host_timing.json",
+    "--precision",
+    "bfp4",
+    "--attention-precision",
+    "bfp4",
+    "--geometry-file",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/geometry.json"
+  ],
+  "source_hashes": {
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/profile_optimized_decoder.py": "b457645f1f0311a35403c57d58b7a5164b3bb807c400855a4d5fb8e80569330b",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_prefill_candidate.py": "d2d1586314dc9d8c5a201686f83b726054fe2bf35a085dd4bf8e3e9750dcacae",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_lifetime_candidate.py": "c994af4d86d3d24c879360d506aeace64777350e3747f898863f53ef08cdcc5c",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_topology_candidate.py": "6933a3676fa79cf53c27144eb44e3654a8270206d9e118bbdc09647c07ab9b18",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_attention_candidate.py": "c267f74a043725ac90bc093ada3622bd958fd38fb3524bdddc80fe563660a51d",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_packing_candidate.py": "39cab89c7c9a1e1534ca737d84f8e9ad9e6b5f1998f4e9d2f89c4c29f3c10436",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "a1675edcb4f8337a4507a18c6fdf7577e51f31929639dbb04c8f9cf9a52e042e"
+  },
+  "exit_code": 0
+}

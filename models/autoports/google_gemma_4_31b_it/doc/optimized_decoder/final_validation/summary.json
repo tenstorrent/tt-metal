@@ -1,0 +1,222 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "batch": 15,
+    "prefill_pcc": 0.9992671340526667,
+    "decode_pcc": 0.9994728392817248,
+    "updated_inputs_pcc": 0.9993232851527769,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch15_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 16,
+    "prefill_pcc": 0.999270436356754,
+    "decode_pcc": 0.9994857522976633,
+    "updated_inputs_pcc": 0.9993384768986586,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch16_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 17,
+    "prefill_pcc": 0.9992618625341212,
+    "decode_pcc": 0.9994945247271263,
+    "updated_inputs_pcc": 0.9993634173898861,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch17_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 31,
+    "prefill_pcc": 0.999265511122058,
+    "decode_pcc": 0.9994758470564633,
+    "updated_inputs_pcc": 0.9993414754233853,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch31_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "prefill_pcc": 0.9992657012592275,
+    "decode_pcc": 0.9994752283018572,
+    "updated_inputs_pcc": 0.9993375662284112,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch32_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 33,
+    "prefill_pcc": 0.9992685570624991,
+    "decode_pcc": 0.9995201774865511,
+    "updated_inputs_pcc": 0.999378562762409,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch33_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 55,
+    "prefill_pcc": 0.9992604713885331,
+    "decode_pcc": 0.9995243485966224,
+    "updated_inputs_pcc": 0.9993812765194341,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch55_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 56,
+    "prefill_pcc": 0.9992672725113515,
+    "decode_pcc": 0.9995245641778703,
+    "updated_inputs_pcc": 0.9993670772654892,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch56_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 8,
+    "prefill_pcc": 0.9992659767748094,
+    "decode_pcc": 0.9994723129409312,
+    "updated_inputs_pcc": 0.9993160501639058,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_batch8_correctness.json"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "prefill_pcc": 0.9995016060930557,
+    "decode_pcc": 0.9996433940235077,
+    "updated_inputs_pcc": 0.9996675512721822,
+    "deterministic": true,
+    "trace_replays": 135,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer0_extended_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 15,
+    "prefill_pcc": 0.9999447962703367,
+    "decode_pcc": 0.9999581458797884,
+    "updated_inputs_pcc": 0.9999526348766223,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch15_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 16,
+    "prefill_pcc": 0.9999436089526913,
+    "decode_pcc": 0.9999580523895302,
+    "updated_inputs_pcc": 0.9999531922997699,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch16_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 17,
+    "prefill_pcc": 0.9999442060893411,
+    "decode_pcc": 0.9999580260328372,
+    "updated_inputs_pcc": 0.9999535373681614,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch17_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 31,
+    "prefill_pcc": 0.9999441907648906,
+    "decode_pcc": 0.9999580359000088,
+    "updated_inputs_pcc": 0.9999531028879232,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch31_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "prefill_pcc": 0.9999452032599632,
+    "decode_pcc": 0.9999580190774902,
+    "updated_inputs_pcc": 0.9999525442184052,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch32_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 33,
+    "prefill_pcc": 0.9999441609065238,
+    "decode_pcc": 0.9999622767552551,
+    "updated_inputs_pcc": 0.9999476863988723,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch33_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 34,
+    "prefill_pcc": 0.9999440850361611,
+    "decode_pcc": 0.9999621802985219,
+    "updated_inputs_pcc": 0.9999478277413519,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch34_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 36,
+    "prefill_pcc": 0.9999432772668781,
+    "decode_pcc": 0.99996200385995,
+    "updated_inputs_pcc": 0.9999483849959743,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch36_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 8,
+    "prefill_pcc": 0.9999440795989661,
+    "decode_pcc": 0.9999629708581427,
+    "updated_inputs_pcc": 0.9999456468499943,
+    "deterministic": true,
+    "trace_replays": 33,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_batch8_correctness.json"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "prefill_pcc": 0.9999337502159366,
+    "decode_pcc": 0.9999223640970814,
+    "updated_inputs_pcc": 0.9999439834532495,
+    "deterministic": true,
+    "trace_replays": 135,
+    "runtime_conversion_guards": null,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_validation/layer5_extended_correctness.json"
+  }
+]

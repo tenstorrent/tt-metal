@@ -1,0 +1,11 @@
+{
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "prefill_host_ms": 55.373033974319696,
+  "traced_decode_host_us": [
+    1039.2053827672498,
+    1039.399499859428,
+    1039.345656408841
+  ],
+  "scope": "candidate ranking only; fixed position4096; host timing, not telemetry device time"
+}

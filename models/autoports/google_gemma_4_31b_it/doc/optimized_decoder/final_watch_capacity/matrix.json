@@ -1,0 +1,64 @@
+[
+  {
+    "name": "layer0_watcher",
+    "layer": 0,
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": true,
+    "replays": 128,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer5_watcher",
+    "layer": 5,
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs2050.pt",
+    "extended": true,
+    "replays": 128,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer0_watcher_batch32",
+    "layer": 0,
+    "batch": 32,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 128,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer5_watcher_batch32",
+    "layer": 5,
+    "batch": 32,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 128,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "source": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_final/sliding_attention/batch1/ops.csv",
+  "source_sha256": "80ec5d6a5686400ca4f06ee36d2cc96a8c779e0a1ef6ea5310887d0d9004d051",
+  "trace_id": "0",
+  "replay_session": "71",
+  "device_us": 958.8866666666667,
+  "ops": 41,
+  "selection": "complete replay nearest median duration among128",
+  "incoming_boundary_latency_excluded": {
+    "OP TO OP LATENCY [ns]": "10063",
+    "OP TO OP LATENCY BR/NRISC START [ns]": "10063"
+  },
+  "all_internal_timestamps_and_latencies_preserved": true
+}

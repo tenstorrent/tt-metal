@@ -1,0 +1,246 @@
+[
+  {
+    "name": "layer0_extended",
+    "layer": 0,
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": true,
+    "replays": 128,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch1",
+    "layer": 0,
+    "batch": 1,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch8",
+    "layer": 0,
+    "batch": 8,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch15",
+    "layer": 0,
+    "batch": 15,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch16",
+    "layer": 0,
+    "batch": 16,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch17",
+    "layer": 0,
+    "batch": 17,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch31",
+    "layer": 0,
+    "batch": 31,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch32",
+    "layer": 0,
+    "batch": 32,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch33",
+    "layer": 0,
+    "batch": 33,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch55",
+    "layer": 0,
+    "batch": 55,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer0_distinct_batch56",
+    "layer": 0,
+    "batch": 56,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_extended",
+    "layer": 5,
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs2050.pt",
+    "extended": true,
+    "replays": 128,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch1",
+    "layer": 5,
+    "batch": 1,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch8",
+    "layer": 5,
+    "batch": 8,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch15",
+    "layer": 5,
+    "batch": 15,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch16",
+    "layer": 5,
+    "batch": 16,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch17",
+    "layer": 5,
+    "batch": 17,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch31",
+    "layer": 5,
+    "batch": 31,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch32",
+    "layer": 5,
+    "batch": 32,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch33",
+    "layer": 5,
+    "batch": 33,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch34",
+    "layer": 5,
+    "batch": 34,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  },
+  {
+    "name": "layer5_distinct_batch36",
+    "layer": 5,
+    "batch": 36,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "replays": 32,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ]
+  }
+]

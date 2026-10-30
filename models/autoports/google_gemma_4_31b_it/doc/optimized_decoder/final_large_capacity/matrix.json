@@ -1,0 +1,77 @@
+[
+  {
+    "name": "layer0_batch33",
+    "layer": 0,
+    "batch": 33,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "seq": 33,
+    "replays": 128,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer0_batch56",
+    "layer": 0,
+    "batch": 56,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_distinct56.pt",
+    "seq": 33,
+    "replays": 128,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer5_batch33",
+    "layer": 5,
+    "batch": 33,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "seq": 33,
+    "replays": 128,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer5_batch34",
+    "layer": 5,
+    "batch": 34,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "seq": 33,
+    "replays": 128,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer5_batch36",
+    "layer": 5,
+    "batch": 36,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_distinct56.pt",
+    "seq": 33,
+    "replays": 128,
+    "timeout": 300,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  }
+]

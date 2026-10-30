@@ -11,10 +11,10 @@
     16,
     32
   ],
-  "stage": "02-fused-decoder",
-  "status": "fused_validation_passed",
+  "stage": "03-optimized-decoder",
+  "status": "optimized_validation_passed_clean_review",
   "context_evidence": "context_contract.json",
-  "prefix_state_contract": "fused_decoder/README.md",
+  "prefix_state_contract": "optimized_decoder/README.md",
   "functional_measurements": [
     {
       "layer_type": "sliding_attention",
@@ -90,6 +90,314 @@
     }
   ],
   "measurements": [
+    {
+      "layer_type": "sliding_attention",
+      "batch": 1,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 1
+      },
+      "prefill_device_us": 21914.17931307459,
+      "decode_device_us": 958.8689717959293,
+      "prefill_flops_pct": 27.808772167411178,
+      "decode_dram_pct": 58.258855210552085,
+      "prefill_useful_flops": 4043728486400,
+      "decode_dram_bytes": 286016556.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final/sliding_attention/batch1/performance.json"
+    },
+    {
+      "layer_type": "sliding_attention",
+      "batch": 32,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 32
+      },
+      "prefill_device_us": 688937.9517508583,
+      "decode_device_us": 1932.8893147166254,
+      "prefill_flops_pct": 28.305895157233177,
+      "decode_dram_pct": 58.77391640330684,
+      "prefill_useful_flops": 129399311564800,
+      "decode_dram_bytes": 581649792.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final/sliding_attention/batch32/performance.json"
+    },
+    {
+      "layer_type": "sliding_attention",
+      "batch": 16,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 16
+      },
+      "prefill_device_us": 337279.2251851852,
+      "decode_device_us": 1414.217085527511,
+      "prefill_flops_pct": 28.90928936016089,
+      "decode_dram_pct": 59.25662923860199,
+      "prefill_useful_flops": 64699655782400,
+      "decode_dram_bytes": 429064896.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final/sliding_attention/batch16/performance.json"
+    },
+    {
+      "layer_type": "sliding_attention",
+      "batch": 8,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 8
+      },
+      "prefill_device_us": 180974.6562962963,
+      "decode_device_us": 1160.0137677284235,
+      "prefill_flops_pct": 26.93886236779368,
+      "decode_dram_pct": 59.396595684311485,
+      "prefill_useful_flops": 32349827891200,
+      "decode_dram_bytes": 352772448.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final/sliding_attention/batch8/performance.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 1,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 1
+      },
+      "prefill_device_us": 31642.55120983668,
+      "decode_device_us": 1074.8070527282548,
+      "prefill_flops_pct": 23.453048600181283,
+      "decode_dram_pct": 59.656320109727936,
+      "prefill_useful_flops": 4924314222592,
+      "decode_dram_bytes": 328289452.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final_k32/full_attention/batch1/performance.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 32,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 32
+      },
+      "prefill_device_us": 991363.0526129776,
+      "decode_device_us": 2855.907550491397,
+      "prefill_flops_pct": 23.954551524654953,
+      "decode_dram_pct": 62.02703409272478,
+      "prefill_useful_flops": 157578055122944,
+      "decode_dram_bytes": 906974592.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final_k32/full_attention/batch32/performance.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 16,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 16
+      },
+      "prefill_device_us": 490729.41239856085,
+      "decode_device_us": 1934.582014663546,
+      "prefill_flops_pct": 24.19628488068839,
+      "decode_dram_pct": 61.54949058632108,
+      "prefill_useful_flops": 78789027561472,
+      "decode_dram_bytes": 609651392.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final_k32/full_attention/batch16/performance.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 8,
+      "workload": {
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "concurrency": 8
+      },
+      "prefill_device_us": 260051.87848741648,
+      "decode_device_us": 1456.4226472744404,
+      "prefill_flops_pct": 22.82973061143058,
+      "decode_dram_pct": 61.46915451880527,
+      "prefill_useful_flops": 39394513780736,
+      "decode_dram_bytes": 458368352.0,
+      "peak_flops_per_s": 663552000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, LoFi peak; 512GB/s. Mixed-fidelity layer useful work is divided by the whole-device LoFi theoretical peak, not a per-op average. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+      "source": "warmed_layer_tracy",
+      "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+      "assumptions": "Dtypes and fidelity are taken from runtime rows; BF16 norms/residuals, dense active work. BFP tile sizes include exponent headers: BFP4 576 and BFP8 1088 bytes per 1024 elements. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+      "evidence": "optimized_decoder/tracy_final_k32/full_attention/batch8/performance.json"
+    }
+  ],
+  "ledger": {
+    "scope": "Single representative layer; layer kinds are alternatives, not a whole-model allocation.",
+    "basis": "Tile physical storage: BFP4=576 bytes/1024 elements; BFP8=1088; BF16 norms pad logical row1 to32. Projection dimensions divisible by eight-bank tile sharding. One packed attention copy. Hidden output zero-padding5632 included.",
+    "layer_types": {
+      "sliding_attention": {
+        "weights": {
+          "packed_qkv": {
+            "shape": [
+              5376,
+              16384
+            ],
+            "physical_bytes": 49545216,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "o": {
+            "shape": [
+              8192,
+              5632
+            ],
+            "physical_bytes": 25952256,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "gate": {
+            "shape": [
+              5376,
+              21504
+            ],
+            "physical_bytes": 65028096,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "up": {
+            "shape": [
+              5376,
+              21504
+            ],
+            "physical_bytes": 65028096,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "down": {
+            "shape": [
+              21504,
+              5632
+            ],
+            "physical_bytes": 68124672,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          }
+        },
+        "norm_physical_bytes": 1409024,
+        "norm_logical_bytes": 44032,
+        "setup_index_payload_bytes": 440,
+        "persistent_weight_bytes": 275087360,
+        "cache_bytes_per_token": 8704,
+        "cache_dtype": "bfloat8_b",
+        "headline_cache_bytes": 36765696,
+        "batch32_headline_cache_bytes": 1176502272,
+        "batch1_full_context_cache_bytes": 2281701376,
+        "estimated_agent_pool_cache_bytes": 9126805504
+      },
+      "full_attention": {
+        "weights": {
+          "packed_qk": {
+            "shape": [
+              5376,
+              18432
+            ],
+            "physical_bytes": 55738368,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "o": {
+            "shape": [
+              16384,
+              5632
+            ],
+            "physical_bytes": 51904512,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "gate": {
+            "shape": [
+              5376,
+              21504
+            ],
+            "physical_bytes": 65028096,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "up": {
+            "shape": [
+              5376,
+              21504
+            ],
+            "physical_bytes": 65028096,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          },
+          "down": {
+            "shape": [
+              21504,
+              5632
+            ],
+            "physical_bytes": 68124672,
+            "dtype": "bfloat4_b",
+            "copies": 1
+          }
+        },
+        "norm_physical_bytes": 1441792,
+        "norm_logical_bytes": 45056,
+        "setup_index_payload_bytes": 440,
+        "persistent_weight_bytes": 307265536,
+        "cache_bytes_per_token": 4352,
+        "cache_dtype": "bfloat8_b",
+        "headline_cache_bytes": 18382848,
+        "batch32_headline_cache_bytes": 588251136,
+        "batch1_full_context_cache_bytes": 1140850688,
+        "estimated_agent_pool_cache_bytes": 4563402752
+      }
+    },
+    "device_dram_bytes": 34359738368,
+    "peak_total_device_memory_bytes": null,
+    "missing_reasons": {
+      "peak_total_device_memory_bytes": "Allocator peak including transient tensors/programs/trace storage not instrumented; persistent/cache accounting is explicit."
+    }
+  },
+  "stage_checker": "Single-layer evidence; no full-model/serving capacity or generation claim.",
+  "fused_measurements": [
     {
       "layer_type": "sliding_attention",
       "batch": 1,
@@ -477,7 +785,7 @@
       }
     }
   ],
-  "ledger": {
+  "fused_ledger": {
     "scope": "Representative single layers; per-kind entries are alternatives, not simultaneous whole-model allocations.",
     "weights": [
       {
@@ -536,5 +844,5 @@
     "target_agent_pool_status": "Workload estimate only; full-model pool capacity is outside this layer stage.",
     "peak_total_device_memory_bytes": null
   },
-  "stage_checker": "check_agentic_serving.py has no fused-decoder stage; its full-model/serving checks are not claimed here."
+  "stage_review": "optimized_decoder/stage_review.md"
 }

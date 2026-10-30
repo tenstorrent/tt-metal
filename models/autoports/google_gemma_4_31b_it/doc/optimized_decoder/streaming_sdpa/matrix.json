@@ -1,0 +1,46 @@
+[
+  {
+    "name": "layer0_fp32_True",
+    "layer": 0,
+    "geometry": {
+      "final_sdpa_fp32": true
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": true,
+    "timeout": 600
+  },
+  {
+    "name": "layer0_fp32_False",
+    "layer": 0,
+    "geometry": {
+      "final_sdpa_fp32": false
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+    "extended": true,
+    "timeout": 600
+  },
+  {
+    "name": "layer5_fp32_True",
+    "layer": 5,
+    "geometry": {
+      "final_sdpa_fp32": true
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs2050.pt",
+    "extended": true,
+    "timeout": 600
+  },
+  {
+    "name": "layer5_fp32_False",
+    "layer": 5,
+    "geometry": {
+      "final_sdpa_fp32": false
+    },
+    "seq": 2049,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs2050.pt",
+    "extended": true,
+    "timeout": 600
+  }
+]

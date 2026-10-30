@@ -1,0 +1,11 @@
+{
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_host_ms": 32.8622690285556,
+  "traced_decode_host_us": [
+    1027.0853044858086,
+    1027.152929964359,
+    1027.6937264279695
+  ],
+  "scope": "candidate ranking only; fixed position4096; host timing, not telemetry device time"
+}

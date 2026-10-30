@@ -1,0 +1,202 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "collection_command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "tracy",
+      "-r",
+      "-p",
+      "-v",
+      "--no-web-server",
+      "--op-support-count",
+      "16384",
+      "-o",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.profile_optimized_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/host_timing.json",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--geometry-file",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/geometry.json"
+    ],
+    "report_commands": [
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-summary",
+        "--no-color",
+        "--csv",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/prefill_perf_report.csv"
+      ],
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-summary",
+        "--no-color"
+      ],
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-summary",
+        "--no-color",
+        "--csv",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/decode_perf_report.csv"
+      ],
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-summary",
+        "--no-color"
+      ]
+    ],
+    "calculation_command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.summarize_optimized_profile",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/ops.csv",
+      "--trace-host-data",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/.logs/tracy_ops_data.csv",
+      "--layer-type",
+      "sliding_attention",
+      "--batch",
+      "1",
+      "--output",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/performance.json"
+    ],
+    "raw_csv": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/reports/2026_10_30_21_01_49/ops_perf_results_2026_10_30_21_01_49.csv",
+    "copied_csv": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/ops.csv",
+    "sha256": "47f61b88d2cd8710a23a95f99b5808d7b0feb53b547ec2a0db5b31cf75e98566",
+    "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/performance.json",
+    "environment": {
+      "TT_METAL_DEVICE_PROFILER": "1",
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_WATCHER": null
+    }
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "collection_command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "tracy",
+      "-r",
+      "-p",
+      "-v",
+      "--no-web-server",
+      "--op-support-count",
+      "16384",
+      "-o",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.profile_optimized_decoder",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/host_timing.json",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--geometry-file",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/geometry.json"
+    ],
+    "report_commands": [
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-summary",
+        "--no-color",
+        "--csv",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/prefill_perf_report.csv"
+      ],
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_PREFILL",
+        "--end-signpost",
+        "PERF_PREFILL_END",
+        "--no-summary",
+        "--no-color"
+      ],
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-summary",
+        "--no-color",
+        "--csv",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/decode_perf_report.csv"
+      ],
+      [
+        "tt-perf-report",
+        "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/ops.csv",
+        "--start-signpost",
+        "PERF_DECODE",
+        "--end-signpost",
+        "PERF_DECODE_END",
+        "--no-summary",
+        "--no-color"
+      ]
+    ],
+    "calculation_command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.summarize_optimized_profile",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/ops.csv",
+      "--trace-host-data",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/.logs/tracy_ops_data.csv",
+      "--layer-type",
+      "full_attention",
+      "--batch",
+      "1",
+      "--output",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/performance.json"
+    ],
+    "raw_csv": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/reports/2026_10_30_21_02_32/ops_perf_results_2026_10_30_21_02_32.csv",
+    "copied_csv": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/ops.csv",
+    "sha256": "a22de15a02408d434885cdac3c6beed8e417af41c818193f049fdc15f524f763",
+    "result": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/full_attention/batch1/performance.json",
+    "environment": {
+      "TT_METAL_DEVICE_PROFILER": "1",
+      "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+      "TT_METAL_WATCHER": null
+    }
+  }
+]

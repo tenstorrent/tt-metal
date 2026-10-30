@@ -1,0 +1,7 @@
+{
+  "prefill_host_us": 1022174.8559852131,
+  "decode_host_us_per_token_without_profiler_drains": 3169.563179653778,
+  "decode_host_us_per_token_including_profiler_drains": 19388.620851714222,
+  "profiler_drain_us": 2075967.3779830337,
+  "scope": "Same profiled progressing 4096/128 layer run; includes harness-owned teacher-forcing input copies and trace submissions; no token-out generator."
+}

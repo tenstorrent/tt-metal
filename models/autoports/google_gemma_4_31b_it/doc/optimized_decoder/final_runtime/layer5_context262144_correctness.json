@@ -1,0 +1,30 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tt.optimized_decoder.OptimizedDecoder",
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_tokens": 262143,
+  "decode_position": 262143,
+  "prefill_pcc": 0.9975234393172149,
+  "decode_pcc": 0.9999324122908617,
+  "real_weights": true,
+  "input_source": "bringup/artifacts/optimized_decoder_layer5_inputs262144.pt",
+  "distinct_request_inputs": false,
+  "precision": [
+    "bfp4",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "last_32_prefill_rows_and_decode_with_all_prefix_KV",
+  "trace_replays": 33,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.999915581418053,
+  "deterministic": true,
+  "caller_prefill_input_unchanged": null,
+  "runtime_conversion_guards": true,
+  "resume_pcc": null,
+  "resume_results": [],
+  "boundaries": [],
+  "maximum_prefill_pcc": 0.9980639152168558
+}

@@ -1,0 +1,17 @@
+{
+  "device": "one p300c Blackhole ASIC",
+  "physical_tensix_cores": 120,
+  "available_worker_grid": [11, 10],
+  "clock_hz": 1350000000,
+  "lofi_operations_per_core_cycle": 4096,
+  "peak_flops_per_s": 663552000000000,
+  "peak_dram_bytes_per_s": 512000000000,
+  "device_dram_bytes": 34359738368,
+  "scope": "Whole participating ASIC theoretical LoFi peak, including dispatch-reserved cores. This is not the active matmul grid's peak.",
+  "sources": [
+    "https://docs.tenstorrent.com/aibs/blackhole/p300.html",
+    "https://docs.tenstorrent.com/systems/quietbox/quietbox-bh-2/specifications.html",
+    "python_env/lib/python3.10/site-packages/tt_perf_report/perf_report.py: ArchitectureSpec blackhole per-core fidelity throughput"
+  ],
+  "verified_on": "2026-10-30"
+}

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "layer0_context262144",
+    "layer": 0,
+    "seq": 262143,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs262144.pt",
+    "replays": 32,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  },
+  {
+    "name": "layer5_context262144",
+    "layer": 5,
+    "seq": 262143,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs262144.pt",
+    "replays": 32,
+    "timeout": 600,
+    "phases": [
+      "correctness"
+    ],
+    "environment": {
+      "TT_METAL_OPERATION_TIMEOUT_SECONDS": "60"
+    }
+  }
+]

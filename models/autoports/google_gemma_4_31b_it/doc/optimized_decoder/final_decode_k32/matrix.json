@@ -1,0 +1,62 @@
+[
+  {
+    "name": "layer0_batch1_k32",
+    "layer": 0,
+    "batch": 1,
+    "phases": [
+      "correctness",
+      "timing"
+    ],
+    "geometry": {
+      "final_sdpa_fp32": false,
+      "final_decode_k": 32
+    },
+    "seq": 4223,
+    "inputs": "bringup/artifacts/optimized_decoder_layer0_inputs262144.pt",
+    "replays": 32,
+    "timeout": 600
+  },
+  {
+    "name": "layer5_batch1_k32",
+    "layer": 5,
+    "batch": 1,
+    "phases": [
+      "correctness",
+      "timing"
+    ],
+    "geometry": {
+      "final_sdpa_fp32": false,
+      "final_decode_k": 32
+    },
+    "seq": 4223,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs262144.pt",
+    "replays": 32,
+    "timeout": 600
+  },
+  {
+    "name": "full_batch32_default_k64",
+    "layer": 5,
+    "batch": 32,
+    "phases": [
+      "timing"
+    ],
+    "timeout": 600
+  },
+  {
+    "name": "layer5_batch32_k32",
+    "layer": 5,
+    "batch": 32,
+    "phases": [
+      "correctness",
+      "timing"
+    ],
+    "geometry": {
+      "final_sdpa_fp32": false,
+      "final_decode_k": 32
+    },
+    "seq": 4223,
+    "inputs": "bringup/artifacts/optimized_decoder_layer5_inputs262144.pt",
+    "replays": 32,
+    "timeout": 600
+  }
+]

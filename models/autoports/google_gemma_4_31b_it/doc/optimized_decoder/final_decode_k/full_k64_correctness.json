@@ -1,0 +1,30 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tests.optimized_sdpa_candidate.SDPAPrefillCandidate",
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_tokens": 4223,
+  "decode_position": 4223,
+  "prefill_pcc": 0.9999266357121377,
+  "decode_pcc": 0.9999448769108479,
+  "real_weights": true,
+  "input_source": "bringup/artifacts/optimized_decoder_layer5_inputs262144.pt",
+  "distinct_request_inputs": false,
+  "precision": [
+    "bfp4",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "last_32_prefill_rows_and_decode_with_all_prefix_KV",
+  "trace_replays": 129,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9999155695474542,
+  "deterministic": true,
+  "caller_prefill_input_unchanged": null,
+  "runtime_conversion_guards": true,
+  "resume_pcc": null,
+  "resume_results": [],
+  "boundaries": [],
+  "maximum_prefill_pcc": null
+}

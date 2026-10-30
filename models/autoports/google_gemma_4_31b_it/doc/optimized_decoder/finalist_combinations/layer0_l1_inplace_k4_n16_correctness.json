@@ -1,0 +1,63 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tests.optimized_padding_candidate.PaddingCandidate",
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "prefill_tokens": 2049,
+  "decode_position": 2049,
+  "prefill_pcc": 0.999503954577374,
+  "decode_pcc": 0.9996944501239138,
+  "real_weights": true,
+  "input_source": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+  "precision": [
+    "bfp4",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "all_rows",
+  "trace_replays": 10,
+  "interleaved_prefill_cases": 6,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9996517395221746,
+  "deterministic": true,
+  "resume_pcc": 0.9999999999999999,
+  "boundaries": [
+    {
+      "length": 1,
+      "pcc": 0.9994762134183721
+    },
+    {
+      "length": 31,
+      "pcc": 0.9992812103418869
+    },
+    {
+      "length": 32,
+      "pcc": 0.9994312952196345
+    },
+    {
+      "length": 33,
+      "pcc": 0.9992053614301522
+    },
+    {
+      "length": 1023,
+      "pcc": 0.9996162987174037
+    },
+    {
+      "length": 1024,
+      "pcc": 0.999525302070647
+    },
+    {
+      "length": 1025,
+      "pcc": 0.999624754495085
+    },
+    {
+      "length": 2049,
+      "pcc": 0.9995154853347652
+    },
+    {
+      "length": 33,
+      "pcc": 0.9994288086200097
+    }
+  ],
+  "maximum_prefill_pcc": null
+}

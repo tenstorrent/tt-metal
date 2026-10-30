@@ -10,37 +10,37 @@
   "layer_types": {
     "sliding_attention": {
       "prefill_tokens": 262144,
-      "prefill_pcc": 0.9999328251648368,
+      "prefill_pcc": 0.9994634645306172,
       "non_aligned_prefill_tokens": 262143,
-      "non_aligned_prefill_pcc": 0.9999234496913295,
+      "non_aligned_prefill_pcc": 0.9995164926323171,
       "decode_context_tokens": 262144,
       "decode_position": 262143,
-      "decode_pcc": 0.9999088945906923,
+      "decode_pcc": 0.9994903091941506,
       "evidence": [
-        "fused_decoder/sliding_context_final.json"
+        "optimized_decoder/final_context_v2/layer0_context262144_correctness.json"
       ]
     },
     "full_attention": {
       "prefill_tokens": 262144,
-      "prefill_pcc": 0.9981916975512795,
+      "prefill_pcc": 0.9980639152168558,
       "non_aligned_prefill_tokens": 262143,
-      "non_aligned_prefill_pcc": 0.9986198158792086,
+      "non_aligned_prefill_pcc": 0.9975234393172149,
       "decode_context_tokens": 262144,
       "decode_position": 262143,
-      "decode_pcc": 0.9999882945194171,
+      "decode_pcc": 0.9999324122908617,
       "evidence": [
-        "fused_decoder/full_context_final.json"
+        "optimized_decoder/final_runtime/layer5_context262144_correctness.json"
       ]
     }
   },
-  "reference_scope": "TTNN executes all prompt rows; long HF comparison uses last32 prefill rows, one exact-maximum row and final decode row, with all required prefix KV. Independent long eager/FP32 control: functional_decoder/long_reference_control.json.",
+  "reference_scope": "TTNN executes every prompt row. Long HF reference compares final32 non-aligned prefill rows, final exact-maximum row and final decode row, with all prefix KV. Inputs recorded from pinned HF embeddings and preceding layers; bounded reference preparation control in optimized_decoder/reference_chunk_control.json. Full long output is not copied to host.",
   "cache_bytes_per_token": {
-    "sliding_attention": 16384,
-    "full_attention": 8192
+    "sliding_attention": 8704,
+    "full_attention": 4352
   },
   "batch1_cache_bytes_at_full_context": {
-    "sliding_attention": 4294967296,
-    "full_attention": 2147483648
+    "sliding_attention": 2281701376,
+    "full_attention": 1140850688
   },
   "functional_layer_types": {
     "sliding_attention": {
@@ -70,7 +70,7 @@
       ]
     }
   },
-  "validated_stage": "02-fused-decoder",
+  "validated_stage": "03-optimized-decoder",
   "fused_persistent_weight_copies": {
     "sliding_attention": {
       "extra_bytes": 176160768,
@@ -81,5 +81,42 @@
       "copy_reason": "Packed Q/K replaces, rather than duplicates, original weights."
     }
   },
-  "fused_setup_index_payload_bytes": 440
+  "fused_setup_index_payload_bytes": 440,
+  "fused_layer_types": {
+    "sliding_attention": {
+      "prefill_tokens": 262144,
+      "prefill_pcc": 0.9999328251648368,
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_prefill_pcc": 0.9999234496913295,
+      "decode_context_tokens": 262144,
+      "decode_position": 262143,
+      "decode_pcc": 0.9999088945906923,
+      "evidence": [
+        "fused_decoder/sliding_context_final.json"
+      ]
+    },
+    "full_attention": {
+      "prefill_tokens": 262144,
+      "prefill_pcc": 0.9981916975512795,
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_prefill_pcc": 0.9986198158792086,
+      "decode_context_tokens": 262144,
+      "decode_position": 262143,
+      "decode_pcc": 0.9999882945194171,
+      "evidence": [
+        "fused_decoder/full_context_final.json"
+      ]
+    }
+  },
+  "optimized_precision": {
+    "weights": "bfloat4_b/LoFi",
+    "cache": "bfloat8_b",
+    "prefill_mlp_intermediate": "bfloat8_b",
+    "residual_norm": "bfloat16",
+    "sdpa_prefill": "HiFi2 BF16 accumulation/streaming",
+    "sdpa_decode": "HiFi2 FP32 accumulation"
+  },
+  "optimized_memory_evidence": "optimized_decoder/memory_ledger.json",
+  "optimized_persistent_attention_copies": 1,
+  "optimized_decode_k_chunk": "sliding64 capped to valid capacity divisibility; full32"
 }

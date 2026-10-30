@@ -1,0 +1,2153 @@
+[
+  {
+    "candidate": "control",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/control_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "control",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/control_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_b3",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 3
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 3
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 3}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 3}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_b3_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_b3",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 3
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 3
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 3}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 3}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_b3_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_b7",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 7}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 7}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 7}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_b7_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_b7",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 7}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 7}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 7}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_b7_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_b21",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 21
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 21
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 21
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 21}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 21}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 21}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_b21_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_b4",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 4
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 4}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_b4_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_b4",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 4
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 4}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_b4_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_b8",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 8
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 8}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_b8_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_b8",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 8
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 8}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_b8_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_b16",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 16}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_b16_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_b16",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 16
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 16}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_b16_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_b32",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 32
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 32}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_b32_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c8_b3",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 3
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 8, \"block\": 3}, \"mlp.up_proj\": {\"cores\": 8, \"block\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c8_b3_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c8_b3",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 3
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 8, \"block\": 3}, \"mlp.up_proj\": {\"cores\": 8, \"block\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c8_b3_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c8_b7",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 7
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 7
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 8, \"block\": 7}, \"mlp.up_proj\": {\"cores\": 8, \"block\": 7}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c8_b7_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c7_b8",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 7,
+        "block": 8
+      },
+      "mlp.up_proj": {
+        "cores": 7,
+        "block": 8
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 7, \"block\": 8}, \"mlp.up_proj\": {\"cores\": 7, \"block\": 8}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c7_b8_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c7_b12",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 7,
+        "block": 12
+      },
+      "mlp.up_proj": {
+        "cores": 7,
+        "block": 12
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 7, \"block\": 12}, \"mlp.up_proj\": {\"cores\": 7, \"block\": 12}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c7_b12_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c7_b24",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 7,
+        "block": 24
+      },
+      "mlp.up_proj": {
+        "cores": 7,
+        "block": 24
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 7, \"block\": 24}, \"mlp.up_proj\": {\"cores\": 7, \"block\": 24}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c7_b24_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c14_b6",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 14,
+        "block": 6
+      },
+      "mlp.up_proj": {
+        "cores": 14,
+        "block": 6
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 14, \"block\": 6}, \"mlp.up_proj\": {\"cores\": 14, \"block\": 6}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c14_b6_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c14_b6",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 14,
+        "block": 6
+      },
+      "mlp.up_proj": {
+        "cores": 14,
+        "block": 6
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 14, \"block\": 6}, \"mlp.up_proj\": {\"cores\": 14, \"block\": 6}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c14_b6_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c14_b12",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 14,
+        "block": 12
+      },
+      "mlp.up_proj": {
+        "cores": 14,
+        "block": 12
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 14, \"block\": 12}, \"mlp.up_proj\": {\"cores\": 14, \"block\": 12}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c14_b12_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c28_b6",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 28,
+        "block": 6
+      },
+      "mlp.up_proj": {
+        "cores": 28,
+        "block": 6
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 28, \"block\": 6}, \"mlp.up_proj\": {\"cores\": 28, \"block\": 6}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c28_b6_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c28_b6",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 28,
+        "block": 6
+      },
+      "mlp.up_proj": {
+        "cores": 28,
+        "block": 6
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 28, \"block\": 6}, \"mlp.up_proj\": {\"cores\": 28, \"block\": 6}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c28_b6_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c56_b3",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 3
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 56, \"block\": 3}, \"mlp.up_proj\": {\"cores\": 56, \"block\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c56_b3_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_c56_b3",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 56,
+        "block": 3
+      },
+      "mlp.up_proj": {
+        "cores": 56,
+        "block": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 56, \"block\": 3}, \"mlp.up_proj\": {\"cores\": 56, \"block\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_c56_b3_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c8_b7",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 7
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 7}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c8_b7_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c8_b7",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 7
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 7}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c8_b7_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c8_b14",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 14}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c8_b14_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c8_b14",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 14
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 14}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c8_b14_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c8_b28",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 28
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 28}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c8_b28_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c7_b16",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 7,
+        "block": 16
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 7, \"block\": 16}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c7_b16_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c7_b24",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 7,
+        "block": 24
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 7, \"block\": 24}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c7_b24_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c14_b24",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 14,
+        "block": 24
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 14, \"block\": 24}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c14_b24_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c28_b12",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 28,
+        "block": 12
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 28, \"block\": 12}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c28_b12_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c28_b12",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 28,
+        "block": 12
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 28, \"block\": 12}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c28_b12_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c56_b12",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 56,
+        "block": 12
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 56, \"block\": 12}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c56_b12_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_c56_b12",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 56,
+        "block": 12
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 56, \"block\": 12}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_c56_b12_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_r2",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_r2_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_r2",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_r2_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_r2",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 8,
+        "readers": 2
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 8, \"readers\": 2}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_r2_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_r2",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}, \"mlp.up_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_r2_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_r2",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}, \"mlp.up_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_r2_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_r2",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 2
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 2}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_r2_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "qkv_r3",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.q_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      },
+      "self_attn.k_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      },
+      "self_attn.v_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.q_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}, \"self_attn.k_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}, \"self_attn.v_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/qkv_r3_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_r3",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 8,
+        "readers": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 8, \"readers\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_r3_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "o_r3",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "self_attn.o_proj": {
+        "cores": 8,
+        "block": 8,
+        "readers": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"self_attn.o_proj\": {\"cores\": 8, \"block\": 8, \"readers\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/o_r3_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_r3",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}, \"mlp.up_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_r3_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "gate_r3",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.gate_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      },
+      "mlp.up_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.gate_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}, \"mlp.up_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/gate_r3_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_r3",
+    "phase": "correctness",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_r3_correctness.json",
+      "--seq",
+      "33",
+      "--inputs",
+      "bringup/artifacts/optimized_decoder_layer0_inputs.pt"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  },
+  {
+    "candidate": "down_r3",
+    "phase": "timing",
+    "geometry": {
+      "default": {
+        "block": 1
+      },
+      "carry": true,
+      "mlp.down_proj": {
+        "cores": 8,
+        "block": 7,
+        "readers": 3
+      }
+    },
+    "precision": "MLP BFP4 LoFi / attention bfp4",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.time_optimized_candidate",
+      "--layer",
+      "0",
+      "--precision",
+      "bfp4",
+      "--attention-precision",
+      "bfp4",
+      "--layout",
+      "--geometry",
+      "{\"default\": {\"block\": 1}, \"carry\": true, \"mlp.down_proj\": {\"cores\": 8, \"block\": 7, \"readers\": 3}}",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/geometry_0_bfp4/down_r3_timing.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/optimized_decoder.py": "d151d1af644935509e4074b032cd3b92202ee6b7627febfb035b05d4c3c1dde3",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/optimized_layout_candidate.py": "59d2e825fe6c7e1ec638bdddb7ef75d5a1167799d653f4f2c7dbb23db38c2abb"
+    }
+  }
+]

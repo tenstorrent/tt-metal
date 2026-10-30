@@ -1,0 +1,13 @@
+Process 192743: /home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python -m models.autoports.google_gemma_4_31b_it.tests.run_optimized_decoder --layer 5 --batch 1 --result models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/final_context_v2/layer5_context262144_correctness.json --seq 262143 --replays 32 --inputs bringup/artifacts/optimized_decoder_layer5_inputs262144.pt
+Python v3.10.19 (/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/bin/python3.10)
+
+Thread 192743 (idle): "MainThread"
+    __call__ (ttnn/decorators.py:1245)
+    _tracked_fast_operation_call (ttnn/decorators.py:1316)
+    prefill_chunk_forward (optimized_decoder.py:582)
+    prefill_forward (optimized_decoder.py:535)
+    call (run_optimized_decoder.py:158)
+    run (run_optimized_decoder.py:169)
+    <module> (run_optimized_decoder.py:414)
+    _run_code (runpy.py:86)
+    _run_module_as_main (runpy.py:196)

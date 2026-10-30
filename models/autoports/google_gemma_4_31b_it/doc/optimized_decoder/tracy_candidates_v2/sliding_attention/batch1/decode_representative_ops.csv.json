@@ -1,0 +1,14 @@
+{
+  "source": "models/autoports/google_gemma_4_31b_it/doc/optimized_decoder/tracy_candidates_v2/sliding_attention/batch1/ops.csv",
+  "source_sha256": "47f61b88d2cd8710a23a95f99b5808d7b0feb53b547ec2a0db5b31cf75e98566",
+  "trace_id": "0",
+  "replay_session": "44",
+  "device_us": 993.3622222222222,
+  "ops": 37,
+  "selection": "complete replay nearest median duration among128",
+  "incoming_boundary_latency_excluded": {
+    "OP TO OP LATENCY [ns]": "9943",
+    "OP TO OP LATENCY BR/NRISC START [ns]": "9943"
+  },
+  "all_internal_timestamps_and_latencies_preserved": true
+}

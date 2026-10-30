@@ -1,0 +1,54 @@
+{
+  "default": {
+    "block": 1
+  },
+  "carry": true,
+  "lifetime": true,
+  "self_attn.o_proj": {
+    "cores": 8,
+    "block": 16
+  },
+  "mlp.gate_proj": {
+    "cores": 56,
+    "block": 6,
+    "readers": 2
+  },
+  "mlp.up_proj": {
+    "cores": 56,
+    "block": 6,
+    "readers": 2
+  },
+  "mlp.down_proj": {
+    "cores": 8,
+    "block": 14
+  },
+  "self_attn.q_proj": {
+    "cores": 8,
+    "block": 7,
+    "readers": 2
+  },
+  "self_attn.k_proj": {
+    "cores": 8,
+    "block": 7,
+    "readers": 2
+  },
+  "self_attn.v_proj": {
+    "cores": 8,
+    "block": 7,
+    "readers": 2
+  },
+  "kv8": true,
+  "head_l1": true,
+  "decode_k": 128,
+  "prefill_q": 128,
+  "prefill_k": 128,
+  "sdpa_fidelity": "HiFi2",
+  "tune_prefill": true,
+  "prefill_block": 2,
+  "minimal": true,
+  "self_attn.qk_proj": {
+    "cores": 8,
+    "block": 3,
+    "readers": 2
+  }
+}

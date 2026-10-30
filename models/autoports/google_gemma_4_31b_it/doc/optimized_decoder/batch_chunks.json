@@ -1,0 +1,65 @@
+{
+  "scope": "Warmed whole-prefill host timings, real pinned weights and recorded HF activations. Last32 output rows compared with delivered default; not device telemetry.",
+  "rows": [
+    {
+      "layer_type": "sliding_attention",
+      "batch": 32,
+      "logical_tokens": 4096,
+      "physical_chunk_tokens": 1024,
+      "chunk_count": 4,
+      "uses_private_l1": false,
+      "host_ms": [
+        716.4605479920283,
+        717.0131410239264,
+        717.1102060237899
+      ],
+      "median_host_ms": 717.0131410239264,
+      "last32_vs_default_pcc": 1.0
+    },
+    {
+      "layer_type": "sliding_attention",
+      "batch": 32,
+      "logical_tokens": 4096,
+      "physical_chunk_tokens": 32,
+      "chunk_count": 128,
+      "uses_private_l1": true,
+      "host_ms": [
+        888.4515559766442,
+        886.6843120194972,
+        886.7112530278973
+      ],
+      "median_host_ms": 886.7112530278973,
+      "last32_vs_default_pcc": 0.9999414682388306
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 32,
+      "logical_tokens": 4096,
+      "physical_chunk_tokens": 1024,
+      "chunk_count": 4,
+      "uses_private_l1": false,
+      "host_ms": [
+        1024.1911089979112,
+        1023.1805340154096,
+        1025.7819289690815
+      ],
+      "median_host_ms": 1024.1911089979112,
+      "last32_vs_default_pcc": 0.9999999403953552
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 32,
+      "logical_tokens": 4096,
+      "physical_chunk_tokens": 32,
+      "chunk_count": 128,
+      "uses_private_l1": true,
+      "host_ms": [
+        1690.2172039845027,
+        1690.7081400277093,
+        1690.2976399869658
+      ],
+      "median_host_ms": 1690.2976399869658,
+      "last32_vs_default_pcc": 0.9999850392341614
+    }
+  ]
+}

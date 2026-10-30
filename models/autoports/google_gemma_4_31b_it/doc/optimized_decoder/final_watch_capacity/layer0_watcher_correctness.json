@@ -1,0 +1,84 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tt.optimized_decoder.OptimizedDecoder",
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "prefill_tokens": 2049,
+  "decode_position": 2049,
+  "prefill_pcc": 0.9994847561735839,
+  "decode_pcc": 0.9996646126026617,
+  "real_weights": true,
+  "input_source": "bringup/artifacts/optimized_decoder_layer0_inputs2050.pt",
+  "distinct_request_inputs": false,
+  "precision": [
+    "bfp4",
+    "bfp4",
+    "bfp4"
+  ],
+  "reference_scope": "all_rows",
+  "trace_replays": 135,
+  "interleaved_prefill_cases": 6,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9996632063306871,
+  "deterministic": true,
+  "caller_prefill_input_unchanged": true,
+  "runtime_conversion_guards": true,
+  "resume_pcc": 0.9999772292614507,
+  "resume_results": [
+    {
+      "chunk_start": 32,
+      "pcc": 0.9999797373690769
+    },
+    {
+      "chunk_start": 96,
+      "pcc": 0.9999772292614507
+    },
+    {
+      "chunk_start": 128,
+      "pcc": 0.9999880950182936
+    },
+    {
+      "chunk_start": 1024,
+      "pcc": 1.0
+    }
+  ],
+  "boundaries": [
+    {
+      "length": 1,
+      "pcc": 0.9994766886899783
+    },
+    {
+      "length": 31,
+      "pcc": 0.9992481341953954
+    },
+    {
+      "length": 32,
+      "pcc": 0.9993938667305244
+    },
+    {
+      "length": 33,
+      "pcc": 0.9991690493302346
+    },
+    {
+      "length": 1023,
+      "pcc": 0.9995978811942308
+    },
+    {
+      "length": 1024,
+      "pcc": 0.9995169735818986
+    },
+    {
+      "length": 1025,
+      "pcc": 0.9996072909375886
+    },
+    {
+      "length": 2049,
+      "pcc": 0.9994855525193268
+    },
+    {
+      "length": 33,
+      "pcc": 0.9994123696365418
+    }
+  ],
+  "maximum_prefill_pcc": null
+}
