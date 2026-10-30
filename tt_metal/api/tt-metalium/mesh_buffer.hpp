@@ -98,7 +98,7 @@ namespace tt::tt_metal::experimental::fixed_address_allocation {
 std::shared_ptr<distributed::MeshBuffer> allocate_at_address(
     const distributed::MeshBufferConfig& mesh_buffer_config,
     const distributed::DeviceLocalBufferConfig& device_local_config,
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     DeviceAddr address);
 }  // namespace tt::tt_metal::experimental::fixed_address_allocation
 
@@ -234,7 +234,7 @@ private:
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::fixed_address_allocation::allocate_at_address(
         const tt::tt_metal::distributed::MeshBufferConfig&,
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
-        tt::tt_metal::distributed::MeshDevice*,
+        tt::tt_metal::distributed::MeshDevice&,
         tt::tt_metal::DeviceAddr);
 };
 

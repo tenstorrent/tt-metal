@@ -47,7 +47,11 @@ void py_module(nb::module_& mod) {
         nb::arg("buffer_address") = nb::none(),
         nb::arg("config_address") = nb::none(),
         R"doc(
-            Create a GlobalCircularBuffer Object on a device.
+            Allocate and own a global circular buffer on a device.
+
+            Supply both addresses to reserve new storage at those exact addresses, or neither
+            for automatic placement. Both ranges must be free. This does not view or adopt
+            existing allocations. Deallocation releases both owned ranges.
 
             Args:
                 mesh_device (MeshDevice): The mesh device on which to create the global circular buffer.

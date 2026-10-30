@@ -139,7 +139,7 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressReconstruction
     const CoreRangeSet receivers{CoreRange{{1, 0}, {1, 0}}};
     const std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping{{sender, receivers}};
     const auto before = mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
-    auto original = experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536);
+    auto original = experimental::CreateGlobalCircularBuffer(*mesh_device, mapping, 65536);
     auto alias = original;
     const auto data_address = original.buffer_address();
     const auto config_address = original.config_address();
@@ -162,8 +162,8 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressReconstruction
     for (const auto& [core, expected] : expected_config) {
         detail::WriteToDeviceL1(physical_device, core, config_address, scratch, CoreType::WORKER);
     }
-    auto restored =
-        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address, config_address);
+    auto restored = experimental::CreateGlobalCircularBuffer(
+        *mesh_device, mapping, 65536, BufferType::L1, data_address, config_address);
     EXPECT_EQ(restored.buffer_address(), data_address);
     EXPECT_EQ(restored.config_address(), config_address);
     distributed::Synchronize(*mesh_device, std::nullopt);
@@ -199,7 +199,7 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressCollisionRolls
     auto* physical_device = mesh_device->get_devices().front();
     for (const auto blocked_address : {data_address, config_address}) {
         auto blocker = experimental::fixed_address_allocation::allocate_at_address(
-            distributed::ReplicatedBufferConfig{.size = 64}, config, mesh_device.get(), blocked_address);
+            distributed::ReplicatedBufferConfig{.size = 64}, config, *mesh_device, blocked_address);
         const auto occupied = mesh_device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
         // Existing explicit-address create remains a non-owning view.
         auto view = distributed::MeshBuffer::create(
@@ -219,9 +219,6 @@ TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferFixedAddressCollisionRolls
         detail::ReadFromDeviceL1(physical_device, sender, blocked_address, 32, after, CoreType::WORKER);
         EXPECT_EQ(after, sentinel);
     }
-    EXPECT_THROW(
-        experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address),
-        std::runtime_error);
     // A failed config allocation must have released the successfully allocated data.
     auto restored =
         experimental::GlobalCircularBuffer(*mesh_device, mapping, 65536, BufferType::L1, data_address, config_address);

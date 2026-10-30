@@ -85,7 +85,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(
         [this](uint32_t size, const distributed::DeviceLocalBufferConfig& config, std::optional<DeviceAddr> address) {
             const distributed::ReplicatedBufferConfig mesh_config{.size = size};
             return address.has_value()
-                       ? fixed_address_allocation::allocate_at_address(mesh_config, config, device_, address.value())
+                       ? fixed_address_allocation::allocate_at_address(mesh_config, config, *device_, address.value())
                        : distributed::MeshBuffer::create(mesh_config, config, device_);
         };
 
@@ -204,9 +204,16 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
+    BufferType buffer_type) :
+    GlobalCircularBuffer(GlobalCircularBufferImpl(device, sender_receiver_core_mapping, size, buffer_type)) {}
+
+GlobalCircularBuffer::GlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
     BufferType buffer_type,
-    std::optional<DeviceAddr> buffer_address,
-    std::optional<DeviceAddr> config_address) :
+    DeviceAddr buffer_address,
+    DeviceAddr config_address) :
     GlobalCircularBuffer(GlobalCircularBufferImpl(
         device, sender_receiver_core_mapping, size, buffer_type, buffer_address, config_address)) {}
 
@@ -214,9 +221,17 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
+}
+
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
     BufferType buffer_type,
-    std::optional<DeviceAddr> buffer_address,
-    std::optional<DeviceAddr> config_address) {
+    DeviceAddr buffer_address,
+    DeviceAddr config_address) {
     return GlobalCircularBuffer(
         device, sender_receiver_core_mapping, size, buffer_type, buffer_address, config_address);
 }

@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -37,13 +36,22 @@ class GlobalCircularBuffer {
 public:
     explicit GlobalCircularBuffer(GlobalCircularBufferImpl impl);
 
+    // Allocate and own data and configuration buffers at allocator-selected addresses.
     GlobalCircularBuffer(
         distributed::MeshDevice& device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1,
-        std::optional<DeviceAddr> buffer_address = std::nullopt,
-        std::optional<DeviceAddr> config_address = std::nullopt);
+        BufferType buffer_type = BufferType::L1);
+
+    // Allocate and own both buffers at the exact addresses. Both ranges must be free.
+    // This reserves new storage; it does not view or adopt existing allocations.
+    GlobalCircularBuffer(
+        distributed::MeshDevice& device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        uint32_t size,
+        BufferType buffer_type,
+        DeviceAddr buffer_address,
+        DeviceAddr config_address);
 
     GlobalCircularBuffer(const GlobalCircularBuffer& other);
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer& other);
@@ -79,23 +87,42 @@ private:
 };
 
 /**
- * @brief Allocates a global circular buffer in L1 on the device.
+ * @brief Allocates and owns a global circular buffer at allocator-selected L1 addresses.
  *
  * @param device Mesh device to create the global circular buffer on.
  * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
  * @param size Size of the global circular buffer per core in bytes.
  * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
- * @param buffer_address Optional exact data address. Both addresses must be supplied together.
- * @param config_address Optional exact configuration address. Fails if either range is unavailable.
  * @return The allocated global circular buffer.
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1,
-    std::optional<DeviceAddr> buffer_address = std::nullopt,
-    std::optional<DeviceAddr> config_address = std::nullopt);
+    BufferType buffer_type = BufferType::L1);
+
+/**
+ * @brief Allocates and owns a global circular buffer at two exact L1 addresses.
+ *
+ * Both ranges must be free. This function reserves new storage in the allocator and initializes
+ * the configuration buffer. It does not view or adopt existing allocations. It fails if either
+ * range is unavailable or invalid. Deallocation releases both owned ranges.
+ *
+ * @param device Mesh device to allocate the global circular buffer on.
+ * @param sender_receiver_core_mapping Mapping of sender cores to receiver cores.
+ * @param size Size of the data buffer per core in bytes.
+ * @param buffer_type L1 buffer type for both allocations.
+ * @param buffer_address Exact data address.
+ * @param config_address Exact configuration address.
+ * @return The global circular buffer that owns both allocations.
+ */
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type,
+    DeviceAddr buffer_address,
+    DeviceAddr config_address);
 
 /**
  * @brief Creates a Circular Buffer in L1 memory of specified cores using the address space of the

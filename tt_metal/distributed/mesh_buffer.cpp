@@ -608,12 +608,12 @@ namespace tt::tt_metal::experimental::fixed_address_allocation {
 std::shared_ptr<distributed::MeshBuffer> allocate_at_address(
     const distributed::MeshBufferConfig& mesh_buffer_config,
     const distributed::DeviceLocalBufferConfig& device_local_config,
-    distributed::MeshDevice* mesh_device,
+    distributed::MeshDevice& mesh_device,
     DeviceAddr address) {
     TT_FATAL(
         device_local_config.buffer_type == BufferType::L1 || device_local_config.buffer_type == BufferType::L1_SMALL,
         "Fixed-address allocation requires an L1 buffer");
-    return distributed::MeshBuffer::create_impl(mesh_buffer_config, device_local_config, mesh_device, address, true);
+    return distributed::MeshBuffer::create_impl(mesh_buffer_config, device_local_config, &mesh_device, address, true);
 }
 
 }  // namespace tt::tt_metal::experimental::fixed_address_allocation

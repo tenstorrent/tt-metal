@@ -16,6 +16,8 @@
 namespace ttnn::global_circular_buffer {
 
 // Multi Device APIs
+// Allocate and own both GCB buffers. Supply both addresses to reserve those exact ranges,
+// or neither for automatic placement. Existing allocations cannot be viewed or adopted.
 GlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* mesh_device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,

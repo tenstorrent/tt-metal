@@ -28,8 +28,15 @@ GlobalCircularBuffer create_global_circular_buffer(
     std::optional<tt::tt_metal::DeviceAddr> buffer_address,
     std::optional<tt::tt_metal::DeviceAddr> config_address) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
+    TT_FATAL(
+        buffer_address.has_value() == config_address.has_value(),
+        "Global circular buffer data and configuration addresses must be supplied together");
+    if (!buffer_address.has_value()) {
+        return tt::tt_metal::experimental::GlobalCircularBuffer(
+            *device, sender_receiver_core_mapping, size, buffer_type);
+    }
     return tt::tt_metal::experimental::GlobalCircularBuffer(
-        *device, sender_receiver_core_mapping, size, buffer_type, buffer_address, config_address);
+        *device, sender_receiver_core_mapping, size, buffer_type, buffer_address.value(), config_address.value());
 }
 
 namespace {
