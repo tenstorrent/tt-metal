@@ -17,7 +17,11 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding
 
 from ..l1_support import L1Support
-from ..storage import DEST_32_BIT_FORMATS, to_dest_storage
+from ..storage import (
+    DEST_32_BIT_FORMATS,
+    to_dest_storage,
+    truncate_to_l1_lattice,
+)
 from .pack_effects import (
     STOCH_RND_EFFECTS,
     PackEdgeMask,
@@ -47,6 +51,7 @@ class Pack:
         edge_mask_masked_when_set: bool = False,
         promotes_outlier_to_32_bit_dest: bool = True,
         gasket_converts_wide_dest: bool = True,
+        truncating_outputs: FrozenSet[DataFormat] = frozenset(),
     ) -> None:
         #: Legal ``Dest -> L1`` pairs, the pack-side counterpart of the
         #: unpacker's table. Empty means unmodelled.
@@ -65,6 +70,12 @@ class Pack:
         #: Wormhole and Blackhole, False on Quasar, whose packer converts
         #: directly. It decides which format the ReLU threshold is encoded in.
         self.gasket_converts_wide_dest = gasket_converts_wide_dest
+
+        #: Output formats this packer truncates toward zero. The codecs in
+        #: :mod:`helpers.pack` round, because they were written to lay down
+        #: stimuli rather than to model this conversion, so a format listed
+        #: here is quantized before they see it.
+        self.truncating_outputs = truncating_outputs
 
         self.l1 = l1
 
@@ -174,4 +185,16 @@ class Pack:
             edge_mask=edge_mask,
             edge_mask_masked_when_set=self.edge_mask_masked_when_set,
         )
+        if l1_format in self.truncating_outputs:
+            truncated = truncate_to_l1_lattice(values, l1_format)
+            if truncated is None:
+                warnings.warn(
+                    f"{self.l1.name} truncates when packing to {l1_format}, "
+                    f"but this golden has no lattice for it, so the rounding "
+                    f"codec is used instead. Those bytes are unverified.",
+                    UnmodelledHardwareWarning,
+                    stacklevel=3,
+                )
+            else:
+                values = truncated
         return self.l1.write(values, l1_format, **geometry)
