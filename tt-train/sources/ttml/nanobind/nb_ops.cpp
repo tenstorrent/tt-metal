@@ -72,6 +72,7 @@ void py_module_types(nb::module_& m) {
         auto py_rope = m.def_submodule("rope");
         nb::class_<ttml::ops::RopeScalingParams>(py_rope, "RopeScalingParams");
         nb::class_<ttml::ops::RotaryEmbeddingParams>(py_rope, "RotaryEmbeddingParams");
+        nb::class_<ttml::ops::RotaryEmbeddingPositionIds>(py_rope, "RotaryEmbeddingPositionIds");
     }
 
     m.def_submodule("matmul");
@@ -474,7 +475,7 @@ void py_module(nb::module_& m) {
             nb::overload_cast<
                 const autograd::TensorPtr&,
                 const ttml::ops::RotaryEmbeddingParams&,
-                const autograd::TensorPtr&>(&ttml::ops::rope),
+                const ttml::ops::RotaryEmbeddingPositionIds&>(&ttml::ops::rope),
             nb::arg("input"),
             nb::arg("rope_params"),
             nb::arg("position_ids"),
@@ -535,6 +536,13 @@ void py_module(nb::module_& m) {
             py_rotary_embedding_params.def_rw("theta", &ttml::ops::RotaryEmbeddingParams::theta);
             py_rotary_embedding_params.def_rw(
                 "rope_scaling_params", &ttml::ops::RotaryEmbeddingParams::rope_scaling_params);
+        }
+        {
+            auto py_position_ids = static_cast<nb::class_<ttml::ops::RotaryEmbeddingPositionIds>>(
+                py_rope.attr("RotaryEmbeddingPositionIds"));
+            py_position_ids.def(nb::init<autograd::TensorPtr>(), nb::arg("ids"));
+            py_position_ids.def("update", &ttml::ops::RotaryEmbeddingPositionIds::update, nb::arg("ids"));
+            py_position_ids.def("get_ids", &ttml::ops::RotaryEmbeddingPositionIds::get_ids);
         }
     }
 
