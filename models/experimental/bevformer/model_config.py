@@ -253,10 +253,10 @@ _TTNN_DTYPES = {
 # The head's box predictions: their centers are the decoder's refined reference points.
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
-# Bisection steps of the coder's exact top-k (TTNMSFreeCoder.topk), which narrow the k-th logit's
-# bracket around the bfloat16 pivot, 2^-5 of the pivot wide, down to one float32 value; 19
-# suffice, the rest is margin.
-CODER_BISECTION_STEPS = 22
+# Rounds of the coder's exact top-k search (TTNMSFreeCoder.topk), each of which splits the k-th
+# logit's bracket around the bfloat16 pivot, 2^-5 of the pivot wide, into 32: four take it down to
+# one float32 value, the fifth is margin.
+CODER_SEARCH_ROUNDS = 5
 
 
 # The backbone and FPN. Their choices below are sized for base's 6 cameras at 1600x928; small and

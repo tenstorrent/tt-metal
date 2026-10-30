@@ -19,7 +19,7 @@ from models.experimental.bevformer.model_config import (
     BOX_CENTER,
     BOX_H,
     BOX_Z,
-    CODER_BISECTION_STEPS,
+    CODER_SEARCH_ROUNDS,
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -85,28 +85,43 @@ class TTNMSFreeCoder:
         )
         self.max_num = max_num
         self.num_classes = num_classes
-        # The bisection's counts reach num_query * num_classes, which bfloat16 accumulation would
+        # The search's counts reach num_query * num_classes, which bfloat16 accumulation would
         # round; float32 holds them exactly.
         self._count_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        )
+        # 1 .. 31 down dim -2: the search's thresholds, in steps of its bracket.
+        self._search_steps = ttnn.to_device(
+            ttnn.Tensor([float(i) for i in range(1, 32)], [1, 1, 31, 1], SCORE_DTYPE, ttnn.TILE_LAYOUT), device
         )
 
     def _kth_logit(self, logits):
         """The exact k-th largest of ``logits`` ``(bs, 1, 1, n)``, ``(bs, 1, 1, 1)`` float32. A
         bfloat16 top-k gives it rounded, the pivot, as rounding is monotonic; within the pivot's
-        bracket a bisection keeps the largest value with at least k logits at or above it."""
+        bracket each round keeps, of 31 evenly spaced thresholds, the largest with at least k logits
+        at or above it, and the step above it. The thresholds fill one tile row, so a round costs
+        one count over the logits, as a single threshold would."""
         k = self.max_num
         pivot, _ = ttnn.topk(ttnn.typecast(logits, ttnn.bfloat16), k=k, dim=-1)
         pivot = ttnn.typecast(pivot[..., k - 1 : k], SCORE_DTYPE)
         # Wider than the pivot's bfloat16 rounding step on either side; the floor covers a pivot of 0.
         half_width = ttnn.add(ttnn.multiply(ttnn.abs(pivot), 2.0**-6), 1e-30)
         low, high = ttnn.subtract(pivot, half_width), ttnn.add(pivot, half_width)
-        for _ in range(CODER_BISECTION_STEPS):
-            middle = ttnn.multiply(ttnn.add(low, high), 0.5)
-            count = ttnn.sum(ttnn.ge(logits, middle), dim=-1, keepdim=True, compute_kernel_config=self._count_config)
-            enough = ttnn.ge(count, float(k))
-            low = ttnn.where(enough, middle, low)
-            high = ttnn.where(enough, high, middle)
+        steps = self._search_steps.shape[-2]
+        for _ in range(CODER_SEARCH_ROUNDS):
+            # 32 steps span the bracket, so a step is the bracket scaled by a power of two, exactly.
+            step = ttnn.multiply(ttnn.subtract(high, low), 1.0 / (steps + 1))
+            thresholds = ttnn.add(low, ttnn.multiply(step, self._search_steps))
+            count = ttnn.sum(
+                ttnn.ge(logits, thresholds), dim=-1, keepdim=True, compute_kernel_config=self._count_config
+            )
+            # The counts fall as the thresholds rise, so the thresholds with enough logits come first.
+            passed = ttnn.sum(ttnn.ge(count, float(k)), dim=-2, keepdim=True, compute_kernel_config=self._count_config)
+            next_high = ttnn.where(
+                ttnn.ge(passed, float(steps)), high, ttnn.add(low, ttnn.multiply(step, ttnn.add(passed, 1.0)))
+            )
+            low = ttnn.add(low, ttnn.multiply(step, passed))
+            high = next_high
         return low
 
     def topk(self, cls_scores, bbox_preds):
