@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writes a run's partials as compute finishes each site group, and the row's shift and mass,
-// each site as column 0 of its own page: the layout the read takes per-site scalars in.
+// Writes the even site groups of a run's partials as compute finishes them, and the row's
+// shift and mass, each site as column 0 of its own page: the layout the read takes per-site
+// scalars in.
 
 #include <cstdint>
 
@@ -12,6 +13,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_items.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_block_mix_partials.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/device/kernels/attn_res_tile_columns.hpp"
 
 void kernel_main() {
@@ -81,25 +83,14 @@ void kernel_main() {
             cb_mass_obj.pop_front(1);
         }
 
-        // Partials are [R, 1, N, d]: site r's tile at (row, w) is page (r * Ht + row) * Wt + w.
-        // Compute emits a group's sites together, one position at a time.
         for (uint32_t group = 0; group < num_groups; ++group) {
+            if (reader_writes_group(group)) {
+                continue;
+            }
             const uint32_t first_site = group * sites_per_group;
             const uint32_t sites = first_site + sites_per_group <= num_sites ? sites_per_group : num_sites - first_site;
-            for (uint32_t w = item.begin; w < item.end; ++w) {
-                cb_partials_obj.wait_front(sites);
-                for (uint32_t s = 0; s < sites; ++s) {
-                    noc.async_write(
-                        cb_partials_obj,
-                        partials_accessor,
-                        value_tile_bytes,
-                        {.offset_bytes = s * value_tile_bytes},
-                        {.page_id = ((first_site + s) * Ht + item.row) * Wt + w});
-                }
-                // Flushed rather than acknowledged: the buffer only has to be free to reuse.
-                noc.async_writes_flushed();
-                cb_partials_obj.pop_front(sites);
-            }
+            write_partials_group<Ht, Wt>(
+                noc, cb_partials_obj, partials_accessor, value_tile_bytes, item, first_site, sites);
         }
         noc.async_write_barrier();
     });
