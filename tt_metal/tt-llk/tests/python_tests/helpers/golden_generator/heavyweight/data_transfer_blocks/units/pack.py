@@ -69,15 +69,10 @@ class Pack:
         self.promotes_outlier_to_32_bit_dest = promotes_outlier_to_32_bit_dest
 
         #: Whether the gasket converts a 32-bit Dest before the packer sees it,
-        #: so the packer reads the *output* format rather than Dest's. True on
-        #: Wormhole and Blackhole, False on Quasar, whose packer converts
-        #: directly. It decides which format the ReLU threshold is encoded in.
+        #: so the packer reads the *output* format rather than Dest's.
         self.gasket_converts_wide_dest = gasket_converts_wide_dest
 
-        #: Output formats this packer truncates toward zero. The codecs in
-        #: :mod:`helpers.pack` round, because they were written to lay down
-        #: stimuli rather than to model this conversion, so a format listed
-        #: here is quantized before they see it.
+        #: Output formats this packer truncates toward zero.
         self.truncating_outputs = truncating_outputs
 
         #: What the early conversion keeps, by output format: the explicit
