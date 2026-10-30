@@ -718,9 +718,12 @@ def check_head_outputs(expected, actual):
     finite, the centers within ``assert_centers_close``'s bounds, and the logits and the boxes over
     all layers, then the last alone, which the coder reads and where the bfloat16 error has built up
     most. The boxes go channel by channel: a joint PCC would be the centers' alone, as x and y span
-    102.4 m against z's 8 m and the other channels' O(1)."""
+    102.4 m against z's 8 m and the other channels' O(1). A single-layer ``actual``, a head without
+    ``all_layers``, is the last layer's."""
     actual = tuple(ttnn.to_torch(t).float() for t in actual)
     actual = (actual[0], actual[1][..., CODE_ORDER])
+    if actual[0].shape[0] == 1:
+        expected = tuple(t[-1:] for t in expected)
     for name, tensor in zip(("class logits", "box predictions"), actual):
         assert_finite(f"the head {name}", tensor)
     assert_centers_close(expected[1], actual[1])

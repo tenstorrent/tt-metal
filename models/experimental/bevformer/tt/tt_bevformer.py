@@ -28,8 +28,9 @@ class TTBEVFormer:
     """The detector, pinned to the image shape ``create_bevformer_parameters`` recorded the
     backbone's and FPN's convs for."""
 
-    def __init__(self, params, device):
-        """``params`` from ``model_preprocessing.create_bevformer_parameters``."""
+    def __init__(self, params, device, all_layers=False):
+        """``params`` from ``model_preprocessing.create_bevformer_parameters``; ``all_layers`` as
+        ``TTBEVFormerHead`` takes it."""
         config = params.config
         assert (
             config.num_cams == params.transformer.config.num_cams
@@ -44,7 +45,7 @@ class TTBEVFormer:
         self.transformer = TTPerceptionTransformer(
             params.transformer, device, bev_h=config.bev_h, bev_w=config.bev_w, spatial_shapes=config.spatial_shapes
         )
-        self.head = TTBEVFormerHead(params.head, device)
+        self.head = TTBEVFormerHead(params.head, device, all_layers=all_layers)
         bev_pos = params.bev_pos
         if self.batch_size > 1:
             bev_pos = ttnn.repeat(bev_pos, ttnn.Shape((self.batch_size, 1, 1)))
@@ -61,10 +62,11 @@ class TTBEVFormer:
     def __call__(self, img, frame, prev_bev=None):
         """``img`` the ``bs * num_cams`` normalized images, ``(1, 1, bs * num_cams * H * W, 3)``
         bfloat16 ROW_MAJOR, sample-major; ``frame`` from :meth:`prepare_frame`; ``prev_bev`` the
-        previous frame's ``(bs, bev_h * bev_w, C)`` BEV or None. Returns the per-layer class logits
-        ``(L, bs, num_query, num_classes)``, boxes ``(L, bs, num_query, code_size)`` and this
-        frame's BEV ``(bs, bev_h * bev_w, C)``; the FPN frees the backbone's features, not
-        ``img``."""
+        previous frame's ``(bs, bev_h * bev_w, C)`` BEV or None. Returns the class logits
+        ``(L, bs, num_query, num_classes)``, boxes ``(L, bs, num_query, code_size)`` in
+        ``TTBEVFormerHead``'s channel order, L the decoder layers with ``all_layers`` and 1, the
+        last, without, and this frame's BEV ``(bs, bev_h * bev_w, C)``; the FPN frees the
+        backbone's features, not ``img``."""
         levels = self.neck(list(self.backbone(img)))
         bev_embed = self.transformer(levels, self.params.bev_queries, self.bev_pos, frame, prev_bev=prev_bev)
         cls_scores, bbox_preds = self.head(bev_embed)
