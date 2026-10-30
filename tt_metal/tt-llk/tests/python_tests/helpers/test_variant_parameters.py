@@ -966,6 +966,37 @@ class DEST_SYNC(TemplateParameter):
 
 
 @dataclass
+class DATACOPY_ZERO_FLAG_PROBE(TemplateParameter):
+    """Compile-time knobs for ``eltwise_unary_datacopy_zero_flag_test.cpp``.
+
+    ``PROBE_COPY``  whether the second Dest section unpack-to-dest copies a tile at all.
+                    False is the control: the stale tile is packed again after a release
+                    with no copy in between, which must give zeros on its own before a
+                    copy can be blamed for anything else coming out.
+    ``PARK_OFFSET`` leave the math dest offset on ``STALE_TILE`` right before the second
+                    section's copy, as a SrcRegs-path op targeting that tile leaves it. The
+                    copy must re-pin the offset before its zero-flag ZEROACC; without the pin
+                    the re-validation lands relative to the parked tile.
+    ``STALE_TILE``  the Dest tile written and packed in the first section and packed
+                    again, unrewritten, in the second. A template argument because the
+                    tile count assert on it is static.
+    """
+
+    probe_copy: bool = True
+    park_offset: bool = False
+    stale_tile: int = 1
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr bool PROBE_COPY = {str(self.probe_copy).lower()};",
+                f"constexpr bool PARK_OFFSET = {str(self.park_offset).lower()};",
+                f"constexpr std::uint32_t STALE_TILE = {self.stale_tile}u;",
+            ]
+        )
+
+
+@dataclass
 class TILIZE(TemplateParameter):
     tilize: Tilize = Tilize.No
 

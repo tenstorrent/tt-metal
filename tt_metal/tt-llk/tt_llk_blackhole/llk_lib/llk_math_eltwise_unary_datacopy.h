@@ -52,16 +52,14 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
-        // Pin the math dest offset to the bank base: hardware adds it to the MOVD2B/MOVB2D immediates
-        // (dst_index * 64 + row) of the broadcast sequences below, and a preceding op may have left another
-        // tile's offset here. A plain copy (NONE) only issues the budabackend#2730 ZEROACC below, whose CLR_16
-        // block index is absolute within the bank: the offset only feeds its bank select, which flips once
-        // offset + index reaches 512 (tt-metal#53693), and a 32-bit bank never gets there (offset <= 240,
-        // index <= 15). So NONE skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
-        if constexpr (src_b_bcast_type != BroadcastType::NONE)
-        {
-            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
-        }
+        // Pin the math dest offset to the base of this thread's sync region (0, or the second DEST half under
+        // SyncHalf): hardware adds it to the MOVD2B/MOVB2D immediates (dst_index * 64 + row) of the broadcast
+        // sequences below, and the CLR_16 ZEROACC below selects the DEST half from offset + block index
+        // (tt-metal#53693); a preceding op may have left another tile's offset here. Two pairings are valid for
+        // that ZEROACC: offset at the tile with the index folded to the half (dst_index & 3, as the dest-reuse
+        // paths do), or offset at the region base with the unfolded tile index (dst_index). This path uses the
+        // second, so the index below is relative to the region base and correct only with this pin in place.
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
         // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
@@ -73,13 +71,14 @@ inline void _llk_math_eltwise_unary_datacopy_(
         const int clear_fp32                  = static_cast<int>(
             dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
             dst_format_masked == (std::uint32_t)DataFormat::UInt32);
-        const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
-        const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
 #pragma GCC unroll 0
         for (std::uint32_t i = 0; i < num_faces; i++)
         {
-            // Clears zero flags in DEST for one face.
-            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
+            // Clears zero flags in DEST for one face of the tile just unpacked. The index (dst_index * 4 + face)
+            // is relative to the sync-region base pinned above and is not folded: under SyncFull with a 32-bit
+            // DEST dst_index runs 0..7, and a folded index with the offset at the region base re-validated tile
+            // dst_index - 4 instead.
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(dst_index, i));
         }
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
