@@ -17,7 +17,13 @@ from abc import ABC, abstractmethod
 from helpers.format_config import DataFormat
 
 from .l1_support import L1Support
-from .storage import SRC_MANT_BITS, SRC_STORAGE_FORMATS
+from .storage import (
+    BF16_MANT_BITS,
+    E8M6_MANT_BITS,
+    FP32_MANTISSA_BITS,
+    SRC_MANT_BITS,
+    SRC_STORAGE_FORMATS,
+)
 from .units import Fpu, Pack, Unpack
 
 BLOCK_FLOAT_FORMATS = frozenset(f for f in DataFormat if f.is_block_float())
@@ -159,6 +165,24 @@ class QuasarArch(ArchGolden):
 # Wormhole and Blackhole: block float, no MX.
 # ----------------------------------------------------------------------
 
+# What the packer's early conversion narrows a 32-bit Dest to, by output
+# format: the explicit mantissa bits it keeps, and whether it rounds getting
+# there. ReLU and the edge mask run after it, so they meet these widths.
+# Float16 and Fp8_e4m3 are absent: neither is an early-conversion target from a
+# float Dest, so they convert late and the effects still see Dest.
+_WH_BH_EARLY_CONVERSION = {
+    DataFormat.Float32: (FP32_MANTISSA_BITS, True),
+    DataFormat.Tf32: (SRC_MANT_BITS, True),
+    DataFormat.Float16_b: (BF16_MANT_BITS, True),
+    # Every block float leaves early as E8M6, one datum at a time, and the
+    # shared block exponent is applied later by the late stage. That step is a
+    # bit-slice rather than a conversion, so it drops the low bits whatever
+    # the architecture does elsewhere.
+    DataFormat.Bfp8_b: (E8M6_MANT_BITS, False),
+    DataFormat.Bfp4_b: (E8M6_MANT_BITS, False),
+    DataFormat.Bfp2_b: (E8M6_MANT_BITS, False),
+}
+
 _WORMHOLE_L1 = L1Support(
     name="Wormhole",
     formats=BLOCK_FLOAT_FORMATS
@@ -195,7 +219,7 @@ class WormholeArch(ArchGolden):
     # matmul path, not the add and subtract one modelled here, and ties to
     # even is no safer a guess. Unset means a write landing on a tie warns.
     fpu = Fpu(_WORMHOLE_L1)
-    pack = Pack(_WORMHOLE_L1)
+    pack = Pack(_WORMHOLE_L1, early_conversion=_WH_BH_EARLY_CONVERSION)
 
 
 _BLACKHOLE_L1 = L1Support(
@@ -233,6 +257,7 @@ class BlackholeArch(ArchGolden):
     # mantissa width, but it is floored the same way.
     pack = Pack(
         _BLACKHOLE_L1,
+        early_conversion=_WH_BH_EARLY_CONVERSION,
         truncating_outputs=frozenset(
             {
                 DataFormat.Fp8_e4m3,

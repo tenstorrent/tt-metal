@@ -28,6 +28,10 @@ SRC_MANT_BITS = 10
 #: Explicit mantissa bits a bf16 datum holds.
 BF16_MANT_BITS = 7
 
+#: Explicit mantissa bits of E8M6, the per-datum intermediate the packer
+#: narrows to before it shares a block float's exponent.
+E8M6_MANT_BITS = 6
+
 #: Largest magnitude an INT8-shaped src datum reaches. Sign-magnitude, so -128
 #: has no encoding on this path.
 INT8_MAX_MAGNITUDE = 127
@@ -90,6 +94,23 @@ def round_mantissa_away(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
     wide = values.to(torch.float32)
     raw = wide.contiguous().view(torch.int32)
     rounded = ((raw + (1 << (dropped - 1))) & ~((1 << dropped) - 1)).view(torch.float32)
+    # Inf and NaN have no mantissa to round, and the add would corrupt them.
+    return torch.where(torch.isfinite(wide), rounded, wide)
+
+
+def round_mantissa_even(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
+    """Round to `keep_bits` mantissa bits, ties to even.
+
+    What IEEE and torch do, written out at an arbitrary width so a conversion
+    the hardware makes at a width torch has no dtype for still rounds the same
+    way. Adding half an ULP less one, plus the low kept bit, carries exactly
+    when the remainder is over half or the kept bit is already odd.
+    """
+    dropped = FP32_MANTISSA_BITS - keep_bits
+    wide = values.to(torch.float32)
+    raw = wide.contiguous().view(torch.int32)
+    bias = (1 << (dropped - 1)) - 1 + ((raw >> dropped) & 1)
+    rounded = ((raw + bias) & ~((1 << dropped) - 1)).view(torch.float32)
     # Inf and NaN have no mantissa to round, and the add would corrupt them.
     return torch.where(torch.isfinite(wide), rounded, wide)
 

@@ -6,10 +6,14 @@
 The packer does more than convert format. Three knobs change the values that
 reach L1, and the hardware applies them in this order:
 
-    Dest -> ReLU -> round -> edge mask -> format convert -> L1
+    Dest -> early convert -> ReLU -> round -> edge mask -> late convert -> L1
+
+The format conversion is in two stages and the effects sit between them, so
+ReLU and the mask meet an already narrowed datum rather than Dest's. See
+:attr:`.Pack.early_conversion`.
 
 Rounding sits between ReLU and the mask in hardware, but the mask *replaces* a
-datum outright, so masking before the format conversion gives the same bytes.
+datum outright, so masking before the late conversion gives the same bytes.
 
 See `README.md`, "units/pack_effects.py".
 """
