@@ -24,9 +24,13 @@ import numpy as np
 import torch
 
 # served c=1 TTFT (ms) at prompt length T, ttis multi_20261030-1332 (includes HTTP + first token)
-TTFT_C1 = {128: 135, 1024: 307, 2048: 444, 4096: 801, 8192: 1211, 16384: 2631, 32768: 6570}
+TTFT_C1 = {128: 135, 1024: 307, 2048: 444, 4096: 801, 8192: 1211, 16384: 2631, 32768: 6570, 65536: 17019, 131072: 50446}
 CLIENT_MS = 15  # HTTP + tokenize share of a c=1 TTFT
 PER_PROMPT_MS = 60  # reset + handoff + first-token launch + logits read of one prompt (inside TTFT_C1)
+FIRST_MS = 20  # of which the first-token launch + sync + logits read (one per launch when batched)
+# what-ifs (CLI): the step's first-token launches batched per launch (vllm_rows), and a step's whole prompts streamed
+# back to back through the PP pipeline (fill / drain once per step: a prefill-side API that does not exist yet)
+WHATIF = dict(batched_first=False, pp_pipelined=False)
 # rows-mode decode step per replayed launch (ms) at 1/2/4/8 active rows, short context (rows_grid_c6436.json)
 LAUNCH_MS = {1: 14.46, 2: 15.12, 4: 16.64, 8: 20.14}
 RELOAD_MS = 3.0  # a decode step after a prefill rewrites token states and page tables on the host
@@ -93,6 +97,7 @@ class Model:
             return ms
         self.last_prefill = True
         ms = 0.0
+        wholes, first_launches = 0, set()
         for rid, (start, end) in spans.items():
             req = sched.requests[rid]
             total = req.num_tokens  # the sequence the chunk core passes as prefill_total_lens
@@ -100,13 +105,21 @@ class Model:
             final = end >= total
             n_pp = (end - 1 if final else end) - start  # the PP takes all tokens but the last
             ticks = math.ceil(max(n_pp, 0) / C)
-            if final:
-                ticks = math.ceil((total - 1) / C) + 3 - start // C
-                ms += PER_PROMPT_MS
             if rid not in self.slot:
                 self.slot[rid] = self.free.pop(0)
+            if final:
+                ticks = math.ceil((total - 1) / C) + 3 - start // C
+                if start == 0:
+                    wholes += 1
+                    if WHATIF["pp_pipelined"] and wholes > 1:
+                        ticks -= 3  # streamed behind the previous prompt: no own fill / drain
+                ms += PER_PROMPT_MS - FIRST_MS
+                if WHATIF["batched_first"]:
+                    first_launches.add(self.slot[rid] // ROWS)
+                else:
+                    ms += FIRST_MS
             ms += ticks * tk
-        return ms
+        return ms + FIRST_MS * len(first_launches)
 
     def release(self, rid):
         s = self.slot.pop(rid, None)
@@ -320,6 +333,8 @@ POLICIES = {
     "il1d4": {"prefill_chunk_tokens": 1024, "decode_interleave_prefill_steps": 1, "decode_interleave_decode_steps": 4},
     "noil": {"prefill_chunk_tokens": 1024, "decode_interleave_enabled": False},
     # gangs: cap while requests decode / while nothing does (0 = the step's token budget)
+    "g2k": {"prefill_chunk_tokens": 1024, "prefill_gang_tokens": 2048},
+    "g8k": {"prefill_chunk_tokens": 1024, "prefill_gang_tokens": 8192},
     "g32k": {"prefill_chunk_tokens": 1024, "prefill_gang_tokens": 32768},
     "g32k_i64k": {"prefill_chunk_tokens": 1024, "prefill_gang_tokens": 32768, "prefill_gang_idle_tokens": 65536},
     "g32k_i32k": {"prefill_chunk_tokens": 1024, "prefill_gang_tokens": 32768, "prefill_gang_idle_tokens": 32768},
@@ -337,10 +352,18 @@ def main():
     ap.add_argument("--rate", type=float, default=None, help="Poisson arrivals (req/s) instead of the closed loop")
     ap.add_argument("--seeds", type=int, default=1)
     ap.add_argument("--jitter-ms", type=float, default=0.0)
+    ap.add_argument("--batched-first", action="store_true", help="what-if: first-token launches batched per launch")
+    ap.add_argument(
+        "--pp-pipelined", action="store_true", help="what-if: a step's whole prompts share one PP fill/drain"
+    )
+    ap.add_argument("--per-prompt-ms", type=float, default=60.0)
+    ap.add_argument("--first-ms", type=float, default=20.0)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     import logging
 
+    globals().update(PER_PROMPT_MS=a.per_prompt_ms, FIRST_MS=a.first_ms)
+    WHATIF.update(batched_first=a.batched_first, pp_pipelined=a.pp_pipelined)
     logging.disable(logging.INFO)
     rows = []
     rng_of = lambda v: tuple(int(x) for x in v.split("-")) if "-" in v else int(v)
