@@ -366,15 +366,17 @@ const std::vector<uint64_t>& MeshWorkloadImpl::get_cross_node_program_ids() {
 
 const std::unordered_set<SubDeviceId>& MeshWorkloadImpl::determine_sub_device_ids(MeshDevice* mesh_device) {
     auto& sub_device_ids_by_manager = sub_device_ids_by_mesh_and_manager_[mesh_device->id()];
-    auto [entry, inserted] = sub_device_ids_by_manager.try_emplace(*mesh_device->get_active_sub_device_manager_id());
-    auto& sub_device_ids = entry->second;
-    if (inserted) {
-        for (auto& [device_range, program] : programs_) {
-            auto sub_devices_for_program = program.impl().determine_sub_device_ids(mesh_device);
-            sub_device_ids.insert(sub_devices_for_program.begin(), sub_devices_for_program.end());
-        }
+    const auto manager_id = *mesh_device->get_active_sub_device_manager_id();
+    if (const auto found = sub_device_ids_by_manager.find(manager_id); found != sub_device_ids_by_manager.end()) {
+        return found->second;
     }
-    return sub_device_ids;
+    // Derive every program before caching, so that a program refused here leaves no entry and is refused again.
+    std::unordered_set<SubDeviceId> sub_device_ids;
+    for (auto& [device_range, program] : programs_) {
+        const auto& sub_devices_for_program = program.impl().determine_sub_device_ids(mesh_device);
+        sub_device_ids.insert(sub_devices_for_program.begin(), sub_devices_for_program.end());
+    }
+    return sub_device_ids_by_manager.emplace(manager_id, std::move(sub_device_ids)).first->second;
 }
 
 ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {

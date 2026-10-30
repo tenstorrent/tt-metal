@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdint>
@@ -371,6 +372,43 @@ TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplays
         mesh_device_->load_sub_device_manager(sub_device_manager_0);
     }
     mesh_device_->release_mesh_trace(trace_id);
+}
+
+// A workload's programs are placed device by device, in parallel; one whose semaphore reaches another sub-device's
+// cores refuses the whole workload, every time.
+TEST_F(MeshSubDeviceTestSuite, AProgramWhoseSemaphoreReachesAnotherSubDeviceRefusesItsWorkload) {
+    if (mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Needs a program per device on two devices";
+    }
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {4, 4}))});
+    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+    mesh_device_->load_sub_device_manager(sub_device_manager);
+    const auto program_with_semaphore_on = [](const CoreRangeSet& semaphore_cores) {
+        Program program = CreateProgram();
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            CoreRange({0, 0}, {0, 0}),
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        CreateSemaphore(program, semaphore_cores, 0);
+        return program;
+    };
+    MeshWorkload workload;
+    workload.add_program(
+        MeshCoordinateRange(MeshCoordinate(0, 0)), program_with_semaphore_on(CoreRangeSet(CoreRange({0, 0}, {0, 0}))));
+    workload.add_program(
+        MeshCoordinateRange(MeshCoordinate(0, 1)),
+        program_with_semaphore_on(CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({3, 3}, {3, 3})})));
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        EXPECT_THAT(
+            [&] { EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false); },
+            ::testing::ThrowsMessage<std::runtime_error>(
+                ::testing::HasSubstr("in sub-device 1, outside sub-device 0 where its kernels run")));
+    }
+    Finish(mesh_device_->mesh_command_queue());
+    mesh_device_->clear_loaded_sub_device_manager();
+    mesh_device_->remove_sub_device_manager(sub_device_manager);
 }
 
 TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {

@@ -3018,6 +3018,108 @@ uint32_t& detail::ProgramImpl::get_program_config_size(uint32_t programmable_cor
     return this->program_config_sizes_[programmable_core_type_index];
 }
 
+namespace {
+
+// Refuses an object, placed on `object_cores`, of a program whose kernels run on sub-device `own`: it reaches the cores
+// of another sub-device.
+[[noreturn]] void refuse_object_in_another_sub_device(
+    const IDevice& device,
+    ProgramId program_id,
+    SubDeviceId own,
+    std::string_view object,
+    std::string_view written,
+    const CoreRangeSet& object_cores) {
+    std::vector<std::string> reached;
+    for (uint32_t i = 0; i < device.num_sub_devices(); ++i) {
+        const SubDeviceId other{static_cast<uint8_t>(i)};
+        if (other == own) {
+            continue;
+        }
+        const CoreRangeSet there =
+            object_cores.intersection(device.worker_cores(HalProgrammableCoreType::TENSIX, other));
+        if (!there.empty()) {
+            reached.push_back(fmt::format("{} in sub-device {}", there.str(), i));
+        }
+    }
+    TT_THROW(
+        "Program {}: its {} on {} reaches {}, outside sub-device {} where its kernels run. Fast dispatch writes its {} "
+        "into the kernel-config ring of every core it is on, ordered only against the programs of sub-device {}, so it "
+        "can overwrite the configs of programs running on the others. Keep it within sub-device {} ({}), together with "
+        "any NoC writes of the program's kernels that target it.",
+        program_id,
+        object,
+        object_cores.str(),
+        fmt::format("{}", fmt::join(reached, " and ")),
+        *own,
+        written,
+        *own,
+        *own,
+        device.worker_cores(HalProgrammableCoreType::TENSIX, own).str());
+}
+
+// A program's kernels place it on a sub-device, whose lane orders its launch. Fast dispatch also writes each WORKER
+// semaphore's initial value and each circular or dataflow buffer's config to the cores the object is placed on (the
+// semaphore, circular-buffer and dataflow-buffer command generators in dispatch.cpp), into those cores' kernel-config
+// ring, ordered only against the programs of the kernels' sub-device. On another sub-device's cores that would
+// overwrite the configs of a program running there, so the objects must stay off them. The kernels' sub-device's cores
+// that run no kernel are fine: each core of a sub-device takes part in every program on it, so a slot is reused only
+// after all of them finish. So are cores in no sub-device: no program runs there while the manager is loaded, and
+// loading another drains every sub-device first. Any other dispatch write beyond kernel cores must join this check (ETH
+// semaphores too, against worker_cores(ACTIVE_ETH), if fast dispatch to Ethernet cores returns).
+void check_objects_in_sub_device(const detail::ProgramImpl& program, const IDevice& device, SubDeviceId sub_device) {
+    CoreRangeSet others;
+    for (uint32_t i = 0; i < device.num_sub_devices(); ++i) {
+        const SubDeviceId other{static_cast<uint8_t>(i)};
+        if (other != sub_device) {
+            others = others.merge(device.worker_cores(HalProgrammableCoreType::TENSIX, other));
+        }
+    }
+    if (others.empty()) {
+        return;
+    }
+    for (const Semaphore& semaphore : program.semaphores()) {
+        if (semaphore.core_type() != CoreType::WORKER) {
+            continue;  // fast dispatch writes no ETH semaphores
+        }
+        const CoreRangeSet semaphore_cores = semaphore.core_range_set();
+        if (others.intersects(semaphore_cores)) {
+            refuse_object_in_another_sub_device(
+                device,
+                program.get_id(),
+                sub_device,
+                fmt::format("semaphore {}", semaphore.id()),
+                "initial value",
+                semaphore_cores);
+        }
+    }
+    for (const auto& circular_buffer : program.circular_buffers()) {
+        if (others.intersects(circular_buffer->core_ranges())) {
+            const std::set<uint32_t> indices(
+                circular_buffer->buffer_indices().begin(), circular_buffer->buffer_indices().end());
+            refuse_object_in_another_sub_device(
+                device,
+                program.get_id(),
+                sub_device,
+                fmt::format("circular buffer (indices {})", fmt::join(indices, ", ")),
+                "config",
+                circular_buffer->core_ranges());
+        }
+    }
+    for (const auto& dataflow_buffer : program.dataflow_buffers()) {
+        if (others.intersects(dataflow_buffer->core_ranges)) {
+            refuse_object_in_another_sub_device(
+                device,
+                program.get_id(),
+                sub_device,
+                fmt::format("dataflow buffer {}", dataflow_buffer->id),
+                "config",
+                dataflow_buffer->core_ranges);
+        }
+    }
+}
+
+}  // namespace
+
 const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(const IDevice* device) {
     const auto& metal_ctx = MetalContext::instance(context_id_);
     const auto& hal = metal_ctx.hal();
@@ -3057,11 +3159,28 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
             }
             TT_FATAL(
                 num_intersections == num_cores,
-                "Kernel group cores do not match sub device cores for programmable core type {}",
-                enchantum::to_string(core_type));
+                "Kernel group cores do not match sub device cores for programmable core type {}: program {} has "
+                "kernels on {}, in no sub-device of the loaded sub-device manager",
+                enchantum::to_string(core_type),
+                this->get_id(),
+                [&] {  // evaluated only on failure
+                    CoreRangeSet kernel_cores;
+                    for (const auto& kg : program_kgs) {
+                        kernel_cores = kernel_cores.merge(kg->core_ranges);
+                    }
+                    for (size_t i = 0; i < device->num_sub_devices(); ++i) {
+                        kernel_cores = kernel_cores.subtract(
+                            device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)}));
+                    }
+                    return kernel_cores.str();
+                }());
         };
         find_sub_device_ids(HalProgrammableCoreType::TENSIX);
         find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
+        // A program whose kernels span sub-devices is refused when enqueued; one without kernels is never dispatched.
+        if (used_sub_device_ids.size() == 1) {
+            check_objects_in_sub_device(*this, *device, *used_sub_device_ids.begin());
+        }
         auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
             sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
         return sub_device_ids->second;
@@ -3196,10 +3315,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         return;
     }
     ScopedBusyClock compile_busy(kProgramCompileBusy);
-    // Clear the determined sub_device_ids when we compile the program for the first time
-    // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
+    // Forget the sub-devices derived before the first compile, under every manager and for every device: they may
+    // predate the program's last kernels and objects, which determine_sub_device_ids also checks.
     if (compiled_.empty()) {
-        this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
+        this->sub_device_ids_.clear();
     }
 
     Inspector::program_compile_started(this, device, build_env.build_key());

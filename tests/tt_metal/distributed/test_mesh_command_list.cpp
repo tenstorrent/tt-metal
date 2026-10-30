@@ -1238,6 +1238,38 @@ TEST_F(CommandListTest, RejectsUnresolvableParametersWithoutChangingTheRecording
         ThrowsMessage<std::runtime_error>(HasSubstr("Cannot build an empty CommandList")));
 }
 
+// A program whose semaphore reaches another sub-device's cores is refused when it is added under the manager, as it is
+// when enqueued.
+TEST_F(CommandListTest, RefusesAProgramWhoseSemaphoreReachesAnotherSubDevice) {
+    auto spec = make_l1_write_spec("semaphore_in_another_sub_device");
+    spec.semaphores = {m2::SemaphoreSpec{
+        .unique_id = m2::SemaphoreSpecName{"spilled"},
+        .target_nodes = CoreRangeSet(std::vector{CoreRange(kNode, kNode), CoreRange({3, 3}, {3, 3})})}};
+    // Built with no manager loaded, where one sub-device holds every core.
+    auto workload = m2::MakeMeshWorkloadFromSpec(*mesh_device_, spec);
+    m2::ProgramRunArgs args;
+    args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
+        .kernel = m2::KernelSpecName{kKernelName},
+        .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(kNode, {{"address", kAddressA}}),
+        .common_runtime_arg_values = {{"value", kValueA}},
+    }};
+    m2::SetProgramRunArgs(workload.get_programs().begin()->second, args);
+    const auto split = mesh_device_->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))}),
+         SubDevice(std::array{CoreRangeSet(CoreRange({3, 3}, {4, 4}))})},
+        3200);
+    mesh_device_->load_sub_device_manager(split);
+    {
+        CommandListBuilder builder(*mesh_device_);
+        EXPECT_THAT(
+            [&] { builder.add(workload); },
+            ThrowsMessage<std::runtime_error>(
+                HasSubstr("in sub-device 1, outside sub-device 0 where its kernels run")));
+    }
+    mesh_device_->clear_loaded_sub_device_manager();
+    mesh_device_->remove_sub_device_manager(split);
+}
+
 TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
     // Define two distinct layouts that both contain the workload's target node.
     const auto worker_grid = mesh_device_->compute_with_storage_grid_size();

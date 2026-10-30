@@ -88,11 +88,11 @@ Note that support for this has not been propagated to the ttnn tensor level, pen
 
 ### 1.3 Programs
 
-The apis for creating and interacting with programs remain unchanged compared to not using sub-devices. Users still create a program and target a specific device with it. The infrastructure will automatically determine the used sub-devices for the program and set/track the appropriate state needed for dispatching the program.
+The apis for creating and interacting with programs remain unchanged compared to not using sub-devices. Users still create a program and target a specific device with it. The infrastructure determines the program's sub-device from the cores its kernels run on, under each sub-device manager the program runs under, and sets/tracks the appropriate state needed for dispatching the program.
 
-Currently there are two outstanding support features that are planned to enable full generality:
-1. Programs can only span one sub-device
-2. Programs cannot be rerun on a different sub-device-manager configuration. This would need to be a new program that runs.
+A program's semaphores and circular/dataflow buffers must stay off the cores of other sub-devices. Fast dispatch writes their initial values and configs into the kernel-config ring of every core they are placed on, ordered only against the programs of the program's own sub-device, so on another sub-device's cores they would overwrite the configs of the programs running there. (Cores of its own sub-device that run no kernel are fine, as are cores in no sub-device, where nothing runs while the manager is loaded.) A program whose objects reach another sub-device is refused when it is placed under the manager: when it is first enqueued there (or added to a command list), or, for a program built from a `ProgramSpec` while the manager is loaded, when it is built. Where kernels write over the NoC is not checked: keep a multicast or semaphore update inside the sub-device, together with the object it targets.
+
+Currently a program can only span one sub-device.
 
 When enqueuing a program on a specific sub-device, the dispatch infrastructure will stall waiting for all programs to finish on that specific sub-device before launching the program, similar to the current dispatch of device level programs. This means that if we need the program to synchronize and stall on programs of other sub-devices, users must ensure to either insert events on the other sub-devices to wait on before launching the current program, or adding a host synchronize/stall depending on the use case.
 

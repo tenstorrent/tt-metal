@@ -23,7 +23,10 @@ namespace tt::tt_metal::experimental {
 //
 // PLACEMENT: Specified directly via target_nodes. Unlike DFBs, semaphores are
 //   remote resources for kernels. Placement cannot be inferred from kernel
-//   bindings.
+//   bindings. With a sub-device manager loaded, target_nodes must not reach
+//   the cores of another sub-device than the program's kernels: this is
+//   checked when the workload is built or enqueued under that manager, not by
+//   ValidateProgramSpec.
 //
 // BINDING SCOPE: Any DM kernel can bind to any semaphore in the ProgramSpec,
 //   regardless of location; any kernel instance can signal any semaphore
