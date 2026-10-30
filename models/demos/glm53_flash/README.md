@@ -35,7 +35,9 @@ prompt: for prompts up to 2 K tokens the per-length traced prefill (replay time)
 traced). The sequence-parallel prefill writes a prompt into the same slot of every row, so one prefill fills 8 slots
 with the same prompt; rows with several users per row prefilled them one after another. Filling every slot with a
 distinct prompt costs (distinct prompts) x TTFT: the aggregate prefill throughput (~2.2 K tok/s at 1 M, ~2 K at
-64 K) is the capacity limit, e.g. 32 distinct 1 M prompts take ~4.2 h to prefill. The users x ISL envelope of the
+64 K) is the capacity limit, e.g. 32 distinct 1 M prompts take ~4.2 h to prefill (served 2026-10-30, capstone r4: 32 distinct
+1 038 673-token requests in 4 h 28 min with 4 in flight on the sequence-parallel path, 31/32 needles at depth 0.9, TTFT 505 s
+for a prompt prefilling alone and 1 961-1 984 s when four interleave their chunks). The users x ISL envelope of the
 memory planner (`tt/memory_plan.py`) is measured at every point: 32 x 1 M, 64 x 512 K, 128 x 256 K and 256 x 128 K
 all fit with 1.1-2.0 GiB per chip to spare.
 

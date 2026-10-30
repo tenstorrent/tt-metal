@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 17:05: the capstone r4 verdict (31/32 at 32 x 1 M), the decode starvation during others' prefill
+
+`served_8x4_needle1m_32_r4`: 32 distinct 1 038 673-token prompts served in 16 072 s (2.07 K tok/s on the SP path, 4 in
+flight), 31/32 needles retrieved (amber-falcon-7398 echoed the question; its prompt is key 8 of the queued 8-prompt wave
+run), 0 cross-talk, no engine error, a clean stop, 0 prefix-cache hits (distinct prompts). TTFT per arrival group of 4:
+505-507 / 513-560 / 873-907 / 928-967 / 982-1371 / 1371-1493 / 1961-1984 s: prompts whose chunks interleave finish
+together (4 x the lone 490 s), a prompt prefilling alone gets 505 s. The decoders starve while others prefill: the 1:1
+interleave gives a running decoder ONE token per 7.9 s chunk (0.13 tok/s), so the 21 answers that ran to the 256-token
+cap took 515-2461 s after their TTFT (the 11 EOS answers were immediate). The plugin's `decode_interleave_decode_steps`
+(default 1) is the lever: `ab_interleave_d8_32` measures 8 decode steps per prefill step at 128 x 128 x 32 (the cost is
+~0.5 s per prefill step against the 5.47 s TTFT). Catalog flips pushed (TIS a0c0f1914: `max_num_batched_tokens`
+131072, `decode_interleave_enabled` true with the slot mask); the release stage (`served_8x4_release_r1`) is queued
+behind the 8 x 1 M wave run and the A/B.
+
 ### 2026-10-30 13:15: the wave wall was the double copy below the direct-untilize threshold; what r4 measures
 
 r3's OOM frame is `user_rows_rm` line 812, the slice path (`user_rows` TILE slice, then `to_layout` ROW_MAJOR): two
