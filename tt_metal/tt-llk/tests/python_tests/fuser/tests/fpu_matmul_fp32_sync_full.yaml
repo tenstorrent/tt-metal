@@ -1,0 +1,30 @@
+# Matrix multiply with LoFi fidelity.
+
+dest_acc: true
+quasar_use_dvalid: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 64]
+    format: "Float32"
+  - name: "input_B"
+    dims: [64, 64]
+    format: "Float32"
+  - name: "matmul_out"
+    dims: [64, 64]
+    format: "Float32"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [32, 64]
+        in0: "input_A"
+        in1: "input_B"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "LoFi"
+    pack:
+      - output: "matmul_out"
+        block_size: [32, 64]
+        packer: "Packer"
+    dest_sync: "SyncFull"

@@ -1795,6 +1795,33 @@ class TILE_COUNT(RuntimeParameter):
 
 
 @dataclass
+class DEST_SYNC_SCHEDULE(RuntimeParameter):
+
+    order0: int = 0
+    order1: int = 0
+    order2: int = 0
+    order3: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t ORDER0 = {self.order0};",
+            f"constexpr std::uint32_t ORDER1 = {self.order1};",
+            f"constexpr std::uint32_t ORDER2 = {self.order2};",
+            f"constexpr std::uint32_t ORDER3 = {self.order3};",
+        ]
+        return "\n".join(lines)
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        lines = [
+            "std::uint32_t ORDER0;",
+            "std::uint32_t ORDER1;",
+            "std::uint32_t ORDER2;",
+            "std::uint32_t ORDER3;",
+        ]
+        return "\n".join(lines), "IIII"
+
+
+@dataclass
 class NUM_GUARD_TILES(RuntimeParameter):
     count: int = 0
 

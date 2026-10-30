@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -223,6 +224,10 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     if raw_data.empty:
         return pd.DataFrame()
 
+    # Debug aid: LLK_PROFILER_RAW_DUMP=<csv path> appends every thread's zone starts and ends of each L1_TO_L1 run.
+    if dump := os.environ.get("LLK_PROFILER_RAW_DUMP"):
+        raw_data.to_csv(dump, mode="a", header=not os.path.exists(dump), index=False)
+
     # Validate that run_index has been explicitly set
     if raw_data["run_index"].isna().any():
         raise ValueError(
@@ -238,30 +243,36 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     threads = raw_data["thread"].to_numpy(dtype=object)
     types = raw_data["type"].to_numpy(dtype=object)
     stamps = raw_data["timestamp"].to_numpy()
-    is_start = (threads == "unpack") & (types == "ZONE_START")
-    is_end = (threads == "pack") & (types == "ZONE_END")
+    is_start = types == "ZONE_START"
+    is_end = types == "ZONE_END"
+    zone_threads = ("unpack", "pack")
 
     timing_markers, timing_values = [], []
     for marker, run_index in sorted(set(zip(markers, runs))):
         group = (markers == marker) & (runs == run_index)
-        unpack_start = np.flatnonzero(group & is_start)
-        pack_end = np.flatnonzero(group & is_end)
 
-        if len(unpack_start) == 0 or len(pack_end) == 0:
+        if not set(zone_threads) <= set(threads[group]):
             raise ValueError(
                 f"Zone must be captured on both unpack and pack for L1_TO_L1 to work properly "
                 f"(marker={marker}, run_index={run_index})"
             )
 
-        if len(unpack_start) != len(pack_end):
+        # Zones are not cross-thread barriers, so span from the earliest start to the latest end on unpack or pack.
+        starts = [stamps[group & is_start & (threads == t)] for t in zone_threads]
+        ends = [stamps[group & is_end & (threads == t)] for t in zone_threads]
+        counts = {len(s) for s in starts + ends}
+
+        if len(counts) != 1:
             raise ValueError(
-                f"Unpack and pack must be paired properly for L1_TO_L1 to work properly "
+                f"Zone starts and ends must be paired on unpack and pack for L1_TO_L1 to work properly "
                 f"(marker={marker}, run_index={run_index}, "
-                f"unpack_count={len(unpack_start)}, pack_count={len(pack_end)})"
+                f"starts={[len(s) for s in starts]}, ends={[len(e) for e in ends]})"
             )
 
-        timing_markers += [marker] * len(unpack_start)
-        timing_values.append(stamps[pack_end] - stamps[unpack_start])
+        timing_markers += [marker] * counts.pop()
+        timing_values.append(
+            np.vstack(ends).max(axis=0) - np.vstack(starts).min(axis=0)
+        )
 
     return _stats_timings(
         pd.DataFrame(
@@ -451,10 +462,16 @@ class Profiler:
 
     @staticmethod
     @functools.cache
-    def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
+    def _get_meta(
+        testname: str, variant_id: str
+    ) -> dict[str, dict[int, ProfilerFullMarker]]:
+        """Markers of each thread by ID. An ID only has to be unique within its thread: a thread's buffer holds only
+        the markers of its own ELF, and it is decoded with that thread's markers alone.
+        """
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}
         for thread in TestConfig.KERNEL_COMPONENTS:
+            markers = metadata[thread] = {}
             file = profiler_data_dir / f"{thread}.meta.bin"
             if not file.exists():
                 continue
@@ -463,8 +480,8 @@ class Profiler:
                 strings = [s.decode("ascii") for s in binary.split(b"\0")]
                 for s in strings:
                     if marker := Profiler._parse_meta(s):
-                        Profiler._assert_no_collision(metadata, marker)
-                        metadata[marker.id] = marker
+                        Profiler._assert_no_collision(markers, marker)
+                        markers[marker.id] = marker
 
         return metadata
 
@@ -474,7 +491,7 @@ class Profiler:
     ) -> int:
         """Look up marker ID from metadata by marker name, file suffix, and line number.
         This provides stable marker ID lookup regardless of build environment paths."""
-        for marker in metadata.values():
+        for marker in (m for markers in metadata.values() for m in markers.values()):
             if (
                 marker.marker == marker_name
                 and marker.file.endswith(file_suffix)
@@ -509,7 +526,9 @@ class Profiler:
         marker_rows = []
         # Parse each thread and append to the DataFrame
         for thread, buffer in zip(TestConfig.KERNEL_COMPONENTS, buffers):
-            marker_rows.extend(Profiler._parse_thread(thread, buffer, profiler_meta))
+            marker_rows.extend(
+                Profiler._parse_thread(thread, buffer, profiler_meta[thread])
+            )
 
         df = Profiler._dataframe(marker_rows)
         return ProfilerData(df)

@@ -1,6 +1,6 @@
 # Matrix multiply with LoFi fidelity.
 
-# quasar_use_dvalid: true
+quasar_use_dvalid: true
 
 operands:
   - name: "input_A"
