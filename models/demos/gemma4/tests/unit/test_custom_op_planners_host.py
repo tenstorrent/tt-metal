@@ -308,6 +308,35 @@ def test_splitfree_scratch_sizes_of_the_galaxy_builds():
     assert sp.scratch_tiles_for((13, 10), 1, specs, CTX_256K, env={}) == 64 * 18
     # a 128K build halves it; the 31B at TP4 (8 local q heads over one KV group) needs the same
     assert sp.scratch_tiles_for((13, 10), 32, [(1, 8, 512, None)], CTX_256K // 2, env={}) == 32 * 32 * 18
+    # the model's own sizing (attach_sdpa_splitfree_scratch, also run by the vLLM generator once the plugin's
+    # caches exist): the covered layers and their per-chip specs of the 12B (16 q / 8 kv heads, head_dim 256 /
+    # 512 global, window 1024, 48 layers in the 5:1 pattern) at TP4 and TP8, mode "1" (global) and "2" (all)
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.model import splitfree_layer_specs
+
+    hf = SimpleNamespace(
+        layer_types=[("full_attention" if i % 6 == 5 else "sliding_attention") for i in range(48)],
+        hidden_size=3840,
+        num_attention_heads=16,
+        num_key_value_heads=8,
+        head_dim=256,
+        global_head_dim=512,
+        sliding_window=1024,
+        rms_norm_eps=1e-6,
+        rope_theta=10000.0,
+        global_rope_theta=1000000.0,
+        partial_rotary_factor=0.25,
+    )
+    covered, specs = splitfree_layer_specs(hf, 48, 4, "1")
+    assert covered == {i for i in range(48) if i % 6 == 5} and specs == [(2, 2, 512, None)]
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 64 * 18  # 288 MiB at TP4
+    covered, specs = splitfree_layer_specs(hf, 48, 4, "2")
+    assert covered == set(range(48)) and specs == [(2, 2, 256, 1024), (2, 2, 512, None)]
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 64 * 18  # the global figure
+    assert splitfree_layer_specs(hf, 48, 8, "1")[1] == [(1, 2, 512, None)]
+    assert splitfree_layer_specs(hf, 12, 16, "2")[1] == [(1, 1, 256, 1024), (1, 1, 512, None)]  # kv replicated
+    assert splitfree_layer_specs(hf, 48, 4, "0") == (set(), [])
 
 
 def test_splitfree_golden_gathers_through_the_page_table():

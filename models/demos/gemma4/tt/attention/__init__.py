@@ -187,8 +187,9 @@ class Gemma4Attention:
         self.kv_staging = None
 
         # The split-independent decode SDPA's persistent fp32 scratch (GEMMA4_SDPA_DECODE_SPLITFREE,
-        # custom_ops/sdpa_decode_splitfree): ONE per model, attached by the model with the KV caches before any
-        # trace capture; None keeps the stock op.
+        # custom_ops/sdpa_decode_splitfree): ONE per model, attached with the KV caches before any trace capture
+        # (Gemma4Model.attach_sdpa_splitfree_scratch: the model's own paged caches, or the vLLM generator's once
+        # the plugin has allocated them); None keeps the stock op.
         self.sdpa_scratch = None
 
         # Trace-safe cross-chunk sliding-tail pool. The stash's runtime-allocated
