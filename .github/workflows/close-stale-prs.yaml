@@ -13,16 +13,7 @@ jobs:
     if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-slim
     steps:
-      # We used to run actions/stale here, but it determines staleness purely from
-      # each PR's `updated_at`, which GitHub bumps on *any* activity. A separate bot,
-      # tenstorrent-github-bot, periodically re-labels pr-priority/pr-risk/pr-complexity
-      # on essentially every open PR (roughly every 1-2 weeks) -- faster than our
-      # 32-day threshold -- so that relabeling alone was resetting the staleness clock
-      # on PRs with no real human activity for months. actions/stale has no option to
-      # exclude a single actor's activity (only the all-or-nothing `ignore-updates`,
-      # which would also ignore genuine human comments/pushes), so we compute
-      # staleness ourselves from each PR's timeline instead, skipping events from that
-      # one bot.
+      # actions/stale can't ignore tenstorrent-github-bot's relabeling, which keeps resetting updated_at and masking real staleness.
       - name: Close PRs stale by real (non-bot) activity
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -33,24 +24,15 @@ jobs:
           OWNER="tenstorrent"
           NAME="tt-metal"
           STALE_DAYS=32
-          # One name today; add more here if another bot starts doing the same thing.
           EXCLUDED_BOT="tenstorrent-github-bot"
-          # Same write budget actions/stale used, to stay well under GitHub's secondary
-          # rate limit of 500 content-generating (POST/PATCH) requests/hour: each close
-          # costs 3 (label + comment + close), so 150 closes = 450 writes.
+          # Keeps writes under GitHub's secondary rate limit (500/hour); each close costs 3.
           MAX_CLOSES=150
           CLOSE_MSG='**AUTOMATION**: This PR has been automatically closed because it has had no activity for 32 days. If you still need this change, feel free to reopen it or open a new PR whenever you'"'"'re ready to continue.'
 
           now_epoch=$(date -u +%s)
           cutoff_epoch=$(( now_epoch - STALE_DAYS * 86400 ))
 
-          # Batched read: one GraphQL call returns up to 50 PRs *and* each PR's recent
-          # timeline in a single round trip (~1 point against the 10,000/hr GraphQL
-          # budget per page), instead of one REST call per PR. Ordered by createdAt
-          # (not updatedAt -- that's the field the bot corrupts) ascending: a PR's real
-          # last activity can never predate its own creation, so once a page's PRs were
-          # created less than 32 days ago, everything after it is too young to be
-          # stale and we can stop paging.
+          # Ordered by createdAt (not updatedAt, which the bot corrupts) so we can stop paging once PRs are too young to be stale.
           query=$(cat <<'GQL'
           query($owner: String!, $name: String!, $cursor: String) {
             repository(owner: $owner, name: $name) {
@@ -77,9 +59,7 @@ jobs:
           GQL
           )
 
-          # Normalizes every timeline event variant to (actor, date), drops the
-          # excluded bot's events, and emits one TSV line per PR:
-          # "<number>\t<last-real-activity-or-createdAt>\t<createdAt>".
+          # Normalizes each timeline event to (actor, date) and drops the excluded bot's events.
           jq_filter='
             .data.repository.pullRequests.nodes[] |
             . as $pr |
