@@ -1225,7 +1225,7 @@ _MATH_UTIL_CASES = [
         "minimax_m3",
         run_indexer_m3,
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
-        42.9,
+        43.6,
         "HiFi2",
         INDEXER_PERF_MARGIN,
     ),
