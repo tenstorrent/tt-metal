@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
 import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import torch
 import yaml
@@ -263,7 +264,11 @@ class Prefetcher(LightweightModule):
         # The pipes' L1 rings on the sender and receiver cores, and one pipe per sender, in DRAM bank order
         self.pipe_space: Optional[ttnn.experimental.PrefetcherPipeSpace] = None
         self.pipes: List[ttnn.experimental.PrefetcherPipe] = []
+        # Ring and config addresses of the pipes, and the address tensor's, which decode traces capture
+        self.pipe_addresses: Optional[Tuple[int, int]] = None
+        self.addr_tensor_address: Optional[int] = None
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
+        self.prefetcher_sub_device: Optional[PrefetcherSubDevice] = None
         self.num_tensors: int = num_tensors
         self.num_layers: int = num_layers
         self.num_senders: int = len(self.pf_config["dram_banks"])
@@ -350,10 +355,10 @@ class Prefetcher(LightweightModule):
         """Reserve the PrefetcherPipes: one per active sender, whose receivers are that sender's ring cores.
 
         Each receiver keeps a whole tensor's blocks until its matmul is done with them, so a ring holds the largest
-        weight share. The rings come from the L1 allocator, so they can be reserved after prefill has run, and the
-        programs it cached stay valid: a cached program checks its circular buffers against L1 buffers each time it
-        is enqueued. Called on the first decode, so prefill's first run does not have to fit beside the rings.
-        A prefill trace captured before then is not checked on replay.
+        weight share, and does not fit in L1 beside prefill's circular buffers. The rings come from the L1 allocator,
+        so each decode reserves them and each prefill releases them (_release_pipes). A pipe re-carved at the same
+        addresses hits the programs and traces cached for the one it replaces, so a reservation must land where the
+        first one did.
         """
         senders = self.core_config.sender_cores(active=True)
         receivers = self.core_config.receiver_cores(sender_active=True, receiver_active=True)
@@ -368,6 +373,39 @@ class Prefetcher(LightweightModule):
             l1_source=ttnn.experimental.PrefetcherPipeL1Source.Allocator,
         )
         self.pipes = self.pipe_space.create_pipes(list(zip(senders, receivers)))
+        addresses = (self.pipe_space.buffer_address(), self.pipe_space.config_address())
+        if self.pipe_addresses is not None and addresses != self.pipe_addresses:
+            raise RuntimeError(
+                f"PrefetcherPipes reserved again at ring/config addresses {addresses}, not {self.pipe_addresses} where "
+                "the decode traces expect them: an L1 buffer allocated since the last decode is still live"
+            )
+        self.pipe_addresses = addresses
+
+    def _ensure_address_tensor(self):
+        """Create the address tensor unless it is live. Re-created after a prefill, it must land where the decode
+        traces read it."""
+        if self.prefetched_tt_addr_tensor is not None:
+            return
+        self.prefetched_tt_addr_tensor = self.create_address_tensor()
+        address = self.prefetched_tt_addr_tensor.buffer_address()
+        if self.addr_tensor_address is not None and address != self.addr_tensor_address:
+            raise RuntimeError(
+                f"Prefetcher address tensor reallocated at {address}, not {self.addr_tensor_address} where the "
+                "decode traces expect it"
+            )
+        self.addr_tensor_address = address
+
+    def _release_pipes(self):
+        """Release the pipes' L1, and the address tensor right below it, so prefill's circular buffers fit.
+        The next decode reserves both again at the same addresses."""
+        if self.pipe_space is None:
+            return
+        self.pipes = []
+        self.pipe_space = None
+        if self.prefetched_tt_addr_tensor is not None:
+            ttnn.deallocate(self.prefetched_tt_addr_tensor)
+            self.prefetched_tt_addr_tensor = None
+        gc.collect()
 
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
@@ -410,16 +448,27 @@ class Prefetcher(LightweightModule):
             case Mode.DECODE:
                 if self.num_tensors > 0 and not self.pipes:
                     self._reserve_pipes()
-                self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
-                self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
-                self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
-                self.prefetcher_sub_device.init_sub_device_manager()
+                    if self.prefetch_done:
+                        self._ensure_address_tensor()
+                # Decode traces belong to the sub-device manager they were captured under, so a decode after a
+                # prefill reloads the same manager.
+                if self.prefetcher_sub_device is None:
+                    self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
+                    self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
+                    self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
+                    self.prefetcher_sub_device.init_sub_device_manager()
+                else:
+                    self.mesh_device.load_sub_device_manager(self.prefetcher_sub_device.manager_id)
+                    self.mesh_device.set_sub_device_stall_group(self.prefetcher_sub_device.sub_devices_id)
+                self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
             case Mode.PREFILL:
-                self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
-                self.prefetcher_sub_device.add_sub_device(self.all_core_range_set)
-                self.prefetcher_sub_device.init_sub_device_manager()
-
-        self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
+                # Prefill runs, and captures its traces, on the default sub-device manager.
+                if self.prefetcher_sub_device is not None:
+                    ttnn.synchronize_device(self.mesh_device)
+                    self._release_pipes()
+                    self.mesh_device.reset_sub_device_stall_group()
+                    self.mesh_device.clear_loaded_sub_device_manager()
+                self.worker_sub_device_id = None
         logger.info("=" * 50)
         logger.info("[Prefetcher Initialization]")
         logger.info(f"  Mode: {mode}")
@@ -521,8 +570,7 @@ class Prefetcher(LightweightModule):
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot run prefetcher"
 
         # Create address tensor if it was not created yet
-        if self.prefetched_tt_addr_tensor is None:
-            self.prefetched_tt_addr_tensor = self.create_address_tensor()
+        self._ensure_address_tensor()
 
         # Run prefetcher op (prefetcher op will start asynchronously prefetching weights until prefetcher.stop() is called)
         self.garbage = ttnn.dram_prefetcher(
