@@ -286,10 +286,24 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint32_t axis = args.get_1d_axis();
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
+                // Measured on a 6U Galaxy (4 links, axes of 4 and 8 devices, payloads 4352-7168 B, bf16/bf8/bf4/fp32
+                // tiles and row-major): the crossover is set by each device's input bytes, the same on both axes,
+                // while pages do not line up across dtypes.
+                const uint64_t input_bytes =
+                    static_cast<uint64_t>(input_tensor.buffer()->num_pages()) * input_tensor.buffer()->page_size();
+                const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
                 if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
-                    use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
+                    // Ring: unicast from 128-256 KB per device. A torus ring of 8 devices crosses earlier, as 2D
+                    // multicast forwards slowly (128-160 KB per device: unicast up to 18% faster).
+                    constexpr uint64_t ring_unicast_bytes = 192 * 1024, torus_ring_unicast_bytes = 128 * 1024;
+                    use_unicast = input_bytes >= ((is_2d_fabric && args.num_devices >= 8) ? torus_ring_unicast_bytes
+                                                                                          : ring_unicast_bytes);
+                } else if (is_2d_fabric) {
+                    // Line on a 2D fabric: 2D multicast forwards slowly, so on an 8-device axis unicast is 10-33%
+                    // faster from 2 MB per device (payload 4352-6144 B; even at 7168 B, within 3%). On 4 devices
+                    // multicast wins. On a 1D fabric's line multicast always wins.
+                    constexpr uint64_t line_2d_unicast_bytes = 2 * 1024 * 1024;
+                    use_unicast = args.num_devices >= 8 && input_bytes >= line_2d_unicast_bytes;
                 }
                 break;
             }
@@ -447,11 +461,10 @@ uint32_t compute_packets_per_slot(
     uint32_t packet_cap,
     uint32_t num_slices,
     uint32_t header_bytes,
-    const Tensor& input_tensor) {
-    // A slot's packets are read behind one read barrier: enough of them to keep about 30 KB of reads in flight, which
-    // hides DRAM read latency whatever the fabric payload (BH: two 15168 B packets per barrier take 24% less worker
-    // time per packet than one), at least two slots per worker iteration so both work, and only as many as fit in L1.
-    constexpr uint32_t read_bytes_per_barrier = 30336;
+    const Tensor& input_tensor,
+    uint32_t read_bytes_per_barrier) {
+    // A slot's packets are read behind one read barrier: enough of them to keep read_bytes_per_barrier of reads in
+    // flight, at least two slots per worker iteration so both work, and only as many as fit in L1.
     constexpr uint32_t max_packets_per_slot = 32;
     const uint32_t num_elements = input_tensor.buffer()->num_pages() * geo.in_page_units / geo.element_units;
     const uint64_t iter_packets = tt::div_up(

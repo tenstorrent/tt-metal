@@ -133,8 +133,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     uint32_t num_links = operation_attributes.axis_num_links[axis];
     uint32_t workers_per_dir = 1;
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
-        // Main's value, not yet re-measured with these kernels on WH.
-        workers_per_dir = 2;
+        // 3 workers are 2-10% faster from 1 MB of input per device, 3-7% slower at 512 KB, on both axes of a 6U Galaxy
+        // (4 links, ring and 2D line).
+        const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
+        constexpr uint64_t three_worker_bytes = 768 * 1024;
+        workers_per_dir = input_bytes >= three_worker_bytes ? 3 : 2;
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
         // 2 workers cannot keep up with a ring's link (3 are 1.4-7% faster at 256 KB - 9 MB); on a line 2 are 10%
         // faster at 121 packets on the busiest link-direction, 3 as fast or faster from 242.
@@ -269,8 +272,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // writer's fabric headers.
     const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    const uint32_t packets_per_slot =
-        compute_packets_per_slot(geo, packet_cap, total_slices, packet_header_size, input_tensor);
+    // WH: one packet per slot, 4-8% faster at 16 MB than about 30 KB per read barrier (6U Galaxy, ring).
+    const bool is_wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    const uint32_t read_bytes_per_barrier = is_wormhole ? 1 : default_read_bytes_per_barrier;
+    const uint32_t packets_per_slot = compute_packets_per_slot(
+        geo, packet_cap, total_slices, packet_header_size, input_tensor, read_bytes_per_barrier);
     const uint32_t cb_page_size =
         all_gather_walk::slot_offsets(packets_per_slot, unit_bytes, packet_header_size, packet_cap).slot_bytes;
 
@@ -287,9 +293,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     });
 
     // KERNEL CREATION
-    // NOCs: the writer on NOC0 is 5-10% faster on a ring, 3-8% slower on a line (BH); the reader takes the other.
-    const auto writer_noc = is_ring ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
-    const auto reader_noc = is_ring ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+    // NOCs: the writer on NOC0 is 5-10% faster on a ring, 3-8% slower on a line (BH); the reader takes the other. WH
+    // keeps the writer on NOC1 on a ring too: on NOC0, with the mux forwarder, it holds a ring to ~7 GB/s per
+    // link-direction and slows as workers are added (6U Galaxy: 13-18% slower from 16 MB at 3 workers).
+    const bool writer_on_noc0 = is_ring && !is_wormhole;
+    const auto writer_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
+    const auto reader_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     // Reader
     std::vector<uint32_t> reader_compile_args = {
@@ -373,7 +382,10 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     // Data_valid cadence: about 4 signals per worker iteration, every 2 to 16 packets. Each signal is a packet: fewer
     // save link time, more start the downstream relay sooner (BH: 1-packet cadence up to 1.5x slower at 8-26 MB).
-    constexpr uint64_t signals_per_iter = 4, min_cadence_packets = 2, max_cadence_packets = 16;
+    // WH: 2 signals per iteration, every 2 to 64 packets (6U Galaxy: 8-13% faster at 4 MB, 1-5% from 16 MB).
+    const uint64_t signals_per_iter = is_wormhole ? 2 : 4;
+    const uint64_t max_cadence_packets = is_wormhole ? 64 : 16;
+    constexpr uint64_t min_cadence_packets = 2;
 
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
