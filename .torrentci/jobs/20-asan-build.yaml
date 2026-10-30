@@ -16,7 +16,7 @@ jobs:
     timeout: 4h
     # Remote ccache through the platform's proxy: TorrentCI sets
     # CCACHE_REMOTE_STORAGE (civ2). The local ccache cache below stays.
-    # Run marker: warm 1
+    # Run marker: cpm warm 1
     compiler-cache: ccache
     runs-on:
       kubernetes:
