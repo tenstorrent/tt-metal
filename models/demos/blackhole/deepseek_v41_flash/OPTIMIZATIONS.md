@@ -433,6 +433,20 @@ and OSL 4096: per user B=8 c8 vs B=4 c4 128 48.5 / 73.0, 1024 47.2 / 64.9, 8192 
 
 **Measured** (coordinator, server, outputs unchanged): 8 x 64k prefill 80.8 s -> 50.2 s, 8 x 32k about 40 s -> 26.7 s, 8 x 8k 10.9 s -> 8.45 s. Catalog unchanged: WARM stays on.
 
+## 8.15 MoE core pin (`MOE_COMPUTE_PIN_EAST_X`, C++ in `ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.cpp`)
+
+**Cause.** `moe_compute` places its 8 ring cores from the DRAM-bank assignment of the FIRST local chip only. On a host whose chip 0 has the east column at logical x=6 (host .46; every other host measured: x=7) the chips with the other harvesting put their east cores at the wrong virtual x, two ring cores read about 1.5x slower and the all-to-all ring stalls (W2 phase 63 us instead of 27 us per expert chunk).
+
+**Switch.** `MOE_COMPUTE_PIN_EAST_X=7` (default off in code, set in the B=8 catalog) pins the east cores of every chip to logical column 7. Needs a tt-metal build containing the C++ change (the image can no longer be a layer over v3d). Test: `tests/test_moe_zone_profile.py`.
+
+**Measured** (staging A/B, `dsv4-logs/stg_ab/`): slow-chip host .46: round 68.2 -> 61.5 ms (about 10 %), per-user 61.6 -> 67.3 tok/s at ISL 1k; neutral on .47 and .35. Only matters on hosts with the slow east-core layout.
+
+## 8.16 mHC parallel Sinkhorn and fast expand (`DSV41_MHC_PAR_SINKHORN`, `DSV41_MHC_EXPAND_FAST`)
+
+`DSV41_MHC_PAR_SINKHORN=1`: one post core per token group. `DSV41_MHC_EXPAND_FAST=1`: batched valid-piece reads (expand5 reader / writer), grouped cores; kernel: expand 43.5 -> 19.3 us at T=12. (The same commit also carries `DSV41_MHC_FRONT_FAST`, default off and not in the catalog.) Tests: `tests/test_mhc_par.py`, `tests/mhc_zone_sum.py`.
+
+**Measured.** Server gain only about 0.5-0.9 % (`dsv4-logs/stg_ab/`). Decode gates passed at B=8 and B=16, no accuracy loss, no new hang. Accepted under the gated-pass rule; both on in the B=8 catalog.
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
