@@ -468,7 +468,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             + (f"\n#define MATMUL_KEY_IN0 DataFormat::{self.in0.name}\n#define MATMUL_KEY_IN1 DataFormat::{self.in1.name}" if self.in0 is not None else "")
             + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
             + (
-                "\nconstexpr std::uint32_t MATMUL_BLOCK_CT = %d, MATMUL_BLOCK_RT = %d, MATMUL_BLOCK_KT = %d, MATMUL_BLOCK_THROTTLE = %d;"
+                "\n#define MATMUL_BLOCK\nconstexpr std::uint32_t MATMUL_BLOCK_CT = %d, MATMUL_BLOCK_RT = %d, MATMUL_BLOCK_KT = %d, MATMUL_BLOCK_THROTTLE = %d;"
                 "\nconstexpr bool MATMUL_BLOCK_ACC = %s, MATMUL_BLOCK_L1_ACC = %s;" % (*self.block[:3], self.block[4], str(self.block[3]).lower(), str(self.block[5]).lower())
                 if self.block
                 else ""

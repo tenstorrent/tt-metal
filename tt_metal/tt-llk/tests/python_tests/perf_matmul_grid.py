@@ -230,6 +230,11 @@ def test_perf_matmul_grid(
             math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
         )
     ]
+    if main_form:
+        for k in form_keys:
+            k.keep_flip = False
+            k.unfused_post = False
+            k.force_form = ""
     keyed_templates = [
             MATH_FIDELITY(math_fidelity),
             PACK_SRC_FROM_OUTPUT(),
