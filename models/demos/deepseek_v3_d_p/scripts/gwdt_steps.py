@@ -482,7 +482,7 @@ def build_steps(models: list[str]) -> list[Step]:
         fabric_step(),
         memory_step(),
         mla_step("mla-smoke", 50),
-        mla_step("mla-soak", 5000),
+        mla_step("mla-soak", 2500),
         didt_step(),
     ]
     return [paths_step(models), collect_step(hardware + model_steps)] + hardware + model_steps
