@@ -1,0 +1,13 @@
+engine: blaze carve planner (C++ port) then pipeline_builder.cpp resolver on its slots; cap 60 s per case
+4x8 ring of 32 x 1x1                                                    32 stages | planner yes    0.036s (188556 exp, 64 cyc) | resolver yes    0.001s | total    0.037s
+8x8 ring of 64 x 1x1                                                    64 stages | planner no     0.043s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.043s
+8x16 ring of 128 x 1x1                                                 128 stages | planner no     0.045s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.045s
+16x16 ring of 256 x 1x1                                                256 stages | planner no     0.048s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.048s
+5x5 ring of 25 x 1x1 (odd: none)                                        25 stages | planner no     0.038s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.038s
+7x7 ring of 49 x 1x1 (odd: none)                                        49 stages | planner no     0.039s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.039s
+8x8 ring of 60 x 1x1 (4 spare)                                          60 stages | planner no     0.043s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.043s
+two 4x4 meshes, cables (0,0),(0,1)                                      32 stages | planner yes    0.033s (199411 exp, 64 cyc) | resolver yes    0.001s | total    0.034s
+two 4x4 meshes, cables same colour                                      32 stages | planner no     0.036s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.036s
+two 8x8 meshes, cables (0,0),(0,1)                                     128 stages | planner no     0.042s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.042s
+two 8x8 meshes, cables same colour                                     128 stages | planner no     0.042s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.042s
+two 4x8 meshes, cables same colour                                      64 stages | planner no     0.039s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.039s

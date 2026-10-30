@@ -1,0 +1,10 @@
+engine: blaze carve planner (C++ port) then pipeline_builder.cpp resolver on its slots; cap 60 s per case
+4x4: 1x1, 3x 2x2 (blaze: no-cycle-13)                                    4 stages | planner no     0.002s (11964 exp, 0 cyc) no-cycle-of-length-13 | resolver -          | total    0.002s
+4x4: 1x1, 3x 2x2, 1x1                                                    5 stages | planner yes    0.000s (1221 exp, 64 cyc) | resolver yes    0.000s | total    0.000s
+4x4: 1x1, 2x 2x2, 1x1                                                    4 stages | planner yes    0.000s (532 exp, 64 cyc) | resolver yes    0.000s | total    0.000s
+4x6: 1x1, 4x 2x2, 1x1 (blaze: no-alignment)                              6 stages | planner no     0.002s (3079 exp, 64 cyc) no-alignment | resolver -          | total    0.002s
+4x8: 1x1, 6x 2x2, 1x1 (blaze: no-alignment)                              8 stages | planner no     0.016s (63562 exp, 64 cyc) no-alignment | resolver -          | total    0.016s
+4x8: 1x1, 2x4, 2x4, 2x2, 1x1                                             5 stages | planner yes    0.009s (30036 exp, 64 cyc) | resolver yes    0.000s | total    0.009s
+5x5: 1x1, 5x 2x2 (only 4 fit)                                            6 stages | planner no     0.038s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.038s
+6x6: 1x1, 9x 2x2 (area 37 > 36)                                         10 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+6x6 fork: r 1x1, r-a1-a2-r, r-b1-b2-r (2x2 branches)                     5 stages | planner n/a (other: the ring planner only)

@@ -1,0 +1,4 @@
+odd grid 3x3, full ring                      stages=  9 submeshes=  9 INFEASIBLE 0.000970s
+odd grid 3x5, full ring                      stages= 15 submeshes= 15 INFEASIBLE 0.017003s
+odd grid 5x5, full ring                      stages= 25 submeshes= 25 INFEASIBLE 2.406054s
+odd grid 3x7, full ring                      stages= 21 submeshes= 21 INFEASIBLE 0.153032s

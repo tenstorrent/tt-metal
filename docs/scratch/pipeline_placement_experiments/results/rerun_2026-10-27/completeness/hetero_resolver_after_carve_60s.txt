@@ -1,0 +1,13 @@
+engine: pipeline_builder.cpp resolver on the slots of each footprint carve; cap 60 s per solve
+hetero 2 meshes 4x8, 2 cables/pair, 16 stages 56/64, seed 0             16 stages | resolver-after-carve yes    0.000s
+hetero 2 meshes 4x8, 2 cables/pair, 20 stages 56/64, seed 1             20 stages | resolver-after-carve yes    0.000s
+hetero 2 meshes 4x8, 2 cables/pair, 23 stages 58/64, seed 2             23 stages | resolver-after-carve yes    0.001s
+hetero 2 meshes 4x8, 4 cables/pair, 12 stages 58/64, seed 0             12 stages | resolver-after-carve yes    0.000s
+hetero 2 meshes 4x8, 4 cables/pair, 19 stages 57/64, seed 1             19 stages | resolver-after-carve yes    0.000s
+hetero 2 meshes 4x8, 4 cables/pair, 13 stages 58/64, seed 2             13 stages | resolver-after-carve yes    0.001s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 0           34 stages | resolver-after-carve yes    0.001s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 1           34 stages | resolver-after-carve yes    0.001s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 2           34 stages | resolver-after-carve yes    0.001s
+hetero 4 meshes 4x8, 4 cables/pair, 33 stages 111/128, seed 0           33 stages | resolver-after-carve yes    0.001s
+hetero 4 meshes 4x8, 4 cables/pair, 28 stages 113/128, seed 1           28 stages | resolver-after-carve yes    0.001s
+hetero 4 meshes 4x8, 4 cables/pair, 29 stages 111/128, seed 2           29 stages | resolver-after-carve yes    0.001s

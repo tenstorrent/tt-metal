@@ -28,7 +28,6 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include <numeric>
 #include <set>
 #include <cmath>
 #include <utility>
@@ -144,30 +143,34 @@ const ttsl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_g
              {tt::tt_metal::ClusterType::GALAXY, "single_galaxy_torus_xy_graph_descriptor.textproto"},
              {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_torus_xy_graph_descriptor.textproto"}}}});
 
+namespace {
+
+MeshGraphDescriptor load_mesh_graph_descriptor(const std::string& mesh_graph_desc_file_path) {
+    log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
+    TT_FATAL(
+        mesh_graph_desc_file_path.ends_with(".textproto"),
+        "Mesh graph descriptor file must use the .textproto format. "
+        "The YAML format (MGD 1.0) has been deprecated.\n\n"
+        "Please convert your YAML mesh graph descriptor to textproto format.\n\n"
+        "For examples of textproto format, see:\n"
+        "  - tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto\n"
+        "  - tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto\n\n"
+        "For conversion instructions from MGD 1.0 (YAML) to MGD (textproto), see:\n"
+        "  - tt_metal/fabric/MGD_README.md (section: Converting from MGD 1.0 to MGD)\n\n"
+        "File provided: {}",
+        mesh_graph_desc_file_path);
+    return MeshGraphDescriptor(std::filesystem::path(mesh_graph_desc_file_path), /*backwards_compatible=*/true);
+}
+
+}  // namespace
+
 MeshGraph::MeshGraph(
     tt::tt_metal::ClusterType cluster_type,
     const std::string& mesh_graph_desc_file_path,
-    std::optional<FabricConfig> fabric_config) {
-    log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
-    if (mesh_graph_desc_file_path.ends_with(".textproto")) {
-        auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        mesh_graph_desc_file_path_ = filepath;
-        mesh_graph_descriptor_.emplace(filepath, true);
-        this->initialize_from_mgd(
-            mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type));
-    } else {
-        TT_THROW(
-            "Mesh graph descriptor file must use the .textproto format. "
-            "The YAML format (MGD 1.0) has been deprecated.\n\n"
-            "Please convert your YAML mesh graph descriptor to textproto format.\n\n"
-            "For examples of textproto format, see:\n"
-            "  - tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto\n"
-            "  - tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto\n\n"
-            "For conversion instructions from MGD 1.0 (YAML) to MGD (textproto), see:\n"
-            "  - tt_metal/fabric/MGD_README.md (section: Converting from MGD 1.0 to MGD)\n\n"
-            "File provided: {}",
-            mesh_graph_desc_file_path);
-    }
+    std::optional<FabricConfig> fabric_config) :
+    mesh_graph_descriptor_(load_mesh_graph_descriptor(mesh_graph_desc_file_path)),
+    mesh_graph_desc_file_path_(std::filesystem::path(mesh_graph_desc_file_path)) {
+    initialize_from_mgd(fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type));
 }
 
 MeshGraph::MeshGraph(
@@ -304,8 +307,8 @@ static std::vector<std::pair<ChipId, ChipId>> expand_express_link_edges(
     return edges;
 }
 
-void MeshGraph::initialize_from_mgd(
-    const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
+void MeshGraph::initialize_from_mgd(std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
+    const MeshGraphDescriptor& mgd = mesh_graph_descriptor_;
     // Intentionally leaked: a control plane (and thus a MeshGraph) can be constructed from the atexit
     // teardown path, after a plain function-local static's destructor has already run.
     static const auto& proto_arch_to_arch = *new std::unordered_map<const proto::Architecture, tt::ARCH>{
@@ -398,23 +401,8 @@ void MeshGraph::initialize_from_mgd(
         }
     }
 
-    // Populate mesh_host_ranks_
-    // Populate mesh_host_rank_coord_ranges_
-    // Populate mesh_to_chip_ids_
     auto all_meshes = mgd.all_meshes();
     auto all_switches = mgd.all_switches();
-
-    // Populate with empty containers
-    this->mesh_host_ranks_.clear();
-    for ([[maybe_unused]] const auto& mesh : all_meshes) {
-        this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
-    }
-    for ([[maybe_unused]] const auto& swtch : all_switches) {
-        this->mesh_host_ranks_.emplace_back(MeshShape{1, 1}, MeshHostRankId{0});
-    }
-
-    this->inter_mesh_policy_specified_ = mgd.is_inter_mesh_policy_specified();
-    this->inter_mesh_relaxed_policy_ = mgd.is_inter_mesh_policy_relaxed();
 
     // Set up the mesh_edge_ports_to_chip_id_ with empty containers for all meshes
     mesh_edge_ports_to_chip_id_.resize(all_meshes.size() + all_switches.size());
@@ -428,10 +416,6 @@ void MeshGraph::initialize_from_mgd(
         const auto& mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
 
         MeshId mesh_id(mesh_instance.local_id);
-
-        // Set intra-mesh relaxed policy based on channels policy from MGD
-        bool is_relaxed = (mesh_desc->channels().policy() == proto::Policy::RELAXED);
-        this->intra_mesh_relaxed_policy_[mesh_id] = is_relaxed;
 
         MeshShape mesh_shape(mesh_desc->device_topology().dims().at(0), mesh_desc->device_topology().dims().at(1));
 
@@ -526,45 +510,6 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        MeshShape host_shape(mesh_desc->host_topology().dims().at(0), mesh_desc->host_topology().dims().at(1));
-
-        // Validate that mesh shape is divisible by host shape before processing
-        TT_FATAL(
-            mesh_shape[0] % host_shape[0] == 0 && mesh_shape[1] % host_shape[1] == 0,
-            "MeshGraph: Mesh shape {}x{} must be divisible by host shape {}x{}",
-            mesh_shape[0],
-            mesh_shape[1],
-            host_shape[0],
-            host_shape[1]);
-
-        std::vector<MeshHostRankId> mesh_host_ranks_values;
-        mesh_host_ranks_values.reserve(host_shape.mesh_size());
-        uint32_t next_rank = 0;
-        for (const auto& host_coord : MeshCoordinateRange(host_shape)) {
-            mesh_host_ranks_values.push_back(MeshHostRankId{next_rank++});
-
-            std::uint32_t board_ns_size = mesh_shape[0] / host_shape[0];
-            std::uint32_t board_ew_size = mesh_shape[1] / host_shape[1];
-
-            // Populate mesh_host_rank_coord_ranges_
-            this->mesh_host_rank_coord_ranges_.emplace(
-                std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
-                MeshCoordinateRange(
-                    MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
-                    MeshCoordinate(
-                        ((host_coord[0] + 1) * board_ns_size) - 1, ((host_coord[1] + 1) * board_ew_size) - 1)));
-        }
-
-        // Populate mesh_host_ranks_
-        this->mesh_host_ranks_[*mesh_id] =
-            tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, mesh_host_ranks_values);
-
-        // Populate mesh_to_chip_ids
-        std::vector<ChipId> chip_ids(mesh_shape[0] * mesh_shape[1]);
-        std::iota(chip_ids.begin(), chip_ids.end(), 0);
-        this->mesh_to_chip_ids_.emplace(
-            mesh_instance.local_id, tt_metal::distributed::MeshContainer<ChipId>(mesh_shape, chip_ids));
-
         // Get the edge ports of each mesh; a torus axis's edge ports are reserved for the torus
         // (see axis_ports_reserved_for_torus, issue #54650).
         std::uint32_t chan_id = 0;
@@ -626,10 +571,6 @@ void MeshGraph::initialize_from_mgd(
 
         MeshId switch_mesh_id(switch_instance.local_id);
 
-        // Set intra-mesh relaxed policy based on channels policy from MGD
-        bool is_relaxed = (switch_desc->channels().policy() == proto::Policy::RELAXED);
-        this->intra_mesh_relaxed_policy_[switch_mesh_id] = is_relaxed;
-
         MeshShape switch_shape(
             switch_desc->device_topology().dims().at(0), switch_desc->device_topology().dims().at(1));
 
@@ -661,28 +602,6 @@ void MeshGraph::initialize_from_mgd(
             this->intra_mesh_connectivity_[*switch_mesh_id][src_chip_id] =
                 this->get_valid_connections(src_switch_coord, switch_coord_range, effective_fabric_type);
         }
-
-        // Switches are always single host, so host_shape is [1, 1]
-        MeshShape host_shape(1, 1);
-
-        // Populate mesh_host_ranks_ for switch (single host)
-        std::vector<MeshHostRankId> switch_host_ranks_values;
-        switch_host_ranks_values.push_back(MeshHostRankId{0});
-        this->mesh_host_ranks_[*switch_mesh_id] =
-            tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, switch_host_ranks_values);
-
-        // Populate mesh_host_rank_coord_ranges_ for switch
-        this->mesh_host_rank_coord_ranges_.emplace(
-            std::make_pair(*switch_mesh_id, MeshHostRankId{0}),
-            MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(switch_shape[0] - 1, switch_shape[1] - 1)));
-
-        // Populate switch_to_chip_ids
-        std::vector<ChipId> chip_ids(switch_shape[0] * switch_shape[1]);
-        std::iota(chip_ids.begin(), chip_ids.end(), 0);
-        this->switch_to_chip_ids_.emplace(
-            switch_mesh_id, tt_metal::distributed::MeshContainer<ChipId>(switch_shape, chip_ids));
-        this->mesh_to_chip_ids_.emplace(
-            *switch_mesh_id, tt_metal::distributed::MeshContainer<ChipId>(switch_shape, chip_ids));
 
         // Track this switch in switch_ids_
         this->switch_ids_.push_back(switch_mesh_id);
@@ -811,34 +730,12 @@ void MeshGraph::print_connectivity() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
-void MeshGraph::validate_mesh_id(MeshId mesh_id) const {
-    TT_FATAL(this->mesh_to_chip_ids_.contains(mesh_id), "MeshGraph: mesh_id {} not found", mesh_id);
-}
-
 MeshShape MeshGraph::get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
-    this->validate_mesh_id(mesh_id);
-
-    if (host_rank.has_value()) {
-        return this->mesh_host_rank_coord_ranges_.at(std::make_pair(mesh_id, *host_rank)).shape();
-    }
-
-    return this->mesh_to_chip_ids_.at(mesh_id).shape();
+    return mesh_graph_descriptor_.get_mesh_shape(mesh_id, host_rank);
 }
 
 MeshCoordinateRange MeshGraph::get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
-    this->validate_mesh_id(mesh_id);
-
-    if (host_rank.has_value()) {
-        auto it = this->mesh_host_rank_coord_ranges_.find(std::make_pair(mesh_id, *host_rank));
-        TT_FATAL(
-            it != this->mesh_host_rank_coord_ranges_.end(),
-            "MeshGraph: host_rank {} not found for mesh {}",
-            *host_rank,
-            *mesh_id);
-        return it->second;
-    }
-    auto mesh_shape = this->mesh_to_chip_ids_.at(mesh_id).shape();
-    return MeshCoordinateRange(mesh_shape);
+    return mesh_graph_descriptor_.get_coord_range(mesh_id, host_rank);
 }
 
 const IntraMeshConnectivity& MeshGraph::get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
@@ -893,19 +790,11 @@ std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
     return std::nullopt;
 }
 
-std::vector<MeshId> MeshGraph::get_all_mesh_ids() const {
-    std::vector<MeshId> mesh_ids;
-    mesh_ids.reserve(this->mesh_to_chip_ids_.size());
-    for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
-        mesh_ids.push_back(mesh_id);
-    }
-    return mesh_ids;
-}
+std::vector<MeshId> MeshGraph::get_all_mesh_ids() const { return mesh_graph_descriptor_.get_all_mesh_ids(); }
 
 std::vector<MeshId> MeshGraph::get_mesh_ids() const {
     std::vector<MeshId> mesh_ids;
-    mesh_ids.reserve(this->mesh_to_chip_ids_.size() - switch_ids_.size());
-    for (const auto& [mesh_id, _] : this->mesh_to_chip_ids_) {
+    for (const auto& mesh_id : mesh_graph_descriptor_.get_all_mesh_ids()) {
         if (!this->is_switch_mesh(mesh_id)) {
             mesh_ids.push_back(mesh_id);
         }
@@ -918,79 +807,40 @@ bool MeshGraph::is_switch_mesh(MeshId mesh_id) const {
 }
 
 MeshContainer<ChipId> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
-    auto it = mesh_to_chip_ids_.find(mesh_id);
-    TT_FATAL(it != mesh_to_chip_ids_.end(), "MeshGraph: mesh_id {} not found", mesh_id);
-
-    if (!host_rank.has_value()) {
-        // Return the entire mesh
-        return it->second;
-    }
-
-    // Return submesh for the specific host rank
-    MeshCoordinateRange coord_range = get_coord_range(mesh_id, host_rank);
-    MeshShape submesh_shape = coord_range.shape();
-
-    std::vector<ChipId> submesh_chip_ids;
-    submesh_chip_ids.reserve(submesh_shape.mesh_size());
-
-    for (const auto& coord : coord_range) {
-        submesh_chip_ids.push_back(it->second.at(coord));
-    }
-
-    return MeshContainer<ChipId>(submesh_shape, submesh_chip_ids);
+    return mesh_graph_descriptor_.get_chip_ids(mesh_id, host_rank);
 }
 
 MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, ChipId chip_id) const {
-    const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
-    int ns = chip_id / mesh_shape[1];
-    int ew = chip_id % mesh_shape[1];
-    return MeshCoordinate(ns, ew);
+    return mesh_graph_descriptor_.chip_to_coordinate(mesh_id, chip_id);
 }
 
 ChipId MeshGraph::coordinate_to_chip(
-    MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank) const {
-    if (host_rank.has_value()) {
-        auto offset = get_coord_range(mesh_id, host_rank).start_coord();
-        coordinate = MeshCoordinate(offset[0] + coordinate[0], offset[1] + coordinate[1]);
-    }
-    const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
-    return (coordinate[0] * mesh_shape[1]) + coordinate[1];
+    MeshId mesh_id, const MeshCoordinate& coordinate, std::optional<MeshHostRankId> host_rank) const {
+    return mesh_graph_descriptor_.coordinate_to_chip(mesh_id, coordinate, host_rank);
 }
 
 std::optional<MeshHostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const {
-    auto it = mesh_to_chip_ids_.find(mesh_id);
-    if (it == mesh_to_chip_ids_.end()) {
+    const auto& mgd = get_mesh_graph_descriptor();
+    if (!mgd.has_mesh_id(mesh_id) || chip_id < 0 ||
+        static_cast<size_t>(chip_id) >= mgd.get_mesh_shape(mesh_id).mesh_size()) {
         return std::nullopt;
     }
-
-    // Convert chip_id to mesh coordinates
-    MeshCoordinate chip_coord = this->chip_to_coordinate(mesh_id, chip_id);
-
-    // Find which host rank owns this coordinate
-    for (const auto& [mesh_id_host_rank_pair, coord_range] : mesh_host_rank_coord_ranges_) {
-        if (mesh_id_host_rank_pair.first == mesh_id && chip_coord[0] >= coord_range.start_coord()[0] &&
-            chip_coord[0] <= coord_range.end_coord()[0] && chip_coord[1] >= coord_range.start_coord()[1] &&
-            chip_coord[1] <= coord_range.end_coord()[1]) {
-            return mesh_id_host_rank_pair.second;
-        }
-    }
-
-    return std::nullopt;
+    return mgd.get_host_rank_for_chip(mesh_id, chip_id);
 }
 
 const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) const {
-    return mesh_host_ranks_[*mesh_id];
+    return mesh_graph_descriptor_.get_host_ranks(mesh_id);
 }
 
 bool MeshGraph::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
-    auto it = intra_mesh_relaxed_policy_.find(mesh_id);
-    TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No mode for mesh_id {}", *mesh_id);
-    return it->second;
+    return mesh_graph_descriptor_.is_intra_mesh_policy_relaxed(mesh_id);
 }
 
-bool MeshGraph::is_inter_mesh_policy_relaxed() const { return inter_mesh_relaxed_policy_; }
+bool MeshGraph::is_inter_mesh_policy_relaxed() const { return mesh_graph_descriptor_.is_inter_mesh_policy_relaxed(); }
 
-bool MeshGraph::is_inter_mesh_policy_specified() const { return inter_mesh_policy_specified_; }
+bool MeshGraph::is_inter_mesh_policy_specified() const {
+    return mesh_graph_descriptor_.is_inter_mesh_policy_specified();
+}
 
 /**
  * Generate all possible mesh shapes that can be formed from a given number of chips.
@@ -1032,7 +882,7 @@ FabricConfig fabric_config_matching_type(FabricType fabric_type) {
 MeshGraph::MeshGraph(
     const MeshGraphDescriptor& mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) :
     mesh_graph_descriptor_(mesh_graph_descriptor) {
-    initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy);
+    initialize_from_mgd(fabric_config, is_ubb_galaxy);
 }
 
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(

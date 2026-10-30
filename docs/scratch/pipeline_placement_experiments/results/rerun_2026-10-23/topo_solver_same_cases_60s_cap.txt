@@ -1,0 +1,13 @@
+engines: topo-sat, topo-dfs (solve_topology_mapping); cap 60 s per solve
+4x8 ring of 32 x 1x1                        32/32  exact | topo-sat yes    0.009s | topo-dfs yes    0.001s
+8x8 ring of 64 x 1x1                        64/64  exact | topo-sat yes    0.211s | topo-dfs yes    0.089s
+8x16 ring of 128 x 1x1                     128/128 exact | topo-sat yes    1.600s | topo-dfs yes    0.206s
+16x16 ring of 256 x 1x1                    256/256 exact | topo-sat yes    3.405s | topo-dfs yes    0.899s
+5x5 ring of 25 x 1x1 (odd: none)            25/25  exact | topo-sat no     0.007s | topo-dfs no    29.790s
+7x7 ring of 49 x 1x1 (odd: none)            49/49  exact | topo-sat no     0.293s | topo-dfs cap   60.000s
+8x8 ring of 60 x 1x1 (4 spare)              60/64  exact | topo-sat yes    0.500s | topo-dfs yes    0.003s
+two 4x4 meshes, cables (0,0),(0,1)          32/32  exact | topo-sat yes    0.192s | topo-dfs yes    0.005s
+two 4x4 meshes, cables same colour          32/32  exact | topo-sat no    38.614s | topo-dfs cap   60.000s
+two 8x8 meshes, cables (0,0),(0,1)         128/128 exact | topo-sat yes    1.318s | topo-dfs cap   60.000s
+two 8x8 meshes, cables same colour         128/128 exact | topo-sat cap   60.000s | topo-dfs cap   60.000s
+two 4x8 meshes, cables same colour          64/64  exact | topo-sat cap   60.000s | topo-dfs cap   60.000s

@@ -1,0 +1,6 @@
+encodings: ['dfs', 'pos']  timeout 600s
+random 8x8: 30 stages                     64/64  | dfs yes 441.397s        | pos ???  >600s      
+random 8x8: 34 stages                     64/64  | dfs yes 541.691s        | pos ???  >600s      
+random 8x16 s1.0: 37 stages              121/128 | dfs yes 529.502s        | pos yes 182.988s (+0.8b)
+random 8x16 s1.1: 32 stages              127/128 | dfs ???  >600s       | pos ???  >600s      
+random 8x16 s1.2: 32 stages              122/128 | dfs yes   2.002s        | pos yes 497.290s (+2.3b)

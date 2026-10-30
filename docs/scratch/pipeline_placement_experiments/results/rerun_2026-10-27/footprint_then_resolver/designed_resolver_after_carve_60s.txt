@@ -1,0 +1,7 @@
+engine: pipeline_builder.cpp resolver on the slots of each footprint carve; cap 60 s per solve
+4x4: 1x1, 3x 2x2 (blaze: no-cycle-13)                                    4 stages | resolver-after-carve yes    0.000s
+4x4: 1x1, 3x 2x2, 1x1                                                    5 stages | resolver-after-carve yes    0.000s
+4x4: 1x1, 2x 2x2, 1x1                                                    4 stages | resolver-after-carve yes    0.000s
+4x6: 1x1, 4x 2x2, 1x1 (blaze: no-alignment)                              6 stages | resolver-after-carve yes    0.000s
+4x8: 1x1, 6x 2x2, 1x1 (blaze: no-alignment)                              8 stages | resolver-after-carve yes    0.000s
+4x8: 1x1, 2x4, 2x4, 2x2, 1x1                                             5 stages | resolver-after-carve yes    0.000s

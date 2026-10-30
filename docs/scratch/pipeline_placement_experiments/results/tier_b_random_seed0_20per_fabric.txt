@@ -1,0 +1,38 @@
+distinct fabrics: 167  (from 229 files)
+slices per mesh: {1: 1398, 2: 100, 3: 2, 4: 112, 8: 6, 16: 25, 32: 6, 64: 1}
+full TIMEOUT (>3 s in Python): 115  by mesh count: {16: 9, 20: 8, 32: 11, 40: 4, 64: 19, 80: 9, 96: 13, 112: 16, 128: 11, 144: 15}  slim verdicts on them: {'PASS': 115}
+
+cases: 3340
+slim rejects: 986 (29.5%)  by reason: {'REJECT:capacity': 846, 'REJECT:connectivity': 96, 'REJECT:capacity-class': 44}
+full rejects: 1510 (45.2%)   full undecided (budget 200000): 19
+GAP (slim pass, full reject): 524 (15.7% of all, 22.3% of slim passes)
+  gap by cause: {'channels/split': 452, 'layout-in-mesh': 72}
+  gap by pipeline kind: {'ring': 256, 'fork': 138, 'ring+ring': 32, 'ring+fork': 15, 'ring+chain': 12, 'fork+ring': 14, 'fork+chain': 4, 'chain+fork': 5, 'fork+fork': 7, 'chain': 33, 'chain+ring': 6, 'chain+chain': 2}
+  gap by mesh count: {1: 70, 2: 40, 4: 106, 5: 69, 7: 16, 8: 49, 10: 11, 16: 27, 20: 11, 24: 5, 28: 11, 32: 47, 36: 3, 40: 5, 48: 8, 64: 15, 70: 16, 80: 5, 96: 4, 112: 3, 144: 3}
+  slim passes by kind: {'chain': 408, 'fork': 400, 'ring': 1179, 'ring+ring': 129, 'chain+fork': 20, 'fork+ring': 46, 'chain+chain': 13, 'chain+ring': 51, 'ring+fork': 43, 'ring+chain': 37, 'fork+chain': 12, 'fork+fork': 16}
+
+full search time, fabrics with <= 8 meshes, ms: p50 0.08  p99 270.2  max 2026.6
+
+full search time (Python) ms: p50 0.13  p90 6.78  p99 862.6  max 2429.9
+full search nodes: p50 7  p99 43427  max 200001
+
+slowest 5:
+    3000.1 ms  nodes      -1  TIMEOUT   meshes 112 slices  112 stages  90 chain+ring blitz_decode_ring_112stage_mesh_graph_descriptor.textproto
+    3000.1 ms  nodes      -1  TIMEOUT   meshes 112 slices  112 stages  76 chain+ring blitz_decode_ring_112stage_mesh_graph_descriptor.textproto
+    3000.1 ms  nodes      -1  TIMEOUT   meshes  96 slices   96 stages  72 chain+ring blitz_decode_ring_96stage_mesh_graph_descriptor.textproto
+    3000.1 ms  nodes      -1  TIMEOUT   meshes  32 slices   64 stages  48 chain      subtorus_4x4_pipeline_32stage_mesh_graph_descriptor.textproto
+    3000.1 ms  nodes      -1  TIMEOUT   meshes  40 slices   80 stages  48 ring       subtorus_sc20_4x4_pipeline_40stage_mesh_graph_descriptor.textproto
+
+sample gap cases:
+  channels/split  ring       meshes   4 slices    4 stages   3  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   3  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  fork       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto
+  channels/split  ring       meshes   4 slices    4 stages   3  pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+  channels/split  fork       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+  channels/split  fork       meshes   4 slices    4 stages   4  pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto

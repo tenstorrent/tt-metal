@@ -5,7 +5,6 @@
 #pragma once
 
 #include <filesystem>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tuple>
@@ -14,7 +13,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -178,7 +176,7 @@ public:
     // When host_rank is provided, coordinate is treated as submesh-local and is
     // offset by that rank's origin within the parent mesh before the conversion.
     ChipId coordinate_to_chip(
-        MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+        MeshId mesh_id, const MeshCoordinate& coordinate, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
@@ -218,8 +216,8 @@ public:
     bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
 
     // Check if the graph topology policy (for inter-mesh connections) is relaxed
-    // Returns false (STRICT) if MeshGraphDescriptor is not available or if graph topology policy is STRICT, or
-    // if the descriptor does not specify inter-mesh policy (in that case use is_inter_mesh_policy_specified()).
+    // Returns false (STRICT) if graph topology policy is STRICT, or if the descriptor does not specify
+    // inter-mesh policy (in that case use is_inter_mesh_policy_specified()).
     bool is_inter_mesh_policy_relaxed() const;
 
     // True if inter-mesh policy was read from FABRIC connection(s) or from graph-level graph_topology.channels
@@ -227,26 +225,17 @@ public:
     // explicit inter-mesh policy; multi-MGD rank binding should not treat it as STRICT when merging.
     bool is_inter_mesh_policy_specified() const;
 
-    bool has_mesh_graph_descriptor() const { return mesh_graph_descriptor_.has_value(); }
-
-    const MeshGraphDescriptor& get_mesh_graph_descriptor() const {
-        TT_FATAL(mesh_graph_descriptor_.has_value(), "MeshGraphDescriptor not available");
-        return mesh_graph_descriptor_.value();
-    }
+    const MeshGraphDescriptor& get_mesh_graph_descriptor() const { return mesh_graph_descriptor_; }
 
     // File path when the graph was loaded from textproto; unset for programmatic / auto-discovered MGDs.
     std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
 
 private:
-    MeshGraph() = default;
-
-    void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
         const MeshCoordinate& src_mesh_coord,
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
-    void initialize_from_mgd(
-        const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
+    void initialize_from_mgd(std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
 
     void add_to_connectivity(
         MeshId src_mesh_id,
@@ -256,13 +245,8 @@ private:
         RoutingDirection port_direction);
 
     ChipSpec chip_spec_{};
-    std::map<MeshId, MeshContainer<ChipId>> mesh_to_chip_ids_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
-
-    // For distributed context, bookkeeping of host ranks and their shapes
-    std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
-    std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 
     std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
@@ -273,15 +257,10 @@ private:
 
     // Switch tracking (switches use MeshId as their identifier)
     std::vector<MeshId> switch_ids_;
-    std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
     std::unordered_map<MeshId, std::vector<MeshId>> switch_to_connected_meshes_;
-    std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
-    bool inter_mesh_relaxed_policy_ = false;  // Default to STRICT (false = not relaxed)
-    // Set true in initialize_from_mgd when policy is read from the descriptor (vs implicit default)
-    bool inter_mesh_policy_specified_ = false;
 
-    // Store the MeshGraphDescriptor instance if created from a descriptor file
-    std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;
+    // Source of truth for mesh shapes, chip ids, host ranks and channel policies.
+    MeshGraphDescriptor mesh_graph_descriptor_;
 
     // Store the file path if MeshGraph was created from a descriptor file
     std::optional<std::filesystem::path> mesh_graph_desc_file_path_;

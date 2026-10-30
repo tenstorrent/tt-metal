@@ -1,0 +1,14 @@
+engines: topo-sat, topo-dfs (solve_topology_mapping), pre-carved slots; cap 60 s per solve
+no-1x1 4x8 tiled 1x2: ring of 16 x 1x2                                  16 stages/ 16 slots | topo-sat yes    0.001s | topo-dfs yes    0.000s
+no-1x1 4x8 tiled 2x1: ring of 16 x 2x1                                  16 stages/ 16 slots | topo-sat yes    0.001s | topo-dfs yes    0.000s
+no-1x1 8x8 tiled 1x2: ring of 32 x 1x2                                  32 stages/ 32 slots | topo-sat yes    0.003s | topo-dfs yes    0.000s
+no-1x1 8x8 tiled 1x2: ring of 31 x 1x2 (1 spare slot)                   31 stages/ 32 slots | topo-sat no     0.004s | topo-dfs no    26.260s
+no-1x1 8x8 half 2x2 / half 1x2: ring of 8 x 2x2 then 16 x 1x2           24 stages/ 24 slots | topo-sat yes    0.001s | topo-dfs yes    0.000s
+no-1x1 8x8 half 2x2 / half 1x2: ring alternating 2x2,1x2 (none: 2x2 slots touch only 2 of 16 dominoes each)  24 stages/ 24 slots | topo-sat no     0.000s | topo-dfs no     0.000s
+no-1x1 16x16 tiled 1x2: ring of 128 x 1x2                              128 stages/128 slots | topo-sat yes    0.060s | topo-dfs yes    0.014s
+no-1x1 2 meshes of 4x8 tiled 1x2, 1 cables/pair: ring of 32 x 1x2       32 stages/ 32 slots | topo-sat yes    0.013s | topo-dfs yes    0.005s
+no-1x1 2 meshes of 4x8 tiled 1x2, 4 cables/pair: ring of 32 x 1x2       32 stages/ 32 slots | topo-sat yes    0.003s | topo-dfs yes    0.000s
+no-1x1 4 meshes of 4x8 tiled 1x2, 1 cables/pair: ring of 64 x 1x2       64 stages/ 64 slots | topo-sat yes    0.044s | topo-dfs cap   60.000s
+no-1x1 4 meshes of 4x8 tiled 1x2, 4 cables/pair: ring of 64 x 1x2       64 stages/ 64 slots | topo-sat yes    0.013s | topo-dfs yes    0.037s
+no-1x1 4 meshes of 4x8 tiled 2x1, 4 cables/pair: chain of 64 x 2x1      64 stages/ 64 slots | topo-sat yes    0.013s | topo-dfs yes    0.002s
+no-1x1 2 meshes of 4x8 half 2x2 / half 1x2, 4 cables/pair: ring of 2 x (4 x 2x2, 8 x 1x2)  24 stages/ 24 slots | topo-sat yes    0.001s | topo-dfs yes    0.000s

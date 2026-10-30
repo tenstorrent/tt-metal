@@ -1,0 +1,41 @@
+diff --git a/tt_metal/fabric/topology_solver_sat.cpp b/tt_metal/fabric/topology_solver_sat.cpp
+index 2e06db01052..e7fa1887450 100644
+--- a/tt_metal/fabric/topology_solver_sat.cpp
++++ b/tt_metal/fabric/topology_solver_sat.cpp
+@@ -1064,6 +1064,36 @@ void topology_sat_encode_resource_disjointness(
+     for (const auto& lits : lits_per_resource) {
+         topology_sat_add_at_most_one(solver, lits);
+     }
++    // EXPERIMENT (pipeline carve, docs/scratch/pipeline_placement_experiments): resource completeness, the resource
++    // analogue of step 5b. When the targets' footprints add up to exactly the resource count (a tight carve: every
++    // slice must be covered), every resource must be used by exactly one chosen global, so add the at-least-one
++    // clause per resource. Redundant logically, but it restores the pigeonhole propagation step 5b gives
++    // bijections, which the resource path otherwise skips. Off unless TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS=1.
++    static const bool resource_completeness = [] {
++        const char* v = std::getenv("TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS");
++        return v != nullptr && v[0] == '1';
++    }();
++    if (resource_completeness) {
++        size_t footprint_sum = 0;
++        for (size_t t = 0; t < enc.assign_lit.size(); ++t) {
++            size_t min_footprint = std::numeric_limits<size_t>::max();
++            for (size_t k = 0; k < enc.assign_lit[t].size(); ++k) {
++                const size_t g = enc.allowed_global_idx[t][k];
++                if (g < constraint_data.global_to_resource_indices.size()) {
++                    min_footprint = std::min(min_footprint, constraint_data.global_to_resource_indices[g].size());
++                }
++            }
++            footprint_sum += min_footprint == std::numeric_limits<size_t>::max() ? 0 : min_footprint;
++        }
++        if (footprint_sum == constraint_data.resource_count) {
++            for (const auto& lits : lits_per_resource) {
++                for (int lit : lits) {
++                    solver.add(lit);
++                }
++                solver.add(0);  // an empty clause when no candidate covers this resource: UNSAT
++            }
++        }
++    }
+ }
+ 
+ // Step 5b: Bijection completeness. When |targets| == |globals| an injective mapping is necessarily surjective, so

@@ -1,0 +1,20 @@
+engines: topo-sat, topo-dfs (solve_topology_mapping); cap 60 s per solve
+engines: topo-sat, topo-dfs (solve_topology_mapping); cap 60 s per solve
+2 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0  64/64  exact | topo-auto(?) cap   60.000s | topo-sat cap   60.000s | topo-dfs no    37.668s
+2 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1  64/64  exact | topo-auto(sat) yes    0.067s | topo-sat yes    0.066s | topo-dfs no    37.591s
+2 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0  64/64  exact | topo-auto(sat) yes    0.013s | topo-sat yes    0.013s | topo-dfs yes    0.013s
+2 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1  64/64  exact | topo-auto(sat) yes    0.013s | topo-sat yes    0.014s | topo-dfs yes    0.074s
+4 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0 128/128 exact | topo-auto(?) cap   60.000s | topo-sat cap   60.000s | topo-dfs cap   60.000s
+4 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1 128/128 exact | topo-auto(?) cap   60.000s | topo-sat cap   60.000s | topo-dfs cap   60.000s
+4 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0 128/128 exact | topo-auto(sat) yes    0.059s | topo-sat yes    0.059s | topo-dfs cap   60.000s
+4 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1 128/128 exact | topo-auto(sat) yes    0.413s | topo-sat yes    0.389s | topo-dfs cap   60.000s
+8 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0 256/256 exact | topo-auto(?) cap   60.000s | topo-sat cap   60.000s | topo-dfs cap   60.000s
+8 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1 256/256 exact | topo-auto(?) cap   60.000s | topo-sat cap   60.000s | topo-dfs cap   60.000s
+8 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0 256/256 exact | topo-auto(?) cap   60.000s | topo-sat cap   60.000s | topo-dfs cap   60.000s
+8 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1 256/256 exact | topo-auto(sat) yes   34.668s | topo-sat yes   34.342s | topo-dfs cap   60.000s
+2 32-rank meshes line, 1 cable/pair, 32/32 per mesh, seed 0  64/64  exact | topo-auto(sat) yes    0.119s | topo-sat yes    0.118s | topo-dfs no    53.198s
+2 32-rank meshes line, 4 cable/pair, 32/32 per mesh, seed 0  64/64  exact | topo-auto(sat) yes    0.013s | topo-sat yes    0.014s | topo-dfs yes    0.262s
+4 32-rank meshes line, 1 cable/pair, 32/32 per mesh, seed 0 128/128 exact | topo-auto(?) cap   60.000s | topo-sat cap   60.000s | topo-dfs cap   60.000s
+4 32-rank meshes line, 4 cable/pair, 32/32 per mesh, seed 0 128/128 exact | topo-auto(sat) yes    0.328s | topo-sat yes    0.337s | topo-dfs no    58.083s
+2 32-rank meshes ring, 2 cable/pair, 24/32 per mesh, seed 0  48/64  exact | topo-auto(sat) yes    0.009s | topo-sat yes    0.009s | topo-dfs yes    0.001s
+4 32-rank meshes ring, 2 cable/pair, 24/32 per mesh, seed 0  96/128 exact | topo-auto(sat) yes    0.044s | topo-sat yes    0.043s | topo-dfs cap   60.000s
