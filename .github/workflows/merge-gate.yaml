@@ -633,6 +633,10 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       changed: ${{ steps.classify.outputs.changed }}
+      # The gate's thresholds, for the compare job and for stage 2 in the legs.
+      thresholds: >-
+        {"blackhole": {"threshold": "0.02", "module_thresholds": ""},
+         "wormhole": {"threshold": "0.02", "module_thresholds": ""}}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -664,6 +668,8 @@ jobs:
       perf-run-types: L1_TO_L1
       pipeline: merge_baseline
       upload-to-warehouse: true
+      stage2-baseline-ref: ${{ github.event.merge_group.base_sha || github.sha }}
+      stage2-thresholds: ${{ needs.llk-perf-merge-gate-changes.outputs.thresholds }}
     secrets: inherit
 
   llk-perf-merge-gate:
@@ -673,13 +679,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: blackhole
-            threshold: "0.02"
-            module_thresholds: ""
-          - arch: wormhole
-            threshold: "0.13"
-            module_thresholds: perf_matmul=0.25,perf_math_matmul=0.25
+        arch: [blackhole, wormhole]
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
@@ -691,8 +691,8 @@ jobs:
       baseline_wait_minutes: "0"
       speed_of_light: "false"
       run_types: L1_TO_L1
-      threshold: ${{ matrix.threshold }}
-      module_thresholds: ${{ matrix.module_thresholds }}
+      threshold: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].threshold }}
+      module_thresholds: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].module_thresholds }}
       min_cycles: "30"
       measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
       # Report-only for the first week. To block, set this to true and add both

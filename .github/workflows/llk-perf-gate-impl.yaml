@@ -90,7 +90,7 @@ on:
         default: true
         type: boolean
       threshold:
-        description: "Relative slowdown counting as a regression (BH 0.02, WH 0.13)"
+        description: "Relative slowdown counting as a regression"
         required: false
         default: "0.02"
         type: string
@@ -443,6 +443,22 @@ jobs:
             echo "::warning::The comparison did not finish (exit ${EXIT_CODE}); no verdict."
           fi
           exit 0  # Don't fail the step; let the verdict step decide
+
+      - name: Download the merge gate's stage 2
+        if: ${{ !cancelled() && inputs.baseline_pipeline == 'merge_baseline' }}
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-stage2-${{ inputs.arch }}-*
+          path: stage2
+
+      - name: Add stage 2 to the report
+        if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
+        run: |
+          python3 ${{ env.LLK_PATH }}/perf/placement_check.py render \
+            --results 'stage2/**/stage2.json' --arch '${{ inputs.arch }}' --report stage2.md
+          printf '\n' >> perf_gate_report.md
+          cat stage2.md >> perf_gate_report.md
 
       - name: Comment on PR
         if: >-

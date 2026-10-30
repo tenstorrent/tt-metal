@@ -1,4 +1,5 @@
-# LLK perf merge gate: non speed-of-light, L1_TO_L1 only.
+# LLK perf merge gate: non speed-of-light, compares L1_TO_L1 only. Wormhole also measures MATH_ISOLATE,
+# so each L1_TO_L1 kernel follows a MATH_ISOLATE kernel.
 # llk-perf-impl sets SPEED_OF_LIGHT and LLK_PERF_RUN_TYPES from its inputs; this
 # list only decides the legs. The merge gate measures the queue head and uploads
 # it as the merge baseline, so the baseline and the gate always share these legs.

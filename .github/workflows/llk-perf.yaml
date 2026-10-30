@@ -92,8 +92,7 @@ jobs:
             threshold: 0.02
             run_types: L1_TO_L1,PACK_ISOLATE,UNPACK_ISOLATE,MATH_ISOLATE
           - arch: wormhole
-            threshold: 0.03
-            module_thresholds: perf_matmul=0.10,perf_math_matmul=0.10
+            threshold: 0.02
             run_types: L1_TO_L1,UNPACK_ISOLATE,MATH_ISOLATE
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
