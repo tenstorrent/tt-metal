@@ -179,23 +179,10 @@ CENTERS_FIRST = CODE_CENTERS + [channel for channel in range(CODE_SIZE) if chann
 CENTERS_FIRST_CENTERS = slice(0, len(CODE_CENTERS))
 
 
-def _box_pred_pieces():
-    """The TTNN head's box predictions, in box code order, as one concat of slices of its refined
-    centers ``"centers"`` (x, y, z) and its centers-first codes ``"codes"``."""
-    pieces = []
-    for channel in range(CODE_SIZE):
-        if channel in CODE_CENTERS:
-            source, index = "centers", CODE_CENTERS.index(channel)
-        else:
-            source, index = "codes", CENTERS_FIRST.index(channel)
-        if pieces and pieces[-1][0] == source and pieces[-1][1].stop == index:
-            pieces[-1] = (source, slice(pieces[-1][1].start, index + 1))
-        else:
-            pieces.append((source, slice(index, index + 1)))
-    return tuple(pieces)
-
-
-BOX_PRED_PIECES = _box_pred_pieces()
+# The TTNN head's box predictions stay in CENTERS_FIRST order, the refined centers in metres in
+# its first channels, which needs no slicing on device; CODE_ORDER takes them to the box code
+# order on the host.
+CODE_ORDER = [CENTERS_FIRST.index(channel) for channel in range(CODE_SIZE)]
 
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
 BOX_CENTER = slice(0, 3)

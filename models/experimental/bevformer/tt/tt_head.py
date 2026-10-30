@@ -13,11 +13,12 @@ The reg branches run once per layer, inside the decoder, which returns their box
 The reference sets a box's center to ``sigmoid(delta + inverse_sigmoid(points))``, with
 ``delta`` the code's center channels and ``points`` the layer's input reference points:
 that is the decoder's refinement of its points, so its refined points (float32) replace
-the center channels, scaled to metres.
+the center channels, scaled to metres. The boxes keep the decoder's ``CENTERS_FIRST`` channel
+order, whose center channels come first, where the refined centers fill them without slicing.
 """
 
 import ttnn
-from models.experimental.bevformer.model_config import BOX_PRED_PIECES, SCORE_DTYPE
+from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, CODE_SIZE, GRID_DTYPE, SCORE_DTYPE
 from models.experimental.bevformer.tt.tt_common import l1_linear, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
@@ -29,6 +30,16 @@ class TTBEVFormerHead:
         """``params`` comes from ``create_head_parameters``, with the reference head's BEV shape
         and the ``pc_range`` corner and size its [0, 1] reference points map to in metres."""
         self.params = params
+        # The box predictions' center channels, which the refined centers fill.
+        self._center_mask = ttnn.to_device(
+            ttnn.Tensor(
+                [float(c in range(CENTERS_FIRST_CENTERS.stop)) for c in range(CODE_SIZE)],
+                [1, 1, 1, CODE_SIZE],
+                GRID_DTYPE,
+                ttnn.TILE_LAYOUT,
+            ),
+            device,
+        )
         self.decoder = TTDetectionTransformerDecoder(params.decoder, device, params.bev_shape, batch_first=True)
 
     @staticmethod
@@ -42,7 +53,8 @@ class TTBEVFormerHead:
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
         (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
-        ``model_config.py``'s box code layout with cx, cy and cz in metres.
+        the box code in ``model_config.py``'s ``CENTERS_FIRST`` order with cx, cy and cz in metres,
+        which ``CODE_ORDER`` takes to the reference's.
         """
         signpost(header="TTNN Head Forward Start")
         p = self.params
@@ -63,8 +75,9 @@ class TTBEVFormerHead:
         signpost(header="Head ClsBranches End")
         signpost(header="Head BoxPreds Start")
 
-        sources = {"centers": ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min), "codes": box_codes}
-        all_bbox_preds = ttnn.concat([sources[source][..., channels] for source, channels in BOX_PRED_PIECES], dim=-1)
+        centers = ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min)
+        centers = ttnn.pad(centers, [(0, 0)] * 3 + [(0, CODE_SIZE - centers.shape[-1])], 0.0)
+        all_bbox_preds = ttnn.where(self._center_mask, centers, box_codes)
         signpost(header="Head BoxPreds End")
         signpost(header="TTNN Head Forward End")
         # The caller may hold the outputs into the next frame, whose backbone needs the L1.
