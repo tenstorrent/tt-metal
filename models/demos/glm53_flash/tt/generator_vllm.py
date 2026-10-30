@@ -1680,6 +1680,7 @@ class GLM53FlashForCausalLM:
         # continuation shares this step with fresh prompts that together fill a wave restarts at 0 inside that wave:
         # one chunk of work dropped, the wave-affine order kept (GLM53_VLLM_SP_REPLACE_TOKENS, 0 = never)
         restart: set[int] = set()
+        burst = len(fresh)  # the burst that decides SP vs waves (``_allocate_slot``)
         if fresh and self.geometry.rows_independent and self._sp_replace_tokens > 0:
             young = [
                 i
@@ -1688,11 +1689,11 @@ class GLM53FlashForCausalLM:
             ]
             if len(fresh) + len(young) >= self.geometry.rows:
                 # the wave forms on the first slot index with a free row; a young prompt already on that index joins
-                # the wave as a continuing member (mixed starts), the others restart there
+                # the wave as a continuing member (mixed starts), the others restart there; every young prompt counts
+                # in the burst (a lone first arrival + rows - 1 stragglers is a wave of rows, no SP for any of them)
                 wave_idx = self.slots.first_open_index()
                 restart = {i for i in young if self.slots.physical(int(empty_slots[i])).user != wave_idx}
-        # the burst that decides SP vs waves: the fresh prompts plus every young prompt joining their wave
-        burst = len(fresh) + (len(young) if restart else 0)
+                burst = len(fresh) + len(young)
         for i in range(B):
             logical = int(empty_slots[i])
             start, end = starts[i], ends[i]

@@ -1265,6 +1265,30 @@ def test_wave_prefill_walks_chunks_and_switches_sp_to_waves_one_way():
         (3, 0, 2048),
     ]
     assert not any(d.slots.physical(k).sp_only for k in range(4))
+    # the served shape (needle64k_8_adaptive_r2: the first step saw ONE arrival, the second its continuation + seven
+    # fresh): the young prompt already sits on the wave's index, so nothing restarts, but it counts in the burst --
+    # without it the seven fresh prompts read as a burst of 7 < 8 and the first three took SP indices (waves of 5)
+    e, me = _adapter(rows=8, independent=True, max_seq_len=65536)
+    ids8 = [(torch.arange(4096) % m + 1).to(torch.int32).reshape(1, 4096) for m in (60, 7, 11, 13, 17, 19, 23, 29)]
+    e.prefill_forward(
+        ids8[0], prompt_lens=[2048], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1)
+    )
+    assert (e.slots.physical(0).row, e.slots.physical(0).user) == (0, 0) and e.slots.physical(0).sp_only
+    octet = torch.zeros(8, 4096, dtype=torch.int32)
+    for k in range(8):
+        octet[k] = ids8[k][0]
+    n0 = len(me.calls)
+    e.prefill_forward(
+        octet,
+        prompt_lens=[4096] + [2048] * 7,
+        start_pos=torch.tensor([2048] + [0] * 7),
+        empty_slots=list(range(8)),
+        sampling_params=_greedy(8),
+    )
+    waves = [w for w in me.calls[n0:] if w[0] == "prefill_wave"]
+    assert [w[4] for w in waves] == [[(0, 0, 2048, 4096)] + [(r, 0, 0, 2048) for r in range(1, 8)]], waves
+    assert not any(c0[0] == "prefill" for c0 in me.calls[n0:])  # one wave of eight, no SP chunk, no restart
+    assert [(e.slots.physical(k).row, e.slots.physical(k).user) for k in range(8)] == [(k, 0) for k in range(8)]
 
 
 def test_kv_accounting_hooks():
