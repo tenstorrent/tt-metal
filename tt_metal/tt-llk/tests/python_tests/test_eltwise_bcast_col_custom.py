@@ -75,7 +75,7 @@ class CT_DIM(TemplateParameter):
 
 @dataclass
 class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_tile_init does."""
+    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_init does."""
 
     bcast_preserve: bool = False
 

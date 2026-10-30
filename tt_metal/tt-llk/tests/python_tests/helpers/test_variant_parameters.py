@@ -2387,7 +2387,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
                          omits the LLK argument; zero and kt_dim retain tight packing.
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
     preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
-                         copy_tile_init does.
+                         copy_init does.
     """
 
     signal_granularity: int = 1
