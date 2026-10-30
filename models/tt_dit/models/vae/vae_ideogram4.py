@@ -27,6 +27,13 @@ from ...parallel.manager import CCLManager
 from .vae_sd35 import VAEDecoder
 
 
+def _enable_conv_slice_fallback(module: Module) -> None:
+    if isinstance(module, Conv2d):
+        module.slice_fallback = True
+    for _, child in module.named_children():
+        _enable_conv_slice_fallback(child)
+
+
 class Ideogram4VAEDecoder(Module):
     def __init__(self, *, post_quant_conv: Conv2d, decoder: VAEDecoder) -> None:
         super().__init__()
@@ -53,7 +60,11 @@ class Ideogram4VAEDecoder(Module):
         decoder = VAEDecoder.from_torch(
             akl.decoder, mesh_device=mesh_device, parallel_config=parallel_config, ccl_manager=ccl_manager
         )
-        return cls(post_quant_conv=post_quant_conv, decoder=decoder)
+        vae = cls(post_quant_conv=post_quant_conv, decoder=decoder)
+        # Ideogram decodes 14 output resolutions on any mesh, most of whose conv shapes are not in
+        # Conv2d.slice_params; opt every conv into the DRAM-slicing fallback so unlisted shapes fit L1.
+        _enable_conv_slice_fallback(vae)
+        return vae
 
     def forward(self, z: ttnn.Tensor) -> ttnn.Tensor:
         """z: [B, H/8, W/8, z_channels] (NHWC, tile layout). Returns [B, H, W, out_channels]."""

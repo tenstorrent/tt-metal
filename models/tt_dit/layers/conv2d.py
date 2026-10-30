@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,14 @@ class Conv2d(Module):
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
+
+    # Opt-in fallback for conv shapes missing from slice_params (off by default, so models that
+    # rely on unlisted shapes running unsliced are unchanged). When on, an unlisted shape is
+    # DRAM-width-sliced at the documented max (ceil(w / TILE)) and, above 1024^2 spatial, keeps
+    # its halo/reader config tensors in DRAM. Without it an unlisted large conv runs unsliced and
+    # its static CBs can clash with resident L1 buffers. The Ideogram 4 VAE (14 output
+    # resolutions on any mesh) sets it on its convs.
+    slice_fallback: bool = False
 
     slice_params = {
         (1, 4): {
@@ -467,18 +476,26 @@ class Conv2d(Module):
                 raise ValueError(msg)
 
         slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+        shape_key = (h, w, self.in_channels, self.out_channels)
+        if shape_key in slice_params:
+            num_slices = slice_params[shape_key]
+        elif self.slice_fallback:
+            num_slices = max(1, math.ceil(w / 32))
+        else:
+            num_slices = None
         slice_config = (
-            ttnn.Conv2dSliceConfig(
-                num_slices=slice_params[(h, w, self.in_channels, self.out_channels)],
-                slice_type=ttnn.Conv2dDRAMSliceWidth,
-            )
-            if (h, w, self.in_channels, self.out_channels) in slice_params
+            ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
+            if num_slices is not None
             else None
         )
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
-        conv_config = ttnn.Conv2dConfig(act_block_h_override=32, weights_dtype=self.weight.dtype)
+        conv_config = ttnn.Conv2dConfig(
+            act_block_h_override=32,
+            weights_dtype=self.weight.dtype,
+            config_tensors_in_dram=self.slice_fallback and h * w > 1024 * 1024,
+        )
 
         if self._prepared_weight is None:
             base_kwargs = {
