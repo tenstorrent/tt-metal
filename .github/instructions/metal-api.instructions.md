@@ -57,7 +57,7 @@ Raw command queue ids are being removed from the host API. Command queues are ad
 
 - Flag any new or changed public API (stable, `experimental/`, or `internal/`) that takes, returns, or stores a raw `cq_id` (`uint8_t`, `QueueId`, `std::optional<uint8_t>`), including a new overload that adds a `cq_id` parameter.
 - Flag new code that reads or sets the thread-local command queue id.
-- New APIs must take a `distributed::MeshCommandQueue&` (or obtain the queue from the `MeshDevice`).
+- New APIs that need a command queue must take a `distributed::MeshCommandQueue&`.
 - Existing `cq_id` APIs are legacy: do not add new callers, and do not extend them.
 
 ## Review Checklist
