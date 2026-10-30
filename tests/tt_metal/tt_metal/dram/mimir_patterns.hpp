@@ -33,6 +33,8 @@ inline constexpr std::array<MimirPattern, 7> kAllMimirPatterns = {
     MimirPattern::AddressDerived,
     MimirPattern::Prng,
 };
+// Constant patterns can match unwritten memory or a misrouted read, so read legs use only these.
+inline constexpr std::array<MimirPattern, 2> kReadLegPatterns = {MimirPattern::AddressDerived, MimirPattern::Prng};
 
 inline std::string pattern_name(MimirPattern pattern) {
     switch (pattern) {
