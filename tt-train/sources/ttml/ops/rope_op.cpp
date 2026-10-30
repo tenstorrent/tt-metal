@@ -111,6 +111,44 @@ E apply_rope_scaling(const E& freqs, const RopeScalingParams& p) {
     return xt::where(in_mid, mid_freqs, xt::where(is_low, low_freqs, high_freqs));
 }
 
+namespace {
+
+ttnn::Tensor rotate_per_head(
+    const ttnn::Tensor& x, const ttnn::Tensor& cos, const ttnn::Tensor& sin, const ttnn::Tensor& trans_mat) {
+    const auto shape = x.logical_shape();
+    const auto flat = ttnn::reshape(x, ttnn::Shape{1U, shape[0] * shape[1], shape[2], shape[3]});
+    // after setting is_decode_mode to and converting all required tensors' memory layout to SHARDED, receiving DRAM OOM
+    // errors
+    const auto rotated = ttnn::experimental::rotary_embedding_llama(
+        flat,
+        cos,
+        sin,
+        trans_mat,
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+    return ttnn::reshape(rotated, shape);
+}
+
+autograd::TensorPtr rope_impl(
+    const autograd::TensorPtr& input,
+    const ttnn::Tensor& cos,
+    const ttnn::Tensor& sin,
+    const ttnn::Tensor& neg_sin,
+    const ttnn::Tensor& trans_mat) {
+    auto out = autograd::create_tensor(rotate_per_head(input->get_value(), cos, sin, trans_mat));
+
+    // The backward pass rotates by -θ. cos(-θ) = cos θ, so it reuses cos and only sin is negated.
+    // trans_mat is the same in both directions.
+    autograd::GradFunction grad_fn = [input, out, cos, neg_sin, trans_mat]() {
+        input->add_grad(rotate_per_head(out->get_grad(), cos, neg_sin, trans_mat));
+    };
+    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, input));
+    return out;
+}
+
+}  // namespace
+
 // trans_mat, sin_cache, cos_cache are all precomputed and stored somewhere in
 // the module hierarchy and passed to the operation.
 autograd::TensorPtr rope(
@@ -118,28 +156,12 @@ autograd::TensorPtr rope(
     validate_rope_input_and_params(input, params);
 
     auto input_logical_shape = input->get_value().logical_shape();
-    auto num_batch = input_logical_shape[0];
-    auto num_heads = input_logical_shape[1];
     auto seq_len = input_logical_shape[2];
     auto head_dim = input_logical_shape[3];
-
-    auto squish_batch = [num_batch, num_heads](const ttnn::Tensor& input) {
-        auto shape = input.logical_shape();
-        auto seq_len = shape[2];
-        auto head_dim = shape[3];
-        auto unbatched_input = ttnn::reshape(input, ttnn::Shape{1U, num_batch * num_heads, seq_len, head_dim});
-        return unbatched_input;
-    };
-
-    auto unsquish_batch = [num_batch, num_heads, seq_len, head_dim](const ttnn::Tensor& input) {
-        auto unbatched_input = ttnn::reshape(input, ttnn::Shape{num_batch, num_heads, seq_len, head_dim});
-        return unbatched_input;
-    };
 
     // Slice cos/sin caches to the specific position if provided (for decode mode)
     ttnn::Tensor cos_cache_to_use = params.cos_cache;
     ttnn::Tensor sin_cache_to_use = params.sin_cache;
-    ttnn::Tensor neg_cos_cache_to_use = params.neg_cos_cache;
     ttnn::Tensor neg_sin_cache_to_use = params.neg_sin_cache;
 
     if (token_position > 0U) {
@@ -150,46 +172,10 @@ autograd::TensorPtr rope(
 
         cos_cache_to_use = ttnn::slice(params.cos_cache, start, end, step);
         sin_cache_to_use = ttnn::slice(params.sin_cache, start, end, step);
-        neg_cos_cache_to_use = ttnn::slice(params.neg_cos_cache, start, end, step);
         neg_sin_cache_to_use = ttnn::slice(params.neg_sin_cache, start, end, step);
     }
 
-    // after setting is_decode_mode to and converting all required tensors' memory layout to SHARDED, receiving DRAM OOM
-    // errors
-    auto out_tensor = ttnn::experimental::rotary_embedding_llama(
-        squish_batch(input->get_value()),
-        cos_cache_to_use,
-        sin_cache_to_use,
-        params.trans_mat,
-        /*is_decode_mode=*/false,
-        /*memory_config=*/std::nullopt,
-        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
-    auto batched_output = unsquish_batch(out_tensor);
-    auto out = autograd::create_tensor(batched_output);
-
-    // In the backward pass we rotate by -θ, so we need negated cos and sin
-    // caches. Note: we can just reuse trans_mat here since the data movement
-    // should be the same on the backward pass (we use the same trick to speed
-    // up the matmul, and the matrix used is specified by the cos/sin caches.)
-    autograd::GradFunction grad_fn =
-        [squish_batch, unsquish_batch, input, params, out, neg_cos_cache_to_use, neg_sin_cache_to_use]() {
-            auto dL_dout = out->get_grad();
-
-            auto dL_dinput = ttnn::experimental::rotary_embedding_llama(
-                squish_batch(dL_dout),
-                neg_cos_cache_to_use,
-                neg_sin_cache_to_use,
-                params.trans_mat,
-                /*is_decode_mode=*/false,
-                /*memory_config=*/std::nullopt,
-                /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
-            auto unsquished = unsquish_batch(dL_dinput);
-            input->add_grad(unsquished);
-        };
-
-    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, input));
-
-    return out;
+    return rope_impl(input, cos_cache_to_use, sin_cache_to_use, neg_sin_cache_to_use, params.trans_mat);
 }
 
 uint64_t RotaryEmbeddingPositions::s_version_counter = 0;
@@ -226,21 +212,6 @@ struct RopeRowsCache {
 };
 
 namespace {
-
-ttnn::Tensor rotate_per_head(
-    const ttnn::Tensor& x, const ttnn::Tensor& cos, const ttnn::Tensor& sin, const ttnn::Tensor& trans_mat) {
-    const auto shape = x.logical_shape();
-    const auto flat = ttnn::reshape(x, ttnn::Shape{1U, shape[0] * shape[1], shape[2], shape[3]});
-    const auto rotated = ttnn::experimental::rotary_embedding_llama(
-        flat,
-        cos,
-        sin,
-        trans_mat,
-        /*is_decode_mode=*/false,
-        /*memory_config=*/std::nullopt,
-        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
-    return ttnn::reshape(rotated, shape);
-}
 
 RopeRows gather_rows(const RotaryEmbeddingParams& params, const ttnn::Tensor& ids, uint32_t num_heads) {
     const uint32_t batch = ids.logical_shape()[0];
@@ -300,15 +271,7 @@ autograd::TensorPtr rope(
     TT_FATAL(params.rows_cache, "RoPE positions require rope_params from build_rope_params");
 
     const auto& rows = get_rope_rows(params, rope_positions, input_shape[1]);
-
-    auto out = autograd::create_tensor(rotate_per_head(input->get_value(), rows.cos, rows.sin, params.trans_mat));
-
-    autograd::GradFunction grad_fn = [input, out, rows, trans_mat = params.trans_mat]() {
-        input->add_grad(rotate_per_head(out->get_grad(), rows.cos, rows.neg_sin, trans_mat));
-    };
-    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, input));
-
-    return out;
+    return rope_impl(input, rows.cos, rows.sin, rows.neg_sin, params.trans_mat);
 }
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
