@@ -370,7 +370,7 @@ class MuseGlimmerAttention:
             out.deallocate(True)
         return reduced
 
-    def forward_prefill(self, x, rope, kv_cache, page_table, user_id: int):
+    def forward_prefill(self, x, rope, kv_cache, page_table, user_id: int, fill_len=None):
         a = self.args
         k_cache, v_cache = kv_cache
 
@@ -394,7 +394,15 @@ class MuseGlimmerAttention:
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
 
-        if page_table is not None:
+        if page_table is not None and self.fill_kwargs and fill_len is not None and fill_len < k.shape[2]:
+            # A ring holds the window plus 256 pad rows: rows padded past fill_len would wrap over the last real rows.
+            kf = ttnn.slice(k, [0, 0, 0, 0], [k.shape[0], k.shape[1], fill_len, k.shape[3]])
+            vf = ttnn.slice(v, [0, 0, 0, 0], [v.shape[0], v.shape[1], fill_len, v.shape[3]])
+            _paged_fill_cache(k_cache, kf, page_table, batch_idx=user_id, **self.fill_kwargs)
+            _paged_fill_cache(v_cache, vf, page_table, batch_idx=user_id, **self.fill_kwargs)
+            ttnn.deallocate(kf)
+            ttnn.deallocate(vf)
+        elif page_table is not None:
             _paged_fill_cache(k_cache, k, page_table, batch_idx=user_id, **self.fill_kwargs)
             _paged_fill_cache(v_cache, v, page_table, batch_idx=user_id, **self.fill_kwargs)
         else:

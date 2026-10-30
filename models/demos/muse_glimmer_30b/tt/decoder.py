@@ -71,8 +71,8 @@ class MuseGlimmerDecoderLayer:
             ttnn.deallocate(xr)
         return out
 
-    def forward_prefill(self, x, rope, kv_cache, page_table, user_id):
-        return self._block(x, lambda h: self.attn.forward_prefill(h, rope, kv_cache, page_table, user_id))
+    def forward_prefill(self, x, rope, kv_cache, page_table, user_id, fill_len=None):
+        return self._block(x, lambda h: self.attn.forward_prefill(h, rope, kv_cache, page_table, user_id, fill_len))
 
     def forward_decode(self, x, current_pos, rope, kv_cache, page_table, sdpa_inputs=None):
         return self._block(
