@@ -4,7 +4,6 @@
 from typing import List
 
 import pytest
-import torch
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     DataCopyGolden,
@@ -17,7 +16,6 @@ from helpers.llk_params import (
     DestSync,
     PerfRunType,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
@@ -50,7 +48,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_eltwise_unary_datacopy_combinations(
@@ -273,12 +271,7 @@ def test_eltwise_unary_datacopy_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

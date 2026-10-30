@@ -16,10 +16,6 @@
 
 namespace ckernel::sfpu {
 
-constexpr auto sdpa_bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto sdpa_lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) & 0xFFFFu); };
-constexpr auto sdpa_hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(sdpa_bits(x) >> 16); };
-
 constexpr auto sdpa_addr_mod_x = ADDR_MOD_7;
 
 ALWI void sdpa_insert_sfpnop() {}
@@ -86,30 +82,30 @@ inline void calculate_exponential_polynomial() {
         constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
         if constexpr (POLY_DEGREE >= 4) {
-            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, sdpa_lo16(c4));
-            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, sdpa_hi16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, Converter::lo16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, Converter::hi16(c4));
         }
         if constexpr (POLY_DEGREE >= 3) {
-            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, sdpa_lo16(c3));
-            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, sdpa_hi16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, Converter::lo16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, Converter::hi16(c3));
         }
         if constexpr (POLY_DEGREE >= 2) {
-            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, sdpa_lo16(c2));
-            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, sdpa_hi16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, Converter::lo16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, Converter::hi16(c2));
         }
         if constexpr (POLY_DEGREE >= 1) {
-            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, sdpa_lo16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, sdpa_hi16(c1));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, sdpa_lo16(c0));
-            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, sdpa_hi16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, Converter::lo16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, Converter::hi16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, Converter::lo16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, Converter::hi16(c0));
         }
     }
 
     if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
-        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, sdpa_lo16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, sdpa_hi16(LN2_RECIP));
-        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, sdpa_lo16(M_LN2));
-        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, sdpa_hi16(M_LN2));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0xA, Converter::lo16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG3, 0x8, Converter::hi16(LN2_RECIP));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0xA, Converter::lo16(M_LN2));
+        TTI_SFPLOADI(p_sfpu::LREG4, 0x8, Converter::hi16(M_LN2));
     }
 
     for (int d = 0; d < ITERATIONS; d++) {
@@ -126,8 +122,8 @@ inline void calculate_exponential_polynomial() {
         if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         } else {
-            TTI_SFPLOADI(p_sfpu::LREG1, 0xA, sdpa_lo16(LN2_RECIP));
-            TTI_SFPLOADI(p_sfpu::LREG1, 0x8, sdpa_hi16(LN2_RECIP));
+            TTI_SFPLOADI(p_sfpu::LREG1, 0xA, Converter::lo16(LN2_RECIP));
+            TTI_SFPLOADI(p_sfpu::LREG1, 0x8, Converter::hi16(LN2_RECIP));
             TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         }
         sdpa_insert_sfpnop();
@@ -144,8 +140,8 @@ inline void calculate_exponential_polynomial() {
             if constexpr (sdpa_can_preload_ln2_constants<USE_SFPARECIP_INSTR, POLY_DEGREE>()) {
                 TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             } else {
-                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, sdpa_lo16(M_LN2));
-                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, sdpa_hi16(M_LN2));
+                TTI_SFPLOADI(p_sfpu::LREG0, 0xA, Converter::lo16(M_LN2));
+                TTI_SFPLOADI(p_sfpu::LREG0, 0x8, Converter::hi16(M_LN2));
                 TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
             }
             sdpa_insert_sfpnop();

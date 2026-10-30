@@ -18,7 +18,7 @@ Environment:
   WAN_DBCACHE_PROMPT, WAN_DBCACHE_SEED
   WAN_DBCACHE_OFFICIAL_SIZE  1 = size the output like Wan's image2video.py: the seed image's aspect
                            ratio at the parametrized pixel area, in whole latent patches
-  WAN_DBCACHE_BOUNDARY_RATIO expert switch boundary override (official checkpoint: 0.9; pipeline default 0.875)
+  WAN_DBCACHE_BOUNDARY_RATIO expert switch boundary override (default: the checkpoint's 0.9)
   WAN_DBCACHE_OUT_DIR      where videos, frame strips and results.json go (default: cwd)
 """
 
@@ -152,7 +152,7 @@ def _flow_shifts() -> list[float | None]:
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, traced",
     [
-        # The only 4x8 Blackhole config test_pipeline_wan_i2v.py defines (there is no 4x8 ring case for I2V).
+        # The only 4x8 Blackhole config test_pipeline_wan.py runs I2V on (it skips the 4x8 ring for I2V).
         [(4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, False],
         [
             (4, 8),
