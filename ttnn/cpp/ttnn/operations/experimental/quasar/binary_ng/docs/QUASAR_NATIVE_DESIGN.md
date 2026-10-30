@@ -475,9 +475,10 @@ Every compute batch is exact at any ring stride (§4.3). Every message names eac
 or `entries_per_thread=8 (TTNN_QSR_ENTRIES_PER_THREAD)`.
 
 **The share batch.** The largest power of 2 up to a compute thread's share of tiles, capped by a DST section.
-Beside DRAM it is both batches, where a, b and c are interleaved with an input in DRAM, from a share of 4 (rounded
-up); fp32 divide stays at 1, and `TTNN_QSR_DRAM_BATCH=0` keeps 1. In L1 it is the FPU kernel's compute batch, where a,
-b and c are interleaved over the NoC or all borrowed, from a share of 2 (rounded down). Other mixes keep 1. The NoC path's three rings
+Beside DRAM, where an input is in DRAM, it is both batches, from a share of 4 (rounded up); fp32 divide stays at 1,
+and `TTNN_QSR_DRAM_BATCH=0` keeps 1. In L1 it is the FPU kernel's compute batch, from a share of 2 (rounded down). It
+applies to every layout: under an anchor the share is the anchor's tiles per cluster, and without one the
+split_work_to_cores share. The NoC path's three rings
 take 384 KiB of L1 per cluster with every operand in L1 (64 entries of 2 KiB each), and 48 KiB at batch 1 (8 entries
 each), against 12 KiB at the old 1,1,1 and depth 2. Nothing yet shrinks the rings when L1 buffers leave less room.
 Unset, the depth follows the batches, so a batch A/B that must hold the depth fixed sets
