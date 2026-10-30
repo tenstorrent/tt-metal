@@ -56,7 +56,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import FACE_C_DIM, SUPPORTED_TILE_SIZES, get_tile_params
 from helpers.tile_shape import construct_tile_shape
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 ALL_TILE_DIMENSIONS = [list(td) for td in SUPPORTED_TILE_SIZES]
 
@@ -262,7 +262,7 @@ def _get_valid_math_fidelity(formats, math_op=None):
     input_format = formats.input_format
     if input_format == DataFormat.Int8:
         return [MathFidelity.LoFi]
-    if input_format in [DataFormat.Bfp8_b, DataFormat.Bfp4_b]:
+    if input_format.is_block_float():
         return [MathFidelity.LoFi]
     elif input_format == DataFormat.Float16_b:
         return [MathFidelity.LoFi, MathFidelity.HiFi2]
@@ -380,7 +380,7 @@ def _run_eltwise_binary_test(
             golden_src_A,
             (
                 DataFormat.Float16_b
-                if formats.input_format in [DataFormat.Bfp4_b, DataFormat.Bfp8_b]
+                if formats.input_format.is_block_float()
                 else formats.input_format
             ),
             num_tiles=tile_cnt_A,
@@ -493,12 +493,7 @@ def _run_eltwise_binary_test(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result tensor ({len(res_from_L1)}) and golden tensor ({len(golden_tensor)}) are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

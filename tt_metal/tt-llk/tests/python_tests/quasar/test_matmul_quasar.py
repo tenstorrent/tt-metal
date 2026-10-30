@@ -30,8 +30,8 @@ from helpers.llk_params import (
     format_tile_sizes,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     quasar_mx_smoke,
     runtime,
@@ -56,7 +56,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import calculate_tile_size_bytes
 from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 kt_dims = [
     1,
@@ -160,9 +160,7 @@ def matmul_dest_acc_modes(format):
 def matmul_tile_dimensions(
     dest_acc, dest_sync, *, exact_dest_fill=False, is_perf=False
 ):
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
+    max_tiles = max_dest_tiles(dest_acc, dest_sync)
     # Perf keeps dest-full tall (max_tiles, 1) and wide (1, max_tiles) so both
     # ct>=rt and ct<rt MOP addr_mod branches are covered, and kt=1 vs kt=4.
     rt_dims = (1, max_tiles) if is_perf else range(1, max_tiles + 1)
@@ -541,11 +539,7 @@ def test_matmul(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, format.output_format, golden_tensor)
 
     # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the
     # math/pack_src format the result was produced in) so the comparison validates the

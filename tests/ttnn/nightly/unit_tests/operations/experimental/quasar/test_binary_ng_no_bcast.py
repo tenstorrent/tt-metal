@@ -45,6 +45,11 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
 )
 from tt_py_test_utils_common.utility_functions import is_quasar
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 # Interleaved tensor: 32x40 tiles (1280 tiles) so split_work_to_cores spreads many tiles per core on
 # both an 8x8 (Wormhole) and an 8x4 (Quasar sim) worker grid -- ~20 tiles/core on 8x8, ~40/core on 8x4,
 # so the compute kernel's per-tile loop runs many iterations. No operand is sharded here, so the size is
