@@ -44,6 +44,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -106,8 +107,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
     // Create output CB based on the output shape's last dimension
     const tt::CBIndex src_cb_idx = tt::CBIndex::c_0;
     const tt::CBIndex dst_cb_idx = tt::CBIndex::c_1;
-    const uint32_t src_page_size = round_up_to_mul32(red_dim_units * unit_size);
-    const uint32_t dst_page_size = round_up_to_mul32(output_last_dim * unit_size);
+    const uint32_t src_page_size = tt::round_up(red_dim_units * unit_size, 32u);
+    const uint32_t dst_page_size = tt::round_up(output_last_dim * unit_size, 32u);
 
     CBFormatDescriptor input_format_descriptor = {
         .buffer_index = src_cb_idx,
@@ -232,7 +233,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
 
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
 
@@ -1257,16 +1258,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     const uint32_t chunks_per_sync =
         std::min(std::max(tile_end / num_tiles_to_write_per_packet, 1u), HEURISTIC_MAX_CHUNKS_PER_SYNC);
 
-    const uint32_t l1_unreserved_base =
-        mesh_device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    tt::tt_fabric::FabricMuxConfig mux_config(
-        1,  // num_workers_per_direction
-        0,  // num_header_only_channels
-        1,  // num_buffers_per_channel
-        0,  // num_buffers_header_only_channel
-        packet_size_bytes,
-        l1_unreserved_base);
-
     auto sd_id = mesh_device_->get_sub_device_ids().at(0);
     auto available_cores = mesh_device_->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     std::vector<ttnn::GlobalSemaphore> global_semaphores = {
@@ -1289,8 +1280,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     auto mux_bwd_virtual = mesh_device_->worker_core_from_logical_core(mux_bwd_core);
     auto worker_fwd_virtual = mesh_device_->worker_core_from_logical_core(worker_fwd_core);
     auto worker_bwd_virtual = mesh_device_->worker_core_from_logical_core(worker_bwd_core);
-
-    auto mux_ct_args = mux_config.get_fabric_mux_compile_time_args();
 
     // =========================================================================
     // Build MeshProgramDescriptor for each device in the 1x4 line
@@ -1317,6 +1306,44 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             .core_ranges = worker_cores,
             .format_descriptors = {{sender_cb_index, df, page_size}},
         };
+
+        // Semaphores - 5 per worker core
+        ProgramDescriptor::SemaphoreDescriptors semaphores;
+        for (uint32_t i = 0; i < 5; i++) {
+            semaphores.push_back(
+                {.id = i,
+                 .core_type = tt::CoreType::WORKER,
+                 .core_ranges = CoreRangeSet({CoreRange(worker_fwd_core)}),
+                 .initial_value = 0});
+        }
+        for (uint32_t i = 0; i < 5; i++) {
+            semaphores.push_back(
+                {.id = i,
+                 .core_type = tt::CoreType::WORKER,
+                 .core_ranges = CoreRangeSet({CoreRange(worker_bwd_core)}),
+                 .initial_value = 0});
+        }
+
+        ProgramDescriptor program_desc = {.kernels = {}, .semaphores = semaphores, .cbs = {cb_desc}};
+
+        // The mux map goes in program-local L1 on this device's mux cores, so the config's addresses are offsets.
+        // The writer waits for the address the mux publishes and adds it to them.
+        tt::tt_fabric::FabricMuxConfig mux_config(
+            1,  // num_workers_per_direction
+            0,  // num_header_only_channels
+            1,  // num_buffers_per_channel
+            0,  // num_buffers_header_only_channel
+            packet_size_bytes,
+            0);  // base_l1_address
+        std::set<CoreRange> active_mux_cores;
+        if (has_forward) {
+            active_mux_cores.insert(CoreRange(mux_fwd_core));
+        }
+        if (has_backward) {
+            active_mux_cores.insert(CoreRange(mux_bwd_core));
+        }
+        mux_config.place_in_program_local_l1(program_desc, CoreRangeSet(active_mux_cores));
+        const auto mux_ct_args = mux_config.get_fabric_mux_compile_time_args();
 
         // Common CT args for reader/writer
         std::vector<uint32_t> common_ct_args = {
@@ -1355,7 +1382,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
         writer_ct_args.push_back(mux_config.get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
         writer_ct_args.push_back(
             mux_config.get_buffer_size_bytes(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL));
-        writer_ct_args.push_back(mux_config.get_status_address());
+        writer_ct_args.push_back(mux_config.get_l1_base_semaphore_id());
         writer_ct_args.push_back(mux_config.get_termination_signal_address());
         writer_ct_args.push_back(1);  // num_workers_per_direction
 
@@ -1375,23 +1402,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             writer_ct_args.insert(writer_ct_args.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u});  // no target
         }
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_ct_args);
-
-        // Semaphores - 5 per worker core
-        ProgramDescriptor::SemaphoreDescriptors semaphores;
-        for (uint32_t i = 0; i < 5; i++) {
-            semaphores.push_back(
-                {.id = i,
-                 .core_type = tt::CoreType::WORKER,
-                 .core_ranges = CoreRangeSet({CoreRange(worker_fwd_core)}),
-                 .initial_value = 0});
-        }
-        for (uint32_t i = 0; i < 5; i++) {
-            semaphores.push_back(
-                {.id = i,
-                 .core_type = tt::CoreType::WORKER,
-                 .core_ranges = CoreRangeSet({CoreRange(worker_bwd_core)}),
-                 .initial_value = 0});
-        }
 
         // Keep this manual descriptor in sync with minimal_default_reader.cpp / minimal_default_writer.cpp.
         // Tensor addresses and semaphores are common RT args laid out by ttnn::ccl::AllGatherCommonArgs;
@@ -1465,9 +1475,6 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
             build_worker_rt_args(0, worker_fwd_virtual, mux_fwd_virtual, worker_bwd_virtual, has_forward);
         auto [bwd_reader_rt, bwd_writer_rt] =
             build_worker_rt_args(1, worker_bwd_virtual, mux_bwd_virtual, worker_fwd_virtual, has_backward);
-
-        // Build ProgramDescriptor
-        ProgramDescriptor program_desc = {.kernels = {}, .semaphores = semaphores, .cbs = {cb_desc}};
 
         // MUX RT args
         const auto src_node_id = mesh_device_->get_fabric_node_id(device_coord);

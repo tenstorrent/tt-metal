@@ -284,6 +284,17 @@ prep_ubuntu_system() {
     echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
     # Also v20
     echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    # Also v23
+    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-23 main" | tee /etc/apt/sources.list.d/llvm-23.list
+
+    # Without this, apt resolves shared package names (e.g. libc++1) to the
+    # highest major version across repos, breaking libc++-20-dev ("held broken
+    # packages"). Exact-name packages like clang-tidy-23 still install fine.
+    cat <<EOF | tee /etc/apt/preferences.d/llvm-23
+Package: *
+Pin: release n=llvm-toolchain-$OS_CODENAME-23
+Pin-Priority: 100
+EOF
 
     # Install CMake from GitHub releases (skip in Docker, cmake provided via tool image)
     if [ "$docker" -ne 1 ]; then
@@ -400,6 +411,15 @@ install_llvm() {
     else
         echo "[INFO] Installing LLVM 20..."
         $TEMP_DIR/llvm.sh 20
+    fi
+
+    # clang-tidy-23 only, not the full llvm-23 toolchain.
+    echo "[INFO] Checking if clang-tidy-23 is already installed..."
+    if command -v clang-tidy-23 &> /dev/null; then
+        echo "[INFO] clang-tidy-23 is already installed. Skipping installation."
+    else
+        echo "[INFO] Installing clang-tidy-23..."
+        apt-get install -y --no-install-recommends clang-tidy-23
     fi
 
     rm -rf "$TEMP_DIR"
