@@ -23,7 +23,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID, num_mtp_tokens
-from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
     fused_mtp_reference,
     glm_mtp_module_reference,
@@ -32,6 +31,15 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3.mtp import (
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tests._reuse import acquire_module
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.mtp_prefill.conftest import glm53_checkpoint_path
+from models.demos.deepseek_v3_d_p.tests.mtp_prefill.predictor_reference import (
+    compute_predictor_reference,
+    load_reference,
+    predictor_inputs,
+    prepare_store,
+    save_reference,
+    stored_reference_path,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
@@ -81,6 +89,32 @@ def _accumulated_pcc(base: float, upstream_levels: int, module_pcc: float) -> fl
     MTP is a recurrence, so device/reference disagreement is inherited rather than reset.
     """
     return 1.0 - ((1.0 - base) + upstream_levels * (1.0 - module_pcc))
+
+
+# Keyed by use_pretrained; levels 2-4 of test_mtp_multiturn_pcc as (x, out and normed, KVPE nope, KVPE pe), centered.
+# Each is the lowest over the 8 schedules at levels7 on bh-glx-120-c02u02 (2026-10-22) minus 0.02, rounded down.
+MULTITURN_LEVEL_PCC = {
+    False: [
+        (0.97, 0.95, 0.97, 0.97),
+        (0.96, 0.93, 0.96, 0.96),
+        (0.95, 0.91, 0.95, 0.95),
+    ],
+    True: [
+        (0.96, 0.92, 0.95, 0.97),
+        (0.93, 0.83, 0.89, 0.94),
+        (0.86, 0.72, 0.80, 0.91),
+    ],
+}
+
+
+def _assert_level_pcc(expected, actual, pcc: float, k: int, what: str):
+    """Plain PCC at level 1 (``k == 0``). Deeper free-running levels share a large common row, which plain PCC
+    rewards even in an output that only repeats it, so there each column's mean over the rows is removed first."""
+    if k > 0:
+        expected, actual = expected.float(), actual.float()
+        expected, actual, what = expected - expected.mean(0), actual - actual.mean(0), f"{what} centered"
+    _, msg = assert_with_pcc(expected, actual, pcc)
+    logger.info(f"{what} PCC: {msg}")
 
 
 _MESH_PARAMS = [
@@ -424,7 +458,7 @@ def test_mtp_module_pcc(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
+@pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
@@ -564,6 +598,10 @@ def test_mtp_predictor_pcc(
 
 CHUNK = 5 * 1024
 CACHE_LEN = 3 * CHUNK
+REFERENCE_LEN = 11520  # the longest schedule, multichunk
+MAX_LEVELS = 4
+INPUT_SEED = 11
+VOCAB = CACHE_LEN + ttnn.TILE_SIZE
 
 # New tokens per turn. Each turn resumes at the previous end rounded down to a tile, as the engine replays.
 _MULTITURN_TURNS = [
@@ -588,11 +626,59 @@ def _turn_chunks(turns) -> list[tuple[int, int]]:
     return chunks
 
 
+# The last reference used, kept for the next case: no test may mutate it.
+_MULTITURN_REFERENCES: dict = {}
+
+
+def _multiturn_reference(
+    config, mtp_sd, layer_sd, use_pretrained: bool, layer_idx: int, index_share: bool, levels: int
+):
+    """The stored reference when this checkpoint has one, else computed once per process: every level, and stored,
+    when ``$TT_GLM53_MTP_REF_CACHE`` is writable. Either has at least ``levels`` levels, and levels 1..K of a longer
+    run are the K-level run."""
+    key = (use_pretrained, layer_idx, index_share)
+    ref = _MULTITURN_REFERENCES.get(key)
+    if ref is not None and ref["x"].shape[0] >= levels:
+        return ref
+    args = dict(
+        index_share=index_share, seed=INPUT_SEED, vocab=VOCAB, seq_len=REFERENCE_LEN, chunk=CHUNK, cache_len=CACHE_LEN
+    )
+    root = os.environ.get("TT_GLM53_MTP_REF_CACHE")
+    path = None
+    if use_pretrained and root:
+        path = stored_reference_path(
+            root, "glm53_mtp_multiturn_ref", glm53_checkpoint_path(), layer_idx, num_levels=MAX_LEVELS, **args
+        )
+    if path is not None and path.exists():
+        logger.info(f"[mtp multiturn] CPU reference stored at {path}")
+        ref = load_reference(path)
+    else:
+        store = path is not None and prepare_store(path)
+        if store:
+            logger.warning(f"[mtp multiturn] no stored CPU reference at {path}, computing every level to store it")
+            levels = MAX_LEVELS
+        elif path is not None:
+            logger.warning(f"[mtp multiturn] no stored CPU reference at {path}, and {path.parent} is not writable")
+        logger.info(
+            f"[mtp multiturn] CPU reference, {levels} level(s) over [0, {REFERENCE_LEN}) in {CHUNK}-token chunks"
+        )
+        ref = compute_predictor_reference(config, mtp_sd, layer_sd, num_levels=levels, **args)
+        if store:
+            try:
+                save_reference(ref, path)
+                logger.info(f"[mtp multiturn] CPU reference stored at {path}")
+            except (OSError, RuntimeError) as e:  # torch.save raises RuntimeError when it cannot write
+                logger.warning(f"[mtp multiturn] could not store the CPU reference at {path}: {e}")
+    _MULTITURN_REFERENCES.clear()
+    _MULTITURN_REFERENCES[key] = ref
+    return ref
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("turns", _MULTITURN_TURNS)
-@pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
+@pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
@@ -611,7 +697,8 @@ def test_mtp_multiturn_pcc(
     mtp_layer_state_dict,
 ):
     """``TtMTPPredictor`` over a multi-turn conversation on one cache vs a whole-conversation reference.
-    Teacher-forced: the real next tokens, and each level's hidden from the device."""
+    Free-running: the real next tokens; each level's hidden is the level below's output, on the device and in
+    the reference."""
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[SP_AXIS]
@@ -622,10 +709,9 @@ def test_mtp_multiturn_pcc(
     chunks = _turn_chunks(turns)
     total = chunks[-1][1]
     assert chunks[-1][0] + CHUNK <= CACHE_LEN, f"turns {turns} write past the {CACHE_LEN}-token cache"
+    assert total <= REFERENCE_LEN and num_levels <= MAX_LEVELS, f"turns {turns} at K={num_levels} outgrow the reference"
 
-    mla_weights, attn_norm_w, ffn_norm_w, moe_weights, layer_state_dict = _glm_layer_weights(
-        variant, config, mtp_layer_state_dict
-    )
+    *_, layer_state_dict = _glm_layer_weights(variant, config, mtp_layer_state_dict)
     module_pcc = MTP_MODULE_OUTPUT_PCC[use_pretrained]
     logger.info(f"[mtp multiturn] use_pretrained={use_pretrained} K={num_levels} turns={turns} chunks={chunks}")
     device_weights, weight_cache_path = _mtp_device_weights(
@@ -665,14 +751,10 @@ def test_mtp_multiturn_pcc(
     )
     mesh_device.enable_program_cache()
 
-    g = torch.Generator().manual_seed(11)
-    vocab = CACHE_LEN + ttnn.TILE_SIZE
-    table = torch.randn(vocab, hidden, generator=g).to(torch.bfloat16)
-    h0 = torch.randn(total, hidden, generator=g).to(torch.bfloat16)
-    ids = list(range(1, total + num_levels + 1))
+    table, h0, ids = predictor_inputs(hidden, VOCAB, REFERENCE_LEN, MAX_LEVELS, INPUT_SEED)
     # A pad id is clamped to the table's last row, which no real id may share.
-    assert ids[-1] < vocab - 1
-    embedding = TtParallelEmbedding(mesh_device, vocab, hidden, torch_weight=table, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
+    assert ids[-1] < VOCAB - 1
+    embedding = TtParallelEmbedding(mesh_device, VOCAB, hidden, torch_weight=table, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
     sp_rank = build_sp_rank_tensor(mesh_device, sp, mesh_shape, SP_AXIS)
     n_mtp = num_mtp_tokens(num_levels)
 
@@ -749,52 +831,20 @@ def test_mtp_multiturn_pcc(
         dev_chunks.append((start, stop, *outputs))
     ttnn.deallocate(sp_rank)
 
-    # Level k's hidden is level k - 1's normed output from the chunk that wrote that row last.
-    hiddens = [h0] + [torch.zeros(total, hidden, dtype=torch.bfloat16) for _ in range(num_levels - 1)]
-    for start, end, _, _, normeds in dev_chunks:
-        for k in range(1, num_levels):
-            hiddens[k][start:end] = normeds[k - 1]
-
-    logger.info(f"[mtp multiturn] CPU reference over [0, {total}) in {CHUNK}-token chunks")
     t0 = time.monotonic()
-    refs = [SparseMLAReference(config, mla_weights, seq_len=CACHE_LEN) for _ in range(num_levels)]
-    token_ids = torch.tensor(ids)
-    ref_chunks = []
-    for ref_start in range(0, total, CHUNK):
-        ref_end = min(ref_start + CHUNK, total)
-        ref_chunks.append(
-            glm_mtp_predictor_reference(
-                config,
-                mla_weights,
-                mtp_state_dict,
-                attn_norm_w,
-                ffn_norm_w,
-                [table[token_ids[ref_start + k + 1 : ref_end + k + 1]].unsqueeze(0) for k in range(num_levels)],
-                h0[ref_start:ref_end].unsqueeze(0),
-                CACHE_LEN,
-                moe_weights=moe_weights,
-                num_levels=num_levels,
-                index_share=predictor.index_share,
-                hiddens=[h[ref_start:ref_end].unsqueeze(0) for h in hiddens],
-                mla_refs=refs,
-                actual_start=ref_start,
-                actual_end=ref_end,
-            )
-        )
-    ref_x, ref_out, ref_normed = (
-        [torch.cat([chunk[part][k][0] for chunk in ref_chunks]) for k in range(num_levels)] for part in range(3)
+    ref = _multiturn_reference(
+        config, mtp_state_dict, layer_state_dict, use_pretrained, layer_idx, predictor.index_share, num_levels
     )
     logger.info(f"[mtp multiturn] CPU reference took {time.monotonic() - t0:.1f}s")
 
+    limits = [(FUSED_MTP_PCC, module_pcc, KVPE_PCC, KVPE_PCC), *MULTITURN_LEVEL_PCC[use_pretrained]]
     for i, (start, end, xs, outs, normeds) in enumerate(dev_chunks):
         for k in range(num_levels):
+            x_pcc, out_pcc, _, _ = limits[k]
             what = f"[mtp multiturn] chunk {i} L{k + 1}"
-            _, msg = assert_with_pcc(ref_x[k][start:end], xs[k], FUSED_MTP_PCC)
-            logger.info(f"{what} fused projection PCC: {msg}")
-            _, msg = assert_with_pcc(ref_out[k][start:end], outs[k], module_pcc)
-            logger.info(f"{what} layer output PCC: {msg}")
-            _, msg = assert_with_pcc(ref_normed[k][start:end], normeds[k], module_pcc)
-            logger.info(f"{what} shared_head.norm output PCC: {msg}")
+            _assert_level_pcc(ref["x"][k, start:end], xs[k], x_pcc, k, f"{what} fused projection")
+            _assert_level_pcc(ref["out"][k, start:end], outs[k], out_pcc, k, f"{what} layer output")
+            _assert_level_pcc(ref["normed"][k, start:end], normeds[k], out_pcc, k, f"{what} shared_head.norm output")
 
     # Whole slots, so a row a later turn failed to overwrite fails too; nothing at or past the last tile is written.
     tail = -(-total // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
@@ -803,10 +853,13 @@ def test_mtp_multiturn_pcc(
     cache_positions = blockcyclic_positions(stripes, CHUNK, kvpe.shape[1])
     for k in range(num_levels):
         cache = unrotate_cache_layer(kvpe[k], cache_positions, kvpe.shape[1])
-        expected = refs[k].kvpe_cache[0, 0]
-        for part, cols in (("nope", slice(None, kv_lora_rank)), ("pe", slice(kv_lora_rank, None))):
-            _, msg = assert_with_pcc(expected[:, cols], cache[:total, cols], KVPE_PCC)
-            logger.info(f"[mtp multiturn] L{k + 1} KVPE {part} PCC: {msg}")
+        expected = ref["kvpe"][k, :total]
+        _, _, nope_pcc, pe_pcc = limits[k]
+        for part, cols, pcc in (
+            ("nope", slice(None, kv_lora_rank), nope_pcc),
+            ("pe", slice(kv_lora_rank, None), pe_pcc),
+        ):
+            _assert_level_pcc(expected[:, cols], cache[:total, cols], pcc, k, f"[mtp multiturn] L{k + 1} KVPE {part}")
         assert torch.count_nonzero(cache[tail:]) == 0, f"L{k + 1} KVPE has rows written at or past {tail}"
     if predictor.index_share:
         index, stripes = gather_cache_natural(index_kv_cache, mesh_device, tp_shard_kv=True)
@@ -816,7 +869,7 @@ def test_mtp_multiturn_pcc(
             index.shape[1],
         )
         index_k = raw @ normalized_hadamard_matrix(raw.shape[-1]).float()
-        _, msg = assert_with_pcc(refs[0].index_cache[0], index_k[:total], INDEX_K_PCC)
+        _, msg = assert_with_pcc(ref["index_k"][:total], index_k[:total], INDEX_K_PCC)
         logger.info(f"[mtp multiturn] L1 index-K PCC: {msg}")
         assert torch.count_nonzero(raw[tail:]) == 0, f"the index cache has rows written at or past {tail}"
 

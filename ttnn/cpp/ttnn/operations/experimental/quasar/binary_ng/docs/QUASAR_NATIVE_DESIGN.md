@@ -969,7 +969,7 @@ takes UnpackToSrc.
 | 1, the slot | `copy_tile` passes its DST index to `llk_unpack_A`, and the unpacker writes that slot | #58416 |
 | 1, the section; 2 | `tile_regs_acquire` and `tile_regs_commit` open and close the unpacker's section too, so the unpacker posts `UNPACK_MATH` and moves to the other section once per batch, as math and the packer do | #59248 |
 | 3 | a third semaphore, `UNPACK_PACK`, counts the sections in the DST, and the unpacker waits on it alone | #59254 |
-| 4 | the unpack thread seeds its semaphores, then raises a startup barrier that math passes before its first wait | #60388 |
+| 4 | the unpack thread seeds its semaphores; right before its first wait, math spins until the unpacker's first `UNPACK_MATH` post, which follows the seed | #60388, #62071 |
 | 1, the section | the unpacker carries its section in the `UNP_DEST` tile index, and the packer in its source address offset: the two places those engines read | #59290 |
 
   A kernel keeps its side of the contract when it makes its copies inside one `tile_regs_acquire` and

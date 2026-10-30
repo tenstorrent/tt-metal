@@ -145,16 +145,13 @@ void Mcast::attach(
     impl_->attach(spec, args, prefix, kernels);
 }
 
-void Mcast::append_semaphores(tt::tt_metal::Program& program) { impl_->append_semaphores(program); }
-
-std::vector<uint32_t> Mcast::compile_time_args_() const {
-    impl_->require_program_bound_();
-    return impl_->compile_time_args_(impl_->program_semaphore_ids_, impl_->argument_metadata_());
-}
-
-std::vector<uint32_t> Mcast::runtime_args_(const CoreCoord& core) const {
-    impl_->require_program_bound_();
-    return impl_->runtime_args_(core, impl_->argument_metadata_());
+void Mcast::attach(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& cores,
+    tt::tt_metal::DataMovementConfig& config,
+    std::string_view prefix,
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>>& runtime_args) {
+    impl_->attach(program, cores, config, prefix, runtime_args);
 }
 
 const CoreRangeSet& Mcast::participating_cores() const { return impl_->participating_cores(); }

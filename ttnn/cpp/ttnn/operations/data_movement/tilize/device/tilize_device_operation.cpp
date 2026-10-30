@@ -150,7 +150,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.is_allocated(), "Operands to tilize need to be allocated in buffers on device!");
 
     // The retile path accepts an already-tiled input as long as its tile shape differs from the
     // requested output tile shape. All other paths require row-major input.

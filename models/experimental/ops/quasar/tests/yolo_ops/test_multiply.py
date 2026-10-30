@@ -61,6 +61,7 @@ def test_multiply_dbox_strides(ttnn_mesh_device, reset_seeds, shape):
 @pytest.mark.parametrize("shape", _SITES)
 def test_multiply_l1(ttnn_mesh_device, reset_seeds, shape):
     """dbox * strides on L1 detect buffers (ttnn_yolov8l.py:755, mem cfg :772-773)."""
+    U.skip_bfp_on_quasar()  # model's bf8 output dtype; no block-float formats on Quasar
     mesh = ttnn_mesh_device
     a = shape[-1]
 
@@ -70,6 +71,7 @@ def test_multiply_l1(ttnn_mesh_device, reset_seeds, shape):
     strides = U.to_tile_l1(strides_torch, mesh)
 
     out = U.op("multiply")(dbox, strides, dtype=ttnn.bfloat8_b)
+    assert out.dtype == ttnn.bfloat8_b, f"expected bfloat8_b, got {out.dtype}"
 
     ref = dbox_torch.float() * strides_torch.float()
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
