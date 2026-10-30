@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -25,14 +26,15 @@ enum class HostTransfer : uint8_t {
     CoreReadFastDispatch,
     ProgramBinariesFastDispatch,
     ProgramBinariesSlowDispatch,
-    // Program commands copied into the issue queue, which the device reads later. Staged like SocketPull.
+    // Program commands copied into the issue queue, which the device reads later.
     ProgramConfigFastDispatch,
     ProgramConfigSlowDispatch,
     Firmware,
     SocketPush,
-    // Bytes copied into host memory that the device reads later, so they have bytes but no transfer time.
+    // Bytes copied into host memory that the device reads later.
     SocketPull,
 };
+inline constexpr size_t kNumHostTransfers = static_cast<size_t>(HostTransfer::SocketPull) + 1;
 
 // Bytes and busy time of host <-> device transfers, logged when the MetalContext tears down if
 // TT_METAL_HOST_TRANSFER_STATS is set. Each transfer is an interval opened with begin() and closed with end(). Busy
@@ -77,7 +79,7 @@ private:
     };
 
     std::atomic<bool> enabled_;
-    std::array<Stream, static_cast<size_t>(HostTransfer::SocketPull) + 1> streams_;
+    std::array<Stream, kNumHostTransfers> streams_;
 };
 
 // Times the scope it lives in as one transfer of `kind` while `stats` is on: for transfers that are done when the host
