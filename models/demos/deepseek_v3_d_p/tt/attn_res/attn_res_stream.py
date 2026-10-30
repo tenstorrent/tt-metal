@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-side `block_residual` lifecycle for Kimi K3 attention residuals, and the
-walk over it.
+"""Device-side sealed-set lifecycle for Kimi K3 attention residuals, and the walk over it.
 
 `TtAttnResWalk` exposes the schedule as four calls a transformer makes from inside the
 layer loop it already owns, so adopting AttnRes moves no loop.
@@ -14,6 +13,7 @@ per-backend, because only this one owns tensors.
 """
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import as_sealed_list
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import walk_sites
 
 BLOCK_SIZE = 12
@@ -29,8 +29,9 @@ class TtAttnResStream(object):
 
     **The stream owns its tensors.** Construction transfers ownership of
     `hidden_states`, and `accumulate` takes ownership of `module_out`. That makes
-    the first `seal` a zero-copy ownership move into `block_residual` instead of a
-    clone, and lets every later `seal` free what it superseded.
+    every `seal` a zero-copy ownership move: the sealed set is kept as it was sealed,
+    one tensor per seal, and the ops that read it take the list. Growing one tensor
+    instead would copy the whole set at every seal.
 
     Args:
         op: a `TtAttnRes`.
@@ -38,14 +39,14 @@ class TtAttnResStream(object):
         block_size: layers per block; seals fire at `layer_idx % block_size == 0`.
     """
 
-    def __init__(self, op, hidden_states, block_size=BLOCK_SIZE, block_residual=None):
+    def __init__(self, op, hidden_states, block_size=BLOCK_SIZE, sealed=None):
         self.op = op
         self._running_sum = hidden_states
         self._pending = None
-        # `block_residual` is the sealed set a previous pipeline rank handed over. None for a
-        # rank that holds layer 0, which starts with nothing sealed. Ownership transfers here on
-        # the same terms as `hidden_states`: the stream frees it.
-        self.block_residual = block_residual
+        # `sealed` is the set a previous pipeline rank handed over, as one `[1, S, N, d]` tensor
+        # or a list of them. None for a rank that holds layer 0, which starts with nothing
+        # sealed. Ownership transfers here on the same terms as `hidden_states`.
+        self.sealed = as_sealed_list(sealed)
         self.block_size = block_size
 
     @property
@@ -60,7 +61,7 @@ class TtAttnResStream(object):
 
     @property
     def num_sealed(self):
-        return 0 if self.block_residual is None else self.block_residual.shape[1]
+        return sum(snapshot.shape[1] for snapshot in self.sealed)
 
     def merge(self, partial, shift, mass, q, site):
         """A read, settling the deferred write against this query.
@@ -83,13 +84,7 @@ class TtAttnResStream(object):
     def seal(self):
         self._flush()
         assert self._running_sum is not None, "nothing to seal"
-        if self.block_residual is None:
-            self.block_residual = self._running_sum
-        else:
-            grown = ttnn.concat([self.block_residual, self._running_sum], dim=1)
-            ttnn.deallocate(self.block_residual)
-            ttnn.deallocate(self._running_sum)
-            self.block_residual = grown
+        self.sealed.append(self._running_sum)
         self._running_sum = None
 
     def accumulate(self, module_out):
@@ -121,27 +116,27 @@ class TtAttnResStream(object):
         at a pipeline boundary, where the live stream and the sealed set cross to the next
         rank instead of being read and freed.
 
-        Returns `(running_sum, block_residual)`; `block_residual` is None before the first
-        seal, which is only reachable on a rank holding fewer than `block_size` layers.
+        Returns `(running_sum, sealed)`: `sealed` is the list of snapshot tensors in seal
+        order, or None before the first seal, which is only reachable on a rank holding fewer
+        than `block_size` layers.
         """
         self._flush()
         assert self._running_sum is not None, "nothing to hand off"
-        running_sum, block_residual = self._running_sum, self.block_residual
-        self._running_sum, self._pending, self.block_residual = None, None, None
-        return running_sum, block_residual
+        running_sum, sealed = self._running_sum, self.sealed or None
+        self._running_sum, self._pending, self.sealed = None, None, []
+        return running_sum, sealed
 
     def deallocate(self):
-        for tensor in (self._running_sum, self._pending, self.block_residual):
+        for tensor in (self._running_sum, self._pending, *self.sealed):
             if tensor is not None:
                 ttnn.deallocate(tensor)
-        self._running_sum, self._pending = None, None
-        self.block_residual = None
+        self._running_sum, self._pending, self.sealed = None, None, []
 
 
 def _block_sites(layers, q_pre, q_post, q_out, block_size):
     """Queries grouped by the sealed set they read, in the order the walk consumes them.
 
-    A `block_residual` value outlives the block that installed it by one read. The seal
+    A sealed set outlives the block that installed it by one read. The seal
     fires in the middle of layer `L`, between its two reads, so the sealed set spans layer
     `L`'s post-attention read through layer `L + block_size`'s pre-attention read. Groups
     are cut on the read sequence every `2 * block_size` sites for that reason, not on layer
@@ -198,12 +193,12 @@ class TtAttnResWalk(object):
         against the set that arrives rather than anything this rank has sealed.
 
         Nothing statistical crosses the boundary: `inter_block` is a pure function of
-        `(block_residual, queries)`, and this rank owns `q_pre[0]`, so the batch is
+        `(sealed set, queries)`, and this rank owns `q_pre[0]`, so the batch is
         recomputed here rather than shipped. Ownership of the tensor transfers in.
         """
         self.op = op
         self.block_size = block_size
-        self.stream = TtAttnResStream(op, hidden_states, block_size=block_size, block_residual=inherited_block_residual)
+        self.stream = TtAttnResStream(op, hidden_states, block_size=block_size, sealed=inherited_block_residual)
         # Unchanged by the inheritance: local group 0 is the group that opens after this
         # rank's first seal, which is exactly what `_block_sites` yields first.
         self._blocks = iter(_block_sites(num_layers, q_pre, q_post, q_out, block_size))
@@ -211,7 +206,7 @@ class TtAttnResWalk(object):
         self._partials = self._shifts = self._masses = None
         if inherited_block_residual is not None:
             boundary = [q_pre[0]]
-            self._partials, self._shifts, self._masses = op.inter_block(inherited_block_residual, boundary)
+            self._partials, self._shifts, self._masses = op.inter_block(self.stream.sealed, boundary)
             self._pending = enumerate(boundary)
 
     def read(self):
@@ -239,7 +234,7 @@ class TtAttnResWalk(object):
             # here strands nothing.
             queries = next(self._blocks)
             self._free_batches()
-            self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.block_residual, queries)
+            self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries)
             self._pending = enumerate(queries)
         return h, borrowed
 
