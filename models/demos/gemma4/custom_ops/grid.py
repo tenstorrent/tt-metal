@@ -73,21 +73,24 @@ def plan_concat_heads_units(grid, num_heads, cols, heads_per_unit=None):
 
 
 NORM_MAX_CORES = 64  # an exchange group: two fp32 receive tiles of 32 columns
-NORM_DEFAULT_CORES = 22  # the preferred group size (GEMMA4_FUSED_NORM_CORES caps it)
+NORM_PREFERRED_CORES_ENV = "GEMMA4_FUSED_NORM_CORES"  # a test knob: the exchange-group size to prefer when it fits
 
 
-def plan_norm_split(grid_cores_, cols_t, nin=1, rt_in=1, cap=None):
+def plan_norm_split(grid_cores_, cols_t, nin=1, rt_in=1, preferred=None):
     """The one work split of the fused norms (``fused_norm_decode``) for ``rt_in`` row tiles on a grid of
     ``grid_cores_`` cores: ``(N, per, groups, passes)`` -- ``N`` cores per row tile (a divisor of ``cols_t`` with
     ``per = cols_t / N <= 8 / nin`` tiles each so one fp32 dest window holds them), ``groups`` row tiles per pass
     (``min(rt_in, grid_cores_ // N)``) and ``passes = ceil(rt_in / groups)`` launches of the program. The split
-    minimizes the passes, prefers a core count up to the cap (``cap``, else ``GEMMA4_FUSED_NORM_CORES``, default
-    22) and then the largest count; it is derived from the grid, never from a constant: 2816 wide at 128 rows =
-    11 cores x 4 row tiles in one pass on Wormhole's 8x8, 22 x 4 on Blackhole's 13x10. Raises ValueError when no
-    split fits (the callers fall back to the composite path)."""
-    if cap is None:
-        cap = int(os.environ.get("GEMMA4_FUSED_NORM_CORES", str(NORM_DEFAULT_CORES)))
-    cap = min(NORM_MAX_CORES, max(1, int(cap)))
+    minimizes the passes, then takes the FEWEST cores per row tile (``preferred``, else
+    ``GEMMA4_FUSED_NORM_CORES``, names a count to take first when it fits at that pass count): the exchange is
+    all-to-all (every core sends its partial to every other), so its cost grows with N^2 while the per-core
+    compute is 2-8 tiles -- measured on one P150 for the 26B's 2816 width, one row tile, traced: 11 cores 17.1 us,
+    22 cores 23.6 us, 44 cores 41.3 us (one input); 22 cores 43.9 us vs 44 cores 76.2 us (two inputs). The split
+    is derived from the grid, never from a constant: 2816 wide at 128 rows = 11 cores x 4 row tiles in one pass
+    on Wormhole's 8x8 and on Blackhole's 13x10, 2048 rows = 11 x 11 groups in 6 passes on 13x10. Raises
+    ValueError when no split fits (the callers fall back to the composite path)."""
+    if preferred is None:
+        preferred = int(os.environ.get(NORM_PREFERRED_CORES_ENV, "0") or 0)
     max_per = 8 // nin
     best = None
     for n in range(1, min(NORM_MAX_CORES, cols_t) + 1):
@@ -97,7 +100,7 @@ def plan_norm_split(grid_cores_, cols_t, nin=1, rt_in=1, cap=None):
         if groups < 1:
             continue
         passes = -(-rt_in // groups)
-        key = (passes, 0 if n <= cap else 1, -n)
+        key = (passes, 0 if n == preferred else 1, n)
         if best is None or key < best[0]:
             best = (key, (n, cols_t // n, groups, passes))
     if best is None:
@@ -108,9 +111,9 @@ def plan_norm_split(grid_cores_, cols_t, nin=1, rt_in=1, cap=None):
     return best[1]
 
 
-def plan_norm_cores(grid, cols_t, nin=1, cap=None):
+def plan_norm_cores(grid, cols_t, nin=1, preferred=None):
     """The fused norms' core count for one row tile on ``grid`` (``plan_norm_split``'s ``N``)."""
-    return plan_norm_split(grid_cores(grid), cols_t, nin, 1, cap)[0]
+    return plan_norm_split(grid_cores(grid), cols_t, nin, 1, preferred)[0]
 
 
 # ── Packed-verify decode SDPA: the K chunk and the cores per head that fit one core's L1 ────────────────────

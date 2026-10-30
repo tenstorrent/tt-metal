@@ -19,6 +19,14 @@ tests/unit/custom_ops/test_<op>.py
   `compute_with_storage_grid_size`, capped by `GEMMA4_TEST_GRID=WxH`), never from a literal; the planners are pure
   python with host tests over the 8x8 (Wormhole) and 13x10 / 12x10 / 11x10 / 10x10 (Blackhole P150 and the harvested
   P300) grids, and a device case forces the 8x8 split on Blackhole.
+* **Cores per the workload.** The split uses the finest unit the kernels have and as many cores as the grid holds
+  units (`min(units, grid)`): one output tile (`geglu_decode`, `moe_combine`, `concat_heads_decode`), one `[32, D]`
+  head tile row (`qkv_norm_rope_prefill`), one (user, tensor) (`qkv_heads_norm_rope`). A lone row or a small batch
+  is never pinned below that. Two deliberate exceptions, both measured: the fused norms' exchange group takes the
+  FEWEST cores whose tiles fit one dest window (the all-to-all exchange grows with N^2: 11 cores 17.1 us vs 22
+  cores 23.6 us vs 44 cores 41.3 us for one 2816-wide row tile on a P150), and the sharded GeGLU runs on the down
+  matmul's activation grid (<= 8x8 by the DRAM-sharded matmul rule) so its output needs no reshard. See the audit
+  table below for the counts at the served shapes.
 * **Blackhole-only ops refuse through their wrapper.** `GegluRoutedExpert.unsupported_reason(device)` (the arch and
   the 11x8 compute rectangle its K-split, multicasts and padded N assume) and `MoeComputeCustom.unsupported_reason(...)`
   (the arch and the standalone staging capacity `E x T <= 64 x hs x ws` rows) are read by the expert wrappers
@@ -76,8 +84,37 @@ The model build records its profile once (`tt/mesh_orientation.py`: `decode_fusi
 
 Call-site switches without a kernel: `GEMMA4_QKV_L1_OUT`, `GEMMA4_SOFTCAP_FUSED`, `GEMMA4_HEAD_NORM_4D`, the 1D decode
 matmul configs (`GEMMA4_MLP/ATTN/ROUTER_DECODE_1D`), `GEMMA4_NORM_SHARDED_OUT`, `GEMMA4_DRAM_SHARD_ROW_VIEW`,
-`GEMMA4_MOE_DECODE_TILE_TAIL`. Test knobs: `GEMMA4_TEST_GRID=WxH` (cap the grid), `GEMMA4_FUSED_NORM_CORES` (the fused
-norms' preferred group size, default 22), `GEMMA4_QKV_NORM_ROPE_INPLACE`, `GEMMA4_CONCAT_HEADS_PER_UNIT`.
+`GEMMA4_MOE_DECODE_TILE_TAIL`. Test knobs: `GEMMA4_TEST_GRID=WxH` (cap the grid), `GEMMA4_FUSED_NORM_CORES` (a
+preferred exchange-group size for the fused norms, taken when it fits; unset: the fewest cores that fit one dest
+window, 11 for the 26B), `GEMMA4_QKV_NORM_ROPE_INPLACE`, `GEMMA4_CONCAT_HEADS_PER_UNIT`.
+
+## Cores at the served shapes (audit 2026-10-30)
+
+Per chip, from the planners (`tests/unit/test_custom_op_planners_host.py` asserts the counts); BH = the 13x10 P150
+grid (130 cores), WH = the 8x8 Wormhole grid (64). "Units" is the finest split the kernels have; an op uses
+`min(units, grid)` cores unless noted. The dense 31B / 12B TP4 and the 26B (4,1) builds on 4 Blackhole chips are the
+served QB2 shapes; the Galaxy (8,4) engines run the dense fusions off (only `qkv_norm_rope` on the 26B lanes, and the
+split-independent decode SDPA of the `arg/gemma4_sdpa_splitfree` branch where enabled).
+
+| op | served shape (per chip) | units | BH cores | WH cores | rule / note |
+|---|---|---|---|---|---|
+| `concat_heads_decode` | 26B / 12B TP4, 4 heads x D 256 / 512 | 32 / 64 | 32 / 64 | 32 / 64 | one output tile per unit |
+| | 31B TP4, 8 heads x D 256 / 512 | 64 / 128 | 64 / 128 | 64 / 64 (head pairs) | |
+| `qkv_heads_norm_rope` | dense TP4, B users | 3 B | 3 B (B 1: 3, 16: 48, 24: 72) | 3 B up to 21, then B | one (user, tensor) per core; a user's heads share one tile |
+| `qkv_norm_rope` | 26B, B users (the head shards) | B | B (1 / 20 / 32) | B | in place on the shard cores |
+| `fused_norm_decode` | 26B W 2816, one row tile | 11 | 11 (22 two inputs) | 11 (22) | fewest cores that fit a dest window (measured, see above) |
+| | 26B 128 / 2048 prefill rows | 4 / 64 row tiles | 44 (1 pass) / 121 (6 passes) | 44 (1) / 55 (13) | one 11-core group per row tile |
+| `geglu_decode` | 26B experts 32 x I 704 / shared I 2112 | 704 / 66 | 130 / 66 | 64 / 64 | one output tile per unit |
+| `geglu_sharded` | 31B / 12B TP4 down activation | shard cores | 56 / 40 | 56 / 40 | the DRAM-sharded down matmul's grid |
+| `moe_combine` | 26B H 2816 | 88 | 88 | 64 | one output column tile per unit |
+| `qkv_norm_rope_prefill` | 31B TP4 S 128 / 2048 (16 heads) | 64 / 1024 | 64 / 130 | 64 / 64 | one `[32, D]` head tile row per unit |
+| | 12B TP4 S 128 (8 heads / q-only 4) | 32 / 16 | 32 / 16 | 32 / 16 | |
+| `router_topk` | 26B E 128, k 8 | 32 users | 32 | 32 | one user row per RISC-V core; scalar top-k |
+| `moe_frame_prep` | Galaxy frame 32 / (2,4) frame 64 tokens | B | B | B | one token row per core (5.6 KB each) |
+| `expert_gather_small` | 26B (4,1), 32 local experts | 32 | 32 | 32 | one local expert per core (the count exchange) |
+| `geglu_routed_expert` | 26B (4,1), N 704 = 22 tiles | 11x8 rectangle | 88 | refused (Blackhole-only) | the shared op's rectangle: 22 N tiles pad-free over 11 columns, DRAM-bound (~450 GB/s) |
+| `moe_compute` | 26B Galaxy lanes (opt-in) | the shared op's placement | 8 ring + combine + <= 4 tilize | refused | the DRAM-bank ring of `select_moe_compute_cores` |
+| `moe_dispatch_prefill` | 26B (4,1), 1 link | per link | 1 sender + 2 workers / + <= 4 untilizers | same | fabric-link bound (the shared op's core lines) |
 
 ## Kernel traps (Blackhole, `ttnn.generic_op`)
 

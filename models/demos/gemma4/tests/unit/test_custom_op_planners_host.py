@@ -23,6 +23,12 @@ def test_qkv_heads_plan(grid, batch):
     if 3 * batch <= g.grid_cores(grid):
         assert per_core == 1
     assert len(g.row_major_cores(grid, n_cores)) == n_cores
+    # the served batches: one (user, tensor) unit per core wherever 3 B cores exist -- the finest split the
+    # kernels have (a user's heads share one 32-row tile: the norm and the RoPE are tile-granular, so a per-head
+    # split would not cut the compute per core); 8x8 folds the three tensors onto one core from 22 users
+    served = {1: (3, 1), 16: (48, 1), 20: (60, 1), 24: (72, 1) if grid == (13, 10) else (24, 3)}
+    for b, want in served.items():
+        assert g.plan_qkv_heads_units(grid, b) == want
 
 
 def test_qkv_heads_plan_falls_back_to_one_user_per_core():
@@ -39,6 +45,15 @@ def test_concat_heads_plan(grid, num_heads, cols):
     assert sum(per) == cols * groups
     assert groups * hg >= num_heads and (groups - 1) * hg < num_heads
     assert max(per) - min(per) <= 1
+    # every output tile (head, column) is a unit of its own wherever the grid holds them (the finest split: a
+    # unit assembles one output tile from the B input tiles of its column); only the 31B TP4 global layer (8
+    # heads x 16 columns = 128 tiles) folds to head pairs on 8x8
+    if num_heads * cols <= g.grid_cores(grid):
+        assert (hg, n_cores) == (1, num_heads * cols)
+    else:
+        assert hg > 1 and n_cores == g.grid_cores(grid)
+    served = {(4, 8): 32, (4, 16): 64, (8, 8): 64, (8, 16): 128 if grid == (13, 10) else 64}  # (heads, cols)
+    assert {k: g.plan_concat_heads_units(grid, *k)[0] for k in served} == served
 
 
 @pytest.mark.parametrize("grid", GRIDS, ids=["wh_8x8", "bh_13x10"])
@@ -48,6 +63,16 @@ def test_norm_cores_plan(grid, cols_t, nin, monkeypatch):
     n = g.plan_norm_cores(grid, cols_t, nin)
     assert 1 <= n <= min(64, g.grid_cores(grid))
     assert cols_t % n == 0 and cols_t // n <= 8 // nin
+    # the fewest cores whose tiles fit one dest window (the all-to-all exchange grows with N^2: 11 cores beat 22
+    # and 44 on a P150 at 2816 wide), the same on both grids for one row tile
+    assert n == min(k for k in range(1, 65) if cols_t % k == 0 and cols_t // k <= 8 // nin)
+    assert {(88, 1): 11, (88, 2): 22, (120, 1): 15, (168, 1): 21}.get((cols_t, nin), n) == n
+    # a preferred count that fits is taken; the grid caps the groups of a prefill call, never the N of a row
+    assert g.plan_norm_split(g.grid_cores(grid), cols_t, nin, 1, preferred=n * 2 if cols_t % (n * 2) == 0 else n)[
+        0
+    ] in (n, n * 2)
+    assert g.plan_norm_split(g.grid_cores(grid), 88, 1, 4) == (11, 8, 4, 1)
+    assert g.plan_norm_split(g.grid_cores(grid), 88, 1, 64)[:2] == (11, 8)
 
 
 def test_compute_grid_cap(monkeypatch):
