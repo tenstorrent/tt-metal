@@ -96,7 +96,7 @@ wave than under SP (policy (c) keeps SP for it); idle rows cost wasted expert wo
 | multimodal (image + video) on the 1 M profile | DONE 19:16 (served_8x4_mm_32_r3: both answers correct, TTFT 5.4 / 5.7 s) | stage e of every later smoke |
 | 1 M context through the API | DONE 2026-10-30 01:34 (needle1m_r6: the needle 104 K tokens before the question answered exactly, TTFT 495 s; r4/r5: 56-66 ms per token at 1 M; the depth-0.56 loop = the model's ~460 K retrieval limit) | README served 1 M row booked |
 | APC on (both switches) at 32 slots | DONE 2026-10-30 02:01 (async_r4: every stage PASS with async + APC host store 2 entries + resident + confirmer: 4/4 hits, repeats identical, bench 14.64 tok/s/u, repeated image served); catalog flipped | the served smoke a-e is the regression gate | the multi-turn hit served from the snapshot, the bench within noise of APC off, stage e twice (the image hit) |
-| 32 users x 1 M | the profile admits it (32 slots, pool 33.5 M tokens); the capstone run (~4.5 h of prefill) needs the queue runner restarted with a 7 h stage budget and `SMOKE_CLIENT_TIMEOUT_S=20000` | 32 needles found under APC + resident; TTFT per arrival and the decode at 32 x ~1 M booked |
+| 32 users x 1 M | QUEUED 2026-10-30 02:08: the capstone waiter restarts the runner with BUDGET=25200 once the 4 async A/B arms and the step-profile arm are done, then queues `served_8x4_needle1m_32_r1` (32 distinct 1 040 000-token prompts, depth 0.9, 256-token answers, SMOKE_CLIENT_TIMEOUT_S=20000); ~4.3 h to the last first token at ~2.2 K tok/s aggregate prefill | 32 needles found under APC + resident; TTFT per arrival and the decode at 32 x ~1 M booked |
 
 ## 2c. A/B method for decode-path changes (user rule 2026-10-30 01:40)
 

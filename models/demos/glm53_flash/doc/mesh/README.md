@@ -1581,6 +1581,23 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 02:10: the catalog carries the gate; the async A/B arms; the capstone waiter
+
+The 1 M profile of the TIS catalog (arg/glm53_flash_galaxy 339f128bb) now serves what async_r4 validated:
+`GLM53_VLLM_PREFIX_CACHING=1`, `GLM53_VLLM_APC_SNAPSHOTS=2` (host store), `enable-prefix-caching: true`,
+`async-scheduling: true`, over `GLM53_RESIDENT_DECODE=1`. The served smoke takes boolean `SMOKE_EXTRA_VLLM_ARGS`
+values (`async-scheduling=true` renders as the bare flag, `=false` is dropped, as the TIS launcher does), so one
+queue line per arm selects the flag. Four fast arms are queued per the A/B rule (plan 2c): async on / off at
+128 x 128 tokens, batch 32 on the 1 M profile (APC on) and batch 128 on the 128 K profile (192 slots), minimal
+warm-ups (no prefix-start walks, no multimodal warm-up, the 256 wave trace only). A step-profile arm
+(`GLM53_VLLM_STEP_PROFILE=60:120`, async on, batch 32) follows them: it attributes the served step's host share
+(the parity item) while the capstone runs. A waiter restarts the queue runner with a 7 h stage budget once the
+queue is empty and the chips are free, and queues the 32 x 1 M capstone (`served_8x4_needle1m_32_r1`: 32 distinct
+1 040 000-token prompts, needle at depth 0.9, 256-token answers, 24 000 s stage timeout). The 02:02 automation that
+was to do all this bailed on its own process name (`pgrep -f serve_smoke_glm53.sh` inside a `bash -c` string
+matches that string); the waiter greps `ps` output with the `[s]` bracket and counts the pytest wrapper and the
+device holders instead.
+
 ### 2026-10-30 02:01: the gate is green (async_r4); the 1 M needle answered (needle1m_r6)
 
 `served_8x4_async_r4` on the catalogued 1 M profile with async scheduling, the cache on the host store with two

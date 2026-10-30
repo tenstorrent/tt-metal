@@ -82,6 +82,19 @@ chain step), but with no gain to pay for it the flag stays off in the catalog; t
 inter-token vs the 48 ms device step) is the engine's synchronous per-step host work, to be attributed with
 `GLM53_VLLM_STEP_PROFILE` before anything else is changed.
 
+## Step 3 result (2026-10-30 02:01): async scheduling ON
+
+Un-parked on the user's direction (2026-10-29 23:35, with tt-metal #62806, tt-inference-server #5484, plugin #255
+and #259). The adapter accepts the one-step lag of the plugin's position on chain steps (any other disagreement
+raises "diverged"; the perf line counts the lagging rows), `read_decode_output(async_read=True)` reads the ids
+without blocking (one event, waited on the next step), and plugin #259 (a host-answered decode is a reload
+transition; a refused read drops the chain) is folded into arg/glm53_registration. `served_8x4_async_r4` (async +
+APC host store 2 entries + resident + the hit confirmer): every stage PASS, bench 128 x 128 at 32 users 14.64 tok/s
+per user (the synchronous chain 14.13, the reload path 11.0). The catalog's 1 M profile carries
+`async-scheduling: true` (TIS 339f128bb). The size of the async gain at batch 32 and 128 comes from the A/B arms
+(plan 2c: on / off at 128 x 128, minimal warm-ups), and the remaining gap to the 48 ms device step from the
+step-profile arm (`GLM53_VLLM_STEP_PROFILE=60:120`).
+
 ## Step 4, the prefill / decode interleave: design (2026-10-29 19:30)
 
 Today the adapter refuses a decode step while a slot is mid-prefill (`_stage_rows`: `supports_slot_mask` is unset on
