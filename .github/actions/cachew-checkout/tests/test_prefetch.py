@@ -73,6 +73,7 @@ class GitServer:
         self.fetch_delay = 0
         self.block_submodules = False
         self.required_auth = {}
+        self.duplicate_auth = []
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -88,6 +89,11 @@ class GitServer:
             def serve(self):
                 url = urllib.parse.urlsplit(self.path)
                 owner.requests.append((self.command, url.path, self.headers.get("Authorization")))
+                if len(self.headers.get_all("Authorization") or []) > 1:
+                    # GitHub rejects a request carrying two Authorization headers.
+                    owner.duplicate_auth.append(url.path)
+                    self.send_error(400, 'Duplicate header: "Authorization"')
+                    return
                 if url.path == "/_liveness":
                     time.sleep(owner.health_delay)
                     self.send_response(owner.health)
@@ -107,7 +113,11 @@ class GitServer:
                     repo in owner.required_auth
                     and self.headers.get("Authorization", "").lower() != owner.required_auth[repo].lower()
                 ):
-                    self.send_error(401)
+                    # Like GitHub, challenge so clients can answer with URL credentials.
+                    self.send_response(401)
+                    self.send_header("WWW-Authenticate", 'Basic realm="fixture"')
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
                     return
                 if (owner.fail_repo == repo and (not owner.fail_post or self.command == "POST")) or (
                     owner.block_submodules and repo != "main"
@@ -567,6 +577,57 @@ class PrefetchTests(unittest.TestCase):
         self.assert_single_cache_attempts(["main"])
         self.assertEqual(list(self.target.iterdir()), [])
         self.assertFalse((self.workspace / "escape").exists())
+
+    def output(self):
+        return runner_file(self.root / "output")
+
+    def test_repository_answer_keeps_cache_available_for_later_dependencies(self):
+        # M3: a 4xx about one repository or ref is not a cache outage.
+        self.cache.fail_repo = "main"
+        for status, available in ((404, "true"), (403, "true"), (503, "false"), (302, "false")):
+            with self.subTest(status=status):
+                self.cache.fail_status = status
+                self.assertFalse(self.attempt())
+                self.assertEqual(self.output()["available"], available)
+
+    def test_stale_staging_directory_from_cancelled_run_is_removed(self):
+        # M4: a cancelled attempt must not block later seeding or leak into the worktree.
+        self.target.mkdir()
+        stale = self.target / ".cachew-prefetch-cancelled"
+        (stale / ".git").mkdir(parents=True)
+        self.assertTrue(self.attempt())
+        self.assertFalse(stale.exists())
+
+    def test_old_git_bypasses_before_contacting_cache(self):
+        # M6: GIT_CONFIG_COUNT needs Git 2.31; older Git would ignore the transport settings.
+        fake = self.root / "old-git"
+        fake.write_text('#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.25.1"; exit 0; fi\nexit 1\n')
+        fake.chmod(0o700)
+        self.env["CACHEW_REAL_GIT"] = str(fake)
+        self.assertFalse(self.attempt())
+        self.assertEqual(self.cache.requests, [])
+        self.assertEqual(self.output()["available"], "unknown")
+
+    def test_auto_url_selects_first_healthy_trusted_origin(self):
+        self.assertEqual(prefetch.cache_candidates("auto", "https://github.com"), list(prefetch.TRUSTED_CACHES))
+        self.assertEqual(prefetch.cache_candidates("", "https://github.com"), list(prefetch.TRUSTED_CACHES))
+        with patch.dict(os.environ, self.env, clear=True):
+            attempt = prefetch.Prefetch(self.env)
+        attempt.caches = ["http://127.0.0.1:1", self.cache.url]
+        attempt.probe()
+        self.assertEqual(attempt.cache, self.cache.url)
+        self.assertNotIn("http://127.0.0.1:1", json.dumps(dict(attempt.env)))
+
+    def test_trusted_origins_match_deployment(self):
+        # tt-flux apps/cachew/README.md: one public name per cluster.
+        self.assertEqual(
+            set(prefetch.TRUSTED_CACHES),
+            {
+                "https://cachew.ci.tenstorrent.net",
+                "https://cachew.yyz2.ci.tenstorrent.net",
+                "https://cachew.dev.tenstorrent.net",
+            },
+        )
 
     def test_composite_forwards_every_pinned_checkout_input(self):
         names = "repository ref token ssh-key ssh-known-hosts ssh-strict ssh-user persist-credentials path clean filter sparse-checkout sparse-checkout-cone-mode fetch-depth fetch-tags show-progress lfs submodules set-safe-directory github-server-url".split()

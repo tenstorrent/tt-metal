@@ -4,18 +4,40 @@
 """Best-effort object seeding. Final checkout and credential cleanup belong to actions/checkout."""
 
 import base64
+import json
 import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
 import urllib.parse
 
 
+ACTION = Path(__file__).resolve().parent
+TRUSTED_CACHES = tuple(json.loads((ACTION / "trusted_caches.json").read_text())["origins"])
+STAGE_PREFIX = ".cachew-prefetch-"
+# Git messages that mean the cache endpoint itself is unusable, as opposed to a
+# per-repository or per-ref answer. Only these turn caching off for the job.
+TRANSPORT_ERRORS = re.compile(
+    rb"could not resolve|failed to connect|connection (?:refused|reset|timed out)|"
+    rb"ssl certificate|ssl_connect|ssl_read|handshake|certificate verif|server certificate|rpc failed|early eof|remote end hung up|operation too slow|timed out|"
+    rb"returned error: (?:3|5)\d\d",
+    re.IGNORECASE,
+)
+# A slow cache is fine; a stalled one is not. The wall-clock cap only guards
+# against a transfer that trickles forever just above the low-speed limit.
+HARD_DEADLINE_SECONDS = 3600
+
+
 class Bypass(Exception):
     """Stop the cache attempt and proceed directly to upstream checkout."""
+
+    def __init__(self, message, transport=False):
+        super().__init__(message)
+        self.transport = transport
 
 
 def origin(value):
@@ -51,25 +73,57 @@ def duration(value, maximum):
     return seconds
 
 
+def cache_candidates(value, upstream):
+    """Return the trusted cache origins to probe, in order. 'auto' tries every
+    trusted origin; only the runner's own cluster answers with a valid
+    certificate, and off-VLAN runners fail DNS immediately."""
+    if (value or "auto").strip().lower() == "auto":
+        return list(TRUSTED_CACHES)
+    cache = origin(value)
+    loopback_fixture = upstream.startswith("http://") and cache.startswith("http://")
+    if cache not in TRUSTED_CACHES and not loopback_fixture:
+        raise Bypass("untrusted cache origin")
+    return [cache]
+
+
+def git_version_at_least(executable, minimum):
+    try:
+        output = subprocess.run(
+            [executable, "version"], capture_output=True, timeout=10, env={"PATH": os.environ.get("PATH", "")}
+        ).stdout.decode()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    match = re.search(r"(\d+)\.(\d+)", output)
+    return bool(match) and (int(match[1]), int(match[2])) >= minimum
+
+
+def remove_stale_stages(target):
+    """A cancelled earlier attempt can leave its private staging directory behind."""
+    if not target.is_dir():
+        return
+    for entry in target.iterdir():
+        if entry.name.startswith(STAGE_PREFIX) and entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry, ignore_errors=True)
+
+
 class Prefetch:
     def __init__(self, environ):
         self.git_executable = environ.get("CACHEW_REAL_GIT", "git")
-        for key in ("SSH_KEY", "LFS", "FILTER", "SPARSE_CHECKOUT"):
+        for key in ("SSH_KEY", "SSH_KEY_SET", "LFS", "FILTER", "SPARSE_CHECKOUT"):
             value = environ.get(f"CACHEW_{key}", "")
             if value and value.lower() != "false":
                 raise Bypass("checkout mode uses upstream directly")
+        # GIT_CONFIG_COUNT (2.31) carries the transport settings below; older Git
+        # would silently ignore them and use inherited helpers and rewrites.
+        if not git_version_at_least(self.git_executable, (2, 31)):
+            raise Bypass("Git 2.31 or newer is required")
         self.upstream = origin(environ.get("CACHEW_GITHUB_SERVER_URL") or environ["GITHUB_SERVER_URL"])
-        self.cache = origin(environ["CACHEW_CACHEW_URL"])
-        trusted_caches = {
-            "https://cachew.dev.tenstorrent.net",
-            "https://cachew.ci.tenstorrent.net",
-            "https://cachew.yyz2.ci.tenstorrent.net",
-        }
-        loopback_fixture = self.upstream.startswith("http://") and self.cache.startswith("http://")
-        if self.cache not in trusted_caches and not loopback_fixture:
-            raise Bypass("untrusted cache origin")
+        self.caches = cache_candidates(environ.get("CACHEW_CACHEW_URL", "auto"), self.upstream)
+        self.cache = None
         self.health_timeout = duration(environ["CACHEW_CACHEW_HEALTH_TIMEOUT"], 30)
+        # Seconds without progress before a cache transfer is abandoned.
         self.fetch_timeout = duration(environ["CACHEW_CACHEW_FETCH_TIMEOUT"], 600)
+        self.hard_deadline = duration(environ.get("CACHEW_HARD_DEADLINE", str(HARD_DEADLINE_SECONDS)), 86400)
         repository = environ.get("CACHEW_REPOSITORY") or environ["GITHUB_REPOSITORY"]
         if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository, re.ASCII):
             raise Bypass("unsupported repository name")
@@ -91,6 +145,8 @@ class Prefetch:
         self.target = target.resolve()
         if not self.target.is_relative_to(workspace):
             raise Bypass("checkout path is outside the workspace")
+        if self.target.is_dir() and not self.target.is_symlink():
+            remove_stale_stages(self.target)
         if self.target.exists() and (not self.target.is_dir() or any(self.target.iterdir())):
             raise Bypass("existing checkout uses upstream directly")
         self.env = dict(environ)
@@ -109,16 +165,26 @@ class Prefetch:
             GIT_ASKPASS="/bin/false",
             GIT_LFS_SKIP_SMUDGE="1",
         )
-        config = [("http.followRedirects", "false"), ("credential.helper", ""), ("fetch.recurseSubmodules", "false")]
-        token = environ.get("CACHEW_TOKEN", "")
-        if token:
-            auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        self.token = environ.get("CACHEW_TOKEN", "")
+        self.modules = 0
+
+    def configure_transport(self):
+        """Transport settings for the selected cache only. The token is never
+        attached before a trusted origin has answered the liveness probe."""
+        config = [
+            ("http.followRedirects", "false"),
+            ("credential.helper", ""),
+            ("fetch.recurseSubmodules", "false"),
+            ("http.lowSpeedLimit", "1000"),
+            ("http.lowSpeedTime", str(max(1, math.ceil(self.fetch_timeout)))),
+        ]
+        if self.token:
+            auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
             config.append((f"http.{self.cache}/.extraHeader", f"AUTHORIZATION: basic {auth}"))
         self.env["GIT_CONFIG_COUNT"] = str(len(config))
         for index, (key, value) in enumerate(config):
             self.env[f"GIT_CONFIG_KEY_{index}"] = key
             self.env[f"GIT_CONFIG_VALUE_{index}"] = value
-        self.modules = 0
 
     def git(self, gitdir, *arguments):
         command = [self.git_executable, f"--git-dir={gitdir}", *arguments]
@@ -126,14 +192,15 @@ class Prefetch:
             command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
         ) as process:
             try:
-                output, _ = process.communicate(timeout=self.fetch_timeout)
+                output, errors = process.communicate(timeout=self.hard_deadline)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
-                raise Bypass("cache operation timed out") from None
+                raise Bypass("cache operation timed out", transport=True) from None
         if process.returncode:
-            # Git's diagnostics may contain credentials or untrusted server text.
-            raise Bypass("cache Git operation failed")
+            # Git's diagnostics may contain credentials or untrusted server text,
+            # so they are only classified, never printed.
+            raise Bypass("cache Git operation failed", transport=bool(TRANSPORT_ERRORS.search(errors or b"")))
         return output
 
     def seed(self, gitdir, url, ref, main=False):
@@ -202,36 +269,46 @@ class Prefetch:
             child_commit = self.seed(child_dir, child_url, sha.decode())
             self.seed_children(child_dir, child_url, child_commit, level + 1)
 
-    def probe(self):
+    def healthy(self, cache):
         # --disable ignores ~/.curlrc, which could otherwise add auth or retries.
         # The process deadline also bounds DNS resolution, unlike a socket timeout.
-        health = subprocess.run(
-            [
-                "curl",
-                "--disable",
-                "--silent",
-                "--fail",
-                "--retry",
-                "0",
-                "--max-time",
-                str(self.health_timeout),
-                "--output",
-                os.devnull,
-                "--write-out",
-                "%{http_code}",
-                self.cache + "/_liveness",
-            ],
-            env=self.env,
-            capture_output=True,
-            timeout=self.health_timeout + 0.5,
-        )
-        if health.returncode or health.stdout != b"200":
-            raise Bypass("cache liveness failed")
+        try:
+            health = subprocess.run(
+                [
+                    "curl",
+                    "--disable",
+                    "--silent",
+                    "--fail",
+                    "--retry",
+                    "0",
+                    "--max-time",
+                    str(self.health_timeout),
+                    "--output",
+                    os.devnull,
+                    "--write-out",
+                    "%{http_code}",
+                    cache + "/_liveness",
+                ],
+                env=self.env,
+                capture_output=True,
+                timeout=self.health_timeout + 0.5,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        return health.returncode == 0 and health.stdout == b"200"
+
+    def probe(self):
+        for cache in self.caches:
+            if self.healthy(cache):
+                self.cache = cache
+                self.configure_transport()
+                return
+        raise Bypass("cache liveness failed")
 
     def run(self):
         self.target.mkdir(parents=True, exist_ok=True)
         # Stage on the target filesystem; publish only a complete object seed.
-        with tempfile.TemporaryDirectory(prefix=".cachew-prefetch-", dir=self.target) as stage:
+        with tempfile.TemporaryDirectory(prefix=STAGE_PREFIX, dir=self.target) as stage:
             gitdir = Path(stage) / ".git"
             commit = self.seed(gitdir, self.url, self.ref, main=True)
             self.seed_children(gitdir, self.url, commit)
@@ -240,7 +317,11 @@ class Prefetch:
 
 def main():
     prefetched = False
+    # unknown: no probe happened, so activation probes for itself.
+    # true: a trusted cache answered; later per-command failures fall back individually.
+    # false: the cache endpoint itself failed, so later dependencies skip it.
     available = "unknown"
+    selected = ""
     try:
         session = os.environ.get("CACHEW_SESSION_DIR")
         if session and (Path(session) / "cache-disabled").exists():
@@ -249,11 +330,14 @@ def main():
         attempt = Prefetch(os.environ)
         available = "false"
         attempt.probe()
+        available = "true"
+        selected = attempt.cache
         attempt.run()
         prefetched = True
-        available = "true"
         print("Cachew object prefetch complete; continuing with upstream checkout.")
     except Bypass as error:
+        if error.transport:
+            available = "false"
         print(f"Cachew prefetch bypassed: {error}. Continuing with upstream checkout.")
     except Exception:
         available = "false"
@@ -262,6 +346,7 @@ def main():
         with open(output, "a") as stream:
             stream.write(f"prefetched={str(prefetched).lower()}\n")
             stream.write(f"available={available}\n")
+            stream.write(f"cache-url={selected}\n")
 
 
 if __name__ == "__main__":

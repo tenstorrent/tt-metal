@@ -9,6 +9,7 @@ import subprocess
 import shutil
 import unittest
 from unittest.mock import patch
+import urllib.parse
 
 import test_prefetch as fixtures
 
@@ -174,21 +175,20 @@ class SessionTests(unittest.TestCase):
     def test_repeated_default_checkouts_keep_both_safe_directories_in_fallback(self):
         self.assertEqual(self.flow(), (True, True))
         directory = Path(self.env["CACHEW_SESSION_DIR"])
-        (directory / "cache-disabled").touch()
-        shutil.copyfile(directory / "upstream.config", directory / "global.config")
+        wrapper = load_wrapper()
+        state = json.loads((directory / "state.json").read_text())
+        wrapper.disable_cache(self.env["CACHEW_REAL_GIT"], directory, state, self.env)
         self.env["CACHEW_PATH"] = "second-checkout"
         self.assertEqual(self.flow(), (False, False))
         expected = {str(self.fixture.target.resolve()), str((self.fixture.workspace / "second-checkout").resolve())}
-        for config in (directory / "global.config", directory / "upstream.config"):
-            self.assertEqual({str(Path(value).resolve()) for value in self.safe_directories(config) if value}, expected)
+        config = directory / "global.config"
+        self.assertEqual({str(Path(value).resolve()) for value in self.safe_directories(config) if value}, expected)
         self.finish()
 
     def test_safe_directory_false_does_not_add_checkout_path(self):
         self.env["CACHEW_SET_SAFE_DIRECTORY"] = "false"
         self.assertEqual(self.flow(), (True, True))
-        directory = Path(self.env["CACHEW_SESSION_DIR"])
         self.assertEqual(self.safe_directories(), [])
-        self.assertEqual(self.safe_directories(directory / "upstream.config"), [])
         self.finish()
 
     def test_safe_directory_empty_reset_and_deduplication_survive_rebuild(self):
@@ -341,9 +341,11 @@ class SessionTests(unittest.TestCase):
             CACHEW_REPOSITORY="org/secondary", CACHEW_PATH="secondary", CACHEW_REF="main", CACHEW_TOKEN=secondary_token
         )
         self.assertEqual(self.flow(), (False, False))
-        for repository in ("main", "secondary"):
+        # Upstream credentials are repository-scoped by actions/checkout, exactly
+        # as without cachew; they are never promoted to job-wide headers.
+        for checkout in (self.fixture.target, self.fixture.workspace / "secondary"):
             result = subprocess.run(
-                ["git", "ls-remote", self.fixture.upstream.url + "/org/" + repository],
+                ["git", "-C", str(checkout), "ls-remote", "origin"],
                 cwd=self.fixture.workspace,
                 env=self.env,
                 text=True,
@@ -451,6 +453,148 @@ class SessionTests(unittest.TestCase):
             finally:
                 nested.doCleanups()
 
+    def test_job_wide_upstream_header_never_overrides_other_credentials(self):
+        # H2: actions/checkout scopes persisted credentials to the checked-out
+        # repository. A job-wide github.com Authorization header would replace the
+        # credentials of every later upstream request, e.g. a PAT in a clone URL
+        # for another private repository (curl drops URL credentials when an
+        # Authorization header is configured), or be sent twice.
+        self.fixture.repository("private")
+        pat = "separate-private-pat"
+        self.fixture.upstream.required_auth["private"] = (
+            "basic " + base64.b64encode(f"x-access-token:{pat}".encode()).decode()
+        )
+        primary = "basic " + base64.b64encode(f"x-access-token:{fixtures.TOKEN}".encode()).decode()
+        self.fixture.upstream.required_auth["main"] = primary
+        self.assertEqual(self.flow(), (True, True))
+        host = urllib.parse.urlsplit(self.fixture.upstream.url).netloc
+        result = subprocess.run(
+            ["git", "clone", f"http://x-access-token:{pat}@{host}/org/private", str(self.fixture.root / "private")],
+            env=self.env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The primary checkout keeps working upstream with exactly one header.
+        target = str(self.fixture.target)
+        self.real_git("-C", target, "push", "origin", "HEAD:refs/heads/pushed-after-activation")
+        directory = Path(self.env["CACHEW_SESSION_DIR"])
+        state = json.loads((directory / "state.json").read_text())
+        load_wrapper().disable_cache(self.env["CACHEW_REAL_GIT"], directory, state, self.env)
+        result = subprocess.run(
+            ["git", "-C", target, "fetch", "origin"], env=self.env, text=True, capture_output=True, timeout=30
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.fixture.upstream.duplicate_auth, [])
+        upstream_auth = [auth for _, url, auth in self.fixture.upstream.requests if "/org/main/" in url]
+        self.assertTrue(upstream_auth and all(auth and auth.lower() == primary.lower() for auth in upstream_auth))
+        for name in ("global.config", "checkout.config"):
+            text = (directory / name).read_text()
+            self.assertNotIn(f'[http "{self.fixture.upstream.url}', text)
+        self.finish()
+
+    def run_prepare_expecting_fallback(self, env):
+        state = self.fixture.root / "fallback-state"
+        state.write_text("")
+        (self.fixture.root / "env").write_text("")
+        (self.fixture.root / "output").write_text("")
+        result = subprocess.run(
+            ["node", str(HELPER)],
+            cwd=self.fixture.workspace,
+            env=dict(env, GITHUB_STATE=str(state)),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(fixtures.runner_file(self.fixture.root / "output").get("ready"), "false")
+        self.assertEqual((self.fixture.root / "env").read_text(), "", "no job environment change")
+        self.assertEqual(list(self.fixture.runtime.glob("cachew-*")), [], "no session left behind")
+        saved = fixtures.runner_file(state)
+        self.assertNotIn("cachew-session", saved)
+        # The registered post invocation must be a no-op, not a second prepare.
+        post = subprocess.run(
+            ["node", str(HELPER)],
+            cwd=self.fixture.workspace,
+            env=dict(env, **{"STATE_" + key: value for key, value in saved.items()}),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertEqual(post.returncode, 0, post.stdout + post.stderr)
+        self.assertEqual((self.fixture.root / "env").read_text(), "")
+        self.assertEqual(list(self.fixture.runtime.glob("cachew-*")), [])
+
+    def test_prepare_errors_fall_back_to_plain_checkout(self):
+        # H3: whatever prevents cachew must never fail a checkout that plain
+        # actions/checkout performs.
+        no_git = self.fixture.root / "no-git-bin"
+        no_git.mkdir()
+        for tool in ("node",):
+            (no_git / tool).symlink_to(shutil.which(tool))
+        self.run_prepare_expecting_fallback(dict(self.env, PATH=str(no_git)))
+
+        old_git = self.fixture.root / "old-git-bin"
+        old_git.mkdir()
+        (old_git / "git").write_text(
+            '#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.25.1"; exit 0; fi\nexec '
+            + self.env["CACHEW_REAL_GIT"]
+            + ' "$@"\n'
+        )
+        (old_git / "git").chmod(0o700)
+        self.run_prepare_expecting_fallback(dict(self.env, PATH=str(old_git) + os.pathsep + self.env["PATH"]))
+
+        broken = self.fixture.home / ".gitconfig"
+        original = broken.read_bytes()
+        broken.write_text("[user\n\tname = broken\n")
+        try:
+            self.run_prepare_expecting_fallback(self.env)
+        finally:
+            broken.write_bytes(original)
+        # The plain checkout still succeeds in the untouched environment.
+        self.posts = []
+        self.original_selection = None
+        state = self.fixture.root / "plain-checkout-state"
+        state.touch()
+        env = dict(self.env, GITHUB_STATE=str(state))
+        for name, value in {
+            "repository": "org/main",
+            "ref": "main",
+            "token": fixtures.TOKEN,
+            "path": "checkout",
+            "fetch-depth": "1",
+            "submodules": "recursive",
+            "clean": "true",
+            "persist-credentials": "true",
+            "set-safe-directory": "true",
+        }.items():
+            env["INPUT_" + name.upper()] = value
+        self.run_node(fixtures.CHECKOUT_JS, env=env)
+        self.assertEqual(self.fixture.cache.requests, [])
+
+    def test_wrapper_shim_only_starts_python_for_network_commands(self):
+        self.assertEqual(self.flow(), (True, True))
+        shim = Path(self.env["CACHEW_SESSION_DIR"]) / "bin/git"
+        marker = self.fixture.root / "python-started"
+        fake = self.fixture.root / "fake-python"
+        fake.write_text(f'#!/bin/sh\ntouch "{marker}"\nexit 99\n')
+        fake.chmod(0o700)
+        text = shim.read_text()
+        python = text.split("exec '", 1)[1].split("'", 1)[0]
+        shim.write_text(text.replace(f"'{python}'", f"'{fake}'"))
+        for arguments in (["rev-parse", "--is-inside-work-tree"], ["-c", "a.b=c", "-C", ".", "status", "--short"]):
+            result = subprocess.run([str(shim), *arguments], cwd=self.fixture.target, env=self.env, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(marker.exists(), arguments)
+        for arguments in (["fetch", "origin"], ["-C", ".", "ls-remote", "origin"], ["-c", "a.b=c", "clone", "x"]):
+            result = subprocess.run([str(shim), *arguments], cwd=self.fixture.target, env=self.env, capture_output=True)
+            self.assertEqual(result.returncode, 99, arguments)
+            self.assertTrue(marker.exists(), arguments)
+            marker.unlink()
+        shim.write_text(text)
+        self.finish()
+
     def test_failed_cache_attempt_stays_disabled_for_later_actions(self):
         self.fixture.cache.fail_repo = "main"
         self.assertEqual(self.flow(), (False, False))
@@ -461,6 +605,15 @@ class SessionTests(unittest.TestCase):
         self.assertFalse(self.activate())
         self.assertEqual(self.fixture.cache.requests, before)
         self.finish()
+
+
+def load_wrapper():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("git_wrapper", fixtures.ACTION / "git_wrapper.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":

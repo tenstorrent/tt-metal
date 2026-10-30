@@ -1,74 +1,86 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Migrate checkout consumers, including gh-aw output, to the published cachew action.
+"""Migrate checkout consumers to the published cachew action and verify its pins.
 
-Run with --write to migrate, or --check to detect drift. With no paths, inspect all
-tracked action/workflow files. The wrapper's internal checkout is intentionally
-excluded: replacing it would recurse instead of providing upstream fallback.
+Run with --write to migrate, --check to detect unmigrated consumers, or
+--verify-pins to check that every pin points at code matching this tree (add
+--require-main after merge to also require the pins to be reachable from
+origin/main). With no paths, inspect all tracked action/workflow files.
+
+Only checkouts of the exact version the wrapper forwards to (actions/checkout
+v6.0.2, or a v6 tag) are migrated, so no consumer changes checkout version.
+Excluded on purpose:
+  * the wrapper's internal checkout (replacing it would recurse);
+  * gh-aw generated lock files and their .md sources (generated, and they pin
+    their own checkout version; they also run on GitHub-hosted runners, where
+    cachew is a no-op);
+  * the vendored tt-llk tree, whose workflows run in tenstorrent/tt-llk.
 """
 
 import argparse
-import json
 from pathlib import Path
 import re
 import subprocess
 import sys
 
 
+ACTION_DIR = Path(".github/actions/cachew-checkout")
 ACTION_REPO = "tenstorrent/tt-metal/.github/actions/cachew-checkout"
 ACTION_SHA = "73f53fe5d7091229a6d0203ccd7c85fcfda52d8c"
 ACTION = f"{ACTION_REPO}@{ACTION_SHA}"
-UPSTREAM_WRAPPER = Path(".github/actions/cachew-checkout/action.yml")
+SESSION_REPO = f"{ACTION_REPO}/session"
+UPSTREAM_WRAPPER = ACTION_DIR / "action.yml"
+FORWARDED_CHECKOUT = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+MIGRATABLE_REFS = (FORWARDED_CHECKOUT, "v6", "v6.0.2")
+EXCLUDED_PREFIXES = ("tt_metal/tt-llk/",)
 CHECKOUT = re.compile(
     r"(?m)^(?P<prefix>[ \t]*(?:-[ \t]+)?uses:[ \t]*)(?P<quote>['\"]?)"
-    r"(?:actions/checkout|" + re.escape(ACTION_REPO) + r")@[^\s'\"#]+(?P=quote)(?:[ \t]*#[^\n]*)?[ \t]*$"
+    r"(?:actions/checkout@(?:"
+    + "|".join(map(re.escape, MIGRATABLE_REFS))
+    + r")|"
+    + re.escape(ACTION_REPO)
+    + r"@[0-9a-f]{40})"
+    r"(?P=quote)(?:[ \t]*#[^\n]*)?[ \t]*$"
 )
-ACTION_COMMENT = re.compile(r"(?m)^#   - (?:actions/checkout|" + re.escape(ACTION_REPO) + r")@[^\n]+$")
-REGEN_COMMAND = "python3 .github/scripts/utils/cachew_checkout.py --write"
+ANY_PIN = re.compile(re.escape(ACTION_REPO) + r"(?P<session>/session)?@(?P<sha>[0-9a-f]{40})")
+
+
+def repository_root():
+    # Independent of the caller's working directory.
+    here = Path(__file__).resolve().parent
+    return Path(subprocess.check_output(["git", "-C", str(here), "rev-parse", "--show-toplevel"], text=True).strip())
+
+
+def excluded(path):
+    relative = path.as_posix()
+    if relative.startswith(EXCLUDED_PREFIXES) or relative.endswith(".lock.yml"):
+        return True
+    return path.suffix == ".md"
 
 
 def rewrite(text):
-    text = CHECKOUT.sub(lambda match: f"{match['prefix']}{ACTION} # cachew checkout", text)
-    text = ACTION_COMMENT.sub(f"#   - {ACTION} # cachew checkout", text)
-    if text.startswith("# gh-aw-metadata:"):
-        lines = text.splitlines(keepends=True)
-        for index, line in enumerate(lines):
-            if line.startswith("# gh-aw-manifest: "):
-                manifest = json.loads(line.removeprefix("# gh-aw-manifest: "))
-                actions = []
-                for action in manifest["actions"]:
-                    if action["repo"] in ("actions/checkout", ACTION_REPO):
-                        action = {"repo": ACTION_REPO, "sha": ACTION_SHA, "version": ACTION_SHA}
-                    if action not in actions:
-                        actions.append(action)
-                manifest["actions"] = actions
-                lines[index] = "# gh-aw-manifest: " + json.dumps(manifest, separators=(",", ":")) + "\n"
-        text = "".join(lines)
-        text = text.replace("#   gh aw compile\n", f"#   gh aw compile && {REGEN_COMMAND}\n")
-        # Different upstream checkout versions can produce duplicate action comments.
-        comment = f"#   - {ACTION} # cachew checkout\n"
-        first = text.find(comment)
-        if first >= 0:
-            text = text[: first + len(comment)] + text[first + len(comment) :].replace(comment, "")
-    return text
+    return CHECKOUT.sub(lambda match: f"{match['prefix']}{ACTION} # cachew checkout", text)
 
 
-def migrate_file(path, write=False):
+def migrate_file(path, write=False, root=None):
+    root = root or repository_root()
     path = Path(path)
-    if path.resolve() == UPSTREAM_WRAPPER.resolve():
+    absolute = path if path.is_absolute() else root / path
+    relative = absolute.resolve().relative_to(root.resolve())
+    if relative == UPSTREAM_WRAPPER or excluded(relative):
         return False
-    before = path.read_text()
+    before = absolute.read_text()
     after = rewrite(before)
     if before == after:
         return False
     if write:
-        path.write_text(after)
+        absolute.write_text(after)
     return True
 
 
-def tracked_consumers():
-    paths = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+def tracked_consumers(root):
+    paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
     for value in paths:
         path = Path(value)
         parts = path.parts
@@ -77,18 +89,53 @@ def tracked_consumers():
         github = parts.index(".github")
         if len(parts) <= github + 1 or parts[github + 1] not in ("actions", "workflows"):
             continue
-        if path.suffix in (".yml", ".yaml") or (path.suffix == ".md" and parts[github + 1] == "workflows"):
+        if path.suffix in (".yml", ".yaml"):
             yield path
 
 
+def git_ok(root, *arguments):
+    return subprocess.run(["git", *arguments], cwd=root, capture_output=True).returncode == 0
+
+
+def verify_pins(root, require_main):
+    """Fail if any pin is unknown, stale relative to this tree, or (after merge) not on main."""
+    problems = []
+    pins = {}
+    for path in tracked_consumers(root):
+        for match in ANY_PIN.finditer((root / path).read_text()):
+            pins.setdefault((bool(match["session"]), match["sha"]), []).append(path.as_posix())
+    consumer_shas = {sha for (session, sha) in pins if not session}
+    if consumer_shas - {ACTION_SHA}:
+        problems.append(f"consumers pin {sorted(consumer_shas)}, expected only {ACTION_SHA}")
+    for (session, sha), files in sorted(pins.items()):
+        label = "session helper" if session else "action"
+        if not git_ok(root, "cat-file", "-e", f"{sha}^{{commit}}"):
+            problems.append(f"{label} pin {sha} is not a known commit (fetch it, or it was never pushed)")
+            continue
+        scope = [str(ACTION_DIR / "session"), str(ACTION_DIR / "trusted_caches.json")] if session else [str(ACTION_DIR)]
+        if not git_ok(root, "diff", "--quiet", sha, "--", *scope):
+            problems.append(f"{label} pin {sha} differs from this tree in {', '.join(scope)} (used by {files[0]})")
+        if require_main and not git_ok(root, "merge-base", "--is-ancestor", sha, "origin/main"):
+            problems.append(f"{label} pin {sha} is not reachable from origin/main and may be garbage-collected")
+    for problem in problems:
+        print(problem)
+    print("Pins verified." if not problems else f"{len(problems)} pin problem(s).")
+    return 1 if problems else 0
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
+    mode.add_argument("--verify-pins", action="store_true")
+    parser.add_argument("--require-main", action="store_true", help="with --verify-pins, require pins on origin/main")
     parser.add_argument("paths", nargs="*", type=Path)
     args = parser.parse_args()
-    changed = [path for path in (args.paths or tracked_consumers()) if migrate_file(path, args.write)]
+    root = repository_root()
+    if args.verify_pins:
+        return verify_pins(root, args.require_main)
+    changed = [path for path in (args.paths or tracked_consumers(root)) if migrate_file(path, args.write, root)]
     for path in changed:
         print(f"{'Migrated' if args.write else 'Needs cachew migration:'} {path}")
     print(f"{len(changed)} file(s) {'updated' if args.write else 'need migration'}.")

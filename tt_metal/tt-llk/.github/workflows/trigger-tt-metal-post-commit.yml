@@ -155,7 +155,7 @@ jobs:
       should-skip: ${{ steps.determine-tests.outputs.should-skip }}
     steps:
       - name: Checkout the appropriate branch
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.setup-branch.outputs.branch-to-run }}
           fetch-depth: 0

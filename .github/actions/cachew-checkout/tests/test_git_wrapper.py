@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 import urllib.parse
 
@@ -31,23 +32,26 @@ class DownstreamGitTests(unittest.TestCase):
         self.upstream = self.git_fixture.upstream
         self.cache = self.git_fixture.cache
         self.baseline = (self.git_fixture.home / ".gitconfig").read_bytes()
-        upstream_config = self.session / "upstream.config"
-        upstream_config.write_bytes(self.baseline)
-        self.config(upstream_config, f"http.{self.upstream.url}/.extraHeader", self.authorization())
+        # Same layout as session/index.js after a successful activation: the
+        # caller's settings plus performance keys, then cachew's managed keys.
+        active = self.session / "global.config"
+        active.write_bytes(self.baseline)
         for name, value in (
             ("checkout.workers", "0"),
             ("checkout.thresholdForParallelism", "50"),
             ("submodule.fetchJobs", "0"),
             ("gc.auto", "0"),
         ):
-            self.config(upstream_config, name, value)
-        active = self.session / "global.config"
-        active.write_bytes(upstream_config.read_bytes())
+            self.config(active, name, value)
         host = urllib.parse.urlsplit(self.upstream.url).netloc
-        self.config(active, f"url.{self.cache.url}/git/{host}/.insteadOf", self.upstream.url + "/")
-        self.config(active, f"http.{self.cache.url}/.extraHeader", self.authorization())
-        self.config(active, "http.followRedirects", "false")
-        (self.session / "state.json").write_text(json.dumps({"active": True}))
+        self.managed = [
+            [f"url.{self.cache.url}/git/{host}/.insteadOf", self.upstream.url + "/"],
+            [f"http.{self.cache.url}/.extraHeader", ""],
+            [f"http.{self.cache.url}/.extraHeader", self.authorization()],
+        ]
+        for key, value in self.managed:
+            subprocess.run([self.real_git, "config", "--file", str(active), "--add", key, value], check=True)
+        (self.session / "state.json").write_text(json.dumps({"active": True, "managed": self.managed}))
         shim = self.session / "bin/git"
         shim.parent.mkdir()
         shim.write_text(
@@ -194,7 +198,10 @@ class DownstreamGitTests(unittest.TestCase):
         self.configure([("cmake-dependency", sha)])
         self.assertEqual(len(self.cache.requests), 1)
         self.assertFalse(marker.exists())
-        self.assert_disabled()
+        # A 401 is an answer about one repository, not a broken cache: that read
+        # goes upstream, while caching stays on for the rest of the job.
+        self.assertEqual(len(self.upstream.discoveries()), 1)
+        self.assert_enabled()
 
     def test_native_recursive_clone_goes_upstream_without_hidden_cache_retries(self):
         target = self.root / "recursive"
@@ -220,17 +227,95 @@ class DownstreamGitTests(unittest.TestCase):
         self.env["GIT_CONFIG_GLOBAL"] = str(explicit)
         self.assertEqual(self.run_git("config", "--get", "user.name"), "Explicit")
 
-    def test_inactive_prepare_keeps_global_writes_in_the_selected_file(self):
-        (self.session / "cache-disabled").touch()
-        (self.session / "state.json").write_text(json.dumps({"active": False}))
-        shutil.copyfile(self.session / "upstream.config", self.session / "global.config")
-        self.run_git("config", "--global", "safe.directory", str(self.root))
-        for name, expected in (("global.config", 0), ("upstream.config", 1)):
-            result = subprocess.run(
-                [self.real_git, "config", "--file", str(self.session / name), "--get", "safe.directory"],
-                capture_output=True,
-            )
-            self.assertEqual(result.returncode, expected)
+    def assert_enabled(self):
+        self.assertFalse((self.session / "cache-disabled").exists())
+        self.assertIn(self.cache.url.encode(), (self.session / "global.config").read_bytes())
+
+    def test_global_writes_survive_cache_disable(self):
+        # M2: a job's own `git config --global` writes must survive the cache
+        # being switched off mid-job.
+        sha = self.dependency("cmake-dependency")
+        self.run_git("config", "--global", "user.email", "job@example.com")
+        self.run_git("config", "--global", "--add", "safe.directory", str(self.root))
+        self.cache.fail_repo = "cmake-dependency"
+        self.configure([("cmake-dependency", sha)])
+        self.assert_disabled()
+        self.assertEqual(self.run_git("config", "--global", "user.email"), "job@example.com")
+        self.assertEqual(self.run_git("config", "--global", "safe.directory"), str(self.root))
+
+    def test_ls_remote_exit_code_2_does_not_disable_cache(self):
+        # M1: `ls-remote --exit-code` returns 2 when nothing matches. That is an
+        # answer, not a cache failure.
+        self.dependency("cmake-dependency")
+        url = self.upstream.url + "/org/cmake-dependency"
+        result = subprocess.run(
+            ["git", "ls-remote", "--exit-code", url, "refs/heads/does-not-exist"],
+            env=self.env,
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assert_enabled()
+        self.assertEqual(self.run_git("ls-remote", url, "refs/heads/main").split()[1], "refs/heads/main")
+        self.assertEqual(len(self.cache.discoveries()), 2)
+
+    def test_missing_ref_retries_upstream_without_disabling_cache(self):
+        self.dependency("cmake-dependency")
+        target = self.root / "cloned"
+        self.run_git("clone", self.upstream.url + "/org/cmake-dependency", str(target))
+        result = subprocess.run(
+            ["git", "-C", str(target), "fetch", "--no-recurse-submodules", "origin", "refs/heads/missing"],
+            env=self.env,
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(self.upstream.discoveries()), 1, "one upstream retry for a ref the cache lacks")
+        self.assert_enabled()
+
+    def test_cache_404_retries_upstream_without_disabling_cache(self):
+        sha = self.dependency("cmake-dependency")
+        self.cache.fail_repo = "cmake-dependency"
+        self.cache.fail_status = 404
+        self.configure([("cmake-dependency", sha)])
+        self.assertEqual(len(self.upstream.discoveries()), 1)
+        self.assert_enabled()
+
+    def test_stalled_cache_transfer_is_abandoned_by_progress_not_wall_clock(self):
+        # M5: lowSpeedTime abandons a silent cache after the stall timeout
+        # instead of a fixed wall-clock deadline that also kills slow progress.
+        self.dependency("cmake-dependency")
+        self.env["CACHEW_GIT_FETCH_TIMEOUT"] = "1"
+        self.cache.fail_repo = "cmake-dependency"
+        self.cache.fetch_delay = 6
+        started = time.monotonic()
+        self.run_git("clone", self.upstream.url + "/org/cmake-dependency", str(self.root / "stalled"))
+        self.assertLess(time.monotonic() - started, 5.5)
+        self.assertEqual(self.run_git("-C", str(self.root / "stalled"), "rev-parse", "--is-inside-work-tree"), "true")
+        self.assert_disabled()
+
+    def test_clone_destination_parsing(self):
+        wrapper = load_wrapper()
+        cwd = Path.cwd()
+        cases = [
+            (["clone", "https://h/o/repo.git"], cwd / "repo"),
+            (["clone", "--depth", "1", "-b", "main", "https://h/o/repo", "dest"], cwd / "dest"),
+            (["-C", "/tmp", "clone", "--no-checkout", "--config", "a=b", "https://h/o/r/", "x"], Path("/tmp/x")),
+            (["clone", "--", "https://h/o/repo", "--odd"], cwd / "--odd"),
+            (["clone", "git@github.com:o/name.git"], cwd / "name"),
+        ]
+        for arguments, expected in cases:
+            index = wrapper.command_index(arguments)
+            self.assertEqual(wrapper.clone_destination(arguments, index), expected, arguments)
+
+
+def load_wrapper():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("git_wrapper", fixture.ACTION / "git_wrapper.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":

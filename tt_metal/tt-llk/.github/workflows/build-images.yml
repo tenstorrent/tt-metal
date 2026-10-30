@@ -15,7 +15,7 @@ jobs:
     outputs:
       docker-image: ${{ steps.build.outputs.docker-image }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 200
 

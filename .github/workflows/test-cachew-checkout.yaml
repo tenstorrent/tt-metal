@@ -8,16 +8,12 @@ on:
       - '.github/actions/**'
       - '.github/workflows/**'
       - '.github/scripts/utils/cachew_checkout.py'
-      - '.github/scripts/utils/update_agentic_workflows.py'
-      - 'tt_metal/tt-llk/.github/**'
   push:
     branches: [main]
     paths:
       - '.github/actions/**'
       - '.github/workflows/**'
       - '.github/scripts/utils/cachew_checkout.py'
-      - '.github/scripts/utils/update_agentic_workflows.py'
-      - 'tt_metal/tt-llk/.github/**'
   workflow_dispatch:
     inputs:
       live-smoke:
@@ -28,10 +24,11 @@ on:
         description: Cachew HTTPS origin for the optional live smoke test
         type: choice
         options:
+          - auto
           - https://cachew.dev.tenstorrent.net
           - https://cachew.ci.tenstorrent.net
           - https://cachew.yyz2.ci.tenstorrent.net
-        default: https://cachew.dev.tenstorrent.net
+        default: auto
 
 permissions:
   contents: read
@@ -49,6 +46,40 @@ jobs:
           persist-credentials: false
       - name: Verify all checkout consumers use cachew
         run: python3 .github/scripts/utils/cachew_checkout.py --check
+      - name: Verify the action pins match this tree
+        # Fails until the action and its session helper are re-pinned to a pushed
+        # commit containing this code. On main the pins must also be on main, or
+        # GitHub may garbage-collect them once their branch is deleted.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pins=$(grep -rhoE 'tenstorrent/tt-metal/\.github/actions/cachew-checkout(/session)?@[0-9a-f]{40}' .github | cut -d@ -f2 | sort -u)
+          for sha in $pins; do git fetch --no-tags --depth=1 origin "$sha"; done
+          python3 .github/scripts/utils/cachew_checkout.py --verify-pins
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            for sha in $pins; do
+              status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$sha" --jq .status)
+              case "$status" in behind|identical) ;; *) echo "::error::cachew pin $sha is not on main ($status)"; exit 1 ;; esac
+            done
+          fi
+      - name: Working-tree action is a strict no-op on GitHub-hosted runners
+        id: hosted
+        uses: ./.github/actions/cachew-checkout
+        with:
+          path: hosted-noop
+          persist-credentials: false
+      - name: Verify no cachew state on a GitHub-hosted runner
+        env:
+          CONFIGURED: ${{ steps.hosted.outputs.cachew-configured }}
+          PREFETCHED: ${{ steps.hosted.outputs.cachew-prefetched }}
+        run: |
+          test "$CONFIGURED" = false
+          test "$PREFETCHED" = false
+          test -z "${CACHEW_SESSION_DIR:-}"
+          test -z "${GIT_CONFIG_GLOBAL:-}"
+          ! ls "$RUNNER_TEMP"/cachew-* >/dev/null 2>&1
+          test "$(command -v git)" = "$(PATH=/usr/bin:/bin command -v git)"
+          git -C hosted-noop rev-parse HEAD
       - name: Obtain the exact checkout implementation under test
         uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
         with:

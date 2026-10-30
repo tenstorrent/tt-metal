@@ -25,7 +25,7 @@ jobs:
     needs: nightly-performance-tests
     steps:
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
       - name: Report status

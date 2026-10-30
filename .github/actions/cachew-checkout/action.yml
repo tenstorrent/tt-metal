@@ -56,14 +56,23 @@ inputs:
     default: 'true'
   github-server-url:
     description: Upstream GitHub origin. Defaults to GITHUB_SERVER_URL.
+  cachew:
+    description: >-
+      auto (default) uses cachew only on self-hosted Linux runners and is a strict no-op
+      elsewhere: no probe, no token, no Git wrapper and no configuration change.
+      false always runs plain actions/checkout. true also tries cachew on other Linux
+      runners. A job-level CACHEW_CHECKOUT=false environment variable disables it too.
+    default: 'auto'
   cachew-url:
-    description: 'Cachew HTTPS origin. Use the endpoint closest to the runner.'
-    default: 'https://cachew.ci.tenstorrent.net'
+    description: >-
+      Cachew HTTPS origin, or auto to probe the trusted origins in trusted_caches.json and
+      use the first healthy one (only the runner's own cluster answers on the CI VLAN).
+    default: 'auto'
   cachew-health-timeout:
-    description: 'Seconds to wait for the single unauthenticated /_liveness probe.'
+    description: 'Seconds to wait for each unauthenticated /_liveness probe.'
     default: '2'
   cachew-fetch-timeout:
-    description: 'Maximum seconds for each single cache fetch, including stalled connections.'
+    description: 'Seconds without transfer progress before a cache fetch is abandoned for upstream.'
     default: '120'
 outputs:
   ref:
@@ -81,9 +90,14 @@ outputs:
 runs:
   using: composite
   steps:
+    # The gate is evaluated by the runner, before any process starts. On
+    # GitHub-hosted runners (no access to the CI VLAN) every cachew step is
+    # skipped and only the official checkout below runs, exactly as before.
     - name: Prepare isolated upstream Git configuration
       id: session
-      if: runner.os != 'Windows'
+      if: >-
+        runner.os == 'Linux' && env.CACHEW_CHECKOUT != 'false' && inputs.cachew != 'false' &&
+        (inputs.cachew == 'true' || runner.environment == 'self-hosted')
       uses: tenstorrent/tt-metal/.github/actions/cachew-checkout/session@4313bf841572fc083c4ea7362b93c4c6ab6b2342
       env:
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
@@ -93,7 +107,7 @@ runs:
         CACHEW_REPOSITORY: ${{ inputs.repository }}
     - name: Prefetch from cachew once
       id: prefetch
-      if: runner.os != 'Windows'
+      if: steps.session.outputs.ready == 'true'
       continue-on-error: true
       shell: bash
       env:
@@ -101,7 +115,7 @@ runs:
         CACHEW_REPOSITORY: ${{ inputs.repository }}
         CACHEW_REF: ${{ inputs.ref }}
         CACHEW_TOKEN: ${{ inputs.token }}
-        CACHEW_SSH_KEY: ${{ inputs.ssh-key }}
+        CACHEW_SSH_KEY_SET: ${{ inputs.ssh-key != '' }}
         CACHEW_SSH_KNOWN_HOSTS: ${{ inputs.ssh-known-hosts }}
         CACHEW_SSH_STRICT: ${{ inputs.ssh-strict }}
         CACHEW_SSH_USER: ${{ inputs.ssh-user }}
@@ -121,7 +135,12 @@ runs:
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
         CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
-      run: python3 "$CACHEW_ACTION_PATH/prefetch.py"
+      run: |
+        if command -v python3 >/dev/null 2>&1; then
+          python3 "$CACHEW_ACTION_PATH/prefetch.py" || echo "Cachew prefetch unavailable; continuing with upstream checkout."
+        else
+          echo "python3 unavailable; continuing with upstream checkout."
+        fi
     - name: Checkout from upstream
       id: checkout
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -148,11 +167,12 @@ runs:
         github-server-url: ${{ inputs.github-server-url }}
     - name: Configure job-global cachew Git transport
       id: configure
-      if: runner.os != 'Windows'
+      if: steps.session.outputs.ready == 'true'
       shell: bash
       env:
         CACHEW_ACTION_PATH: ${{ github.action_path }}
         CACHEW_AVAILABLE: ${{ steps.prefetch.outputs.available || 'unknown' }}
+        CACHEW_SELECTED_URL: ${{ steps.prefetch.outputs.cache-url }}
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
         CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
