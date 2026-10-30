@@ -358,8 +358,7 @@ class Conv2d(Module):
             on_host=True,
         )
 
-        self._prepared_weight = None
-        self._prepared_bias = None
+        self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
 
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -375,11 +374,11 @@ class Conv2d(Module):
         self.ccl_manager = ccl_manager
         self.use_barrier = use_barrier
 
-        # Prepared (device-resident) weight/bias tensors.  Populated lazily on the first
-        # forward call so they are ready before any trace capture begins.  Stored as plain
-        # attributes (not Parameter) because their shape differs from the raw OIHW weights.
-        self._prepared_weight: ttnn.Tensor | None = None
-        self._prepared_bias: ttnn.Tensor | None = None
+        # Prepared (device-resident) weight/bias tensors, one pair per conv configuration:
+        # the prepared layout depends on the input size and slice config, so weights prepared
+        # for one input size give wrong results at another. Populated lazily on the first
+        # forward call at each size so they are ready before any trace capture begins.
+        self._prepared: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor | None]] = {}
 
     @classmethod
     def from_torch(
@@ -410,15 +409,17 @@ class Conv2d(Module):
 
         return model
 
+    def _release_prepared(self) -> None:
+        for weight, bias in self._prepared.values():
+            ttnn.deallocate(weight)
+            if bias is not None:
+                ttnn.deallocate(bias)
+        self._prepared.clear()
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Invalidate any previously prepared device tensors so they are re-prepared on the
         # next forward call with the new weights.
-        if self._prepared_weight is not None:
-            ttnn.deallocate(self._prepared_weight)
-            self._prepared_weight = None
-        if self._prepared_bias is not None:
-            ttnn.deallocate(self._prepared_bias)
-            self._prepared_bias = None
+        self._release_prepared()
 
         bias = state.pop("bias", None)
         if bias is not None:
@@ -428,12 +429,7 @@ class Conv2d(Module):
             state["bias"] = torch.cat([bias, bias_zeros])
 
     def deallocate_weights(self) -> None:
-        if self._prepared_weight is not None:
-            ttnn.deallocate(self._prepared_weight)
-            self._prepared_weight = None
-        if self._prepared_bias is not None:
-            ttnn.deallocate(self._prepared_bias)
-            self._prepared_bias = None
+        self._release_prepared()
         super().deallocate_weights()
 
     def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
@@ -498,7 +494,9 @@ class Conv2d(Module):
             config_tensors_in_dram=self.slice_fallback,
         )
 
-        if self._prepared_weight is None:
+        prepared_key = (b, h, w, num_slices)
+        prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
+        if prepared_weight is None:
             base_kwargs = {
                 "in_channels": in_channels,
                 "out_channels": out_channels,
@@ -513,7 +511,7 @@ class Conv2d(Module):
                 "device": self.mesh_device,
                 "conv_config": conv_config,
             }
-            self._prepared_weight = ttnn.prepare_conv_weights(
+            prepared_weight = ttnn.prepare_conv_weights(
                 weight_tensor=self.weight.data,
                 weights_format="OIHW",
                 input_memory_config=x.memory_config(),
@@ -523,22 +521,22 @@ class Conv2d(Module):
                 slice_config=slice_config,
                 **base_kwargs,
             )
-            self._prepared_weight = ttnn.to_device(self._prepared_weight, self.mesh_device)
+            prepared_weight = ttnn.to_device(prepared_weight, self.mesh_device)
             if self.bias is not None:
-                self._prepared_bias = ttnn.prepare_conv_bias(
+                prepared_bias = ttnn.prepare_conv_bias(
                     bias_tensor=self.bias.data,
                     input_memory_config=x.memory_config(),
                     input_layout=x.get_layout(),
                     input_dtype=x.dtype,
                     **base_kwargs,
                 )
-                self._prepared_bias = ttnn.to_device(self._prepared_bias, self.mesh_device)
+                prepared_bias = ttnn.to_device(prepared_bias, self.mesh_device)
 
         try:
-            x, (out_height, out_width), (self._prepared_weight, self._prepared_bias) = ttnn.conv2d(
+            x, (out_height, out_width), (prepared_weight, prepared_bias) = ttnn.conv2d(
                 input_tensor=x,
-                weight_tensor=self._prepared_weight,
-                bias_tensor=self._prepared_bias,
+                weight_tensor=prepared_weight,
+                bias_tensor=prepared_bias,
                 in_channels=in_channels,
                 out_channels=out_channels,
                 device=self.mesh_device,
@@ -565,6 +563,7 @@ class Conv2d(Module):
                 f"{tuple(self.mesh_device.shape)}: {m.group(1)}"
             )
             raise RuntimeError(msg) from e
+        self._prepared[prepared_key] = (prepared_weight, prepared_bias)
 
         x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
