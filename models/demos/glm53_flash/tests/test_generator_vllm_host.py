@@ -28,6 +28,7 @@ from models.demos.glm53_flash.tt.memory_plan import MemoryPlan
 from models.demos.glm53_flash.tt.packed_inputs import RESIDENT_ENV
 from models.demos.glm53_flash.tt.vllm_config import (
     DEFAULT_WAVE_ROWS,
+    REPLAY_BLOCKING_ENV,
     LogicalBlockTable,
     PrefillPlanner,
     ServingGeometry,
@@ -443,6 +444,7 @@ class _FakeMeshModel:
         self._fed_ids = None
         self._fed_pos = None
         self._last_ids = torch.zeros(self.total_users, dtype=torch.long)
+        self._unread: list[torch.Tensor] = []  # the ids of every stepped-but-unread step, oldest first (the CQ order)
         self._last_logits = torch.zeros(self.total_users, VOCAB)
         self.next_start = [0] * max_batch  # the chunked-prefill cursor per slot (``rewind_user``)
         # GLM53_RESIDENT_DECODE: the step feeds its own ids back and advances the live positions (the device side)
@@ -510,6 +512,7 @@ class _FakeMeshModel:
         """The one-call input load (``GLM53MeshModel.load_decode_inputs``: one packed upload with the knob; the
         resident chain's transition carries the live mask)."""
         self.calls.append(("load_decode_inputs", len(positions)))
+        self._unread.clear()  # a reload follows the plugin's drain: every earlier read landed
         self.load_ids(ids)
         self.set_positions(positions)
         self._live = None if live is None else [bool(v) for v in live]
@@ -524,6 +527,7 @@ class _FakeMeshModel:
             self._last_ids[s] = nxt
             self._last_logits[s] = 0.0
             self._last_logits[s, nxt] = 1.0
+        self._unread.append(self._last_ids.clone())
         if self.resident:  # the in-graph feedback: the next step embeds these ids at the advanced live positions
             self._fed_ids = self._last_ids.clone()
             live = [True] * self.total_users if self._live is None else self._live
@@ -531,6 +535,7 @@ class _FakeMeshModel:
 
     def replay(self, trace_id, blocking=True):
         assert trace_id == self.trace_id
+        self.calls.append(("replay", blocking))
         self._step()
 
     def decode_step(self, ids_dev, positions):
@@ -538,7 +543,9 @@ class _FakeMeshModel:
         return ("streams",), ("logits_eager",), ("ids_eager",)
 
     def ids_to_host(self, ids):
-        return self._last_ids.clone()
+        """A read drains the oldest unread step (the command queue's order): a deferred read lands the ids of ITS
+        step, whatever stepped after it."""
+        return self._unread.pop(0) if self._unread else self._last_ids.clone()
 
     # prefill
     def rewind_user(self, user, position):
@@ -875,6 +882,14 @@ def test_decode_reload_contract_is_enforced(monkeypatch):
     out2b = a.decode_forward(torch.zeros_like(tokens), torch.tensor([41, -1, -1, -1]), reload_inputs=False, **kw)
     assert int(out2b[0, 0]) == _next_token(_next_token(t1, 41), 42) and a.slots.physical(0).position == 43
     assert a._perf_stale_positions == 1
+    assert ("replay", True) in m.calls and ("replay", False) not in m.calls
+    # GLM53_DECODE_REPLAY_BLOCKING=0: the served replay returns at enqueue (the plugin's read event completes the step)
+    monkeypatch.setenv(REPLAY_BLOCKING_ENV, "0")
+    b, mb = _adapter()
+    b.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
+    b.decode_forward(tokens, positions, reload_inputs=True, **kw)
+    assert not b._replay_blocking and ("replay", False) in mb.calls
+    monkeypatch.delenv(REPLAY_BLOCKING_ENV)
     with expect_error(RuntimeError, "diverged"):
         a.decode_forward(tokens, torch.tensor([50, -1, -1, -1]), reload_inputs=False, **kw)
     t2 = torch.full((1, 40), 6, dtype=torch.int32)

@@ -878,6 +878,9 @@ APC_WARMUP_ALLOWANCE_ENV = "GLM53_VLLM_APC_WARMUP_ALLOWANCE_MIB"
 APC_WARMUP_ALLOWANCE_MIB = 768
 # "1": the served adapter records the DRAM footprint after the decode capture and refuses the first APC call site
 # (snapshot save, hit restore, prefill row, release) after which it differs (doc/serving/prefix_caching.md s.6)
+REPLAY_BLOCKING_ENV = "GLM53_DECODE_REPLAY_BLOCKING"  # "0": the served decode replay returns at enqueue (the plugin's
+# async read event, or a blocking read, completes the step; the engine thread builds step N + 1 while the device runs
+# step N); "1" (default): the replay blocks until the device finished the step
 APC_ALLOC_CHECK_ENV = "GLM53_VLLM_APC_ALLOC_CHECK"
 
 

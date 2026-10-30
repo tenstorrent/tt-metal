@@ -347,11 +347,12 @@ def _apc_adapter(entries=2, users_per_row=4, max_seq_len=65536, tail_split=False
     return a, model
 
 
-def _decode(a, tokens, positions, reload=True):
+def _decode(a, tokens, positions, reload=True, read=True):
     return a.decode_forward(
         torch.tensor([[t] for t in tokens], dtype=torch.int32),
         torch.tensor(positions),
         sampling_params=_greedy(len(tokens)),
+        read_from_device=read,
         reload_inputs=reload,
         reload_page_table=False,
         reload_sampling_params=False,
@@ -382,8 +383,20 @@ def test_multi_turn_hit_restores_the_crossing_snapshot_and_prefills_from_it(monk
     assert content.length == L + 20 and content.snapshots == {320: 0} and content.live
     assert content.tokens[L : L + 20].tolist() == chain[:20], "the record holds the tokens the steps consumed"
     assert a._perf_chain == (19 if resident else 0)
+    end = L + 20
+    if resident:
+        # vLLM's async scheduling stages step N + 1 before step N's read lands: a chain step records nothing at
+        # staging; the reads, landing in submission order, record the token each step consumed
+        h1 = _decode(a, [0, 0, 0, 0], [L + 20, -1, -1, -1], reload=False, read=False)
+        h2 = _decode(a, [0, 0, 0, 0], [L + 21, -1, -1, -1], reload=False, read=False)
+        assert content.length == L + 20 and a.slots.physical(0).position == L + 22
+        t21 = int(a.process_decode_output_host(h1, is_tokens=True)[0, 0])
+        t22 = int(a.process_decode_output_host(h2, is_tokens=True)[0, 0])
+        assert content.length == L + 22 and content.tokens[L + 20 : L + 22].tolist() == [chain[20], t21]
+        assert t22 == _next_token(t21, L + 21) and a._perf_chain == 21
+        end = L + 22
     a.release_request(0)
-    assert content.retained and a.apc.park_positions() == {(0, user): 320}
+    assert content.retained and a.apc.park_positions() == {(0, user): end}
     # the next turn: the whole content + 40 new tokens, vLLM says 320 cached -> served from the snapshot at 320
     turn = torch.cat([content.tokens[:320].clone(), torch.full((40,), 9, dtype=torch.int32)]).reshape(1, 360)
     m.calls.clear()

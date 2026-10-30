@@ -133,6 +133,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     DEFAULT_WAVE_ROWS,
     DENSE_PREFILL_ROWS,
     PREFIX_BUCKET_ENV,
+    REPLAY_BLOCKING_ENV,
     TILE,
     WAVE_CHUNK_UNIT,
     DecodeRowMap,
@@ -371,6 +372,10 @@ class GLM53DecodeOutput:
     # the asynchronous ids readback (``read_decode_output(async_read=True)``): one host ttnn tensor per mesh row
     # ([1,1,B,1] uint32) whose non-blocking read the plugin's event wait completes before ``_read`` converts them
     pending: Any = None
+    # per wire row at submission: the physical (row, user, position consumed) of a live row, None for a dead row (or
+    # for every row of a step without a content record): the read records a chain row's consumed token
+    consumed: Any = None
+    reload: bool = True  # the host fed the step's tokens (recorded at staging); False: a resident chain step
 
 
 class GLM53SpecEngine:
@@ -707,9 +712,18 @@ class GLM53FlashForCausalLM:
         # inputs with the live mask, a chain step (reload_inputs=False) uploads nothing
         self.resident = resident_decode_enabled()
         self._resident_live: list[int] | None = None  # the live logical slots of the last staged step
-        self._last_read_ids: dict[
-            int, int
-        ] = {}  # per logical slot: the greedy id of its last read step (the chain's feed)
+        # per physical (row, user): the greedy id of its last read step = the token the next chain step consumes.
+        # Written and consumed on the read path only (the reads of a chain land in submission order), never by the
+        # staging thread, which under vLLM's async scheduling stages step N + 1 before step N's read landed
+        self._last_sampled: dict[tuple[int, int], int] = {}
+        # GLM53_DECODE_REPLAY_BLOCKING=0: the decode replay returns at enqueue and the plugin's async read event (or a
+        # blocking read) completes the step, so the engine thread builds step N + 1 while the device runs step N
+        self._replay_blocking = os.environ.get(REPLAY_BLOCKING_ENV, "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
         if self.resident:
             if self.spec is not None:
                 raise NotImplementedError(
@@ -2038,7 +2052,7 @@ class GLM53FlashForCausalLM:
                 t0 = time.perf_counter()
             if self.spec is None:
                 if enable_trace:
-                    self.model.replay(self.trace_id)
+                    self.model.replay(self.trace_id, blocking=self._replay_blocking)
                     logits_dev, ids_dev = self._trace_outputs
                     transient = False
                 else:
@@ -2053,12 +2067,15 @@ class GLM53FlashForCausalLM:
                 self._spec_last = vs.PlainRecord(positions=list(pos_feed), read_index=list(rows.read_index), live=live)
                 self._spec_stats.plain_steps += 1
             synced = False
+            consumed: list[tuple[int, int, int] | None] = [None] * wire
             for i in live:
                 state = self.slots.physical(i)
+                consumed[i] = (state.row, state.user, feed_positions[i])
                 state.position = feed_positions[i] + 1
                 state.phase = "decode"
                 if self.apc is not None:
-                    self.apc.record_decode(state.row, state.user, feed_positions[i], feed_tokens[i])
+                    if reload_inputs:  # the host fed this token; a chain step's token is recorded when its read lands
+                        self.apc.record_decode(state.row, state.user, feed_positions[i], feed_tokens[i])
                     if state.position % TILE == 0:
                         # the state now sits on a block boundary: the multi-turn hit position. The step's first save
                         # drains the device first (the replay just enqueued), the later ones queue behind it
@@ -2072,7 +2089,12 @@ class GLM53FlashForCausalLM:
             raise
         self._pending_moves = applied_moves or None
         out = GLM53DecodeOutput(
-            ids=ids_dev if is_tokens else None, logits=None if is_tokens else logits_dev, rows=rows, is_tokens=is_tokens
+            ids=ids_dev if is_tokens else None,
+            logits=None if is_tokens else logits_dev,
+            rows=rows,
+            is_tokens=is_tokens,
+            consumed=tuple(consumed),
+            reload=reload_inputs,
         )
         if read_from_device:
             out = self._read(out)
@@ -2192,13 +2214,7 @@ class GLM53FlashForCausalLM:
                 self._perf_stale_positions += 1  # the async-scheduling lag: the device's position is the truth
             if page_table is not None:
                 self.blocks.check_row(page_table[i], state.position + 1)
-            tok = self._last_read_ids.get(i)
-            if tok is None:
-                raise RuntimeError(
-                    f"resident decode row {i}: no sampled id was read for slot {i} since its last step (the chain "
-                    "needs every step's ids read before the next submission)"
-                )
-            feed_tokens[i] = tok  # the id the device fed itself: what this step consumes at state.position
+            feed_tokens[i] = -1  # the id the device fed itself (its last sampled id) is recorded when the read lands
             feed_positions[i] = state.position
             rows.read_index[i] = self.slots.read_index(i)
         return live, feed_tokens, feed_positions, rows
@@ -2454,7 +2470,18 @@ class GLM53FlashForCausalLM:
             cols = self.geometry.cols
             pending = [shards[r * cols].cpu(blocking=False) for r in range(self.geometry.rows)]
             event = ttnn.record_event(self.model.device, 0)
-            return GLM53DecodeOutput(ids=None, logits=None, rows=tt_out.rows, is_tokens=True, pending=pending), [event]
+            return (
+                GLM53DecodeOutput(
+                    ids=None,
+                    logits=None,
+                    rows=tt_out.rows,
+                    is_tokens=True,
+                    pending=pending,
+                    consumed=tt_out.consumed,
+                    reload=tt_out.reload,
+                ),
+                [event],
+            )
         out = self._read(tt_out)
         return (out, []) if async_read else out
 
@@ -2481,11 +2508,30 @@ class GLM53FlashForCausalLM:
             logits[i, 0] = out.logits[rows.read_index[i]]
         return logits, None
 
-    def _note_read_ids(self, rows: DecodeRowMap, host_ids: torch.Tensor) -> None:
-        """The greedy ids of a read step per logical slot: a resident chain step feeds them back (its token record
-        for the prefix cache)."""
-        for i in rows.live_rows():
-            self._last_read_ids[i] = int(host_ids[rows.read_index[i]])
+    def _note_read_ids(self, out: GLM53DecodeOutput, host_ids: torch.Tensor) -> None:
+        """The greedy ids of a read step. The content record of the slot prefix cache grows by the token each chain
+        row consumed (the id the device fed itself = the previous read's id of that physical slot) and the read's
+        ids become the next chain step's consumed tokens. On the read path only: the reads of a chain land in
+        submission order, while under vLLM's async scheduling the staging of step N + 1 runs before step N's read,
+        so a record written at staging would carry the id of the step before. A reload step's token was fed and
+        recorded by the host at staging; a step without ``consumed`` (the speculative paths) records nothing."""
+        if out.consumed is None:
+            return
+        for i in out.rows.live_rows():
+            key = out.consumed[i]
+            if key is None:
+                continue
+            row, user, position = key
+            sampled = int(host_ids[out.rows.read_index[i]])
+            if not out.reload and self.apc is not None:
+                prev = self._last_sampled.get((row, user))
+                if prev is None:
+                    raise RuntimeError(
+                        f"resident chain step of slot ({row}, {user}) at {position} without a read of its previous "
+                        "step (a chain starts with a reload step, whose read lands first)"
+                    )
+                self.apc.record_decode(row, user, position, prev)
+            self._last_sampled[(row, user)] = sampled
 
     def _read(self, out: GLM53DecodeOutput) -> GLM53DecodeOutput:
         """Device -> host: the greedy ids of every slot (tiny) or the logits of the rows that hold live slots (one
@@ -2497,11 +2543,11 @@ class GLM53FlashForCausalLM:
             ttnn = _ttnn()
             host = torch.cat([ttnn.to_torch(t) for t in out.pending], dim=2)  # like GLMMesh.to_host(ids, rows=2)
             host_ids = host.view(torch.int32).reshape(-1).long()
-            self._note_read_ids(out.rows, host_ids)
+            self._note_read_ids(out, host_ids)
             return GLM53DecodeOutput(ids=host_ids, logits=None, rows=out.rows, is_tokens=True, on_host=True)
         if out.is_tokens:
             host_ids = self.model.ids_to_host(out.ids).reshape(-1)
-            self._note_read_ids(out.rows, host_ids)
+            self._note_read_ids(out, host_ids)
             return GLM53DecodeOutput(ids=host_ids, logits=None, rows=out.rows, is_tokens=True, on_host=True)
         B = self.geometry.users_per_row
         host = torch.zeros(self.geometry.physical_slots, self.vocab_size, dtype=torch.float32)
@@ -2617,8 +2663,9 @@ class GLM53FlashForCausalLM:
         """Snapshot slot ``state``'s KDA carries at ``position`` when the ring policy grants an entry; True when a
         save ran. ``sync``: the save follows a traced replay (a decode crossing, a traced prefill chunk): the device
         is drained first (``ttnn.synchronize_device``) so the save's reads of the live state and its scratch writes
-        never overlap the replay. ``GLM53MeshModel.replay`` blocks until the replay finished anyway; the explicit
-        sync keeps the order independent of that default (doc/serving/prefix_caching.md s.6)."""
+        never overlap the replay. ``GLM53MeshModel.replay`` blocks until the replay finished unless
+        ``GLM53_DECODE_REPLAY_BLOCKING=0``; this sync keeps the order independent of that knob
+        (doc/serving/prefix_caching.md s.6)."""
         entry = self.apc.plan_snapshot(state.row, state.user, position, kind)
         if entry is None:
             return False
@@ -2672,7 +2719,8 @@ class GLM53FlashForCausalLM:
             ms = 1000 * self._perf_s / self._perf_steps
             logger.info(
                 f"[glm53-vllm-perf] decode step {ms:.1f} ms = {1000 / ms:.2f} tok/s per user, "
-                f"{live * 1000 / ms:.1f} tok/s aggregate over {live} live users ({self._perf_steps} steps, host wall incl. readback"
+                f"{live * 1000 / ms:.1f} tok/s aggregate over {live} live users ({self._perf_steps} steps, host wall "
+                + ("incl. readback" if self._replay_blocking else "to the enqueue: the replay is non-blocking")
                 + (
                     f"; {self._perf_chain} resident chain steps, {self._perf_stale_positions} rows a step behind the plugin"
                     if self.resident
