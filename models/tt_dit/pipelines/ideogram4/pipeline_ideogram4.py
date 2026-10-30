@@ -602,6 +602,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         preset: str = "V4_TURBO_12",
         guidance_scale: float | None = None,
         on_event: PipelineEventCallback | None = None,
+        latents: torch.Tensor | None = None,
     ) -> list[Image.Image]:
         on_event = on_event if on_event is not None else null_callback
         assert len(prompts) == 1, "Ideogram4 pipeline generates one image per call"
@@ -644,9 +645,18 @@ class Ideogram4Pipeline(PipelineAPIMixin):
                 f"guidance schedule at every step (the model was distilled for that schedule; a "
                 f"constant override may degrade quality)"
             )
-        # Seed the initial noise from the per-call seed via an explicit generator, so z is
-        # reproducible regardless of any other RNG use between here and now.
-        z = torch.randn(1, num_img, cfg.in_channels, dtype=torch.float32, generator=torch.Generator().manual_seed(seed))
+        # Initial noise: caller-supplied latents (e.g. one CPU-drawn tensor shared across runs, so
+        # only the prompt varies), else drawn from the per-call seed via an explicit generator so z
+        # is reproducible regardless of any other RNG use between here and now.
+        if latents is not None:
+            expected = (1, num_img, cfg.in_channels)
+            if tuple(latents.shape) != expected:
+                raise ValueError(f"latents shape {tuple(latents.shape)} != {expected} for {height}x{width}")
+            z = latents.detach().to(device="cpu", dtype=torch.float32).clone()
+        else:
+            z = torch.randn(
+                1, num_img, cfg.in_channels, dtype=torch.float32, generator=torch.Generator().manual_seed(seed)
+            )
 
         def _branch_velocity(model, br, x_full):
             """Transformer forward + on-device SP-axis gather + image-token slice ->
