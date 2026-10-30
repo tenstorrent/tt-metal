@@ -1,0 +1,9 @@
+=== build _ttml 2026-10-30T15:38:49Z
+build rc=0
+=== transpose_split check 2026-10-30T15:39:01Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+=== lora harness tests 2026-10-30T15:39:06Z
+tests rc=0
+================= 7 passed, 33 deselected in 93.26s (0:01:33) ==================
+=== done 2026-10-30T15:40:42Z

@@ -103,16 +103,10 @@ class FusedLoraLinearT(Function):
         dcat_t = ttnn.matmul(
             w_val, grad_output, transpose_b=True, compute_kernel_config=cfg, core_grid=full_core_grid()
         )
-        T = int(dcat_t.shape[-1])
-        dx_t = ttnn.slice(dcat_t, [0, 0, 0, 0], [1, 1, in_features, T])
-        dh_t = ttnn.slice(dcat_t, [0, 0, in_features, 0], [1, 1, in_features + rank, T])  # (s/tp) * dh^T
+        # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
+        # one pass over the product (iteration 13; was two slices, two transposes and a multiply).
+        dx, s_dh = ttml.ops.metal.transpose_split(dcat_t, in_features, rank, dh_scale)
         ttnn.deallocate(dcat_t)
-        dx = ttnn.transpose(dx_t, -2, -1)
-        ttnn.deallocate(dx_t)
-        s_dh = ttnn.transpose(dh_t, -2, -1)  # [T, rank], already scaled by s (and 1/tp)
-        ttnn.deallocate(dh_t)
-        if dh_scale != 1.0:
-            s_dh = ttnn.multiply(s_dh, dh_scale)
         # dx += (s dh) @ A ; dB = s * g^T h ; dA = (s dh)^T x (dh all-reduced first when B is column-sharded)
         dx = lowrank_update(dx, s_dh, a_val)
         grad_b = ttnn.multiply(

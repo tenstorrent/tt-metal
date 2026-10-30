@@ -1,0 +1,27 @@
+[0/2] Re-checking globbed directories...
+[1/25] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/transpose_split/transpose_split.cpp.o
+[3/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/softmax_backward_op.cpp.o
+[4/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/lowrank_update/lowrank_update.cpp.o
+[5/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/mla_kv_assemble_op.cpp.o
+[6/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/swiglu_op.cpp.o
+[7/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/layernorm_op.cpp.o
+[8/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/unary_ops.cpp.o
+[9/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw_full_precision.cpp.o
+[10/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/transpose_split/device/transpose_split_program_factory.cpp.o
+[11/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw.cpp.o
+[12/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/core/tt_profiler.cpp.o
+[13/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/qkv_causal_conv1d_silu_op.cpp.o
+[14/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/rmsnorm_op.cpp.o
+[15/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/sgd.cpp.o
+[16/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/scaled_dot_product_attention.cpp.o
+[17/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/losses.cpp.o
+[18/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/moe_ffn_swiglu_op.cpp.o
+[19/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/lowrank_update/device/lowrank_update_device_operation.cpp.o
+[20/25] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/transpose_split/device/transpose_split_device_operation.cpp.o
+[21/25] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[22/25] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_2_cxx.cxx.o
+[23/25] Linking CXX static library tt-train/sources/ttml/libttml.a
+[24/25] Linking CXX shared library ttnn/_ttnncpp.so
+[25/25] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so

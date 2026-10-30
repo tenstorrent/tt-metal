@@ -28,6 +28,7 @@
 #include "metal/ops/skinny_matmul/skinny_matmul.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
+#include "metal/ops/transpose_split/transpose_split.hpp"
 #include "metal/ops/write_tile_block/write_tile_block.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
@@ -789,6 +790,15 @@ void py_module(nb::module_& m) {
             nb::arg("transpose_b") = false,
             "acc + scale * (a @ W) for a one-tile K (K <= 32; w is [N, K] with transpose_b, else [K, N]): the "
             "product formed in fp32 per output tile, the acc tile added there, one bf16 rounding. HiFi4.");
+        py_metal.def(
+            "transpose_split",
+            &ttml::metal::transpose_split,
+            nb::arg("input"),
+            nb::arg("rows"),
+            nb::arg("tail_rows"),
+            nb::arg("tail_scale") = 1.0F,
+            "[input[:rows]^T, tail_scale * input[rows:rows + tail_rows]^T] for a [1, 1, R, T] bf16 input in one pass: "
+            "the fused LoRA backward's dx and s*dh from its [in + TAIL, T] product.");
         py_metal.def(
             "skinny_matmul",
             &ttml::metal::skinny_matmul,

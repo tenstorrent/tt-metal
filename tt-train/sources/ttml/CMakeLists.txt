@@ -179,6 +179,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/lowrank_update/lowrank_update.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/lowrank_update/device/lowrank_update_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/lowrank_update/device/lowrank_update_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/transpose_split/transpose_split.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/transpose_split/device/transpose_split_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/transpose_split/device/transpose_split_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/skinny_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/device/skinny_matmul_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/device/skinny_matmul_program_factory.cpp

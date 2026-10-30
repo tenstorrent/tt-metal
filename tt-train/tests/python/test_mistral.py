@@ -390,6 +390,19 @@ def test_lowrank_update_matches_torch(n_cols, scale, transpose_b, images):
     rep.done()
 
 
+@pytest.mark.parametrize("rows, rank, scale", [(5120, 16, 1.0), (512, 32, 0.25)], ids=["gate_up-route", "tp-scaled"])
+def test_transpose_split_matches_numpy(rows, rank, scale):
+    """`transpose_split` of a `[rows + 64, T]` product: dx = rows[:rows]^T, tail = scale * rows[rows:rows+rank]^T."""
+    rng = seeded(13)
+    T = 1024
+    x_np = bf16(rng.normal(0, 1, (1, 1, rows + 64, T)))
+    dx, tail = ttml.ops.metal.transpose_split(to_device(x_np).get_value(), rows, rank, scale)
+    rep = Report(f"transpose_split rows={rows} rank={rank} scale={scale}")
+    rep.check("dx", to_host(dx), np.swapaxes(x_np[:, :, :rows, :], -1, -2), 0.9999, 1e-6)
+    rep.check("tail", to_host(tail), bf16(scale * np.swapaxes(x_np[:, :, rows : rows + rank, :], -1, -2)), 0.9999, 1e-6)
+    rep.done()
+
+
 def test_fused_residual_norm_model_matches_the_block_path():
     """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
     the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number
