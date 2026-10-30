@@ -571,9 +571,23 @@ def test_softmax_bfloat8_b_intermediates(shape, dim, strategy, device):
         ([1, 4, 32, 32], 1, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_C),
     ],
 )
-def test_softmax_backward_rejects_bfloat8_b(shape, dim, strategy, device, expect_error):
+@pytest.mark.parametrize(
+    "bfloat8_b_operand, message",
+    [
+        ("output", "Output_tensor dtype should be bfloat16"),
+        ("output_grad", "Output_tensor_grad dtype should be bfloat16"),
+        ("input_grad", "Input_grad_tensor dtype should be bfloat16"),
+    ],
+)
+def test_softmax_backward_rejects_bfloat8_b(shape, dim, strategy, bfloat8_b_operand, message, device, expect_error):
     torch.manual_seed(0)
-    ttnn_y = ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_dy = ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    with expect_error(RuntimeError, "Output_tensor dtype should be bfloat16"):
-        ttnn.operations.moreh.softmax_backward(ttnn_y, ttnn_dy, dim, strategy=strategy)
+
+    def to_device(name):
+        dtype = ttnn.bfloat8_b if name == bfloat8_b_operand else ttnn.bfloat16
+        return ttnn.from_torch(torch.rand(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_y = to_device("output")
+    ttnn_dy = to_device("output_grad")
+    ttnn_dx = to_device("input_grad")
+    with expect_error(RuntimeError, message):
+        ttnn.operations.moreh.softmax_backward(ttnn_y, ttnn_dy, dim, input_grad_tensor=ttnn_dx, strategy=strategy)
