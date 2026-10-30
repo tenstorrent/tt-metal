@@ -433,15 +433,17 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementIgnoresExcludedUnpairedEndpoint) {
     EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAllowsUnpairedEndpointsOutsideReservation) {
-    // Disjoint producer and consumer nodes are accepted when DFB placement excludes both.
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsReservationWithoutEitherEndpoint) {
+    // A reservation outside both disjoint endpoint placements has no usable FIFO.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
     spec.work_units = {
         MakeMinimalWorkUnit("lone-producer", NodeCoord{0, 0}, {"dm_kernel"}),
         MakeMinimalWorkUnit("lone-consumer", NodeCoord{1, 0}, {"compute_kernel"})};
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no producer or consumer")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsReservedUnpairedProducer) {

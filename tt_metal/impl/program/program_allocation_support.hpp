@@ -76,10 +76,10 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
 
 // TODO(#62451):
-// The allocation logic should be unified in the future but we unfortunately have different allocation routine for now.
-// The dfb allocation maybe erroneous and thus should be fixed while we unify the two.
+// Circular-buffer allocation can overlap on partially intersecting ranges.
+// It uses a separate routine to preserve compact allocation on disjoint nodes.
 
-// Performs lockstep allocation of a circular buffer or dataflow buffer across `cores`.
+// Performs lockstep allocation of a circular buffer across `cores`.
 //
 // Returns the start of the allocation, aligned to `alignment`; [address, address + size) is reserved on every core
 // of `cores`. The address is read from the regions whose core_range exactly matches a range of `cores`.
@@ -102,10 +102,10 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
 //
 // side-effect:
 //  - mutates `metadata` regions that have core_range intersecting with `cores`.
-DeviceAddr allocate_dfb(
+DeviceAddr allocate_circular_buffer(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment);
 
-// Performs lockstep allocation of a scratchpad across `cores`.
+// Performs lockstep allocation of a dataflow buffer or scratchpad across `cores`.
 //
 // Returns the start of the allocation, aligned to `alignment`; [address, address + size) is reserved on every core
 // of `cores`. The address is above every region whose core_range intersects `cores`, so it never overlaps an earlier
@@ -128,7 +128,7 @@ DeviceAddr allocate_dfb(
 //
 // side-effect:
 //  - mutates `metadata` regions that have core_range intersecting with `cores`.
-DeviceAddr allocate_scratchpad(
+DeviceAddr allocate_program_resource(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment);
 
 // Clears all allocations recorded in `metadata`; the registered core ranges are kept.

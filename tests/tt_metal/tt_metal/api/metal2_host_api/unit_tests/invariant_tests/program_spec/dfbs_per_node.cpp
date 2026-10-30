@@ -158,11 +158,12 @@ TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
     }
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementCountsSlotsOnReservationOnlyNodes) {
-    // Exceeding the DFB slot limit is rejected on a reserved node with no work unit.
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementCountsSlotsOnSelectedNode) {
+    // Exceeding the DFB slot limit is rejected on a selected endpoint node.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     const uint32_t count = static_cast<uint32_t>(::dfb::NUM_DFBS) + 1;
     auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, count);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {2, 0});
     for (auto& dfb : spec.dataflow_buffers) {
         dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
     }
@@ -171,10 +172,11 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementCountsSlotsOnReservationOnlyNodes)
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DataflowBufferSpecs on node (2, 0)")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementDetectsL1OverflowOnExtraNode) {
-    // DFBs whose combined storage exceeds L1 capacity on an extra reservation node are rejected.
+TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementDetectsL1OverflowOnSelectedNode) {
+    // DFBs whose combined storage exceeds L1 capacity on a selected endpoint node are rejected.
     distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto spec = test_helpers::MakeSeparateDFBEndpointPairs(tt::ARCH::WORMHOLE_B0);
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::WORMHOLE_B0, 2);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {2, 0});
     for (auto& dfb : spec.dataflow_buffers) {
         dfb.entry_size = 2048;
         dfb.num_entries = fixture_device.l1_size_per_core() / 4096;
