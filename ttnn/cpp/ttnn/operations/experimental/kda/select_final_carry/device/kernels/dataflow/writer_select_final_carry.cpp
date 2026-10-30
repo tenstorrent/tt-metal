@@ -28,8 +28,8 @@ constexpr auto output_args = TensorAccessorArgs<9>();
 // state locally and multicasts it along the sequence-parallel line, and the other ranks wait for its arrival.
 void kernel_main() {
     using namespace kda_select_final_carry;
+    const uint32_t output_address = get_common_arg_val<uint32_t>(0);
     size_t arg = 0;
-    const uint32_t output_address = get_arg_val<uint32_t>(arg++);
     const uint32_t copy_begin = get_arg_val<uint32_t>(arg++);
     const uint32_t copy_end = get_arg_val<uint32_t>(arg++);
     const uint32_t send_begin = get_arg_val<uint32_t>(arg++);
