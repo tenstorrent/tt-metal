@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Fabric manifest",
-  "description": "The shape of a fabric manifest (docs/FORMAT.md in this directory). Fields are described by kind, not by key: docs/FIELDS.md names each key. Values the manifest defines (channel status, credit backing, stream register, field kind and category) are enumerated here; enums from the rest of fabric are lower-case names, and vocabulary lists every name each label key can hold.",
+  "description": "The shape of a fabric manifest (docs/FORMAT.md in this directory). Fields are described by kind, not by key: docs/FIELDS.md names each key. Values the manifest defines (channel status, credit backing, field kind and category) are enumerated here; enums from the rest of fabric are lower-case names, and vocabulary lists every name each label key can hold.",
   "type": "object",
   "properties": {
     "manifest_version": { "const": 1 },
@@ -9,7 +9,6 @@
     "run": { "$ref": "#/$defs/run" },
     "fabric": { "$ref": "#/$defs/fabric" },
     "arch": { "$ref": "#/$defs/arch" },
-    "types": { "$ref": "#/$defs/types" },
     "vocabulary": { "$ref": "#/$defs/vocabulary" },
     "meshes": {
       "type": "object",
@@ -18,7 +17,7 @@
       "additionalProperties": { "$ref": "#/$defs/mesh" }
     }
   },
-  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "types", "vocabulary", "meshes"],
+  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "vocabulary", "meshes"],
   "additionalProperties": false,
 
   "$defs": {
@@ -33,22 +32,13 @@
     "router_path": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+$" },
     "vc_key": { "pattern": "^vc[0-9]+$" },
     "field_category": { "enum": ["lifecycle", "kernel_params", "flow_control", "control_info", "diagnostics"] },
-    "field_kind": { "enum": ["l1", "stream", "number", "flag", "enum"] },
+    "field_kind": { "enum": ["l1", "stream_reg", "number", "flag", "enum"] },
     "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
     "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
-    "schema": {
+    "type_name": {
+      "description": "A registered C++ type's name without its namespaces, as the build that wrote the manifest spells it (fabric_manifest_type_registry.hpp), such as HybridMeshPacketHeaderT<36> or unsigned int. Decode, built from the same commit, maps it back to the type.",
       "type": "string",
-      "pattern": "^([ui](8|16|32|64)|bytes|pad|struct:[A-Za-z_][A-Za-z0-9_]*(<([0-9]+|true|false)(,([0-9]+|true|false))*>)?|enum:[A-Za-z_][A-Za-z0-9_]*|union:[A-Za-z_][A-Za-z0-9_]*)$"
-    },
-    "stream_register_layout": {
-      "description": "A register's byte offset in a stream's block, and how many of the word's low bits hold its value.",
-      "type": "object",
-      "properties": {
-        "offset": { "$ref": "#/$defs/count" },
-        "bits": { "type": "integer", "minimum": 1, "maximum": 32 }
-      },
-      "required": ["offset", "bits"],
-      "additionalProperties": false
+      "minLength": 1
     },
 
     "run": {
@@ -118,10 +108,8 @@
         "topology": { "$ref": "#/$defs/name" },
         "is_2d_routing": { "type": "boolean" },
         "packet_header": {
-          "description": "The packet header type the run's routers use. Its layout is in types.structs.",
-          "$ref": "#/$defs/type_keys",
-          "properties": { "schema": { "pattern": "^struct:" } },
-          "unevaluatedProperties": false
+          "description": "The packet header type the run's routers use.",
+          "$ref": "#/$defs/type_name"
         },
         "max_payload_size_bytes": { "$ref": "#/$defs/count" },
         "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
@@ -141,7 +129,7 @@
 
     "name_list": { "type": "array", "items": { "$ref": "#/$defs/name" }, "uniqueItems": true },
     "vocabulary": {
-      "description": "Every name each label can hold. Each list is named for what the label is, and the label's key refers to it below (a channel's status is channel_status). These are names the manifest writes as strings; enum values read from the device are in types.enums.",
+      "description": "Every name each label can hold. Each list is named for what the label is, and the label's key refers to it below (a channel's status is channel_status). These are names the manifest writes as strings.",
       "type": "object",
       "properties": {
         "arch": { "$ref": "#/$defs/name_list" },
@@ -152,11 +140,9 @@
         "fabric_manager_mode": { "$ref": "#/$defs/name_list" },
         "fabric_topology": { "$ref": "#/$defs/name_list" },
         "credit_backing": { "$ref": "#/$defs/name_list" },
-        "l1_credit_counter_reason": { "$ref": "#/$defs/name_list" },
         "z_port_role": { "type": "array", "items": { "$ref": "#/$defs/z_port_role" }, "uniqueItems": true },
         "edge_capability": { "$ref": "#/$defs/name_list" },
         "credit_counter_indexed_by": { "$ref": "#/$defs/name_list" },
-        "stream_register": { "$ref": "#/$defs/name_list" },
         "field_category": { "type": "array", "items": { "$ref": "#/$defs/field_category" }, "uniqueItems": true },
         "field_kind": { "type": "array", "items": { "$ref": "#/$defs/field_kind" }, "uniqueItems": true },
         "channel_status": { "type": "array", "items": { "$ref": "#/$defs/channel_status" }, "uniqueItems": true },
@@ -164,58 +150,46 @@
       },
       "required": [
         "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
-        "fabric_topology", "credit_backing", "l1_credit_counter_reason", "z_port_role", "edge_capability",
-        "credit_counter_indexed_by", "stream_register", "field_category", "field_kind", "channel_status",
-        "erisc_processor"
+        "fabric_topology", "credit_backing", "z_port_role", "edge_capability", "credit_counter_indexed_by",
+        "field_category", "field_kind", "channel_status", "erisc_processor"
       ],
       "additionalProperties": false
     },
 
-    "type_keys": {
-      "description": "A type's size and schema. An array also has num_elements and size_per_element, and a tagged union tag_member, the enclosing struct's member that holds its tag.",
+    "region_keys": {
+      "description": "num_elements elements of type in L1, element_size bytes apart from address. Each element holds a type in its first bytes; the rest of the element, up to element_size, isn't typed (a ring buffer slot's payload).",
       "type": "object",
       "properties": {
-        "size": { "$ref": "#/$defs/count" },
-        "num_elements": { "$ref": "#/$defs/count" },
-        "size_per_element": { "$ref": "#/$defs/count" },
-        "schema": { "$ref": "#/$defs/schema" },
-        "tag_member": { "type": "string", "minLength": 1 }
-      },
-      "required": ["size", "schema"],
-      "dependentRequired": {
-        "size_per_element": ["num_elements"]
-      },
-      "if": { "properties": { "schema": { "pattern": "^union:" } } },
-      "then": { "required": ["tag_member"] },
-      "else": { "not": { "required": ["tag_member"] } }
-    },
-    "region_keys": {
-      "$ref": "#/$defs/type_keys",
-      "properties": {
         "address": { "$ref": "#/$defs/count" },
+        "num_elements": { "type": "integer", "minimum": 1 },
+        "element_size": { "type": "integer", "minimum": 1 },
+        "type": { "$ref": "#/$defs/type_name" },
         "cleared_by_host": { "type": "boolean" }
       },
-      "required": ["address", "cleared_by_host"]
+      "required": ["address", "num_elements", "element_size", "type", "cleared_by_host"]
     },
     "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
     "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
-    "stream_keys": {
+    "stream_reg_keys": {
+      "description": "A stream register's word at address. Its value is the word's low value_bits bits, read as type; the bits above can hold other state.",
       "type": "object",
       "properties": {
         "stream_id": { "$ref": "#/$defs/count" },
-        "register": { "enum": ["buf_space_available", "remote_src"] },
-        "schema": { "$ref": "#/$defs/schema" }
+        "address": { "$ref": "#/$defs/count" },
+        "value_bits": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "type": { "$ref": "#/$defs/type_name" }
       },
-      "required": ["stream_id", "register", "schema"]
+      "required": ["stream_id", "address", "value_bits", "type"]
     },
-    "stream": { "$ref": "#/$defs/stream_keys", "unevaluatedProperties": false },
+    "stream_reg": { "$ref": "#/$defs/stream_reg_keys", "unevaluatedProperties": false },
     "core_register_keys": {
-      "$ref": "#/$defs/type_keys",
+      "type": "object",
       "properties": {
         "name": { "$ref": "#/$defs/name" },
-        "address": { "$ref": "#/$defs/count" }
+        "address": { "$ref": "#/$defs/count" },
+        "type": { "$ref": "#/$defs/type_name" }
       },
-      "required": ["name", "address"]
+      "required": ["name", "address", "type"]
     },
 
     "arch": {
@@ -252,26 +226,6 @@
           ],
           "additionalProperties": false
         },
-        "stream_registers": {
-          "description": "Where a stream register is: stream N's register R is at base + N * stride + registers[R].offset, and its value is the word's low registers[R].bits bits.",
-          "type": "object",
-          "properties": {
-            "base": { "$ref": "#/$defs/count" },
-            "stride": { "$ref": "#/$defs/count" },
-            "count": { "$ref": "#/$defs/count" },
-            "registers": {
-              "type": "object",
-              "properties": {
-                "buf_space_available": { "$ref": "#/$defs/stream_register_layout" },
-                "remote_src": { "$ref": "#/$defs/stream_register_layout" }
-              },
-              "required": ["buf_space_available", "remote_src"],
-              "additionalProperties": false
-            }
-          },
-          "required": ["base", "stride", "count", "registers"],
-          "additionalProperties": false
-        },
         "core_registers": {
           "description": "A router core's soft reset and wall clock registers, in the order they are read: reading wall_clock_low latches wall_clock_high. reset_masks is indexed by physical ERISC, which a router ERISC's physical_erisc names.",
           "type": "array",
@@ -300,84 +254,7 @@
           "items": false
         }
       },
-      "required": ["name", "l1_areas", "stream_registers", "core_registers"],
-      "additionalProperties": false
-    },
-
-    "types": {
-      "description": "The type catalog. A struct:<Name> schema names an entry in structs, an enum:<Name> schema one in enums, and a union:<Name> schema one in tagged_unions.",
-      "type": "object",
-      "properties": {
-        "structs": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "size": { "$ref": "#/$defs/count" },
-              "members": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/type_keys",
-                  "properties": {
-                    "name": { "type": "string", "minLength": 1 },
-                    "offset": { "$ref": "#/$defs/count" }
-                  },
-                  "required": ["name", "offset"],
-                  "unevaluatedProperties": false
-                }
-              }
-            },
-            "required": ["size", "members"],
-            "additionalProperties": false
-          }
-        },
-        "enums": { "type": "object", "additionalProperties": { "$ref": "#/$defs/enum" } },
-        "tagged_unions": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "size": { "$ref": "#/$defs/count" },
-              "tag": {
-                "description": "The enum the tag member holds.",
-                "type": "object",
-                "properties": { "schema": { "$ref": "#/$defs/schema", "pattern": "^enum:" } },
-                "required": ["schema"],
-                "additionalProperties": false
-              },
-              "cases": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/type_keys",
-                  "properties": {
-                    "name": { "type": "string", "minLength": 1 },
-                    "offset": { "$ref": "#/$defs/count" },
-                    "tag_value": { "$ref": "#/$defs/name" }
-                  },
-                  "required": ["name", "offset", "tag_value"],
-                  "unevaluatedProperties": false
-                }
-              }
-            },
-            "required": ["size", "tag", "cases"],
-            "additionalProperties": false
-          }
-        }
-      },
-      "required": ["structs", "enums", "tagged_unions"],
-      "additionalProperties": false
-    },
-
-    "enum": {
-      "type": "object",
-      "properties": {
-        "values": {
-          "type": "object",
-          "propertyNames": { "$ref": "#/$defs/name" },
-          "additionalProperties": { "$ref": "#/$defs/count" }
-        }
-      },
-      "required": ["values"],
+      "required": ["name", "l1_areas", "core_registers"],
       "additionalProperties": false
     },
 
@@ -399,10 +276,9 @@
           "additionalProperties": {
             "type": "object",
             "properties": {
-              "backing": { "enum": ["stream_register", "l1_counter"] },
-              "reasons": { "type": "array", "items": { "$ref": "#/$defs/name" } }
+              "backing": { "enum": ["stream_register", "l1_counter"] }
             },
-            "required": ["backing", "reasons"],
+            "required": ["backing"],
             "additionalProperties": false
           }
         },
@@ -580,7 +456,7 @@
       "description": "A stream register, null when the builder did not allocate one, or an element of a credit counter array.",
       "oneOf": [
         { "type": "null" },
-        { "$ref": "#/$defs/stream" },
+        { "$ref": "#/$defs/stream_reg" },
         {
           "type": "object",
           "properties": {
@@ -667,8 +543,8 @@
           "unevaluatedProperties": false
         },
         {
-          "$ref": "#/$defs/stream_keys",
-          "properties": { "category": { "$ref": "#/$defs/field_category" }, "kind": { "const": "stream" } },
+          "$ref": "#/$defs/stream_reg_keys",
+          "properties": { "category": { "$ref": "#/$defs/field_category" }, "kind": { "const": "stream_reg" } },
           "required": ["category", "kind"],
           "unevaluatedProperties": false
         },
@@ -698,9 +574,12 @@
             "category": { "$ref": "#/$defs/field_category" },
             "kind": { "const": "enum" },
             "value": { "$ref": "#/$defs/count" },
-            "schema": { "type": "string", "pattern": "^enum:[A-Za-z_][A-Za-z0-9_]*$" }
+            "value_name": {
+              "description": "The enumerator value names, in lower case. The enum is a configuration value the kernel is given, such as a direction.",
+              "$ref": "#/$defs/name"
+            }
           },
-          "required": ["category", "kind", "value", "schema"],
+          "required": ["category", "kind", "value", "value_name"],
           "additionalProperties": false
         }
       ]
