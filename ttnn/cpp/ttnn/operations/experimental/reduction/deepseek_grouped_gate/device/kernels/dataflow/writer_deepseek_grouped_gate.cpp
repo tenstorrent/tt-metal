@@ -93,11 +93,13 @@ FORCE_INLINE void generate_group_indices_tiles(
     // first row –> 0, 0, 0, second row –> 1, 1, 1, n_groups - 1 row –> n_groups - 1, n_groups - 1, n_groups
     // - 1
     volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_write_addr);
+    volatile tt_l1_ptr uint32_t* last_write_ptr = write_ptr;
     for (uint32_t group_index = 0; group_index < n_groups; group_index++) {
         // 16 uint16_t values is 8 uint32_t writes
         for (uint32_t i = 0; i < columns_per_face / 2; i++) {
             write_ptr[i] = (group_index) << 16 | group_index;
         }
+        last_write_ptr = write_ptr + ((columns_per_face / 2) - 1);
         if (group_index > rows_per_face - 1) {
             // skip to face 3
             constexpr uint32_t skip_elements = face_size_bytes / sizeof(uint32_t);
@@ -108,6 +110,9 @@ FORCE_INLINE void generate_group_indices_tiles(
             write_ptr += skip_elements;
         }
     }
+    // Same RISC-store vs. NoC-read L1 ordering hazard as in generate_index_tile(): read back the last
+    // written word so the fill is in L1 before the loop-back noc_async_read below samples it.
+    (void)ckernel::load_blocking(last_write_ptr);
     // then use noc to write the rest of the faces
     uint64_t dm_engine_index_write_offset_face_1 = get_noc_addr(base_write_addr);
     // if n_groups is greater than 16, we need to write the third face

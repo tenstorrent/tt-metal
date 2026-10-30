@@ -559,3 +559,21 @@ def test_softmax_bfloat8_b_intermediates(shape, dim, strategy, device):
     passing, out = comp_allclose_and_pcc(torch_output, ttnn_output, rtol=0, atol=16 * rounding_floor)
     logger.debug(out)
     assert passing, out
+
+
+@pytest.mark.parametrize(
+    "shape, dim, strategy",
+    [
+        ([1, 1, 32 * 4, 32], 2, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_H),
+        ([1, 1, 32 * 4, 32], 2, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.SMALL_H),
+        ([1, 1, 32, 32 * 4], 3, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_W),
+        ([1, 1, 32, 32 * 4], 3, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.SMALL_W),
+        ([1, 4, 32, 32], 1, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_C),
+    ],
+)
+def test_softmax_backward_rejects_bfloat8_b(shape, dim, strategy, device, expect_error):
+    torch.manual_seed(0)
+    ttnn_y = ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_dy = ttnn.from_torch(torch.rand(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Output_tensor dtype should be bfloat16"):
+        ttnn.operations.moreh.softmax_backward(ttnn_y, ttnn_dy, dim, strategy=strategy)
