@@ -33,8 +33,9 @@ _NODE = "perf_x.py::test_perf_x[4]"
 
 
 def _side(root, tile_loop, window="aaa", skip=(), init=900.0):
-    """One side measured at every position: tile_loop is a value per position."""
-    for pos, value in zip(POSITIONS, tile_loop):
+    """One side measured at every position: tile_loop, and init if a list, give a value per position."""
+    inits = init if isinstance(init, list) else [init] * len(POSITIONS)
+    for pos, value, init_value in zip(POSITIONS, tile_loop, inits):
         if pos in skip:
             continue
         path = root / pos / "perf_x" / "perf_x.csv"
@@ -44,7 +45,7 @@ def _side(root, tile_loop, window="aaa", skip=(), init=900.0):
                 "marker": ["INIT", "TILE_LOOP"],
                 "tile_cnt": [4, 4],
                 "dest_acc": [False, False],
-                "mean(L1_TO_L1)": [init, value],
+                "mean(L1_TO_L1)": [init_value, value],
             }
         ).to_csv(path, index=False)
     pd.DataFrame(
@@ -324,6 +325,31 @@ def test_other_markers_are_judged_by_the_positions(tmp_path):
     assert blocks(results)
 
 
+def test_other_markers_get_no_loop_label(tmp_path):
+    # The TILE_LOOP fingerprint changed, but it says nothing about INIT: no threads, no "partial".
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    everywhere = _side(tmp_path / "all", [_BASE] * 5, window="bbb", init=1000.0)
+    some = _side(
+        tmp_path / "some", [_BASE] * 5, window="bbb", init=[1000.0] * 4 + [900.0]
+    )
+
+    def init_row(cur):
+        results = decide(
+            _candidates(tmp_path, init=True),
+            base,
+            cur,
+            threshold=0.05,
+            min_cycles=30,
+            module_thresholds={},
+        )
+        return next(r for r in results if r["marker"] == "INIT")
+
+    row = init_row(everywhere)
+    assert (row["outcome"], row["threads"]) == ("regression", [])
+    row = init_row(some)
+    assert (row["outcome"], row["threads"]) == ("placement", [])
+
+
 def test_positions_measured_in_parts_are_read(tmp_path):
     base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
     cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
@@ -399,10 +425,7 @@ def test_gate_command_exit_code(tmp_path):
 
     assert main(args + ["--legs", "1"]) == 0
     assert main(args + ["--legs", "2"]) == 1
-    assert (
-        "1 of 2 leg(s) left a stage-2 result. The gate keeps blocking."
-        in (tmp_path / "r.md").read_text()
-    )
+    assert "> ⚠️ 1 of 2 leg(s) left a stage-2 result." in (tmp_path / "r.md").read_text()
 
 
 def test_a_test_the_base_does_not_have_is_named(tmp_path):
