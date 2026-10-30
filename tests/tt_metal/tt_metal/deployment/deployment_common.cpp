@@ -82,10 +82,24 @@ std::vector<std::string> get_chip_physical_locations() {
 }
 
 uint64_t get_asic_serial_number(uint64_t chip_id) {
-    const tt::Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const std::unordered_map<tt::ChipId, uint64_t>& unique_ids = cluster.get_cluster_desc()->get_chip_unique_ids();
-    auto it = unique_ids.find(chip_id);
-    return it != unique_ids.end() ? it->second : -1;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    TT_FATAL(cluster.arch() == tt::ARCH::BLACKHOLE, "ASIC ID telemetry reader requires Blackhole");
+
+    auto* device = cluster.get_driver()->get_tt_device(chip_id);
+    auto* telemetry = device->get_firmware_telemetry_reader();
+
+    using tt::umd::TelemetryTag;
+    TT_FATAL(
+        telemetry && telemetry->is_entry_available(TelemetryTag::ASIC_ID_HIGH) &&
+            telemetry->is_entry_available(TelemetryTag::ASIC_ID_LOW),
+        "ASIC ID telemetry unavailable for chip {}",
+        chip_id);
+
+    const uint64_t hi = telemetry->read_entry(TelemetryTag::ASIC_ID_HIGH);
+    const uint64_t lo = telemetry->read_entry(TelemetryTag::ASIC_ID_LOW);
+
+    return (hi << 32) | lo;
 }
 
 std::string get_asic_serial_string(uint64_t chip_id) {
