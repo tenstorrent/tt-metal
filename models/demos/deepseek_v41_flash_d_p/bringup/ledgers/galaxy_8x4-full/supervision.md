@@ -1151,3 +1151,18 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   SP=8 x TP=4 with its shapes swept in the same pick (P.20; both sides galaxy-tuned: apples to apples). P.18 (window
   tiles, designed for SP=32) and K.1R wait for P.20's answer. Framework: F231 / F232 / F233 (BREADCRUMBS), selftests.
   P.17 tasks.yaml gets imports: [origin/dnijemcevic/model_bringup_lowbit].
+- 14:48 P.17 gate PASS -> 22528347b03 (pushed). The accept gate re-ran (ladder 477 s + profile 730 s) instead of reusing
+  the A/B's on side: the code key moved (F234: the seeded ledger's tasks.yaml and testing/settings_lint.py were in it;
+  fixed in core/stamps.py, uncommitted until the next pause; at least one more difference not yet found). P.19 started.
+- 15:00 OWNER: the sweep needs no 8x4: capture on the 8x4 (shapes + L1 view; at 51200 and 512000, diff), sweep every
+  call on single cards in parallel (run_safe_pytest --device auto, per-card locks; P23_SHARD), held to the captured
+  grid; tune the 5120 chunk only (other lengths keep the rule). Note OV-27 for P.19 / P.20; P.19 attempt 1 aborted
+  as soon as its capture ends (its capture is reused).
+- 15:15 P.19 sweep (12 single-card shards, < 3 min): 187 calls = 12 distinct; 2 improve (q_a 0.0549 -> 0.0450 ms,
+  engram_kv 0.2728 -> 0.2237, bit-identical to auto), 10 keep the rule. Capture at 51200 == 512000 (shapes do not depend
+  on the context). Core counts (grid 12 x 10): engram_kv 120, wq_b 114, wo_b 80, indexer wq_b 64, q_a 56, wo_a 55,
+  compressor 40-55, hc.fn 10, weights_proj 5 (SP=32: 5 row tiles, work spread over N only).
+- 15:40 OWNER: Galaxy power limit: no op on more than 110 Tensix cores of a chip (PSU trips on di/dt). Agent rule 18
+  added (agents/bringup-engineer.md, both copies). 15:42 OWNER: the P.19 / P.20 A/Bs run at 120 (like for like); the cap
+  and the re-tune after: FIX.15 GALAXY_CORE_CAP queued, held until P.20's decision (gate P.17 + K.1: also the overdue
+  Paris / contract re-check). Notes OV-29 (P.20 sweeps on 32 cards), OV-31 (P.20 keeps 120). OV-30 closed.
