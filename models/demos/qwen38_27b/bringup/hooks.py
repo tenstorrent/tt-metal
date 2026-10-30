@@ -16,6 +16,7 @@ import torch
 import ttnn
 
 NORM_WEIGHTS = {"attn_norm": "input_layernorm.weight", "ffn_norm": "post_attention_layernorm.weight"}
+RESIDUAL_STEPS = ("attn_residual", "mlp_residual")
 
 
 def _to_device(mesh, x: torch.Tensor) -> ttnn.Tensor:
@@ -61,6 +62,16 @@ def device_component(mesh, spec, layer, step):
         def run(ctx, x):
             with _hooked_dispatch():
                 return _to_host(mesh, norm(_to_device(mesh, x)), x.shape)
+
+        return run
+    if step in RESIDUAL_STEPS:
+        from models.demos.qwen38_27b.tt.residual import TtResidualAdd
+
+        add = TtResidualAdd()
+
+        def run(ctx, x, y):
+            with _hooked_dispatch():
+                return _to_host(mesh, add(_to_device(mesh, x), _to_device(mesh, y)), x.shape)
 
         return run
     if step == "attention" and spec.block_type_of(layer) == "linear":

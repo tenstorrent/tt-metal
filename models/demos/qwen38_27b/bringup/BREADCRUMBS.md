@@ -62,3 +62,12 @@
 - Not done yet (later tasks): pad masking past actual_end (g = beta = 0), the restart snapshot split, and the
   served state buffers.
 - Re-run: `bfw job check --task C.linear.attention --gate-only`.
+
+## C.linear.attn_residual (device residual add, layer 0), 2026-10-30
+
+- `tt/residual.py` `TtResidualAdd`: one `ttnn.add` (bf16, DRAM) of two tensors in the residual layout
+  `[1, 1, 640, 5120]` per chip (SP rows over axis 0, replicated over TP columns); no collective.
+- `device_component` serves both `attn_residual` and `mlp_residual` (`RESIDUAL_STEPS`) with the same module, for
+  both block types.
+- Result: PCC 0.999997, auto_margin_min 1.97, 1 device op, host FLOPs 0.
+- Re-run: `bfw job check --task C.linear.attn_residual --gate-only`.
