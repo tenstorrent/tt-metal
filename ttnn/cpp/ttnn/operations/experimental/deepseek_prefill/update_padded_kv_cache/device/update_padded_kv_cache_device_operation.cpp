@@ -50,6 +50,10 @@ bool has_input_window(const UpdatePaddedKvCacheDeviceOperation::operation_attrib
     return args.input_row_offset != 0 || written_input_rows(args, input_seq) != input_seq;
 }
 
+std::optional<TensorSpec> optional_spec(const std::optional<Tensor>& tensor) {
+    return tensor.has_value() ? std::optional<TensorSpec>{tensor->tensor_spec()} : std::nullopt;
+}
+
 // Window offset in page-rows. A windowed call is a plain page copy (no rope / scales), so a page-row is one token
 // row for a ROW_MAJOR cache and one tile row otherwise. The cache-miss and cache-hit paths both use this, so a hit
 // patches the same value the miss set.
@@ -537,42 +541,36 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     // slot_idx and kv_actual_global are NEVER hashed on either path (metadata: read on-device; scalar:
     // common runtime args patched on cache hits), so successive users/chunks reuse the cached program.
     // The metadata-vs-scalar choice DOES change the program (compile args, common args, which kernel
-    // path compiles), so `slot_idx.has_value()` is hashed to keep the two variants distinct (the
-    // slot_idx and kv_actual_global tensors are always present together).
+    // path compiles); hashing each metadata tensor's optional TensorSpec keeps the two variants
+    // distinct (the slot_idx and kv_actual_global tensors are always present together).
     // layer_idx IS hashed: it takes only num_layers distinct values, so one program per layer is reused
     // across users/chunks. num_layers, cluster_axis and tp_axis stay IN: all structural — they govern
     // the cache slot linearization and which mesh dims are sp/tp — not per-call data.
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
-    // Hash the full padded shapes, not just their volumes: the descriptor derives Wt, input_Ht,
-    // cache_HtWt/CHtWt and the work split from specific dimensions, so two differently-shaped
-    // tensors that happen to share a volume must NOT collide onto the same cached program.
+    // Every tensor's whole TensorSpec is keyed. The full padded shapes, not just their volumes, matter:
+    // the descriptor derives Wt, input_Ht, cache_HtWt/CHtWt and the work split from specific
+    // dimensions, so two differently-shaped tensors that happen to share a volume must NOT collide onto
+    // the same cached program. Layout matters too (TILE vs ROW_MAJOR drives the page-unit math), and the
+    // rest of each spec (Alignment included) is keyed because Metal 2.0 requires an exact layout match on
+    // every cache hit (#59915). On the metadata path the writer bakes a TensorAccessorArgs built from
+    // slot_idx into its compile-time args, so the bank table it selects cannot be refreshed on a cache
+    // hit; only the metadata tensors' specs are keyed, never their values.
     // has_valid is a writer compile arg, so it is hashed; the VALUE stays out (patched runtime arg).
     return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
-        tensor_args.slot_idx.has_value(),
         tensor_args.valid_global.has_value() || args.valid_global.has_value(),
         args.layer_idx,
         args.num_layers,
         args.cluster_axis,
         args.tp_axis.has_value(),
         args.tp_axis.value_or(0),
-        tensor_args.rope.has_value(),
-        tensor_args.rope.has_value() ? tensor_args.rope->memory_config() : MemoryConfig{},
-        tensor_args.rope.has_value() ? tensor_args.rope->layout() : Layout::ROW_MAJOR,
-        tensor_args.scales.has_value(),
-        tensor_args.scales.has_value() ? tensor_args.scales->memory_config() : MemoryConfig{},
-        cache.dtype(),
-        cache.layout(),
-        input.dtype(),
-        input.layout(),  // TILE vs ROW_MAJOR drives the page-unit math; must not collide
-        input.memory_config(),
-        input.padded_shape(),
-        cache.memory_config(),
-        cache.padded_shape(),
-        // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
-        // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
-        // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
-        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{},
+        cache.tensor_spec(),
+        input.tensor_spec(),
+        optional_spec(tensor_args.slot_idx),
+        optional_spec(tensor_args.kv_actual_global),
+        optional_spec(tensor_args.valid_global),
+        optional_spec(tensor_args.rope),
+        optional_spec(tensor_args.scales),
         // A window's row count shapes the work split; its offset is a runtime arg patched on cache hits.
         has_input_window(args, input.padded_shape()[-2]),
         written_input_rows(args, input.padded_shape()[-2]));

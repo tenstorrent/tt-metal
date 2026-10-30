@@ -362,3 +362,29 @@ def test_tanh_bw_cache_miss_same_volume_different_alignment(device):
     ttnn.tanh_bw(*tall)
     assert device.num_program_cache_entries() == 2
     device.disable_and_clear_program_cache()
+
+
+def test_tanh_bw_cache_miss_same_padded_shape_different_logical_shape(device):
+    """Same padded shape, different logical shape, must be two cache entries.
+
+    logical 30x30 and 32x32 both pad to 32x32 under the default tile alignment. Metal 2.0 compares every tensor's
+    layout exactly on a cache hit, so the key must cover the whole TensorSpec, not just the padded shape (#59915).
+    """
+    device.enable_program_cache()
+
+    def pair(logical):
+        grad = ttnn.from_torch(torch.rand(logical, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        x = ttnn.from_torch(torch.rand(logical, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        return grad, x
+
+    torch.manual_seed(0)
+    small = pair((1, 1, 30, 30))
+    full = pair((1, 1, 32, 32))
+    assert list(small[1].padded_shape) == list(full[1].padded_shape)
+
+    device.clear_program_cache()
+    ttnn.tanh_bw(*small)
+    assert device.num_program_cache_entries() == 1
+    ttnn.tanh_bw(*full)
+    assert device.num_program_cache_entries() == 2
+    device.disable_and_clear_program_cache()

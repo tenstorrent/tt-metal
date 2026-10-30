@@ -111,15 +111,15 @@ ttsl::hash::hash_t ReshapeDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input_tensor;
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 
+    // The input's whole TensorSpec, not just the fields the factories read: Metal 2.0 requires an exact
+    // layout match (Alignment included) on every cache hit, so a key that left any layout field free
+    // would turn a working hit into a throw once the op is ported (#59915).
     return operation::hash_operation<ReshapeDeviceOperation>(
         operation_attributes.logical_output_shape,
         operation_attributes.padded_output_shape,
         operation_attributes.output_mem_config,
         program_factory.index(),
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        input_tensor.layout(),
-        input_tensor.padded_shape());
+        input_tensor.tensor_spec());
 }
 
 ttnn::Tensor reshape_on_device(
