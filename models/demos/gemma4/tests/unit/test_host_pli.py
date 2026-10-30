@@ -67,3 +67,20 @@ def test_verify_pli_validates_layer_count(expect_error):
     model, _ = _host_pli_model()
     with expect_error(ValueError, "3 layers"):
         model._verify_pli_device_tensors(None, [object(), object()])
+
+
+def test_stacked_pli_validates_layer_count(expect_error):
+    model, _ = _host_pli_model()
+    with expect_error(ValueError, "3 layers"):
+        model._validate_pli_stacked(torch.empty(2, 1, 4, 2))
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_verify_rejects_device_pli_with_explicit_tensors(packed, expect_error):
+    model, _ = _host_pli_model()
+    kwargs = {"pli_on_device": True, "pli_device_tensors": object()}
+    with expect_error(ValueError, "not both"):
+        if packed:
+            model.ttnn_packed_verify_forward(None, None, None, None, 4, **kwargs)
+        else:
+            model.ttnn_verify_forward(None, None, **kwargs)
