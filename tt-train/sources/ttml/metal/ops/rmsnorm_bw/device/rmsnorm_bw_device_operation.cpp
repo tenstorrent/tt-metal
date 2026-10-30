@@ -25,6 +25,12 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_da_tensor = tensor_args.preallocated_da;
     const auto& preallocated_dgamma_components_tensor = tensor_args.preallocated_dgamma_components;
     const auto& preallocated_dgate_tensor = tensor_args.preallocated_dgate;
+    TT_FATAL(
+        args.max_row_slices >= 1U && args.max_row_slices <= rmsnorm::kMaxRowSlices,
+        "{}: max_row_slices must be in [1, {}], got {}",
+        op,
+        rmsnorm::kMaxRowSlices,
+        args.max_row_slices);
 
     check_device_tensor(
         input_tensor,
@@ -151,12 +157,14 @@ ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation::tensor_ret
     const ttnn::Tensor& dL_dout_tensor,
     const std::optional<ttnn::Tensor>& gate,
     bool compute_dgamma,
+    uint32_t max_row_slices,
     const std::optional<ttnn::Tensor>& preallocated_da,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
     const std::optional<ttnn::Tensor>& preallocated_dgate) {
     using OperationType = ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{.compute_dgamma = compute_dgamma};
+    auto operation_attributes =
+        OperationType::operation_attributes_t{.compute_dgamma = compute_dgamma, .max_row_slices = max_row_slices};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,

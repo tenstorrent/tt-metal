@@ -19,7 +19,11 @@
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
+// Tiles of each row this core normalizes: the whole row, or its slice of it.
 constexpr uint32_t num_inner = get_compile_time_arg_val(2);
+// Cores that share each row; they exchange their partial sum(x^2) through the writer.
+constexpr uint32_t num_slices = get_compile_time_arg_val(3);
+constexpr bool sliced = num_slices > 1U;
 
 constexpr auto cb_input = tt::CBIndex::c_0;
 constexpr auto cb_mask = tt::CBIndex::c_1;
@@ -33,6 +37,13 @@ constexpr auto cb_output = tt::CBIndex::c_8;
 constexpr auto cb_rms_output = tt::CBIndex::c_9;
 constexpr auto cb_output_intermediate = tt::CBIndex::c_10;
 constexpr auto cb_gate = tt::CBIndex::c_11;
+constexpr auto cb_slice_partial = tt::CBIndex::c_12;
+constexpr auto cb_gathered_partials = tt::CBIndex::c_13;
+
+// A sliced core sums x^2 over its slice only, and the row reduction adds up the gathered partials of all slices.
+constexpr auto cb_sum_x_squared = sliced ? cb_slice_partial : cb_rms_before_reduction_intermediate;
+constexpr auto cb_row_partials = sliced ? cb_gathered_partials : cb_rms_before_reduction_intermediate;
+constexpr uint32_t num_row_partials = sliced ? num_slices : 1U;
 
 constexpr uint32_t onetile = 1;
 #ifdef DO_MASK_W
@@ -54,6 +65,9 @@ constexpr bool gated = false;
 #endif
 #if defined(GATED) && !defined(EVERYTHING_FITS_IN_L1)
 #error "Gated mode is only implemented for rows resident in L1."
+#endif
+#if defined(GATED) || !defined(EVERYTHING_FITS_IN_L1)
+static_assert(!sliced, "Only ungated rows resident in L1 are split into slices.");
 #endif
 
 // DEST[0, block_size) *= silu(gate) for the next gate block, with DEST[block_size] as scratch.
@@ -77,7 +91,7 @@ void multiply_block_by_silu_gate() {
 
 void calculate_sum_x_squared() {
     cb_wait_front(cb_input, num_inner);
-    cb_reserve_back(cb_rms_before_reduction_intermediate, onetile);
+    cb_reserve_back(cb_sum_x_squared, onetile);
 
     const uint32_t accum_register = 0;
     const uint32_t tile_register = 1U;
@@ -114,17 +128,17 @@ void calculate_sum_x_squared() {
     tile_regs_commit();
     tile_regs_wait();
 
-    pack_reconfig_data_format(cb_rms_before_reduction_intermediate);
-    pack_tile(accum_register, cb_rms_before_reduction_intermediate);
+    pack_reconfig_data_format(cb_sum_x_squared);
+    pack_tile(accum_register, cb_sum_x_squared);
 
     tile_regs_release();
-    cb_push_back(cb_rms_before_reduction_intermediate, onetile);
+    cb_push_back(cb_sum_x_squared, onetile);
 }
 
 #else
 
 void calculate_sum_x_squared() {
-    cb_reserve_back(cb_rms_before_reduction_intermediate, onetile);
+    cb_reserve_back(cb_sum_x_squared, onetile);
 
     const uint32_t accum_register = 0;
     const uint32_t tile_register = 1U;
@@ -168,11 +182,11 @@ void calculate_sum_x_squared() {
     tile_regs_commit();
     tile_regs_wait();
 
-    pack_reconfig_data_format(cb_rms_before_reduction_intermediate);
-    pack_tile(accum_register, cb_rms_before_reduction_intermediate);
+    pack_reconfig_data_format(cb_sum_x_squared);
+    pack_tile(accum_register, cb_sum_x_squared);
     tile_regs_release();
 
-    cb_push_back(cb_rms_before_reduction_intermediate, onetile);
+    cb_push_back(cb_sum_x_squared, onetile);
 }
 
 #endif
@@ -324,20 +338,18 @@ void kernel_main() {
 
         // reduce and sqrt
         {
-            cb_wait_front(cb_rms_before_reduction_intermediate, onetile);
+            cb_wait_front(cb_row_partials, num_row_partials);
             cb_reserve_back(cb_rms_after_reduction_intermediate, onetile);
             tile_regs_acquire();
 
             const uint32_t reduction_register = 0;
-            reconfig_data_format(cb_scaler, cb_rms_before_reduction_intermediate);
+            reconfig_data_format(cb_scaler, cb_row_partials);
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_rms_before_reduction_intermediate, cb_scaler, cb_rms_after_reduction_intermediate);
-            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_rms_before_reduction_intermediate,
-                cb_scaler,
-                /* tile_idx */ 0,
-                /* tile_idx */ 0,
-                reduction_register);
+                cb_row_partials, cb_scaler, cb_rms_after_reduction_intermediate);
+            for (uint32_t partial = 0; partial < num_row_partials; ++partial) {
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                    cb_row_partials, cb_scaler, /* tile_idx */ partial, /* tile_idx */ 0, reduction_register);
+            }
             reduce_uninit();
 
             const uint32_t eps_register = 1U;
@@ -345,7 +357,7 @@ void kernel_main() {
             copy_init(cb_eps);
             copy_tile(cb_eps, /* tile_idx */ 0, /* register_idx */ eps_register);
 
-            reconfig_data_format(cb_rms_before_reduction_intermediate, cb_eps);
+            reconfig_data_format(cb_row_partials, cb_eps);
             add_binary_tile_init();
             add_binary_tile(reduction_register, eps_register, reduction_register);
 
@@ -360,7 +372,7 @@ void kernel_main() {
 
             tile_regs_release();
             cb_push_back(cb_rms_after_reduction_intermediate, onetile);
-            cb_pop_front(cb_rms_before_reduction_intermediate, onetile);
+            cb_pop_front(cb_row_partials, num_row_partials);
         }
 
         // copy tile from cb_rms_after_reduction_intermediate to cb_rms_output

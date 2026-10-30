@@ -24,6 +24,12 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma_tensor = tensor_args.gamma;
     const auto& preallocated_rms_tensor = tensor_args.preallocated_rms;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
+    TT_FATAL(
+        args.max_row_slices >= 1U && args.max_row_slices <= rmsnorm::kMaxRowSlices,
+        "{}: max_row_slices must be in [1, {}], got {}",
+        op,
+        rmsnorm::kMaxRowSlices,
+        args.max_row_slices);
     check_device_tensor(
         input_tensor,
         op,
@@ -126,12 +132,13 @@ ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_retu
     const std::optional<ttnn::Tensor>& gate,
     bool return_intermediates,
     float epsilon,
+    uint32_t max_row_slices,
     const std::optional<ttnn::Tensor>& preallocated_rms,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.return_intermediates = return_intermediates, .epsilon = epsilon};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .return_intermediates = return_intermediates, .epsilon = epsilon, .max_row_slices = max_row_slices};
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .gamma = gamma_tensor,

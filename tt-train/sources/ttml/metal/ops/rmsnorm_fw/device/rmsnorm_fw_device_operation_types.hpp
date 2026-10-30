@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "metal/ops/common/rmsnorm_common.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
@@ -11,6 +12,8 @@ namespace ttml::metal::ops::rmsnorm_fw::device {
 struct RMSNormForwardParams {
     bool return_intermediates{false};
     float epsilon{1e-6F};
+    // Caps the column slices a tile-row is split into; 1 keeps whole rows, e.g. to test the paths that stream a row.
+    uint32_t max_row_slices{rmsnorm::kMaxRowSlices};
 };
 
 struct RMSNormForwardInputs {
