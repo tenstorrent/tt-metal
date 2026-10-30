@@ -533,14 +533,19 @@ void kernel_main() {
     // the chips I tell "started" - their latent ports toward me: (chip | mesh << 16, x | y << 8))
     const uint32_t lf0 = la0 + 2 + 2 * lnu + 2 * get_arg_val<uint32_t>(la0 + 1 + 2 * lnu) + 5;
     const uint32_t lfence = get_arg_val<uint32_t>(lf0), lneed = get_arg_val<uint32_t>(lf0 + 1), lns = get_arg_val<uint32_t>(lf0 + 2);
-    const uint32_t ra0 = lf0 + 3 + 2 * lns;
+    // (the logits' end-to-end fence: my fence word, the "started" count my logits need (one an owner chip I send to),
+    // then the chips whose logits come to me through this port's direction and link: route, their port)
+    const uint32_t lg0 = lf0 + 3 + 2 * lns;
+    const uint32_t lgfence = get_arg_val<uint32_t>(lg0), lgneed = get_arg_val<uint32_t>(lg0 + 1), lgns = get_arg_val<uint32_t>(lg0 + 2);
+    volatile tt_l1_ptr uint32_t* lgf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lgfence);
+    const uint32_t ra0 = lg0 + 3 + 2 * lgns;
     RASend ra;
     ra.init(ra0);
     const uint32_t rf0 = ra0 + RASend::len(ra0);
     RAFwd rf;
     rf.init(rf0);
     a = rf0 + RAFwd::len(rf0);
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || !ra.done || rf.left || NZF || (rzone && zneed)) {
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || lgns > 0 || !ra.done || rf.left || NZF || (rzone && zneed)) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1 + 3];
         for (uint32_t h = 0; h <= GROUP; ++h) {
@@ -572,6 +577,18 @@ void kernel_main() {
             }
         };
         if (!rlat) lstarted();  // (I started this call: LATZ is free - no router buffers over it)
+        if (lgns > 0) {  // (I started this call: every chip whose logits come to me through this port may write my
+            // router cores' arrival zone - its logits port's fence word; my neighbour's ready only fences the first hop)
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* gh = lshdr;  // (free until the first logits packet: re-routed each)
+            for (uint32_t i = 0; i < lgns; ++i) {
+                const uint32_t w = get_arg_val<uint32_t>(lg0 + 3 + 2 * i), xy = get_arg_val<uint32_t>(lg0 + 4 + 2 * i);
+                (void)fabric_set_unicast_route(gh, static_cast<uint16_t>(w & 0xFFFF), static_cast<uint16_t>(w >> 16));
+                gh->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(xy & 0xFF, (xy >> 8) & 0xFF, lgfence), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(gh), sizeof(PACKET_HEADER_TYPE));
+            }
+        }
+        bool lgok = lgneed == 0;  // (every owner I send logits to started this call)
         if (wait_ready) {
             DeviceZoneScopedN("SE-RDYWAIT");  // (its end: the neighbour's port started - launch skew + a hop)
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready), 1);
@@ -614,7 +631,11 @@ void kernel_main() {
         };
         auto lpoll = [&]() {
             zpoll();
-            ls.poll(conn, lshdr, false);
+            if (!lgok) {
+                invalidate_l1_cache();
+                lgok = *lgf >= lgneed;
+            }
+            if (lgok) ls.poll(conn, lshdr, false);
             ra.poll(conn, rahdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
             rf.poll(conn, rahdr, false, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);
         };
@@ -672,6 +693,7 @@ void kernel_main() {
             invalidate_l1_cache();
             lpoll();
         }
+        if (lgneed) noc_semaphore_wait_min(lgf, lgneed);
         ls.poll(conn, lshdr, true);  // (whatever is left of the logits)
         ra.poll(conn, rahdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);  // (the routing)
         rf.poll(conn, rahdr, true, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);  // (and what passes through)
@@ -683,6 +705,8 @@ void kernel_main() {
         }
         ls.rearm();
         if (lneed) noc_semaphore_inc(get_noc_addr(lfence), 0u - lneed);  // (re-arm: a next call's early "started" stays)
+        if (lgneed) noc_semaphore_inc(get_noc_addr(lgfence), 0u - lgneed);  // (re-arm, as the latent's)
+        noc_async_atomic_barrier();
         conn.close();
     }
     if (rneed) {  // (re-arm: every matmul core counted its router phase here - also on a port with nothing to send)
@@ -1037,6 +1061,32 @@ class XGather3:
             + sends
         )
 
+    def lg_block(self, router, coord, d, v, fence):
+        """The logits' end-to-end fence of port (d, v) on chip coord: [fence word, the "started" count this port's
+        logits need (one an owner chip it sends to), how many chips this port tells, then (route, their port) each].
+        An owner's router cores' arrival zone is in its head's per-call arena: a sender 2+ hops away is not fenced by
+        the gather's neighbour ready, so it waits for "started" from every owner it sends to; an owner tells, through
+        its port toward the sender (the direction its own sends there take) on the sender's link, every chip whose
+        logits come to it."""
+        if not fence or self.chips[coord]["rings"][0][("next" if d == "fwd" else "prev")] is None:
+            return [0, 0, 0]
+        p = router._pos(coord)
+        js = router._port_layout(v)
+        need = len(router._dests(p, d)) if js else 0
+        sends = []
+        for q in range(self.G):
+            if q == p or router._dir(p, q) != d or not js:
+                continue
+            qc = next(c for c, ch in self.chips.items() if c[0] == coord[0] and ch["rings"][0]["p"] == q)
+            dq = router._dir(q, p)  # (the direction q sends my partials: its logits port (dq, v))
+            if self.chips[qc]["rings"][0][("next" if dq == "fwd" else "prev")] is None:
+                continue
+            pc = {(dd, l): c for (_, dd, l), c in self.chips[qc]["ports"].items()}[(dq, v)]
+            pv = self.mesh.worker_core_from_logical_core(pc)
+            nq = self._node_of_pos(coord, q)
+            sends += [int(nq.chip_id) | int(nq.mesh_id) << 16, pv.x | pv.y << 8]
+        return [fence if (need or sends) else 0, need, len(sends) // 2] + sends
+
     def _node_of_pos(self, coord, pos):
         """The fabric node of the chip at TP position pos in coord's row."""
         for c, ch in self.chips.items():
@@ -1094,7 +1144,8 @@ class XGather3:
             rab = routing.send_block(coord, ("x", d, v)) if routing is not None else [0]
             rab = rab + (routing.fwd_block(coord, ("x", d, v)) if routing is not None else [0])
             assert rab[0] == 0 or fence or not rab[1], "the routing's fabric packets need the gather's fence"
-            rsb = rsb + lab + rab
+            lgb = self.lg_block(router, coord, d, v, rs.get("lgfence", 0) if rs else 0) if router else [0, 0, 0]
+            rsb = rsb + lab + lgb + rab
             assert rsb[0] == 0 or fence, "a port sending reduce-scatter units must have the gather's fence"
             assert not (router and router.port_block(coord, d, v)[0]) or fence, "the logits need the gather's fence"
             args = [xown, v, self.arrival, pl["expect_in"], self.ready, int(fence)]

@@ -425,7 +425,7 @@ class HeadSE3:
             # (its peer's port))
             self.zw_off = self.lw_off + 4 * self.port_words
             # (and the ports' "router done" word: the matmul cores' router phase over - se_engine3 rtr_overlay)
-            words = self.zw_off + 12
+            words = self.zw_off + 16  # (+ the logits' end-to-end fence word: x_gather3.lg_block)
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -840,6 +840,7 @@ class HeadSE3:
                         zfree=zfree,
                         zcred=zfree + 16,
                         rdone=zfree + 32,
+                        lgfence=zfree + 48,
                     )
                     rsx["coord"] = coord
                     la = None

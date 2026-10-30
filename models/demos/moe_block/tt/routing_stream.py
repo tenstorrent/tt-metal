@@ -330,7 +330,9 @@ struct RAFwd {
                     bytes = PCAP;
                 }
                 ra_hop(conn, hdr, pb, bytes, r0 + 12 + 5 * k, par, src, PCAP, sl, c0, c1, px, py, mesh, fd, fl, RA_N, MAXP);
-                *f = 0;  // (re-arm: one packet a slot a call)
+                // (re-arm: one packet a slot a call - by an atomic decrement, ordered with the previous hop's remote
+                // increments: a plain store could wipe a next call's increment landing between the read and the store)
+                noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(f)), 0u - 1u);
                 sent[k] = 1;
                 --left;
                 any = true;
