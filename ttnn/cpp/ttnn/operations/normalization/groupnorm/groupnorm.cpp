@@ -8,6 +8,7 @@
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
+#include <cstdlib>
 #include <mutex>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
@@ -26,6 +27,10 @@ using ttnn::operations::normalization::find_expected_dram_grid;
 
 // Stats/intermediate CB format: fp32 input uses fp32 stats, bf16 input uses bf16.
 ttnn::DataType group_norm_im_data_format(ttnn::DataType input_dtype) {
+    // EXPERIMENT (#29960): force fp32 intermediates for any input dtype. Do not commit.
+    if (std::getenv("TT_GN_FP32_IM") != nullptr) {
+        return ttnn::DataType::FLOAT32;
+    }
     return input_dtype == ttnn::DataType::FLOAT32 ? ttnn::DataType::FLOAT32 : ttnn::DataType::BFLOAT16;
 }
 

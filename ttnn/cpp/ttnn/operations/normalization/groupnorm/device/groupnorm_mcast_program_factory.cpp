@@ -258,7 +258,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
-    const bool fp32_sfpu_normalizer = welford_unpack_fp32_active;
+    // Use the SFPU normalizer on the Welford path whenever DEST and the intermediate CBs are fp32, not only for
+    // fp32 input (#29960). Mean and rstd read through SrcA are truncated to TF32, so to keep their full fp32
+    // precision they must be unpacked straight to DEST instead. This covers fp32 input and bf16 input with fp32
+    // intermediates. With bf16 input, the input tensor needs no fp32 alias because bf16 is exact in TF32.
+    const bool fp32_sfpu_normalizer =
+        welford_unpack_fp32_active || (use_welford && fp32_dest_acc_en && cb_data_format == tt::DataFormat::Float32);
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
         {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
 
@@ -333,7 +338,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t ex_global_CB_size = ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);
     uint32_t ex2_global_CB_size = ex2_partial_CB_size;
     uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
-    uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+    // EXPERIMENT (#29960): on the Welford path c_22 (xmm3) only stages the final output for the writer,
+    // so it should take the output format since the writer copies its tiles to the output tensor unconverted.
+    // When not using welford, c_22 is an intermediate buffer, so the data format and tile size should follow
+    // the CB allocation format.
+    const tt::DataFormat xmm3_data_format = use_welford ? out_data_format : cb_data_format;
+    const uint32_t xmm3_single_tile_size = use_welford ? out_single_tile_size : single_tile_size;
+    uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * xmm3_single_tile_size;
     uint32_t ex2pe_CB_size = use_welford ? single_tile_size * num_groups_per_core : ex_partial_CB_size;
     uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
 
@@ -1099,8 +1110,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .core_ranges = all_cores_group_1,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(xmm3_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = xmm3_data_format,
+            .page_size = xmm3_single_tile_size,
         }}},
     });
 

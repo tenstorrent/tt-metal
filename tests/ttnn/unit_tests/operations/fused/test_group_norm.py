@@ -2590,3 +2590,77 @@ def test_group_norm_interleaved_wide_groups_fp32_dest(
     max_abs_err = (out - ref).abs().max().item()
     tolerance = 0.03 if dtype == ttnn.float32 else 0.08
     assert max_abs_err < tolerance, f"max abs error {max_abs_err} at C={C} ({C // G // 32} channel tiles per group)"
+
+
+# A user compute_kernel_config replaces the op's default config wholesale, so its fp32_dest_acc_en must reach the
+# kernels unchanged. Float32 input defaults to fp32 DEST, so an explicit fp32_dest_acc_en=False is only rejected if
+# the user's value is actually the one in effect.
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize("N, HW, core_grid", [(1, 1024, (8, 8)), (8, 128, (8, 4))], ids=["mcast", "no_mcast"])
+def test_group_norm_user_fp32_dest_acc_en_off_rejected_for_fp32_input(
+    device, use_welford, N, HW, core_grid, expect_error
+):
+    C, G = 512, 4
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+    )
+    tt_input = ttnn.from_torch(torch.randn(N, 1, HW, C), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
+        ttnn.group_norm(
+            tt_input,
+            num_groups=G,
+            core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+            inplace=False,
+            compute_kernel_config=compute_kernel_config,
+            use_welford=use_welford,
+        )
+
+
+# With bf16 input the op's default is fp32 DEST for welford and bf16 DEST for legacy. Only fp32_dest_acc_en differs
+# between the two user configs, so matching outputs would mean the flag was dropped. Only welford is checked for an
+# accuracy gain: legacy packs its statistics to bf16 intermediate CBs between steps, so fp32 DEST can round the mean
+# to a worse bf16 value (#29960).
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize("N, HW, core_grid", [(1, 1024, (8, 8)), (8, 128, (8, 4))], ids=["mcast", "no_mcast"])
+def test_group_norm_user_fp32_dest_acc_en_honored_for_bf16_input(device, use_welford, N, HW, core_grid):
+    torch.manual_seed(0)
+    C, G = 512, 4
+    # A nonzero mean makes bf16 rounding of the statistics visible.
+    x = (torch.randn(N, 1, HW, C) + 4.0).bfloat16().float()
+    ref = torch.nn.functional.group_norm(x.double().permute(0, 3, 1, 2), G, eps=1e-5).permute(0, 2, 3, 1)
+
+    def run(fp32_dest_acc_en):
+        compute_kernel_config = None
+        if fp32_dest_acc_en is not None:
+            # Same fidelity and approx mode as the op's default config, so only fp32_dest_acc_en differs.
+            compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=True,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+            )
+        tt_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_output = ttnn.group_norm(
+            tt_input,
+            num_groups=G,
+            epsilon=1e-5,
+            core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+            inplace=False,
+            compute_kernel_config=compute_kernel_config,
+            use_welford=use_welford,
+        )
+        return ttnn.to_torch(tt_output).double()
+
+    out_default = run(None)
+    out_off = run(False)
+    out_on = run(True)
+
+    assert not torch.equal(out_on, out_off), "fp32_dest_acc_en in the user compute_kernel_config had no effect"
+    assert torch.equal(out_default, out_on if use_welford else out_off), "user config differs from matching default"
+
+    if use_welford:
+        err_on = (out_on - ref).abs().mean().item()
+        err_off = (out_off - ref).abs().mean().item()
+        assert err_on < err_off, f"fp32 DEST mean abs error {err_on} is not below bf16 DEST {err_off}"

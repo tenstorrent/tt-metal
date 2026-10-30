@@ -224,6 +224,17 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
+    // EXPERIMENT (#29960): compute_kernel_hw_startup configures the packer for the input format, but every pack
+    // below targets a CB in the intermediate format (c_8, c_27, c_25, c_24), except the output packs, which switch
+    // to dfb_out and back. So point the packer at the intermediate format here. Without this, bf16 input with fp32
+    // intermediates would pack the first statistics as bf16 into fp32 CBs. The output packs use the two-argument
+    // reconfig, which relies on the packer being on the intermediate format whenever they run. A new pack to a CB
+    // in another format must restore the packer the same way. TT_METAL_LLK_ASSERTS=1 checks the packer registers
+    // against the target CB on every pack_tile. For fp32 input this is a same-format reconfig, and all-bf16
+    // configurations compile it out.
+    if constexpr (enable_fp32_reconfig) {
+        pack_reconfig_data_format(dfb_ex_partial_id);
+    }
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
@@ -247,9 +258,10 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_batches; ++b) {
         // Aim the unpacker at the welford intake CB; the tail stage leaves SrcA on dfb_x, so this
-        // repeats every batch. Only the fp32 path needs the reconfig, and it must precede the init:
+        // repeats every batch. Needed on the fp32-input path and whenever the intake and dfb_x formats
+        // differ (bf16 input with fp32 intermediates), and it must precede the init:
         // transpose_init's LLK assert checks the unpack config registers against the operand it is given.
-        if constexpr (welford_unpack_fp32_active) {
+        if constexpr (welford_unpack_fp32_active || enable_fp32_reconfig) {
 #ifdef TILIZE_IN
             reconfig_data_format_srca(dfb_in_id);
 #else
@@ -689,7 +701,15 @@ void kernel_main() {
                         if constexpr (do_beta || has_fused_activation) {
                             pack_tile(dst0, dfb_x_id);
                         } else {
+                            // Runs per output tile: the two-argument form skips the reconfig when the formats
+                            // match. See the startup reconfig for why dfb_x is the right "old" operand.
+                            if constexpr (enable_fp32_reconfig) {
+                                pack_reconfig_data_format(dfb_x_id, dfb_out_id);
+                            }
                             pack_tile(dst0, dfb_out_id);
+                            if constexpr (enable_fp32_reconfig) {
+                                pack_reconfig_data_format(dfb_out_id, dfb_x_id);
+                            }
                         }
                         tile_regs_release();
                         if constexpr (do_beta || has_fused_activation) {
@@ -724,7 +744,15 @@ void kernel_main() {
                         if constexpr (has_fused_activation) {
                             pack_tile(dst0, dfb_x_id);
                         } else {
+                            // Runs per output tile: the two-argument form skips the reconfig when the formats
+                            // match. See the startup reconfig for why dfb_x is the right "old" operand.
+                            if constexpr (enable_fp32_reconfig) {
+                                pack_reconfig_data_format(dfb_x_id, dfb_out_id);
+                            }
                             pack_tile(dst0, dfb_out_id);
+                            if constexpr (enable_fp32_reconfig) {
+                                pack_reconfig_data_format(dfb_out_id, dfb_x_id);
+                            }
                         }
                         tile_regs_release();
                         if constexpr (has_fused_activation) {
@@ -755,19 +783,18 @@ void kernel_main() {
                         dfb_x.pop_front(1);
                         dfb_out.reserve_back(1);
                         tile_regs_wait();
-#ifndef UNTILIZE_OUT
-                        // Packer was last set for bf16 dfb_x; reconfigure to dfb_out_id (may be fp32) before pack,
-                        // then restore it. This compiles out for the bf16 path.
+                        // Switch the packer from dfb_x's format to dfb_out's for this pack, then restore it. This
+                        // used to be skipped under UNTILIZE_OUT, but there dfb_out is c_30, which takes the input
+                        // format and differs from dfb_x for bf16 input with fp32 intermediates (#29960). Runs per
+                        // output tile: the two-argument form skips the reconfig when the formats match. See the
+                        // startup reconfig for why dfb_x is the right "old" operand. Compiles out for all-bf16.
                         if constexpr (enable_fp32_reconfig) {
-                            pack_reconfig_data_format(dfb_out_id);
+                            pack_reconfig_data_format(dfb_x_id, dfb_out_id);
                         }
-#endif
                         pack_tile(dst0, dfb_out_id);
-#ifndef UNTILIZE_OUT
                         if constexpr (enable_fp32_reconfig) {
-                            pack_reconfig_data_format(dfb_x_id);
+                            pack_reconfig_data_format(dfb_out_id, dfb_x_id);
                         }
-#endif
                         tile_regs_release();
                         dfb_out.push_back(1);
                     }

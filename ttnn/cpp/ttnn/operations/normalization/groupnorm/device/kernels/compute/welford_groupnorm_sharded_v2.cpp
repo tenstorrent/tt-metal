@@ -158,6 +158,14 @@ void kernel_main() {
 #else   // !TILIZE_IN
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif  // TILIZE_IN
+    // EXPERIMENT (#29960): compute_kernel_hw_startup configures the packer for the input format, but every pack
+    // below targets an intermediate CB, except the output packs, which switch to the output CB and back. So point
+    // the packer at the intermediate format here. Without this, bf16 input with fp32 intermediates would pack the
+    // first statistics as bf16 into fp32 CBs. For fp32 input this is a same-format reconfig, and all-bf16
+    // configurations compile it out.
+    if constexpr (enable_fp32_reconfig) {
+        pack_reconfig_data_format(dfb_ex_partial_id);
+    }
 
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
@@ -172,9 +180,15 @@ void kernel_main() {
     for (std::uint32_t b = 0; b < num_batches; ++b) {
         std::uint32_t tile_id = b * num_tiles_per_batch;
         dfb_ex_partial.reserve_back(2);
-        if constexpr (welford_fp32_alias) {
-            // The alias carries UnpackToDestFp32 while c_0 / c_1 stay Default; transpose_init only
-            // programs the MOP, so without the reconfig the fp32 intake is silently truncated to TF32.
+        if constexpr (welford_fp32_alias || enable_fp32_reconfig) {
+            // Point SrcA at the Welford intake CB before transpose_init, which only programs the MOP and does
+            // not reconfigure the unpacker. Two cases need this:
+            // - With the fp32 alias, the alias carries UnpackToDestFp32 while c_0 / c_1 stay Default, so
+            //   without the reconfig the fp32 intake is silently truncated to TF32.
+            // - From the second batch on, SrcA is still set for dfb_x from the previous batch. With bf16 input
+            //   and fp32 intermediates (#29960), dfb_x is fp32 but the intake is bf16, so the input would be
+            //   unpacked in the wrong format.
+            // Without the alias, the Welford intake ids are c_1 / c_0 themselves.
 #ifdef TILIZE_IN
             reconfig_data_format_srca(dfb_in_welford_id);
             transpose_init(dfb_in_welford_id);
@@ -614,19 +628,25 @@ void kernel_main() {
                 DataflowBuffer write_dfb(static_cast<uint16_t>(write_dfb_id));
                 write_dfb.reserve_back(1);
                 tile_regs_wait();
-#ifndef UNTILIZE_OUT
-                // Switch from the intermediate format to output for this pack,
-                // then restore it. All-BF16 configurations need no reconfiguration.
+                // Switch the packer from the intermediate format to the format of write_dfb for this pack, then
+                // restore it. This used to be skipped under UNTILIZE_OUT, but there write_dfb is the staging CB
+                // (c_30), which takes the input format. With bf16 input and fp32 intermediates (#29960) the two
+                // differ, so the result would be packed as fp32 into a bf16 CB.
+                // This runs for every output tile, so it uses the two-argument form, which compares the two CBs'
+                // formats and skips the reconfig (and its packer drain) when they match.
+                // pack_reconfig_data_format only compares the CBs it is given, so the packer must really be on the
+                // intermediate format here. (It is: every pack in this kernel targets a CB in the intermediate
+                // format (c_8, c_17, c_2, c_13), except this one, which restores it straight after.) A new pack to
+                // a CB in another format must restore the packer the same way. TT_METAL_LLK_ASSERTS=1 checks the
+                // packer registers against the target CB on every pack_tile. All-bf16 configurations compile
+                // this out.
                 if constexpr (enable_fp32_reconfig) {
-                    pack_reconfig_data_format(write_dfb_id);
+                    pack_reconfig_data_format(dfb_xmm_id, write_dfb_id);
                 }
-#endif
                 pack_tile(dst0, static_cast<uint32_t>(write_dfb_id));
-#ifndef UNTILIZE_OUT
                 if constexpr (enable_fp32_reconfig) {
-                    pack_reconfig_data_format(dfb_xmm_id);
+                    pack_reconfig_data_format(write_dfb_id, dfb_xmm_id);
                 }
-#endif
                 tile_regs_release();
                 write_dfb.push_back(1);
             }
@@ -663,6 +683,15 @@ void kernel_main() {
 #endif
 
 #ifdef UNTILIZE_OUT
+    // The batch loop leaves SrcA and the packer set for its own last operands, which use the intermediate
+    // format. The untilize below runs with NoReconfigure, so point both at its operands here (#29960): SrcA at
+    // the staging CB (c_30, input format) and the packer at the output CB. Without this, bf16 input with fp32
+    // intermediates would unpack the bf16 staging tiles as fp32. For fp32 input these are same-format
+    // reconfigs, and all-bf16 configurations compile them out.
+    if constexpr (enable_fp32_reconfig) {
+        reconfig_data_format_srca(dfb_untilize_in_id);
+        pack_reconfig_data_format(static_cast<uint32_t>(dfb_untilize_out_id));
+    }
     // untilize - DEST capacity auto-detected
     compute_kernel_lib::untilize<
         per_core_N,
