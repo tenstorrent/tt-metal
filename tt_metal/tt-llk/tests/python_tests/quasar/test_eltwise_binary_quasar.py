@@ -20,6 +20,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -52,7 +53,7 @@ from helpers.utils import passed_test, result_tensor
 
 
 def _eltwise_dest_acc_sync(dest_acc_modes, *, is_perf=False):
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
     return [
         (dest_sync, dest_acc)
         for dest_sync in dest_sync_modes

@@ -13,7 +13,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     UnpackerEngine,
 )
@@ -24,6 +23,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -69,9 +69,7 @@ def generate_eltwise_unary_datacopy_combinations(
         in_fmt = fmt.input_format
 
         dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-        dest_sync_modes = (
-            (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-        )
+        dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
         tile_sizes = (
             select_perf_tile_sizes(SUPPORTED_TILE_SIZES)

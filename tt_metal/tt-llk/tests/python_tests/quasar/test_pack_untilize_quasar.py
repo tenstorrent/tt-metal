@@ -9,7 +9,6 @@ from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
-    DestSync,
     PerfRunType,
 )
 from helpers.param_config import (
@@ -17,6 +16,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -45,10 +45,6 @@ PACK_UNTILIZE_TILE_SIZES = [
     (1, 32),
     (2, 32),
 ]
-
-
-def pack_untilize_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
 def pack_untilize_perf_input_dimensions(dest_acc, dest_sync, tile_shape):
@@ -91,7 +87,7 @@ def generate_pack_untilize_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format

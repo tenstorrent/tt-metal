@@ -12,7 +12,6 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     UnpackerEngine,
     format_dict,
@@ -22,6 +21,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
 )
@@ -68,10 +68,6 @@ def _wide_range_spec(fmt: DataFormat):
     return StimuliSpec.uniform(low=-hi, high=hi)
 
 
-def unary_broadcast_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
-
-
 UNARY_BROADCAST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -105,7 +101,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=BROADCAST_TYPES,
-    dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
