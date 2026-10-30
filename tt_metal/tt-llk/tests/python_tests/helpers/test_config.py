@@ -48,13 +48,13 @@ from .device import (
     TRISC_CORES,
     BootMode,
     RiscCore,
-    commit_brisc_command,
     commit_tensix_soft_reset,
     exalens_device_setup,
+    get_soft_reset_mask,
     handle_if_assert_hit,
     reset_mailboxes,
     set_tensix_soft_reset,
-    wait_brisc_boot_ready,
+    soft_reset_bits,
 )
 from .device_print import aux_size_for
 from .format_config import (
@@ -73,7 +73,6 @@ from .golden_generators import (
     get_golden_proxied,
 )
 from .llk_params import (
-    BriscCmd,
     DestAccumulation,
     L1Accumulation,
     Mailboxes,
@@ -2018,10 +2017,9 @@ class TestConfig:
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
-    # Max BRISC bring-up attempts after a reset. A board-wide `tt-smi -r 0`
-    # can leave a core slow-to-boot or wedged; each attempt re-issues the
-    # soft-reset kick (re-polling alone cannot recover a wedged core).
-    BRISC_BOOT_MAX_ATTEMPTS: ClassVar[int] = 3
+    # Wormhole: the _start addresses of the loaded TRISC ELFs, written again before every launch (device_setup copies them
+    # into the TRISC reset PCs and the TRISCs clear them).
+    TRISC_START_VALUES: ClassVar[list[int]] = []
 
     def _write_launch_word(self, counted_zones: int):
         """Counters on only: the launch word counters.h reads (launch_word), and on Quasar the bank registers."""
@@ -2046,12 +2044,15 @@ class TestConfig:
 
             configure_quasar_counters(TestConfig.TENSIX_LOCATION)
 
-    def run_elf_files(self) -> list:
-        boot_mode = (
+    def resolved_boot_mode(self) -> BootMode:
+        return (
             CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
             if self.boot_mode == BootMode.DEFAULT
             else self.boot_mode
         )
+
+    def run_elf_files(self) -> list:
+        boot_mode = self.resolved_boot_mode()
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -2083,65 +2084,16 @@ class TestConfig:
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
-        brisc_cmd_timeout = (
-            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
-        )
-
-        if boot_mode == BootMode.BRISC:
-            if not TestConfig.BRISC_ELF_LOADED:
-                commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
-                load_elf(
-                    elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
-                    location=TestConfig.TENSIX_LOCATION,
-                    risc_name="brisc",
-                    verify_write=True,
-                )
-                # Bring BRISC up, retrying the soft-reset kick until it reaches
-                # its polling loop. A board-wide `tt-smi -r 0` can leave a core
-                # slow-to-boot or wedged; re-polling alone never recovers a
-                # wedged core, so each attempt re-asserts then de-asserts the
-                # BRISC soft reset. BRISC_ELF_LOADED is latched only after
-                # boot-ready succeeds, so a failed bring-up is retried on the
-                # next test instead of poisoning the rest of this worker's run.
-                last_err = None
-                for attempt in range(TestConfig.BRISC_BOOT_MAX_ATTEMPTS):
-                    if attempt:
-                        commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
-                    # Pre-clear BriscCounter so we cannot latch onto a stale
-                    # boot-ready sentinel left in L1 by a prior pytest process —
-                    # mailboxes live at fixed L1 addresses outside any ELF
-                    # section, so they survive ELF reload.
-                    write_words_to_device(
-                        TestConfig.TENSIX_LOCATION,
-                        device_module.Mailboxes.BriscCounter.value,
-                        [0],
-                    )
-                    commit_tensix_soft_reset(
-                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
-                    )
-                    try:
-                        wait_brisc_boot_ready(
-                            TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
-                        )
-                    except TimeoutError as err:
-                        last_err = err
-                        continue
-                    TestConfig.BRISC_ELF_LOADED = True
-                    break
-                else:
-                    raise TimeoutError(
-                        f"BRISC bring-up did not become ready after "
-                        f"{TestConfig.BRISC_BOOT_MAX_ATTEMPTS} attempts"
-                    ) from last_err
-
-            # Reset only TRISCs, BRISC stays alive in its polling loop
-            commit_brisc_command(
-                TestConfig.TENSIX_LOCATION,
-                BriscCmd.RESET_TRISCS,
-                timeout=brisc_cmd_timeout,
+        # BRISC boot: BRISC already put all four cores back in reset when the last launch ended (brisc.cpp), unless it hung.
+        commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+        if boot_mode == BootMode.BRISC and not TestConfig.BRISC_ELF_LOADED:
+            load_elf(
+                elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
+                location=TestConfig.TENSIX_LOCATION,
+                risc_name="brisc",
+                verify_write=True,
             )
-        else:
-            commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+            TestConfig.BRISC_ELF_LOADED = True
 
         # Counters on: every launch names the zones it counts (counters.h launch_word), 0 unless a perf run counts
         # them, then with a new token that the readouts store, so a result is never one an earlier launch left.
@@ -2153,19 +2105,17 @@ class TestConfig:
             # A failed load or start address update leaves the TRISCs on two variants
             TestConfig.LAST_LOADED_ELFS = Path()
 
+            TestConfig.TRISC_START_VALUES = []
             for i, elf_file_path in enumerate(self.temp_elfs):
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
-                    start_address = load_elf(
-                        elf_file=elf_file_path,
-                        location=TestConfig.TENSIX_LOCATION,
-                        risc_name=f"trisc{i}",
-                        return_start_address=True,
-                        verify_write=False,
-                    )
-                    write_words_to_device(
-                        TestConfig.TENSIX_LOCATION,
-                        TestConfig.TRISC_START_ADDRS[i],
-                        [start_address],
+                    TestConfig.TRISC_START_VALUES.append(
+                        load_elf(
+                            elf_file=elf_file_path,
+                            location=TestConfig.TENSIX_LOCATION,
+                            risc_name=f"trisc{i}",
+                            return_start_address=True,
+                            verify_write=False,
+                        )
                     )
                 else:
                     load_elf(
@@ -2180,27 +2130,25 @@ class TestConfig:
                         verify_write=False,
                     )
 
-            if (
-                boot_mode == BootMode.BRISC
-                and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-            ):
-                commit_brisc_command(
-                    TestConfig.TENSIX_LOCATION,
-                    BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
-                    timeout=brisc_cmd_timeout,
-                )
-                TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
-                return
-
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
+
+        if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
+            # The TRISCs clear their start addresses after reading them, so every launch writes them again.
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                TestConfig.TRISC_START_ADDRS[0],
+                TestConfig.TRISC_START_VALUES,
+            )
 
         match boot_mode:
             case BootMode.BRISC:
-                commit_brisc_command(
-                    TestConfig.TENSIX_LOCATION,
-                    BriscCmd.START_TRISCS,
-                    timeout=brisc_cmd_timeout,
-                )
+                launch_done = device_module.launch_done_address()
+                if launch_done is not None:
+                    write_words_to_device(
+                        TestConfig.TENSIX_LOCATION, launch_done, [0], safe_mode=False
+                    )
+                # Not a committed write: a short kernel can be done and back in reset before a readback.
+                set_tensix_soft_reset(0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION)
             case BootMode.TRISC:
                 reset_mailboxes(TestConfig.TENSIX_LOCATION)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)
@@ -2220,14 +2168,6 @@ class TestConfig:
         """
 
         mailboxes = {core for core in device_module.Mailboxes}
-        if self.CHIP_ARCH != ChipArchitecture.QUASAR:
-            mailboxes -= {
-                device_module.Mailboxes.BriscCommand0,
-                device_module.Mailboxes.BriscCommand1,
-                device_module.Mailboxes.BriscCounter,
-                device_module.Mailboxes.BriscBread0,
-                device_module.Mailboxes.BriscBread1,
-            }
         timeout = (
             TestConfig.SIMULATOR_TIMEOUT
             if TestConfig.TEST_TARGET.run_simulator
@@ -2243,21 +2183,60 @@ class TestConfig:
         span = max(mailbox.value for mailbox in mailboxes) + 4 - base
         word_index = {mailbox: (mailbox.value - base) // 4 for mailbox in mailboxes}
 
-        completed = set()
-        end_time = time.time() + timeout
-        while time.time() < end_time:
+        def completed_mailboxes():
             words = np.frombuffer(
                 read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span),
                 dtype=np.uint32,
             )
-            for mailbox in mailboxes - completed:
-                if words[word_index[mailbox]] == KERNEL_COMPLETE:
-                    completed.add(mailbox)
+            return {
+                mailbox
+                for mailbox in mailboxes
+                if words[word_index[mailbox]] == KERNEL_COMPLETE
+            }
+
+        # BRISC boot: BRISC puts itself and the TRISCs back in soft reset once every TRISC is done (brisc.cpp), so the
+        # wait polls that register and never reads L1 while a kernel runs.
+        brisc_launch = self.resolved_boot_mode() == BootMode.BRISC
+        if brisc_launch:
+            brisc_done_mask = get_soft_reset_mask([RiscCore.BRISC, *TRISC_CORES])
+            # Silicon: the overlay register BRISC marks the launch done in, off L1 and the Tensix register bus.
+            launch_done = device_module.launch_done_address()
+
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            if brisc_launch and launch_done is not None:
+                done = (
+                    np.frombuffer(
+                        read_from_device(
+                            TestConfig.TENSIX_LOCATION, launch_done, num_bytes=4
+                        ),
+                        dtype=np.uint32,
+                    )[0]
+                    & device_module.HOST_SIGNAL_MASK
+                    == KERNEL_COMPLETE
+                )
+                # BRISC puts the cores in reset right after marking the launch done.
+                while done and (
+                    soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
+                    != brisc_done_mask
+                ):
+                    pass
+            elif brisc_launch:
+                done = (
+                    soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
+                    == brisc_done_mask
+                )
+            else:
+                done = completed_mailboxes() == mailboxes
 
             if poll_callback is not None:
                 poll_callback()
 
-            if completed == mailboxes:
+            if done:
+                if brisc_launch and completed_mailboxes() != mailboxes:
+                    raise RuntimeError(
+                        f"BRISC put the TRISCs in reset before {', '.join(m.name for m in mailboxes - completed_mailboxes())} finished"
+                    )
                 return
 
         handle_if_assert_hit(
@@ -2265,7 +2244,11 @@ class TestConfig:
             core_loc=TestConfig.TENSIX_LOCATION,
         )
 
-        trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed)]
+        trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed_mailboxes())]
+        if brisc_launch:
+            trisc_hangs.append(
+                f"BRISC (soft reset 0x{soft_reset_bits(TestConfig.TENSIX_LOCATION):x})"
+            )
         raise TimeoutError(
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )

@@ -110,7 +110,11 @@ int main(void)
 
     llk_perf::read_last_zone();
 
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+    ckernel::store_blocking(mailbox, ckernel::KERNEL_COMPLETE); // landed before BRISC can reset this core (_start)
+#else
     *mailbox = ckernel::KERNEL_COMPLETE;
+#endif
 }
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
@@ -121,6 +125,12 @@ extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrume
 
 #ifdef COVERAGE
     gcov_dump();
+#endif
+
+#if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !defined(TT_METAL_TTSIM) // BRISC waits on L1 on ttsim
+    // Park on this TRISC's own PC buffer, which nothing fills: that ends BRISC's wait on it (brisc.cpp), and BRISC then
+    // puts the core back in soft reset.
+    (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
 #endif
 
     for (;;)
