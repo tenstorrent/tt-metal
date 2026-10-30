@@ -315,16 +315,18 @@ class ExpertCacheRunner:
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-        N: int,
+        N: int | ttnn.Tensor,
         timestep: ttnn.Tensor,
         traced: bool,
         gather_output: bool = False,
+        valid_11N1: ttnn.Tensor | None = None,
     ) -> list[ttnn.Tensor]:
         """Run one denoising step for each CFG branch, returning one velocity tensor per branch.
 
         ``prompts_1BLP[0]`` is the conditional prompt, ``prompts_1BLP[1]`` (if present) the
         unconditional one. Returned tensors are this runner's persistent buffers when more than one
-        branch runs (the tracers reuse their output tensors between calls).
+        branch runs (the tracers reuse their output tensors between calls). ``valid_11N1`` masks
+        the sequence padding out of the residual diff (see ``cache_head``).
         """
         cfg = self.config
         ctx = self.context
@@ -355,6 +357,7 @@ class ExpertCacheRunner:
                 N,
                 timestep,
                 self.prev_fn_in,
+                valid_11N1,
                 num_fn_blocks=cfg.Fn_compute_blocks,
                 traced=traced,
             )

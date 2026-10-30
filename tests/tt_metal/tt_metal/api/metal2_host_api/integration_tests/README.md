@@ -20,3 +20,4 @@ Put a test here only if a mock device cannot cover it. Put it elsewhere when:
 | `llk_operand_mul.cpp` | LLK operands from a DFB, a LocalTensorAccessor and a Scratchpad (Blackhole) |
 | `mesh_workload_factories.cpp` | `MakeMeshWorkloadFromSpec(s)` |
 | `trisc0_rvv_vadd.cpp` | `Compute2XXConfig::enable_unpack_rvv`: TRISC0 vector add (Quasar emulator) |
+| `per_node_tensor_bindings.cpp` | Per-node allocated tensor bindings. Built into `unit_tests_hybrid_allocator`, not `unit_tests_api`: the HYBRID allocator mode is latched per process |

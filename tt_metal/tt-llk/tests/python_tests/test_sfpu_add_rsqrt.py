@@ -36,7 +36,6 @@ expectations (NaN and +inf respectively) rather than tolerance comparisons, sinc
 neither is a value passed_test can meaningfully bound.
 """
 
-import struct
 
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
@@ -60,6 +59,7 @@ from helpers.test_variant_parameters import (
     SFPU_TYPED_BF16_STORE,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
+    fp32_bits,
 )
 from helpers.utils import passed_test
 
@@ -121,10 +121,6 @@ _RTOL = {
 }
 
 
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
 def _build_add_rsqrt(
     formats,
     dest_acc,
@@ -158,8 +154,8 @@ def _build_add_rsqrt(
             APPROX_MODE(approx),
             SFPU_FAST_APPROX(fast_approx),
             SFPU_TYPED_BF16_STORE(typed_bf16_store),
-            SFPU_INPUT_SCALE(_bits(input_scale)),
-            SFPU_UNARY_SCALAR(_bits(addend)),
+            SFPU_INPUT_SCALE(fp32_bits(input_scale)),
+            SFPU_UNARY_SCALAR(fp32_bits(addend)),
             VECTOR_MODE(VectorMode.RC),
         ],
         runtimes=[],

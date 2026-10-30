@@ -136,6 +136,20 @@ public:
 
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
 
+    // Page placement chosen by the allocator. It doesn't depend on the device, so all device buffers share it.
+    // Each getter throws if none of the device buffers are local to this host.
+
+    /// Alignment of the buffer's memory type, in bytes.
+    uint32_t alignment() const;
+    /// Page size rounded up to the alignment.
+    DeviceAddr aligned_page_size() const;
+    /// Number of pages on each device, including padding pages of sharded buffers.
+    uint32_t num_dev_pages() const;
+    /// Total size of the pages on each device, aligned.
+    DeviceAddr aligned_size() const;
+    /// Size the allocation takes in each bank.
+    DeviceAddr aligned_size_per_bank() const;
+
     // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
     // The reference buffer allows "casting" the MeshBuffer to a buffer allocated on a
     // single device. This allows users of this object that only need to query single device

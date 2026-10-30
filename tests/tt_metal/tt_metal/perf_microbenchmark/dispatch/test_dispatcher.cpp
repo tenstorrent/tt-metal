@@ -13,7 +13,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/context_types.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -1188,7 +1188,7 @@ public:
         tt_metal::MetalContext::instance().get_cluster().write_core(
             raw.data(), raw.size(), tt_cxy_pair(this->device_->id(), phys_spoof), l1_buf_base);
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*this->mesh_device_);
 
         const uint32_t spoof_prefetch_sem_id =
             tt_metal::CreateSemaphore(program, {spoof_logical}, dispatch_buffer_pages, cq_core_type);
