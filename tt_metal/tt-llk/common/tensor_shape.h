@@ -87,6 +87,18 @@ constexpr std::uint32_t tiny_face_stride(const TensorShape& tensor_shape)
     return tensor_shape.face_r_dim < MAX_FPU_ROWS ? MAX_FPU_ROWS / tensor_shape.face_r_dim : 1;
 }
 
+/// Register-file rows one face occupies, including tiny-face padding.
+constexpr std::uint32_t padded_face_rows(const TensorShape& tensor_shape)
+{
+    return tensor_shape.face_r_dim * tiny_face_stride(tensor_shape);
+}
+
+/// Register-file rows one tile occupies, including tiny-face padding.
+constexpr std::uint32_t padded_tile_rows(const TensorShape& tensor_shape)
+{
+    return tensor_shape.total_num_faces() * padded_face_rows(tensor_shape);
+}
+
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
 /// Build a TensorShape from explicit face dimensions and face-grid counts.
