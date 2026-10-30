@@ -7,8 +7,10 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 #include "tt-metalium/work_split.hpp"
@@ -35,9 +37,6 @@ using tt::tt_metal::experimental::KernelSpec;
 using tt::tt_metal::experimental::KernelSpecName;
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
-using tt::tt_metal::experimental::SemaphoreBinding;
-using tt::tt_metal::experimental::SemaphoreSpec;
-using tt::tt_metal::experimental::SemaphoreSpecName;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
@@ -328,11 +327,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             num_cores_to_corerangeset_in_subcoregrids(receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
     }
 
-    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
-    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
-
     uint32_t num_batch_compute = use_indices ? num_active : nnz.value_or(sparsity.logical_volume());
     // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
     // device op (device/sparse/sparse_matmul_device_operation.cpp): [1, nnz, M, N]. Shape matching,
@@ -394,9 +388,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const TensorParamName INDICES{"indices"};
     const TensorParamName OUTPUT{"output"};
     const TensorParamName BIAS{"bias"};
-
-    const SemaphoreSpecName IN0_SENDER_SEM{"in0_mcast_sender"};
-    const SemaphoreSpecName IN0_RECEIVER_SEM{"in0_mcast_receiver"};
 
     // In indexed/gather mode the in1 sender/writer's sparsity slot carries the *indices* tensor, a
     // different tensor from the mask the in0 sender reads, so it needs its own TensorParameter.
@@ -508,20 +499,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Semaphores
-    ////////////////////////////////////////////////////////////////////////////
-    Group<SemaphoreSpec> semaphores = {
-        SemaphoreSpec{
-            .unique_id = IN0_SENDER_SEM,
-            .target_nodes = all_cores,
-        },
-        SemaphoreSpec{
-            .unique_id = IN0_RECEIVER_SEM,
-            .target_nodes = all_cores,
-        },
-    };
-
-    ////////////////////////////////////////////////////////////////////////////
     //                      Defines
     ////////////////////////////////////////////////////////////////////////////
     std::map<std::string, std::string> mm_kernel_defines;
@@ -544,11 +521,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         mm_kernel_defines,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
-    if (in0_mcast_receiver_num_cores == 1) {
-        mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
-    }
-
-    mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     if (use_bias) {
         // FUSE_BIAS selects the shared kernels' fused-bias path; BIAS_PER_GROUP makes the reader fetch
         // tile row indices[bB] for every group and the compute kernel wait/pop the bias per group.
@@ -598,11 +570,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
     const bool has_in0_receiver_kernel = in0_mcast_receivers.num_cores() > 0;
 
-    const Group<SemaphoreBinding> in0_mcast_sem_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = IN0_SENDER_SEM, .accessor_name = "in0_mcast_sender"},
-        SemaphoreBinding{.semaphore_spec_name = IN0_RECEIVER_SEM, .accessor_name = "in0_mcast_receiver"},
-    };
-
     Group<KernelSpec> kernels;
 
     // ---- in0 sender ------------------------------------------------------
@@ -635,7 +602,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
             },
-        .semaphore_bindings = in0_mcast_sem_bindings,
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
@@ -662,9 +628,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 {"num_blocks_inner_dim", num_blocks},
                 {"num_blocks_w_dim", out_num_blocks_x},
                 {"num_blocks_h_dim", out_num_blocks_y},
-                // in0 mcast args
-                {"in0_mcast_num_dests", num_cores - 1},
-                {"in0_mcast_num_cores", in0_mcast_receiver_num_cores - 1},
                 // batch args
                 {"MtKt", Mt * Kt},
                 {"in0_B", batchA},
@@ -685,13 +648,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names =
-                    {"in0_tensor_start_tile_id",
-                     "in0_mcast_dest_noc_start_x",
-                     "in0_mcast_dest_noc_start_y",
-                     "in0_mcast_dest_noc_end_x",
-                     "in0_mcast_dest_noc_end_y",
-                     "last_block_h"},
+                .runtime_arg_names = {"in0_tensor_start_tile_id", "last_block_h"},
             },
         .hw_config = in0_hw_config,
     });
@@ -710,7 +667,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                         .endpoint_type = DFBEndpointType::PRODUCER,
                     },
                 },
-            .semaphore_bindings = in0_mcast_sem_bindings,
             .compile_time_args =
                 {
                     {"in0_block_num_tiles", in0_block_num_tiles},
@@ -720,18 +676,12 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     {"batch", num_batch_compute},
                     {"get_batch_from_reader", static_cast<uint32_t>(get_batch_from_reader)},
                 },
-            .runtime_arg_schema =
-                {
-                    .runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"},
-                },
             .hw_config = in0_hw_config,
         });
     }
 
     // ---- in1 sender / output writer --------------------------------------
-    // The in1 multicast is skipped entirely (SKIP_MCAST), so the kernel's semaphore objects are
-    // constructed but never used; they are still bound because the kernel constructs them
-    // unconditionally. Legacy passed literal ids 0/0 into the same slots.
+    // The in1 multicast is skipped entirely; this kernel reads weights and writes output.
     KernelSpec in1_sender{
         .unique_id = IN1_SENDER_WRITER,
         .source =
@@ -766,11 +716,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
             },
-        .semaphore_bindings =
-            {
-                SemaphoreBinding{.semaphore_spec_name = IN0_SENDER_SEM, .accessor_name = "in1_mcast_sender"},
-                SemaphoreBinding{.semaphore_spec_name = IN0_RECEIVER_SEM, .accessor_name = "in1_mcast_receiver"},
-            },
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = IN1, .accessor_name = "in1"},
@@ -793,9 +738,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 {"num_blocks_inner_dim", num_blocks},
                 {"num_blocks_w_dim", out_num_blocks_x},
                 {"num_blocks_h_dim", out_num_blocks_y},
-                // in1 mcast args
-                {"in1_mcast_num_dests", 0u},
-                {"in1_mcast_num_cores", 0u},
                 // batch args
                 {"KtNt", Kt * Nt},
                 {"batch", batchA},
@@ -826,10 +768,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             {
                 .runtime_arg_names =
                     {"in1_tensor_start_tile_id",
-                     "in1_mcast_dest_noc_start_x",
-                     "in1_mcast_dest_noc_start_y",
-                     "in1_mcast_dest_noc_end_x",
-                     "in1_mcast_dest_noc_end_y",
                      "out_tensor_start_tile_id",
                      // padding args (READER)
                      "last_block_w",
@@ -1043,12 +981,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
 
-    CoreCoord start_core_noc = top_left_core_physical;
-    CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-        std::swap(start_core_noc, end_core_noc);
-    }
-
     KernelRunArgs in0_sender_run_args{.kernel = IN0_SENDER};
     KernelRunArgs in0_receiver_run_args{.kernel = IN0_RECEIVER};
     KernelRunArgs in1_sender_run_args{.kernel = IN1_SENDER_WRITER};
@@ -1066,22 +998,8 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 core,
                 {// in0 tensor args
                  {"in0_tensor_start_tile_id", Kt * per_core_M * output_idx_y},
-                 // in0 mcast args
-                 {"in0_mcast_dest_noc_start_x", static_cast<uint32_t>(start_core_noc.x)},
-                 {"in0_mcast_dest_noc_start_y", static_cast<uint32_t>(start_core_noc.y)},
-                 {"in0_mcast_dest_noc_end_x", static_cast<uint32_t>(end_core_noc.x)},
-                 {"in0_mcast_dest_noc_end_y", static_cast<uint32_t>(end_core_noc.y)},
                  // padding args
                  {"last_block_h", out_block_h}});
-        }
-        // in0 receiver and in 1 sender
-        else {
-            AddRuntimeArgsForNode(
-                in0_receiver_run_args.runtime_arg_values,
-                core,
-                {// in0 mcast args
-                 {"in0_mcast_sender_noc_x", static_cast<uint32_t>(top_left_core_physical.x)},
-                 {"in0_mcast_sender_noc_y", static_cast<uint32_t>(top_left_core_physical.y)}});
         }
         if (i < num_cores_with_work) {
             const bool last_x = (output_idx_x == num_blocks_x - 1);
@@ -1091,11 +1009,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 {// READER
                  // in1 tensor args
                  {"in1_tensor_start_tile_id", per_core_N * output_idx_x},
-                 // in1 mcast args
-                 {"in1_mcast_dest_noc_start_x", 0u},
-                 {"in1_mcast_dest_noc_start_y", 0u},
-                 {"in1_mcast_dest_noc_end_x", 0u},
-                 {"in1_mcast_dest_noc_end_y", 0u},
                  // WRITER
                  // out tensor args
                  {"out_tensor_start_tile_id", (output_idx_x * per_core_N) + (output_idx_y * per_core_M * Nt)},
@@ -1146,10 +1059,23 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         .name = "sparse_matmul_multi_core_reuse_mcast_1d",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
-        .semaphores = std::move(semaphores),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
+
+    std::vector<KernelSpecName> mcast_kernels{IN0_SENDER};
+    if (has_in0_receiver_kernel) {
+        mcast_kernels.push_back(IN0_RECEIVER);
+    }
+    ttnn::kernel_lib::host::Mcast in0_mcast(
+        *device,
+        {.noc = in0_noc, .handshake_cores = all_cores},
+        CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
+        in0_mcast_receiver_num_cores,
+        ttnn::kernel_lib::host::McastExplicitFixedSenderConfig{.senders_per_group = {start_core}});
+    in0_mcast.attach(spec, run_args, "in0_mcast", mcast_kernels);
+    // in1 is never multicast on this path.
+    ttnn::kernel_lib::host::attach_absent_mcast(spec, "in1_mcast", std::array{IN1_SENDER_WRITER});
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

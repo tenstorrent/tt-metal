@@ -56,5 +56,5 @@ outputs:
     description: 'Path to the JSON file containing workflow status changes'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'analyze-workflow-data.js'

@@ -54,8 +54,10 @@
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
+#include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/tensor/mesh_tensor.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include "jit_build/build_cache_telemetry.hpp"
@@ -85,8 +87,8 @@
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
 #include "kernel_compile_utils.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
@@ -806,8 +808,8 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         const size_t crta_words =
             static_cast<size_t>(layout.vararg_section_offset) + schema->num_common_runtime_varargs;
 
-        // Per-node RTAs: named count + per-node vararg count from the schema.
-        const size_t named_rta_words = schema->runtime_arg_names.size();
+        // Per-node RTAs: [ named | per-node tensor bindings | varargs ], with the vararg count from the schema.
+        const size_t rta_vararg_offset = kernel->get_rta_layout().vararg_section_offset;
 
         // Reserve unique RTAs first so set_common_runtime_args can validate against
         // max_runtime_args_per_core_ once CRTAs are installed.
@@ -817,7 +819,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
                 it != schema->num_runtime_varargs_per_node.end()) {
                 vararg_words = it->second;
             }
-            const size_t rta_words = named_rta_words + vararg_words;
+            const size_t rta_words = rta_vararg_offset + vararg_words;
             if (rta_words == 0) {
                 continue;
             }
@@ -883,6 +885,37 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
         }
     }
     return names;
+}
+
+detail::BoundTensorFootprint detail::make_bound_tensor_footprint(const MeshTensor& tensor) {
+    const auto& mesh_buffer = tensor.mesh_buffer();
+    const Buffer* backing_buffer = mesh_buffer.get_backing_buffer();
+    return BoundTensorFootprint{
+        .buffer_type = mesh_buffer.device_local_config().buffer_type,
+        .address = mesh_buffer.address(),
+        .size_per_bank = mesh_buffer.get_reference_buffer()->aligned_size_per_bank(),
+        .buffer_id = backing_buffer != nullptr ? std::optional{backing_buffer->unique_id()} : std::nullopt};
+}
+
+void ProgramImpl::set_bound_tensor_footprint(const std::string& name, const detail::BoundTensorFootprint& footprint) {
+    if (!metal2_registry_) {
+        return;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it != metal2_registry_->tensor_parameter_layouts.end()) {
+        it->second.bound = footprint;
+    }
+}
+
+const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end() || !it->second.bound.has_value()) {
+        return nullptr;
+    }
+    return &*it->second.bound;
 }
 
 void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
@@ -3838,14 +3871,14 @@ bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
 [[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program) {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/false);
     return workload;
 }
 
 distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program) {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(0), workload, /*blocking=*/true);
     return workload;
 }
 

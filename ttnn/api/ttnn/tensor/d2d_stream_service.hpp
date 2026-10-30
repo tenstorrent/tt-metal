@@ -9,7 +9,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -29,6 +31,9 @@ class MeshDevice;
 
 namespace ttnn {
 
+struct D2DReceiverDescriptor;     // ttnn/tensor/d2d_pipeline_descriptor.hpp
+class D2DPipelineDescriptorFile;  // ttnn/tensor/d2d_pipeline_descriptor.hpp
+
 // Receiver stage gate: the receiver holds each landed transfer until the gate selected
 // by the slot id in its metadata is open. Slot ids >= num_gates (e.g.
 // d2d_stream::kUngatedSlot) pass ungated. The two offsets must name different metadata
@@ -37,6 +42,8 @@ struct D2DStageGateConfig {
     uint32_t num_gates = 0;  // enabled when > 0
     uint32_t slot_id_offset_bytes = 0;
     uint32_t gate_mode_offset_bytes = 0;  // d2d_stream::GateMode
+
+    bool operator==(const D2DStageGateConfig&) const = default;
 };
 
 // Location of one coord's gates.
@@ -125,11 +132,26 @@ struct D2DStreamConfig {
     // device. The sender fans its transfer across up to this many links, one RISC +
     // one link per lane (lane 0 = master on RISCV_0/NOC_0, lane 1 = sub on
     // RISCV_1/NOC_1). The actual lane count per coord is
-    // min(max_sender_lanes, forwarding links sender->receiver); on Blackhole there
-    // are up to 2 links between adjacent chips. 1 = single-lane (the original
-    // behavior). Both meshes derive the same per-coord lane count from the symmetric
-    // link topology, so the receiver knows how many data-landed increments to await.
+    // min(max_sender_lanes, free forwarding links sender->receiver); on Blackhole
+    // there are up to 2 links between adjacent chips. A link is not free when
+    // another D2D service on the same chip, outside this service's lease group (see
+    // fabric_link_group), already holds its router: a router's
+    // worker channel serves one worker, so a chip's receiver and sender never share
+    // one, and a sender whose route leaves the same way as the chip's receiver's
+    // runs a lane fewer. Create a chip's receivers before its senders so the sender
+    // is the one that gives up the lane (a receiver needs one router and fails if
+    // none is free). 1 = single-lane (the original behavior). The receiver learns
+    // the sender's per-coord lane count from the sender (see get_num_lanes), so it
+    // knows how many data-landed increments to await.
     uint32_t max_sender_lanes = 2;
+
+    // Lease group (LEASE mode only). Services on one chip that name the same non-empty
+    // group may hold the same fabric routers: the caller guarantees their connections
+    // never overlap, by granting them turns one at a time with release_fabric_links /
+    // wait_for_fabric_links (as the prefill runner does with a stage's activation and
+    // index streams in one direction). Services in different groups, or with no group
+    // (the default), never share a router. Groups are process-local names.
+    std::string fabric_link_group;
 
     // Receiver only.
     std::optional<D2DStageGateConfig> stage_gate;
@@ -184,6 +206,10 @@ public:
     // Logical CoreCoord of this coord's sender service core. Workers must
     // convert via worker_core_from_logical_core before using as a NoC target.
     tt::tt_metal::CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+
+    // Fabric lanes this coord's sender runs: min(Config::max_sender_lanes, forwarding
+    // links toward the receiver that no other D2D service on the chip holds).
+    uint32_t get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Service-core L1 slot. Sender workers atomic-inc here once per iter. Per-
     // coord because each device's service core is independent.
@@ -291,6 +317,9 @@ public:
     void set_stage_gate(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate, bool open);
     bool is_stage_gate_open(const tt::tt_metal::distributed::MeshCoordinate& coord, uint32_t gate) const;
 
+    // This receiver's entry in a D2DPipelineDescriptor.
+    D2DReceiverDescriptor describe() const;
+
 private:
     friend class D2DStreamService;
 
@@ -349,6 +378,17 @@ public:
         D2DStreamConfig cfg,
         const D2DEndpointConfig& endpoints);
 
+    // Collective over `ctx` (default: world): every rank calls it with the receivers it owns,
+    // grouped by boundary: one list per pipeline stage it receives into, holding every receiver
+    // across that boundary (empty if none). `root` gathers them and writes them to
+    // d2d_pipeline_descriptor_path(service_id). Returns the file on `root`, which removes it when
+    // destroyed; null elsewhere.
+    static std::unique_ptr<D2DPipelineDescriptorFile> export_pipeline_descriptor(
+        const std::string& service_id,
+        const std::vector<std::vector<const D2DStreamServiceReceiver*>>& boundaries,
+        tt::tt_metal::distributed::multihost::Rank root = tt::tt_metal::distributed::multihost::Rank{0},
+        std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ctx = nullptr);
+
 private:
     // Shared per-side tail of all three factories. Given an already-constructed
     // MeshSocket endpoint (single-host via create_socket_pair, multi-host via the
@@ -372,7 +412,8 @@ private:
         tt::tt_metal::distributed::MeshSocket socket,
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
         const Tensor& backing,
-        const D2DStreamConfig& cfg);
+        const D2DStreamConfig& cfg,
+        const std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t>& sender_lanes);
 };
 
 }  // namespace ttnn

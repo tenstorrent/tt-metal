@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 
 constexpr uint32_t cb_weights_id = tt::CBIndex::c_1;
 constexpr uint32_t cb_dispatch_table_id = tt::CBIndex::c_2;
@@ -42,8 +43,25 @@ constexpr bool use_dispatch_table_skip =
 constexpr uint32_t row_tiles = get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 1);
 // residual: the compute's reduced + residual tiles (c_18, emb_dim_out_tiles per chunk) are written instead of c_16
 constexpr bool has_residual = get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 2) != 0;
+// Per-token weights ([..., num_experts]): a page holds one token's weights; a chunk's 32 pages are read once into
+// cb_wtok and each weight is copied into its cb_weights tile by this RISC, instead of one DRAM read per weight.
+constexpr bool weights_per_token =
+    get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 3) != 0;
+constexpr uint32_t weights_aligned_page_size =
+    get_compile_time_arg_val(indices_accessor_args.next_compile_time_args_offset() + 4);
+constexpr uint32_t cb_wtok_id = tt::CBIndex::c_6;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
+
+// Per-token weights: copy token token_idx's weight for slot expert_idx from the chunk's pages (wtok_l1) into the
+// weight tile at dst_addr. The compute kernel reads element 0 (scalar broadcast; the zero test reads elements 0-1).
+FORCE_INLINE void copy_token_weight(uint32_t dst_addr, uint32_t wtok_l1, uint32_t token_idx, uint32_t expert_idx) {
+    volatile tt_l1_ptr uint16_t* dst = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_addr);
+    const volatile tt_l1_ptr uint16_t* src =
+        reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(wtok_l1 + token_idx * weights_aligned_page_size);
+    dst[0] = src[expert_idx];
+    dst[1] = 0;
+}
 
 void kernel_main() {
     // Runtime arg layout: weight_addr, output_addr,
@@ -80,6 +98,12 @@ void kernel_main() {
     const uint32_t output_tile_size = cb_output.get_tile_size();
 
     const auto weight_addrg = TensorAccessor(weight_accessor_args, weight_addr);
+    const auto weight_tok_addrg = TensorAccessor(weight_accessor_args, weight_addr, weights_aligned_page_size);
+    uint32_t wtok_l1 = 0;
+    if constexpr (weights_per_token) {
+        CircularBuffer cb_wtok(cb_wtok_id);
+        wtok_l1 = cb_wtok.get_write_ptr();
+    }
     const auto output_addrg = TensorAccessor(output_accessor_args, output_addr);
 
     uint32_t dispatch_table_write_addr = 0;
@@ -147,6 +171,18 @@ void kernel_main() {
             cb_local_mask.push_back(1);
         }
 
+        if constexpr (weights_per_token) {
+            for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
+                noc.async_read(
+                    weight_tok_addrg,
+                    CoreLocalMem<uint32_t>(wtok_l1 + i * weights_aligned_page_size),
+                    weights_aligned_page_size,
+                    {.page_id = token_start_idx + i},
+                    {});
+            }
+            noc.async_read_barrier();
+        }
+
         // Phase 1: Stream one weight per expert per token for this chunk
         for (uint32_t token_idx = 0; token_idx < TOKENS_PER_CHUNK; ++token_idx) {
             uint32_t global_token_idx = token_start_idx + token_idx;
@@ -186,13 +222,19 @@ void kernel_main() {
                             ptr[w] = 0;
                         }
                     } else if (dispatch_table[token_indices[expert_idx]] != -1) {
-                        noc.async_read(
-                            weight_addrg,
-                            cb_weights,
-                            weight_tile_size,
-                            {.page_id = weight_page_idx},
-                            {.offset_bytes = slot_off});
+                        if constexpr (weights_per_token) {
+                            copy_token_weight(cb_weights.get_write_ptr() + slot_off, wtok_l1, token_idx, expert_idx);
+                        } else {
+                            noc.async_read(
+                                weight_addrg,
+                                cb_weights,
+                                weight_tile_size,
+                                {.page_id = weight_page_idx},
+                                {.offset_bytes = slot_off});
+                        }
                     }
+                } else if constexpr (weights_per_token) {
+                    copy_token_weight(cb_weights.get_write_ptr() + slot_off, wtok_l1, token_idx, expert_idx);
                 } else {
                     noc.async_read(
                         weight_addrg,

@@ -17,6 +17,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -31,7 +32,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT        = params.TILE_CNT;
 #endif
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
@@ -43,7 +44,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
-    if (is_fp32_dest_acc_en && !unpack_to_dest)
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
@@ -53,10 +54,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_dest_init_();
+        _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, TILE_CNT);
+    }
+    else
+    {
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    }
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
@@ -86,7 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT        = params.TILE_CNT;
     const std::uint32_t DST_INDEX       = params.DST_INDEX;
 #endif
-    if (!unpack_to_dest)
+    if constexpr (!unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
@@ -132,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_INDEX = params.DST_INDEX;
 #endif
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
@@ -180,7 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_INDEX       = params.DST_INDEX;
 #endif
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }

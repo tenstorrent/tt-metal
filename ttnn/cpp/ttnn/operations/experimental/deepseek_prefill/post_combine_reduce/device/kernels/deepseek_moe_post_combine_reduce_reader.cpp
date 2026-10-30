@@ -31,6 +31,17 @@ constexpr uint32_t out_tiles = get_compile_time_arg_val(res_base + 1);
 constexpr uint32_t row_tiles = get_compile_time_arg_val(res_base + 2);
 constexpr auto residual_accessor_args = TensorAccessorArgs<res_base + 3>();
 constexpr uint32_t cb_residual_id = tt::CBIndex::c_5;
+// Row-indexed combine: combine_output is a [rows, emb] table and slot j of token t reads row row_index[t, j]; a
+// 32-token chunk of index pages is read at once into cb_row_index. Slots pointing at skip_row are not read: the
+// expert skip drops them, so their c_0 slot only has to hold finite data (zeroed once, then earlier real rows).
+constexpr uint32_t ri_off = residual_accessor_args.next_compile_time_args_offset();
+constexpr bool row_indexed = get_compile_time_arg_val(ri_off) != 0;
+constexpr uint32_t skip_row = get_compile_time_arg_val(ri_off + 1);
+constexpr uint32_t row_index_aligned_page_size = get_compile_time_arg_val(ri_off + 2);
+// The table's row count: a row index at or past it is not read (a bad index must not read past the table).
+constexpr uint32_t table_rows = get_compile_time_arg_val(ri_off + 3);
+constexpr auto row_index_accessor_args = TensorAccessorArgs<ri_off + 4>();
+constexpr uint32_t cb_row_index_id = tt::CBIndex::c_7;
 constexpr uint32_t cb_local_mask_id = tt::CBIndex::c_4;
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
@@ -51,6 +62,17 @@ void kernel_main() {
     const auto combine_addrg = TensorAccessor(combine_accessor_args, combine_addr);
     const uint32_t slot_bytes = emb_dim_cb_tiles * cb_combine_input.get_tile_size();
 
+    uint32_t row_index_l1 = 0;
+    if constexpr (row_indexed) {
+        CircularBuffer cb_row_index(cb_row_index_id);
+        row_index_l1 = cb_row_index.get_write_ptr();
+        // Zero all of c_0 (both token batches) once so a skipped slot never hands compute uninitialized bytes.
+        constexpr uint32_t c0_tiles = 2 * num_experts * emb_dim_cb_tiles;
+        cb_combine_input.reserve_back(c0_tiles);
+        noc.async_write_zeros(cb_combine_input, c0_tiles * cb_combine_input.get_tile_size());
+        noc.write_zeros_l1_barrier();
+    }
+
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         if constexpr (has_residual) {
             const uint32_t residual_tile_size = cb_residual.get_tile_size();
@@ -68,6 +90,19 @@ void kernel_main() {
             noc.async_read_barrier();
             cb_residual.push_back(out_tiles);
         }
+        if constexpr (row_indexed) {
+            const auto row_index_addrg =
+                TensorAccessor(row_index_accessor_args, get_arg_val<uint32_t>(6), row_index_aligned_page_size);
+            for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
+                noc.async_read(
+                    row_index_addrg,
+                    CoreLocalMem<uint32_t>(row_index_l1 + i * row_index_aligned_page_size),
+                    row_index_aligned_page_size,
+                    {.page_id = token_start_idx + i},
+                    {});
+            }
+            noc.async_read_barrier();
+        }
         volatile tt_l1_ptr uint8_t* mask = nullptr;
         if constexpr (use_local_mask) {
             cb_local_mask.wait_front(1);
@@ -83,12 +118,19 @@ void kernel_main() {
                 const uint32_t m = use_local_mask ? mask[token_idx * num_experts + expert_idx] : 1;
                 if (m == 1) {
                     uint32_t expert_page_idx = global_token_idx * num_experts + expert_idx;
-                    noc.async_read(
-                        combine_addrg,
-                        cb_combine_input,
-                        emb_dim_bytes,
-                        {.page_id = expert_page_idx, .offset_bytes = col_off_bytes},
-                        {.offset_bytes = slot_off});
+                    if constexpr (row_indexed) {
+                        expert_page_idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                            row_index_l1 + token_idx * row_index_aligned_page_size)[expert_idx];
+                        ASSERT(expert_page_idx == skip_row || expert_page_idx < table_rows);
+                    }
+                    if (!row_indexed || (expert_page_idx != skip_row && expert_page_idx < table_rows)) {
+                        noc.async_read(
+                            combine_addrg,
+                            cb_combine_input,
+                            emb_dim_bytes,
+                            {.page_id = expert_page_idx, .offset_bytes = col_off_bytes},
+                            {.offset_bytes = slot_off});
+                    }
                 } else if (m == 2) {
                     const uint32_t cb_write_addr = cb_combine_input.get_write_ptr() + slot_off;
                     for (uint32_t off = 0; off < emb_dim_bytes; off += MEM_ZEROS_SIZE) {

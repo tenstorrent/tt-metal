@@ -40,6 +40,8 @@ ttnn::Tensor post_combine_reduce(
     const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config,
+    const std::optional<ttnn::Tensor>& combine_row_index = std::nullopt,
+    uint32_t skip_row = std::numeric_limits<uint32_t>::max(),
     const std::optional<ttnn::Tensor>& residual = std::nullopt,
     uint32_t l1_end = 0);
 

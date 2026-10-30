@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 #include "ttnn/types.hpp"
@@ -57,6 +58,8 @@ ttnn::Tensor post_combine_reduce(
     const std::optional<ttnn::Tensor>& expert_dispatch_table = std::nullopt,
     uint32_t expert_dim = 3,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& combine_row_index = std::nullopt,
+    uint32_t skip_row = std::numeric_limits<uint32_t>::max(),
     const std::optional<ttnn::Tensor>& residual = std::nullopt,
     uint32_t l1_end = 0);
 

@@ -9,6 +9,9 @@
 //                  becomes an offset_bytes on each read, mirroring the quasar i2s stick reader).
 //   * non-aligned staging -> node-local Scratchpad `scratch::pad` (not a DFB: the reader both
 //                  fills and drains it, which would be an unsupported DM self-loop on Gen2).
+//   * pad-row tails -> node-local Scratchpad `scratch::zero`, zeroed once and copied into the tail of
+//                  each output row when the shard row is wider than the slice row (the shared op's
+//                  pad-row writer did this in place; here the reader does it before pushing the rows).
 //   * TRID pipelining uses the Quasar Noc API (noc.async_read<TXN_ID> + is_read_trid_flushed),
 //     replacing the legacy noc_async_read_set_trid / ncrisc_..._flushed intrinsics.
 // The trailing per-dim arrays (num_unpadded_sticks/num_padded_sticks/id_per_dim) are still read
@@ -51,6 +54,8 @@ void kernel_main() {
     constexpr uint32_t is_non_aligned = get_arg(args::is_non_aligned);
     constexpr uint32_t src_buffer_alignment = get_arg(args::src_buffer_alignment);
     constexpr uint32_t num_trids = get_arg(args::num_trids);
+    constexpr uint32_t pad_output_row = get_arg(args::pad_output_row);
+    constexpr uint32_t l1_alignment = get_arg(args::l1_alignment);
 
     Noc noc;
     DataflowBuffer cb_in0(dfb::in0);
@@ -63,6 +68,19 @@ void kernel_main() {
         misalignment = src_byte_offset % src_buffer_alignment;
     }
     const uint32_t src_off_aligned = src_byte_offset - misalignment;
+
+    // Pad-row tail: bytes [unpadded_stick_size, stick_size_offset) of every output row are zeroed. The zero
+    // source starts at the same L1 misalignment as the tail so the local copy keeps src/dst aligned alike.
+    Scratchpad<uint32_t> zero_buf(scratch::zero);  // NB: local must not be named `zero` (shadows scratch::zero)
+    const uint32_t pad_size_bytes = stick_size_offset - unpadded_stick_size;
+    const uint32_t zero_src_off = unpadded_stick_size % l1_alignment;
+    if constexpr (pad_output_row) {
+        // Store under a scoped_lock so the zeros reach L1 before the NoC reads them (Quasar DM caches).
+        const auto zero_lock = zero_buf.scoped_lock(0, zero_buf.size());
+        for (uint32_t i = 0; i < zero_buf.size(); ++i) {
+            zero_buf[i] = 0;
+        }
+    }
 
     if constexpr (is_non_aligned) {
         // TRID-pipelined src->scratch->dest, mirroring the quasar i2s stick reader's unaligned path.
@@ -140,6 +158,24 @@ void kernel_main() {
                     }
                 }
             }
+            if constexpr (pad_output_row) {
+                if (pad_size_bytes > 0) {
+                    // Each core runs one batch (the factory passes num_read_per_barrier == num_sticks_per_core),
+                    // so the loop above exits only once every issued read has completed: all slots are idle.
+                    // Zero the tails of this batch's rows, tagged like the reads above.
+                    for (uint32_t i = 0; i < sticks_completed; ++i) {
+                        noc.async_read<NocOptions::TXN_ID>(
+                            zero_buf,
+                            cb_in0,
+                            pad_size_bytes,
+                            {.offset_bytes = zero_src_off},
+                            {.offset_bytes = i * stick_size_offset + unpadded_stick_size},
+                            NocOptVals{.trid = trid_base});
+                    }
+                    while (!noc.is_read_trid_flushed(trid_base)) {
+                    }
+                }
+            }
             cb_in0.push_back(num_read_per_barrier);
         }
         // Reset the sticky TRID tag for any downstream untagged reads.
@@ -158,6 +194,16 @@ void kernel_main() {
                     unpadded_stick_size,
                     {.page_id = src_stick_id, .offset_bytes = src_off_aligned},
                     {.offset_bytes = dest_off});
+                if constexpr (pad_output_row) {
+                    if (pad_size_bytes > 0) {
+                        noc.async_read(
+                            zero_buf,
+                            cb_in0,
+                            pad_size_bytes,
+                            {.offset_bytes = zero_src_off},
+                            {.offset_bytes = dest_off + unpadded_stick_size});
+                    }
+                }
                 dest_off += stick_size_offset;
                 src_stick_id++;
                 for (uint32_t j = 0; j < num_dims; j++) {
