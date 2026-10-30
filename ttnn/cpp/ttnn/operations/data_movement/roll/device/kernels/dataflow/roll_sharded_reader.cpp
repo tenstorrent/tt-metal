@@ -22,7 +22,9 @@
 //
 // DRAM mode: source data is read from DRAM via get_noc_addr_from_bank_id; the result is
 // staged in scratch L1. The destination is also DRAM, written back via NOC async write.
-// DRAM transfers are tile-aligned so no sub-alignment padding is needed.
+// DRAM transfers are tile-aligned so no sub-alignment padding is needed. Both DRAM modes take the
+// input and output base addresses from common runtime args 0 and 1; per-core args carry only bank
+// ids and offsets from those bases.
 
 // Local copy of `copy_size` bytes. Prefers 32-bit word copies; falls back to bytes.
 inline void local_copy(uint32_t src_addr, uint32_t dst_addr, uint32_t copy_size) {
@@ -80,18 +82,19 @@ void kernel_main() {
 
         AllocatorBank<AllocatorBankType::DRAM> dram_bank;
 
+        // Each bank holds one shard, at the buffer's base address.
+        const uint32_t input_base = get_common_arg_val<uint32_t>(0);
+        const uint32_t output_base = get_common_arg_val<uint32_t>(1);
         const uint32_t dst_bank_id = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t dst_bank_base = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t num_src = get_arg_val<uint32_t>(arg_idx++);
 
         for (uint32_t s = 0; s < num_src; s++) {
             const uint32_t bank_id = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t bank_addr = get_arg_val<uint32_t>(arg_idx++);
             noc.async_read(
                 dram_bank,
                 CoreLocalMem<uint32_t>(src_base[s]),
                 shard_size,
-                {.bank_id = bank_id, .addr = bank_addr},
+                {.bank_id = bank_id, .addr = input_base},
                 {});
         }
         noc.async_read_barrier();
@@ -113,25 +116,22 @@ void kernel_main() {
         }
 
         noc.async_write(
-            CoreLocalMem<uint32_t>(dst_base),
-            dram_bank,
-            shard_size,
-            {},
-            {.bank_id = dst_bank_id, .addr = dst_bank_base});
+            CoreLocalMem<uint32_t>(dst_base), dram_bank, shard_size, {}, {.bank_id = dst_bank_id, .addr = output_base});
         noc.async_write_barrier();
 
     } else if constexpr (mode == 1) {
         // DRAM mode: source is a DRAM bank, destination is a DRAM bank.
-        // Per-core header: dst_bank_id, dst_bank_base_addr.
+        // Per-core header: dst_bank_id. Each bank holds one shard, at the buffer's base address.
         AllocatorBank<AllocatorBankType::DRAM> dram_bank;
 
+        const uint32_t input_base = get_common_arg_val<uint32_t>(0);
+        const uint32_t output_base = get_common_arg_val<uint32_t>(1);
         const uint32_t dst_bank_id = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t dst_bank_base = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
 
         for (uint32_t t = 0; t < num_transfers; t++) {
             const uint32_t src_bank_id = get_arg_val<uint32_t>(arg_idx++);
-            uint32_t src_bank_addr = get_arg_val<uint32_t>(arg_idx++);  // bank_base + intra_shard_offset
+            uint32_t src_offset = get_arg_val<uint32_t>(arg_idx++);  // intra-shard, from input_base
             uint32_t dst_offset = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t copy_size = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t src_stride = get_arg_val<uint32_t>(arg_idx++);
@@ -144,7 +144,7 @@ void kernel_main() {
                     dram_bank,
                     CoreLocalMem<uint32_t>(scratch_base),
                     copy_size,
-                    {.bank_id = src_bank_id, .addr = src_bank_addr},
+                    {.bank_id = src_bank_id, .addr = input_base + src_offset},
                     {});
                 noc.async_read_barrier();
 
@@ -154,10 +154,10 @@ void kernel_main() {
                     dram_bank,
                     copy_size,
                     {},
-                    {.bank_id = dst_bank_id, .addr = dst_bank_base + dst_offset});
+                    {.bank_id = dst_bank_id, .addr = output_base + dst_offset});
                 noc.async_write_barrier();
 
-                src_bank_addr += src_stride;
+                src_offset += src_stride;
                 dst_offset += dst_stride;
             }
         }

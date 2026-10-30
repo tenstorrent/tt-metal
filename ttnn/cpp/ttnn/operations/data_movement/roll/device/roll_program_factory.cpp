@@ -76,8 +76,10 @@ struct RollPlan {
     uint32_t scratch_size = 0;
 
     std::vector<uint32_t> compile_time_args;
-    // Fully-resolved per-core reader args (DRAM modes bake base+offset addresses from the current
-    // buffers). override_runtime_arguments re-applies these + re-points the tensor-backed CBs on hit.
+    // Fully-resolved per-core reader args. They hold no buffer addresses: DRAM modes carry bank ids
+    // and in-bank offsets, and the kernel adds them to the input/output base addresses it reads from
+    // its common runtime args. override_runtime_arguments re-applies these, re-points the
+    // tensor-backed CBs (L1 mode) and refreshes the base addresses (DRAM modes) on a hit.
     std::vector<std::pair<CoreCoord, KernelDescriptor::CoreRuntimeArgs>> per_core_args;
 };
 
@@ -348,8 +350,6 @@ RollPlan compute_roll_plan(
     constexpr uint32_t dram_rm_dst_cb_id = 4;
 
     // --- DRAM shard address helpers ---
-    const uint32_t num_dram_banks = device->num_dram_channels();
-    const uint32_t dram_shard_size = shard_cells_h * row_pitch_bytes;
     // A DRAM shard grid is a single row whose x-coordinate is the bank id, and shard i sits on the
     // grid's i-th core in either orientation, so shard i lives in bank grid_start_x + i. The input and
     // output may sit on different grids, so each tensor's bank comes from its own grid.
@@ -362,9 +362,9 @@ RollPlan compute_roll_plan(
     const uint32_t dst_first_bank = is_dram ? dram_first_bank(out_ss) : 0;
     auto src_bank_id = [&](uint32_t shard_idx) { return src_first_bank + shard_idx; };
     auto dst_bank_id = [&](uint32_t shard_idx) { return dst_first_bank + shard_idx; };
-    auto dram_bank_base = [&](const Buffer* buf, uint32_t shard_idx) {
-        return static_cast<uint32_t>(buf->address()) + (shard_idx / num_dram_banks) * dram_shard_size;
-    };
+    // With one shard per bank, every shard starts at its buffer's base address within its bank.
+    // The kernel reads the base addresses from its common runtime args; the per-core args below carry
+    // only offsets from them, never a base with an offset folded in.
 
     // --- Kernel arg budget ---
     uint32_t max_num_transfers = 0;
@@ -373,11 +373,12 @@ RollPlan compute_roll_plan(
     }
     constexpr uint32_t runtime_args_limit = 256;
     // L1 mode:       1 + 9*N args.
-    // DRAM TILE:     3 + 7*N args (dst_bank_id, dst_bank_base, count, then 7 per transfer).
-    // DRAM RM:       3 + max_4_src_info + 1 + 7*N args (dst, num_src≤2, src0, src1?, count, 7*N).
-    //                worst case: 3 + 4 + 1 + 7*N = 8 + 7*N.
+    // DRAM modes also take 2 common args (input base, output base), counted in their overhead.
+    // DRAM TILE:     2 + 2 + 7*N args (dst_bank_id, count, then 7 per transfer).
+    // DRAM RM:       2 + 2 + max_2_src_banks + 1 + 7*N args (dst_bank_id, num_src≤2, src0, src1?,
+    //                count, 7*N). Worst case: 2 + 2 + 2 + 1 + 7*N = 7 + 7*N.
     const uint32_t args_per_transfer = is_dram_rm ? 7u : (is_dram ? 7u : 9u);
-    const uint32_t args_overhead = is_dram_rm ? 8u : (is_dram ? 3u : 1u);
+    const uint32_t args_overhead = is_dram_rm ? 7u : (is_dram ? 4u : 1u);
     TT_FATAL(
         args_overhead + max_num_transfers * args_per_transfer <= runtime_args_limit,
         "Native sharded roll: too many copy segments per core ({}). Reduce grid/shape.",
@@ -411,9 +412,8 @@ RollPlan compute_roll_plan(
     plan.compile_time_args = std::move(compile_time_args);
 
     // --- Per-core runtime args ---
-    // The three builders emit args in a fixed layout the reader kernel reads positionally.  DRAM modes
-    // bake the buffer base+offset addresses straight into the args from the CURRENT buffers, so
-    // override_runtime_arguments re-derives the identical values by re-running this builder on a hit.
+    // The three builders emit args in a fixed layout the reader kernel reads positionally. None holds a
+    // buffer address, so every value is fixed by the hashed shape, shift, dim and shard grids.
     auto build_runtime_args_l1 = [&](const std::vector<RollTransferDesc>& descs) {
         KernelDescriptor::CoreRuntimeArgs args;
         args.reserve(1 + descs.size() * 9);
@@ -434,16 +434,14 @@ RollPlan compute_roll_plan(
 
     auto build_runtime_args_dram = [&](uint32_t dst_shard_idx, const std::vector<RollTransferDesc>& descs) {
         KernelDescriptor::CoreRuntimeArgs args;
-        args.reserve(3 + descs.size() * 7);
+        args.reserve(2 + descs.size() * 7);
         args.push_back(dst_bank_id(dst_shard_idx));
-        // dst bank base = output buffer address + shard offset, from the current buffer.
-        args.push_back(dram_bank_base(plan.output_buffer, dst_shard_idx));
         args.push_back(static_cast<uint32_t>(descs.size()));
         for (const auto& td : descs) {
-            // src_bank_id, src_bank_addr (= bank_base + intra_shard_offset), dst_offset,
+            // src_bank_id, src_offset (intra-shard, from the input base), dst_offset,
             // copy_size, src_stride, dst_stride, num_rows
             args.push_back(src_bank_id(td.src_dram_shard_idx));
-            args.push_back(dram_bank_base(plan.input_buffer, td.src_dram_shard_idx) + td.src_l1_offset);
+            args.push_back(td.src_l1_offset);
             args.push_back(td.dst_offset);
             args.push_back(td.copy_size);
             args.push_back(td.src_stride);
@@ -454,7 +452,7 @@ RollPlan compute_roll_plan(
     };
 
     // DRAM RM mode: full-shard L1 staging.
-    // Per core: [dst_bank_id, dst_bank_base, num_src, (src0_bank_id, src0_addr)..., num_xfers,
+    // Per core: [dst_bank_id, num_src, src0_bank_id, ..., num_xfers,
     //            (src_slot, src_off, dst_off, copy_size, src_stride, dst_stride, num_rows) x N]
     auto build_runtime_args_dram_rm = [&](uint32_t dst_shard_idx, const std::vector<RollTransferDesc>& descs) {
         // Reader hard-codes 2 staging CBs (src0/src1) and `src_base[2]`; higher-dim rolls whose
@@ -478,12 +476,9 @@ RollPlan compute_roll_plan(
             src_shards.size());
         KernelDescriptor::CoreRuntimeArgs args;
         args.push_back(dst_bank_id(dst_shard_idx));
-        // dst bank base = output buffer address + shard offset, from the current buffer.
-        args.push_back(dram_bank_base(plan.output_buffer, dst_shard_idx));
         args.push_back(static_cast<uint32_t>(src_shards.size()));
         for (uint32_t s : src_shards) {
             args.push_back(src_bank_id(s));
-            args.push_back(dram_bank_base(plan.input_buffer, s));
         }
         args.push_back(static_cast<uint32_t>(descs.size()));
         for (const auto& td : descs) {
@@ -600,6 +595,10 @@ ProgramDescriptor RollShardedProgramFactory::create_descriptor(
     for (const auto& [core, args] : plan.per_core_args) {
         reader_desc.runtime_args.emplace_back(core, args);
     }
+    // DRAM modes address the input and output by bank id + offset from these base addresses.
+    if (plan.is_dram) {
+        reader_desc.emplace_common_runtime_args({plan.input_buffer, plan.output_buffer});
+    }
 
     desc.kernels.push_back(std::move(reader_desc));
     return desc;
@@ -630,9 +629,14 @@ void RollShardedProgramFactory::override_runtime_arguments(
         }
     }
 
-    // L1 mode addresses data through the input/output-backed CBs; DRAM mode carries bank ids in the
-    // args above. CBs are matched positionally, and create_descriptor pushes input then output first.
-    if (!plan.is_dram) {
+    // L1 mode addresses data through the input/output-backed CBs; DRAM mode through the input/output
+    // base addresses in the common args. CBs are matched positionally, and create_descriptor pushes
+    // input then output first.
+    if (plan.is_dram) {
+        auto& common = tt::tt_metal::GetCommonRuntimeArgs(program, 0);
+        common[0] = plan.input_buffer->address();
+        common[1] = plan.output_buffer->address();
+    } else {
         tt::tt_metal::ProgramDescriptor cb_addr_only;
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.input_buffer});
         cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = plan.output_buffer});
