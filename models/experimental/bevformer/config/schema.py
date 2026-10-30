@@ -78,10 +78,12 @@ class ModelConfig:
             raise ValueError("input.camera_image_size values must be positive")
         if any(value == 0 for value in self.image_std):
             raise ValueError("input.std values must be non-zero")
-        if len(set(self.out_indices)) != len(self.out_indices) or any(
+        if tuple(sorted(set(self.out_indices))) != self.out_indices or any(
             index not in range(4) for index in self.out_indices
         ):
-            raise ValueError("backbone.out_indices must contain unique ResNet stage indices from 0 through 3")
+            raise ValueError(
+                "backbone.out_indices must contain unique ResNet stage indices from 0 through 3 in ascending order"
+            )
         if self.num_levels < len(self.out_indices):
             raise ValueError("fpn.num_levels must be at least the number of backbone.out_indices")
         if self.embed_dims % self.num_heads:
