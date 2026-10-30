@@ -20,91 +20,12 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/matmul.h"
-#include "api/compute/pack.h"
-#include "api/compute/reconfig_data_format.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 
 #include "../fused_recurrent_gdn_cb.hpp"
+#include "fused_recurrent_gdn_math.hpp"
 
 namespace cb = gdn_decode_cb;
-
-namespace {
-
-// ---- STUB of decode_token, until fused_recurrent_gdn_math.hpp lands ------------------------------------------------
-// Consumes and produces exactly the CBs of the real decode_token, in the same counts, so the reader tiles, the CB
-// sizes and the writer layout can be exercised without hangs: o = v (row 0 of v16 -> row 0 of out16) and
-// S_next = S_cur (exact copies). ecol32 / r16 / craw16 / ccol32 / u16 are compute-internal and not touched.
-constexpr uint32_t DST_TILES = 4;  // fp32 DEST tiles per acquire (half-sync)
-
-template <uint32_t Kt, uint32_t Vt>
-void decode_token(uint32_t cb_s_cur, uint32_t cb_s_next, bool emit_state) {
-    constexpr uint32_t kv = Kt * Vt;
-    CircularBuffer qk(cb::qk16), kT(cb::kT16), qc(cb::qcol32), v(cb::v16), g(cb::gcol32), b(cb::bcol16);
-    CircularBuffer s_cur(cb_s_cur), s_next(cb_s_next), out(cb::out16), st(cb::state_out);
-
-    qk.wait_front(Kt);
-    kT.wait_front(Kt);
-    qc.wait_front(Kt);
-    v.wait_front(Vt);
-    g.wait_front(1);
-    b.wait_front(1);
-    s_cur.wait_front(kv);
-
-    // o = v: 16x32 -> 16x32.
-    out.reserve_back(Vt);
-    copy_init(cb::v16);
-    pack_reconfig_data_format<true>(cb::out16);
-    for (uint32_t j = 0; j < Vt; j++) {
-        tile_regs_acquire();
-        copy_tile(cb::v16, j, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile<true>(0, cb::out16, j);
-        tile_regs_release();
-    }
-    out.push_back(Vt);
-
-    // S_next = S_cur (and state_out): 32x32 -> 32x32, groups of DST_TILES.
-    s_next.reserve_back(kv);
-    if (emit_state) {
-        st.reserve_back(kv);
-    }
-    copy_init(cb_s_cur);
-    pack_reconfig_data_format<true>(cb_s_next);
-    for (uint32_t i0 = 0; i0 < kv; i0 += DST_TILES) {
-        const uint32_t nn = (kv - i0 < DST_TILES) ? (kv - i0) : DST_TILES;
-        tile_regs_acquire();
-        for (uint32_t j = 0; j < nn; j++) {
-            copy_tile(cb_s_cur, i0 + j, j);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t j = 0; j < nn; j++) {
-            pack_tile<true>(j, cb_s_next, i0 + j);
-            if (emit_state) {
-                pack_tile<true>(j, cb::state_out, i0 + j);
-            }
-        }
-        tile_regs_release();
-    }
-    s_next.push_back(kv);
-    if (emit_state) {
-        st.push_back(kv);
-    }
-
-    qk.pop_front(Kt);
-    kT.pop_front(Kt);
-    qc.pop_front(Kt);
-    v.pop_front(Vt);
-    g.pop_front(1);
-    b.pop_front(1);
-    s_cur.pop_front(kv);
-}
-// ---- end of STUB -----------------------------------------------------------------------------------------------
-
-}  // namespace
 
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
@@ -112,15 +33,32 @@ void kernel_main() {
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
     const uint32_t T = get_arg_val<uint32_t>(0);
 
-    // Every CB is fp32 (see the program factory); the passes reconfigure the per-CB tile dims as they go.
-    compute_kernel_hw_startup(cb::qk16, cb::S, cb::out16);
+    // Every CB is fp32 (see the program factory). Matmul operand order: in0 (qk16) -> SrcB, in1 (S) -> SrcA; the
+    // passes re-initialise the unpacker / packer per CB tile shape as they go.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb::qk16, cb::S, cb::out16);
 
+    constexpr gdn_decode::TokenCbs tcb{
+        .qk16 = cb::qk16,
+        .kT16 = cb::kT16,
+        .qcol32 = cb::qcol32,
+        .v16 = cb::v16,
+        .gcol32 = cb::gcol32,
+        .bcol16 = cb::bcol16,
+        .ones32 = cb::ones32,
+        .ecol32 = cb::ecol32,
+        .r16 = cb::r16,
+        .craw16 = cb::craw16,
+        .ccol32 = cb::ccol32,
+        .u16 = cb::u16,
+        .out16 = cb::out16,
+        .state_out = cb::state_out,
+    };
     for (uint32_t t = 0; t < T; t++) {
         const uint32_t cur_S_id = (t == 0) ? cb::S : ((t & 1u) ? cb::s2 : cb::s3);
         const uint32_t nxt_S_id = (t & 1u) ? cb::s3 : cb::s2;
         const bool last = (t == T - 1);
-        // decode_token pops S_cur and pushes S_next; S_next is intentionally left in its CB: the next iteration
-        // reads it as S_cur.
-        decode_token<Kt, Vt>(cur_S_id, nxt_S_id, per_token || last);
+        // decode_token pops the token's inputs and S_cur (pop_inputs = true); S_next is intentionally left in its
+        // CB: the next iteration reads it as S_cur.
+        gdn_decode::decode_token<Kt, Vt>(tcb, cur_S_id, nxt_S_id, per_token || last);
     }
 }
