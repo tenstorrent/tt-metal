@@ -54,8 +54,9 @@ template <
     uint32_t norm_eps_bits,
     uint32_t ctrl_bytes,
     uint32_t hold_sentinel,
-    uint32_t AB2>
-TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
+    uint32_t AB2,
+    uint32_t NV>  // value split: this core owns value tile columns [s*Vs, (s+1)*Vs) of head h (NV = 1: all Vt)
+TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx, uint32_t s) {
     const auto qkv_acc = TensorAccessor(tensor::qkv);
     const auto wa_acc = TensorAccessor(tensor::win_a);
     const auto wb_acc = TensorAccessor(tensor::win_b);
@@ -88,8 +89,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     DataflowBuffer state_in(dfb::state_in);
     DataflowBuffer ctrl_r(dfb::ctrl_r);
     Noc noc;
-    constexpr uint32_t KV = Kt * Vt;
-    constexpr uint32_t Ch = 2 * Kt + Vt;
+    constexpr uint32_t KV = Kt * Vt;  // ring page stride of one (token, head) block (full head)
+    constexpr uint32_t Vs = Vt / NV;
+    constexpr uint32_t KVs = Kt * Vs;
+    constexpr uint32_t Ch = 2 * Kt + Vs;  // chunks of this core: q | k | own v columns
     constexpr uint32_t rf = Nv / Nk;
     const uint32_t hk = h / rf;
     const uint32_t bh = u * Nv + h;
@@ -104,7 +107,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
         if (c < 2 * Kt) {
             return Nk * Kt + hk * Kt + (c - Kt);
         }
-        return 2 * Nk * Kt + h * Vt + (c - 2 * Kt);
+        return 2 * Nk * Kt + h * Vt + s * Vs + (c - 2 * Kt);
     };
 
     // ---- ctrl page: parity, mi[u], initial ring block of (u,h)
@@ -149,8 +152,8 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     }
 
     // ---- phase 1 (small): z, the a|b tile(s), the gates -> compute starts silu(z) (and, plain mode, the T gate pairs)
-    z_in.reserve_back(Vt);
-    read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt, Vt, 0);
+    z_in.reserve_back(Vs);
+    read_tiles_at(qkv_acc, z_in, noc, pg + z_tile0 + h * Vt + s * Vs, Vs, 0);
     // ab_in[0] = a's tile (ab_page + h/32); ab_in[1] = b's tile (ab_page + (Nv+h)/32) only when it differs (b_idx = 1;
     // AB2 = 0 -> one tile, one entry, exactly the 2*Nv <= 32 read). AB2 is the factory's compile-time arg (it also
     // sizes ab_in and g1), not re-derived here.
@@ -165,7 +168,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     }
 #if GDN_FAST
     noc.async_read_barrier();
-    z_in.push_back(Vt);
+    z_in.push_back(Vs);
 #else
     // csel[0]: row h & 31 all ones (column extractor of a within its tile), csel[1]: row (Nv + h) & 31 (of b within
     // its)
@@ -194,7 +197,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     }
     rsel.push_back(T);
     noc.async_read_barrier();
-    z_in.push_back(Vt);
+    z_in.push_back(Vs);
     // With AB2 = 1 and b_idx = 0 (a and b share a tile: heads h < 8 at Nv = 24) entry 1 is pushed UNWRITTEN; compute
     // gathers b from ab_in[b_idx] = entry 0, so it is never indexed.
     ab_in.push_back(1 + AB2);
@@ -232,10 +235,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
                     {.offset_bytes = base + entry / 4});
             }
         }
-        w_in.reserve_back(Vt);
-        zero_reserved(w_in, noc, Vt);
-        for (uint32_t t = 0; t < Vt; ++t) {
-            read_row0_at(w_acc, w_in, noc, t, t);  // the norm weight lives in row 0 (row-broadcast operand)
+        w_in.reserve_back(Vs);
+        zero_reserved(w_in, noc, Vs);
+        for (uint32_t t = 0; t < Vs; ++t) {
+            read_row0_at(w_acc, w_in, noc, s * Vs + t, t);  // the norm weight lives in row 0 (row-broadcast operand)
         }
         // sel[0] = WO_W: row i (i < K-1) picks window row mi+1+i of E_prev; sel[1] = WO_N: row i (K-1 <= i < Lw) picks
         // raw row r0 + i - (K-1); sel[2+j] = SH_j: row r0+t picks W row t+j (the tap-j operand of output token t);
@@ -286,7 +289,7 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
         noc.async_read_barrier();
         src_in.push_back(2 * Ch);
         taps.push_back(Ch);
-        w_in.push_back(Vt);
+        w_in.push_back(Vs);
     }
 
 #if GDN_FAST
@@ -300,8 +303,10 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
         dtb_bits = read_head_scalar_bits < dtb_fp32 != 0 > (dtb_acc, dtb_s, noc, h);
         nea_bits = read_head_scalar_bits < nea_fp32 != 0 > (nea_acc, nea_s, noc, h);
     }
-    state_in.reserve_back(KV);
-    read_tiles_at(ring_acc, state_in, noc, blk * KV, KV, 0);
+    state_in.reserve_back(KVs);
+    for (uint32_t kt = 0; kt < Kt; ++kt) {
+        read_tiles_at(ring_acc, state_in, noc, blk * KV + kt * Vt + s * Vs, Vs, kt * Vs);
+    }
     // The T gate pairs of user u from rows r0 .. r0+T-1 of the a|b tile(s): a[h] at column h & 31 of entry 0,
     // b[h] at column (Nv + h) & 31 of entry b_idx (AB2) / entry 0. bf16 -> fp32 bits is exact (<< 16); the gate math
     // is reader_gdn_decode_step_conv_fast.cpp's, bit for bit. The ab_in slot stays reserved (staging, never pushed).
@@ -330,17 +335,19 @@ TT_KERNEL void reader(uint32_t u, uint32_t h, uint32_t b_idx) {
     {
         DeviceZoneScopedN("rd_state");
         noc.async_read_barrier();
-        state_in.push_back(KV);
+        state_in.push_back(KVs);
     }
 #else
     // ---- the initial state, last: 16 tiles from ring block blk (the writer's block-0 write of this core is ordered
     // after this read completes, since compute cannot produce a state before it is pushed)
     {
         DeviceZoneScopedN("rd_state");
-        state_in.reserve_back(KV);
-        read_tiles_at(ring_acc, state_in, noc, blk * KV, KV, 0);
+        state_in.reserve_back(KVs);
+        for (uint32_t kt = 0; kt < Kt; ++kt) {
+            read_tiles_at(ring_acc, state_in, noc, blk * KV + kt * Vt + s * Vs, Vs, kt * Vs);
+        }
         noc.async_read_barrier();
-        state_in.push_back(KV);
+        state_in.push_back(KVs);
     }
 #endif
 }

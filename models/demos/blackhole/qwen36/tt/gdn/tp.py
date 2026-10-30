@@ -3293,6 +3293,25 @@ class TPGatedDeltaNet:
             return d
         return 2
 
+    def _spec_num_slices(self, B):
+        """V-slices per (user, value head) of the gdn_spec_step op (its ``num_slices``): QWEN36_GDN_SPEC_NV = "1",
+        "2", or "auto" (default: 2 when B*Nv*2 fits the device grid and Vt = Dv/32 is even, else 1). A forced "2"
+        that does not fit falls back to 1 (never errors). Depends only on B, the model and the env, so it is fixed
+        per bucket before trace capture; the seed and the verify call must see the same value. (With NV = 2 the freed
+        L1 may allow QWEN36_SPEC_STEP_HNEW_DEPTH=4; _spec_hnew_depth is NOT changed here.)"""
+        env = os.environ.get("QWEN36_GDN_SPEC_NV", "auto")
+        if env == "1":
+            return 1
+        g = self.mesh.compute_with_storage_grid_size()
+        grid_cores = int(g.x) * int(g.y)
+        vt = self.Dv // 32
+        if env == "auto":
+            nv = 2
+        else:
+            nv = int(env)
+            assert nv in (1, 2), f"QWEN36_GDN_SPEC_NV must be 1, 2 or auto, got {env}"
+        return nv if (B * self.Nv * nv <= grid_cores and vt % nv == 0) else 1
+
     def _ensure_spec_fused_seed(self):
         """Allocate (once per B) the fused seed's constants: the scratch half of its [B, K, C] window pair and its
         identity ctrl page (parity 0, mi 0, ring block (u, h) = u*Nv + h = rec_state's own block, no holds). EAGER:
@@ -3334,6 +3353,9 @@ class TPGatedDeltaNet:
         _mu = max_users if max_users is not None else getattr(self, "_spec_max_users", 0)
         if _mu:
             extra["max_users"] = int(_mu)
+        _nv = self._spec_num_slices(B)
+        if _nv > 1:
+            extra["num_slices"] = _nv
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
             win_a,

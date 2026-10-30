@@ -266,6 +266,56 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.hidden_dim // tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
 
+        # QWEN36_MLP_DECODE_DS (default 1; 0 = old 1D path + old weights): decode/verify MLP on DRAM-sharded
+        # pipelined matmuls (device trace, M=32: gate+up 74.5 -> 58.4us, mul+down 33.5 -> 29.0us).
+        # gate+up = ONE packed [gate|up] DS matmul fed straight from RES40; mul writes the down input shard.
+        # TP=8 only (shapes swept there).
+        self.mlp_decode_ds = os.environ.get("QWEN36_MLP_DECODE_DS", "1") == "1" and tp8 and self.mlp_1d_decode
+        if self.mlp_decode_ds:
+            _grid = lambda n: ttnn.num_cores_to_corerangeset(
+                n, mesh_device.compute_with_storage_grid_size(), row_wise=True
+            )
+
+            def _ws_l1(ncores, width_tiles):
+                return ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(_grid(ncores), (32, width_tiles * 32), ttnn.ShardOrientation.ROW_MAJOR),
+                )
+
+            def _ds_pc(n_tiles, ibw):
+                pcn = -(-n_tiles // min(n_tiles, 64))  # per-core N tiles; out spans cdiv(n_tiles, pcn) cores
+                pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=ibw,
+                    per_core_M=1,
+                    per_core_N=pcn,
+                    fused_activation=None,
+                    num_workers_per_dram_bank=4,
+                    use_multicore_pipeline=True,
+                )
+                return pc, _ws_l1(-(-n_tiles // pcn), pcn)
+
+            _hid = self.hidden_dim // tp
+            self.mlp_ds_res_memcfg = ttnn.MemoryConfig(  # RES40 (tp_common DecodeResidualAllReduce.res_mem layout)
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 3))}),
+                    (32, self.dim // 40),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+            self.mlp_ds_gateup_progcfg, self.mlp_ds_gateup_out_memcfg = _ds_pc(2 * _hid // 32, 2)
+            self.mlp_ds_down_progcfg, self.mlp_ds_down_out_memcfg = _ds_pc(self.dim // 32, 2)
+            self.mlp_ds_down_in_memcfg = _ws_l1(_hid // 32 // 2, 2)  # 34 cores x 2 tiles
+            self.mlp_ds_gateup_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, 2 * _hid)
+            self.mlp_ds_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(_hid, self.dim)
+            # DS matmuls only: MLP decode config (fp32 acc, packer_l1_acc) at HiFi4. Device check vs exact ref: rel RMS
+            # 8.35e-3 -> 3.62e-3 (gate+up), 4.38e-3 -> 1.70e-3 (down), about +1 us per matmul.
+            self.mlp_ds_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+            )
+
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
         # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.
         self.proj_1d_decode = True

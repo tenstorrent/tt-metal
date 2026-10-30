@@ -763,3 +763,78 @@ def test_hnew_depth4(device, geo, mode, request):
     assert torch.equal(out2, out4) and torch.equal(ring2, ring4) and torch.equal(win2, win4)
     print("hnew_depth 4 == 2: torch.equal (out, ring, window)")
     _golden(request, out=out2, ring=ring2, win=win2)
+
+
+def skip_if_over_grid_sliced(device, g, B, nv):
+    n = num_cores(device)
+    if B * g.Nv * nv > n:
+        pytest.skip(f"B*Nv*NV = {B}*{g.Nv}*{nv} = {B * g.Nv * nv} work items exceed the {n}-core grid")
+
+
+@pytest.mark.parametrize(
+    "B,T,hold",
+    [
+        (1, 1, ()),
+        (1, 4, ()),
+        (1, 8, ()),
+        (2, 1, ()),
+        (2, 4, ()),
+        (2, 8, ()),
+        (4, 1, ()),
+        (4, 4, ()),
+        (4, 8, ()),
+        (8, 1, ()),
+        (8, 4, ()),
+        (8, 8, ()),
+        (4, 8, (1, 2)),
+        (8, 4, (0, 7)),
+    ],
+)
+def test_num_slices_bit_equal(device, geo, mode, request, B, T, hold):
+    """num_slices=2 (value tile columns of every (user, head) split over 2 cores) == num_slices=1 bit for bit: out,
+    ring, both windows (torch.equal), and the NV=2 result also passes the torch reference. Skipped when
+    B*Nv*2 exceeds the grid."""
+    skip_if_over_grid_sliced(device, geo, B, 2)
+    c = Case(device, geo, B, T, seed=10 * B + T, hold=hold, par=(B + T) & 1, R=round_up32(B * T), mode=mode)
+    o1 = c.run()
+    out1, ring1, wp1, wn1 = c.snapshot(o1)
+    c.reseed()
+    o2 = c.run(num_slices=2)
+    out2, ring2, wp2, wn2 = c.snapshot(o2)
+    assert torch.equal(out2, out1), "num_slices=2 output differs from num_slices=1"
+    assert torch.equal(ring2, ring1), "num_slices=2 ring differs from num_slices=1"
+    assert torch.equal(wn2, wn1), "num_slices=2 next window differs from num_slices=1"
+    assert torch.equal(wp2, wp1), "num_slices=2 changed the previous window"
+    out_ref, st_ref, Wn_ref = c.reference()
+    check_case(c, out2, ring2, wp2, wn2, out_ref, st_ref, Wn_ref, tag="nv2-vs-torch ", require_pad_rows=B * T % 32 != 0)
+    # determinism of the NV=2 program (semaphore reset per launch)
+    c.reseed()
+    o3 = c.run(num_slices=2)
+    out3, ring3, _, wn3 = c.snapshot(o3)
+    assert torch.equal(out3, out2) and torch.equal(ring3, ring2) and torch.equal(wn3, wn2), "NV=2 non-deterministic"
+
+
+def test_num_slices_hnew_depth4(device, geo, mode, request):
+    """hnew_depth 4 at num_slices=2 == hnew_depth 2 at num_slices=1 bit for bit (the split frees L1 for depth 4)."""
+    skip_if_over_grid_sliced(device, geo, 4, 2)
+    c = Case(device, geo, 4, 8, seed=41, hnew_depth=2, mode=mode)
+    out1, ring1, _, win1 = c.snapshot(c.run())
+    c4 = Case(device, geo, 4, 8, seed=41, hnew_depth=4, mode=mode)
+    out4, ring4, _, win4 = c4.snapshot(c4.run(num_slices=2))
+    assert torch.equal(out1, out4) and torch.equal(ring1, ring4) and torch.equal(win1, win4)
+
+
+def test_num_slices_invalid_rejected(device, geo, expect_error):
+    """num_slices outside {1, 2} is refused by the host validate."""
+    c = Case(device, geo, 1, 1, seed=5)
+    with expect_error(RuntimeError, "num_slices must be 1 or 2"):
+        c.run(num_slices=3)
+
+
+def test_num_slices_over_grid_rejected(device, geo, expect_error):
+    """B*Nv fits the grid but B*Nv*2 work items do not: refused by the host validate ("exceed"), not a device hang."""
+    n = num_cores(device)
+    B = n // (2 * geo.Nv) + 1
+    c = Case(device, geo, B, 1, seed=6)  # B*Nv <= n here, so the Case itself is not skipped
+    with expect_error(RuntimeError, "exceed"):
+        c.run(num_slices=2)

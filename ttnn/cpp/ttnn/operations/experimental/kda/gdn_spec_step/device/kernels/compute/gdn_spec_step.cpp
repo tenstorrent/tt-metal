@@ -26,6 +26,9 @@
 #ifndef GDN_FP32_STATE
 #define GDN_FP32_STATE 0
 #endif
+#ifndef GDN_SPLIT
+#define GDN_SPLIT 0
+#endif
 
 using namespace gdn_step;
 
@@ -99,15 +102,16 @@ inline void silu_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32
     out_dfb.push_back(n);
 }
 
-// out[i] = (on[i] * w[i] per column) * zs[i]  (final product on the SFPU, fp32); packed in `out`'s format
-inline void gated_out(uint32_t on, uint32_t w, uint32_t zs, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
+// out[i] = (on[on_off + i] * w[i] per column) * zs[i]  (final product on the SFPU, fp32); packed in `out`'s format
+inline void gated_out(
+    uint32_t on, uint32_t w, uint32_t zs, uint32_t out, DataflowBuffer& out_dfb, uint32_t n, uint32_t on_off = 0) {
     out_dfb.reserve_back(n);
     pack_reconfig_data_format(out);
     reconfig_data_format(on, w);
     for (uint32_t i = 0; i < n; ++i) {
         mul_bcast_rows_init(on, w);
         tile_regs_acquire();
-        mul_tiles_bcast_rows(on, w, i, i, 0);
+        mul_tiles_bcast_rows(on, w, on_off + i, i, 0);
         copy_init(zs);
         copy_tile(zs, i, 1);
         mul_binary_tile_init();
@@ -411,11 +415,22 @@ inline void outer_add_state_sfpu(
 
 }  // namespace
 
-template <uint32_t Kt, uint32_t Vt, uint32_t T, uint32_t K, uint32_t AB2, uint32_t scale_bits, uint32_t inv_dv_bits>
-TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t T,
+    uint32_t K,
+    uint32_t AB2,
+    uint32_t scale_bits,
+    uint32_t inv_dv_bits,
+    uint32_t NV>
+TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     (void)u;
-    constexpr uint32_t KV = Kt * Vt;
-    constexpr uint32_t Ch = 2 * Kt + Vt;
+    // NV value slices per (user, head): this core owns value tile columns [s * Vs, (s + 1) * Vs). NV = 1: Vs = Vt,
+    // KV = Kt * Vt, Ch = 2 * Kt + Vt (the unsplit kernel). Only the final norm needs the whole row (`ofull`).
+    constexpr uint32_t Vs = Vt / NV;
+    constexpr uint32_t KV = Kt * Vs;
+    constexpr uint32_t Ch = 2 * Kt + Vs;
     DataflowBuffer src_in(dfb::src_in);
     DataflowBuffer taps(dfb::taps);
     DataflowBuffer z_in(dfb::z_in);
@@ -474,6 +489,12 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     DataflowBuffer hnew(dfb::hnew);
     DataflowBuffer out(dfb::out);
     DataflowBuffer wout(dfb::wout);
+#if GDN_SPLIT
+    DataflowBuffer orow(dfb::orow);
+    DataflowBuffer ofull(dfb::ofull);
+#else
+    (void)s;
+#endif
     const uint32_t state_in_id = dfb::state_in;
     const uint32_t hn_id = dfb::hn;
     const uint32_t acc_a_id = dfb::acc_a;
@@ -491,10 +512,10 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     // tap reads
     {
         DeviceZoneScopedN("c_silu");
-        z_in.wait_front(Vt);
-        silu_tiles(dfb::z_in, dfb::zs, zs, Vt);
-        z_in.pop_front(Vt);
-        zs.wait_front(Vt);
+        z_in.wait_front(Vs);
+        silu_tiles(dfb::z_in, dfb::zs, zs, Vs);
+        z_in.pop_front(Vs);
+        zs.wait_front(Vs);
     }
 #if !GDN_FAST
     // the T gate pairs (plain mode: one-hot gathers + SFPU sigmoid / softplus / exp); FAST: the reader delivers
@@ -614,7 +635,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         //     (same operand roles: bf16 one-hot A, fp32 conv B); required for bit-identity with it
         qc.reserve_back(Kt);
         kc.reserve_back(Kt);
-        vc.reserve_back(Vt);
+        vc.reserve_back(Vs);
         pack_reconfig_data_format(qc_id);
         reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::cv);
         matmul_init(dfb::sel, dfb::cv);
@@ -639,7 +660,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         }
         qc.push_back(Kt);
         kc.push_back(Kt);
-        vc.push_back(Vt);
+        vc.push_back(Vs);
         cv.pop_front(Ch);
         sel.pop_front(3 + K);
     }
@@ -650,20 +671,20 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         mask_T.wait_front(1);
         qc.wait_front(Kt);
         kc.wait_front(Kt);
-        vc.wait_front(Vt);
+        vc.wait_front(Vs);
         // k, v row-batched; then the q row sums of squares once into `stats` (kept through the token loop): qn_t itself
         // is formed per token with the e_t mask, exactly the plain kernel's inverse_l2(mask) + scale_rows, so o_t =
         // qn_t @ S_t has only the token's row non-zero
         l2norm_rows<Kt>(dfb::kc, dfb::mask_T, dfb::kn, kn, tmp, stats, scratch, inv, kOneBits);
-        scale_rows(dfb::vc, dfb::mask_T, dfb::vm, vm, Vt);
+        scale_rows(dfb::vc, dfb::mask_T, dfb::vm, vm, Vs);
         square_tiles(dfb::qc, dfb::tmp, tmp, Kt);
         reduce_rows(Kt);
         stats.wait_front(1);
         kc.pop_front(Kt);
-        vc.pop_front(Vt);
+        vc.pop_front(Vs);
         mask_T.pop_front(1);
         kn.wait_front(Kt);
-        vm.wait_front(Vt);
+        vm.wait_front(Vs);
         transpose_tiles(dfb::kn, dfb::kt, kt, Kt);
         kt.wait_front(Kt);
     }
@@ -717,26 +738,26 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         hd.wait_front(KV);
 #endif
         // vread = kn @ hd ; delta = beta * (vm - vread) on row r0 + t (other rows exactly 0)
-        row_times_matrix_acc(dfb::vread, dfb::kn, dfb::hd, dfb::vread, vread, Kt, Vt, false);
-        vread.wait_front(Vt);
-        subtract_tiles(dfb::vm, dfb::vread, dfb::tmp, tmp, Vt);
-        vread.pop_front(Vt);
-        tmp.wait_front(Vt);
-        scale_rows(dfb::tmp, dfb::eb, dfb::delta, delta, Vt);
-        tmp.pop_front(Vt);
+        row_times_matrix_acc(dfb::vread, dfb::kn, dfb::hd, dfb::vread, vread, Kt, Vs, false);
+        vread.wait_front(Vs);
+        subtract_tiles(dfb::vm, dfb::vread, dfb::tmp, tmp, Vs);
+        vread.pop_front(Vs);
+        tmp.wait_front(Vs);
+        scale_rows(dfb::tmp, dfb::eb, dfb::delta, delta, Vs);
+        tmp.pop_front(Vs);
         eb.pop_front(1);
-        delta.wait_front(Vt);
+        delta.wait_front(Vs);
         // S_next = hd + kt @ delta ; hnew for the writer's ring write
 #if GDN_FP32_STATE
         hd.pop_front(KV);  // the FPU copy served vread only; the add reads the exact hd32
         hd32.wait_front(KV);
         // hn (o operand), hnew (writer), hn32 (next token's S_cur) = hd32 + kt @ delta, outer product fused in DST
-        outer_add_state_sfpu(hn, hnew, hn32, Kt, Vt);
+        outer_add_state_sfpu(hn, hnew, hn32, Kt, Vs);
         hd32.pop_front(KV);
-        delta.pop_front(Vt);
+        delta.pop_front(Vs);
 #else
-        outer_product4(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vt);
-        delta.pop_front(Vt);
+        outer_product4(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vs);
+        delta.pop_front(Vs);
         outer.wait_front(KV);
 #if GDN_FAST
         add_tiles_n_dual(dfb::hd, dfb::outer, hn_id, hn, dfb::hnew, hnew, KV);  // hn and hnew from one DST tile
@@ -758,11 +779,19 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         DataflowBuffer& acc_prev = (t & 1u) ? acc_a : acc_b;
         const uint32_t acc_prev_id = (t & 1u) ? acc_a_id : acc_b_id;
         if (!first) {
-            acc_prev.wait_front(Vt);
+            acc_prev.wait_front(Vs);
         }
-        row_times_matrix_acc(acc_prev_id, dfb::qn, hn_id, acc_cur_id, acc_cur, Kt, Vt, !first);
+#if GDN_SPLIT
+        // the last token's row product (all T rows accumulated) goes to `orow` for the writer's exchange: the same
+        // fp32 pack as acc_cur, nothing is left in acc_a / acc_b afterwards
+        DataflowBuffer& acc_dst = last ? orow : acc_cur;
+        const uint32_t acc_dst_id = last ? dfb::orow : acc_cur_id;
+        row_times_matrix_acc(acc_prev_id, dfb::qn, hn_id, acc_dst_id, acc_dst, Kt, Vs, !first);
+#else
+        row_times_matrix_acc(acc_prev_id, dfb::qn, hn_id, acc_cur_id, acc_cur, Kt, Vs, !first);
+#endif
         if (!first) {
-            acc_prev.pop_front(Vt);
+            acc_prev.pop_front(Vs);
         }
 #if GDN_FP32_STATE
         hn.pop_front(KV);  // the next token's S_cur is the exact hn32 copy
@@ -783,27 +812,37 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
 
     // ---- D. row-batched post: out = rmsnorm(acc) * w * silu(z)
     DeviceZoneScopedN("c_D");
-    w_in.wait_front(Vt);  // only the final gate needs the norm weight (the reader pushes it with the bulk reads)
+    w_in.wait_front(Vs);  // only the final gate needs the norm weight (the reader pushes it with the bulk reads)
+#if GDN_SPLIT
+    // the final o tiles of all NV slices, assembled by the writer into `ofull` (tile order 0..Vt-1): the norm sums
+    // over the whole Dv row, so every slice runs the identical full-row norm and keeps its own columns
+    ofull.wait_front(Vt);
+    rmsnorm_rows<Vt>(dfb::ofull, dfb::on, on, tmp, stats, scratch, inv, inv_dv_bits);
+    ofull.pop_front(Vt);
+    const uint32_t on_col = s * Vs;  // this slice's first column tile in the normed row
+#else
     DataflowBuffer& acc_fin = ((T - 1) & 1u) ? acc_b : acc_a;
     const uint32_t acc_fin_id = ((T - 1) & 1u) ? acc_b_id : acc_a_id;
     acc_fin.wait_front(Vt);
     rmsnorm_rows<Vt>(acc_fin_id, dfb::on, on, tmp, stats, scratch, inv, inv_dv_bits);
     acc_fin.pop_front(Vt);
+    const uint32_t on_col = 0;
+#endif
     on.wait_front(Vt);
     // gated -> gq (fp32), then one datacopy pass into `out`: gdn_decode_step_conv.cpp routes its gated result through
     // tmp -> out_acc -> out, i.e. through the SrcA unpack, so its stored output is the tf32-rounded product; the same
     // pass here makes the T = 1 output bit-identical to the plain op's (without it: max |d| 2.1e-3, every element)
-    gated_out(dfb::on, dfb::w_in, dfb::zs, dfb::gq, gq, Vt);
+    gated_out(dfb::on, dfb::w_in, dfb::zs, dfb::gq, gq, Vs, on_col);
     on.pop_front(Vt);
-    gq.wait_front(Vt);
-    copy_tiles(dfb::gq, dfb::out, out, Vt);
-    gq.pop_front(Vt);
+    gq.wait_front(Vs);
+    copy_tiles(dfb::gq, dfb::out, out, Vs);
+    gq.pop_front(Vs);
     // (qn is pushed and popped Kt per token inside the token loop: nothing left to pop here)
     kn.pop_front(Kt);
-    vm.pop_front(Vt);
+    vm.pop_front(Vs);
     kt.pop_front(Kt);
-    zs.pop_front(Vt);
-    w_in.pop_front(Vt);
+    zs.pop_front(Vs);
+    w_in.pop_front(Vs);
     scaler.pop_front(1);
     eps_l2.pop_front(1);
     eps_norm.pop_front(1);

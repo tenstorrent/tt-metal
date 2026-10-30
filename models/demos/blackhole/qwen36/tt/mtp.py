@@ -97,6 +97,17 @@ class Qwen36MTP:
             from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
             self._fc_compute_cfg = tpc.COMPUTE_HIFI2
+            # Decode fc: explicit 1D mcast_in0 on 20 cores, in0_block_w 32 (sweep g_1d20_ib32: 28.5 us vs 142.9 us auto).
+            self._fc_1d_progcfg = None
+            if bool(int(os.environ.get("QWEN36_DRAFT_FC_1D", "1"))):
+                self._fc_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+                    32,
+                    2 * args.dim,
+                    args.dim // self.num_devices,
+                    num_cores=20,
+                    grid_w=mesh_device.compute_with_storage_grid_size().x,
+                    max_in0_block_w=32,
+                )
             # Column-parallel: transpose to [2*dim, dim] then shard dim=-1 -> [2*dim, dim/tp] per device.
             self.fc = tpc.shard_w(
                 fc_w,
@@ -108,6 +119,7 @@ class Qwen36MTP:
             )
         else:
             self._fc_compute_cfg = None
+            self._fc_1d_progcfg = None
             self.fc = ttnn.as_tensor(
                 fc_w.T.contiguous(),  # [2*dim, dim]
                 dtype=ttnn.bfloat8_b,
@@ -133,8 +145,8 @@ class Qwen36MTP:
         # Dedicated cache root (.../mtp/) so the reused layer's sharded weights never collide with
         # the real layer L's cache.
         self.decoder = Qwen36DecoderLayer(
-            mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl
-        )
+            mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl, rope_perm=False
+        )  # the drafter keeps its own un-permuted projections and 64-wide RoPE (QWEN36_ROPE_PERM covers base layers only)
         # KV accessor for allocate_kv_caches / rollback.
         self.attention = self.decoder.attention
         # Drafter-only decode SDPA width. Shared decode program config leaves max_cores_per_head_batch
@@ -310,22 +322,40 @@ class Qwen36MTP:
         assert rows in self._argmax_consts, f"no argmax constants for {rows} rows (have {sorted(self._argmax_consts)})"
         shard_off, sel_lane = self._argmax_consts[rows]
 
-        # 1. Local argmax over this device's shard. ttnn.argmax needs ROW_MAJOR for the multicore
-        #    last-dim path (a TILE input falls back to a single-core internal untilize).
-        rm = ttnn.to_layout(logits_shard, ttnn.ROW_MAJOR_LAYOUT)
-        lidx4 = ttnn.argmax(rm, dim=-1, keepdim=True)  # [1,1,B,1] uint32 ROW_MAJOR, LOCAL index per row
-        ttnn.deallocate(rm)
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-        # 2. This shard's max VALUE per row — the only thing the other devices need in order to rank it.
-        val = self._maxval_dev(logits_shard)  # [1,1,B,1] fp32 TILE
+        dm = tpc.draft_argmax_topk_min_rows()
+        if dm and rows >= dm and rows <= ttnn.TILE_SIZE and int(logits_shard.shape[3]) <= 32768:
+            # 1-3 (QWEN36_DRAFT_ARGMAX_TOPK_MIN_ROWS): fp32 -> bf16, then one stable topk gives the local index AND the
+            #    max; the index goes uint16 -> uint32 -> int32 in TILE. Cross-device ties compare bf16 values (draft only).
+            lg = ttnn.typecast(logits_shard, ttnn.bfloat16)
+            i16, val_b = tpc.local_topk_argmax(lg, rows)  # [1,1,B,1] TILE, val bf16
+            ttnn.deallocate(lg)
+            val = ttnn.typecast(val_b, ttnn.float32)  # the gather below is fp32
+            ttnn.deallocate(val_b)
+            lidx_u = ttnn.typecast(i16, ttnn.uint32)
+            ttnn.deallocate(i16)
+            lidx_i = ttnn.typecast(lidx_u, ttnn.int32)
+            ttnn.deallocate(lidx_u)
+            gid = ttnn.add(shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
+            ttnn.deallocate(lidx_i)
+        else:
+            # 1. Local argmax over this device's shard. ttnn.argmax needs ROW_MAJOR for the multicore
+            #    last-dim path (a TILE input falls back to a single-core internal untilize).
+            rm = ttnn.to_layout(logits_shard, ttnn.ROW_MAJOR_LAYOUT)
+            lidx4 = ttnn.argmax(rm, dim=-1, keepdim=True)  # [1,1,B,1] uint32 ROW_MAJOR, LOCAL index per row
+            ttnn.deallocate(rm)
 
-        # 3. Candidate GLOBAL id = d * vocab_shard + local index, int32, in every lane.
-        lidx_t = ttnn.to_layout(lidx4, ttnn.TILE_LAYOUT)  # uint32 TILE [1,1,B,1]
-        ttnn.deallocate(lidx4)
-        lidx_i = ttnn.typecast(lidx_t, ttnn.int32)
-        ttnn.deallocate(lidx_t)
-        gid = ttnn.add(shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
-        ttnn.deallocate(lidx_i)
+            # 2. This shard's max VALUE per row — the only thing the other devices need in order to rank it.
+            val = self._maxval_dev(logits_shard)  # [1,1,B,1] fp32 TILE
+
+            # 3. Candidate GLOBAL id = d * vocab_shard + local index, int32, in every lane.
+            lidx_t = ttnn.to_layout(lidx4, ttnn.TILE_LAYOUT)  # uint32 TILE [1,1,B,1]
+            ttnn.deallocate(lidx4)
+            lidx_i = ttnn.typecast(lidx_t, ttnn.int32)
+            ttnn.deallocate(lidx_t)
+            gid = ttnn.add(shard_off, lidx_i)  # [1,1,B,lanes] int32, column broadcast over W
+            ttnn.deallocate(lidx_i)
 
         # 4. One tile-wide value block per row: lane 0 carries the real max, the rest a floor that can
         #    never win. ttnn.pad is pure data movement, so the fp32 max survives bit-exact.
@@ -431,6 +461,8 @@ class Qwen36MTP:
         ttnn.deallocate(e)
         ttnn.deallocate(h)
         kw = dict(compute_kernel_config=self._fc_compute_cfg) if self._fc_compute_cfg is not None else {}
+        if self._fc_1d_progcfg is not None and mode == Mode.DECODE and cat.shape[-2] <= 32:
+            kw["program_config"] = self._fc_1d_progcfg
         fused = ttnn.linear(cat, self.fc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)  # [1,1,*,dim/tp]
         ttnn.deallocate(cat)
         return fused

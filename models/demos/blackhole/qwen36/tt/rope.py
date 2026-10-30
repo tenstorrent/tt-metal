@@ -90,6 +90,31 @@ class Qwen36RoPESetup:
         # ROW_MAJOR [max_seq_len, head_dim] tables for the device-resident decode loop's ttnn.embedding RoPE lookup
         # (decode_rm_tables); built lazily so models that never run that loop do not pay the DRAM.
         self._decode_rm_tables = None
+        self._decode_rm_tables_wide = None
+        self.wide_hd = None  # QWEN36_ROPE_PERM: attention head_dim (the model sets it); decode_rm_tables then also builds the wide pair
+
+    def decode_rm_tables_wide(self, hd):
+        """decode_rm_tables in the QWEN36_ROPE_PERM layout: ROW_MAJOR DRAM [max_seq_len, hd] (hd = attention head_dim), each
+        row = widen_cos_sin of the 64-wide row (rotary lanes (i, i + hd/2) hold cos[i], cos[i + rd/2]; pass-through
+        lanes cos = 1, sin = 0), so a lookup gives the permuted hd-wide cos/sin directly. Same bf16 values bit for bit.
+        Built on first use, outside any trace, kept for the model's lifetime."""
+        if self._decode_rm_tables_wide is None:
+            from models.demos.blackhole.qwen36.tt.attention.rope_tp import widen_cos_sin
+
+            mapper = ttnn.ReplicateTensorToMesh(self.device)
+            c, s = widen_cos_sin(self.cos_cpu.to(torch.bfloat16), self.sin_cpu.to(torch.bfloat16), hd)
+            self._decode_rm_tables_wide = tuple(
+                ttnn.from_torch(
+                    t.contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+                for t in (c, s)
+            )
+        return self._decode_rm_tables_wide
 
     def decode_rm_tables(self):
         """Replicated bf16 ROW_MAJOR DRAM (cos, sin) tables [max_seq_len, head_dim] for an on-device RoPE lookup:
@@ -111,6 +136,8 @@ class Qwen36RoPESetup:
                 )
                 for table in (self.cos_cpu, self.sin_cpu)
             )
+            if self.wide_hd:  # allocated together, outside any trace
+                self.decode_rm_tables_wide(self.wide_hd)
         return self._decode_rm_tables
 
     def get_rot_mats(self, position_ids: torch.Tensor):
@@ -246,6 +273,10 @@ class Qwen36RoPESetup:
         """ttnn cos/sin [1, length, head_dim] (replicated) for SEQUENCE positions [start, start+length),
         M-RoPE-aware. Drop-in for the prefill sites that previously called get_rot_mats(arange(...))."""
         cos_t, sin_t = self.prefill_cos_sin_torch(start, length)
+        if self.wide_hd:  # QWEN36_ROPE_PERM: the permuted hd-wide layout the base attention layers take
+            from models.demos.blackhole.qwen36.tt.attention.rope_tp import widen_cos_sin
+
+            cos_t, sin_t = widen_cos_sin(cos_t, sin_t, self.wide_hd)
         cos = ttnn.from_torch(
             cos_t.unsqueeze(0),
             dtype=ttnn.bfloat16,

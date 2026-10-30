@@ -13,9 +13,14 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+    DecodeRope,
+    apply_full_rope_decode,
+    apply_full_rope_prefill,
     apply_partial_rope_decode,
     apply_partial_rope_decode_single,
     apply_partial_rope_prefill,
+    narrow_cos_sin_dev,
+    rope_perm_index,
 )
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
@@ -39,15 +44,30 @@ def _probe_kv_group_write():
 KV_GROUP_WRITE_OK = _probe_kv_group_write()
 
 
-def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
-    """Shard one full-attention layer's weights across the mesh."""
+def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None, rope_perm=False):
+    """Shard one full-attention layer's weights across the mesh.
+
+    rope_perm (QWEN36_ROPE_PERM, base-model layers only): permute each q and k head's channels (rope_tp.rope_perm_index) so
+    the rotary pairs land at lanes (i, i + hd/2) and RoPE is one full-width op. Applies to the q rows of q_proj, k_proj
+    and the q_norm / k_norm weights; weight cache stems get a ".rp" suffix, so old and new caches never mix."""
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
+    _rp = ".rp" if rope_perm else ""
 
-    def c(n):
-        return str(cache_dir / n) if cache_dir is not None else None
+    def c(n, qk=False):  # qk: the weight holds permuted q/k rows (v and wo keep their old keys)
+        return str(cache_dir / (n + (_rp if qk else ""))) if cache_dir is not None else None
 
-    tw = {}
+    tw = {"_rope_perm": bool(rope_perm)}
+    q_w, k_w = state_dict["q_proj.weight"], state_dict["k_proj.weight"]
+    qn_w, kn_w = state_dict["q_norm.weight"], state_dict["k_norm.weight"]
+    if rope_perm:
+        _perm = rope_perm_index(args.head_dim, args.rope_head_dim)
+        # q_proj rows are [q(hd) | gate(hd)] per head: permute the q half only; k_proj rows are [hd] per head.
+        q_w = q_w.reshape(-1, 2, args.head_dim, q_w.shape[-1]).clone()
+        q_w[:, 0] = q_w[:, 0, _perm]
+        q_w = q_w.reshape(-1, q_w.shape[-1])
+        k_w = k_w.reshape(-1, args.head_dim, k_w.shape[-1])[:, _perm].reshape(-1, k_w.shape[-1])
+        qn_w, kn_w = qn_w[_perm], kn_w[_perm]
     # Column-parallel q/k/v: fused [q+gate|k|v] per device, or separate DRAM-sharded weights.
     # Distinct cache names — as_tensor reload ignores requested memcfg.
     # QKV + wo weight dtype (QWEN36_BFP4_ATTN, default off): BFP8; =1 -> BFP4. Cache stems unchanged (dtype is in the file name).
@@ -61,12 +81,12 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # to (devices 2d, 2d+1 share head d at TP=8). The per-device slicing below is then uniform.
     # No-op when tp <= n_kv_heads, so TP=4 weights stay bit-identical.
     kv_rep = lambda w: tpc.replicate_kv_weight(w, args.n_kv_heads, args.num_devices, args.head_dim)
-    k_proj, v_proj = kv_rep(state_dict["k_proj.weight"]), kv_rep(state_dict["v_proj.weight"])
+    k_proj, v_proj = kv_rep(k_w), kv_rep(state_dict["v_proj.weight"])
 
     if fused_qkv:
         if qg_deint:
             fused = tpc.prepare_attn_qkv_deint(
-                state_dict["q_proj.weight"],
+                q_w,
                 k_proj,
                 v_proj,
                 args.n_local_heads,
@@ -76,7 +96,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             )
         else:
             fused = tpc.prepare_attn_qkv(
-                state_dict["q_proj.weight"],
+                q_w,
                 k_proj,
                 v_proj,
                 args.n_local_heads * args.head_dim * 2,
@@ -92,7 +112,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
-            cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
+            cache_path=c(_base + (".il" if _proj1d else ".dramshard"), qk=True),
             dtype=_attn_dtype,
         )
     else:
@@ -102,11 +122,11 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         v_mc = args.attn_v_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
         tag = ".dramshard" if qkv_sharded else ""
         tw["wqkv"] = tpc.shard_w(
-            state_dict["q_proj.weight"],
+            q_w,
             mesh,
             dim=-1,
             memory_config=qg_mc,
-            cache_path=c("wqkv" + tag),
+            cache_path=c("wqkv" + tag, qk=True),
             dtype=_attn_dtype,
         )
         # k_proj/v_proj are the KV-replicated weights: shard_w splits tp*head_dim rows evenly, so
@@ -116,7 +136,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=k_mc,
-            cache_path=c("wk" + tag),
+            cache_path=c("wk" + tag, qk=True),
             dtype=_attn_dtype,
         )
         tw["wv"] = tpc.shard_w(
@@ -138,8 +158,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dtype=_attn_dtype,
     )
     # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
-    tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
-    tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+    tw["q_norm"] = tpc.replicate(qn_w.to(torch.float32) + 1.0, mesh, None)
+    tw["k_norm"] = tpc.replicate(kn_w.to(torch.float32) + 1.0, mesh, None)
     return tw
 
 
@@ -161,6 +181,9 @@ class TPAttention:
         self.HD = args.head_dim
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
+        # QWEN36_ROPE_PERM: q/k channels are permuted at load (load_attention_weights_tp), RoPE runs full-width on hd-wide
+        # cos/sin. False for the MTP drafter (own weights, own 64-wide RoPE) and for weights loaded without it.
+        self.rope_perm = bool(tw.get("_rope_perm", False))
         self.compute_cfg = tpc.COMPUTE_HIFI2  # SDPA + all prefill matmuls
         # DECODE-only QKV / wo matmul configs: LoFi with BFP4 weights (QWEN36_BFP4_ATTN), else unchanged.
         self.qkv_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
@@ -196,6 +219,34 @@ class TPAttention:
         self.paged_k = k_cache
         self.paged_v = v_cache
         self.use_paged = True
+
+    def _rope_prefill(self, q, k, cos_tt, sin_tt):
+        """Prefill RoPE of q [1,NH,S,HD] and k [1,NKV,S,HD]. rope_perm: one full-width op each on hd-wide permuted cos/sin
+        [1,1,S,HD]. Otherwise the partial slice / rotate / concat chain on rd-wide cos/sin; a drafter handed the base's
+        hd-wide permuted buffers (the shared traced-prefill cos/sin) first narrows them back to rd-wide."""
+        if self.rope_perm:
+            assert cos_tt.shape[-1] == self.HD, f"rope_perm attention needs {self.HD}-wide cos/sin, got {cos_tt.shape}"
+            return apply_full_rope_prefill(q, cos_tt, sin_tt), apply_full_rope_prefill(k, cos_tt, sin_tt)
+        narrowed = cos_tt.shape[-1] != self.rope_dim
+        if narrowed:
+            cos_tt, sin_tt = narrow_cos_sin_dev(cos_tt, sin_tt, self.HD, self.rope_dim)
+        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, self.NH, self.rope_dim)
+        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, self.NKV, self.rope_dim)
+        if narrowed:
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
+        return q, k
+
+    def _rope_decode_perm(self, q, k, dr, B, k_out):
+        """Decode RoPE (rope_perm) of q [1,B,NH,HD] and k [1,B,NKV,HD] with the per-step DecodeRope ``dr`` (already
+        height-sharded by the model, once for all layers). q returns DRAM interleaved (what the paged SDPA reads); k
+        returns in ``k_out`` (None: still on its shard grid, for the KV-write reshard)."""
+        assert (
+            isinstance(dr, DecodeRope) and dr.B == B
+        ), f"rope_perm decode needs a DecodeRope of {B} rows, got {type(dr)}"
+        q = apply_full_rope_decode(q, dr, "q", ttnn.DRAM_MEMORY_CONFIG)
+        k = apply_full_rope_decode(k, dr, "k", k_out)
+        return q, k
 
     def _qkv(self, x, decode_qkv3_l1=False, wide_prefill=False):
         """Q+gate/K/V projections → (qg, kp, vp). Fused path: one matmul, then slice.
@@ -511,8 +562,7 @@ class TPAttention:
             tw["k_norm"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
-        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+        q, k = self._rope_prefill(q, k, cos_tt, sin_tt)
 
         # Fill per-head KV cache for decode (stateful path only)
         if self.k_caches is not None:
@@ -831,6 +881,7 @@ class TPAttention:
         spec_n_users=1,
         spec_user_page_table=None,
         spec_pos_groups=None,
+        spec_pos_masked=None,
     ):
         """One decode step for B "users".
 
@@ -862,6 +913,9 @@ class TPAttention:
 
         spec_pos_groups: QWEN36_VERIFY_ATTN_LEAN only; list of T device int32 [n_users] tensors, entry j = the strided
         slice cur_pos[j::T] (group j's KV positions). The verify model builds them once per trace; None = slice here.
+
+        spec_pos_masked: QWEN36_KV_WRITE_MASKED only; list of T device int32 [B] tensors, entry j = cur_pos with every row
+        whose candidate index is not j set to -1 (the update op skips those rows). None = the unmasked grouped write.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         if (
@@ -882,6 +936,7 @@ class TPAttention:
                 spec_user_page_table,
                 spec_page_table,
                 spec_pos_groups,
+                spec_pos_masked,
             )
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
         # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
@@ -933,8 +988,11 @@ class TPAttention:
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
 
-        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+        if self.rope_perm:
+            q, k = self._rope_decode_perm(q, k, cos_tt, B, k_out=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+            k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
         # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a
@@ -1210,6 +1268,64 @@ class TPAttention:
             if _t is not None:
                 ttnn.deallocate(_t)
 
+    def _kv_masked_cfgs(self, B):
+        """``(v_cfg, k_cfg)`` height shards ([32, HD] per core, one core per row, B cores each) for _write_kv_fused_masked, or
+        None when they do not fit the grid. V takes the rectangle x < cols, y < B/cols (cols = min(8, B)), K the same
+        rectangle shifted down by B/cols rows, so the two sets are disjoint (the op needs that) for every B the verify uses
+        (4, 8, 16, 32 rows). Row-wise shard order in both: shard r <-> core r of its rectangle, K core r pairs with V core r.
+        """
+        cache = getattr(self, "_kv_masked_cfg_cache", None)
+        if cache is None:
+            cache = self._kv_masked_cfg_cache = {}
+        if B not in cache:
+            grid = self.mesh.compute_with_storage_grid_size()
+            cols = min(8, B)
+            rows_ = B // cols
+            if B % cols or cols > grid.x or 2 * rows_ > grid.y:
+                cache[B] = None
+            else:
+
+                def _cfg(y0):
+                    cores = ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, y0), ttnn.CoreCoord(cols - 1, y0 + rows_ - 1))}
+                    )
+                    return ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        ttnn.BufferType.L1,
+                        ttnn.ShardSpec(cores, [ttnn.TILE_SIZE, self.HD], ttnn.ShardOrientation.ROW_MAJOR),
+                    )
+
+                cache[B] = (_cfg(0), _cfg(rows_))
+        return cache[B]
+
+    def _write_kv_fused_masked(self, k, v, pos_masked, page_table, B, T):
+        """Masked aliased KV write: ONE shard copy of all B rows of k and one of v, then T paged_fused_update_cache calls on those
+        same two sharded tensors (6 ops per layer; _write_kv_fused_groups is 4 x (slice, I2S, slice, I2S, update)).
+
+        Why T calls: a user's T rows (p..p+T-1) usually share one 32-row cache tile and each core of the op reads the whole tile,
+        patches its row and writes the whole tile back, so two rows of one user in ONE call race (last writer wins).
+        Call j therefore lets only the rows r with r % T == j write: pos_masked[j][r] = cur_pos[r] if r % T == j else -1, and
+        the op skips an update index of -1 on that core (reader / writer ``skip_update``), so each call has one live row per
+        user, as the grouped write has. Row r sits on core r of both shard sets and the op reads page-table row r for it, so
+        ``page_table`` is the PER-ROW table (row u*T + j = user u's blocks), not the per-user one.
+        Consumes k and v ([1, B, NKV, HD] TILE interleaved, rows user-major)."""
+        v_cfg, k_cfg = self._kv_masked_cfgs(B)
+        k_sh = ttnn.to_memory_config(k, k_cfg)
+        ttnn.deallocate(k)
+        v_sh = ttnn.to_memory_config(v, v_cfg)
+        ttnn.deallocate(v)
+        for j in range(T):
+            ttnn.experimental.paged_fused_update_cache(
+                self.paged_k,
+                k_sh,
+                self.paged_v,
+                v_sh,
+                update_idxs_tensor=pos_masked[j],
+                page_table=page_table,
+            )
+        ttnn.deallocate(k_sh)
+        ttnn.deallocate(v_sh)
+
     def _forward_verify_lean(
         self,
         x,
@@ -1222,6 +1338,7 @@ class TPAttention:
         spec_user_page_table,
         spec_page_table,
         spec_pos_groups,
+        spec_pos_masked=None,
     ):
         """Traced-verify attention (QWEN36_VERIFY_ATTN_LEAN): the arithmetic of the legacy forward_decode verify branch,
         op for op (same QKV matmul, nlp head split, rms_norm then * (1+w), partial rope, fused spec SDPA, sigmoid then
@@ -1251,10 +1368,24 @@ class TPAttention:
 
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
-        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+        if self.rope_perm:
+            # k feeds the masked write (_write_kv_fused_masked: interleaved [1,B,NKV,HD] rows) or the grouped write: k_out
+            # DRAM = the layout the old path handed over (the DecodeRope output is converted back to it).
+            q, k = self._rope_decode_perm(q, k, cos_tt, B, k_out=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+            k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        self._write_kv_fused_groups(k, v, cur_pos_tt, spec_n_users, spec_user_page_table, spec_pos_groups, B)
+        if (
+            spec_pos_masked is not None
+            and len(spec_pos_masked) == T
+            and page_table is not None
+            and page_table.shape[0] == B
+            and self._kv_masked_cfgs(B) is not None
+        ):
+            self._write_kv_fused_masked(k, v, spec_pos_masked, page_table, B, T)
+        else:
+            self._write_kv_fused_groups(k, v, cur_pos_tt, spec_n_users, spec_user_page_table, spec_pos_groups, B)
         # The paged SDPA-decode derives its batch from the page table's row count and checks nothing (legacy comment).
         assert B == page_table.shape[0] == cur_pos_tt.shape[-1], (
             f"decode SDPA batch mismatch: q rows {B}, page_table rows {page_table.shape[0]}, "
@@ -1332,7 +1463,11 @@ class TPAttention:
         q = ttnn.rms_norm(q, epsilon=1e-6, weight=tw["q_norm"], memory_config=_L1)
         k = ttnn.rms_norm(k, epsilon=1e-6, weight=tw["k_norm"], memory_config=_L1)
 
-        if B == 1:
+        if self.rope_perm:
+            # q -> DRAM (paged SDPA decode rejects an L1-interleaved q). k stays on its rope shard grid: the
+            # to_memory_config below reshards it straight onto the KV-update cores (no interleaved round trip).
+            q, k = self._rope_decode_perm(q, k, cos_tt, B, k_out=None)
+        elif B == 1:
             # q -> DRAM: paged SDPA decode requires a DRAM-interleaved (or sharded) Q, as in qwen38's `_rope_decode`.
             q = apply_partial_rope_decode_single(
                 q, cos_tt, sin_tt, self.rope_dim, memory_config=_L1, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1444,8 +1579,7 @@ class TPAttention:
             tw["k_norm"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
-        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+        q, k = self._rope_prefill(q, k, cos_tt, sin_tt)
 
         k_paged, v_paged = self.paged_k, self.paged_v
         block_size = k_paged.shape[2]

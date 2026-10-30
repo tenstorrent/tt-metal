@@ -64,6 +64,44 @@ def verify_device_topk_m():
     return int(os.environ.get("QWEN36_VERIFY_TOPK_M", "64"))
 
 
+def argmax_topk_min_rows():
+    """QWEN36_ARGMAX_TOPK_MIN_ROWS (default 8; 0 = off): the per-shard (local idx, max) of the sharded argmax chains
+    comes from one stable multi-core ttnn.topk (k=32, column 0) when the call has >= this many rows. Below it the
+    argmax + max-reduce path stays (it is cheaper at 1-4 rows)."""
+    return int(os.environ.get("QWEN36_ARGMAX_TOPK_MIN_ROWS", "8") or 0)
+
+
+def draft_argmax_topk_min_rows():
+    """QWEN36_DRAFT_ARGMAX_TOPK_MIN_ROWS (default 4; 0 = off): the MTP drafter's fp32 shard logits are typecast to bf16
+    and take the topk local-argmax path when the call has >= this many rows (bench: 154 us flat vs 128 us at 1 row,
+    354 us at 8). bf16 near-ties can change a draft id; the target verify is unaffected."""
+    return int(os.environ.get("QWEN36_DRAFT_ARGMAX_TOPK_MIN_ROWS", "4") or 0)
+
+
+def argmax_topk_pick(x, rows):
+    """True when the topk local-argmax path applies to shard logits ``x`` [1,1,rows,W] (W <= 32768)."""
+    m = argmax_topk_min_rows()
+    if m == 0 or rows < m or rows > ttnn.TILE_SIZE or int(x.shape[3]) > 32768:
+        return False
+    return x.dtype == ttnn.bfloat16
+
+
+def local_topk_argmax(x, rows):
+    """(idx, val) [1,1,rows,1] TILE of the per-row first-index argmax / max of shard logits x [1,1,rows,W]: pad to
+    32 rows x 32768 lanes with -1e30, stable ttnn.topk(k=32), column 0 (== torch first-index argmax, also on ties).
+    idx is uint16 (topk's index dtype), val keeps x's dtype. Caller owns x."""
+    w = 1 << 15
+    pad_rows = ttnn.TILE_SIZE - rows
+    p = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_rows), (0, w - int(x.shape[3]))], value=-1e30)
+    vals, idx = ttnn.topk(p, k=32, dim=-1, largest=True, sorted=True, stable=True)
+    ttnn.deallocate(p)
+    v0 = ttnn.slice(vals, [0, 0, 0, 0], [1, 1, rows, 1])
+    i0 = ttnn.slice(idx, [0, 0, 0, 0], [1, 1, rows, 1])
+    ttnn.deallocate(vals)
+    ttnn.deallocate(idx)
+    return i0, v0
+
+
 def verify_dar_enabled():
     """QWEN36_VERIFY_DAR (default "1"; "0" = today's verify, byte for byte): the traced verify body runs on the replicated
     RES40 residual of the plain decode (DecodeResidualAllReduce: one AG at entry, one all_reduce_async per row-parallel
@@ -77,6 +115,14 @@ def verify_attn_lean_enabled():
     traced verify take the lean decode op sequence (TPAttention._forward_verify_lean) and the model hands them cos/sin
     already in the layout the rope wants (one reshape per trace, not four per layer). Note 42 has the op list."""
     return os.environ.get("QWEN36_VERIFY_ATTN_LEAN", "1") == "1"
+
+
+def kv_write_masked_enabled():
+    """QWEN36_KV_WRITE_MASKED (default "1"; "0" = today's verify KV write, byte for byte): the lean verify's KV write of the
+    full-attention layers is one shard copy of all B rows of k and of v, then T paged_fused_update_cache calls on those same
+    tensors, each with a position tensor that is -1 (skip) for the rows of the other candidates (6 ops per layer instead
+    of 20). See TPAttention._write_kv_fused_masked."""
+    return os.environ.get("QWEN36_KV_WRITE_MASKED", "1") == "1"
 
 
 def verify_layout_cuts_enabled():

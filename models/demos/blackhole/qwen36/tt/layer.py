@@ -22,7 +22,9 @@ class Qwen36DecoderLayer:
     Attention is either GatedAttention (full, with RoPE) or GatedDeltaNet (linear).
     """
 
-    def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None):
+    def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None, rope_perm=None):
+        # rope_perm (QWEN36_ROPE_PERM; TP full-attention layers): permuted q/k channels + full-width RoPE. None = follow the
+        # env flag and the head geometry; the MTP drafter passes False (own weights, own 64-wide RoPE).
         self.layer_num = layer_num
         self.device = mesh_device
         self.args = args
@@ -90,10 +92,17 @@ class Qwen36DecoderLayer:
             # single-threaded) reorder+shard of the full 27B.
             tp_cache = (tensor_cache_path / f"layers.{layer_num}" / "tp") if tensor_cache_path else None
             if self.is_full_attention:
+                from models.demos.blackhole.qwen36.tt.attention.rope_tp import rope_perm_env_on, rope_perm_supported
                 from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
 
+                if rope_perm is None:
+                    rope_perm = rope_perm_env_on() and rope_perm_supported(args.head_dim, args.rope_head_dim)
                 tw = load_attention_weights_tp(
-                    mesh_device, substate(state_dict, f"layers.{layer_num}.self_attn"), args, cache_dir=tp_cache
+                    mesh_device,
+                    substate(state_dict, f"layers.{layer_num}.self_attn"),
+                    args,
+                    cache_dir=tp_cache,
+                    rope_perm=rope_perm,
                 )
                 self.attention = TPAttention(mesh_device, args, tw, tt_ccl)
             else:
@@ -195,7 +204,9 @@ class Qwen36DecoderLayer:
         conv_sel=None,
         spec_ctrl=None,
         spec_pos_groups=None,
+        spec_pos_masked=None,
     ):
+        # spec_pos_masked (QWEN36_KV_WRITE_MASKED): T masked [rows] position tensors (-1 = skip), see TPAttention._write_kv_fused_masked.
         # spec_pos_groups (QWEN36_VERIFY_ATTN_LEAN): the verify's per-candidate-group KV positions, strided slices of the row
         # position buffer built ONCE per trace by the model instead of once per attention layer; None = slice in the layer.
         # spec_ctrl: QWEN36_VERIFY_SPEC_STEP=1 -- the fused GDN spec op's ctrl page ({parity, mi, ring block | HOLD}),
@@ -293,6 +304,7 @@ class Qwen36DecoderLayer:
                         spec_n_users=n_users,
                         spec_user_page_table=spec_user_page_table,
                         spec_pos_groups=spec_pos_groups,
+                        spec_pos_masked=spec_pos_masked,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on

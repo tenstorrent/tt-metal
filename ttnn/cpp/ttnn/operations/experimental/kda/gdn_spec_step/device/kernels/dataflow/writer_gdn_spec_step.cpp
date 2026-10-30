@@ -11,8 +11,18 @@
 // every output row outside [u*T, u*T + T) is then exactly 0. HOLD is decided per (u,h) ctrl word; q/k window chunk
 // ownership is per key-head group (h % rf == 0), so a caller must hold ALL Nv heads of a user (the op cannot check
 // ctrl contents).
+// NV value slices (NV > 1, define GDN_SPLIT): one core = (u, h, slice s) owns value tile columns [s*Vs, (s+1)*Vs),
+// Vs = Vt / NV. Own-column window / ring / zero-pad / output writes only; q/k window chunks come from slice 0 of the
+// h % rf == 0 head. Before the last ring token the slices of one (u,h) exchange their final o tiles (`orow`, own
+// columns) into every peer's `ofull` at the same L1 address (NoC write, barrier, semaphore up, wait_min(NV - 1), set
+// 0), so every slice runs the gated norm on the identical full row.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/dataflow/gdn_step_dataflow_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
+#if GDN_SPLIT
+#include "api/semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#endif
 
 using namespace gdn_step_df;
 
@@ -60,8 +70,20 @@ template <
     uint32_t Ct,
     uint32_t out_w_tiles,
     uint32_t ctrl_bytes,
-    uint32_t hold_sentinel>
-TT_KERNEL void writer(uint32_t u, uint32_t h) {
+    uint32_t hold_sentinel,
+    uint32_t NV>
+TT_KERNEL void writer(
+    uint32_t u,
+    uint32_t h,
+    uint32_t s,
+    uint32_t nx,
+    uint32_t ny,
+    uint32_t px0,
+    uint32_t py0,
+    uint32_t px1,
+    uint32_t py1,
+    uint32_t px2,
+    uint32_t py2) {
     const auto ring_acc = TensorAccessor(tensor::ring_out);
     const auto out_acc = TensorAccessor(tensor::out);
     const auto wa_acc = TensorAccessor(tensor::win_a_w);
@@ -72,9 +94,18 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     DataflowBuffer wout(dfb::wout);
     DataflowBuffer ctrl_w(dfb::ctrl_w);
     DataflowBuffer bounce(dfb::bounce);
+#if GDN_SPLIT
+    DataflowBuffer orow(dfb::orow);
+    DataflowBuffer ofull(dfb::ofull);
+    Semaphore exchange(sem::exchange);
+#else
+    (void)nx, (void)ny, (void)px0, (void)py0, (void)px1, (void)py1, (void)px2, (void)py2;
+#endif
     Noc noc;
-    constexpr uint32_t KV = Kt * Vt;
-    constexpr uint32_t Ch = 2 * Kt + Vt;
+    constexpr uint32_t Vs = Vt / NV;  // own value tile columns
+    constexpr uint32_t KV = Kt * Vt;  // full-head state tiles (ring page stride)
+    constexpr uint32_t KVs = Kt * Vs;
+    constexpr uint32_t Ch = 2 * Kt + Vs;
     constexpr uint32_t rf = Nv / Nk;
     constexpr uint32_t BH = M * Nv;
     constexpr uint32_t Lw_w = (Lw + 1) & ~1u;  // even row count (row Lw is an exact zero when Lw is odd)
@@ -82,7 +113,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
     const uint32_t bh = u * Nv + h;
     const uint32_t tr = (u * T) / 32;  // output tile row of the user's rows
     const uint32_t r0 = (u * T) % 32;
-    const bool write_qk = (h % rf) == 0;  // the rf value heads of a key head share its q/k chunks: one writer
+    const bool write_qk = (h % rf) == 0 && s == 0;  // the rf heads x NV slices of a key head share its q/k chunks
     auto chunk_col = [&](uint32_t c) -> uint32_t {
         if (c < Kt) {
             return hk * Kt + c;
@@ -90,7 +121,7 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
         if (c < 2 * Kt) {
             return Nk * Kt + hk * Kt + (c - Kt);
         }
-        return 2 * Nk * Kt + h * Vt + (c - 2 * Kt);
+        return 2 * Nk * Kt + h * Vt + s * Vs + (c - 2 * Kt);
     };
     auto owns = [&](uint32_t c) -> bool { return c >= 2 * Kt || write_qk; };
 
@@ -172,8 +203,8 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
         const uint32_t entry = out.get_entry_size();
         const uint32_t esz = entry / 1024;
         const uint32_t seg = entry / 64;
-        for (uint32_t t = 0; t < Vt; ++t) {
-            const uint32_t page = tr * out_w_tiles + h * Vt + t;
+        for (uint32_t t = 0; t < Vs; ++t) {
+            const uint32_t page = tr * out_w_tiles + h * Vt + s * Vs + t;
             for (uint32_t lo = r0 + T; lo < 32;) {
                 const uint32_t hi = (lo < 16) ? 16u : 32u;
                 for (uint32_t half = 0; half < 2; ++half) {
@@ -192,31 +223,78 @@ TT_KERNEL void writer(uint32_t u, uint32_t h) {
         bounce.pop_front(2);
     }
 
-    // ---- ring: the post-token state of every token, token-major block (t*BH + bh); skipped for held heads
+    // ---- ring: the post-token state of every token, token-major block (t*BH + bh); skipped for held heads. Each slice
+    //      writes its own Vs tile columns of the block (page = block*KV + kt*Vt + s*Vs + j). With NV > 1 the o-tile
+    //      exchange sits between token T-2 and token T-1 (held heads still exchange: their compute still runs).
     {
         const uint32_t entry = hnew.get_entry_size();
         for (uint32_t t = 0; t < T; ++t) {
+#if GDN_SPLIT
+            if (t == T - 1) {
+                DeviceZoneScopedN("wr_exchange");
+                constexpr uint32_t peers = NV - 1;
+                const uint32_t px[3] = {px0, px1, px2};
+                const uint32_t py[3] = {py0, py1, py2};
+                ofull.reserve_back(Vt);
+                const uint32_t dst = ofull.get_write_ptr();
+                orow.wait_front(Vs);
+                const uint32_t src = orow.get_read_ptr();
+                const uint32_t t32 = ofull.get_entry_size();
+                for (uint32_t j = 0; j < Vs; ++j) {
+                    const uint32_t addr = dst + (s * Vs + j) * t32;
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(src + j * t32),
+                        UnicastEndpoint{},
+                        t32,
+                        {},
+                        {.noc_x = nx, .noc_y = ny, .addr = addr});
+                    for (uint32_t p = 0; p < peers; ++p) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(src + j * t32),
+                            UnicastEndpoint{},
+                            t32,
+                            {},
+                            {.noc_x = px[p], .noc_y = py[p], .addr = addr});
+                    }
+                }
+                noc.async_write_barrier();
+                for (uint32_t p = 0; p < peers; ++p) {
+                    exchange.up(noc, px[p], py[p], 1);
+                }
+                exchange.wait_min(peers);
+                exchange.set(0);
+                orow.pop_front(Vs);
+                ofull.push_back(Vt);
+            }
+#endif
             {
                 DeviceZoneScopedN("wr_wait_hnew");
-                hnew.wait_front(KV);
+                hnew.wait_front(KVs);
             }
             DeviceZoneScopedN("wr_ring");
             if (!hold) {
                 const uint32_t page0 = (t * BH + bh) * KV;
-                for (uint32_t i = 0; i < KV; ++i) {
-                    noc.async_write(hnew, ring_acc, entry, {.offset_bytes = i * entry}, {.page_id = page0 + i});
+                for (uint32_t kt = 0; kt < Kt; ++kt) {
+                    for (uint32_t j = 0; j < Vs; ++j) {
+                        noc.async_write(
+                            hnew,
+                            ring_acc,
+                            entry,
+                            {.offset_bytes = (kt * Vs + j) * entry},
+                            {.page_id = page0 + kt * Vt + s * Vs + j});
+                    }
                 }
                 noc.async_write_barrier();
             }
-            hnew.pop_front(KV);
+            hnew.pop_front(KVs);
         }
     }
 
     // ---- the user's T output rows of the head's Vt output tiles
     DeviceZoneScopedN("wr_out");
     if constexpr ((T % 2) == 0) {
-        write_rows(out_acc, out, noc, tr * out_w_tiles + h * Vt, Vt, r0, T);
+        write_rows(out_acc, out, noc, tr * out_w_tiles + h * Vt + s * Vs, Vs, r0, T);
     } else {
-        write_rows_single(out_acc, out, noc, tr * out_w_tiles + h * Vt, Vt, r0, T);
+        write_rows_single(out_acc, out, noc, tr * out_w_tiles + h * Vt + s * Vs, Vs, r0, T);
     }
 }

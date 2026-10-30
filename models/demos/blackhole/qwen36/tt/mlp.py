@@ -18,6 +18,9 @@ class MLPWeights:
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_BFP4_MLP_DOWN=1, dense only)
     w3: ttnn.Tensor  # up_proj [in, out], bfloat8_b (bfloat4_b if QWEN36_MLP_GATEUP_BFP8=0, dense only)
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
+    w_gu_ds: ttnn.Tensor = (
+        None  # TP decode (QWEN36_MLP_DECODE_DS): per-device [gate_d|up_d] DRAM-sharded; w1/w3 are None then
+    )
 
 
 def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
@@ -43,6 +46,35 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
+
+
+def _mlp_decode_ds(args, use_gateup_agmm):
+    """QWEN36_MLP_DECODE_DS on (model_config.mlp_decode_ds) and a dense layer (the MoE shared expert,
+    use_gateup_agmm=False, has no packed prefill weight, so it keeps w1/w3 and the 1D path)."""
+    return args is not None and getattr(args, "mlp_decode_ds", False) and use_gateup_agmm
+
+
+def _build_gate_up_ds(gate_w, up_w, mesh, tp, cache_path, memory_config, dtype):
+    """Decode packed [gate|up] DRAM-sharded weight: each device holds [gate_d | up_d] ([K, 2*hidden/tp], gate first)."""
+    import torch
+
+    def pack(gate):
+        # Cache-miss only. Per-device blocks: [K, tp, 2N] -> [K, tp*2N], then shard dim=-1.
+        gk = gate.to(torch.bfloat16).T.contiguous()  # [K, tp*N]
+        uk = up_w.to(torch.bfloat16).T.contiguous()
+        k = gk.shape[0]
+        return torch.cat([gk.reshape(k, tp, -1), uk.reshape(k, tp, -1)], dim=-1).reshape(k, -1).contiguous()
+
+    return ttnn.as_tensor(
+        gate_w,
+        preprocess=pack,
+        dtype=dtype,
+        device=mesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=memory_config,
         cache_file_name=cache_path,
     )
 
@@ -91,6 +123,32 @@ def load_mlp_weights(
             if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
         )
+
+        if _mlp_decode_ds(args, use_gateup_agmm):
+            # Decode/verify reads only the packed DS gate|up + DS down; prefill reads w_gate_up (AGMM) + the same
+            # DS w2 (2D matmul, same speed), so w1/w3 are not loaded (DRAM neutral).
+            return MLPWeights(
+                w1=None,
+                w3=None,
+                w2=tpc.shard_w(
+                    state_dict["down_proj.weight"],
+                    mesh_device,
+                    dim=0,
+                    memory_config=args.mlp_ds_w2_weight_memcfg,
+                    cache_path=cache("down_proj", ".ds"),
+                    dtype=down_dtype,
+                ),
+                w_gate_up=wgu,
+                w_gu_ds=_build_gate_up_ds(
+                    state_dict["gate_proj.weight"],
+                    state_dict["up_proj.weight"],
+                    mesh_device,
+                    tp,
+                    cache("gate_up", ".ds_packed"),
+                    args.mlp_ds_gateup_weight_memcfg,
+                    gateup_dtype,
+                ),
+            )
 
         if dram_sharded:
             return MLPWeights(
@@ -201,6 +259,7 @@ class Qwen36MLP:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
+        self._decode_ds = self.num_devices > 1 and _mlp_decode_ds(args, use_gateup_agmm)
         self.weights = load_mlp_weights(
             mesh_device,
             state_dict,
@@ -269,6 +328,35 @@ class Qwen36MLP:
                 x, w.w_gate_up, self.tt_ccl, self.compute_kernel_config_agmm, args.ccl_topology()
             )
             _silu_fused = True
+        elif self._decode_ds and x.shape[-2] <= ttnn.TILE_SIZE:
+            # DS decode/verify: packed [gate|up] DS matmul straight from RES40 (no interleave), slice, SiLU mul
+            # written into the down DS input shard (34 cores x 2 tiles).
+            x_r = ttnn.to_memory_config(x, args.mlp_ds_res_memcfg)  # no-op when x is already RES40
+            gu = ttnn.linear(
+                x_r,
+                w.w_gu_ds,
+                compute_kernel_config=args.mlp_ds_compute_kernel_config,
+                program_config=args.mlp_ds_gateup_progcfg,
+                memory_config=args.mlp_ds_gateup_out_memcfg,
+                dtype=ttnn.bfloat16,
+            )
+            if x_r is not x:
+                ttnn.deallocate(x_r)
+            gu_il = ttnn.to_memory_config(gu, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(gu)
+            n_h = gu_il.shape[-1] // 2
+            w1_out, w3_out = gu_il[..., :n_h], gu_il[..., n_h:]
+            hidden = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=args.mlp_ds_down_in_memcfg,
+            )
+            ttnn.deallocate(w1_out)
+            ttnn.deallocate(w3_out)
+            ttnn.deallocate(gu_il)
+            _silu_fused = True
+            _fused_gu = True  # `hidden` is ready: skip the generic gate*up below
         elif getattr(self, "_dram_sharded", False) and x.shape[-2] <= ttnn.TILE_SIZE:
             # DRAM-WIDTH_SHARDED w1/w3 decode (M=1 tile). Prefill uses fused AGMM above.
             x_sh = ttnn.to_memory_config(x, args.act_shard_hidden)
@@ -357,7 +445,10 @@ class Qwen36MLP:
             ttnn.deallocate(w3_out)
         # Prefill w2: 2D progcfg on (8,10); decode (M<=32) keeps ttnn-auto.
         w2_pc = None
-        if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:
+        _ds_down = self._decode_ds and hidden.shape[-2] <= ttnn.TILE_SIZE
+        if _ds_down:
+            w2_pc = args.mlp_ds_down_progcfg
+        elif self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:
             # 1D mcast decode down-proj on a small explicit grid (~16 cores).
             w2_pc = args.mlp_w2_decode_1d_progcfg
         elif hidden.shape[-2] > ttnn.TILE_SIZE:
@@ -377,11 +468,28 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_l1_rows_ok(x.shape[-2])))
             else mc
         )
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
+        if _ds_down:
+            # DS down: L1 width-sharded out (54 cores x 3 tiles); the all-reduce reshards it to RES40.
+            partial = ttnn.linear(
+                hidden,
+                w.w2,
+                compute_kernel_config=args.mlp_ds_compute_kernel_config,
+                memory_config=args.mlp_ds_down_out_memcfg,
+                program_config=w2_pc,
+                dtype=ttnn.bfloat16,
+            )
+        else:
+            partial = ttnn.linear(
+                hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc
+            )
         ttnn.deallocate(hidden)
 
         if decode_ar is not None:
             return decode_ar.all_reduce(partial)
+        if _ds_down:  # tt_all_reduce expects an interleaved partial
+            p_il = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(partial)
+            partial = p_il
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
         out = tt_all_reduce(

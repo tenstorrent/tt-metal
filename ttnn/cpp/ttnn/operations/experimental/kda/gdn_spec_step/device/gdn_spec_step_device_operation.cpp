@@ -79,15 +79,23 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
     const uint32_t M = a.max_users ? a.max_users : B;  // ring/ctrl layout width
     TT_FATAL(M >= B, "{}: max_users ({}) must be >= B ({})", kOp, M, B);
     TT_FATAL(Nv > 0 && Nk > 0 && Nv % Nk == 0, "{}: num_value_heads must be a multiple of num_key_heads", kOp);
-    // one core per (user, value head); the a|b gate pair may span two tiles (Nv = 24 at TP = 2), see the factory
+    // num_slices cores per (user, value head); the a|b gate pair may span two tiles (Nv = 24 at TP = 2), see the
+    // factory
+    TT_FATAL(
+        a.num_slices == 1 || a.num_slices == 2 /* || == 4 once the NV=4 path is validated */,
+        "{}: num_slices must be 1 or 2 (got {})",
+        kOp,
+        a.num_slices);
     const auto grid = in.qkvzab.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        B * Nv <= static_cast<uint32_t>(grid.x * grid.y),
-        "{}: B * num_value_heads = {} (user, head) items exceed the {}-core compute grid",
+        B * Nv * a.num_slices <= static_cast<uint32_t>(grid.x * grid.y),
+        "{}: B * num_value_heads * num_slices = {} work items exceed the {}-core compute grid",
         kOp,
-        B * Nv,
+        B * Nv * a.num_slices,
         grid.x * grid.y);
     TT_FATAL(Dk > 0 && Dv > 0 && Dk % TW == 0 && Dv % TW == 0, "{}: key_dim and value_dim must be tile aligned", kOp);
+    TT_FATAL(
+        (Dv / TW) % a.num_slices == 0, "{}: num_slices {} must divide value_dim / 32 = {}", kOp, a.num_slices, Dv / TW);
     TT_FATAL(std::isfinite(a.scale) && a.l2_epsilon > 0.0f && a.norm_epsilon > 0.0f, "{}: bad scale/epsilon", kOp);
     TT_FATAL(T >= 1 && B >= 1, "{}: need T >= 1, B >= 1", kOp);
     TT_FATAL(K >= 2 && K <= 4, "{}: conv_kernel must be in [2, 4] (got {})", kOp, K);
@@ -192,7 +200,8 @@ Tensor gdn_spec_step(
     DataType output_dtype,
     bool fast_mode,
     bool fp32_state,
-    uint32_t max_users) {
+    uint32_t max_users,
+    uint32_t num_slices) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnSpecStepOperation>(
         GdnSpecStepParams{
@@ -214,6 +223,7 @@ Tensor gdn_spec_step(
             .compute_kernel_config = compute_kernel_config,
             .fast_mode = fast_mode,
             .fp32_state = fp32_state,
+            .num_slices = num_slices,
         },
         GdnSpecStepInputs{
             .qkvzab = qkvzab,

@@ -35,7 +35,8 @@ ttnn::Tensor gdn_spec_step(
     DataType output_dtype,
     bool fast_mode,
     bool fp32_state,
-    uint32_t max_users) {
+    uint32_t max_users,
+    uint32_t num_slices) {
     TT_FATAL(
         qkvzab.storage_type() == StorageType::DEVICE && qkvzab.buffer() != nullptr,
         "gdn_spec_step: qkvzab must be an allocated device tensor");
@@ -75,7 +76,8 @@ ttnn::Tensor gdn_spec_step(
         output_dtype,
         fast_mode,
         fp32_state,
-        max_users);
+        max_users,
+        num_slices);
 }
 
 }  // namespace ttnn::experimental::kda

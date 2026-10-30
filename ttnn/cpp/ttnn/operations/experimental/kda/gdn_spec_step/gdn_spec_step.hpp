@@ -44,6 +44,7 @@ ttnn::Tensor gdn_spec_step(
     ttnn::DataType output_dtype = ttnn::DataType::BFLOAT16,
     bool fast_mode = false,
     bool fp32_state = false,
-    uint32_t max_users = 0);  // 0 = B; ring/ctrl layout width when > B (rows 0..B-1 of a max_users-wide layout)
+    uint32_t max_users = 0,    // 0 = B; ring/ctrl layout width when > B (rows 0..B-1 of a max_users-wide layout)
+    uint32_t num_slices = 1);  // V-slices per (user, value head): 1 or 2; the output is bit-identical to 1
 
 }  // namespace ttnn::experimental::kda

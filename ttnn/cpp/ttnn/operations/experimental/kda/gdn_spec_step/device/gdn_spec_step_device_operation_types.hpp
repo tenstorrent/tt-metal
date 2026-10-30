@@ -43,6 +43,7 @@ struct GdnSpecStepParams {
     // instead of the FPU, whose SrcA path truncates the fp32 state to ~tf32 every token. Costs two extra KV-tile
     // DFBs (hd32, hn32). Part of the program hash.
     bool fp32_state = false;
+    uint32_t num_slices = 1;  // V-slices per (user, value head): value tile columns split NV ways; 1 or 2 (4 reserved)
 };
 
 struct GdnSpecStepInputs {

@@ -50,6 +50,7 @@ Tensor gdn_spec_step(
     tt::tt_metal::DataType output_dtype,
     bool fast_mode = false,
     bool fp32_state = false,
-    uint32_t max_users = 0);
+    uint32_t max_users = 0,
+    uint32_t num_slices = 1);
 
 }  // namespace ttnn::experimental::prim

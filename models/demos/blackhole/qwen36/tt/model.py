@@ -18,13 +18,14 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as _tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.prefix_cache import alloc_zeros_like
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.demos.blackhole.qwen36.tt.spec_masks import MASK_NEG, MASK_ROWS, SHARD_WORDS
 from models.demos.blackhole.qwen36.tt.tp_common import aliases as _tpc_aliases
-from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled
+from models.demos.blackhole.qwen36.tt.tp_common import kv_cache_bf8_enabled, kv_write_masked_enabled
 from models.demos.blackhole.qwen36.tt.tp_common import lm_head_kwargs as _lm_head_kwargs
 from models.demos.blackhole.qwen36.tt.tp_common import (
     pack_u32_rows,
@@ -228,6 +229,8 @@ def _page_table_rows(page_tables):
 class Qwen36Model:
     """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
 
+    _rope_perm = False  # QWEN36_ROPE_PERM, resolved per instance in __init__ (class default for partial test doubles)
+
     # QWEN36_SPEC_BUCKETS row buckets (see _VfyBucket): None / empty = only the B-row verify trace exists.
     _vfy_bk = None
     _vfy_last_bucket = None
@@ -295,6 +298,14 @@ class Qwen36Model:
 
         # RoPE setup (for gated attention layers only)
         self.rope = Qwen36RoPESetup(mesh_device, args)
+        # QWEN36_ROPE_PERM (default on): the base model's TP full-attention layers hold permuted q/k channels and take hd-wide
+        # permuted cos/sin (rope_tp.widen_cos_sin). The MTP drafter is unchanged (64-wide). Must match Qwen36DecoderLayer.
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rope_perm_env_on, rope_perm_supported
+
+        self._rope_perm = bool(
+            self.num_devices > 1 and rope_perm_env_on() and rope_perm_supported(args.head_dim, args.rope_head_dim)
+        )
+        self.rope.wide_hd = args.head_dim if self._rope_perm else None
         if self._serve_device_decode:
             # The serving decode trace looks cos/sin up in these tables: allocate them now, outside any trace.
             self.rope.decode_rm_tables()
@@ -990,11 +1001,50 @@ class Qwen36Model:
             ttnn.copy_host_to_device_tensor(host_t, dev_t)
         dl.host_refs = [host_t for host_t, _ in staged]
 
-    def _dl_rope_cos_sin(self, rope_idx, batch=1):
+    def _rope_wide_rows(self, rope_idx):
+        """QWEN36_ROPE_PERM: (cos, sin) [1, B, 1, head_dim] TILE bf16 (one tile row per user, the layout DecodeRope shards)
+        looked up on device from the permuted hd-wide tables: the same rows as the 64-wide lookup, widened."""
+        B, hd = rope_idx.shape[-1], self.args.head_dim
+        out = []
+        for table in self.rope.decode_rm_tables_wide(hd):
+            row = ttnn.embedding(rope_idx, table, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            row = ttnn.reshape(row, (1, B, 1, hd))  # RM: a view
+            out.append(ttnn.to_layout(row, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        return out[0], out[1]
+
+    def _rot_mats_decode_base(self, positions):
+        """rope_tp.rot_mats_decode for the BASE model's decode: rd-wide [1,B,1,rd], or (QWEN36_ROPE_PERM) the permuted
+        hd-wide [1,B,1,hd] DecodeRope input. The MTP drafter calls rot_mats_decode directly (64-wide)."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_decode_wide
+
+        if self._rope_perm:
+            return rot_mats_decode_wide(
+                self.device, self.args.rope_head_dim, self.args.head_dim, self.args.rope_theta, positions
+            )
+        return rot_mats_decode(
+            self.device, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta, positions
+        )
+
+    def _rope_decode_arg(self, cos, sin):
+        """What the layer loop of a BASE decode / verify / seed body passes as cos / sin. QWEN36_ROPE_PERM: one DecodeRope
+        (hd-wide cos/sin [1,B,1,hd] height-sharded once for all full-attention layers); caller frees it after the loop
+        (rope_tp.DecodeRope.free). Off: the tensors unchanged and None."""
+        if not self._rope_perm:
+            return cos, sin, None
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import DecodeRope
+
+        dr = DecodeRope(self.mesh_device, cos, sin, self.args.head_dim)
+        return dr, dr, dr
+
+    def _dl_rope_cos_sin(self, rope_idx, batch=1, wide=False):
         """cos/sin of the RoPE rows `rope_idx` ([1,batch] uint32), looked up on device. batch == 1: [1,1,1,rope_dim]
         TILE bf16. batch > 1: [1,1,batch,rope_dim] TILE bf16 (row u = user u): the layout apply_partial_rope_decode
         reshapes the host-packed [1,batch,1,rope_dim] cos/sin to before use (same values, same final tensor; the
-        lookup output is already in it, so that reshape becomes a no-op and the per-user tile re-layout is skipped)."""
+        lookup output is already in it, so that reshape becomes a no-op and the per-user tile re-layout is skipped).
+        wide (QWEN36_ROPE_PERM; the BASE model's callers pass self._rope_perm): the permuted [1,batch,1,head_dim] rows
+        instead (_rope_wide_rows). The MTP drafter's callers keep the default (64-wide)."""
+        if wide:
+            return self._rope_wide_rows(rope_idx)
         rd = self.args.rope_head_dim
         out = []
         for table in self.rope.decode_rm_tables():
@@ -1023,6 +1073,12 @@ class Qwen36Model:
     def shard_argmax_max_rows(self, sharded_logits, rows):
         """Batched shard_argmax_max: per-device, per-user (row) local argmax idx [1,1,rows] uint32 RM + max
         [1,1,rows] bf16 TILE of the pre-gather logits [1,1,rows,vocab/TP]. Trace-safe."""
+        if _tpc.argmax_topk_pick(sharded_logits, rows):  # QWEN36_ARGMAX_TOPK_MIN_ROWS: one stable topk, column 0
+            i0, v0 = _tpc.local_topk_argmax(sharded_logits, rows)
+            i32 = ttnn.typecast(i0, ttnn.uint32)  # uint16 -> uint32 (what the callers get from argmax)
+            idx = ttnn.reshape(ttnn.to_layout(i32, ttnn.ROW_MAJOR_LAYOUT), (1, 1, rows))
+            val = ttnn.reshape(v0, (1, 1, rows))
+            return idx, val
         logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
         idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
         ttnn.deallocate(logits_rm)
@@ -1098,7 +1154,7 @@ class Qwen36Model:
         # Token of this step = lane 0 (lanes 0..batch-1 when batched) of the token buffer (B's idiom: reshape [1,32],
         # slice [1,B]). The batched embedding of [1,B] ids == the [B,1] ids of the host loop: same rows, same order.
         ids = ttnn.slice(ttnn.reshape(dl.tokbuf, (1, lanes)), [0, 0], [1, nb], [1, 1])
-        cos, sin = self._dl_rope_cos_sin(dl.rope_idx, nb)
+        cos, sin = self._dl_rope_cos_sin(dl.rope_idx, nb, wide=self._rope_perm)
         logits = self._forward_decode(ids, cos, sin, dl.pos, page_table, sharded_lm_head=True)
         if nb == 1:
             idx, val = self.shard_argmax_max(logits)
@@ -1263,7 +1319,6 @@ class Qwen36Model:
 
     def decode_tp(self, token_id, pos):
         """Single-token TP decode at position `pos` (B=1). Uses KV + GDN from prefill/decode."""
-        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
         tok = ttnn.from_torch(
             torch.tensor([[int(token_id)]], dtype=torch.int32),
@@ -1276,21 +1331,18 @@ class Qwen36Model:
         if self._decode_ar is not None:
             x = self._decode_ar.enter(x)  # QWEN36_DECODE_ALLREDUCE=1: one AG -> replicated RES40 residual
         # RoPE position offset by rope_delta for multimodal (KV position cur_pos_tt stays `pos`).
-        cos, sin = rot_mats_decode(
-            self.device,
-            self.args.rope_head_dim,
-            self.args.max_seq_len,
-            self.args.rope_theta,
-            torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
-        )
+        cos, sin = self._rot_mats_decode_base(torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32))
         cur_pos_tt = ttnn.from_torch(
             torch.tensor([pos], dtype=torch.int32),
             dtype=ttnn.int32,
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
+        cos, sin, _dr = self._rope_decode_arg(cos, sin)
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
+        if _dr is not None:
+            _dr.free()
         x = self._final_norm_decode(x)
         logits = self._lm_head(x)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
@@ -1567,6 +1619,7 @@ class Qwen36Model:
                 # consumes the last-layer hidden FRACTURED [1,1,B,dim/tp], so that decode keeps the fractured residual.
                 x = self._decode_ar.enter(x)
         _cap = getattr(self, "_capture_layer", None)
+        cos, sin, _dr = self._rope_decode_arg(cos, sin) if self.num_devices > 1 else (cos, sin, None)
         for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
                 x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
@@ -1574,6 +1627,8 @@ class Qwen36Model:
                 x = layer.forward(x, mode="decode")
             if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
                 self._cap_rec = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if _dr is not None:
+            _dr.free()
         # Independent clone of the live last-layer output: the MTP head consumes this hidden on a
         # LATER forward and all-gathers it, so it must survive the final norm + lm_head below (a
         # to_memory_config is a no-op alias when x is already DRAM, so the norm would free it).
@@ -1612,7 +1667,7 @@ class Qwen36Model:
             tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
         )
         # Same absolute positions as the base chunk, so the same RoPE table slice applies.
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, S)
+        cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, S, wide=False)  # the drafter keeps 64-wide RoPE
         cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
         sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
         block_size = get_block_size(self._paged_kv_caches)
@@ -2027,13 +2082,15 @@ class Qwen36Model:
             out.extend([d] * T)
         return out
 
-    def _rope_tp_cos_sin_decode_torch(self, positions, deltas=None):
+    def _rope_tp_cos_sin_decode_torch(self, positions, deltas=None, wide=False):
         """Torch cos/sin [1, B, 1, rope_head_dim] in the DECODE rope layout — one rotation per ROW.
 
         Byte-identical to what prepare_decode_inputs_host builds for a decode step at those positions
         (same inv_freq / outer / cat / bf16 cast). The hybrid verify pushes its candidates through the
         DECODE attention kernel as B pseudo-users, so it needs this per-row table, not the
-        prefill [1,1,S,rd] one."""
+        prefill [1,1,S,rd] one.
+        wide (QWEN36_ROPE_PERM; the BASE model's callers pass self._rope_perm): permuted hd-wide [1, B, 1, head_dim]
+        (rope_tp.widen_cos_sin). The MTP drafter's callers keep the default (64-wide)."""
         pos_vec = positions.to(torch.int32).reshape(-1)
         # RoPE position is the KV position offset by rope_delta (0 for text); same as decode. ``deltas``: one delta per
         # position (the rows' own); None = the scalar request delta.
@@ -2042,7 +2099,15 @@ class Qwen36Model:
         )
         B = rope_pos_vec.shape[0]
         cos, sin = self._rope_cos_sin_rows(rope_pos_vec)
+        if wide:
+            cos, sin = self._rope_widen(cos, sin)
         return cos.reshape(1, B, 1, -1), sin.reshape(1, B, 1, -1)
+
+    def _rope_widen(self, cos, sin):
+        """widen_cos_sin for bf16 cos/sin rows [..., rope_head_dim] -> permuted [..., head_dim] (QWEN36_ROPE_PERM)."""
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import widen_cos_sin
+
+        return widen_cos_sin(cos, sin, self.args.head_dim)
 
     def _rope_cos_sin_rows(self, rope_pos_vec):
         """bf16 (cos, sin) [len(rope_pos_vec), rope_head_dim] for RoPE positions (rope_delta already applied)."""
@@ -2052,7 +2117,7 @@ class Qwen36Model:
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
 
-    def _rope_tp_cos_sin_decode_cached(self, positions, deltas=None):
+    def _rope_tp_cos_sin_decode_cached(self, positions, deltas=None, wide=False):
         """_rope_tp_cos_sin_decode_torch served from a host bf16 table built once (QWEN36_VERIFY_STAGING_CACHE):
         row p = _rope_cos_sin_rows(p), so the result is bit-identical; positions outside the table fall back to
         the direct computation. Saves the per-step outer/cos/sin on the host."""
@@ -2063,10 +2128,13 @@ class Qwen36Model:
             self.rope.rope_delta if deltas is None else torch.as_tensor(deltas, dtype=torch.int32)
         )
         if rope_pos.numel() == 0 or int(rope_pos.min()) < 0 or int(rope_pos.max()) >= tab[0].shape[0]:
-            return self._rope_tp_cos_sin_decode_torch(positions, deltas)
+            return self._rope_tp_cos_sin_decode_torch(positions, deltas, wide)
         B = rope_pos.shape[0]
         idx = rope_pos.long()
-        return tab[0][idx].reshape(1, B, 1, -1), tab[1][idx].reshape(1, B, 1, -1)
+        cos, sin = tab[0][idx], tab[1][idx]
+        if wide:
+            cos, sin = self._rope_widen(cos, sin)
+        return cos.reshape(1, B, 1, -1), sin.reshape(1, B, 1, -1)
 
     @staticmethod
     def _vfy_pt_unchanged(prev, new):
@@ -2153,13 +2221,36 @@ class Qwen36Model:
         ttnn.deallocate(pos_u)
         kvpos = ttnn.reshape(kvpos_i, (rows,))
         ridx = ttnn.slice(aux, [1, 0], [2, rows])
-        cos, sin = self._dl_rope_cos_sin(ridx, rows)
+        cos, sin = self._dl_rope_cos_sin(ridx, rows, wide=self._rope_perm)
         ctrl = None
         owned = [kvpos, cos, sin, ridx]
         if getattr(self, "_vfy_fused", False):
             ctrl = ttnn.slice(aux, [2, 0], [3, self._vfy_ctrl_words])
             owned.append(ctrl)
         return kvpos, cos, sin, ctrl, owned
+
+    def _vfy_pos_masked(self, kvpos, rows, T):
+        """T masked position tensors for the masked KV write (QWEN36_KV_WRITE_MASKED), built once per trace and shared by every
+        full-attention layer: entry j = kvpos where row % T == j, else -1 (paged_fused_update_cache skips a -1 row), as device
+        int32 ops on the persistent 0/1 masks m_j: kvpos * m_j + (m_j - 1). Returns None when the masks were not allocated
+        for this row count (the layers then keep the grouped write). Each entry is a [rows] int32 ROW_MAJOR DRAM tensor.
+        """
+        ms = getattr(self, "_vfy_kvmask", {}).get(rows)
+        if not ms:
+            return None
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        p_rm = ttnn.reshape(kvpos, (1, rows))
+        p_t = ttnn.to_layout(p_rm, ttnn.TILE_LAYOUT, memory_config=_dram)
+        out = []
+        for m, nm in ms:
+            x = ttnn.multiply(p_t, m, memory_config=_dram)
+            y = ttnn.add(x, nm, memory_config=_dram)
+            ttnn.deallocate(x)
+            z = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+            ttnn.deallocate(y)
+            out.append(ttnn.reshape(z, (rows,)))
+        ttnn.deallocate(p_t)
+        return out
 
     def _expand_row_deltas(self, rope_delta, n_pos):
         """``rope_delta`` (an int, or one delta per engine row) as the per-position value rope_row_index takes for a
@@ -2324,9 +2415,12 @@ class Qwen36Model:
         # With the packed aux (QWEN36_SPEC_HOSTSET) cos/sin/kvpos are the trace-derived tensors from _vfy_inputs (cos/sin
         # already [1,1,R,rd] from the RoPE table lookup): one source, no second reshape; the T position slices read kvpos.
         _rd = self.args.rope_head_dim
-        _cos, _sin, _pos_groups, _tmp = cos, sin, None, []
+        _pos_groups, _tmp, _pos_masked = None, [], None
+        _cos, _sin, _dr = self._rope_decode_arg(
+            cos, sin
+        )  # QWEN36_ROPE_PERM: one DecodeRope for all layers (cos is [1,rows,1,hd])
         if verify_attn_lean_enabled():
-            if tuple(cos.shape) != (1, 1, rows, _rd):
+            if _dr is None and tuple(cos.shape) != (1, 1, rows, _rd):
                 _cos = ttnn.reshape(cos, (1, 1, rows, _rd))
                 _sin = ttnn.reshape(sin, (1, 1, rows, _rd))
                 _tmp += [(_cos, cos), (_sin, sin)]
@@ -2334,6 +2428,7 @@ class Qwen36Model:
 
             if KV_GROUP_WRITE_OK and T > 1:
                 _pos_groups = [ttnn.slice(kvpos, (j,), (rows,), (T,)) for j in range(T)]
+            _pos_masked = self._vfy_pos_masked(kvpos, rows, T) if KV_GROUP_WRITE_OK and T > 1 else None
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -2360,6 +2455,7 @@ class Qwen36Model:
                     spec_page_table=(pt_groups if pt_groups is not None else self._vfy_kvpt1_buf),
                     n_users=n_users,
                     spec_pos_groups=_pos_groups,
+                    spec_pos_masked=_pos_masked,
                 )
             else:
                 x_new = layer.forward(
@@ -2376,10 +2472,14 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        if _dr is not None:
+            _dr.free()
         for _new, _old in _tmp:  # per-trace temporaries (a reshape that aliased its source is not freed twice)
             if _new is not _old and not _tpc_aliases(_new, _old):
                 ttnn.deallocate(_new)
         for _g in _pos_groups or ():
+            ttnn.deallocate(_g)
+        for _g in _pos_masked or ():
             ttnn.deallocate(_g)
         if bucket:  # the sliced page tables are per-trace temporaries (never a full-span alias: b < B)
             for t in (pt_rows, pt_users, pt_groups):
@@ -3137,6 +3237,26 @@ class Qwen36Model:
             ttnn.from_torch(h, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
             for h in self._vfy_page_table_host(pt)
         )
+        # QWEN36_KV_WRITE_MASKED: constant 0/1 candidate masks for the masked KV write (see _vfy_pos_masked); persistent
+        # (allocated here, outside any trace) for every row count n_users * T a verify body can run at.
+        for _old in getattr(self, "_vfy_kvmask", {}).values():
+            for _pair in _old:
+                for _t in _pair:
+                    ttnn.deallocate(_t)
+        self._vfy_kvmask = {}
+        if kv_write_masked_enabled() and self._vfy_kv_grouped:
+            for _n in range(1, B + 1):
+                _r = _n * T
+                _ms = []
+                for _j in range(T):
+                    _m = torch.tensor([[1 if (i % T) == _j else 0 for i in range(_r)]], dtype=torch.int32)
+                    _ms.append(
+                        tuple(
+                            ttnn.from_torch(h, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+                            for h in (_m, _m - 1)
+                        )
+                    )
+                self._vfy_kvmask[_r] = _ms
         # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
         # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
         # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
@@ -3144,7 +3264,7 @@ class Qwen36Model:
         if self._vfy_hostset:
             self._vfy_cos_buf = self._vfy_sin_buf = None  # looked up in the trace from the resident RoPE tables
         else:
-            cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(warm)
+            cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(warm, wide=self._rope_perm)
             self._vfy_cos_buf = ttnn.from_torch(
                 cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
             )
@@ -3639,9 +3759,13 @@ class Qwen36Model:
             _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
             ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
             if self._vfy_staging_cache:
-                cos_t, sin_t = self._rope_tp_cos_sin_decode_cached(pos, self._spec_pos_deltas(len(pos)))
+                cos_t, sin_t = self._rope_tp_cos_sin_decode_cached(
+                    pos, self._spec_pos_deltas(len(pos)), wide=self._rope_perm
+                )
             else:
-                cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos, self._spec_pos_deltas(len(pos)))
+                cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(
+                    pos, self._spec_pos_deltas(len(pos)), wide=self._rope_perm
+                )
             _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
             ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
             _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
@@ -3888,6 +4012,7 @@ class Qwen36Model:
 
     def _seed_bucket_layers(self, x, kvpos, kvpt, cos, sin, n_users):
         """The layer loop of _forward_seed_bucket_tp (consumes x, returns the residual after the last layer)."""
+        cos, sin, _dr = self._rope_decode_arg(cos, sin)
         for layer in self.layers:
             if layer.is_full_attention:
                 x_new = layer.forward(
@@ -3912,6 +4037,8 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        if _dr is not None:
+            _dr.free()
         return x
 
     def seed_spec_step(self, tokens, positions, page_tables):
@@ -3950,7 +4077,7 @@ class Qwen36Model:
         # Absolute cache slot per row, doubling as the decode SDPA's cur_pos (the trace's _vfy_kvpos_buf at T = 1).
         kvpos = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
         kvpt = ttnn.from_torch(pt, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep)
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos, self._spec_row_deltas(len(pos)))
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos, self._spec_row_deltas(len(pos)), wide=self._rope_perm)
         cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
         sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
 
@@ -3970,20 +4097,13 @@ class Qwen36Model:
         page_table : torch [1, num_blocks] identity table.
         Returns (logits [vocab] host float, hidden [1,1,1,dim/tp] fractured device — the MTP seed).
         """
-        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
 
         rep = ttnn.ReplicateTensorToMesh(self.device) if self.num_devices > 1 else None
         mk = dict(mesh_mapper=rep) if rep is not None else {}
         tok = ttnn.from_torch(
             torch.tensor([[int(token_id)]], dtype=torch.int32), dtype=ttnn.uint32, device=self.device, **mk
         )
-        cos, sin = rot_mats_decode(
-            self.device,
-            self.args.rope_head_dim,
-            self.args.max_seq_len,
-            self.args.rope_theta,
-            torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
-        )
+        cos, sin = self._rot_mats_decode_base(torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32))
         cur_pos_tt = ttnn.from_torch(torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32, device=self.device, **mk)
         pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         logits, hidden = self._forward_decode(tok, cos, sin, cur_pos_tt, pt, return_hidden=True)
@@ -4027,16 +4147,22 @@ class Qwen36Model:
             x = x_new
         return x
 
-    def _rope_tp_cos_sin_torch(self, start, length):
+    def _rope_tp_cos_sin_torch(self, start, length, wide=None):
         """Torch cos/sin tables [1, 1, length, rope_head_dim] for SEQUENCE positions
         [start, start+length), in the rope_tp (HF split-halves) format consumed by
         apply_partial_rope_prefill. Single source of truth for the TP masked-bucket and
         traced chunk-outer prefill paths (so the captured trace's cos/sin are byte-identical
         to the eager path's). M-RoPE-aware: when a multimodal request staged a per-sequence
         table (build_request_rope) this slices it; otherwise it is ordinary 1D RoPE at
-        positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour."""
+        positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour.
+        wide (default: self._rope_perm, the base model): permuted hd-wide [1, 1, length, head_dim] (QWEN36_ROPE_PERM; the M-RoPE
+        rows are widened the same way). The MTP drafter's own call passes wide=False; a drafter handed the base's hd-wide
+        buffers narrows them in TPAttention._rope_prefill."""
         rd = self.args.rope_head_dim
         cos_t, sin_t = self.rope.prefill_cos_sin_torch(start, length)  # [length, rd] bf16
+        if self._rope_perm if wide is None else wide:
+            cos_t, sin_t = self._rope_widen(cos_t, sin_t)
+            rd = self.args.head_dim
         cos = cos_t.reshape(1, 1, length, rd)
         sin = sin_t.reshape(1, 1, length, rd)
         return cos, sin
@@ -7675,6 +7801,8 @@ class Qwen36Model:
             emb = torch.cat([freqs, freqs], dim=-1)
             cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
             sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
+            if self._rope_perm:  # QWEN36_ROPE_PERM: permuted hd-wide [1,B,1,hd] (DecodeRope input)
+                cos, sin = self._rope_widen(cos, sin)
             rope_packed = ttnn.from_torch(torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         else:
             # Single-device decode is B=1 in this port; per-user single-device rope is out of scope.
@@ -7745,6 +7873,8 @@ class Qwen36Model:
         embedding already yields that row-per-user layout ([1,B,rd] TILE -> a pure view), so the reshape is skipped.
         Rows are the host path's bf16 values bit for bit (rope.decode_rm_tables)."""
         B = rope_idx.shape[-1]
+        if self._rope_perm:  # QWEN36_ROPE_PERM: permuted hd-wide [1,B,1,hd] rows (DecodeRope input)
+            return self._rope_wide_rows(rope_idx)
         rd = self.args.rope_head_dim
         out = []
         for table in self.rope.decode_rm_tables():

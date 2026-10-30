@@ -4345,7 +4345,7 @@ class MTPSpecEngine:
         plan = self._propose_plan(K, *sl, None, build_core=False)
         if plan.skip_all or list(plan.decline) != declined.tolist():
             raise RuntimeError(f"fused aux declined {declined.tolist()} != propose plan {plan.decline}")
-        drafts = self._drafts_from_steps(steps)
+        drafts = self._drafts_from_steps(steps, declined)
         if bool(declined.any()):
             drafts[declined] = 0
         if any(int(c) > 1 for c in counts):
@@ -5274,7 +5274,7 @@ class MTPSpecEngine:
         want = [(not bool(a)) or bool(s) or (not f) for a, s, f in zip(h.active.tolist(), h.skip, fit)]
         if want != h.declined.tolist():
             raise RuntimeError(f"fused aux declined {h.declined.tolist()} != propose plan {want}")
-        drafts = self._drafts_from_steps(d["steps"])
+        drafts = self._drafts_from_steps(d["steps"], h.declined)
         drafts[h.declined] = 0
         if any(int(c) > 1 for c in n32):
             self.mtp_extra_steps += 1
@@ -5975,9 +5975,15 @@ class MTPSpecEngine:
             drafts[torch.tensor(c.decline)] = 0
         return drafts
 
-    def _drafts_from_steps(self, steps):
+    def _drafts_from_steps(self, steps, declined=None):
+        """steps[k][u] -> [B, K] int32. Rows in ``declined`` (inactive / unfit rows, zeroed by the caller anyway) are never
+        converted: a row bucket (D4/D2/D1) rewrites only rows < b of the shared K ids outputs, rows b..B-1 keep whatever the
+        buffer held (stale bytes, not token ids), and int32 conversion of such a word overflows."""
         B, K = self.B, self.K
-        return torch.tensor([[steps[k][u] for k in range(K)] for u in range(B)], dtype=torch.int32)
+        rows = [[steps[k][u] for k in range(K)] for u in range(B)]
+        if declined is not None:
+            rows = [[0] * K if bool(dc) else r for r, dc in zip(rows, declined.tolist())]
+        return torch.tensor(rows, dtype=torch.int32)
 
     def propose_draft_tokens(
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
