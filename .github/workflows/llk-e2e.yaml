@@ -1,58 +1,91 @@
 name: "LLK e2e Tests"
 
+# Review probe branch (mvlahovicTT), not for main: this file replaces the LLK e2e workflow on this branch only, so a
+# workflow_dispatch here runs a base vs head A/B of one LLK functional module and one perf module per arch, both sides
+# on the same runner card with interleaved perf reps. review-probe/run.sh does the work; results come back as artifacts.
+
 on:
-  schedule:
-    # Run every night at 1AM UTC
-    - cron: '0 1 * * *'
   workflow_dispatch:
     inputs:
-      pytest_markers:
-        description: "Pytest mark expression for testing (e.g., 'nightly', 'perf')"
-        required: false
-        default: "not perf and not quasar and not accuracy"
+      base_sha:
+        description: "Merge base commit"
+        required: true
         type: string
+      head_sha:
+        description: "PR head commit"
+        required: true
+        type: string
+      func_module:
+        description: "Functional module under tests/python_tests"
+        required: true
+        type: string
+      perf_module:
+        description: "Perf module under tests/python_tests"
+        required: true
+        type: string
+      reps:
+        description: "Interleaved perf reps per side"
+        required: false
+        type: string
+        default: "3"
+      archs:
+        description: "JSON list of archs"
+        required: false
+        type: string
+        default: '["blackhole", "wormhole"]'
 
 permissions:
-  checks: write
   contents: read
   packages: write
 
 jobs:
-  llk-e2e-tests:
-    name: "LLK e2e Tests"
-    uses: ./.github/workflows/llk-e2e-impl.yaml
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
-    with:
-      pytest-markers: ${{ inputs.pytest_markers || 'not perf and not quasar and not accuracy' }}
-      coverage: false
 
-  llk-e2e-summary:
-    name: "LLK e2e summary"
-    if: always()
-    needs:
-      - llk-e2e-tests
-    runs-on: ubuntu-slim
+  review-probe:
+    needs: [build-images]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(inputs.archs) }}
+    name: "review probe ${{ matrix.arch }}"
+    runs-on: ${{ matrix.arch == 'blackhole' && 'tt-ubuntu-2204-P150b-viommu-stable' || 'tt-ubuntu-2204-N150-viommu-stable' }}
+    timeout-minutes: 240
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
-      - name: Check e2e test results
-        uses: re-actors/alls-green@release/v1
-        with:
-          jobs: ${{ toJSON(needs) }}
-
-  report-status:
-    name: "Report status"
-    runs-on: ubuntu-slim
-    if: always()
-    needs: llk-e2e-summary
-    steps:
-      - name: Checkout repository
+      - name: Checkout probe scripts
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          fetch-depth: 1
-      - name: Report status
-        uses: ./.github/actions/report-failure
+          path: probe
+          sparse-checkout: review-probe
+      - name: Checkout base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
-          test_name: "LLK e2e tests"
-          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.llk-e2e-summary.result }}
+          ref: ${{ inputs.base_sha }}
+          path: base
+      - name: Checkout head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.head_sha }}
+          path: head
+      - name: Run probe
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+          REPS: ${{ inputs.reps }}
+          FUNC_MODULE: ${{ inputs.func_module }}
+          PERF_MODULE: ${{ inputs.perf_module }}
+        run: bash probe/review-probe/run.sh "$ARCH" "$REPS" "$FUNC_MODULE" "$PERF_MODULE"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: review-probe-${{ matrix.arch }}
+          path: out
