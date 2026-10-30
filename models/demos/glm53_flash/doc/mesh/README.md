@@ -1581,6 +1581,23 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 11:40: the capstone r2 fragmented its waves by slot index; r3 runs waves of 8
+
+r2 (budget 131072, interleave on) admitted 8 partial prefills, but after its first 8 prompts the next 8 sat on two
+slot indices (the SP-first placement had taken whole indices for the first prompts' chunks), and a wave carries one
+slot index: each step ran a wave of 5 plus a wave of 3 (~14 s per 16 K tokens, 1.15 K tok/s over its last 10 min,
+past the stage timeout), so it was stopped at 2 h 17 min. The stop itself taught a rule: a TERM to the pytest
+wrapper is parked while the smoke bash waits on its foreground client (hours of 1 M requests); the client gets the
+TERM first, then the smoke's trap stops the server. r3 runs with `GLM53_VLLM_SP_FIRST=0`: the wave-affine branch of
+`SlotTable.allocate` fills slot index 0 on rows 0..7 for consecutive prompts, so every wave carries 8 members
+(2.28 K tok/s, projected ~4 h of prefill). That knob is not the catalog default: a lone 1 M prompt would then take
+its own row's 507 waves (~1 h) instead of 485 s on the sequence-parallel path; the planner needs an adaptive rule
+(SP-first for small bursts, wave-affine once the scheduled set can fill a wave of `rows` members), to be A/B'd on
+the 8 x 64 K point and the lone 1 M needle. The block gate r6 showed the traced wave graph row-local (a lone member
+with idle rows is bit-identical to the all-rows trace at both lengths), so the served 128-bucket flip must come from
+the served path itself; the 45-layer 8x4 gate (lone-member form) runs after r3, then the smoke's stage a under the
+128 bucket.
+
 ### 2026-10-30 08:45: the budget measured, the interleave measured, the capstone r2 queued
 
 `needle64k_8_bt128k` (8 concurrent 65 396-token prompts, `max_num_batched_tokens` 131072): 8/8 needles, every
