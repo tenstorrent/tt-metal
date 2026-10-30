@@ -16,8 +16,11 @@
 //   state.json       Session state, including cache-scoped auth headers.
 //
 // Upstream (github.com) authentication is never added to the global file:
-// actions/checkout already persists repository-scoped credentials, and a second
-// job-wide Authorization header makes GitHub reject requests as duplicates.
+// actions/checkout already persists repository-scoped credentials, and a
+// job-wide Authorization header would override the credentials of every later
+// upstream request (for example a different token in a clone URL).
+//
+// Usage (from action.yml run steps): node index.js prepare | activate
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -43,7 +46,6 @@ function fileCommand(file, key, value) {
 
 function output(key, value) { fileCommand(process.env.GITHUB_OUTPUT, key, value); }
 function environment(key, value) { fileCommand(process.env.GITHUB_ENV, key, value); }
-function save(key, value) { fileCommand(process.env.GITHUB_STATE, key, value); }
 
 function mask(value) {
   if (value) console.log(`::add-mask::${value.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')}`);
@@ -288,8 +290,6 @@ function prepare() {
 }
 
 function prepareMain() {
-  // Marks the registered post invocation, which must never prepare again.
-  save('cachew-post', 'true');
   let prepared;
   try {
     prepared = prepare();
@@ -300,10 +300,7 @@ function prepareMain() {
     console.log('Cachew unavailable on this runner; using standard checkout only.');
     return;
   }
-  const {directory, state, created} = prepared;
-  // Only the creating invocation's post removes the session. Posts run in
-  // reverse order, so it is the last cachew post of the job.
-  if (created) save('cachew-session', directory);
+  const {directory, state} = prepared;
   output('session-dir', directory);
   output('ready', 'true');
   environment('CACHEW_SESSION_DIR', directory);
@@ -414,28 +411,19 @@ function activate() {
   output('configured', String(state.active));
 }
 
-function cleanup(directory) {
-  if (!directory || !fs.existsSync(directory)) return;
-  const state = readState(directory);
-  let restored = state.originalGlobal;
-  if (restored === null) {
-    // Actions can set, but cannot unset, a job environment variable. Restore
-    // native HOME/XDG lookup for remaining posts through a secret-free proxy.
-    restored = path.join(fs.realpathSync(process.env.RUNNER_TEMP), `cachew-original-${crypto.randomUUID()}.config`);
-    writePrivate(restored, state.originalPaths.map(file => entry('include.path', file)).join(''));
-  }
-  environment('GIT_CONFIG_GLOBAL', restored);
-  environment('CACHEW_SESSION_DIR', '');
-  fs.rmSync(directory, {recursive: true, force: true});
-}
-
+// There is no cleanup step. The session lives in RUNNER_TEMP, which the runner
+// empties when the job completes (including cancelled and failed jobs) and again
+// before the next job starts, together with actions/checkout's own credentials
+// file in the same directory. Until then later steps and other actions' post
+// steps keep a working GIT_CONFIG_GLOBAL.
 if (require.main === module) {
+  const phase = process.argv[2];
   try {
-    if (process.env['STATE_cachew-post']) cleanup(process.env['STATE_cachew-session']);
-    else if (process.argv[2] === 'activate') activate();
-    else prepareMain();
+    if (phase === 'activate') activate();
+    else if (phase === 'prepare') prepareMain();
+    else throw new Error('Unknown phase');
   } catch {
-    if (process.argv[2] === 'activate') {
+    if (phase === 'activate') {
       const directory = process.env.CACHEW_SESSION_DIR;
       try {
         const state = readState(directory);
@@ -445,9 +433,8 @@ if (require.main === module) {
       } catch {}
       output('configured', 'false');
       console.log('Cachew configuration unavailable; later Git operations use upstream.');
-    } else if (process.env['STATE_cachew-post']) {
-      // Post cleanup must not fail the job; RUNNER_TEMP is removed after the job.
-      console.log('Cachew cleanup could not complete.');
+    } else {
+      output('ready', 'false');
     }
   }
 }

@@ -98,7 +98,7 @@ runs:
       if: >-
         runner.os == 'Linux' && env.CACHEW_CHECKOUT != 'false' && inputs.cachew != 'false' &&
         (inputs.cachew == 'true' || runner.environment == 'self-hosted')
-      uses: tenstorrent/tt-metal/.github/actions/cachew-checkout/session@4313bf841572fc083c4ea7362b93c4c6ab6b2342
+      shell: bash
       env:
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
         CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
@@ -106,6 +106,10 @@ runs:
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
         CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
         CACHEW_REPOSITORY: ${{ inputs.repository }}
+      # Runs from this action's own directory: the consumer's pin to this action
+      # is the only pin. There is no post step; the runner empties RUNNER_TEMP,
+      # and with it the session, when the job completes.
+      run: bash "$GITHUB_ACTION_PATH/session/prepare.sh"
     - name: Prefetch from cachew once
       id: prefetch
       if: steps.session.outputs.ready == 'true'

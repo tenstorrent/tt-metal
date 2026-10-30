@@ -29,7 +29,6 @@ ACTION_DIR = Path(".github/actions/cachew-checkout")
 ACTION_REPO = "tenstorrent/tt-metal/.github/actions/cachew-checkout"
 ACTION_SHA = "73f53fe5d7091229a6d0203ccd7c85fcfda52d8c"
 ACTION = f"{ACTION_REPO}@{ACTION_SHA}"
-SESSION_REPO = f"{ACTION_REPO}/session"
 UPSTREAM_WRAPPER = ACTION_DIR / "action.yml"
 FORWARDED_CHECKOUT = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 MIGRATABLE_REFS = (FORWARDED_CHECKOUT, "v6", "v6.0.2")
@@ -43,7 +42,7 @@ CHECKOUT = re.compile(
     + r"@[0-9a-f]{40})"
     r"(?P=quote)(?:[ \t]*#[^\n]*)?[ \t]*$"
 )
-ANY_PIN = re.compile(re.escape(ACTION_REPO) + r"(?P<session>/session)?@(?P<sha>[0-9a-f]{40})")
+ANY_PIN = re.compile(re.escape(ACTION_REPO) + r"(?P<subpath>/[\w./-]+)?@(?P<sha>[0-9a-f]{40})")
 
 
 def repository_root():
@@ -60,7 +59,11 @@ def excluded(path):
 
 
 def rewrite(text):
-    return CHECKOUT.sub(lambda match: f"{match['prefix']}{ACTION} # cachew checkout", text)
+    # A trailing "cachew: keep" comment opts a checkout out (e.g. a bootstrap
+    # checkout that must test the working tree's action).
+    return CHECKOUT.sub(
+        lambda match: match[0] if "cachew: keep" in match[0] else f"{match['prefix']}{ACTION} # cachew checkout", text
+    )
 
 
 def migrate_file(path, write=False, root=None):
@@ -98,25 +101,26 @@ def git_ok(root, *arguments):
 
 
 def verify_pins(root, require_main):
-    """Fail if any pin is unknown, stale relative to this tree, or (after merge) not on main."""
+    """The consumers' pin to this action is the only pin. Fail if any consumer
+    pins something else, or if the pin is unknown, differs from this tree, or
+    (after merge) is not on main."""
     problems = []
     pins = {}
     for path in tracked_consumers(root):
         for match in ANY_PIN.finditer((root / path).read_text()):
-            pins.setdefault((bool(match["session"]), match["sha"]), []).append(path.as_posix())
-    consumer_shas = {sha for (session, sha) in pins if not session}
-    if consumer_shas - {ACTION_SHA}:
-        problems.append(f"consumers pin {sorted(consumer_shas)}, expected only {ACTION_SHA}")
-    for (session, sha), files in sorted(pins.items()):
-        label = "session helper" if session else "action"
+            if match["subpath"]:
+                problems.append(f"{path} references {match[0]}; reference the action itself, not a subdirectory")
+            pins.setdefault(match["sha"], []).append(path.as_posix())
+    if set(pins) - {ACTION_SHA}:
+        problems.append(f"consumers pin {sorted(pins)}, expected only ACTION_SHA {ACTION_SHA}")
+    for sha, files in sorted(pins.items()):
         if not git_ok(root, "cat-file", "-e", f"{sha}^{{commit}}"):
-            problems.append(f"{label} pin {sha} is not a known commit (fetch it, or it was never pushed)")
+            problems.append(f"pin {sha} is not a known commit (fetch it, or it was never pushed)")
             continue
-        scope = [str(ACTION_DIR / "session"), str(ACTION_DIR / "trusted_caches.json")] if session else [str(ACTION_DIR)]
-        if not git_ok(root, "diff", "--quiet", sha, "--", *scope):
-            problems.append(f"{label} pin {sha} differs from this tree in {', '.join(scope)} (used by {files[0]})")
+        if not git_ok(root, "diff", "--quiet", sha, "--", str(ACTION_DIR)):
+            problems.append(f"pin {sha} differs from this tree in {ACTION_DIR} (used by {files[0]})")
         if require_main and not git_ok(root, "merge-base", "--is-ancestor", sha, "origin/main"):
-            problems.append(f"{label} pin {sha} is not reachable from origin/main and may be garbage-collected")
+            problems.append(f"pin {sha} is not reachable from origin/main and may be garbage-collected")
     for problem in problems:
         print(problem)
     print("Pins verified." if not problems else f"{len(problems)} pin problem(s).")

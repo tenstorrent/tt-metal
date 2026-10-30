@@ -118,6 +118,15 @@ class RunnerGateTests(unittest.TestCase):
         self.assertIn("value: ${{ steps.configure.outputs.configured || 'false' }}", text)
         self.assertIn("value: ${{ steps.prefetch.outputs.prefetched || 'false' }}", text)
 
+    def test_action_needs_no_pin_besides_the_consumers_pin(self):
+        # Everything runs from the action's own directory; the only remote
+        # action is the pinned official checkout.
+        text = ACTION.read_text()
+        self.assertNotIn("tenstorrent/tt-metal/", text)
+        self.assertEqual(re.findall(r"^\s*uses:\s*(\S+)", text, re.M), [self.checkout["uses"].split()[0]])
+        self.assertIn('run: bash "$GITHUB_ACTION_PATH/session/prepare.sh"', self.session["raw"])
+        self.assertFalse((ACTION.parent / "session" / "action.yml").exists())
+
     def test_ssh_key_is_not_exposed_to_the_prefetch_process(self):
         prefetch = next(step for step in self.steps if step.get("id") == "prefetch")
         self.assertNotIn("inputs.ssh-key }}", prefetch["raw"])

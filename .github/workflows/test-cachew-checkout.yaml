@@ -38,22 +38,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+      # A plain checkout bootstraps the working tree, so every later step tests
+      # this commit's action rather than a pinned copy.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         with:
-          sparse-checkout: |
-            .github
-            tt_metal/tt-llk/.github
+          sparse-checkout: .github
           persist-credentials: false
       - name: Verify all checkout consumers use cachew
         run: python3 .github/scripts/utils/cachew_checkout.py --check
       - name: Verify the action pins match this tree
-        # Fails until the action and its session helper are re-pinned to a pushed
-        # commit containing this code. On main the pins must also be on main, or
-        # GitHub may garbage-collect them once their branch is deleted.
+        # The consumers' pin (ACTION_SHA) is the only pin. It must point at a pushed
+        # commit with this action code; on main it must also be on main, or GitHub
+        # may garbage-collect it once its branch is deleted.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pins=$(grep -rhoE 'tenstorrent/tt-metal/\.github/actions/cachew-checkout(/session)?@[0-9a-f]{40}' .github | cut -d@ -f2 | sort -u)
+          pins=$(grep -rhoE 'tenstorrent/tt-metal/\.github/actions/cachew-checkout@[0-9a-f]{40}' .github | cut -d@ -f2 | sort -u)
           for sha in $pins; do git fetch --no-tags --depth=1 origin "$sha"; done
           python3 .github/scripts/utils/cachew_checkout.py --verify-pins
           if [ "$GITHUB_EVENT_NAME" = push ]; then
@@ -77,11 +77,11 @@ jobs:
           test "$PREFETCHED" = false
           test -z "${CACHEW_SESSION_DIR:-}"
           test -z "${GIT_CONFIG_GLOBAL:-}"
-          ! ls "$RUNNER_TEMP"/cachew-* >/dev/null 2>&1
+          if ls "$RUNNER_TEMP"/cachew-* >/dev/null 2>&1; then echo "::error::cachew session on a hosted runner"; exit 1; fi
           test "$(command -v git)" = "$(PATH=/usr/bin:/bin command -v git)"
           git -C hosted-noop rev-parse HEAD
       - name: Obtain the exact checkout implementation under test
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+        uses: ./.github/actions/cachew-checkout
         with:
           repository: actions/checkout
           ref: de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -105,10 +105,9 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: 20
     steps:
-      - name: Bootstrap the action definition
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+      - name: Bootstrap this commit's action definition
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         with:
-          cachew-url: ${{ inputs.cachew-url }}
           sparse-checkout: .github/actions/cachew-checkout
           persist-credentials: false
       - name: Checkout through cachew with upstream fallback
@@ -132,3 +131,6 @@ jobs:
           test "$CACHEW_CONFIGURED" = "true"
           git -C cachew-smoke submodule status --recursive
           echo "cachew-prefetched=$CACHEW_PREFETCHED"
+          # Later dependency reads go through the job-global rewrite and wrapper.
+          test -n "$CACHEW_SESSION_DIR"
+          git ls-remote https://github.com/tenstorrent/tt-metal refs/heads/main

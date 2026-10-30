@@ -91,6 +91,23 @@ is used only for that checkout's seeding. Steps may write the global
 configuration (`git config --global ...`); cachew only adds and removes its own
 keys, so those writes survive cache fallback and later checkouts.
 
+The helper needs Node.js 18 or newer. Composite steps do not get the runner's
+bundled Node on `PATH`, so `session/prepare.sh` uses `node` from `PATH`, then the
+runner's own `externals/node24` or `node20` (found from `RUNNER_TEMP`, which is
+`<runner>/_work/_temp`; tt CI VMs run the runner from `/opt/runner` and have no
+system Node), then `/__e/node24` or `/__e/node20`, where the runner mounts the
+same externals into job containers. If none runs (for example glibc Node in an
+Alpine container), the action falls back to the plain checkout without changing
+the job.
+
+There is no post step: composite actions cannot have one, and a separate
+JavaScript action would need its own pin. The session directory lives in
+`RUNNER_TEMP`, which the runner empties when the job completes (also for failed
+and cancelled jobs) and again before the next job starts, together with
+`actions/checkout`'s own credentials file in the same directory. Until then later
+steps and other actions' post steps keep a working `GIT_CONFIG_GLOBAL`. If the
+runner process itself dies, the files remain until that runner's next job starts.
+
 The session directory and its files are private to the runner user because the
 configuration holds cache-scoped tokens. A step that runs Git as another user
 with this environment must set its own `GIT_CONFIG_GLOBAL`, or the job should use
@@ -118,17 +135,19 @@ CHECKOUT_ACTION_JS=/absolute/path/to/checkout/dist/index.js \
   python3 -m unittest discover -s .github/actions/cachew-checkout/tests -v
 ```
 
-The action uses its session helper by commit (`session@<sha>` in `action.yml`)
-because composite actions cannot run post steps themselves. Releasing a change
-therefore takes two pins:
+Everything runs from this action's own directory, so the consumers' pin to this
+action (`ACTION_SHA` in `.github/scripts/utils/cachew_checkout.py`) is the only
+pin. To release a change:
 
-1. Push the change, then set `session@<sha>` in `action.yml` to that commit.
-2. Push again and set `ACTION_SHA` in `.github/scripts/utils/cachew_checkout.py`
-   to the new commit, then run `--write`.
-3. `python3 .github/scripts/utils/cachew_checkout.py --verify-pins` checks both
-   pins match this tree. After merging, re-pin both to the merge commit on `main`
-   (`--verify-pins --require-main`); commits only on a deleted branch can be
-   garbage-collected and would break every consumer.
+1. Commit the action change. In a second commit, set `ACTION_SHA` to the first
+   commit and run `python3 .github/scripts/utils/cachew_checkout.py --write`.
+   Push both together; `--verify-pins` checks that the pin matches this tree.
+2. After merging, re-pin `ACTION_SHA` to the merge commit on `main` and run
+   `--write` again (`--verify-pins --require-main`). A commit that is only on a
+   deleted branch can be garbage-collected, which would break every consumer.
+
+A checkout with a trailing `# cachew: keep` comment is never migrated (the test
+workflow's bootstrap checkout uses this to test the working tree's action).
 
 `--check` and `--write` migrate only checkouts of the version this action
 forwards to (v6.0.2). gh-aw generated workflows, intentionally floating
