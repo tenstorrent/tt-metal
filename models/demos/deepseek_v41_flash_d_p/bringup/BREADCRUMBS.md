@@ -4315,3 +4315,56 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   models/demos/deepseek_v41_flash_d_p/tt/perf_pack_gather.py -s` (bytes + timings, 1 min); `...
   tt/perf_pack_identity.py -s` (on / off identity, 8 min, DS41_ENGRAM_TABLE=resident); fork: `scripts/run_safe_pytest.sh
   --device auto ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit`; old path DS41_CKV_PACK_BEFORE_GATHER=off.
+
+## P.13 (perf, galaxy 8x4): INDEX_TOPK_OP, the indexers' top-k on the 2x2's ttnn.bringup.topk_large_indices fork
+
+- What: no model code change. The merge 0b9fd49e26b (2x2 @ 9e5e0556b80) already has the setting INDEX_TOPK_OP
+  (tt/settings.py, default fork; stock = ttnn.experimental.topk_large_indices, the old path) and every indexer top-k
+  goes through `tt/indexer.py:topk_large_indices`. That covers the index top-k 512 (TtIndexer.topk_of: r2 layers
+  2 / 8 / 14, r1 layers 20 / 24-36) and the candidate blocks' k 2048 (TtCandidateIndexer._candidates_glue). The
+  fork needed no change at 8x4 sizes (ttnn rebuilt 01:56 with the merge).
+- stock ttnn.experimental.topk_large_indices instead of ttnn.bringup.topk_large_indices: only with
+  INDEX_TOPK_OP=stock (the A/B's old path), and in the fork's comparison test.
+- 8x4 per-chip calls (P.12's op table, ladder rung last, chunk [51200, 56320), 160 query rows a chip):
+  - r2: 160 x 28160, k 512, 3 calls a chunk;
+  - candidates: 160 x 7040, k 2048, 1 call;
+  - r1: 160 x 56320, k 512, 5 calls.
+- Device time a call, one Galaxy p150b (tt/perf_topk_op.py under --profile, median of 5 after a warm call), stock ->
+  fork:
+  - r2 244 -> 110 us, candidates 76 -> 51 us, r1 486 -> 219 us (stock matches P.12's in-model 244 / 76 / 486).
+  - The same calls at 1M: r2 4491 -> 1901 us (522240 keys), candidates 1098 -> 581 us (130560), r1 9240 -> 3909 us
+    (1044480).
+- Expected a chunk (40 layers): the top-k ops 3.24 -> 1.48 ms (-1.76 ms). The indexer section was 8.51 ms in P.12, so
+  it should come out ~6.7 ms. At 1M: ~34.9 ms less device a chunk. Host: a C++ op either way. In P.12 its host time
+  was 60-107 us a call (stock); fork host time was not measured separately. Not profiled in-model here (a plain
+  profile is ~600 s, the shell cap); the orchestrator's A/B profile gives the section and device totals on / off.
+- Selection vs stock (fork tests/unit/test_stock_identity.py, 31 cases: 8x4 shapes to 1M keys plus the 2x2's; inputs
+  randn, 16-level tied, causal -inf tails, re-index -inf blocks):
+  - The values are equal position by position, sentinels included, and both ops match torch's top-k values.
+  - Ids differ only between tied bf16 keys (DS41-170): every k 512 row and the 40 pair-split rows of a k 2048 call.
+    Neither op has a tie rule, so "ties as the stock op orders them" would mean reproducing the stock op's
+    sorting-network order. That means the stock op's row split, the thing the speedup removes. Not done; explained
+    instead. Downstream reads are sets (sparse attention, scatter of candidates; K-42).
+- Fork tests on one Galaxy card: tests/unit 217 / 218. The one other is upstream's production perf band (prefill
+  0.848 ms, band 0.887-0.905: faster). test_stock_identity 31 / 31. The model cases (tests/test_topk_large_indices.py)
+  need a 2x2 mesh with FABRIC_2D: not run here. No new 8x4 cases.py entries: those need a fork_calls capture (optests).
+- Accuracy, measure --task P.13 (quick, change on). Attempt 1 was cut by the 10-minute shell cap at 596 s, after its
+  layer metrics:
+  - 62 limited metrics recorded, every one within its limit;
+  - the tightest are err_state_topk_idx_L08 0.1546 / 0.1716 (P.11 0.1548) and err_layer_L07 0.1186 / 0.1466;
+  - err_layer_L39 0.875 / 1.533 (P.11 0.867); pcc_chunk_out 0.578 (P.11 0.609: tie flips, DS41-170).
+  - Not reached: the state / final metrics and host_transfers_per_layer.
+- Wall (warm, DS41_ENGRAM_TABLE=resident, change on): attempt 1 367.2 ms (spread 86.5, loadavg 29.3); attempt 2
+  351.3 ms (spread 34.2, loadavg 19.1). Attempt 2 was also cut at 596 s, before accuracy, and its P.13.json
+  overwrote attempt 1's metrics. P.11's quick on was 347.6 ms (spread 242). The orchestrator's measure gives the full
+  on / off table.
+- OV-23: topk_large_indices is a C++ device op (program cache), not a Python-built program: nothing non-prepared was
+  added or touched. OV-3: nothing padded. The candidate path's -inf pad to k when fewer blocks than k are visible is
+  the old path, unchanged.
+- Re-run:
+  - accuracy / wall: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.13`;
+  - per-call timing: `scripts/run_safe_pytest.sh --device auto --profile --no-precompile
+    models/demos/deepseek_v41_flash_d_p/tt/perf_topk_op.py`;
+  - stock comparison: `scripts/run_safe_pytest.sh --device auto --no-precompile
+    ttnn/ttnn/bringup/topk_large_indices/tests/unit/test_stock_identity.py -s`;
+  - old path: `DS41_INDEX_TOPK_OP=stock`.
