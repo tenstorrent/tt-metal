@@ -127,11 +127,15 @@ FORCE_INLINE void math_segment(CircularBuffer& input, uint32_t seg_chunks, uint3
 
 // PACK's share of one segment. `block` is the segment's 32-chunk block of the row, which decodes the
 // segment-local stamps; `mirror` ends the segment ascending, which a later segment needs for its unfused merge
-// and the last segment needs when the row's survivor leaves this core.
+// and the last segment needs when the row's survivor leaves this core. `keep_fused` leaves the survivor fused for a
+// fused cross-core join; only a single-segment row may ask for it.
 template <uint32_t K>
-FORCE_INLINE void sfpu_segment(uint32_t seg_chunks, bool later, uint32_t block, bool mirror) {
+FORCE_INLINE void sfpu_segment(uint32_t seg_chunks, bool later, uint32_t block, bool mirror, bool keep_fused) {
     constexpr uint32_t accumulator_slot = 0;
-    auto epilogue = [block, later] {
+    auto epilogue = [block, later, keep_fused] {
+        if (keep_fused) {
+            return;
+        }
         topk_xl_split_indices<K>(block * (max_fused_chunks * K));
         if (later) {
             topk_large_indices_move_segment_result_at_split<K>();
@@ -260,7 +264,12 @@ FORCE_INLINE void reduce_classic_row(CircularBuffer& input, uint32_t num_chunks,
 // argument would build the whole body twice for nothing.
 template <uint32_t K>
 FORCE_INLINE void reduce_fused_row(
-    CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements, bool final_ascending) {
+    CircularBuffer& input,
+    uint32_t first_chunk,
+    uint32_t num_chunks,
+    uint32_t tail_elements,
+    bool final_ascending,
+    bool keep_fused) {
     constexpr uint32_t survivor_slot = 0;
     // A fused survivor has no separate index tiles. Its merge operand is
     // therefore adjacent at one sequence, rather than two sequences, away.
@@ -281,14 +290,23 @@ FORCE_INLINE void reduce_fused_row(
     }
 
     // Decode the five-bit chunk stamp once, after the final fused survivor is
-    // known, and leave the standard [values, indices] epilogue layout.
+    // known, and leave the standard [values, indices] epilogue layout. A half
+    // joined fused across cores stays fused; the receiver decodes after the join.
+    if (keep_fused) {
+        return;
+    }
     topk_xl_separate_indices_row_major_global_init();
     topk_xl_separate_indices_row_major_global<K>(survivor_slot);
 }
 
 template <uint32_t K>
 FORCE_INLINE void reduce_segmented_row(
-    CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements, bool final_ascending) {
+    CircularBuffer& input,
+    uint32_t first_chunk,
+    uint32_t num_chunks,
+    uint32_t tail_elements,
+    bool final_ascending,
+    bool keep_fused) {
     constexpr uint32_t segment_capacity = max_fused_chunks;
     constexpr uint32_t accumulator_slot = 0;
     constexpr uint32_t segment_slot = 2 * tiles_per_sequence<K>;
@@ -328,6 +346,11 @@ FORCE_INLINE void reduce_segmented_row(
             }
         }
 
+        // A fused cross-core join takes this single segment's survivor fused.
+        if (keep_fused) {
+            ASSERT(last_segment);
+            break;
+        }
         // Split once per segment. The base is a multiple of 32*K, so it does
         // not overlap the decoded segment-local index bits.
         topk_xl_separate_indices_row_major_global_init();
@@ -367,6 +390,35 @@ FORCE_INLINE void merge_landed_survivor(CircularBuffer& landing, uint32_t input_
     topk_xl_init<K, false>();
     topk_xl_merge<K, false>(survivor_slot);
     topk_xl_rebuild<K, false>(survivor_slot, false);
+}
+
+// The fused join: both halves arrive fused ([bf16 value | u16 stamp], row-global stamps), so the fused compare
+// orders equal values by stamp exactly as one core reducing the whole row does. The unfused merge above compares
+// values only, which returned tied keys of a split row in a different order (#63408). Only a row of at most 32
+// chunks has unique stamps; the receiver then decodes the joined survivor once.
+template <uint32_t K>
+FORCE_INLINE void merge_landed_fused_survivor(CircularBuffer& landing, uint32_t input_cb) {
+    constexpr uint32_t survivor_tiles = 2 * tiles_per_sequence<K>;
+    constexpr uint32_t survivor_slot = 0;
+    // A fused survivor is one sequence, so its merge operand sits one sequence away.
+    constexpr uint32_t incoming_slot = survivor_slot + tiles_per_sequence<K>;
+    const uint32_t landing_cb = landing.get_cb_id();
+
+    // The hand-off is sized for an unfused survivor; a fused one fills only its first sequence.
+    landing.wait_front(survivor_tiles);
+    reconfig_data_format_srca(landing_cb);
+    copy_init(landing_cb);
+    for (uint32_t tile = 0; tile < tiles_per_sequence<K>; ++tile) {
+        copy_tile(landing_cb, tile, incoming_slot + tile);
+    }
+    landing.pop_front(survivor_tiles);
+    reconfig_data_format_srca(input_cb);
+
+    topk_xl_init<K, true>();
+    topk_xl_merge<K, true>(survivor_slot);
+    topk_xl_rebuild<K, true>(survivor_slot, false);
+    topk_xl_separate_indices_row_major_global_init();
+    topk_xl_separate_indices_row_major_global<K>(survivor_slot);
 }
 
 template <uint32_t K>
@@ -411,7 +463,8 @@ FORCE_INLINE void reduce_split_segmented_row(
     uint32_t num_chunks,
     uint32_t tail_elements,
     bool final_ascending,
-    bool emit_indices) {
+    bool emit_indices,
+    bool keep_fused) {
     static_assert(K == 2048, "the segmented body is K = 2048's");
     constexpr uint32_t accumulator_tiles = 2 * tiles_per_sequence<K>;
     constexpr uint32_t accumulator_slot = 0;
@@ -449,7 +502,7 @@ FORCE_INLINE void reduce_split_segmented_row(
             }
             feed_segment<K>(input, seg_chunks, seg_tail);
             math_segment<K>(input, seg_chunks, seg_tail);
-            sfpu_segment<K>(seg_chunks, later, block, mirror);
+            sfpu_segment<K>(seg_chunks, later, block, mirror, keep_fused);
         }
 
         if (later) {
@@ -609,7 +662,8 @@ void kernel_main() {
                         num_chunks,
                         tail_elements,
                         false /*final_ascending*/,
-                        true /*emit_indices*/);
+                        true /*emit_indices*/,
+                        false /*keep_fused*/);
                 } else {
                     reduce_split_row<K>(
                         input, indices_cb, num_chunks, tail_elements, prefetch && row > 0, prefetch_next);
@@ -652,6 +706,9 @@ void kernel_main() {
         const bool row_receives = split_row && receives_survivor;
         // A survivor that leaves this core is merge operand one of its partner and must end ascending.
         const bool row_sends = split_row && sends_survivor;
+        // A split row's halves are joined fused whenever its stamps are unique, i.e. the whole row is at most 32
+        // chunks; both partners derive this from the same whole-row chunk count, so they agree on the format.
+        const bool fused_join = split_row && num_chunks <= max_fused_chunks;
 
         tile_regs_acquire();
 
@@ -663,7 +720,7 @@ void kernel_main() {
             if (split_row && row_chunks >= min_split_chunks && (first_chunk & fused_chunk_id_mask) == 0) {
                 begin_thread_split();
                 reduce_split_segmented_row<K>(
-                    input, acc_cb, indices_cb, first_chunk, row_chunks, row_tail, row_sends, false);
+                    input, acc_cb, indices_cb, first_chunk, row_chunks, row_tail, row_sends, false, fused_join);
                 topk_xl_split_end();
                 // The split body leaves the packer in its last segment's mode; both output forms below start
                 // from the untilize one.
@@ -674,17 +731,21 @@ void kernel_main() {
         if (half_on_both_threads) {
             // The split body already left the survivor in tile 0; nothing more to reduce.
         } else if constexpr (body_mode == ComputeBodyMode::FusedSegmented) {
-            reduce_segmented_row<K>(input, first_chunk, row_chunks, row_tail, row_sends);
+            reduce_segmented_row<K>(input, first_chunk, row_chunks, row_tail, row_sends, fused_join);
         } else if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
             // The rebuild assembles its instructions from the direction, so each direction gets its own body.
-            reduce_fused_row<K>(input, first_chunk, row_chunks, row_tail, row_sends);
+            reduce_fused_row<K>(input, first_chunk, row_chunks, row_tail, row_sends, fused_join);
         } else {
             // row_split_enabled() keeps has_split false for this body, so these are the whole-row bounds.
             reduce_classic_row<K>(input, row_chunks, row_tail);
         }
 
         if (row_receives) {
-            merge_landed_survivor<K>(landing, input_cb);
+            if (fused_join) {
+                merge_landed_fused_survivor<K>(landing, input_cb);
+            } else {
+                merge_landed_survivor<K>(landing, input_cb);
+            }
         }
 
         if (row_sends) {
