@@ -131,6 +131,16 @@ PREFIX_INCREMENTAL = os.environ.get("GLM53_PREFIX_INCREMENTAL", "0")
 # exact-prefix path (``_prefix_rows``: one program per start, the 2026-10-28 unaligned-restore seal miss).
 DENSE_PREFIX_STATIC_ENV = "GLM53_DENSE_PREFIX_STATIC"
 PREFIX_INCREMENTAL_BUDGET_MB = int(os.environ.get("GLM53_PREFIX_INCREMENTAL_BUDGET_MB", "1024"))
+# GLM53_PREFIX_SCRATCH=1: the sparse prefill's whole-prefix ROW_MAJOR kv (the sparse_sdpa contract) lives in ONE
+# persistent scratch per chip shared by every DSA layer (``TtLatentCache.whole_rows_rm``), allocated at the first
+# sparse copy of the warm-up (an unfragmented allocator) and refilled piecewise per layer per chunk from the paged
+# cache (slice -> untilize -> slice_write, ``PREFIX_SCRATCH_PIECE_ROWS`` rows at a time) instead of a fresh copy per
+# layer per chunk: the served 1 M profile's per-row waves died at 378 K / 477 K / 112 K positions (2026-10-30) as the
+# per-chunk copy (up to 1 GiB) fought the scorer's blocks for a contiguous hole in ~2 GiB of headroom. The scratch is
+# the slot's full length (1 GiB at 1 M), so sparse_sdpa's T is constant and the DRAM footprint is paid once; the
+# piecewise fill moves ~3x the bytes of the direct untilize (~40 ms per layer-chunk at 1 M, 1.4 % of a wave step).
+PREFIX_SCRATCH_ENV = "GLM53_PREFIX_SCRATCH"
+PREFIX_SCRATCH_PIECE_ROWS = int(os.environ.get("GLM53_PREFIX_SCRATCH_PIECE_ROWS", "131072"))
 
 
 def prefill_blocks(max_seq_len: int | None = None) -> tuple[int, int]:
@@ -866,6 +876,56 @@ class TtLatentCache:
             return
         self._append_rows(a, chunk_c, start)
 
+    _shared_scratch: dict = {}  # (device id, rows_per_user, latent_dim) -> the chip's whole-prefix ROW_MAJOR scratch
+
+    @property
+    def prefix_scratch_enabled(self) -> bool:
+        return os.environ.get(PREFIX_SCRATCH_ENV, "0") == "1"
+
+    def prefix_scratch(self) -> ttnn.Tensor:
+        """The chip's shared whole-prefix scratch ``[1,1,rows_per_user,L]`` bf16 ROW_MAJOR (allocated once per device
+        and slot length, shared by every layer's cache: a layer's copy is consumed by its own attention before the
+        next layer refills it)."""
+        key = (id(self.device), self.rows_per_user, self.latent_dim)
+        t = TtLatentCache._shared_scratch.get(key)
+        if t is None or not t.is_allocated():
+            t = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, self.rows_per_user, self.latent_dim]),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            TtLatentCache._shared_scratch[key] = t
+        return t
+
+    def whole_rows_rm(self, user: int, n_rows: int) -> tuple[ttnn.Tensor, bool]:
+        """The sparse_sdpa kv of ``user``'s first ``n_rows`` as ``(kv, owned)``: a fresh ``user_rows_rm`` copy the
+        caller deallocates, or (GLM53_PREFIX_SCRATCH=1, contiguous pages) the shared scratch refilled piecewise
+        from the paged cache (never deallocated by the caller; its rows past ``n_rows`` are stale and never indexed:
+        every index row is causal)."""
+        if not self.prefix_scratch_enabled:
+            return self.user_rows_rm(user, n_rows), True
+        n_blocks = min(self.blocks_per_seq, -(-int(n_rows) // self.block_size))
+        ids = self.page_table_host[self.prefill_slot(user), :n_blocks].tolist()
+        if ids != list(range(ids[0], ids[0] + n_blocks)):  # scattered pages: the per-block gather path
+            return self.user_rows_rm(user, n_rows), True
+        scratch = self.prefix_scratch()
+        step = max(1, PREFIX_SCRATCH_PIECE_ROWS // self.block_size)
+        for b in range(0, n_blocks, step):
+            b1 = min(n_blocks, b + step)
+            tiles = ttnn.slice(
+                self.cache, [ids[0] + b, 0, 0, 0], [ids[0] + b1, 1, self.block_size, self.latent_dim]
+            )  # TILE [b1-b, 1, 32, L]
+            rm = ttnn.to_layout(tiles, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(tiles)
+            rm = ttnn.reshape(rm, [1, 1, (b1 - b) * self.block_size, self.latent_dim])
+            ttnn.experimental.slice_write(
+                rm, scratch, [0, 0, b * self.block_size, 0], [1, 1, b1 * self.block_size, self.latent_dim], [1, 1, 1, 1]
+            )
+            ttnn.deallocate(rm)
+        return scratch, False
+
     def prefix_rows_rm(self, user: int, start: int, n_chunk: int, chunk_c: ttnn.Tensor | None = None):
         """The sparse_sdpa kv of a prefill chunk of ``user`` at ``start`` (``n_chunk`` padded rows): the user's
         ROW_MAJOR latent rows [0, start + n_chunk) as ``(kv, owned)``. ``owned`` = a fresh ``user_rows_rm`` copy the
@@ -885,7 +945,7 @@ class TtLatentCache:
         it copied before (its attention result is dropped by ``TtDSA._sparse_attention(owner=...)``)."""
         n_rows = start + n_chunk
         if not self.prefix_incremental:
-            return self.user_rows_rm(user, n_rows), True
+            return self.whole_rows_rm(user, n_rows)
         a = self._prefix
         if a is None or a.user != user:
             self.release_prefix()
@@ -1469,7 +1529,9 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(o_dense)
             self._mark("out_proj")
             return y
-        kv_rm = cache.user_rows_rm(user, max(starts) + T)  # the wave's longest prefix on every row (superset)
+        kv_rm, kv_owned = cache.whole_rows_rm(
+            user, max(starts) + T
+        )  # the wave's longest prefix on every row (superset)
         ttnn.deallocate(c)
         self._mark("kv_copy")
         o_sparse = self._sparse_rows(
@@ -1488,7 +1550,8 @@ class TtDSA(LightweightModule):
         )
         ttnn.deallocate(q_resid)
         ttnn.deallocate(q)
-        ttnn.deallocate(kv_rm)
+        if kv_owned:
+            ttnn.deallocate(kv_rm)
         mask = self._position_mask(starts, T, P)
         o = self._select_rows_mask(o_dense, o_sparse, mask)
         for t in (mask, o_dense, o_sparse):
