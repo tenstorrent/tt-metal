@@ -311,12 +311,14 @@ IMAGE_BATCH_STD = IMAGE_PIXEL_STD / (sum(IMAGE_STD) / len(IMAGE_STD))
 
 
 # The references only run forward; without autograd they keep no activations for backward.
-def build_reference_backbone():
-    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_BATCH_STD).requires_grad_(False)
+def build_reference_backbone(seed=0):
+    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), seed=seed, input_std=IMAGE_BATCH_STD).requires_grad_(
+        False
+    )
 
 
-def build_reference_fpn():
-    return init_dummy_fpn_weights(FPN(**FPN_KWARGS)).requires_grad_(False)
+def build_reference_fpn(seed=0):
+    return init_dummy_fpn_weights(FPN(**FPN_KWARGS), seed=seed).requires_grad_(False)
 
 
 def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
@@ -348,7 +350,7 @@ def to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
-def random_image_batch():
+def random_image_batch(generator=None):
     """Random camera images in the range BEVFormer's normalized images take: smooth random
     structure at several scales plus pixel noise around the dataset mean, clamped to [0, 255]
     as pixels are, normalized by ``IMAGE_MEAN`` and ``IMAGE_STD``. Backbone error depends on the
@@ -356,11 +358,11 @@ def random_image_batch():
     mean = torch.tensor(IMAGE_MEAN).view(1, 3, 1, 1)
     images = mean.expand(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH).clone()
     for cell, amplitude in IMAGE_NOISE_SCALES:
-        coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1) - 0.5
+        coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1, generator=generator) - 0.5
         images += amplitude * F.interpolate(
             coarse, size=(IMAGE_HEIGHT, IMAGE_WIDTH), mode="bilinear", align_corners=False
         )
-    images += IMAGE_PIXEL_NOISE * torch.randn(images.shape)
+    images += IMAGE_PIXEL_NOISE * torch.randn(images.shape, generator=generator)
     return (images.clamp(0, 255) - mean) / torch.tensor(IMAGE_STD).view(1, 3, 1, 1)
 
 
@@ -825,14 +827,14 @@ def build_reference_transformer(num_layers, seed=0):
     return PerceptionTransformer(build_reference_encoder(num_layers, seed)).eval().requires_grad_(False)
 
 
-def build_reference_bevformer(bev_shape):
+def build_reference_bevformer(bev_shape, seed=0):
     """The detector over a ``(bev_h, bev_w)`` grid from the dummy-weight parts above."""
     bev_h, bev_w = bev_shape
     model = BEVFormer(
-        build_reference_backbone(),
-        build_reference_fpn(),
-        build_reference_transformer(ENCODER_NUM_LAYERS),
-        build_reference_head(bev_shape),
+        build_reference_backbone(seed=seed),
+        build_reference_fpn(seed=seed),
+        build_reference_transformer(ENCODER_NUM_LAYERS, seed=seed),
+        build_reference_head(bev_shape, seed=seed),
         bev_h,
         bev_w,
     )

@@ -236,7 +236,7 @@ def run_demo(args):
     torch.manual_seed(args.seed)
     assert (config.num_cameras, config.can_bus_dims) == (NUM_CAMS, CAN_BUS_DIMS)
     if args.checkpoint == "random":
-        parameter_model = build_reference_bevformer((BEV_H, BEV_W))
+        parameter_model = build_reference_bevformer((BEV_H, BEV_W), seed=args.seed)
     else:
         from models.experimental.bevformer.demo.checkpoint import load_model_checkpoint
 
@@ -255,12 +255,13 @@ def run_demo(args):
         parameter_model.bbox_coder.score_threshold = args.score_threshold
 
     if args.dataset_format == "synthetic":
-        generator = torch.Generator().manual_seed(args.seed)
-        synthetic_metas = frame_metas(1, args.num_frames + 1, generator)
+        metadata_generator = torch.Generator().manual_seed(args.seed)
+        image_generator = torch.Generator().manual_seed(args.seed)
+        synthetic_metas = frame_metas(1, args.num_frames + 1, metadata_generator)
 
         def load_frame(index):
             # Unlike the numerical perf test, the demo presents a fresh camera batch per frame.
-            return random_image_batch(), synthetic_metas[index], f"synthetic-{index}"
+            return random_image_batch(generator=image_generator), synthetic_metas[index], f"synthetic-{index}"
 
         frame_count = args.num_frames + 1
     else:
