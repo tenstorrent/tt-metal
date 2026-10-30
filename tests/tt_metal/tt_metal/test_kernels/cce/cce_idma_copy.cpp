@@ -12,6 +12,7 @@
 // on each trid's pending count, all under one budget. kModeTridBatch and kModeAccumulate run on command buffer 0 or 1;
 // the other modes on command buffer 0.
 
+#include "cce_idma_blocking_copy.h"
 #include "cce_idma_copy_abi.h"
 #include "cce_test_common.h"
 #include "dev_mem_map.h"
@@ -25,6 +26,7 @@ namespace abi = cce_idma_copy_abi;
 using cce_test::arg_u64;
 using cce_test::DataCheck;
 using cce_test::poll_bounded;
+using cce_test::setup_idma_cmdbuf;
 using overlay::ADDRGEN_0;
 using overlay::CmdBuf;
 using overlay::CMDBUF_0;
@@ -112,12 +114,7 @@ static void program_copy(
             len_bytes, static_cast<uint64_t>(num_elements) * len_bytes + 1);
     }
     overlay::idma_setup_as_copy_cmdbuf<CMDBUF_0>(/*wrapping=*/false);
-    overlay::setup_ongoing_cmdbuf<CMDBUF_0>({});
-    overlay::setup_wrapping_vcs_cmdbuf<CMDBUF_0>(
-        {.start = backend_vc, .end = backend_vc},
-        {.start = overlay::CMDBUF_WR_RESP_VC, .end = overlay::CMDBUF_WR_RESP_VC});
-    overlay::setup_trids_cmdbuf<CMDBUF_0>(abi::kTrid);
-    overlay::setup_max_bytes_in_packet_cmdbuf<CMDBUF_0>(NOC_OVERLAY_MAX_BYTES_IN_PACKET);
+    setup_idma_cmdbuf<CMDBUF_0>(backend_vc, abi::kTrid);
     if (!strided) {
         overlay::set_src_cmdbuf<CMDBUF_0>(source.command_address);
         overlay::set_dest_cmdbuf<CMDBUF_0>(destination.command_address);
@@ -157,8 +154,7 @@ static void write_status(uint32_t status_offset, const Report& report) {
     status[abi::kStatusPendingHighWater] = report.pending_high_water;
     status[abi::kStatusProbeFirst] = report.probe_first;
     status[abi::kStatusProbeSecond] = report.probe_second;
-    asm volatile("fence w, w" ::: "memory");
-    status[abi::kStatusMagic] = abi::kDoneMagic;
+    cce_test::publish_done_magic(status, abi::kDoneMagic);
 }
 
 // Commands of `trid` issued on command buffer CMDBUF and not yet acked.
@@ -171,10 +167,7 @@ static uint32_t pending_count(uint32_t trid) {
 template <typename Ready>
 static bool poll_until(Ready ready, const cce_test::WaitDeadline& deadline, uint32_t& cycles_spent) {
     const uint64_t start = cce_test::read_cycle_counter();
-    bool is_ready = ready();
-    while (!is_ready && !deadline.expired()) {
-        is_ready = ready();
-    }
+    const bool is_ready = cce_test::wait_until(deadline, ready);
     cycles_spent += static_cast<uint32_t>(cce_test::read_cycle_counter() - start);
     return is_ready;
 }
@@ -215,12 +208,7 @@ static void setup_batch(const BatchArgs& batch, uint32_t first_trid) {
     } else {
         overlay::idma_setup_as_copy_cmdbuf<CMDBUF>(/*wrapping=*/false);
     }
-    overlay::setup_ongoing_cmdbuf<CMDBUF>({});
-    overlay::setup_wrapping_vcs_cmdbuf<CMDBUF>(
-        {.start = batch.backend_vc, .end = batch.backend_vc},
-        {.start = overlay::CMDBUF_WR_RESP_VC, .end = overlay::CMDBUF_WR_RESP_VC});
-    overlay::setup_trids_cmdbuf<CMDBUF>(first_trid);
-    overlay::setup_max_bytes_in_packet_cmdbuf<CMDBUF>(NOC_OVERLAY_MAX_BYTES_IN_PACKET);
+    setup_idma_cmdbuf<CMDBUF>(batch.backend_vc, first_trid);
     if (batch.snoop) {
         overlay::setup_packet_tags_cmdbuf<CMDBUF>({.snoop = true});
     }
