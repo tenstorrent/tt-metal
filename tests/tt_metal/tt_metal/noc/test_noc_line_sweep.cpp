@@ -36,7 +36,8 @@
 //   TT_NOC_SWEEP_TRANSFER_BYTES  comma list of bytes per (source, destination) pair, each a multiple of 128;
 //                                every step of every sweep runs once per size   (default 1024,2048,4096,8192)
 //   TT_NOC_SWEEP_CHUNK_BYTES     bytes per NOC transaction, 0 = whole transfer per call   (default 0)
-//   TT_NOC_SWEEP_ITERS           how many times each step re-sends the same data         (default 1)
+//   TT_NOC_SWEEP_ITERS           how many times each step re-sends the same data, to keep the path busy
+//                                longer. Only what the last repetition left behind is checked. (default 1)
 //   TT_NOC_SWEEP_SEED            payload RNG seed                                        (default 0xC0FFEE)
 //   TT_NOC_SWEEP_NOCS            comma list of NOCs to test, e.g. "1" or "0,1"            (default "0,1")
 //   TT_NOC_SWEEP_DEVICES         comma list of chip ids to test, empty = all              (default all)
@@ -106,6 +107,8 @@ constexpr uint32_t kFlitWords = kFlitBytes / 4;
 // Payloads are built from pairs of flits: a random flit followed by its bitwise complement, so every bit at
 // every flit-word position is sent as both 0 and 1 within each pair. Transfers are multiples of this.
 constexpr uint32_t kFlitPairBytes = 2 * kFlitBytes;
+// The payload area of every region is rounded up to this, so the slots that follow it start aligned.
+constexpr uint32_t kPayloadAlign = 1024;
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_line_sweep.cpp";
 
 enum class LineKind { TensixRow, TensixCol, ActiveEth, IdleEth, Dram };
@@ -202,6 +205,7 @@ SweepConfig config_from_env() {
     const std::string nocs = tt::parse_env<std::string>("TT_NOC_SWEEP_NOCS", "0,1");
     cfg.nocs.clear();
     for (uint32_t n : parse_list(nocs)) {
+        TT_FATAL(n <= 1, "TT_NOC_SWEEP_NOCS: NOC {} does not exist (0 or 1)", n);
         cfg.nocs.push_back(n == 0 ? NOC::NOC_0 : NOC::NOC_1);
     }
     for (uint32_t d : parse_list(tt::parse_env<std::string>("TT_NOC_SWEEP_DEVICES", ""))) {
@@ -230,7 +234,9 @@ Region unreserved_region(HalProgrammableCoreType t) {
 // Layout of every endpoint's region: [payload][slot 0][slot 1]...[slot N-1], payload area rounded up to 1 KB.
 // For a core the region is its unreserved L1; for a DRAM bank it is that bank's page of a buffer allocated per
 // step.
-uint32_t payload_area_bytes(uint32_t transfer_bytes) { return ((transfer_bytes + 1023) / 1024) * 1024; }
+uint32_t payload_area_bytes(uint32_t transfer_bytes) {
+    return ((transfer_bytes + kPayloadAlign - 1) / kPayloadAlign) * kPayloadAlign;
+}
 
 // DRAM view (what the allocator calls a DRAM channel) behind an allocator bank id.
 uint32_t dram_view_of_bank(IDevice* device, uint32_t bank) {
@@ -409,12 +415,18 @@ bool can_run_kernel(const Line& line, bool slow_dispatch, tt::ARCH arch) {
 std::string fault_class(const PairResult& r) {
     const bool all_0to1 = r.flips_0to1 == r.chances_0to1;
     const bool all_1to0 = r.flips_1to0 == r.chances_1to0;
-    const char* cls = (all_0to1 && all_1to0)            ? "inverted"
-                      : (all_0to1 && r.flips_1to0 == 0) ? "stuck-at-1"
-                      : (all_1to0 && r.flips_0to1 == 0) ? "stuck-at-0"
-                      : (r.flips_0to1 && !r.flips_1to0) ? "intermittent 0->1"
-                      : (!r.flips_0to1 && r.flips_1to0) ? "intermittent 1->0"
-                                                        : "intermittent mixed";
+    const char* cls = "intermittent mixed";
+    if (all_0to1 && all_1to0) {
+        cls = "inverted";
+    } else if (all_0to1 && r.flips_1to0 == 0) {
+        cls = "stuck-at-1";
+    } else if (all_1to0 && r.flips_0to1 == 0) {
+        cls = "stuck-at-0";
+    } else if (r.flips_0to1 != 0 && r.flips_1to0 == 0) {
+        cls = "intermittent 0->1";
+    } else if (r.flips_0to1 == 0 && r.flips_1to0 != 0) {
+        cls = "intermittent 1->0";
+    }
     return fmt::format(
         "{} [0->1: {}/{}, 1->0: {}/{}]", cls, r.flips_0to1, r.chances_0to1, r.flips_1to0, r.chances_1to0);
 }
@@ -485,6 +497,98 @@ PairResult compare_slot(
         r.flips_1to0 += __builtin_popcount(e & ~g);
     }
     return r;
+}
+
+// Host-only checks of the checker itself, runnable without hardware: build a complement-flit payload, corrupt a
+// copy the way a given fault would, and confirm compare_slot / fault_class report exactly that fault.
+namespace checker_test {
+
+std::vector<uint32_t> payload(uint32_t words, uint32_t seed = 1) {
+    std::mt19937 rng(seed);
+    std::vector<uint32_t> p(words);
+    for (uint32_t i = 0; i < words; i++) {
+        p[i] = (i / kFlitWords) % 2 == 1 ? ~p[i - kFlitWords] : rng();
+    }
+    return p;
+}
+
+// Apply `mask` to flit word `w` of every flit: mode 's' sets, 'c' clears, 'f' flips.
+std::vector<uint32_t> corrupt(std::vector<uint32_t> p, uint32_t w, uint32_t mask, char mode) {
+    for (uint32_t i = w; i < p.size(); i += kFlitWords) {
+        p[i] = mode == 's' ? (p[i] | mask) : mode == 'c' ? (p[i] & ~mask) : (p[i] ^ mask);
+    }
+    return p;
+}
+
+constexpr uint32_t kWords = 256;  // 1 KB: 16 flits, 8 random + 8 complements
+constexpr uint32_t kBit = 0x800;
+constexpr uint32_t kWord = 15;
+
+}  // namespace checker_test
+
+TEST(NocLineSweepChecker, CleanSlotIsNotReported) {
+    const auto exp = checker_test::payload(checker_test::kWords);
+    const PairResult r = compare_slot({0, 0}, {1, 0}, exp.data(), exp);
+    EXPECT_EQ(r.bad_words, 0u);
+    EXPECT_FALSE(r.undelivered);
+}
+
+TEST(NocLineSweepChecker, StuckAtOneOnOneFlitWord) {
+    using namespace checker_test;
+    const auto exp = payload(kWords);
+    const auto got = corrupt(exp, kWord, kBit, 's');
+    const PairResult r = compare_slot({0, 0}, {1, 0}, got.data(), exp);
+    // Complement flits guarantee exactly half the 16 samples of word 15 carry a 0 at bit 11.
+    EXPECT_EQ(r.bad_words, 8u);
+    EXPECT_EQ(r.xor_or, kBit);
+    EXPECT_EQ(fault_class(r), "stuck-at-1 [0->1: 8/8, 1->0: 0/8]");
+    for (uint32_t w = 0; w < kFlitWords; w++) {
+        EXPECT_EQ(r.flit_word_hist[w], w == kWord ? 8u : 0u) << "flit word " << w;
+    }
+    EXPECT_FALSE(r.undelivered);
+}
+
+TEST(NocLineSweepChecker, StuckAtZeroOnOneFlitWord) {
+    using namespace checker_test;
+    const auto exp = payload(kWords);
+    const auto got = corrupt(exp, kWord, kBit, 'c');
+    const PairResult r = compare_slot({0, 0}, {1, 0}, got.data(), exp);
+    EXPECT_EQ(r.bad_words, 8u);
+    EXPECT_EQ(fault_class(r), "stuck-at-0 [0->1: 0/8, 1->0: 8/8]");
+}
+
+TEST(NocLineSweepChecker, InvertedBitOnOneFlitWord) {
+    using namespace checker_test;
+    const auto exp = payload(kWords);
+    const auto got = corrupt(exp, kWord, kBit, 'f');
+    const PairResult r = compare_slot({0, 0}, {1, 0}, got.data(), exp);
+    EXPECT_EQ(r.bad_words, 16u);
+    EXPECT_EQ(fault_class(r), "inverted [0->1: 8/8, 1->0: 8/8]");
+}
+
+TEST(NocLineSweepChecker, IntermittentFlipIsNotAStuckAt) {
+    using namespace checker_test;
+    const auto exp = payload(kWords);
+    auto got = exp;
+    // One flit's word 15 loses bit 11 where it was 1; the other 15 flits are intact.
+    for (uint32_t i = kWord; i < got.size(); i += kFlitWords) {
+        if (exp[i] & kBit) {
+            got[i] &= ~kBit;
+            break;
+        }
+    }
+    const PairResult r = compare_slot({0, 0}, {1, 0}, got.data(), exp);
+    EXPECT_EQ(r.bad_words, 1u);
+    EXPECT_EQ(fault_class(r), "intermittent 1->0 [0->1: 0/8, 1->0: 1/8]");
+}
+
+TEST(NocLineSweepChecker, PoisonedSlotIsUndelivered) {
+    using namespace checker_test;
+    const auto exp = payload(kWords);
+    const std::vector<uint32_t> got(kWords, kPoison);
+    const PairResult r = compare_slot({0, 0}, {1, 0}, got.data(), exp);
+    EXPECT_TRUE(r.undelivered);
+    EXPECT_EQ(pair_signature(r), "UNDELIVERED (slot still poison)");
 }
 
 class NocLineSweepFixture : public MeshDispatchFixture {
@@ -581,8 +685,10 @@ protected:
                 continue;
             }
             const Region r = unreserved_region(l->prog_type);
+            TT_FATAL(
+                r.size > kPayloadAlign, "{}: unreserved region of {} B is too small for a payload", l->name, r.size);
             const uint32_t need_slots = l == &sinks ? num_slots : 0;
-            const uint32_t max_t = (r.size - 1024) / (need_slots + 1);
+            const uint32_t max_t = (r.size - kPayloadAlign) / (need_slots + 1);
             t = std::min(t, max_t - (max_t % kFlitPairBytes));
         }
         return std::max<uint32_t>(t, kFlitPairBytes);
@@ -635,7 +741,7 @@ protected:
         bool pull,
         uint32_t requested_transfer,
         uint32_t step_index) {
-        IDevice* device = mesh_device->get_device(distributed::MeshCoordinate(0, 0));
+        IDevice* device = mesh_device->get_device(0, 0);
         const ChipId dev_id = device->id();
         TT_FATAL(!active.is_dram(), "the DRAM line cannot be the active line");
         const Line& sources = pull ? passive : active;
@@ -677,9 +783,9 @@ protected:
             dram_buf = distributed::MeshBuffer::create(global, local, mesh_device.get());
             dram_image.assign(page_words * passive.cores.size(), kPoison);
         }
-        // Base of endpoint i's region in `line`, as the kernel addresses it. For a DRAM bank that is the buffer
-        // address: the kernel's bank-id lookup adds the bank's own offset.
-        auto region_base = [&](const Line& line, uint32_t i) -> uint32_t {
+        // Base of every endpoint's region in `line`, as the kernel addresses it: the unreserved L1 base, or for the
+        // DRAM line the buffer address (the kernel's bank-id lookup adds each bank's own offset).
+        auto region_base = [&](const Line& line) -> uint32_t {
             if (line.is_dram()) {
                 return static_cast<uint32_t>(dram_buf->address());
             }
@@ -723,8 +829,7 @@ protected:
             if (sources.is_dram()) {
                 std::copy(to_device.begin(), to_device.end(), dram_image.begin() + s * page_words);
             } else {
-                detail::WriteToDeviceL1(
-                    device, sources.cores[s], region_base(sources, s), to_device, sources.host_type);
+                detail::WriteToDeviceL1(device, sources.cores[s], region_base(sources), to_device, sources.host_type);
             }
         }
         // 2. Poison every slot on every sink (the DRAM image starts out as poison).
@@ -732,7 +837,7 @@ protected:
         if (!sinks.is_dram()) {
             for (uint32_t d = 0; d < sinks.cores.size(); d++) {
                 detail::WriteToDeviceL1(
-                    device, sinks.cores[d], region_base(sinks, d) + payload_area, poison, sinks.host_type);
+                    device, sinks.cores[d], region_base(sinks) + payload_area, poison, sinks.host_type);
             }
         }
         if (dram_passive) {
@@ -767,7 +872,7 @@ protected:
             const uint32_t a = pull ? p.dst : p.src;  // index into the active line
             const uint32_t q = pull ? p.src : p.dst;  // index into the passive line
             // PUSH: the peer's slot region. PULL: the peer's payload.
-            const uint32_t remote_base = region_base(passive, q) + (pull ? 0 : payload_area);
+            const uint32_t remote_base = region_base(passive) + (pull ? 0 : payload_area);
             if (passive.is_dram()) {
                 peer_args[a].insert(peer_args[a].end(), {1u, q, 0u, remote_base, p.slot});
             } else {
@@ -779,7 +884,7 @@ protected:
         }
         for (uint32_t i = 0; i < active.cores.size(); i++) {
             // PUSH: my payload. PULL: my slot region.
-            const uint32_t local = region_base(active, i) + (pull ? payload_area : 0);
+            const uint32_t local = region_base(active) + (pull ? payload_area : 0);
             std::vector<uint32_t> rt = {
                 pull ? 1u : 0u,
                 local,
@@ -810,7 +915,7 @@ protected:
                 detail::ReadFromDeviceL1(
                     device,
                     sinks.cores[d],
-                    region_base(sinks, d) + payload_area,
+                    region_base(sinks) + payload_area,
                     slots_bytes,
                     readback[d],
                     sinks.host_type);
@@ -874,7 +979,7 @@ protected:
         uint32_t total_bad = 0;
         uint32_t steps = 0;
         for (const auto& mesh_device : devices) {
-            IDevice* device = mesh_device->get_device(distributed::MeshCoordinate(0, 0));
+            IDevice* device = mesh_device->get_device(0, 0);
             auto active_lines = active_lines_fn(device, cfg_);
             auto passive_lines = passive_lines_fn(device, cfg_);
             if (reported_skips_.insert(device->id()).second) {
@@ -1040,8 +1145,8 @@ TEST_F(NocLineSweepFixture, EthFromTensixPull) {
     run_sweep("eth <- tensix pull", eth_lines, tensix_rows_and_cols, true);
 }
 
-// Every tensix row and column writes into the Ethernet cores (no kernel on the Ethernet core, so this also works
-// under fast dispatch).
+// Every tensix row and column writes into the Ethernet cores. Like every Ethernet test this needs slow dispatch:
+// under fast dispatch the Ethernet lines are dropped on both sides, since dispatch kernels may own the region.
 TEST_F(NocLineSweepFixture, TensixToEthPush) {
     run_sweep("tensix -> eth push", tensix_rows_and_cols, eth_lines, false);
 }
