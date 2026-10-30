@@ -78,7 +78,7 @@ private:
 // can hold a weak_ptr back and survive close_impl() without UAF.
 class DriscL1Arena : public std::enable_shared_from_this<DriscL1Arena> {
 public:
-    // Sized for ~16 GCBs at production receiver counts. Each GCB's per-bank
+    // Blackhole: sized for ~16 GCBs at production receiver counts. Each GCB's per-bank
     // footprint is `2 * sizeof(uint32_t) * num_receivers_per_bank` bytes, e.g.
     // 2 * 4 * 8 = 64 B for ring=64 → 16 GCBs * 64 B = 1 KB exact (DRISC slots
     // are packed at 4-byte stride; the kernel walks them via
@@ -88,6 +88,10 @@ public:
     // 36 B header + 8 NOC XY pairs + 8 L1-aligned counter pairs). The remaining
     // ~92 KB above the zone is reported by kernel_working_region_size() so
     // callers placing a co-resident DRISC kernel know how much L1 they have.
+    //
+    // Quasar: kQuasarSenderStateZoneSize and kQuasarReceiverZoneSize. A GCB with DRAM receivers
+    // gives each pages_sent and pages_acked counter its own line (dram_receiver_config_page.hpp),
+    // and the receiver zone holds those GCBs' receiver config pages and FIFOs.
     static constexpr uint32_t kSenderStateZoneSize = 1 * 1024;
     static constexpr uint32_t kQuasarSenderStateZoneSize = 16 * 1024;
     static constexpr uint32_t kQuasarReceiverZoneSize = 1024 * 1024;
