@@ -200,7 +200,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #line 201
 
 #if defined(ARCH_BLACKHOLE)
-// The block pack of one block, from the opt-in fast forms or, with pack_block_default, from the calls llk_pack_block makes (default block, closed block for block-float).
+// The block pack of one block. Default (pack_block 1 and 2): the calls llk_pack_block makes with the W offset on (the plain block with the W offset, the closed
+// block with the W offset for block-float outputs), the output programmed once by _llk_pack_block_w_init_. pack_block_w (3) and pack_block_fast (4) are library
+// forms on purpose: the W offset forms behind _llk_pack_block_fast_init_, and the fast forms of the matmul harness.
 template <DstSync sync, bool fp32>
 inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, bool bfp, std::uint32_t out_tile = 0)
 {
@@ -215,18 +217,7 @@ inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std:
             _llk_pack_block_w_<sync, fp32>(dst_index, out_tile, num_tiles);
         }
     }
-    else if constexpr (pack_block_default)
-    {
-        if (bfp)
-        {
-            _llk_pack_block_closed_<sync, fp32>(dst_index, address, num_tiles, tile_stride);
-        }
-        else
-        {
-            _llk_pack_block_<sync, fp32, ckernel::PackMode::Default>(dst_index, address, num_tiles);
-        }
-    }
-    else
+    else if constexpr (pack_block_fast)
     {
         if (bfp)
         {
@@ -235,6 +226,17 @@ inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std:
         else
         {
             _llk_pack_block_fast_<sync, fp32>(dst_index, address, num_tiles);
+        }
+    }
+    else
+    {
+        if (bfp)
+        {
+            _llk_pack_block_closed_w_mop_<sync, fp32>(dst_index, out_tile, num_tiles);
+        }
+        else
+        {
+            _llk_pack_block_w_<sync, fp32>(dst_index, out_tile, num_tiles);
         }
     }
 }
@@ -270,10 +272,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>(); PACK_RMW_INIT
 #if defined(ARCH_BLACKHOLE)
-        if constexpr (pack_block_en && !pack_block_default)
+        if constexpr (pack_block_en)
         {
-            _llk_pack_block_fast_init_<false>();
-            if constexpr (pack_block_w)
+            if constexpr (pack_block_w || pack_block_fast)
+            {
+                _llk_pack_block_fast_init_<false>();
+            }
+            if constexpr (!pack_block_fast)
             {
                 _llk_pack_block_w_init_(L1_ADDRESS(buffer_Res[0]), (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4);
             }

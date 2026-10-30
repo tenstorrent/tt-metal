@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tiny tiles and partial faces that perf_pack_tiny_tile_block does not run: 2x32 and 32x16 tiles, block sizes of 1 to 8 tiles, the first or the last dest tile that
-fits as the start, Float16 and UInt16 outputs, and Bfp4_b for the 16x32 tile; modes 1 (closed block), 2 (per-tile) and 3 (dense block). Four tile blocks from index 0 of
+fits as the start, Float16 and UInt16 outputs, and Bfp4_b for the 16x32 tile; modes 1 (closed block, library form), 2 (per-tile), 3 (dense block) and 4 (the closed block llk_pack_block makes, with the W offset). Four tile blocks from index 0 of
 the old shapes and formats are rows of perf_pack_tiny_tile_block and are not repeated."""
 
 import pytest
@@ -43,10 +43,10 @@ def _tiny_indices(formats, dest_acc, tile_dims, block_tiles):
 
 def _tiny_modes(formats, tile_dims, block_tiles, dest_index):
     if formats.output_format.is_block_float():
-        return [1, 2] if tile_dims == (16, 32) else []
+        return [1, 2, 4] if tile_dims == (16, 32) else []
     if (formats.input_format.name, formats.output_format.name) in TINY_OLD and dest_index == 0 and block_tiles == 4 and tile_dims in TINY_OLD_DIMS:
         return []
-    return [1, 2, 3]
+    return [1, 2, 3, 4]
 
 
 @pytest.mark.perf

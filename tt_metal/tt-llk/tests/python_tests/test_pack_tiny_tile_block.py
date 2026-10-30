@@ -165,7 +165,7 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
-    pack_mode=[0, 1, 2, 3],
+    pack_mode=[0, 1, 2, 3, 4],
 )
 def test_pack_tiny_tile_block(
     formats,
@@ -196,7 +196,7 @@ def test_pack_tiny_tile_block(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[(16, 32)],  # face_r_dim=16, num_faces=2: block-float faces need 16 rows
     num_tiles=[2, 4, 8],
-    pack_mode=[1, 2],
+    pack_mode=[1, 2, 4],
 )
 def test_pack_tiny_tile_block_bfp(
     formats,
