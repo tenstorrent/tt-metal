@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sol-Attn routing pre-pass for the ring-joint SDPA path (DESIGN.md §3.2 / §3.4).
+"""Sol-Attn routing pre-pass for the ring-joint SDPA path.
 
 Runs as plain ttnn ops between the fused QK-norm/RoPE and the ring SDPA. Per device it produces,
 from the local Q/K/V shards [1, H_local, R, D]:
@@ -12,26 +12,26 @@ from the local Q/K/V shards [1, H_local, R, D]:
   block goes through the pooled correction. Only full 64-token blocks inside logical_n are ever exact;
   block 0 of every shard is forced exact (one gathered chunk per ring iteration).
 * ``pooled_k`` / ``pooled_v``  bf16 tile [1, H, n_blocks_pad, D]: per-64-token block mean K / mean V
-  for the WHOLE sequence (all-gathered along SP), per-shard blocking (DESIGN.md §3.1).
+  for the WHOLE sequence (all-gathered along SP), per-shard blocking.
 * ``bias``  OPTIONAL (``emit_bias``; default from ``TT_SOL_EMIT_BIAS``) bf16 tile
   [1, H, n_q_chunks_pad * 32, n_blocks_pad]: per Q chunk, one 32-row tile row holding the additive
   column bias for the pooled logits: ln(block token count) / scale for blocks the Q chunk approximates
   (the kernel evaluates exp((QK + bias - max) * scale), so this weights the pooled column by its token
   count), a large negative value for blocks it computes exactly (no double counting) and for padding
   blocks. When not emitted (``bias`` is None) the ring op's reader generates the identical tile rows on
-  device from the mask row and the block geometry (sol_bias_gen.hpp), saving ~100 MB/layer of DRAM
-  traffic and two pre-pass ops. The op consuming these is ttnn.transformer.sparse_ring_sdpa.
+  device from the mask row and the block geometry (sol_bias_gen.hpp), which removes the bias upload and
+  two pre-pass ops. Interface contract: SOL_ATTN_INTERFACE.md next to this file.
 
 Geometry: blocks are 64 tokens inside each SP shard (the last block of a shard may be 32 tokens);
 K chunks are ``k_chunk`` tokens inside each shard; global K chunk index = shard * k_chunks_per_shard
 + local index. Every tensor dimension is padded to a tile multiple.
 
-``torch_reference(...)`` is the same arithmetic in fp32 torch on host (for unit tests against
-``sol_attn_work/sol_ref.py``).
+``torch_reference(...)`` is the same arithmetic in fp32 torch on host (for unit tests).
 """
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -139,8 +139,9 @@ def build_constants(
         qg[:nb] = torch.arange(nb) + s * nb
         band_m[s, 0] = ((qg[:, None] - gidx[None, :]).abs() <= band).float() * valid_row[None, :]
         if dense_prefix_queries:
-            # Prefix (text + condition) QUERY rows attend densely, as NVlabs recomputes them outside the sparse
-            # kernel: every Q block whose first token lies before sink_tokens keeps all valid K blocks. Folded
+            # Prefix (text + condition) QUERY rows attend densely, as the reference implementation recomputes them
+            # outside the sparse kernel: every Q block whose first token lies before sink_tokens keeps all valid K
+            # blocks. Folded
             # into the band constant so it costs no extra op. (The ragged last block stays pooled: the kernel
             # only gathers full blocks.)
             for b in range(nb):
@@ -162,7 +163,7 @@ def build_constants(
     qc_pool_t = torch.zeros(1, 1, nbp, geo.nqc_pad)
     for b in range(nb):
         qc_pool_t[0, 0, b, (b * geo.block) // geo.q_chunk] = 1.0
-    # Forced columns: block 0 of every shard (one gathered chunk per ring iteration, see DESIGN.md §3.1b)
+    # Forced columns: block 0 of every shard (one gathered chunk per ring iteration)
     force_row = torch.zeros(1, 1, 1, nbg)
     if force_first_chunk:
         for s in range(S):
@@ -190,6 +191,61 @@ def build_constants(
         "len_bias_row": len_bias_row,
         "n_valid_blocks": float(pos.sum()),
     }
+
+
+# ----------------------------------------------------------------------------- static row max (resident mode)
+
+
+def row_max_constants(head_dim: int, scale: float) -> dict:
+    """Host constants for `compute_row_max` (fp32 torch, replicated on upload).
+
+    ``e0_col`` [1, 1, D, 32]: column 0 all ones, the rest zero. A squared Q/K row times it is the row's squared
+    norm in tile column 0 with zeros in columns 1..31, i.e. already the one-tile-column layout the ring op takes.
+    ``row_max_bias`` [1, 1, 1, 32]: ln(64) / scale in column 0 only, the largest pooled-column bias the ring op
+    generates (ln(block length) / scale, block length <= 64), in the same raw logit units.
+    """
+    e0_col = torch.zeros(1, 1, head_dim, TILE)
+    e0_col[0, 0, :, 0] = 1.0
+    row_max_bias = torch.zeros(1, 1, 1, TILE)
+    row_max_bias[0, 0, 0, 0] = math.log(BLOCK) / scale
+    return {"e0_col": e0_col, "row_max_bias": row_max_bias}
+
+
+def compute_row_max(
+    q: ttnn.Tensor, k: ttnn.Tensor, *, consts: dict, ccl_manager, sp_axis: int, compute_kernel_config
+) -> ttnn.Tensor:
+    """Resident mode's static row max: bf16 tile [1, H, R, 32] from the local Q/K shards [1, H, R, D].
+
+    Column 0 of row r holds ``||q_r|| * max_over_all_keys ||k|| + ln(64) / scale`` in RAW (unscaled) logit units
+    (the ring op applies the softmax scale inside its exp); columns 1..31 are zero. By Cauchy-Schwarz it bounds
+    every raw logit of the row plus the largest pooled-column bias, so flash attention with this fixed max is exact
+    up to rounding and the kernel drops its running-max bookkeeping.
+
+    The key-norm max is per head over the WHOLE sequence: the local max is all-gathered along SP on a tile-shaped
+    [1, H, 32, 32] tensor (whole tiles per device, so the gather concatenates cleanly) and max-reduced, so every
+    device of the ring holds the same value. R keeps the Q shard's row count; TILE layout pads it like Q.
+    """
+    qq = ttnn.multiply(q, q)
+    q_norm = ttnn.sqrt(ttnn.matmul(qq, consts["e0_col"], compute_kernel_config=compute_kernel_config))  # [1,H,R,32]
+    ttnn.deallocate(qq)
+    kk = ttnn.multiply(k, k)
+    k_sq = ttnn.matmul(kk, consts["e0_col"], compute_kernel_config=compute_kernel_config)  # [1,H,R,32]
+    ttnn.deallocate(kk)
+    k_sq_max = ttnn.max(k_sq, dim=2, keepdim=True)  # [1,H,1,32]: column 0 = local max ||k||^2, the rest 0
+    ttnn.deallocate(k_sq)
+    k_sq_tile = ttnn.repeat_interleave(k_sq_max, TILE, dim=2)  # [1,H,32,32], tile-shaped for the gather
+    ttnn.deallocate(k_sq_max)
+    k_sq_all = ccl_manager.all_gather(k_sq_tile, dim=2, mesh_axis=sp_axis, use_hyperparams=False)  # [1,H,32*S,32]
+    ttnn.deallocate(k_sq_tile)
+    # Column 0 = global max ||k||, times a 2 % margin so the bf16 rounding of the norms and of the product can never
+    # put the bound below a row's true max (an overestimate only scales the bf16 exp terms, which costs nothing).
+    k_norm_max = ttnn.multiply(ttnn.sqrt(ttnn.max(k_sq_all, dim=2, keepdim=True)), 1.02)  # [1,H,1,32]
+    ttnn.deallocate(k_sq_all)
+    # H-broadcast of the per-head max over the Q rows, then the bias row (same broadcast as len_bias_row).
+    row_max = ttnn.add(ttnn.multiply(q_norm, k_norm_max), consts["row_max_bias"])  # [1,H,R,32]
+    ttnn.deallocate(q_norm)
+    ttnn.deallocate(k_norm_max)
+    return row_max
 
 
 # ----------------------------------------------------------------------------- torch reference
@@ -250,6 +306,7 @@ class SolPrepass:
         dense_prefix_queries: bool = True,
         mode: str = "gather",
         emit_bias: bool | None = None,
+        row_max: bool = False,
     ):
         # "gather": block mask [1,H,nqc_pad,n_blocks_pad], the reader gathers kept 64-token blocks (chains off).
         # "chunk": K-chunk mask [1,H,nqc_pad,nkc_pad] (any kept block in the chunk keeps the chunk); the reader
@@ -257,13 +314,16 @@ class SolPrepass:
         #          approximated by the pooled chunks.
         # "compact": the gather-form block mask (full blocks only; block 0 of every shard forced kept so every
         #          (Q chunk, shard) computes at least one block), streamed through the chains like chunk mode; the
-        #          reader compacts each core's kept blocks in L1 (DESIGN_BLOCK_COMPACT.md). Pass sol_mode="compact".
-        # "pack" is compact plus the ring op's Q2 cross-chunk packing; the pre-pass output is identical to compact.
+        #          reader compacts each core's kept blocks in L1. Pass sol_mode="compact".
+        # "pack" is compact plus the ring op's cross-chunk packing; the pre-pass output is identical to compact.
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         self.mode = mode
-        # emit_bias=False: the ring op generates the pooled-column bias on device (production path once the
-        # kernel build carries sol_bias_gen.hpp). TT_SOL_EMIT_BIAS flips the default for A/B runs.
+        # emit_bias=False: the ring op generates the pooled-column bias on device. TT_SOL_EMIT_BIAS sets the default
+        # (1 = emit the bias tensor, 0 = let the op generate it).
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
+        # row_max=True: also return "row_max", the static per-query-row logit bound (compute_row_max) the ring op's
+        # resident mode accepts as the deprecated sol_row_max input. The op ignores it; the model leaves it off.
+        self.row_max = bool(row_max)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
@@ -273,6 +333,11 @@ class SolPrepass:
         self.force_first_chunk = force_first_chunk
         self.dense_prefix_queries = dense_prefix_queries
         self._consts: dict | None = None
+        # Own global semaphores for the two pooled gathers, alternated per call (as SolPrepassFused, SOL_AG_OWN_SEMS):
+        # the CCL manager's all-gather pool is shared with the ring attention op's fused K/V gather, whose reader
+        # zeroes its semaphore at exit, so a lagging chip could lose a running chip's credits.
+        self._ag_sems: list | None = None
+        self._ag_idx = 0
         self._key = None
         self.last_density: float | None = None
         # Density of the (q_chunk x 64-key) block mask before any K-chunk union (64x64 blocks when q_chunk is 64,
@@ -295,9 +360,8 @@ class SolPrepass:
             mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
         return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device, mesh_mapper=mapper)
 
-    # Uploaded constants shared by every SolPrepass on the same mesh (all 48 layers use identical geometry, sink and
-    # scale): one build + upload per process instead of one per layer (~0.5 s and ~3 MB/device instead of ~22 s and
-    # ~140 MB/device for 48 layers).
+    # Uploaded constants shared by every SolPrepass on the same mesh (all layers use identical geometry, sink and
+    # scale): one build + upload per process instead of one per layer.
     _shared_consts: dict = {}
 
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
@@ -389,6 +453,41 @@ class SolPrepass:
         ttnn.deallocate(chunk01)
         return {"block_mask": mask_u32, "pooled_k": self._pooled_k, "pooled_v": self._pooled_v, "bias": bias}
 
+    # Row-max constants depend only on (device, head dim, scale), not on the geometry: shared like _shared_consts.
+    _shared_row_max_consts: dict = {}
+
+    def _row_max(self, q: ttnn.Tensor, k: ttnn.Tensor, scale: float) -> ttnn.Tensor:
+        head_dim = int(q.shape[3])
+        key = (id(self.mesh_device), head_dim, scale)
+        consts = SolPrepass._shared_row_max_consts.get(key)
+        if consts is None:
+            consts = {name: self._upload(t, shard=False) for name, t in row_max_constants(head_dim, scale).items()}
+            SolPrepass._shared_row_max_consts[key] = consts
+        return compute_row_max(
+            q, k, consts=consts, ccl_manager=self.ccl_manager, sp_axis=self.sp_axis, compute_kernel_config=self.hifi4
+        )
+
+    def _gather(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """All-gather a pooled [1, H, nb_pad, D] tensor along dim 2 over SP: CCLManager.all_gather with this pre-pass's
+        own semaphores."""
+        ccl = self.ccl_manager
+        if self._ag_sems is None:
+            self._ag_sems = [
+                [ttnn.create_global_semaphore(self.mesh_device, ccl.ccl_cores, 0) for _ in range(2)] for _ in range(2)
+            ]
+        sems = self._ag_sems[self._ag_idx]
+        self._ag_idx ^= 1
+        return ttnn.experimental.all_gather_async(
+            t,
+            persistent_output_buffer=None,
+            barrier_semaphore=ccl.get_barrier_semaphore(self.sp_axis),
+            dim=2,
+            multi_device_global_semaphore=sems,
+            num_links=ccl.num_links,
+            topology=ccl.topology,
+            cluster_axis=self.sp_axis,
+        )
+
     def _pool(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """[1,H,R,D] -> [1,H,nb_pad,D] block means (local shard)."""
         xt = ttnn.transpose(x, -2, -1)
@@ -404,11 +503,12 @@ class SolPrepass:
         c = self._consts
         geo = self.geo
         log2_scale = scale * LOG2E
+        row_max = self._row_max(q, k, scale) if self.row_max else None  # [1,H,R,32] (resident mode)
         q_bar = self._pool(q)  # [1,H,nbp,D]
         kc_local = self._pool(k)
         vc_local = self._pool(v)
-        kc = self.ccl_manager.all_gather(kc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
-        vc = self.ccl_manager.all_gather(vc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+        kc = self._gather(kc_local)
+        vc = self._gather(vc_local)
         ttnn.deallocate(kc_local)
         ttnn.deallocate(vc_local)
 
@@ -443,6 +543,7 @@ class SolPrepass:
         if self.mode == "chunk":
             self._pooled_k, self._pooled_v = kc, vc
             out = self._finish_chunk_mode(block01, report_density)
+            out["row_max"] = row_max
             return out
         # gather / compact: block-form mask
         if report_density:
@@ -461,4 +562,5 @@ class SolPrepass:
             "pooled_v": vc,
             "bias": bias,
             "q_bar": q_bar,
+            "row_max": row_max,
         }

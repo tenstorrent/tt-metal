@@ -7,17 +7,18 @@
 Same outputs and semantics as :class:`sol_prepass.SolPrepass` (its ``torch_reference`` is the reference for both):
 
 * ``sol_block_pool`` (kernels ``sol_kernels/sol_pool_*.cpp``): per-64-token-block means of the local Q/K/V shards,
-  one program for the three tensors, every core busy; replaces the three [R x NBP] pooling matmuls (8.8 ms at 10 s).
+  one program for the three tensors, every core busy; replaces the three [R x NBP] pooling matmuls.
 * ``sol_route`` (``sol_kernels/sol_route_*.cpp``): moments, thresholds, proxy scores, Q-chunk union, K-chunk union,
-  uint32 mask and the column-bias tiles in one program; replaces ~56 small ttnn ops.
+  uint32 mask and the column-bias tiles in one program; replaces the chain of small ttnn ops in SolPrepass.
 
 Geometry constants are built on host once per geometry (cached per mesh, like SolPrepass) and the program
 descriptors are cached with them; per call only the buffer addresses are patched (generic_op re-applies runtime
-args on a program-cache hit). Plan and measurements: ~/sol_attn_work/PREPASS_FUSED_PLAN.md.
+args on a program-cache hit).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import struct
 import time
@@ -26,11 +27,32 @@ import torch
 
 import ttnn
 
-from .sol_prepass import LOG2E, NEG, TILE, VAR_EPS, SolGeometry, _pad32, build_constants
+from .sol_prepass import (
+    LOG2E,
+    NEG,
+    TILE,
+    VAR_EPS,
+    SolGeometry,
+    _pad32,
+    build_constants,
+    compute_row_max,
+    row_max_constants,
+)
 
 KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol_kernels")
 TILE_BYTES = 2048
-L1_CB_BUDGET = 1_200_000  # bytes of circular buffers per core we allow (Blackhole L1 = 1.5 MB)
+# Defaults of the pooled all-gather configuration (see SolPrepassFused.__init__): overridden per instance / by env.
+DEFAULT_GATHER_KWARGS: dict = {"num_workers_per_link": 1, "barrier": False}
+# Own global semaphores for the two pooled gathers (SOL_AG_OWN_SEMS, default 1). The CCL manager's all-gather ping-pong
+# semaphore pool is shared with the ring attention op's fused K/V gather, whose reader zeroes its semaphore at exit
+# (ring_attention_all_gather_reader.cpp); a chip that is already sending the next layer's pooled gather on the same set
+# while a lagging chip is still inside the ring op loses those credits (or the lagging chip consumes them as its own).
+# With its own two sets the pre-pass never shares a semaphore address with the ring op. Defensive: the 2026-10-29 hangs
+# were traced to the route's constants multicast (see sol_route_reader.cpp), not to this.
+DEFAULT_GATHER_OWN_SEMS = True
+DEFAULT_GATHER_PERSISTENT = False
+DEFAULT_PERSISTENT_INTERNAL = True  # q_bar / kc_local / vc_local allocated once and reused across calls
+L1_CB_BUDGET = 1_200_000  # circular-buffer bytes per core the route program may use (Blackhole L1 = 1.5 MB)
 SCRATCH_PAGES = 8
 
 
@@ -78,6 +100,14 @@ def build_fused_constants(
         erow[0, 0, r * TILE : (r + 1) * TILE, r] = 1.0
     ones = torch.zeros(1, 1, TILE, TILE)
     ones[0, 0, 0, :] = 1.0
+    # Shard-row selectors for the route moment exchange ((head, shard) units): gather tile t holds shard ps = 4t + q at
+    # rows q*8 + n (n = moment tile 0..7: DT sums, DT sums of squares); selector tile n has ones at row 0, columns
+    # q*8 + n, so selector[n] @ gather[t] puts the sum over that tile's shards of moment n in row 0, accumulated over t.
+    assert S in (4, 8), S  # other counts leave never-written rows in the gather tiles (0 * stale NaN = NaN)
+    shsel = torch.zeros(1, 1, 8 * TILE, TILE)
+    for n in range(8):
+        for q in range(min(4, S)):
+            shsel[0, 0, n * TILE, q * 8 + n] = 1.0
     out = {
         "const_or": const_or,
         "colconst": colconst,
@@ -85,6 +115,7 @@ def build_fused_constants(
         "ksel": ksel,
         "erow": erow,
         "ones": ones,
+        "shsel": shsel,
         "n_valid_blocks": c["n_valid_blocks"],
         "nkcl": nkcl,
     }
@@ -112,6 +143,18 @@ class SolPrepassFused:
     """Drop-in replacement for SolPrepass (same constructor keywords, prepare() and __call__())."""
 
     _shared: dict = {}
+    _generation: int = 0
+
+    @classmethod
+    def new_generation(cls) -> None:
+        """Drop the shared per-geometry state (uploaded constants, program descriptors) so the next call re-uploads it.
+
+        The device contents of constants uploaded once are not preserved across generations (other models, such as
+        the VAE decoder and the prompt encoder, run in between), so the constants are re-uploaded per generation.
+        Called by MiniMaxH3Attention when the caller sets `sol_logical_n` for a request.
+        """
+        cls._shared.clear()
+        cls._generation += 1
 
     def __init__(
         self,
@@ -129,10 +172,15 @@ class SolPrepassFused:
         math_fidelity=None,
         emit_chunk_union: bool = False,
         debug_moments: bool = False,
+        row_max: bool = False,
+        units_per_shard: bool | None = None,
+        mask_reuse: int = 1,
+        gather_kwargs: dict | None = None,
+        gather_persistent: bool = False,
     ):
-        # "compact" (tier 3, DESIGN_BLOCK_COMPACT.md) consumes the gather-form block mask: same outputs as "gather".
-        # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (dormant option).
-        # "pack" is compact plus the ring op's Q2 cross-chunk packing; the pre-pass output is identical to compact.
+        # "compact" consumes the gather-form block mask: same outputs as "gather".
+        # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (optional).
+        # "pack" is compact plus the ring op's cross-chunk packing; the pre-pass output is identical to compact.
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         assert thresh_type == "diag", "fused pre-pass implements the diag threshold (H3 policy)"
         self.mode = mode
@@ -143,14 +191,66 @@ class SolPrepassFused:
         self.thresh_type = thresh_type
         self.band = band
         # compact mode keeps the gather-mode convention: block 0 of every shard is forced (a Q chunk computing zero
-        # chunks in a ring iteration deadlocks the accumulator staging protocol; sol-vid2, 2026-10-16).
+        # chunks in a ring iteration deadlocks the ring op's accumulator staging protocol).
         self.force_first_chunk = force_first_chunk
         self.dense_prefix_queries = dense_prefix_queries
-        # Same convention as SolPrepass: None -> TT_SOL_EMIT_BIAS (default 1 until the ring op generates the bias).
+        # Same convention as SolPrepass: None -> TT_SOL_EMIT_BIAS (default 1).
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
         self.emit_chunk_union = bool(emit_chunk_union) and mode != "chunk"
         self.debug_moments = bool(debug_moments)  # route program writes mean/E2/var tiles into the bias tensor (tests)
+        # The debug tiles go through the bias accessor (16 tiles per unit): without a real bias tensor they would
+        # overrun the 1-tile placeholder.
+        assert not self.debug_moments or self.emit_bias, "debug_moments needs emit_bias (the tiles use the bias tensor)"
+        # Route-program unit = (head, shard) instead of (head, Q-chunk tile row): H*S units instead of H*NQCT, which
+        # keeps the core grid filled when NQCT is small. None -> SOL_ROUTE_UNITS_PER_SHARD (default 1); 0 selects the
+        # (head, Q-chunk tile row) unit. Applies to the gather-form mask (MODE 1) only, see _route_program.
+        self.route_units_per_shard = (
+            (os.environ.get("SOL_ROUTE_UNITS_PER_SHARD", "1") == "1")
+            if units_per_shard is None
+            else bool(units_per_shard)
+        )
+        # (head, shard) units: the pooled Q of a head is read from DRAM by its shard-0 core and shipped to the other
+        # S-1 cores over the NoC (reader semaphore 2) instead of 8 identical DRAM reads. SOL_ROUTE_Q_SHARED (default 1).
+        self.route_q_shared = os.environ.get("SOL_ROUTE_Q_SHARED", "1") == "1"
+        self.route_units: tuple[int, int] | None = None  # (unit count, units_per_shard) of the last built route program
         self.math_fidelity = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.HiFi4
+        # row_max=True (resident mode): also return "row_max" from sol_prepass.compute_row_max, the same ttnn-op
+        # chain SolPrepass uses (not fused; it is a handful of small ops on top of one tile-sized all-gather).
+        self.row_max = bool(row_max)
+        self._row_max_consts: dict | None = None
+        self._row_max_ckc = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+            )
+            if self.row_max
+            else None
+        )
+        # Mask reuse: N > 1 keeps the route outputs (block mask, bias, union) of a call and reuses them for the next
+        # N-1 calls, skipping the route program; the pool program and the two gathers still run every call because the
+        # ring op's correction term needs the current block means. 1 (default) = route every call.
+        self.mask_reuse = int(mask_reuse)
+        # Configuration of the two pooled all-gathers (ttnn.experimental.all_gather_async over the SP ring).
+        # gather_kwargs: extra keyword args for all_gather_async (num_links, num_workers_per_link,
+        # num_buffers_per_channel, chunks_per_sync, topology as "ring" | "linear", barrier False to skip the ring-wide
+        # barrier semaphore the manager adds before a non-persistent gather); SOL_AG_KW (a JSON dict) overrides.
+        # gather_persistent (SOL_AG_PERSISTENT=1): gather into the CCL manager's ping-pong buffers, no barrier
+        # semaphore and no per-call allocation; the caller must then not deallocate pooled_k / pooled_v.
+        # Empty / False = the manager's defaults (CCLManager.all_gather, use_hyperparams=False).
+        self.gather_kwargs = dict(DEFAULT_GATHER_KWARGS if gather_kwargs is None else gather_kwargs)
+        if os.environ.get("SOL_AG_KW"):
+            self.gather_kwargs.update(json.loads(os.environ["SOL_AG_KW"]))
+        self.gather_persistent = bool(gather_persistent or DEFAULT_GATHER_PERSISTENT)
+        self.gather_own_sems = os.environ.get("SOL_AG_OWN_SEMS", "1" if DEFAULT_GATHER_OWN_SEMS else "0") == "1"
+        self._ag_sems: list | None = None  # two sets of two global semaphores, alternated per gather call
+        self._ag_idx = 0
+        # persistent_internal (SOL_PERSISTENT_INTERNAL, default 1): the pool outputs that never leave this object
+        # (q_bar, the local pooled K / V) are allocated once per prepare() and reused: on the in-order command queue the
+        # next call's pool program runs only after the previous call's gathers and route have consumed them. Saves three
+        # mesh allocations and three deallocations (~0.25 ms of host time) per call. pool() always allocates fresh.
+        self.persistent_internal = os.environ.get("SOL_PERSISTENT_INTERNAL", "1" if DEFAULT_PERSISTENT_INTERNAL else "0") == "1"
+        self._held_route: tuple | None = None  # (mask, bias, union) of the last routed call, while mask_reuse > 1
+        self._reuse_left = 0  # calls the held route may still serve
+        self.last_mask_reused = False  # whether the last call reused the held mask (diagnostics)
         self._state: dict | None = None
         self._key = None
         self.last_density: float | None = None
@@ -186,6 +286,7 @@ class SolPrepassFused:
             self.emit_bias,
             self.emit_chunk_union,
             self.debug_moments,
+            self.route_units_per_shard,
             str(self.math_fidelity),
             key,
         )
@@ -210,6 +311,7 @@ class SolPrepassFused:
                 "ksel": self._upload(c["ksel"], shard=False),
                 "erow": self._upload(c["erow"], shard=False),
                 "ones": self._upload(c["ones"], shard=False),
+                "shsel": self._upload(c["shsel"], shard=False),
                 "geo": self._upload(
                     torch.tensor(
                         [
@@ -224,11 +326,23 @@ class SolPrepassFused:
                 ),
                 "pool_prog": None,
                 "route_prog": None,
+                "pool_outs": None,
             }
             SolPrepassFused._shared[shared_key] = st
+        old = getattr(self, "_state", None)
+        if old is not None and old is not st and old.get("pool_outs"):  # the state is shared per geometry key
+            for t in {id(t): t for t in old["pool_outs"]}.values():
+                ttnn.deallocate(t)
+            old["pool_outs"] = None
         self._state = st
         self.geo = geo
         self._key = key
+        self.reset_mask_reuse()  # a held mask belongs to the previous geometry
+
+    def reset_mask_reuse(self) -> None:
+        """Drop the held route outputs: the next call routes afresh (call at the start of every generation)."""
+        self._held_route = None
+        self._reuse_left = 0
 
     def _cores(self):
         g = self.mesh_device.compute_with_storage_grid_size()
@@ -265,9 +379,9 @@ class SolPrepassFused:
         )
 
     def _compute_config(self, full_sync: bool):
-        # fp32 DST holds 4 tiles per section in half-sync mode and 8 in full-sync mode (tests/ttnn/unit_tests/kernel_lib/
-        # test_chain_oob.py). The route kernel addresses DST tiles 0..7, so it must run full-sync; the pool kernel
-        # uses DT (<= 4) tiles and keeps the math/pack overlap of half-sync.
+        # fp32 DST holds 4 tiles per section in half-sync mode and 8 in full-sync mode
+        # (tests/ttnn/unit_tests/kernel_lib/test_chain_oob.py). The route kernel addresses DST tiles 0..7, so it must
+        # run full-sync; the pool kernel uses DT (<= 4) tiles and keeps the math/pack overlap of half-sync.
         return ttnn.ComputeConfigDescriptor(
             math_fidelity=self.math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True, dst_full_sync_en=full_sync
         )
@@ -294,11 +408,15 @@ class SolPrepassFused:
         acc_in = [a for _ in range(3) for a in ttnn.TensorAccessorArgs(x).get_compile_time_args()]
         acc_in += list(ttnn.TensorAccessorArgs(geo_t).get_compile_time_args())
         acc_out = [a for o in outs for a in ttnn.TensorAccessorArgs(o).get_compile_time_args()]
+        # Reader pipeline (sol_pool_reader.cpp): batches of 4 tile rows, three batches resident in cb 0 (data) and cb 2
+        # (pooling tiles) so two can be in flight on the NoC while compute consumes the third; cb 5 holds the 32
+        # standard pooling tiles built once per core.
         cbs = [
-            self._cb(0, 32, cores),
-            self._cb(2, 8, cores),
+            self._cb(0, 3 * 4 * DT, cores),
+            self._cb(2, 3 * 4, cores),
             self._cb(3, 1, cores),
             self._cb(4, 1, cores, page_size=128, dtype=ttnn.uint32),
+            self._cb(5, 32, cores),
             self._cb(16, 2 * DT, cores),
         ]
         reader = self._kernel(
@@ -308,11 +426,12 @@ class SolPrepassFused:
         compute = self._kernel("sol_pool_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=False))
         return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
 
-    def _run_pool(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> list[ttnn.Tensor]:
+    def _run_pool(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, persistent: bool | None = None) -> list[ttnn.Tensor]:
         st = self._state
         _, H, _, D = q.shape
+        persistent = self.persistent_internal if persistent is None else bool(persistent)
         t0 = time.perf_counter()
-        outs = [
+        outs = st["pool_outs"] if (persistent and st["pool_outs"] is not None) else [
             ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, H, self.geo.nb_pad, D]),
                 ttnn.bfloat16,
@@ -322,6 +441,8 @@ class SolPrepassFused:
             )
             for _ in range(3)
         ]
+        if persistent:
+            st["pool_outs"] = outs
         t1 = time.perf_counter()
         if st["pool_prog"] is None:
             st["pool_prog"] = self._pool_program(q, st["geo"], outs)
@@ -375,14 +496,48 @@ class SolPrepassFused:
         acc_in = [a for t in ins for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         acc_out = [a for t in (mask, bias, union) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         nx, ny, cores = self._cores()
-        ct += [
-            nx,
-            ny,
-            H * NQCT,
-        ]  # grid + unit count (unit = (head, Q-chunk tile row)); kernels derive their range per core
+        # Unit = (head, shard): H*S units. The chunk-form outputs (MODE 0 mask, MODE 2 union row) assemble whole rows
+        # from every shard in the writer's L1 row buffer (their per-shard word ranges are not NoC-aligned), so those
+        # modes keep the (head, Q-chunk tile row) unit with H*NQCT units; the kernels static_assert the same rule.
+        units_per_shard = 1 if (self.route_units_per_shard and mode == 1) else 0
+        units = H * S if units_per_shard else H * NQCT
+        self.route_units = (units, units_per_shard)
+        ct += [nx, ny, units, units_per_shard]  # grid + unit count + unit kind; kernels derive their range per core
         mask_t = NKCLT if mode == 0 else NBPT  # per shard
+        # (head, shard) units read only their shard's pooled K and exchange partial moments between the S cores of
+        # a head (sol_route_reader.cpp): the reader needs every logical core's NoC coordinates (common runtime args
+        # 10..) and a semaphore; cb 23 receives the peers' partial moments (gather tiles), 24 ships this unit's,
+        # 26 holds the reader's copy of the mask tiles and 29 the shard-row selectors.
+        core_xy = self._core_noc_xy(nx, ny) if units_per_shard else []
+        st["route_core_xy"] = core_xy
+        # Constants multicast ((head, shard) units, sol_route_reader.cpp): the idle last logical core multicasts the
+        # constant tiles to the grid as NoC rectangles of worker cores (physical columns come in contiguous runs with
+        # non-worker columns between them). NoC 0 order: start <= end. Common args after the core coordinates:
+        # count, then (x_start, y_start, x_end, y_end, cores) per rectangle.
+        # SOL_ROUTE_CONST_MCAST=0 (default since 2026-10-29): rectangle count 0, every core reads its own constants
+        # from DRAM; the multicast hung at the 10 s / 15 s geometries (jobs 162394, 163714, 163912, 164002: the
+        # sender's multicast never completed on NOC0, every route core waiting). 1 = the multicast as before.
+        const_mcast = os.environ.get("SOL_ROUTE_CONST_MCAST", "0") == "1"
+        rects: list[int] = []
+        if units_per_shard and not const_mcast:
+            rects = [0]
+        elif units_per_shard:
+            assert H * S < nx * ny, "the constants sender must be a core without a unit"
+            xs = sorted({core_xy[lx] & 0xFF for lx in range(nx)})
+            ys = sorted({(core_xy[ly * nx] >> 8) & 0xFF for ly in range(ny)})
+            assert ys == list(range(ys[0], ys[0] + ny)), ys  # one contiguous run of physical rows
+            runs: list[list[int]] = []
+            for x in xs:
+                if runs and x == runs[-1][-1] + 1:
+                    runs[-1].append(x)
+                else:
+                    runs.append([x])
+            for run in runs:
+                rects += [run[0], ys[0], run[-1], ys[-1], len(run) * ny]
+            rects = [len(runs)] + rects
+        st["route_rects"] = rects
         sizes = {
-            0: NBGT * DT,
+            0: (NBPT if units_per_shard else NBGT) * DT,
             1: NBPT * DT,
             2: 1,
             3: NQCT * NBPT,
@@ -404,17 +559,57 @@ class SolPrepassFused:
             20: DT,
             21: NKCLT,
         }
+        mask_rows_bytes = 32 * geo.nb_pad * 4  # (head, shard) units: one page = the 32 row-major uint32 mask rows of (it, sp)
+        if units_per_shard:  # 23: gather tiles, 24: this shard's reduced tiles, 29: shsel; 16 becomes the row page
+            sizes.update({23: (S + 3) // 4, 24: 8, 29: 8})
+            del sizes[16]
         cbs = [self._cb(i, n, cores) for i, n in sizes.items()]
+        if units_per_shard:
+            cbs.append(self._cb(16, 2, cores, page_size=mask_rows_bytes, dtype=ttnn.uint32))
         row_bytes = geo.nkc_pad * 4  # chunk-form row buffer: 32 complete rows
         cbs.append(self._cb(19, 32, cores, page_size=row_bytes, dtype=ttnn.uint32))
         cbs.append(self._cb(22, SCRATCH_PAGES, cores, page_size=geo.nb_pad * 4, dtype=ttnn.uint32))  # gather-form ring
         total = sum(n for n in sizes.values()) * TILE_BYTES + 32 * row_bytes + SCRATCH_PAGES * geo.nb_pad * 4
+        total += 2 * mask_rows_bytes if units_per_shard else 0
         if total > L1_CB_BUDGET:
             raise ValueError(f"sol_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET}); geometry too large")
-        reader = self._kernel("sol_route_reader.cpp", cores, ct + acc_in, [], [0] * 8, ttnn.ReaderConfigDescriptor())
+        acc_extra = [a for t in (mask, st["shsel"]) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
+        reader = self._kernel(
+            "sol_route_reader.cpp", cores, ct + acc_in + acc_extra + [int(units_per_shard and self.route_q_shared)], [],
+            [0] * 10 + core_xy + rects,
+            ttnn.ReaderConfigDescriptor(),
+        )
         writer = self._kernel("sol_route_writer.cpp", cores, ct + acc_out, [], [0, 0, 0], ttnn.WriterConfigDescriptor())
         compute = self._kernel("sol_route_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=True))
-        return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+        sems = (
+            [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in (0, 1, 2)]
+            if units_per_shard
+            else []
+        )
+        return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs)
+
+    def _core_noc_xy(self, nx: int, ny: int) -> list[int]:
+        """NoC coordinates (x | y << 8) of every logical worker core, index y*nx + x. One program with common runtime
+        args runs on every chip of the mesh, so the coordinates must agree across chips (virtual worker coordinates do);
+        verified against every mesh coordinate when the experimental per-chip query is available."""
+        md = self.mesh_device
+        logical = [(x, y) for y in range(ny) for x in range(nx)]
+        xy = [md.worker_core_from_logical_core(ttnn.CoreCoord(x, y)) for x, y in logical]
+        per_chip = getattr(getattr(getattr(ttnn, "_ttnn", None), "multi_device", None), "experimental", None)
+        per_chip = getattr(per_chip, "worker_core_from_logical_core", None)
+        if per_chip is not None:
+            rows, cols = tuple(md.shape)
+            for r in range(rows):
+                for c in range(cols):
+                    mc = ttnn.MeshCoordinate(r, c)
+                    for (x, y), w0 in zip(logical, xy):
+                        w = per_chip(md, mc, ttnn.CoreCoord(x, y))
+                        if (w.x, w.y) != (w0.x, w0.y):
+                            raise ValueError(
+                                f"worker core ({x},{y}) maps to NoC ({w.x},{w.y}) on chip {mc} but ({w0.x},{w0.y}) on "
+                                "chip (0,0): the route program's common core coordinates would be wrong"
+                            )
+        return [w.x | (w.y << 8) for w in xy]
 
     def _run_route(
         self, q_bar: ttnn.Tensor, kc: ttnn.Tensor
@@ -455,19 +650,57 @@ class SolPrepassFused:
             st["route_prog"] = self._route_program(q_bar, kc, mask, bias, union)
         prog = st["route_prog"]
         ins = [q_bar, kc, st["const_or"], st["colconst"], st["qsel"], st["ksel"], st["erow"], st["ones"]]
-        prog.kernels[0].common_runtime_args = [t.buffer_address() for t in ins]
+        prog.kernels[0].common_runtime_args = (
+            [t.buffer_address() for t in ins]
+            + [mask.buffer_address(), st["shsel"].buffer_address()]
+            + st["route_core_xy"]
+            + st["route_rects"]
+        )
         prog.kernels[1].common_runtime_args = [mask.buffer_address(), bias.buffer_address(), union.buffer_address()]
         t2 = time.perf_counter()
-        ttnn.generic_op([*ins, mask, bias, union], prog)
+        ttnn.generic_op([*ins, st["shsel"], mask, bias, union], prog)
         t3 = time.perf_counter()
         self.host_times["route"] = {"alloc": t1 - t0, "patch": t2 - t1, "launch": t3 - t2}
         return mask, (bias if self.emit_bias else None), (union if self.emit_chunk_union else None)
+
+    def _gather(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """All-gather a pooled [1, H, nb_pad, D] tensor along dim 2 over the SP axis with the configured arguments."""
+        ccl = self.ccl_manager
+        if not self.gather_kwargs and not self.gather_persistent:
+            return ccl.all_gather(t, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+        kw = dict(self.gather_kwargs)
+        topo = kw.pop("topology", None)
+        barrier = kw.pop("barrier", True) and not self.gather_persistent  # "barrier": False drops the ring-wide barrier
+        if isinstance(topo, str):
+            topo = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[topo.lower()]
+        if self.gather_own_sems:
+            if self._ag_sems is None:
+                self._ag_sems = [
+                    [ttnn.create_global_semaphore(self.mesh_device, ccl.ccl_cores, 0) for _ in range(2)] for _ in range(2)
+                ]
+            sems = self._ag_sems[self._ag_idx]
+            self._ag_idx ^= 1
+        else:
+            sems = ccl.get_ag_ping_pong_semaphore(self.sp_axis)
+        return ttnn.experimental.all_gather_async(
+            t,
+            persistent_output_buffer=(
+                ccl.get_ag_ping_pong_buffer(t.shape, 2, self.sp_axis, dtype=t.get_dtype()) if self.gather_persistent else None
+            ),
+            dim=2,
+            multi_device_global_semaphore=sems,
+            num_links=kw.pop("num_links", ccl.num_links),
+            topology=topo if topo is not None else ccl.topology,
+            cluster_axis=self.sp_axis,
+            barrier_semaphore=ccl.get_barrier_semaphore(self.sp_axis) if barrier else None,
+            **kw,
+        )
 
     # ------------------------------------------------------------------ forward
 
     def pool(self, q, k, v) -> dict:
         """Block means only (q_bar, kc_local, vc_local), for unit tests."""
-        qb, kcl, vcl = self._run_pool(q, k, v)
+        qb, kcl, vcl = self._run_pool(q, k, v, persistent=False)
         return {"q_bar": qb, "kc_local": kcl, "vc_local": vcl}
 
     def __call__(
@@ -475,12 +708,37 @@ class SolPrepassFused:
     ) -> dict:
         assert abs(scale - self._state["scale"]) < 1e-12, "scale is baked into the prepared constants"
         geo = self.geo
+        row_max = None
+        if self.row_max:
+            if self._row_max_consts is None:
+                self._row_max_consts = {
+                    name: self._upload(t, shard=False) for name, t in row_max_constants(int(q.shape[3]), scale).items()
+                }
+            row_max = compute_row_max(
+                q,
+                k,
+                consts=self._row_max_consts,
+                ccl_manager=self.ccl_manager,
+                sp_axis=self.sp_axis,
+                compute_kernel_config=self._row_max_ckc,
+            )
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
-        kc = self.ccl_manager.all_gather(kc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
-        vc = self.ccl_manager.all_gather(vc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
-        ttnn.deallocate(kc_local)
-        ttnn.deallocate(vc_local)
-        mask, bias, union = self._run_route(q_bar, kc)
+        kc = self._gather(kc_local)
+        vc = self._gather(vc_local)
+        if not self.persistent_internal:
+            ttnn.deallocate(kc_local)
+            ttnn.deallocate(vc_local)
+        reuse = self.mask_reuse > 1 and self._held_route is not None and self._reuse_left > 0
+        if reuse:
+            mask, bias, union = self._held_route
+            self._reuse_left -= 1
+            self.host_times["route"] = {"alloc": 0.0, "patch": 0.0, "launch": 0.0}
+        else:
+            mask, bias, union = self._run_route(q_bar, kc)
+            if self.mask_reuse > 1:
+                self._held_route = (mask, bias, union)  # the references keep the DRAM buffers alive across calls
+                self._reuse_left = self.mask_reuse - 1
+        self.last_mask_reused = reuse
         if report_density:
             host = ttnn.to_torch(
                 mask,
@@ -497,8 +755,9 @@ class SolPrepassFused:
                 cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
             self.last_density = float(sub[..., cols].mean())
             self.last_block_density = None if self.mode == "chunk" else self.last_density
-        ttnn.deallocate(q_bar)
-        out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias}
+        if not self.persistent_internal:
+            ttnn.deallocate(q_bar)
+        out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "row_max": row_max}
         if union is not None:
             out["chunk_union"] = union
         return out
