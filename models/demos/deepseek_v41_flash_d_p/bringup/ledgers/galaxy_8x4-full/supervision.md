@@ -1065,3 +1065,31 @@ selftest failures. Remaining ledger: X.3 -> O.1 -> Z.1 -> F.1 (not launched; own
   then the profile series (owner): /scratch/dnijemcevic/posprof/series_p15.sh after P.15 commits.
 - 07:40 P.15 ACCEPTED by the overseer (delegation: accuracy identical on 102 metrics, gate PASS; wall A/B 345.9 on / 365.8 off, spread 31 / 68; agent's same-process 326.8 / 367.1). Op launches 2820 -> 2540, allocations 372 -> 132 (31.1 -> 22.2 ms), host 374.7 -> 347.6 ms (cProfile). Persistent gather outputs allocated at load (P.4 retried), MoE arena kept, fused-tail and six attention intermediates into load-time buffers; slices unchanged (none foldable). Item 2 (MoE head / dispatch shape keys) not done: neither rebuilds in a warm chunk, the head's 0.7 ms is the 32-chip launch (DS41-145). Next host idea (agent): output_tensor= for rms_norm / mhc_post / mhc_pre_xing / rotary_embedding_indexed (~500 calls x ~35 us), after checking the indexer memo. Then: profile series P15.
 - 07:35 OWNER: queue P.16 FORK_OUT_BUFFERS (rms_norm / mHC / RoPE forks write into load-time outputs; lifetimes checked first) after the profile; chain2 launches --until P.16 when the P15 series prints p15done.
+- 07:40 OWNER: profile series P15 interrupted; P.16 first (launched --until P.16), then the profile.
+- 09:20 OWNER: stop the fork regression suites (8x4 time too expensive; F.1 covers them). P.16 attempt 1 aborted after its code + census (host -13.5 ms, wall ~333 -> ~306 ms); note OV-24 for attempt 2 (records only), OV-25 for every P/FIX task (no fork regression suites on the 8x4).
+- 09:45 P.16 A/B: the on side was SIGKILLed (exit 137) at the end of model load (5m15s), no test ran; off side fine (wall 327.3). No OOM record readable, 222 GB available now. decide --rerun once, memory logged to /scratch/dnijemcevic/p16/mem.log.
+- 09:50 F228 (framework, to fix): decide --rerun reused the killed A/B side (quick.log rc 137, 'same code and switch'); a side whose run did not finish must never be reused. Workaround: moved ab/P.16/new aside (new.killed_0938), resumed.
+- 09:55 F229 (framework, to fix): decide --rerun on a perf pick with a killed side returns straight to WAITING without measuring (after moving the side aside too). Owner short of time: the 50k A/B (on = P.15+P.16 on, off = both off) and the e2e contract checks run by hand on the current tree (P.16 uncommitted): /scratch/dnijemcevic/ab50k_e2e.sh (tmux ab50). P.16 decided after it.
+
+## 2026-10-30 10:30 HAND-OFF: P.16 to be rerun on another machine (this node's host RAM is the blocker)
+State: P.15 committed (045aedd6f92). P.16 FORK_OUT_BUFFERS (bring-up rms_norm / mhc_post / mhc_pre_xing / RoPE forks
+write into load-time output buffers): code done by the agent (attempts 1 + 2; agent's own on/off census: the four forks'
+host 44.9 -> 31.4 ms a chunk, plain wall ~333 -> ~306 ms), NOT accepted: the orchestrator's A/B "on" side was killed at
+model load twice (exit 137). The whole uncommitted P.16 tree is pushed as branch dnijemcevic/model_bringup_p16wip (one
+commit on top of this branch: code + new tests + ledger state).
+Cause (not P.16-specific): this node (bh-glx-110-c10u02) has 566 GiB RAM, of which ~304 GiB is held outside every
+process and kernel counter (kernel driver: tenstorrent or weka/igb_uio; root needed to attribute or free it) and ~35 GiB
+hugetlb; ~211 GiB free idle. A model run with ENGRAM_TABLE=resident takes ~198 GB, leaving ~13 GB; the Paris runner
+smoke (model + tt-d-gen engine) with P.16 OFF was also killed at load (min 1 GiB free, 10:16). Our runs do not leak:
+free RAM 210.4 GiB before / 210.9 after a full load. Workaround without root: DS41_ENGRAM_TABLE=random (tables read via
+the page cache, same bytes, cold lookups slower).
+To rerun P.16 elsewhere: checkout dnijemcevic/model_bringup_p16wip, rebuild ttnn (C++ fork changes in mhc_post /
+mhc_pre / rms_norm / rotary_embedding_indexed), then `orchestrator decide --task P.16 --rerun` and `orchestrator resume
+--until P.16` (the A/B measures both sides; the run dir there has no old sides), decide on the table (owner's rule:
+accept wins in speed or memory when accuracy meets the bar), it commits. Do not run fork regression suites (task F.1).
+Then: the 50k -> 55k A/B profile and the e2e checks (runner smoke = Paris through tt-d-gen, contract, KV read-back
+PCC, acks, layout) through the framework; last passed at FIX.14 (2026-10-29 17:52).
+Open: F228 (an A/B side whose run did not finish must not be reused by decide --rerun; this node: the first rerun reused
+the killed side); P.16's note on the 'eval' package import errors in the rms_norm / mhc golden tests (DS41-173);
+F215 / F216 / F227; decode team's answers (KV handover page); X.3 / O.1 / Z.1 / F.1 not run.
+Skill updated (both copies): no fork regression suites on large boxes; on a killed run, no improvising.
