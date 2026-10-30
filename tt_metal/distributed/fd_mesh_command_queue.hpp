@@ -222,15 +222,14 @@ private:
         const std::optional<MeshCoordinateRange>& device_range,
         std::function<void(std::chrono::steady_clock::time_point)> on_complete);
 
-    static HostTransfer fast_dispatch_transfer(TransferOp op);
     // Whether the open transfer records start and end events. Set and read under lock_api_function_().
     bool transfer_stats_events_ = false;
     // When the open transfer's start event completed. Set and read only by the completion queue reader.
     std::chrono::steady_clock::time_point transfer_stats_start_;
 
 protected:
-    void begin_transfer_stats(TransferOp op) override;
-    void end_transfer_stats(TransferOp op, uint64_t bytes) override;
+    void begin_transfer_stats(HostTransfer kind) override;
+    void end_transfer_stats(HostTransfer kind, uint64_t bytes) override;
     bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,

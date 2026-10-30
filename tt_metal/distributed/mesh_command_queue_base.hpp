@@ -69,13 +69,12 @@ protected:
     tt::TargetDevice get_target_device_type() const;
 
     // Host transfer stats (TT_METAL_HOST_TRANSFER_STATS). Each transfer API call is one transfer.
-    enum class TransferOp : uint8_t { BufferWrite, BufferRead, CoreWrite, CoreRead, ProgramBinaries };
     // Open and close the transfer of one API call while stats are on, for queues whose transfers finish after the
-    // call returns. Called with lock_api_function_() held, so the transfers of one queue never overlap.
-    // end_transfer_stats is called after the transfer's commands are issued and before a blocking call waits for
-    // them.
-    virtual void begin_transfer_stats(TransferOp /*op*/) {}
-    virtual void end_transfer_stats(TransferOp /*op*/, uint64_t /*bytes*/) {}
+    // call returns. Only the fast dispatch queue overrides them, so callers pass fast dispatch kinds. Called with
+    // lock_api_function_() held, so the transfers of one queue never overlap. end_transfer_stats is called after the
+    // transfer's commands are issued and before a blocking call waits for them.
+    virtual void begin_transfer_stats(HostTransfer /*kind*/) {}
+    virtual void end_transfer_stats(HostTransfer /*kind*/, uint64_t /*bytes*/) {}
     // Adds one shard's bytes to the transfer open on this queue. Shard writes and reads call it once they are past
     // the checks that skip the transfer.
     void count_transfer_bytes(uint64_t bytes) {
@@ -91,7 +90,7 @@ protected:
     // end_transfer_stats with the counted bytes, plus `bytes`, on close() or destruction.
     class ScopedTransferStats {
     public:
-        ScopedTransferStats(MeshCommandQueueBase& cq, TransferOp op, uint64_t bytes = 0);
+        ScopedTransferStats(MeshCommandQueueBase& cq, HostTransfer kind, uint64_t bytes = 0);
         ~ScopedTransferStats();
         void close();
 
@@ -102,7 +101,7 @@ protected:
 
     private:
         MeshCommandQueueBase* cq_ = nullptr;
-        TransferOp op_;
+        HostTransfer kind_;
         uint64_t bytes_;
     };
 

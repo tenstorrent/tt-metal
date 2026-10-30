@@ -12,22 +12,29 @@ namespace tt::tt_metal {
 
 namespace {
 
-constexpr std::array<const char*, 13> kLabels = {
-    "buffer writes, fast dispatch",
-    "buffer writes, slow dispatch",
-    "buffer reads, fast dispatch",
-    "buffer reads, slow dispatch",
-    "core writes, fast dispatch",
-    "core reads, fast dispatch",
-    "program binaries, fast dispatch",
-    "program binaries, slow dispatch",
-    "program config, fast dispatch",
-    "program config, slow dispatch",
-    "firmware",
-    "H2D socket writes, host push",
-    "H2D socket writes, device pull",
+struct KindInfo {
+    const char* label;
+    // The device reads these bytes after the host call returns, so they are reported without a transfer time.
+    bool staged = false;
 };
-static_assert(kLabels.size() == static_cast<size_t>(HostTransfer::SocketPull) + 1);
+
+// One entry per HostTransfer, in enum order.
+constexpr auto kKinds = std::to_array<KindInfo>({
+    {"buffer writes, fast dispatch"},
+    {"buffer writes, slow dispatch"},
+    {"buffer reads, fast dispatch"},
+    {"buffer reads, slow dispatch"},
+    {"core writes, fast dispatch"},
+    {"core reads, fast dispatch"},
+    {"program binaries, fast dispatch"},
+    {"program binaries, slow dispatch"},
+    {"program config, fast dispatch", /*staged=*/true},
+    {"program config, slow dispatch"},
+    {"firmware"},
+    {"H2D socket writes, host push"},
+    {"H2D socket writes, device pull", /*staged=*/true},
+});
+static_assert(kKinds.size() == kNumHostTransfers);
 
 std::string format_bytes(uint64_t bytes) {
     const auto b = static_cast<double>(bytes);
@@ -102,14 +109,13 @@ HostTransferStats::Totals HostTransferStats::totals(HostTransfer kind) const {
 std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows() const {
     std::vector<std::pair<std::string, std::string>> rows;
     for (size_t i = 0; i < streams_.size(); ++i) {
-        const auto kind = static_cast<HostTransfer>(i);
-        const Totals t = totals(kind);
+        const Totals t = totals(static_cast<HostTransfer>(i));
         if (t.transfers == 0) {
             continue;
         }
         const double seconds = std::chrono::duration<double>(t.busy).count();
         std::string value;
-        if (kind == HostTransfer::SocketPull || kind == HostTransfer::ProgramConfigFastDispatch) {
+        if (kKinds[i].staged) {
             value = fmt::format("{} staged, {} transfers", format_bytes(t.bytes), t.transfers);
         } else if (seconds > 0) {
             value = fmt::format(
@@ -121,7 +127,7 @@ std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows
         } else {
             value = fmt::format("{}, {} transfers", format_bytes(t.bytes), t.transfers);
         }
-        rows.emplace_back(kLabels[i], std::move(value));
+        rows.emplace_back(kKinds[i].label, std::move(value));
     }
     return rows;
 }
