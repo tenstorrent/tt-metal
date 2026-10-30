@@ -59,7 +59,6 @@ Raw command queue ids are being removed from the host API. Command queues are ad
 - Flag new code that reads or sets the thread-local command queue id.
 - New APIs must take a `distributed::MeshCommandQueue&` (or obtain the queue from the `MeshDevice`).
 - Existing `cq_id` APIs are legacy: do not add new callers, and do not extend them.
-- Narrow exceptions are limited to shims and compatibility tests that exist only to bridge an existing `cq_id` signature.
 
 ## Review Checklist
 
