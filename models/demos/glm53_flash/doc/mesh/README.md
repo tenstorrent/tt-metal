@@ -1581,6 +1581,29 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 12:10: the wave path's DRAM wall at 1 M; the capstone r4 in the shape the server can prefill
+
+r3 (wave-affine placement) ran waves of 8 at 2.2 K tok/s for 45 min and died when its rows reached ~360-378 K:
+`TT_FATAL Out of Memory` for a 384 MiB DRAM buffer inside the DSA wave prefill, with 4100 of 4205 MiB per bank
+allocated. A per-row wave's sparse prefill copies the prompt's whole prefix as ROW_MAJOR latent rows per chunk
+(`TtLatentCache.prefix_rows_rm`, ~1 KiB per position: 387 MB at 378 K, 1 GiB at 1 M; the incremental arena is off
+at 1 M because one layer's arena is already 1 GiB), and the 1 M profile keeps ~0.8 GiB of fragmented headroom. The
+sequence-parallel path prefills 1 M (`needle1m_r6`: TTFT 495 s). Capacity as it stands: 32 x 1 M decode fits;
+1 M prompts prefill on the SP path, four at a time (a slot index free on every row); per-row waves are safe to
+~350 K. The capstone r4 therefore serves 32 x 1 M with the smoke client keeping four requests in flight
+(`NEEDLE_INFLIGHT=4`): every prompt takes the SP path at the 128 K budget (4 x 16 K per step), the finished users'
+slots free their indices for the next four, the decodes interleave; ~4.4 h. The metal item that lifts this is a
+bounded prefix copy for waves (an incremental arena sized to the budget, or the copy column-sharded over the row's
+four chips). The adaptive placement (6543cad1914: a burst of fresh long prompts that fills a wave takes the
+wave-affine order, a smaller burst keeps SP-first) stays, with its two A/B points queued behind r4.
+
+The 128-row wave bucket is closed as not shippable: at 45 layers (`wave_gate_128_8x4_l45_r2`) the 128-row trace is
+form-dependent (a lone member on row 1 differs from the all-rows trace at pcc 0.951, and the all-rows form gives a
+wrong first token on row 6), while the 256-row trace is bit-identical across forms and rows; at 6 layers both were
+bit-identical. A T=128-specific numeric path diverges with depth (suspects: the MoE prefill expert blocking or the
+compact gather at 128 rows, the KDA scan grouping at four chunks); the per-layer lone-vs-all-rows diff at 45 layers
+is the next metal step. The default stays 256,512.
+
 ### 2026-10-30 11:40: the capstone r2 fragmented its waves by slot index; r3 runs waves of 8
 
 r2 (budget 131072, interleave on) admitted 8 partial prefills, but after its first 8 prompts the next 8 sat on two
