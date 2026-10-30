@@ -86,3 +86,12 @@ Source: none (new op), deepseek_v41_flash_d_p 4-bit compressed KV (owner 2026-10
 - Needed by: deepseek_v41_flash_d_p P.12
 - Files: ckv_bfp4.py, kernels/ckv_bfp4_reader.cpp, kernels/ckv_share.hpp, kernels/ckv_bfp4_{writer,compute}.cpp,
   kernels/bfp_round_{writer,compute}.cpp, tests/unit/test_ckv_bfp4.py, tests/unit/test_bfp_round.py, README.md
+
+### Test: compact with rounded=True on bfloat4_b row records (2026-10-30)
+- What: no op change. tests/unit/test_ckv_bfp4.py::test_ckv_bfp4_compact_rounded (n 320 / 640 at row0 0, generic and
+  prepared): records == the default path == the host rule, rounded output equal, the program prepares.
+- Why: deepseek_v41_flash_d_p P.11 (CKV_PACK_BEFORE_GATHER) calls `ckv_bfp4(rows, local, 0, rounded=True,
+  compact=True, prepared=True)` (each chip packs its own compressed rows), a combination no test covered. Fork tests
+  tests/unit: 55 passed (51 before, unchanged).
+- Needed by: deepseek_v41_flash_d_p P.11
+- Files: tests/unit/test_ckv_bfp4.py

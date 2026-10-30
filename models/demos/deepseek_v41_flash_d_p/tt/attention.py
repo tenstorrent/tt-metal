@@ -101,6 +101,15 @@ def lowbit_host() -> bool:
     return settings.get("LOWBIT_HOST") == "on"
 
 
+def pack_before_gather() -> bool:
+    """CKV_PACK_BEFORE_GATHER=on (P.11): each chip packs its own rows before the all_gather over SP (``WindowTables``
+    ``packed`` buffers; tt/compressor.TtCompressor._write_packed, TtWindowAttention._window_packed)."""
+    return settings.get("CKV_PACK_BEFORE_GATHER") == "on"
+
+
+ROW_BFP4_BYTES = 320  # a bfloat4_b row record (ttnn.bringup.ckv_bfp4; tt/compressor.BFP4_ROW_BYTES)
+
+
 def window_bfp8() -> bool:
     """WINDOW_KV_FORMAT=bfp8_blocks (DS41-150): the window region as bfloat8_b blocks of 32 rows (``WindowTables``)."""
     return settings.get("WINDOW_KV_FORMAT") == "bfp8_blocks"
@@ -188,6 +197,96 @@ class WindowTables:
         self.fold = settings.get("GLUE_FOLD") == "on"
         self._srv_row = None  # (k, [1, 1, 1, W] uint32)
         self._blocks = None  # WINDOW_KV_FORMAT=bfp8_blocks: the window region every layer writes in turn
+        # CKV_PACK_BEFORE_GATHER=on (P.11), load time (agent rule 5; allocated here, not mid-forward, DS41-146): per SP
+        # row block size n (W: window rows, compressed rows at ratio 1; W / 2: ratio 2) the chunk-relative row index
+        # of the SP row's own rows (the pad mask) and the packed buffers, {(kind, n): (local, gathered)}: "rows" =
+        # bfloat4_b row records (compressed KV), "blocks" = bfloat8_b window blocks of 32 rows
+        self._sp_iota, self._packed, self._carry = {}, {}, None
+        if pack_before_gather() and g.sp > 1:
+            ns = sorted({n for n in (g.w, g.w // 2) if n % 32 == 0 and g.w % n == 0})
+            for n in ns:
+                ids = torch.arange(g.sp * n, dtype=torch.float32).view(g.sp, 1, n, 1)
+                self._sp_iota[n] = _upload(mesh, ids, ttnn.float32, ttnn.TILE_LAYOUT, (0, None))
+            if settings.get("CKV_FORMAT") == "bfp4_rows":
+                for n in ns:
+                    self._packed[("rows", n)] = self._pair(n, ROW_BFP4_BYTES)
+            if window_bfp8():
+                self._packed[("blocks", g.w)] = self._pair(g.w // 32, WINDOW_BLOCK_BYTES)
+                # the carry read from the served cache (TtWindowCache.carry_owner): each chip's 4 carry blocks, over
+                # TP, over the mesh (chip-linear r TP + c)
+                c = WINDOW // 32
+                self._carry = [
+                    ttnn.zeros(
+                        [1, 1, k * c, WINDOW_BLOCK_BYTES],
+                        dtype=ttnn.uint8,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=mesh,
+                        memory_config=DRAM,
+                    )
+                    for k in (1, g.tp, g.n)
+                ]
+
+    def _pair(self, pages: int, width: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """(local [1, 1, pages, width], gathered [1, 1, SP pages, width]) uint8 ROW_MAJOR (load time)."""
+        return tuple(
+            ttnn.zeros(
+                [1, 1, k * pages, width],
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=DRAM,
+            )
+            for k in (1, self.geo.sp)
+        )
+
+    def packs(self, kind: str, n: int, start: int) -> bool:
+        """CKV_PACK_BEFORE_GATHER=on (P.11) applies: the buffers exist and the start is chunk-aligned (the server's
+        order of each SP row is then its own block: the served write is local)."""
+        return start % self.geo.chunk == 0 and (kind, n) in self._packed and pack_before_gather()
+
+    def mask_local(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:
+        """t [1, 1, n, w] bf16 TILE, the SP row's own block of chunk rows (row r n + i on SP row r): rows at or past
+        ``valid`` zeroed (exact), as ``iota``'s mask does on the gathered rows. Returns ``t`` when every row is valid
+        (the caller frees what it got only when it is not ``t``)."""
+        n = t.shape[-2]
+        if valid >= n * self.geo.sp:
+            return t
+        keep = ttnn.lt(self._sp_iota[n], float(valid), dtype=ttnn.bfloat16, memory_config=DRAM)
+        out = ttnn.multiply(t, keep, dtype=ttnn.bfloat16, memory_config=DRAM)
+        dealloc(keep)
+        return out
+
+    def packed(self, kind: str, n: int) -> ttnn.Tensor:
+        """The local packed buffer of (kind, n) (the caller packs its rows into it at row 0)."""
+        return self._packed[(kind, n)][0]
+
+    def gather_packed(self, kind: str, n: int) -> ttnn.Tensor:
+        """The local packed buffer gathered over SP (natural order) into the load-time output; the caller frees the
+        result only when it is not that output (``is_kept``)."""
+        local, out = self._packed[(kind, n)]
+        res = ccl.all_gather(local, 2, SP_AXIS, out=out)
+        # (the fabric gather returns a new wrapper of ``out``'s buffer: hand back ``out`` itself, never freed)
+        return out if res.buffer_address() == out.buffer_address() else res
+
+    def is_kept(self, t: ttnn.Tensor) -> bool:
+        return any(t is pair[1] for pair in self._packed.values())
+
+    def carry_local(self) -> ttnn.Tensor | None:
+        """The local carry block buffer [1, 1, 4, WINDOW_BLOCK_BYTES] (None: not built)."""
+        return self._carry[0] if self._carry is not None else None
+
+    def gather_carry(self) -> ttnn.Tensor:
+        """Every chip's packed carry blocks, chip-linear [1, 1, 4 N, WINDOW_BLOCK_BYTES] (load-time outputs, never
+        freed: the caller slices its owner's 4 blocks)."""
+        local, tp_out, all_out = self._carry
+        t = local
+        if self.geo.tp > 1:
+            t = ccl.all_gather(t, 2, TP_AXIS, out=tp_out)
+        res = ccl.all_gather(t, 2, SP_AXIS, out=all_out)
+        if t is not local and t.buffer_address() != tp_out.buffer_address():
+            dealloc(t)
+        assert res.buffer_address() == all_out.buffer_address(), "gather_carry: the fabric gather (CCL_IMPL) is off"
+        return all_out
 
     def window_blocks(self) -> ttnn.Tensor:
         """WINDOW_KV_FORMAT=bfp8_blocks: the window region [carry 128 | chunk S] as bfloat8_b blocks of 32 rows,
@@ -264,6 +363,76 @@ class TtWindowCache:
         # whole: the next chunk's carry is their last 128 rows (one slice instead of the cache read). Dropped by any
         # other write (another start, a host load) and by free().
         self._tail = None
+        # CKV_PACK_BEFORE_GATHER=on (P.11): the previous chunk's last 128 rows as its 4 bfloat8_b window blocks (next
+        # start, [1, 1, 4, WINDOW_BLOCK_BYTES] uint8) when it was whole: the next chunk's carry blocks as they are
+        self._tail_blocks = None
+        # (allocated here, at load time, and written in place: a buffer allocated mid-forward and kept shifts the
+        # later steps' addresses, DS41-146)
+        self._tail_buf = None
+        if tables.carry_local() is not None:
+            self._tail_buf = ttnn.zeros(
+                [1, 1, WINDOW // 32, WINDOW_BLOCK_BYTES],
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+            )
+
+    def keep_blocks(self, gathered: ttnn.Tensor, start: int, end: int) -> None:
+        """``gathered``: the chunk's window blocks [1, 1, S / 32, WINDOW_BLOCK_BYTES]; when the chunk is whole, its last
+        4 blocks (positions [end - 128, end)) are copied into the load-time tail buffer as the next chunk's carry."""
+        self._drop_tail()
+        if end == start + self.geo.chunk and self._tail_buf is not None:
+            nb, c = gathered.shape[-2], WINDOW // 32
+            ttnn.slice(
+                gathered,
+                [0, 0, nb - c, 0],
+                [1, 1, nb, WINDOW_BLOCK_BYTES],
+                memory_config=DRAM,
+                output_tensor=self._tail_buf,
+            )
+            self._tail_blocks = (end, self._tail_buf)
+
+    def carry_blocks(self, start: int) -> ttnn.Tensor | None:
+        """The kept carry blocks of positions [start - 128, start), or None (not kept: read the rows, ``carry``)."""
+        tail = self._tail_blocks
+        if tail is not None and tail[0] == start and start >= WINDOW:
+            return tail[1]
+        return None
+
+    def carry_owner(self, start: int) -> tuple[int, int] | None:
+        """(owner chip q (chip-linear), its local row) when the carry rows [start - 128, start) are 128 rows of ONE
+        owner stripe (``carry``'s single-piece case), else None."""
+        g = self.geo
+        if start < WINDOW:
+            return None
+        s_idx, u = divmod(start - WINDOW, g.stripe)
+        if g.stripe - u < WINDOW:
+            return None
+        return s_idx % g.n, (s_idx // g.n) * g.stripe + u
+
+    def write_local(self, rows_rm: ttnn.Tensor, start: int, end: int) -> None:
+        """CKV_PACK_BEFORE_GATHER=on (P.11): rows_rm [1, 1, W, 512] bf16 ROW_MAJOR = the SP row's own block of the
+        chunk, rows at or past end zero; start % S == 0, so the server's order of SP row r is its own block (the
+        index row srv_row(0) is the identity): ``write`` without the gathered rows and the embedding."""
+        g = self.geo
+        assert start % g.chunk == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end)
+        assert rows_rm.shape[-2] == g.w, (rows_rm.shape, g.w)
+        if self._tail_blocks is not None and self._tail_blocks[0] != start:
+            self._drop_tail()
+        if self._tail is not None:  # (a bf16 tail is never this path's carry)
+            self._drop_tail()
+        ttnn.bringup.update_padded_kv_cache(
+            self.slab.tensor,
+            rows_rm,
+            slot_idx=self.slab.slot,
+            layer_idx=self.slab.row,
+            num_layers=self.slab.layers,
+            kv_actual_global=start,
+            cluster_axis=SP_AXIS,
+            valid_global=end,
+            tp_axis=self.tp_axis,
+        )
 
     def keep_rows(self, kv_rm: ttnn.Tensor, start: int, end: int) -> None:
         """Takes ``kv_rm`` (the chunk's rows just written, natural order): kept as the next chunk's carry source
@@ -275,6 +444,7 @@ class TtWindowCache:
             dealloc(kv_rm)
 
     def _drop_tail(self) -> None:
+        self._tail_blocks = None  # (its buffer is the cache's own, kept)
         if self._tail is not None:
             if self._tail[1].is_allocated():
                 dealloc(self._tail[1])
@@ -288,6 +458,8 @@ class TtWindowCache:
         assert start % 32 == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end, self.max_seq)
         k = (start % g.chunk) // 32
         if self._tail is not None and self._tail[0] != start:  # another start may overwrite the kept rows' positions
+            self._drop_tail()
+        if self._tail_blocks is not None:  # (P.11: kept blocks are never this path's carry)
             self._drop_tail()
         idx = self.tables.srv_row(k)
         rows = ttnn.embedding(
@@ -421,6 +593,9 @@ class TtWindowCache:
     def free(self) -> None:
         """Frees the tensor only when it is the cache's own (never the engine's)."""
         self._drop_tail()
+        if self._tail_buf is not None and self._tail_buf.is_allocated():
+            dealloc(self._tail_buf)
+        self._tail_buf = None
         self.slab.free()
 
 
@@ -550,6 +725,84 @@ class TtWindowAttention:
                 self._put_blocks(ct, 0)
             dealloc(ct)
         return carry, kv_rm
+
+    def _packs(self, start: int) -> bool:
+        """CKV_PACK_BEFORE_GATHER=on (P.11) for this chunk's window blocks (WINDOW_KV_FORMAT=bfp8_blocks)."""
+        return self.win8 and self.tables.packs("blocks", self.geo.w, start)
+
+    def _window_packed(self, kv: ttnn.Tensor, start: int, end: int, cache: TtWindowCache) -> None:
+        """CKV_PACK_BEFORE_GATHER=on (P.11; WINDOW_KV_FORMAT=bfp8_blocks, start % S == 0): ``_window_rows(blocks=True)``
+        with each SP row packing its own rows: kv gathered over TP (bf16, the SP row's block [W, 512]) -> pad rows
+        zeroed -> the served cache written locally (bf16 rows, ``write_local``) -> the block's W / 32 bfloat8_b blocks
+        (ckv_bfp4 compact into the load-time local buffer) -> all_gather of the blocks over SP -> slice_write into the
+        window blocks' chunk region; the carry region from the previous chunk's kept last 4 blocks, else from the
+        carry rows packed (``carry``). The same records as ``_window_rows`` (gap bytes aside, DS41-144). Does not
+        consume ``kv``."""
+        g, tables = self.geo, self.tables
+        prepared = settings.get("CKV_BFP4_PREPARED") == "on"
+        full = kv
+        if g.tp > 1 and kv.shape[-2] == g.q_rows:  # ATTN_SP32=on (P.10): the chip's own rows -> the SP row's block
+            full = ccl.all_gather(kv, 2, TP_AXIS)  # [1, 1, W, 512] bf16
+        masked = tables.mask_local(full, end - start)
+        if masked is not full and full is not kv:
+            dealloc(full)
+        rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+        cache.write_local(rm, start, end)
+        dealloc(rm)
+        ttnn.bringup.ckv_bfp4(
+            masked,
+            tables.packed("blocks", g.w),
+            0,
+            dtype=ttnn.bfloat8_b,
+            blocks=True,
+            memory_config=DRAM,
+            prepared=prepared,
+            compact=True,
+        )
+        if masked is not kv:
+            dealloc(masked)
+        gat = tables.gather_packed("blocks", g.w)  # [1, 1, S / 32, WINDOW_BLOCK_BYTES]
+        blocks = tables.window_blocks()
+        c, nb = WINDOW // 32, gat.shape[-2]
+        ttnn.experimental.slice_write(gat, blocks, [0, 0, c, 0], [1, 1, c + nb, WINDOW_BLOCK_BYTES], [1, 1, 1, 1])
+        tail = cache.carry_blocks(start)
+        owner = cache.carry_owner(start) if tail is None and tables.carry_local() is not None else None
+        if tail is not None:
+            ttnn.experimental.slice_write(tail, blocks, [0, 0, 0, 0], [1, 1, c, WINDOW_BLOCK_BYTES], [1, 1, 1, 1])
+        elif owner is not None and ccl.fabric():
+            # the carry from the served cache, packed before its gather: every chip packs the same local rows (the
+            # owner's are the carry), the 4 blocks gathered over the mesh, the owner's kept (``carry``'s bf16 path)
+            q, loc = owner
+            sl = cache.slab.slice_rows(loc, loc + WINDOW)
+            tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM)
+            dealloc(sl)
+            ttnn.bringup.ckv_bfp4(
+                tl,
+                tables.carry_local(),
+                0,
+                dtype=ttnn.bfloat8_b,
+                blocks=True,
+                memory_config=DRAM,
+                prepared=prepared,
+                compact=True,
+            )
+            dealloc(tl)
+            every = tables.gather_carry()
+            mine = ttnn.slice(every, [0, 0, q * c, 0], [1, 1, (q + 1) * c, WINDOW_BLOCK_BYTES], memory_config=DRAM)
+            ttnn.experimental.slice_write(mine, blocks, [0, 0, 0, 0], [1, 1, c, WINDOW_BLOCK_BYTES], [1, 1, 1, 1])
+            dealloc(mine)
+        else:
+            carry = cache.carry(start)
+            ct = ttnn.to_layout(carry, ttnn.TILE_LAYOUT, memory_config=DRAM)
+            if carry is not tables.zero_carry:
+                dealloc(carry)
+            ttnn.bringup.ckv_bfp4(
+                ct, blocks, 0, dtype=ttnn.bfloat8_b, blocks=True, memory_config=DRAM, prepared=prepared, compact=True
+            )
+            dealloc(ct)
+        cache.keep_blocks(gat, start, end)  # the next chunk's carry: this chunk's last 4 blocks (whole chunks)
+        if not tables.is_kept(gat):
+            dealloc(gat)
 
     def _put_blocks(self, rows_tile: ttnn.Tensor, row0: int, prefix: ttnn.Tensor | None = None) -> None:
         """WINDOW_KV_FORMAT=bfp8_blocks: bf16 TILE rows (replicated, not consumed) at row0 of the window blocks,
@@ -865,8 +1118,11 @@ class TtWindowAttention:
         end = start + s if end is None else int(end)
         cos, sin = self._rope_rows(start, s)
         if self.win8:  # WINDOW_KV_FORMAT=bfp8_blocks: the window blocks, read as kv_format ROW_BFP8
-            carry, kv_rm = self._window_rows(kv, start, end, cache, blocks=True)
-            self._release_window(carry, kv_rm, cache, start, end)
+            if self._packs(start):  # CKV_PACK_BEFORE_GATHER=on (P.11)
+                self._window_packed(kv, start, end, cache)
+            else:
+                carry, kv_rm = self._window_rows(kv, start, end, cache, blocks=True)
+                self._release_window(carry, kv_rm, cache, start, end)
             table = self.tables.window_blocks()
         else:
             table = self._table(kv, start, end, cache)

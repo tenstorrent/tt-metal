@@ -4253,3 +4253,65 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   ttnn/ttnn/bringup/rotary_embedding_indexed/tests/unit/test_uniform.py -k 8x4 -s`; `python -m
   models.demos.common.bringup.testing.fork_source --fork rotary_embedding_indexed`; old path
   `DS41_ROPE_UNIFORM_PROGRAM=off`.
+
+## P.11 (perf, galaxy 8x4): CKV_PACK_BEFORE_GATHER, each chip packs its own KV rows before the gather
+
+- What: setting CKV_PACK_BEFORE_GATHER (tt/settings.py, default on; off = the path before, code unchanged). On, at
+  chunk-aligned starts (start % S == 0):
+  - Compressed KV (CKV_FORMAT=bfp4_rows; tt/compressor.TtCompressor._write_packed). Each SP row's own compressed rows
+    [W / r, 512] go through the pad mask (per-SP-row load-time iota, `WindowTables.mask_local`). ttnn.bringup.ckv_bfp4
+    (compact, prepared, rounded=True) packs them into a load-time local record buffer. The rounded bf16 rows go to the
+    served cache locally (`TtServedRows.write_local`: no gathered rows, no server-order embedding). The 320 B records
+    are all_gathered over SP into a load-time output and slice_written into the attention table
+    (`AttnTable.put_records`).
+  - Window KV (WINDOW_KV_FORMAT=bfp8_blocks; tt/attention.TtWindowAttention._window_packed, also from
+    sparse_attention._static). The kv rows are gathered over TP in bf16, as before: the served write needs the SP row's
+    [W, 512] slab. Then the pad mask, the served bf16 write done locally (`TtWindowCache.write_local`), ckv_bfp4 of the
+    SP row's 20 blocks, the blocks' all_gather over SP, and a slice_write into the window blocks at block 4.
+  - Window carry. A whole previous chunk leaves its last 4 blocks, copied (slice with output_tensor) into a per-cache
+    load-time buffer (`keep_blocks`), and the next chunk slice_writes them. Otherwise, when the carry is one owner stripe
+    (`carry_owner`), each chip packs the same 128 local served rows into 4 blocks, the blocks are gathered over TP and SP
+    (`gather_carry`) and the owner's 4 are kept. Else the bf16 `carry` rows are packed.
+- Why only aligned starts (DS41-148): the served order of an SP row is its own compute block only when start % S == 0.
+  Other starts (prefix-hit follow-ups) run the off path, so serving gets nothing from this at those starts.
+- Bytes: same table bytes. tt/perf_pack_gather.py, 8x4, every chip: window blocks (defined bytes, DS41-144) and
+  compressed records equal the old path and the host rule, rounded rows equal, partial chunks too. In the whole model
+  (tt/perf_pack_identity.py: the profile rung's prefix, two chunks, the second with the kept-blocks carry, on / off
+  alternating): hidden state after each chunk bit-identical on == off, and deterministic.
+- Gather bytes received a chip a chunk (8x4, S 5120):
+  - window SP gather: 4.59 -> 2.59 MB a layer (183.5 -> 103.6 MB a chunk, 40 layers);
+  - compressed KV: r2 2.29 -> 0.72 MB (3 sources), r1 4.59 -> 1.43 MB (1), 11.5 -> 3.6 MB a chunk;
+  - carry from the served cache: 4.06 -> 2.30 MB a layer.
+- Profile rung, change on, plain profile (DS41_ENGRAM_TABLE=resident; scratch results
+  /scratch/dnijemcevic/p11/results/P11on*):
+  - device 202 ms a chunk (P.12's table: 204.6), attention section 66.0 (68.0), compressor 1.8;
+  - op sums vs P.12: all gathers in attention + compressor 14.46 -> 12.23 ms. Window SP gather 4.42 -> 3.40 ms. Carry
+    gathers 6.41 -> 5.37 ms. ckv_bfp4 1.91 -> 1.91 ms: own rows 24 us + carry 23 us a layer vs one 47.5 us call.
+    to_layout + embedding 1.82 -> 0.39 ms. New: slice_writes + tail slice 1.12 ms. Compressor ops 2.17 -> 1.94 ms;
+  - op calls a chunk 2203 -> 2237 (attention +40: the carry's separate pack), programs 72032 -> 74400;
+  - profiled wall 407.6 ms (not the clean wall).
+- The profile chunk always takes the carry-from-cache path: its prefix is loaded from the host, so there is no kept
+  tail. Consecutive chunks (serving, a long prompt) take the kept blocks: one slice_write a layer, no carry gathers.
+- Window layer write sequence (tt/perf_pack_gather.py::test_window_layer, median of 20, ms a layer, old -> new):
+  - consecutive chunks: synced 1.007 -> 0.914, host 0.842 -> 0.698;
+  - carry from the cache: synced 1.530 -> 1.460, host 1.356 -> 1.252.
+  - Compressed rows (pack + gather + table write, synced): n 320 0.777 -> 0.468, n 640 0.809 -> 0.679.
+- Gotchas:
+  - DS41-149: the fabric gather returns a new wrapper of a caller's output, so an `is` check freed it. Compare
+    buffer addresses.
+  - DS41-146: a kept tail allocated mid-forward (a plain ttnn.slice) made "on" second chunks 399-852 ms vs 339-371
+    off. A load-time buffer written with slice(output_tensor=) fixed it (315-332 ms).
+  - In-process on/off alternation leaves outliers right after each switch on both sides (address-keyed program
+    caches), so its walls (on 324 / off 436 median, n 2) decide nothing. The orchestrator's separate-process A/B does.
+- OV-23: ckv_bfp4 (Python ProgramDescriptor) is called prepared (CKV_BFP4_PREPARED=on) and compact at row0 0, so one
+  prepared program per shape. Fork test added: test_ckv_bfp4_compact_rounded (compact + rounded on bfloat4_b rows, the
+  new call); fork tests/unit 55 passed (51 before). No non-prepared Python op added. OV-3: no padding. Every box: the
+  buffers and masks are sized from mesh.shape and the chunk (W, W / 2), the carry owner path needs a 128-row stripe
+  (else the bf16 carry), and SP = 1 keeps the off path.
+- Not finished here: `measure --task P.11` (quick, on) hit the 10-minute foreground cap at 597 s. It was in the clean
+  wall's settle runs: 330-365 ms, run 1 396 ms. The orchestrator runs it. Accuracy: the bytes and the hidden state are
+  identical to off (= P.5's code, whose measure passed all 102 limited metrics).
+- Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_pack_gather.py -s` (bytes + timings, 1 min); `...
+  tt/perf_pack_identity.py -s` (on / off identity, 8 min, DS41_ENGRAM_TABLE=resident); fork: `scripts/run_safe_pytest.sh
+  --device auto ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit`; old path DS41_CKV_PACK_BEFORE_GATHER=off.

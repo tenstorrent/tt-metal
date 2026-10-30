@@ -1,0 +1,94 @@
+{
+ "used": [
+  {
+   "id": "DS41-146",
+   "how": "the kept carry blocks go into a load-time per-cache buffer (slice output_tensor) and the local / gathered record buffers are allocated in WindowTables.__init__, not mid-forward: a mid-forward kept slice made 'on' second chunks 399-852 ms vs 315-332 after",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-145",
+   "how": "every new ckv_bfp4 call is compact (common args only, row0 0 frozen) + prepared, so its host dispatch on 32 chips stays at the cheap end",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-144",
+   "how": "window block bytes compared with the host rule's mask (gap bytes stale) in tt/perf_pack_gather.py",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-135",
+   "how": "ckv_bfp4 called with prepared=True under CKV_BFP4_PREPARED (OV-23)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-143",
+   "how": "the window served cache keeps its unrounded bf16 rows in write_local (contract unchanged); only compressed KV serves rounded rows",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-54",
+   "how": "TtServedRows.write_local goes through the same _put (update_padded_kv_cache metadata path for ratio 2), only the gathered rows and the embedding are skipped",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "a full-range ttnn.slice shares its source's buffer: the probe's iota mask uses the iota itself at full length (freed it once, TT_FATAL not allocated)",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "fabric_all_gather with a caller's output returns a new Python wrapper of that buffer (identity checks fail); now DS41-149",
+  "pack-before-gather keeps the served write local only at chunk-aligned starts (the served order); now DS41-148",
+  "the profile rung's chunk loads its prefix from the host, so its window carry always comes from the served cache (32-chip gathers), never the kept tail of consecutive chunks: the profile does not measure the steady-state carry",
+  "measure --task on the 8x4 needs more than the 10-minute foreground cap (model load + per-layer checks + the clean-wall settle runs); P.12 and P.11 both hit it"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work added; each row is packed once (the TP-replicated SP block is packed by the row's 4 chips in parallel, as its compressor output already is)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the only Python-built op touched, ttnn.bringup.ckv_bfp4, is called prepared=True (CKV_BFP4_PREPARED=on) and compact at row0 0 at all three new sites (tt/compressor._write_packed, tt/attention._window_packed chunk and carry): one prepared program per shape; host a call in the window sequence measured in tt/perf_pack_gather.py (layer 0.698 ms host consecutive). No non-prepared op added; new fork test test_ckv_bfp4_compact_rounded checks compact+rounded prepares (patch count)"
+  }
+ ],
+ "cited_only": [
+  "DS41-148",
+  "DS41-149"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.11",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T01:33:42",
+  "head": "3b187dfdbdf",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.11.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_pack_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_pack_identity.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/README.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4.py"
+  ]
+ }
+}

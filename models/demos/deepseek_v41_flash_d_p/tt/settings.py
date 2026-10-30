@@ -718,6 +718,20 @@ TABLE = {
         "and kv_actual_global 0 every chip reads row 0, so the programs are identical). Same kernels, same values. "
         "off = the stock ttnn.experimental.deepseek_prefill.rotary_embedding_indexed (32 programs a call on 8x4)",
     ),
+    "CKV_PACK_BEFORE_GATHER": Setting(
+        "on",
+        ("on", "off"),
+        "P.11 (galaxy 8x4, owner 2026-10-29 13:35; CKV_FORMAT=bfp4_rows, and WINDOW_KV_FORMAT=bfp8_blocks for the "
+        "window): on = each chip rounds + packs ITS OWN rows (the SP row's block) with ttnn.bringup.ckv_bfp4 (compact, "
+        "prepared) into a load-time local record buffer, writes its served rows locally (compressed KV: the rounded "
+        "values; window: the bf16 rows, as before), and the all_gather over SP moves the packed records (compressed "
+        "KV 320 B a row, window bfloat8_b blocks 578 B a row, vs 1024 B bf16), which are slice_written into the "
+        "attention table / window blocks; the window carry is the previous chunk's last 4 blocks (kept per layer) or "
+        "the served rows packed. Taken at chunk-aligned starts (start % chunk == 0: the server's order is then each SP "
+        "row's own block); other starts run the off path. Same table bytes (records are per row; the window blocks' "
+        "unwritten gap bytes aside, DS41-144). off = the bf16 rows gathered over SP, then every chip packs all of them "
+        "(the path before P.11)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8
