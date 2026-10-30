@@ -34,7 +34,7 @@ void record_to_command_list(
         "{} runs on a different MeshDevice than the recording CommandListBuilder",
         operation_name);
     try {
-        builder->record(workload);
+        builder->record(ttnn::get_current_command_queue_id_for_thread(), workload);
     } catch (const std::exception& e) {
         TT_THROW("{} cannot be recorded into a command list: {}", operation_name, e.what());
     }
@@ -93,7 +93,9 @@ void CommandListBuilder::deallocate() {
 
 tt::tt_metal::distributed::MeshDevice& CommandListBuilder::device() const { return metal_builder_.device(); }
 
-void CommandListBuilder::record(tt::tt_metal::distributed::MeshWorkload& workload) { metal_builder_.add(workload); }
+void CommandListBuilder::record(QueueId binary_upload_cq_id, tt::tt_metal::distributed::MeshWorkload& workload) {
+    metal_builder_.add(device().mesh_command_queue(binary_upload_cq_id.get()), workload);
+}
 
 CommandList::CommandList(metal::CommandList metal_list) : metal_list_(std::move(metal_list)) {}
 

@@ -112,12 +112,15 @@ public:
 
     /**
      * @brief Records one workload without launching it.
-     * Compiles the workload and uploads any required kernel binaries through the current thread's command queue.
+     * Compiles the workload and uploads any required kernel binaries.
      *
-     * @param workload      Workload to record.
-     * @param parameters    Fields of @p workload that built command lists can patch with CommandList::update_args().
+     * @param binary_upload_cq  Command queue of device() that writes the kernel binaries to the device. Waits for the
+     *                          upload to finish.
+     * @param workload          Workload to record.
+     * @param parameters        Fields of @p workload that built command lists can patch with
+     *                          CommandList::update_args().
      */
-    void add(MeshWorkload& workload, const CmdListParameters& parameters = {});
+    void add(MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters = {});
 
     /**
      * @brief Builds an independent command list bound to @p cq.

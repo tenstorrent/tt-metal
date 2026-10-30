@@ -53,8 +53,9 @@ public:
 
     tt::tt_metal::distributed::MeshDevice& device() const;
 
-    // Adds one workload to the recording.
-    void record(tt::tt_metal::distributed::MeshWorkload& workload);
+    // Adds one workload to the recording. binary_upload_cq_id is the command queue that writes its kernel binaries to
+    // the device.
+    void record(QueueId binary_upload_cq_id, tt::tt_metal::distributed::MeshWorkload& workload);
 
 private:
     tt::tt_metal::experimental::CommandListBuilder metal_builder_;
