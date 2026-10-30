@@ -129,20 +129,27 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
 
+    // A row-major input is tilized on the way (concatenating along the rows dim, splitting an outer dim) and the
+    // output is tiled, so its packets carry output tiles rather than input rows.
+    const bool tilize_input = input_tensor.layout() == Layout::ROW_MAJOR;
+    const uint32_t packet_page_size =
+        tilize_input ? compute_output_specs(operation_attributes, tensor_args).compute_page_size_bytes() : page_size;
     TT_FATAL(
-        max_payload_size >= page_size,
-        "Fabric maximum payload {} must fit at least one tensor page of size {}",
+        max_payload_size >= packet_page_size,
+        "Fabric maximum payload {} must fit at least one transmitted page of size {}",
         max_payload_size,
-        page_size);
+        packet_page_size);
 
     TT_FATAL(
         input_shape[operation_attributes.out_dim] % operation_attributes.num_devices == 0,
         "AllToAllAsync: input tensor dimension {} must be divisible by num_devices {}",
         input_shape[operation_attributes.out_dim],
         operation_attributes.num_devices);
-    // A row-major input is tilized on the way (concatenating along the rows dim, splitting an outer dim) and the
-    // output is tiled.
-    const bool tilize_input = input_tensor.layout() == Layout::ROW_MAJOR;
+    // The tilize runs with a 16-bit dest, which only bfloat16 passes through unchanged.
+    TT_FATAL(
+        !tilize_input || input_tensor.dtype() == DataType::BFLOAT16,
+        "A row-major input must be bfloat16, got {}",
+        input_tensor.dtype());
     TT_FATAL(
         input_tensor.layout() == Layout::TILE ||
             (tilize_input && operation_attributes.in_dim == rank - 2 && operation_attributes.out_dim < rank - 2 &&
