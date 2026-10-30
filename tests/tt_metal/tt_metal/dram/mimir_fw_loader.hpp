@@ -40,4 +40,9 @@ const CceFwManifest& build_cce_fw_manifest(MetalContext& context, ChipId chip);
 // Relocated load spans of the CCE firmware ELF at binary_path, as the runtime loads them.
 std::vector<CceFwSpan> cce_fw_spans(const std::string& binary_path);
 
+// Writes a distinct poison to each hart's reset vector on one CCE and asserts every one reads back. Hart 0 goes first,
+// because a write to its register reaches all eight. Every device open writes the same vector, so without the poison a
+// dropped write passes after any earlier process. Call with the harts held in reset.
+void poison_cce_reset_vectors(const Cluster& cluster, ChipId chip, uint32_t cce_index);
+
 }  // namespace tt::tt_metal::mimir_test

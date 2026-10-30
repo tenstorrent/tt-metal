@@ -21,8 +21,36 @@
 #include "llrt/hal.hpp"
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_metal/tt_metal/dram/mimir_access.hpp"
+#include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
+#include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
+
+// dev_mem_map.h defines CCE_RESET_VECTOR_BASE as a macro, which collides with UMD's constant of the same name.
+#pragma push_macro("CCE_RESET_VECTOR_BASE")
+#undef CCE_RESET_VECTOR_BASE
+#include "umd/device/arch/grendel_implementation.hpp"
+#pragma pop_macro("CCE_RESET_VECTOR_BASE")
 
 namespace tt::tt_metal::mimir_test {
+
+void poison_cce_reset_vectors(const Cluster& cluster, ChipId chip, uint32_t cce_index) {
+    const Hal& hal = MetalContext::instance().hal();
+    const uint64_t fw_launch_addr =
+        hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, 0)
+            .fw_launch_addr;
+    const tt_cxy_pair core(chip, cce_virtual_core(cluster, chip, cce_index));
+    std::vector<uint32_t> poisons(cce_hart_count());
+    for (uint32_t hart = 0; hart < poisons.size(); ++hart) {
+        poisons[hart] = 0xDEAD0000u | (cce_index << 4) | hart;
+        cluster.write_reg(&poisons[hart], core, fw_launch_addr + tt::umd::grendel::CCE_HART_RESET_VECTOR_STRIDE * hart);
+    }
+    const std::vector<uint64_t> reset_vectors =
+        read_cce_reset_vectors(cluster, cluster.get_soc_desc(chip), chip, cce_index);
+    for (uint32_t hart = 0; hart < poisons.size(); ++hart) {
+        ASSERT_EQ(reset_vectors[hart], poisons[hart])
+            << "CCE " << cce_index << " hart " << hart << " reset vector did not take the poison";
+    }
+}
 
 std::vector<CceFwSpan> cce_fw_spans(const std::string& binary_path) {
     const Hal& hal = MetalContext::instance().hal();

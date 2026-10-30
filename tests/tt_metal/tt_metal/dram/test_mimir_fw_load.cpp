@@ -192,6 +192,9 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
     }
     const tt::Cluster& cluster = MetalContext::instance().get_cluster();
     ASSERT_NO_FATAL_FAILURE(zero_firmware_windows(cluster));
+    for (uint32_t cce_index = 0; cce_index < emu_cce_count(); ++cce_index) {
+        ASSERT_NO_FATAL_FAILURE(poison_cce_reset_vectors(cluster, kFwLoadChip, cce_index));
+    }
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
     for (uint32_t cce_index = 0; cce_index < emu_cce_count(); ++cce_index) {

@@ -117,9 +117,15 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
         logical_dram_core,
         DramConfig{.noc = NOC::NOC_0, .compile_args = {result_dev_addr, magic}});
 
+    // Nothing else writes UNRESERVED, so without the poison a kernel that never runs reads the last run's magic.
+    const uint32_t poison = 0xDEADBEEFu;
+    uint32_t result = 0;
+    write_cce_sram(device, logical_dram_core, result_noc_addr, &poison, sizeof(poison));
+    read_cce_sram(device, logical_dram_core, result_noc_addr, &result, sizeof(result));
+    ASSERT_EQ(result, poison);
+
     LaunchProgram(*mesh_device, program);
 
-    uint32_t result = 0;
     read_cce_sram(device, logical_dram_core, result_noc_addr, &result, sizeof(result));
     EXPECT_EQ(result, magic);
 }
@@ -145,28 +151,50 @@ TEST_P(AllHartsRunDramKernel, WritesMagic) {
     const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
     ASSERT_EQ(num_harts, 8u);
 
-    const uint32_t result_dev_base =
-        MEM_L1_UNCACHED_BASE + hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const uint64_t result_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint32_t echo_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t echo_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    // The echo kernel writes {magic, mhartid, marker} to the slot its mhartid picks, so a hart that runs another
+    // hart's kernel leaves the wrong marker. The fourth word is never written and must keep the poison.
+    constexpr uint32_t slot_words = 4;
+    const uint32_t poison = 0xDEADBEEFu;
+    const uint32_t echo_magic = 0xC0FFEE10 + (cce_index << 8);
+    const uint32_t echo_bytes = num_harts * slot_words * sizeof(uint32_t);
 
     Program program = CreateProgram();
-    std::vector<uint32_t> expected(num_harts);
+    std::vector<uint32_t> expected(num_harts * slot_words, poison);
     for (uint32_t hart = 0; hart < num_harts; hart++) {
-        expected[hart] = 0xC0FFEE10 + (cce_index << 8) + hart;
+        const uint32_t marker = 0xC0DE0000 + (cce_index << 8) + hart;
+        expected[hart * slot_words] = echo_magic;
+        expected[hart * slot_words + 1] = hart;
+        expected[hart * slot_words + 2] = marker;
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/cce/cce_args_echo.cpp",
             logical_dram_core,
             DramConfig{
                 .processor = static_cast<DataMovementProcessor>(hart),
                 .noc = NOC::NOC_0,
-                .compile_args = {result_dev_base + hart * static_cast<uint32_t>(sizeof(uint32_t)), expected[hart]}});
+                .compile_args = {
+                    echo_dev_base,
+                    marker,
+                    echo_magic,
+                    slot_words * static_cast<uint32_t>(sizeof(uint32_t)),
+                    0,
+                    0,
+                    0,
+                    0}});
     }
+
+    // Nothing else writes UNRESERVED, so without the poison a launch where no hart runs reads the last run's slots.
+    const std::vector<uint32_t> poison_words(num_harts * slot_words, poison);
+    std::vector<uint32_t> result(poison_words.size(), 0);
+    write_cce_sram(device, logical_dram_core, echo_noc_base, poison_words.data(), echo_bytes);
+    read_cce_sram(device, logical_dram_core, echo_noc_base, result.data(), echo_bytes);
+    ASSERT_EQ(result, poison_words);
 
     LaunchProgram(*mesh_device, program);
 
-    std::vector<uint32_t> result(num_harts, 0);
-    read_cce_sram(device, logical_dram_core, result_noc_base, result.data(), result.size() * sizeof(uint32_t));
+    read_cce_sram(device, logical_dram_core, echo_noc_base, result.data(), echo_bytes);
     EXPECT_EQ(result, expected);
 }
 
@@ -353,6 +381,17 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
     for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
         gddr_backing.tracker.note(partition, buffer->address(), page_size);
     }
+
+    // GDDR keeps its contents across processes and the input is the same every run, so without the poison a dropped
+    // write reads the last run's data.
+    std::vector<uint32_t> poison(buffer_size / sizeof(uint32_t));
+    for (std::size_t i = 0; i < poison.size(); ++i) {
+        poison[i] = 0xDEADBEEFu ^ static_cast<uint32_t>(i);
+    }
+    slow_dispatch::WriteToBuffer(*buffer, poison);
+    std::vector<uint32_t> poison_read_back;
+    slow_dispatch::ReadFromBuffer(*buffer, poison_read_back);
+    ASSERT_EQ(poison_read_back, poison);
 
     const std::size_t words_per_page = page_size / sizeof(uint32_t);
     std::vector<uint32_t> input(buffer_size / sizeof(uint32_t));
