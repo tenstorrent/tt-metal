@@ -200,19 +200,7 @@ tt_reuse_precompile_headers(swiglu_packed_benchmark ttml_pch)
 ############################################################################################################################
 
 if(TARGET benchmark::benchmark)
-    set(BENCHMARK_SOURCES
-        benchmark/matmuls_benchmark.cpp
-        benchmark/from_vector_benchmark.cpp
-        benchmark/adamw_benchmark.cpp
-        benchmark/frobenius_normalize_benchmark.cpp
-        benchmark/polynorm_fusion_benchmark.cpp
-        benchmark/rmsnorm_benchmark.cpp
-        benchmark/gram_matmul_benchmark.cpp
-        benchmark/mla_q_rope_benchmark.cpp
-        benchmark/mla_kv_assemble_benchmark.cpp
-        benchmark/transpose_matmul_benchmark.cpp
-        benchmark/qkv_causal_conv1d_silu_benchmark.cpp
-    )
+    include(benchmark/sources.cmake)
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
         get_filename_component(BENCH_TARGET ${BENCH_SRC} NAME_WE)
