@@ -224,6 +224,163 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     )
 
 
+_UINT16_MAX = (1 << 16) - 1
+_UINT32_MAX = (1 << 32) - 1
+
+
+def _uint_to_uint16_saturation_boundaries(input_format: DataFormat) -> list[int]:
+    """Inputs on both sides of the UInt16 saturation edge, plus bit-31-set values."""
+    if input_format == DataFormat.UInt8:
+        return list(range(256))
+    boundaries = [
+        0,
+        1,
+        _UINT16_MAX - 1,
+        _UINT16_MAX,
+        _UINT16_MAX + 1,
+        _UINT16_MAX + 2,
+        1 << 17,
+        (1 << 31) - 1,
+        1 << 31,
+        (1 << 31) + 1,
+        _UINT32_MAX - 1,
+        _UINT32_MAX,
+    ]
+    for bit in range(15, 32):
+        boundaries.extend(((1 << bit) - 1, 1 << bit, (1 << bit) + 1))
+    return boundaries
+
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format in (DataFormat.UInt32, DataFormat.UInt8)
+        and pair.output_format == DataFormat.UInt16
+    ],
+    dest_acc=_production_dest_acc,
+)
+def test_eltwise_unary_typecast_uint_to_uint16_saturation(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+):
+    # The functional matrix feeds uniform(0, 255), so it never reaches the
+    # saturating lanes; pin x >= 2^16 and bit-31-set inputs to min(x, 65535).
+    input_dimensions = [32, 32]
+    boundaries = _uint_to_uint16_saturation_boundaries(formats.input_format)
+
+    def distribution(size, dtype, generator):
+        # Called once per face. Boundaries take the even lanes; every odd lane
+        # stays below 65535 so no packed 32-bit word of the UInt16 result reads
+        # 0xFFFFFFFF (which BH NOC treats as a readback timeout). UInt8 inputs
+        # cannot saturate, so all 256 of them fill the face directly.
+        if formats.input_format == DataFormat.UInt8:
+            return torch.tensor(boundaries, dtype=torch.int64)[:size].to(dtype)
+        values = torch.randint(
+            0, 1 << 32, (size,), dtype=torch.int64, generator=generator
+        )
+        values[1::2] = torch.randint(
+            0, _UINT16_MAX, (size // 2,), dtype=torch.int64, generator=generator
+        )
+        assert 2 * len(boundaries) <= size
+        values[: 2 * len(boundaries) : 2] = torch.tensor(boundaries, dtype=torch.int64)
+        return values.to(dtype)
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=StimuliSpec(distribution=distribution, seed=62824),
+        spec_B=StimuliSpec(distribution=distribution, seed=62824),
+    )
+    src_values = [int(v) & _UINT32_MAX for v in src_A.flatten().tolist()]
+    golden = [min(v, _UINT16_MAX) for v in src_values]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+    )
+    result = [int(v) & _UINT16_MAX for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+    assert set(boundaries) <= set(src_values), "boundary inputs missing from stimuli"
+
+    mismatches = [(x, g, r) for x, g, r in zip(src_values, golden, result) if g != r]
+    assert not mismatches, (
+        f"{len(mismatches)} {formats.input_format.name}->UInt16 mismatches; first "
+        f"(input, expected, got): {[(hex(x), g, r) for x, g, r in mismatches[:16]]}"
+    )
+
+
+# The uint8 wrap and uint16 saturation edges the 0..255 sweep above never reaches. Odd lanes stay in
+# 0..127 so no readback word is all-ones, which is what the Blackhole NOC returns on a timeout.
+_INT_EDGE_PAIRS = [
+    InputOutputFormat(DataFormat.Int32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt16, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt16),
+]
+_INT_EDGE_VALUES = {
+    DataFormat.Int32: (
+        [0, 1, -1, -2, 127, -127, 128, -128, -129, 255, -255, 256, -256, -257, 1000, -1000,
+         65535, -65535, 65536, -65536, 2**31 - 1, -(2**31) + 1, -(2**31)],
+        -(2**31),
+        2**31,
+    ),
+    DataFormat.UInt32: (
+        [0, 1, 127, 128, 255, 256, 257, 65534, 65535, 65536, 65537, 2**24, 2**31 - 1, 2**31,
+         2**31 + 65535, 2**32 - 2, 2**32 - 1],
+        0,
+        2**32,
+    ),
+    DataFormat.UInt16: (
+        [0, 1, 127, 128, 255, 256, 257, 32767, 32768, 65534, 65535],
+        0,
+        2**16,
+    ),
+}  # fmt: skip
+
+
+def _int_edge_spec(in_fmt: DataFormat) -> StimuliSpec:
+    edges, low, high = _INT_EDGE_VALUES[in_fmt]
+
+    def distribution(size, dtype, generator):
+        values = torch.randint(
+            low, high, (size,), dtype=torch.int64, generator=generator
+        )
+        values[0 : 2 * len(edges) : 2] = torch.tensor(edges, dtype=torch.int64)
+        values[1::2] &= 0x7F
+        return values.to(dtype)
+
+    return StimuliSpec(distribution=distribution, seed=0)
+
+
+@parametrize(
+    formats=_INT_EDGE_PAIRS,
+    dest_acc=_production_dest_acc,
+)
+def test_eltwise_unary_typecast_int_edges(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+):
+    _run_typecast(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        [32, 32],
+        _int_edge_spec(formats.input_format),
+        twos_complement=formats.input_format == DataFormat.Int32,
+    )
+
+
 _FP32_EXP_BIAS = 127
 _FP32_MANTISSA_BITS = 23
 _FP32_SIGN_BIT = 1 << 31
@@ -329,6 +486,87 @@ def test_eltwise_unary_typecast_fp32_to_uint8_wide_exponent():
     )
 
 
+# 32 tiles per run (the largest operand other LLK tests use); full-range UInt16 takes two.
+_UINT_TO_UINT8_DIMENSIONS = [128, 256]
+_UINT_TO_UINT8_CHUNK = _UINT_TO_UINT8_DIMENSIONS[0] * _UINT_TO_UINT8_DIMENSIONS[1]
+
+
+def _uint_to_uint8_wide_range_values(input_format: DataFormat, chunk: int) -> list[int]:
+    """Inputs that set the bits above bit 7, which the kernel must drop.
+
+    UInt16 is swept exhaustively (``chunk`` selects the half). Int32/UInt32 get
+    every 2^k - 1, 2^k, 2^k + 1, the 256-wrap points, the top of the range and a
+    random fill. Int32 stays non-negative: Wormhole Dest holds Int32 as
+    sign-magnitude, so a negative input reads back as |x| & 0xFF there.
+    """
+    if input_format == DataFormat.UInt16:
+        start = chunk * _UINT_TO_UINT8_CHUNK
+        return list(range(start, start + _UINT_TO_UINT8_CHUNK))
+
+    top = 2**32 if input_format == DataFormat.UInt32 else 2**31
+    values = [0, 1, 254, 255, 256, 257, 511, 512, 0xFF00, 0xFFFF, 0x10000, 0x100FF]
+    for k in range(1, 32):
+        values += [v for v in ((1 << k) - 1, 1 << k, (1 << k) + 1) if v < top]
+    values += list(range(top - 256, top))
+    generator = torch.Generator().manual_seed(62765)
+    fill = _UINT_TO_UINT8_CHUNK - len(values)
+    values += torch.randint(
+        0, top, (fill,), dtype=torch.int64, generator=generator
+    ).tolist()
+    return values
+
+
+@parametrize(
+    formats=[
+        InputOutputFormat(in_fmt, DataFormat.UInt8)
+        for in_fmt in (DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
+        if in_fmt in _ARCH_SUPPORTED_FORMATS
+    ],
+    chunk=lambda formats: [0, 1] if formats.input_format == DataFormat.UInt16 else [0],
+)
+def test_eltwise_unary_typecast_uint_to_uint8_wide_range(
+    formats: InputOutputFormat, chunk: int
+):
+    # The kernel keeps only the low byte. The default stimuli (0..255) cannot tell
+    # x & 0xFF from x, (x + 256) & 0xFF or (x & 0xFFFF) & 0xFF, so drive the
+    # bits above bit 7 here.
+    dest_acc = _production_dest_acc(formats)[0]
+    input_dimensions = _UINT_TO_UINT8_DIMENSIONS
+    values = _uint_to_uint8_wide_range_values(formats.input_format, chunk)
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    # A custom distribution is called once per face, so overwrite the operand.
+    assert len(values) == src_A.numel()
+    src_A = torch.tensor(values, dtype=torch.int64).to(src_A.dtype)
+    golden = [v & 0xFF for v in values]
+
+    configuration = _build_typecast_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        input_dimensions,
+        src_A,
+        tile_cnt_A,
+        src_B,
+        tile_cnt_B,
+    )
+    result = [int(v) & 0xFF for v in configuration.run().result]
+    assert len(result) == len(
+        golden
+    ), f"expected {len(golden)} result elements, got {len(result)}"
+
+    mismatches = [(v, g, r) for v, g, r in zip(values, golden, result) if g != r]
+    assert not mismatches, (
+        f"{len(mismatches)} {formats.input_format.name}->UInt8 mismatches; first "
+        f"(input, expected, got): {[(hex(v), g, r) for v, g, r in mismatches[:16]]}"
+    )
+
+
 def _build_typecast_config(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
@@ -338,6 +576,7 @@ def _build_typecast_config(
     tile_cnt_A: int,
     src_B: torch.Tensor,
     tile_cnt_B: int,
+    twos_complement: bool = False,
 ) -> TestConfig:
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
@@ -386,6 +625,7 @@ def _build_typecast_config(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
@@ -424,6 +664,7 @@ def _run_typecast(
     spec_A: StimuliSpec,
     *,
     max_ulp: int | None = None,
+    twos_complement: bool = False,
 ):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -451,6 +692,7 @@ def _run_typecast(
         tile_cnt_A,
         src_B,
         tile_cnt_B,
+        twos_complement,
     )
 
     res_from_L1 = configuration.run().result

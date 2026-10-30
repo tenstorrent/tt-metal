@@ -9,8 +9,8 @@
 //
 // The builder is matmul's own create_program_mcast_in0_descriptor as of 917da3f9949^ (removed by #56836), which
 // already pushed the fused-op runtime args but never initialised the signaler. Updated to match matmul's Program&
-// builder (Quasar mcast-rectangle normalisation, one batch count for in0 and in1), with the mcast semaphore ids
-// allocated in the caller's descriptor and the signaler initialised. mcast_in1 / gather_in0 are rejected: neither
+// builder (one batch count for in0 and in1), with the in0 multicast built by the multicast helpers
+// (ttnn/cpp/ttnn/kernel_lib/mcast) and the signaler initialised. mcast_in1 / gather_in0 are rejected: neither
 // works fused today (#50167). Delete this file once the CCL ops are on Metal 2.0.
 //
 // It binds matmul's legacy kernels in ttnn/operations/matmul/device/kernels/ (not their _metal2 forks),
@@ -36,6 +36,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 
@@ -53,6 +54,21 @@ using tt::tt_metal::KernelDescriptor;
 namespace ttnn::prim::ccl_fusion {
 
 namespace reuse_mcast_1d_optimized_helpers {
+
+namespace {
+
+// One past the highest worker semaphore ID that `desc` already uses on `cores`; every ID from there up is free.
+uint32_t next_free_semaphore_id(const tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& cores) {
+    uint32_t next = 0;
+    for (const auto& sem : desc.semaphores) {
+        if (sem.core_type == tt::CoreType::WORKER && sem.core_ranges.intersects(cores)) {
+            next = std::max(next, sem.id + 1);
+        }
+    }
+    return next;
+}
+
+}  // namespace
 
 void create_program_mcast_in0_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,
@@ -231,7 +247,6 @@ void create_program_mcast_in0_descriptor(
 
     CoreRangeSet in0_mcast_sender_cores =
         num_cores_to_corerangeset_in_subcoregrids(start_core, in0_sender_num_cores, matmul_core_rect, row_major);
-    CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
         num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores_with_work, matmul_core_rect, row_major);
@@ -245,8 +260,6 @@ void create_program_mcast_in0_descriptor(
     CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
     CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
     CoreRangeSet in0_mcast_receivers;
-    std::vector<uint32_t> in0_mcast_noc_x;
-    std::vector<uint32_t> in0_mcast_noc_y;
     if (in0_is_sharded) {
         in0_mcast_cores_with_work_and_in_receiver_grid = all_cores_with_work;
 
@@ -272,17 +285,6 @@ void create_program_mcast_in0_descriptor(
                 matmul_core_rect,
                 row_major);
         }
-
-        in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
-        in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
-        for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(
-                device.worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
-        }
-        for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(
-                device.worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
-        }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
         if (in0_mcast_receiver_num_cores > 1) {
@@ -294,18 +296,6 @@ void create_program_mcast_in0_descriptor(
                 receiver_start_core, num_cores - 1, matmul_core_rect, row_major);
         }
     }
-
-    // Mcast args — semaphore IDs assigned sequentially (0, 1)
-    // The fused CCL op may already have placed semaphores in desc; take ids that are free on these cores.
-    const uint32_t in0_mcast_sender_semaphore_id =
-        ttnn::experimental::ccl::add_semaphore_descriptor(desc, CoreRangeSet(all_cores), INVALID);
-    const uint32_t in0_mcast_receiver_semaphore_id =
-        ttnn::experimental::ccl::add_semaphore_descriptor(desc, CoreRangeSet(all_cores), INVALID);
-
-    CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
-    CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
-    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -339,9 +329,7 @@ void create_program_mcast_in0_descriptor(
     std::vector<uint32_t> in0_sender_compile_time_args;
     if (in0_is_sharded) {
         in0_sender_compile_time_args = {
-            (std::uint32_t)1,  // core_has_output_block_work
-            (std::uint32_t)1,  // core_in_in0_receiver_mcast_grid
-
+            (std::uint32_t)1,                                           // core_has_output_block_work
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             (std::uint32_t)in0_last_ktile_w,
@@ -351,14 +339,6 @@ void create_program_mcast_in0_descriptor(
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_num_dests,  // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores,  // in0_mcast_num_cores
-            (std::uint32_t)(in0_mcast_sender_cores_grid.x),
-            (std::uint32_t)(in0_mcast_sender_cores_grid.y),
-            (std::uint32_t)(false),
             (std::uint32_t)(in0_shard_width_in_tiles),
             (std::uint32_t)(in0_shard_height_in_tiles),
             (std::uint32_t)(in0_block_w),
@@ -387,15 +367,10 @@ void create_program_mcast_in0_descriptor(
             (std::uint32_t)num_blocks,        // num_blocks
             (std::uint32_t)out_num_blocks_x,  // num_blocks_x
             (std::uint32_t)out_num_blocks_y,  // num_blocks_y
-            // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore_id,
-            (std::uint32_t)in0_mcast_receiver_semaphore_id,
-            (std::uint32_t)num_cores - 1,                     // in0_mcast_num_dests
-            (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
             // batch args
             (std::uint32_t)M * K,  // MtKt
-            (std::uint32_t)B,  // batch
-            (std::uint32_t)B,  // batch
+            (std::uint32_t)B,      // batch
+            (std::uint32_t)B,      // batch
             (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
@@ -424,14 +399,9 @@ void create_program_mcast_in0_descriptor(
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,  // in1_mcast_num_dests
-        (std::uint32_t)0,  // in1_mcast_num_cores
         // batch args
         (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)B,        // batch
+        (std::uint32_t)B,            // batch
         (std::uint32_t)bcast_batch,  // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
@@ -477,12 +447,9 @@ void create_program_mcast_in0_descriptor(
         (std::uint32_t)num_blocks,        // num_blocks
         (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B,  // batch
-        (std::uint32_t)false   // get_batch_from_reader
+        (std::uint32_t)B,     // batch
+        (std::uint32_t)false  // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -525,16 +492,6 @@ void create_program_mcast_in0_descriptor(
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
-
-    // TODO: SKIP_MCAST flag isn't used for the sharded reader kernel because internal mcast logic already works without
-    // skipping We can use this flag to turn off unnecessary mcast overhead if necessary
-    if (in0_mcast_receiver_num_cores == 1) {
-        mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
-    }
-
-    mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
-
-    // Intermediate CB read
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -608,7 +565,6 @@ void create_program_mcast_in0_descriptor(
             has_in0_no_work_in_receiver_kernel = true;
             auto no_work_ct_args = in0_sender_compile_time_args;
             no_work_ct_args[0] = 0;  // core_has_output_block_work
-            no_work_ct_args[1] = 1;  // core_in_in0_receiver_mcast_grid
             in0_no_work_in_receiver_kernel_desc.kernel_source =
                 "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
                 "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
@@ -628,7 +584,6 @@ void create_program_mcast_in0_descriptor(
             has_in0_no_work_not_in_receiver_kernel = true;
             auto no_work_ct_args = in0_sender_compile_time_args;
             no_work_ct_args[0] = 0;  // core_has_output_block_work
-            no_work_ct_args[1] = 0;  // core_in_in0_receiver_mcast_grid
             in0_no_work_not_in_receiver_kernel_desc.kernel_source =
                 "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
                 "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
@@ -964,22 +919,6 @@ void create_program_mcast_in0_descriptor(
     uint32_t in0_last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - in0_last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
-    CoreCoord start_core_noc = top_left_core_physical;
-    CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-        std::swap(start_core_noc, end_core_noc);
-    }
-    // Quasar is single-NOC / non-torus: the mcast rectangle MUST stay ascending [min..max]. in0_noc =
-    // preferred_noc_for_dram_write(arch), which is NOC_1 on Quasar, so the WH/BH NOC_1 swap above reverses it
-    // to [max..min] -> NoC "multicast invalid range" and the in0 sender hangs (waypoint NMWW). Re-normalize to
-    // ascending on Quasar.
-    if (device.arch() == tt::ARCH::QUASAR) {
-        const CoreCoord lo{std::min(start_core_noc.x, end_core_noc.x), std::min(start_core_noc.y, end_core_noc.y)};
-        const CoreCoord hi{std::max(start_core_noc.x, end_core_noc.x), std::max(start_core_noc.y, end_core_noc.y)};
-        start_core_noc = lo;
-        end_core_noc = hi;
-    }
-
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
@@ -987,16 +926,7 @@ void create_program_mcast_in0_descriptor(
         uint32_t output_idx_y = i / num_blocks_x;
 
         if (in0_is_sharded) {
-            std::vector<uint32_t> mm_in0_sender_args;
-            mm_in0_sender_args.reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
-            mm_in0_sender_args.push_back(i);
-            mm_in0_sender_args.push_back(start_core_noc.x);
-            mm_in0_sender_args.push_back(start_core_noc.y);
-            mm_in0_sender_args.push_back(end_core_noc.x);
-            mm_in0_sender_args.push_back(end_core_noc.y);
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-            mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
-
+            std::vector<uint32_t> mm_in0_sender_args{i};
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
@@ -1015,12 +945,6 @@ void create_program_mcast_in0_descriptor(
                 // in0 tensor args
                 (std::uint32_t)in0_tensor.address(),
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
-                // in0 mcast args
-                (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)start_core_noc.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)end_core_noc.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)end_core_noc.y,    // in0_mcast_dest_noc_end_y
-
                 // padding args
                 (std::uint32_t)in0_last_out_block_h,  // last_block_h
 
@@ -1039,27 +963,12 @@ void create_program_mcast_in0_descriptor(
                 in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
             }
         }
-        // in0 receiver and in 1 sender
-        else {
-            std::vector<uint32_t> mm_in0_receiver_args = {
-                // in0 mcast args
-                (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
-            };
-            in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
-        }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
                 (std::uint32_t)in1_tensor.address(),
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
-                // in1 mcast args
-                (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
-                (std::uint32_t)0,  // in1_mcast_dest_noc_start_y
-                (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
-                (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
-
                 // sparsity args
                 (std::uint32_t)0,  // sparsity_addr
 
@@ -1098,7 +1007,7 @@ void create_program_mcast_in0_descriptor(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            // Bias base address placeholder; rebound to a tensor binding via in1_sender_variant[18] below.
+            // Bias base address placeholder; rebound to a tensor binding via in1_sender_variant[14] below.
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
             mm_in1_sender_writer_args.push_back(
@@ -1119,13 +1028,51 @@ void create_program_mcast_in0_descriptor(
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in1_sender_variant(
                     mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
                 in1_sender_variant[0] = in1_tensor;
-                in1_sender_variant[7] = out_tensor;
+                in1_sender_variant[3] = out_tensor;
                 if (bias_tensor.has_value()) {
-                    in1_sender_variant[18] = *bias_tensor;
+                    in1_sender_variant[14] = *bias_tensor;
                 }
                 in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
             }
         }
+    }
+
+    // Every kernel's operation runtime arguments now exist; attach the in0 multicast after them. The fused CCL op may
+    // already have placed semaphores in desc, so the channel starts at IDs free on its cores.
+    {
+        using namespace ttnn::kernel_lib::host;
+        McastSenderConfig sender_config = McastExplicitFixedSenderConfig{.senders_per_group = {start_core}};
+        if (in0_is_sharded) {
+            const uint32_t num_blocks_per_shard = in0_shard_width_in_tiles / in0_block_w;
+            const uint32_t num_active_senders = (num_blocks + num_blocks_per_shard - 1) / num_blocks_per_shard;
+            if (num_active_senders > 1) {
+                sender_config = McastRotatingSenderConfig{
+                    .sender_cores = num_cores_to_corerangeset_in_subcoregrids(
+                        start_core, num_active_senders, matmul_core_rect, row_major),
+                    .sender_order = McastCoreOrder::RowMajor};
+            }
+        }
+        Mcast in0_mcast(
+            device,
+            McastConfig{
+                .noc = device.arch() == tt::ARCH::QUASAR ? tt_metal::NOC::NOC_0 : in0_noc,
+                .handshake_cores = all_cores.intersection(CoreRangeSet(in0_mcast_receiver_cores_bounding_box))},
+            CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
+            in0_mcast_receiver_num_cores,
+            sender_config);
+        std::vector<std::reference_wrapper<KernelDescriptor>> in0_targets{in0_sender_kernel_desc};
+        if (has_in0_no_work_in_receiver_kernel) {
+            in0_targets.emplace_back(in0_no_work_in_receiver_kernel_desc);
+        }
+        if (has_in0_no_work_not_in_receiver_kernel) {
+            in0_targets.emplace_back(in0_no_work_not_in_receiver_kernel_desc);
+        }
+        if (has_in0_receiver_kernel) {
+            in0_targets.emplace_back(in0_receiver_kernel_desc);
+        }
+        in0_mcast.attach(desc, "in0_mcast", in0_targets, next_free_semaphore_id(desc, in0_mcast.participating_cores()));
+        // in1 is never multicast on this path.
+        attach_absent_mcast(in1_sender_writer_kernel_desc, "in1_mcast");
     }
 
     ////////////////////////////////////////////////////////////////////////////

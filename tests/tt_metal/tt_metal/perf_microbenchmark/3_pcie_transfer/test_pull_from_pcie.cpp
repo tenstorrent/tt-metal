@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
         slow_dispatch::WriteToL1(*device, logical_core, l1_unreserved_base, go_signal);
 
         // Application setup
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
 
         uint32_t kernel_read_size = 64 * 1024;
 

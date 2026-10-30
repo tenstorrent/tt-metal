@@ -44,6 +44,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -655,7 +656,7 @@ struct Run {
 Run run(distributed::MeshDevice& mesh_device, uint32_t runtime_id) {
     Chips chips;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device.shape())) {
-        IDevice* device = mesh_device.get_device(coord);
+        IDevice* device = tt::tt_metal::internal::get_device(mesh_device, coord);
         chips.emplace(device->id(), Chip{coord, device, mesh_device.get_fabric_node_id(coord)});
     }
     Run result{.pairs = find_pairs(mesh_device, chips)};
