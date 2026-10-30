@@ -11,8 +11,6 @@
 #error "tt-metalium/buffer_types.hpp is host-only; include \"api/buffer_types.hpp\" in device code"
 #endif
 
-#include <cstdint>  // IWYU pragma: keep
-
 namespace tt::tt_metal {
 
 enum class TensorMemoryLayout {
