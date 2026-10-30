@@ -64,6 +64,11 @@ constexpr uint32_t blkidx = 18;
 
 constexpr uint32_t num_cbs = 19;  // c_0 .. c_18 (blkidx is only allocated in ring mode)
 
+// The reader's per-token CBs (qk16, kT16, qcol32, v16, gcol32, bcol16) hold this many tokens, so the reader builds
+// token t+1 while the compute consumes token t (decode_token pops its inputs only at its end). The reader zero-fills
+// every slot set once at kernel start; the per-token reserve/push walks the slot sets in a fixed order.
+constexpr uint32_t token_cb_nbuf = 2;
+
 // Tile dims {rows, cols} per CB id (blkidx is not a tile CB; its entry is a placeholder).
 constexpr std::array<uint32_t, 2> tile_16x32 = {16, 32};
 constexpr std::array<uint32_t, 2> tile_32x16 = {32, 16};
