@@ -206,7 +206,7 @@ MeshWorkload build_relay_workload(
 
     MeshWorkload workload;
     for (const auto& coord : up.backing->tensor_topology().mesh_coords()) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(stage);
 
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);

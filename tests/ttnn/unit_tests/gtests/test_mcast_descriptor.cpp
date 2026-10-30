@@ -331,7 +331,7 @@ TEST_F(McastHostFixture, NoHandshakeLeavesExchangeCreditAcrossConstructionPaths)
     for (const auto signal :
          {dataflow_kernel_lib::DataReadySignal::Flag, dataflow_kernel_lib::DataReadySignal::Counter}) {
         auto mcast = make_mcast(device_, {{participants, {{0, 0}}}}, {.handshake = false, .data_ready = signal});
-        Program program;
+        Program program = CreateProgram(*device_);
         ProgramDescriptor descriptor;
         auto spec = spec_pair();
         for (uint32_t id = 0; id < 14; ++id) {

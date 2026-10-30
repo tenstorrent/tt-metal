@@ -100,7 +100,7 @@ ProgramState init_program() {
         tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape());
     // Create a program object. A program is a collection of kernels that are executed on the device.
     // Kernels will be specified later.
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     return ProgramState(std::move(mesh_device), std::move(program), std::move(workload), std::move(device_range), cq);
 }

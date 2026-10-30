@@ -87,7 +87,7 @@ protected:
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device_->shape());
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device_);
         program.set_runtime_id(program_runtime_id_++);
 
         CreateKernel(
