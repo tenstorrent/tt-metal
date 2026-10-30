@@ -21,6 +21,24 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
+static void delay_until_env() {
+    char* run_at_strp = getenv("RUN_AT");
+    if (run_at_strp) {
+        uint64_t timestamp = std::stoll(run_at_strp);
+        std::chrono::system_clock::time_point tp{std::chrono::seconds(timestamp)};
+
+        std::time_t now_time_t = std::chrono::system_clock::to_time_t(tp);
+
+        std::tm* utc_time = std::gmtime(&now_time_t);
+        std::stringstream ss;
+        ss << std::put_time(utc_time, "%Y-%m-%d %H:%M:%S");
+
+        log_info(tt::LogTest, "Run at UTC time: {}", ss.str());
+
+        std::this_thread::sleep_until(tp);
+    }
+}
+
 struct chip_core {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     IDevice* chip;
@@ -140,6 +158,8 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernetDist02BandwidthBidir) {
     std::vector<std::string> test_endpoints = {
         "asic:0x2fb57e3b70ec5ed7/eth11",
     };
+
+    delay_until_env();
 
     for (auto& core : get_cores_to_test(devices_, test_endpoints)) {
         log_info(tt::LogTest, "running {}", core);
