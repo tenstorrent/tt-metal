@@ -297,7 +297,10 @@ def kv_cache_pcc_check(
 
     # Gather the persistent representation and reconstruct scaled FP8 only on the host. This keeps
     # validation compatible with both cache formats without allocating a BF16 cache on device.
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+    # Sequence (SP axis) onto dim 2, TP onto dim 1, whichever mesh axis SP is on.
+    composer = ttnn.ConcatMesh2dToTensor(
+        mesh_device, dims=(2, 1) if cfg.sp_axis == 0 else (1, 2), mesh_shape=mesh_device.shape
+    )
 
     def _to_host(tensor):
         host = ttnn.to_torch(tensor, mesh_composer=composer)  # [slots, tp, seq_len_cache / tp, row]

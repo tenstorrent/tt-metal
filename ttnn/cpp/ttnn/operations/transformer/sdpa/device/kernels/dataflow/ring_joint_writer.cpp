@@ -526,7 +526,8 @@ void kernel_main() {
     // mask-generation gate together with joint_l_partial_col.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(31);
     // Slots 32-35: transport-to-tensor rank mapping.
-    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(32) == 1;
+    constexpr uint32_t full_mesh_rank_mapping =
+        get_compile_time_arg_val(32);  // k{Axis,RowMajor,ColumnMajor}RankMapping
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(33));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(34);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(35);

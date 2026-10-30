@@ -564,25 +564,36 @@ def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device, sp_axis):
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params",
+    "mesh_device,device_params,sp_axis,chunk_size_global",
     [
         pytest.param(
             (2, 4),
             fabric2d_device_params(),
+            0,
+            768,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
-        )
+        ),
+        # A 4x4 prefill stage: SP on the axis-1 ring, so the 16 stripes run down the mesh columns.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            1536,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
     ],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_tensor_args", [False, True], ids=["scalar", "tensor"])
 @pytest.mark.timeout(0)
-def test_zero_padded_kv_cache_tp_deduped(mesh_device, use_tensor_args):
-    """TP-deduped cache: block-cyclic over sp*tp = 8 stripes of 96 rows, so 128-aligned windows can cross one."""
-    sp_axis, tp_axis = 0, 1
+def test_zero_padded_kv_cache_tp_deduped(mesh_device, sp_axis, chunk_size_global, use_tensor_args):
+    """TP-deduped cache: block-cyclic over sp*tp stripes of 96 rows (8 on the 2x4, 16 on the 4x4), so
+    128-aligned windows can cross one."""
+    tp_axis = 1 - sp_axis
     mesh_shape = tuple(mesh_device.shape)
-    chunk_size_global = 768
-    seq_len_cache = 1536
+    seq_len_cache = 2 * chunk_size_global
     num_layers, num_users = 2, 2
 
     cache = _init_cache_filled_with_ones(
@@ -601,10 +612,12 @@ def test_zero_padded_kv_cache_tp_deduped(mesh_device, use_tensor_args):
 
     mesh_device.enable_program_cache()
     cache_entries_before = mesh_device.num_program_cache_entries()
+    # Stripes are 96 rows on both meshes, so each window crosses the same stripe boundary (192, 480); the
+    # last sits in the second chunk on the 2x4 and in the first on the 4x4.
     windows = {
-        (0, 1): (180, 256),  # crosses 192: chip (0,1) -> (0,2)
-        (1, 0): (450, 512),  # crosses 480: chip (1,0) -> (1,1)
-        (1, 1): (1000, 1024),  # second chunk slab, chip (0,2)
+        (0, 1): (180, 256),  # crosses 192: stripe 1 -> 2
+        (1, 0): (450, 512),  # crosses 480: stripe 4 -> 5
+        (1, 1): (1000, 1024),
     }
     for (slot_idx, layer_idx), (valid_global, _pad_end) in windows.items():
         if use_tensor_args:

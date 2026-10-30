@@ -40,6 +40,8 @@ struct RingAttentionAllGatherAsyncParams {
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     std::optional<uint64_t> route_plan_hash;
+    // Full mesh only: tensor ranks run down the mesh columns (split KV with SP on mesh axis 1).
+    bool column_major_ranks = false;
 
     RingAttentionAllGatherAsyncParams(
         int32_t dim,
@@ -55,7 +57,8 @@ struct RingAttentionAllGatherAsyncParams {
         ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row,
         uint32_t mesh_rows = 0,
         uint32_t mesh_cols = 0,
-        std::optional<uint64_t> route_plan_hash = std::nullopt) :
+        std::optional<uint64_t> route_plan_hash = std::nullopt,
+        bool column_major_ranks = false) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -69,7 +72,8 @@ struct RingAttentionAllGatherAsyncParams {
         snake_orientation(snake_orientation),
         mesh_rows(mesh_rows),
         mesh_cols(mesh_cols),
-        route_plan_hash(route_plan_hash) {}
+        route_plan_hash(route_plan_hash),
+        column_major_ranks(column_major_ranks) {}
 
     // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
     // Excludes `semaphore` (GlobalSemaphore objects whose addresses are passed to runtime args).
@@ -88,7 +92,8 @@ struct RingAttentionAllGatherAsyncParams {
         "snake_orientation",
         "mesh_rows",
         "mesh_cols",
-        "route_plan_hash");
+        "route_plan_hash",
+        "column_major_ranks");
     auto attribute_values() const {
         return std::forward_as_tuple(
             dim,
@@ -103,7 +108,8 @@ struct RingAttentionAllGatherAsyncParams {
             snake_orientation,
             mesh_rows,
             mesh_cols,
-            route_plan_hash);
+            route_plan_hash,
+            column_major_ranks);
     }
 };
 

@@ -2213,9 +2213,11 @@ class ttMLA:
             ), "dense tp_shard_kv is the chunked ring_mla split-KV path; single-shot prefill has no striped write"
         # Checked here, not on the first chunk after a long weight load.
         if self.tp_shard_kv and not self._has_indexer:
-            assert self.sp_axis == 0 and self.tp_axis == 1, (
-                f"dense tp_shard_kv needs SP on mesh axis 0 and TP on axis 1 (split-KV ring_mla), got "
-                f"sp_axis={self.sp_axis} tp_axis={self.tp_axis}"
+            # Either axis works: ring_mla numbers its KV stripes SP-major, row-major over the mesh with SP
+            # on axis 0 and column-major with SP on axis 1, from Q's declared sequence placement.
+            assert self.tp_axis == 1 - self.sp_axis, (
+                f"dense tp_shard_kv needs SP and TP on distinct mesh axes, got sp_axis={self.sp_axis} "
+                f"tp_axis={self.tp_axis}"
             )
             chunk_local = self.active_seq_len // self.sp_factor
             assert self.active_seq_len % self.sp_factor == 0 and chunk_local % (self.tp_factor * ttnn.TILE_SIZE) == 0, (
