@@ -166,6 +166,15 @@ class SplitfreePlan:
         return self.scratch_tiles * F32_TILE_BYTES
 
     @property
+    def scratch_tiles_bound(self):
+        """The slots any context needs on this grid: ``derive_unit`` keeps ``max_units <= n_cores`` on a layer
+        without a window (a narrower page table than the model's maximum shrinks the unit, never the bound), so a
+        scratch sized for ``n_cores`` slots serves every call; a windowed layer's slot count is fixed by the
+        window."""
+        slots = self.n_slots if self.window else max(self.n_slots, self.n_cores)
+        return self.batch * self.groups * slots * self.tiles_per_slot
+
+    @property
     def fits(self):
         return max(self.partial_cb_bytes, self.combine_cb_bytes) <= self.budget_bytes
 
@@ -333,9 +342,11 @@ def plan_splitfree(
 
 def scratch_tiles_for(grid, batch, layer_specs, max_context, *, kv_dtype=None, arch=None, env=None):
     """The flat scratch (in fp32 tiles) one model needs on ``grid`` for ``batch`` padded rows at ``max_context``:
-    the largest slot pool over its layer types, ``layer_specs`` an iterable of ``(groups, heads_per_group,
-    head_dim, window)``. Planned with the arch's L1 budget and a page-table row of 32-token blocks (the widest
-    row a call can bring), so the chunk choice is the call's or a smaller one, never a larger."""
+    the largest slot pool over its layer types (``scratch_tiles_bound``: one slot per core on a layer without a
+    window, so a call on a narrower page table -- a smaller unit, as many units -- still fits), ``layer_specs``
+    an iterable of ``(groups, heads_per_group, head_dim, window)``. Planned with the arch's L1 budget and a
+    page-table row of 32-token blocks (the widest row a call can bring), so the chunk choice is the call's or a
+    smaller one, never a larger."""
     tiles = 0
     for groups, heads_per_group, head_dim, window in layer_specs:
         plan = plan_splitfree(
@@ -351,5 +362,5 @@ def scratch_tiles_for(grid, batch, layer_specs, max_context, *, kv_dtype=None, a
             env=env,
             pt_stick=ceil_div(max_context, TILE) * 4,
         )
-        tiles = max(tiles, plan.scratch_tiles)
+        tiles = max(tiles, plan.scratch_tiles_bound)
     return tiles

@@ -329,12 +329,18 @@ def test_splitfree_scratch_sizes_of_the_galaxy_builds():
     sliding = _plan((13, 10), 32, groups=2, hpg=2, head_dim=256, window=1024)
     assert sliding.scratch_tiles == 32 * 2 * 5 * 10 == 3200 and sliding.scratch_bytes == 13_107_200
     specs = [(1, 4, 512, None), (2, 2, 256, 1024)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env={}) == 73728
+    # the model's scratch takes one slot per core (130 on 13x10): a call on a narrower page table than the
+    # model's maximum derives a smaller unit with up to n_cores units (33280 tokens: 130 units of 256), and fits
+    assert p31.scratch_tiles_bound == 32 * 130 * 18 == 74880 and sliding.scratch_tiles_bound == 3200
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env={}) == 74880
     assert sp.scratch_tiles_for((8, 8), 32, specs, CTX_256K, kv_dtype="BFLOAT16", env={}) == 36864
-    assert sp.scratch_tiles_for((13, 10), 1, specs, CTX_256K, env={}) == 128 * 18
+    assert sp.scratch_tiles_for((13, 10), 1, specs, CTX_256K, env={}) == 130 * 18
+    narrow = _plan((13, 10), 32, ctx=33280)
+    assert (narrow.unit, narrow.max_units, narrow.scratch_tiles) == (256, 130, 74880)
+    assert all(_plan((13, 10), 32, ctx=c).scratch_tiles <= 74880 for c in range(4096, CTX_256K + 1, 4096))
     # a 128K build keeps the slot count (1024-token units); the 31B at TP4 (8 local q heads over one KV group)
     # needs the same
-    assert sp.scratch_tiles_for((13, 10), 32, [(1, 8, 512, None)], CTX_256K // 2, env={}) == 32 * 128 * 18
+    assert sp.scratch_tiles_for((13, 10), 32, [(1, 8, 512, None)], CTX_256K // 2, env={}) == 32 * 130 * 18
     # the model's own sizing (attach_sdpa_splitfree_scratch, also run by the vLLM generator once the plugin's
     # caches exist): the covered layers and their per-chip specs of the 12B (16 q / 8 kv heads, head_dim 256 /
     # 512 global, window 1024, 48 layers in the 5:1 pattern) at TP4 and TP8, mode "1" (global) and "2" (all)
@@ -357,10 +363,10 @@ def test_splitfree_scratch_sizes_of_the_galaxy_builds():
     )
     covered, specs = splitfree_layer_specs(hf, 48, 4, "1")
     assert covered == {i for i in range(48) if i % 6 == 5} and specs == [(2, 2, 512, None)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 128 * 18  # 576 MiB at TP4
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 130 * 18  # 585 MiB at TP4
     covered, specs = splitfree_layer_specs(hf, 48, 4, "2")
     assert covered == set(range(48)) and specs == [(2, 2, 256, 1024), (2, 2, 512, None)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 128 * 18  # the global figure
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 130 * 18  # the global figure
     assert splitfree_layer_specs(hf, 48, 8, "1")[1] == [(1, 2, 512, None)]
     assert splitfree_layer_specs(hf, 12, 16, "2")[1] == [(1, 1, 256, 1024), (1, 1, 512, None)]  # kv replicated
     assert splitfree_layer_specs(hf, 48, 4, "0") == (set(), [])
