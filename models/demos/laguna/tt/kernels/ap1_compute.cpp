@@ -131,7 +131,7 @@ void kernel_main() {
                 }
             } else {
                 reconfig_data_format_srca(cb_y);
-                copy_tile_init(cb_y);
+                copy_init(cb_y);
                 copy_tile(cb_y, j, 0);
             }
             tile_regs_commit();

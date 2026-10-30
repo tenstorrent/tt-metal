@@ -46,15 +46,15 @@ void kernel_main() {
     if constexpr (reduce) {
         cb_wait_front(cb_part, Mt);
         cb_wait_front(cb_recv, (KC - 1) * Mt);
-        copy_tile_to_dst_init_short(cb_part);
+        copy_init(cb_part);
         reconfig_data_format_srca(cb_part);
         pack_reconfig_data_format(cb_out);
         cb_reserve_back(cb_out, Mt);
         for (uint32_t m = 0; m < Mt; ++m) {
             tile_regs_acquire();
-            copy_tile_to_dst_init_short(cb_part);
+            copy_init(cb_part);
             copy_tile(cb_part, m, 0);
-            copy_tile_to_dst_init_short(cb_recv);
+            copy_init(cb_recv);
             for (uint32_t i = 0; i < KC - 1; ++i) {
                 copy_tile(cb_recv, i * Mt + m, 1);
                 add_binary_tile_init();

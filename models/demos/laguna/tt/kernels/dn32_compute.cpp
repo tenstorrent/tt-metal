@@ -106,7 +106,7 @@ void kernel_main() {
         cb_push_back(cb_acc, CPC * Mt);
         // fp32 sums -> the bf16 output tiles (order j * Mt + m)
         cb_wait_front(cb_acc, CPC * Mt);
-        copy_tile_to_dst_init_short(cb_acc);
+        copy_init(cb_acc);
         reconfig_data_format_srca(cb_acc);
         pack_reconfig_data_format(cb_out);
         cb_reserve_back(cb_out, CPC * Mt);

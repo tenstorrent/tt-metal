@@ -93,7 +93,7 @@ void kernel_main() {
             tile_regs_acquire();
             mul_bcast_cols_init(cb_u, cb_wv);
             mul_tiles_bcast_cols(cb_u, cb_wv, a, m, 1);
-            copy_tile_init(cb_g);
+            copy_init(cb_g);
             copy_tile(cb_g, a, 0);
             silu_tile_init();
             silu_tile(0);

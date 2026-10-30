@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t na = read_tile_value(cb_meta, 0, 0);
     cb_pop_front(cb_meta, 1);
     tile_regs_acquire();
-    copy_tile_init(cb_x);
+    copy_init(cb_x);
     for (uint32_t i = 0; i < na; ++i) {
         cb_wait_front(cb_x, 1);
         copy_tile(cb_x, 0, i == 0 ? 0 : 1);
@@ -27,7 +27,7 @@ void kernel_main() {
         if (i > 0) {
             add_binary_tile_init();
             add_binary_tile(0, 1, 0);
-            copy_tile_init(cb_x);
+            copy_init(cb_x);
         }
     }
     tile_regs_commit();

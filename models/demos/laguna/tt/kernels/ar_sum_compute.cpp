@@ -18,10 +18,10 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_x, cb_out);
     cb_wait_front(cb_x, D + 1);
     tile_regs_acquire();
-    copy_tile_init(cb_x);
+    copy_init(cb_x);
     copy_tile(cb_x, 0, 0);
     for (uint32_t i = 1; i <= D; ++i) {
-        copy_tile_init(cb_x);
+        copy_init(cb_x);
         copy_tile(cb_x, i, 1);
         add_binary_tile_init();
         add_binary_tile(0, 1, 0);

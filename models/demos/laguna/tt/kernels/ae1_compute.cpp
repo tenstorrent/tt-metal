@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t cb_attn = 0, cb_g = 1, cb_gsp = 3, cb_out = 16;
     compute_kernel_hw_startup(cb_g, cb_gsp);
     cb_wait_front(cb_g, 1);
-    copy_tile_init(cb_g);
+    copy_init(cb_g);
     tile_regs_acquire();
     copy_tile(cb_g, 0, 0);
     softplus_tile_init();
