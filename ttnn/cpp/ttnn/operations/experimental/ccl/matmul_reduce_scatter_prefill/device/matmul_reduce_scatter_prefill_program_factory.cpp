@@ -18,12 +18,8 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -1016,13 +1012,11 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 }
 
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles) {
-    // The staging layout of a size is the same on every call: build it once (the sharded page mapping over the full
-    // grid is most of create_device_tensor's cost) and allocate only the buffer per call. Mesh ids are never reused,
+    // The staging spec and topology of a size are the same on every call: build them once and allocate through
+    // create_device_tensor, which keeps its trace-allocation and graph-capture bookkeeping. Mesh ids are never reused,
     // so a mesh's grid and shape are fixed under its key.
     struct StagingLayout {
         TensorSpec spec;
-        tt::tt_metal::distributed::DeviceLocalBufferConfig device_local;
-        tt::tt_metal::distributed::ReplicatedBufferConfig replicated;
         tt::tt_metal::TensorTopology topology;
     };
     static ttsl::Indestructible<std::map<std::pair<MeshKey, uint32_t>, StagingLayout>> layouts;
@@ -1036,21 +1030,7 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
         }
     }
     if (layout != nullptr) {
-        // What create_device_tensor does around the allocation, so trace allocation tracking and graph capture see
-        // the same as on the first call.
-        auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.allocate_tensor_on_device");
-        tt::tt_metal::GraphTracker::instance().track_function_start(
-            "tt::tt_metal::create_device_tensor",
-            layout->spec.logical_shape(),
-            layout->spec.tensor_layout().get_data_type(),
-            layout->spec.tensor_layout().get_layout(),
-            mesh,
-            layout->spec.tensor_layout().get_memory_config());
-        auto buffer = tt::tt_metal::distributed::MeshBuffer::create(layout->replicated, layout->device_local, mesh);
-        Tensor staging = set_tensor_id(Tensor(
-            tt::tt_metal::mesh_tensor_from_buffer_with_topology(std::move(*buffer), layout->spec, layout->topology)));
-        tt::tt_metal::GraphTracker::instance().track_function_end(staging);
-        return staging;
+        return create_device_tensor(layout->spec, mesh, layout->topology);
     }
     const CoreCoord g = mesh->compute_with_storage_grid_size();
     const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
@@ -1067,16 +1047,7 @@ Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t st
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
     Tensor first = create_device_tensor(spec, mesh);
     const std::lock_guard<std::mutex> lock(layouts_mutex);
-    layouts.get().try_emplace(
-        key,
-        StagingLayout{
-            .spec = spec,
-            .device_local =
-                {.page_size = spec.compute_page_size_bytes(),
-                 .buffer_type = BufferType::L1,
-                 .sharding_args = spec.compute_buffer_sharding_args()},
-            .replicated = {.size = spec.compute_packed_buffer_size_bytes()},
-            .topology = first.tensor_topology()});
+    layouts.get().try_emplace(key, StagingLayout{.spec = spec, .topology = first.tensor_topology()});
     return first;
 }
 
