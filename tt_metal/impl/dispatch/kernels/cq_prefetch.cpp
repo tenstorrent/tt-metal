@@ -619,12 +619,10 @@ FORCE_INLINE uint32_t read_from_pcie(
 #endif
     }
 #if defined(PREFETCH_Q_CACHED)
-    // After the first slot of a line, drop the next line from the cache, so its first read comes fresh from TL1. Doing
-    // it any earlier loses to the hardware prefetch that this line's miss starts, which pulls the next lines into L2
-    // with whatever the host had written by then. Skipping the fences is fine since the rest of the line goes by first.
-    const uintptr_t rd_addr = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr);
-    if ((rd_addr & (L2_CACHE_LINE_SIZE - 1)) == sizeof(prefetch_q_entry_type)) {
-        uintptr_t next_line = (rd_addr & ~static_cast<uintptr_t>(L2_CACHE_LINE_SIZE - 1)) + L2_CACHE_LINE_SIZE;
+    // On entering a line, drop the next one from the cache, so its first read comes fresh from TL1 and the rest
+    // of it hits. Skipping the fences is fine since the invalidate has a whole line of entries to land first.
+    if ((reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) & (L2_CACHE_LINE_SIZE - 1)) == 0) {
+        uintptr_t next_line = reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr) + L2_CACHE_LINE_SIZE;
         if (next_line == prefetch_q_view_end) {
             next_line = prefetch_q_view_base;
         }
