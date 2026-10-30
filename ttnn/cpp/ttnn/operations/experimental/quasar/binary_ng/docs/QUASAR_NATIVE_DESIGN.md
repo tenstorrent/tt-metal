@@ -511,7 +511,8 @@ Env vars, one per knob: `TTNN_QSR_NATIVE` (master: on unless set to `0`), `TTNN_
 inert, and re-enabling it needs the non-empty-thread guarantee that F1 removed, since a zero-work thread
 would skip `handle_final_credits`' barrier), `TTNN_QSR_READER_THREADS`, `TTNN_QSR_COMPUTE_THREADS`,
 `TTNN_QSR_WRITER_THREADS`, `TTNN_QSR_ENTRIES_PER_THREAD`, `TTNN_QSR_DM_BATCH`, `TTNN_QSR_TILES_PER_CYCLE`,
-`TTNN_QSR_DRAM_BATCH` (on unless `0`);
+`TTNN_QSR_DRAM_BATCH` (on unless `0`), `TTNN_QSR_SLICE_TAIL_MIN` (the tiles per bank from which an uneven slice
+is borrowed, on both kernels);
 unset or empty means the rule. `select_program_factory` runs on **every** dispatch, so check arch and
 attributes before `std::getenv` and cache the parse in a trivially-destructible `static const`.
 
@@ -832,7 +833,9 @@ worker grid.
   grid to be the L1 bank cores, which is the whole grid on Quasar. An anchor must run on at least as many
   clusters as production uses for the op: the cores that hold the output's shards where production borrows the
   output, else production's split. Under the rule a borrowed ring must divide by 4; with all three operands
-  borrowed and no activation, tail rings carry the tiles past the largest multiple of 4. Among the anchors left,
+  borrowed and no activation, tail rings carry the tiles past the largest multiple of 4. A slice takes them only on
+  the FPU kernel from 96 tiles per bank (`TTNN_QSR_SLICE_TAIL_MIN`): their setup costs about 1000 cycles, which a
+  smaller slice or the SFPU kernel does not win back over the NoC path. Among the anchors left,
   the one that borrows the most operands wins; a tie goes to the one that borrows the output, then to the one on
   more clusters. Each operand that is not borrowed moves over the NoC in the anchor's tile order. Without an
   anchor, native splits the tiles as production does.
@@ -872,7 +875,7 @@ contiguous range. The tile count per cluster is the same: the first (tiles mod 3
 | Tiles that do not divide over the cores | `split_work_to_cores`: group 1 takes one tile more than group 2; idle cores get no-op runtime args | the same groups; idle clusters do not start |
 | Uneven shards (pad slots) | borrowed only with one shard spec on all three; each core computes its full shard | the same, and also beside operands that move, which skip the pad slots |
 | Tiles that do not divide over the threads of a cluster | — | the low thread ids take one tile more; a thread can take none |
-| A borrowed shard that 4 does not divide | — | with all three borrowed and no activation: tail rings. Beside an activation, or beside operands that move: not borrowed (see above) |
+| A borrowed shard or slice that 4 does not divide | — | with all three borrowed and no activation: tail rings, for a slice only on the FPU kernel from 96 tiles per bank. Otherwise not borrowed (see above) |
 
 **The same in both.**
 
