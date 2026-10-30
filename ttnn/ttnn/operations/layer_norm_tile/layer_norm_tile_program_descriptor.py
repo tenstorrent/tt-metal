@@ -17,7 +17,11 @@ TILE = 32
 
 # Blocking-model host constants (op_design.md, Blocking Model). Each is defined once.
 CB_L1_BUDGET_BYTES = 768 * 1024
-INPUT_DEPTH_MAX = 2
+BLOCK_HEIGHT_MAX = 1
+INPUT_DEPTH_MAX = 4
+# Tile-row count from which the residual stream moves to the writer RISC / other NoC. Measured on BH
+# p100a (residual, us, split off -> on): R=32 17.4-18.3 -> 19.2-20.6, R=64 33 -> 26.5, R=128 58 -> 36.4.
+RESIDUAL_SPLIT_MIN_TILE_ROWS = 64
 OUTPUT_DEPTH = 2
 
 CB_INPUT_TILES = 0
@@ -47,6 +51,8 @@ class Blocking:
     in_tile_bytes: int
     acc_dtype: object
     has_residual: bool
+    # Residual stream fetched by the writer RISC on the other NoC (else by the reader, beside x).
+    residual_on_writer: bool
     # {allocation: (pages, page_bytes)} from _cb_plan
     cb_plan: dict
     all_cores: object
@@ -107,16 +113,16 @@ def derive_blocking(input_tensor, *, has_residual, fp32_dest_acc_en):
     acc_bytes = ttnn.tile_size(acc_dtype)
     geom = dict(Wt=Wt, in_bytes=in_bytes, acc_bytes=acc_bytes, has_residual=has_residual)
 
-    if _block_height_cap(INPUT_DEPTH_MAX, **geom) < 1:
+    if _block_height_cap(1, **geom) < 1:
         return None
 
     all_cores, cores_rows, max_core_rows_tiles = _split_rows(input_tensor.device(), tensor_rows_tiles)
-    if max_core_rows_tiles <= _block_height_cap(1, **geom):
-        input_depth = 1
-        block_height = max_core_rows_tiles
-    else:
-        input_depth = INPUT_DEPTH_MAX
-        block_height = min(max_core_rows_tiles, _block_height_cap(INPUT_DEPTH_MAX, **geom))
+    # Compute runs BLOCK_HEIGHT_MAX tile-rows per block so it starts as soon as the first rows land; the
+    # reader runs up to input_depth blocks ahead (whole assignment when it fits) so reads never wait on it.
+    block_height = min(max_core_rows_tiles, BLOCK_HEIGHT_MAX, _block_height_cap(1, **geom))
+    input_depth = min(-(-max_core_rows_tiles // block_height), INPUT_DEPTH_MAX)
+    while input_depth > 1 and _block_height_cap(input_depth, **geom) < block_height:
+        input_depth -= 1
 
     assignment = []
     start_row = 0
@@ -133,6 +139,7 @@ def derive_blocking(input_tensor, *, has_residual, fp32_dest_acc_en):
         in_tile_bytes=in_bytes,
         acc_dtype=acc_dtype,
         has_residual=has_residual,
+        residual_on_writer=has_residual and tensor_rows_tiles >= RESIDUAL_SPLIT_MIN_TILE_ROWS,
         cb_plan=_cb_plan(block_height, input_depth, **geom),
         all_cores=all_cores,
         assignment=tuple(assignment),
@@ -188,27 +195,33 @@ def create_program_descriptor(
     if has_residual:
         cbs.append(_cb((CB_RESIDUAL_TILES,), *plan["residual"], residual_input_tensor.dtype, cores))
 
-    reader_ct_args = [CB_INPUT_TILES, CB_RESIDUAL_TILES, Wt, block_height, in_bytes, int(has_residual)]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    reader_ct_args.extend(
+    residual_args = (
         ttnn.TensorAccessorArgs(residual_input_tensor).get_compile_time_args()
         if has_residual
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+    residual_on_writer = has_residual and blocking.residual_on_writer
+    reader_ct_args = [CB_INPUT_TILES, Wt, in_bytes, CB_RESIDUAL_TILES, int(has_residual and not residual_on_writer)]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend(residual_args)
 
     writer_ct_args = [
         CB_OUTPUT_TILES,
         CB_GAMMA_ROWS,
         CB_BETA_ROWS,
+        CB_RESIDUAL_TILES,
         Wt,
-        block_height,
         plan["output"][1],
+        int(residual_on_writer),
+        in_bytes,
+        plan["residual"][0] // Wt if has_residual else 0,  # residual CB capacity in tile-rows
     ]
     writer_ct_args.extend(_affine_ct_args(gamma))
     writer_ct_args.extend(_affine_ct_args(beta))
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
     writer_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
+    writer_ct_args.extend(residual_args)
 
     compute_ct_args = [
         CB_INPUT_TILES,
@@ -240,8 +253,9 @@ def create_program_descriptor(
     beta_addr = beta.buffer_address()
     eps_bits = _float_bits(epsilon)
     for core, start_row, num_blocks, last_block_extent in blocking.assignment:
-        reader_rt[core.x][core.y] = [in_addr, res_addr, start_row, num_blocks, last_block_extent]
-        writer_rt[core.x][core.y] = [out_addr, gamma_addr, beta_addr, start_row, num_blocks, last_block_extent]
+        core_rows = (num_blocks - 1) * block_height + last_block_extent
+        reader_rt[core.x][core.y] = [in_addr, res_addr, start_row, core_rows]
+        writer_rt[core.x][core.y] = [out_addr, gamma_addr, beta_addr, res_addr, start_row, core_rows]
         compute_rt[core.x][core.y] = [num_blocks, last_block_extent, eps_bits]
 
     kernels = [

@@ -5,6 +5,8 @@
 //   fetch_affine_rows: once per kernel, builds one row-0 tile per tile-column of gamma and beta (only
 //                      face-0 row 0 and face-1 row 0 are meaningful; the Row broadcast reads nothing else).
 //                      Runs here, not on the reader, so the reader issues block 0 first (stall-shadow).
+//   load_block (residual stream): tops up cb_residual_tiles on this RISC's NoC, in parallel with the
+//                      reader's x stream on the other NoC.
 //   store_block:       drains cb_output_tiles one tile-row at a time.
 
 #include <cstdint>
@@ -71,25 +73,63 @@ void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t cb_gamma_rows = get_compile_time_arg_val(1);
     constexpr uint32_t cb_beta_rows = get_compile_time_arg_val(2);
-    constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t block_height = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_residual_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t output_tile_bytes = get_compile_time_arg_val(5);
-    constexpr bool gamma_is_rm = get_compile_time_arg_val(6) != 0;
-    constexpr uint32_t gamma_stick_elems = get_compile_time_arg_val(7);
-    constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(8);
-    constexpr bool beta_is_rm = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t beta_stick_elems = get_compile_time_arg_val(10);
-    constexpr uint32_t beta_page_bytes = get_compile_time_arg_val(11);
-    constexpr auto output_args = TensorAccessorArgs<12>();
+    // True when the residual stream is fetched here (the other NoC) rather than by the reader.
+    constexpr bool fetch_residual = get_compile_time_arg_val(6) != 0;
+    constexpr uint32_t residual_tile_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t residual_depth_rows = get_compile_time_arg_val(8);
+    constexpr bool gamma_is_rm = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t gamma_stick_elems = get_compile_time_arg_val(10);
+    constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(11);
+    constexpr bool beta_is_rm = get_compile_time_arg_val(12) != 0;
+    constexpr uint32_t beta_stick_elems = get_compile_time_arg_val(13);
+    constexpr uint32_t beta_page_bytes = get_compile_time_arg_val(14);
+    constexpr auto output_args = TensorAccessorArgs<15>();
     constexpr auto gamma_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto residual_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
     const uint32_t beta_addr = get_arg_val<uint32_t>(2);
-    const uint32_t start_row = get_arg_val<uint32_t>(3);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(4);
-    const uint32_t last_block_extent = get_arg_val<uint32_t>(5);
+    [[maybe_unused]] const uint32_t residual_addr = get_arg_val<uint32_t>(3);
+    const uint32_t start_row = get_arg_val<uint32_t>(4);
+    const uint32_t core_rows = get_arg_val<uint32_t>(5);
+
+    // load_block, residual stream (when fetch_residual): runs on this RISC's NoC, concurrently with the
+    // reader's x stream on the other NoC. Rows are topped up ahead of each output drain; reserving row r + depth - 1
+    // never blocks for long, because compute popped residual rows < r before producing output row r - 1.
+    [[maybe_unused]] const auto residual_accessor = TensorAccessor(residual_args, residual_addr, residual_tile_bytes);
+    uint32_t residual_rows_pushed = 0;
+    auto top_up_residual = [&](uint32_t row_limit) {
+        if constexpr (fetch_residual) {
+            for (; residual_rows_pushed < row_limit; ++residual_rows_pushed) {
+                const uint32_t first_page = (start_row + residual_rows_pushed) * tensor_w_tiles;
+                cb_reserve_back(cb_residual_tiles, tensor_w_tiles);
+#ifndef LAYER_NORM_ABLATE_READS  // perf ablation: keep the CB handshake, drop the NoC payload
+                uint32_t l1_write_addr = get_write_ptr(cb_residual_tiles);
+                for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
+                    noc_async_read(
+                        residual_accessor.get_noc_addr(first_page + col), l1_write_addr, residual_tile_bytes);
+                    l1_write_addr += residual_tile_bytes;
+                }
+                noc_async_read_barrier();
+#endif
+                cb_push_back(cb_residual_tiles, tensor_w_tiles);
+            }
+        }
+    };
+    auto residual_row_limit = [&](uint32_t output_row) {
+        const uint32_t limit = output_row + residual_depth_rows;
+        return limit < core_rows ? limit : core_rows;
+    };
+
+    // Compute needs residual row 0 first (add_residual_block) and gamma/beta only at scale_block. Issuing
+    // the affine reads ahead of it was measured slower: the grid-wide fetch of a few hot gamma/beta banks
+    // delays the residual responses.
+    top_up_residual(1);  // every assigned core owns >= 1 tile-row
 
     Noc noc;
     const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
@@ -107,23 +147,21 @@ void kernel_main() {
     gamma_rows.push_back(tensor_w_tiles);
     beta_rows.push_back(tensor_w_tiles);
 
+    // store_block
     const auto output_accessor = TensorAccessor(output_args, output_addr, output_tile_bytes);
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        const uint32_t block_rows = (block_idx + 1 == num_blocks) ? last_block_extent : block_height;
-        const uint32_t block_first_row = start_row + block_idx * block_height;
-        for (uint32_t row = 0; row < block_rows; ++row) {
-            const uint32_t first_page = (block_first_row + row) * tensor_w_tiles;
-            cb_wait_front(cb_output_tiles, tensor_w_tiles);
-            uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
+    for (uint32_t row = 0; row < core_rows; ++row) {
+        top_up_residual(residual_row_limit(row));
+        const uint32_t first_page = (start_row + row) * tensor_w_tiles;
+        cb_wait_front(cb_output_tiles, tensor_w_tiles);
 #ifndef LAYER_NORM_ABLATE_WRITES  // perf ablation: keep the CB handshake, drop the NoC payload
-            for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
-                noc_async_write(l1_read_addr, output_accessor.get_noc_addr(first_page + col), output_tile_bytes);
-                l1_read_addr += output_tile_bytes;
-            }
-#endif
-            noc_async_writes_flushed();
-            cb_pop_front(cb_output_tiles, tensor_w_tiles);
+        uint32_t l1_read_addr = get_read_ptr(cb_output_tiles);
+        for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
+            noc_async_write(l1_read_addr, output_accessor.get_noc_addr(first_page + col), output_tile_bytes);
+            l1_read_addr += output_tile_bytes;
         }
+#endif
+        noc_async_writes_flushed();
+        cb_pop_front(cb_output_tiles, tensor_w_tiles);
     }
     noc_async_write_barrier();
 }

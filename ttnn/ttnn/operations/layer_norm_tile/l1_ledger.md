@@ -9,8 +9,8 @@ spanned by every tile-shaped page; it is not repeated per row below.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_tiles` | `input_depth * block_height * Wt` | no residual: `block_rows * Wt` (whole block resident through `mean_block`); residual: 1 tile on the consumer side | `{tile_rows: spans -> block_height, W: spans -> Wt}` | bf16 (tensor dtype) | reader | compute | `load_block` .. `center_block` (no residual) / `add_residual_block` (residual) | Not shared: it is reader-produced, and every candidate partner (`work`, `stats`) is compute-produced, so aliasing would give the bytes two producers. Capacity above the residual-path live set is the reader prefetch of a whole block in one pass; `input_depth = 2` only when a next block exists (double buffering). |
-| `cb_residual_tiles` | `HAS_RESIDUAL * input_depth * block_height * Wt` | 1 tile consumer-side (streamed by `add_residual_block`) | `{tile_rows: spans -> block_height, W: spans -> Wt}` | bf16 | reader | compute | `load_block` .. `add_residual_block` | Not shared: concurrent with `cb_input_tiles` (both streamed by the same phase) and reader-produced. Capacity above live set = whole-block reader prefetch so the reader fills input and residual tile-rows in one barrier; a `Wt`-tile window is the nearby alternative (overlap lamp scope). |
+| `cb_input_tiles` | `input_depth * block_height * Wt` | no residual: `block_rows * Wt` (whole block resident through `mean_block`); residual: 1 tile on the consumer side | `{tile_rows: spans -> block_height, W: spans -> Wt}` | bf16 (tensor dtype) | reader | compute | `load_block` .. `center_block` (no residual) / `add_residual_block` (residual) | Not shared: it is reader-produced, and every candidate partner (`work`, `stats`) is compute-produced, so aliasing would give the bytes two producers. Capacity above the live set is reader run-ahead: `input_depth` blocks of `block_height = 1` tile-row, up to the whole per-core assignment (`INPUT_DEPTH_MAX = 4`), so reads never wait on compute and compute starts on the first landed row. |
+| `cb_residual_tiles` | `HAS_RESIDUAL * input_depth * block_height * Wt` | 1 tile consumer-side (streamed by `add_residual_block`) | `{tile_rows: spans -> block_height, W: spans -> Wt}` | bf16 | reader when `R < RESIDUAL_SPLIT_MIN_TILE_ROWS (64)`, else **writer** (other RISC, NoC1; single producer either way) | compute | `load_block` .. `add_residual_block` | Not shared: concurrent with `cb_input_tiles` (both streamed by the same phase) and DM-produced. Capacity above live set = run-ahead (same depth as `cb_input_tiles`); on the writer path it is topped up to `input_depth` rows ahead of each output drain. |
 | `cb_gamma_rows` | `Wt` | `Wt` (all tile-columns re-read by every `scale_block`) | `{tile_rows: streams -> 0 (constant over rows), W: spans -> Wt}` | bf16 | writer | compute | kernel | Not shared: live for the whole kernel, overlapping every other CB. Also serves as the never-read scaler id of `mean_block`/`rstd_block` (no allocation). |
 | `cb_beta_rows` | `Wt` | `Wt` | `{tile_rows: streams -> 0, W: spans -> Wt}` | bf16 | writer | compute | kernel | Not shared: kernel lifetime, concurrent with `cb_gamma_rows` (both resident). |
 | `cb_xsum` (alias group `work`) | `block_height * Wt` (group total) | `block_rows * Wt` | `{tile_rows: spans -> block_height, W: spans -> Wt}` | `T_acc` | compute | compute | `add_residual_block` .. `center_block` | **Shares** the `work` allocation with `cb_centered`, `cb_normed`, `cb_scaled` (lockstep alias, identical page size and quanta). No traffic without residual. |
@@ -29,9 +29,11 @@ Allocations: 7 with residual (`cb_input_tiles`, `cb_residual_tiles`, `cb_gamma_r
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
 | `Wt = tensor_w_tiles` | 24 in the contract domain; hard bound `Wt <= 38` (fp32 DEST + residual) / `<= 47` (fp32, no residual) | `alignment` axis rejects `W % 32 != 0`; `derive_blocking()` returns `None` (typed `UnsupportedAxisValue`) when `block_height_cap(INPUT_DEPTH_MAX) < 1`, which is `Wt * (4 T_in + 2 T_in (1 + HAS_RESIDUAL) + T_acc) + T_acc > CB_L1_BUDGET_BYTES` |
-| `block_height` | `1 <= block_height <= min(max_core_rows_tiles, block_height_cap(input_depth))` | `derive_blocking()` in `op_design.md`; validate requires `block_height_cap(INPUT_DEPTH_MAX) >= 1` |
+| `block_height` | `1 <= block_height <= min(max_core_rows_tiles, BLOCK_HEIGHT_MAX, block_height_cap(1))` | `derive_blocking()`; `None` (typed refusal) when `block_height_cap(1) < 1` |
 | `block_rows` | `1 <= block_rows <= block_height` | per-block runtime extent (`last_block_extent` on the final block) |
-| `input_depth` | `{1, 2}` | 1 iff `max_core_rows_tiles <= block_height_cap(1)` |
+| `input_depth` | `1 .. INPUT_DEPTH_MAX (4)` | `min(ceil(max_core_rows_tiles / block_height), INPUT_DEPTH_MAX)`, lowered until `block_height_cap(input_depth) >= block_height` |
+| `BLOCK_HEIGHT_MAX` | 1 | host constant: compute granularity, decoupled from run-ahead (`input_depth`) |
+| `RESIDUAL_SPLIT_MIN_TILE_ROWS` | 64 | host constant: residual stream moves to the writer RISC / NoC1 from this tile-row count (measured) |
 | `HAS_RESIDUAL` | `{0, 1}` | `residual_input_tensor is not None` |
 | `OUTPUT_DEPTH` | 2 | host constant |
 | `T_acc` | `{2048, 4096}` | `fp32_dest_acc_en` |
@@ -46,10 +48,10 @@ total = block_height * ( Wt * (input_depth * T_in * (1 + HAS_RESIDUAL) + T_acc) 
 
 | Configuration | `block_height` | `input_depth` | Bytes |
 |---------------|----------------|---------------|-------|
-| fp32, residual (worst Phase 0) | 2 | 1 | 598,016 |
-| fp32, no residual | 2 | 1 | 499,712 |
-| bf16 DEST, residual | 2 | 1 | 495,616 |
-| fp32, residual, multi-block (`(256,1,16,768)` on 110 cores) | 1 | 2 | 495,616 |
+| fp32, residual, R=128 (2 rows/core) | 1 | 2 | 495,616 |
+| fp32, residual, R=256 (3 rows/core) | 1 | 3 | 593,920 |
+| fp32, residual, worst (`input_depth = INPUT_DEPTH_MAX = 4`) | 1 | 4 | 692,224 |
+| fp32, no residual, R=128 | 1 | 2 | 397,312 |
 
 ## Data-movement budget
 
@@ -66,6 +68,10 @@ to the computing core; TILE gamma/beta are in DRAM. Example shape `(8, 1, 512, 7
 | output | 0 DRAM; 1 NoC crossing per tile (6 MiB) | written once from the resident block | none |
 
 Totals for the example: NoC 18 MiB (in + res + out) + 0.33-2.9 MiB affine rows; DRAM 0 (RM gamma) or 2.9 MiB (TILE gamma).
+
+NoC assignment (bytes unchanged, links balanced): input reads on NoC0 (reader RISC); residual reads on NoC1
+(writer RISC) when `R >= RESIDUAL_SPLIT_MIN_TILE_ROWS`, else NoC0 beside the input; output writes on NoC1.
+At the example shape that moves NoC0 from 12 MiB of reads to 6 MiB, measured 59.6 -> 36.4 us device time.
 
 > Cheapest-traffic split considered: `tile_rows` across cores (`row_resident`) - delta 0 bytes per tier.
 > Implemented: `tile_rows` across cores. It is also the cheapest-traffic split. The only above-minimum

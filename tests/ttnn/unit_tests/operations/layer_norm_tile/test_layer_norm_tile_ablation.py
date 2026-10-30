@@ -26,6 +26,7 @@ WIDTH = 768
 RUNS_PER_CASE = 2
 SHAPES = [
     (32, 1, 32, WIDTH),  # 32 tile-rows: 1 row per core
+    (16, 1, 128, WIDTH),  # 64 tile-rows: 1 row per core
     (8, 1, 512, WIDTH),  # 128 tile-rows: 1-2 rows per core
     (256, 1, 16, WIDTH),  # 256 tile-rows: 2-3 rows per core
 ]
