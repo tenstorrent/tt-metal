@@ -36,7 +36,8 @@
 // alike.
 //   landed (or no arrival: chain start)  -> every subblock: DEST += hold + 0, += arrival(s) (reuse), pack bf16
 //   not landed (late)                    -> every subblock: DEST += hold + 0, pack fp32 IN PLACE over its hold
-//                                           tiles; the separate finish adds the arrival(s) after the matmul
+//                                           tiles; PACK then drains and signals UNPACK (the slot was pushed
+//                                           before these packs), and the separate finish adds the arrival(s)
 // DETERMINISM: both branches run the identical op sequence on identical values. The late branch stores the
 // (DEST + hold) sum exactly (fp32 pack) and the finish reads it back through srcA, which is the same fp32 -> srcA
 // conversion the fused branch's DEST_TO_SRCA move applies, then the same FPU adds with the same operands in the
@@ -334,6 +335,17 @@ void kernel_main() {
                     fin_buf.push_back(row_group);  // the streamed fin writer can store this row group now
                 }
             }
+        }
+        if (late && hold_prev) {
+            // The slot was pushed before the in-place packs above, so no CB push orders them before the finish's hold
+            // reads, and UNPACK (gated by srcA/srcB, not DEST) could read a tile the last pack is still writing. PACK
+            // drains the packer (the LLK's STALLWAIT + tensix_sync idiom) and hands UNPACK a token it waits on.
+            PACK(({
+                TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+                ckernel::tensix_sync();
+                mailbox_write(ckernel::ThreadId::UnpackThreadId, 1);
+            }));
+            UNPACK(((void)mailbox_read(ckernel::ThreadId::PackThreadId)));
         }
         if (fused) {
             if (rows * cols < P) {
