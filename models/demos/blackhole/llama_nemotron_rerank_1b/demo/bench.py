@@ -9,9 +9,10 @@ Each shape: build inputs (B rows of S tokens), compile, capture a trace with the
 attention mask applied, as for any batch whose rows hold packed or padded pairs
 (``--no-mask``: the unmasked trace TracedReranker uses only when every row is one
 pair of exactly S tokens), then replay it
-``--iters`` times back to back. Reported over the second half of the replays, after the board has
-settled its clock under the load: average and p95 replay latency (host-synchronized, inputs already
-on device), sequences/s and tokens/s at the average, and the trace output
+``--iters`` times back to back. Reported: the first replay (one batch on an idle board, at full
+clock), and over the second half of the replays, after the board has settled its clock under the
+load, average and p95 replay latency (host-synchronized, inputs already on device), sequences/s and
+tokens/s at the average, and the trace output
 checked against an untraced forward. ``--signpost`` wraps one replay in
 tracy signposts for op-level profiling.
 """
@@ -68,7 +69,7 @@ def bench_shape(model, device, B, S, iters, do_signpost, masked):
     avg = statistics.fmean(steady)
     p95 = steady[math.ceil(0.95 * len(steady)) - 1]
     print(
-        f"B={B:<3} S={S:<5} {'masked  ' if masked else 'unmasked'} avg {avg:8.2f} ms  p95 {p95:8.2f} ms  "
+        f"B={B:<3} S={S:<5} {'masked  ' if masked else 'unmasked'} first {times[0]:8.2f} ms  avg {avg:8.2f} ms  p95 {p95:8.2f} ms  "
         f"{B / avg * 1e3:8.1f} seq/s  {B * S / avg * 1e3:10.0f} tok/s  trace-vs-eager {maxdiff:.2e}"
     )
     return avg

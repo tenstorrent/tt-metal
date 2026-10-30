@@ -96,33 +96,36 @@ and nDCG@10 within 0.015 of HF.
 
 ## Performance (one P150)
 
-Traced forward, inputs on device, one process per shape (`demo/bench.py`). Average and p95 are over the last
-50 of 100 back-to-back replays: under continuous load the board lowers its clock to stay under its 200 A
-core-current limit (see "Clock under load" below), so these are the latencies under continuous load. (An
-earlier version of this table took the median of the last 15 of 30 replays, which for most shapes ended
-before the clock had settled: 8 x 512 read 41.3 ms, 1 x 2048 27.7 ms.) Every time is one batch of B rows of S tokens with the
-attention mask applied (`demo/bench.py`), as for any batch whose rows hold packed pairs or padding. The
-time does not depend on how many of a row's tokens are real; packing (see "Packed rows") reduces the
-number of rows a request needs, which the MIRACL table there shows.
+Traced forward, inputs on device, one process per shape (`demo/bench.py`), each started with the board at or
+below 55 C. "One batch" is the first replay: a single batch on an idle board, at the full 1.35 GHz clock, the
+latency of a request that arrives when the card is not already busy. Average and p95 are over the last 50 of
+100 back-to-back replays: under continuous load the board lowers its clock to stay under its 200 A core-current
+limit (see "Clock under load" below), so these are the latencies under continuous load. Every time is one
+batch of B rows of S tokens with the attention mask applied, as for any batch whose rows hold packed pairs or
+padding. The time does not depend on how many of a row's tokens are real; packing (see "Packed rows") reduces
+the number of rows a request needs, which the MIRACL table there shows.
 
-| batch x tokens | after bring-up | now, average | now, p95 | speed of light (kernel cycles) |
-|---|---|---|---|---|
-| 1 x 128 | 12.8 ms | 6.42 ms | 6.43 ms | |
-| 1 x 256 | | 6.75 ms | 6.76 ms | |
-| 1 x 512 | 15.6 ms | 8.22 ms | 8.40 ms | 32.4 % |
-| 1 x 1024 | | 19.1 ms | 20.2 ms | |
-| 8 x 512 | 76.2 ms | 53.4 ms | 53.9 ms | 56.1 % |
-| 10 x 512 \* | | 66.9 ms | 67.3 ms | 60.4 % |
-| 32 x 512 | 329 ms | 194 ms | 196 ms | **69.3 %** (160.9 M cycles) |
-| 1 x 2048 | 46.5 ms | 36.1 ms | 36.5 ms | 47.1 % |
-| 1 x 4096 | | 79.8 ms | 80.1 ms | |
-| 1 x 8192 | 362 ms | 225 ms | 227 ms | 50.3 % |
+| batch x tokens | after bring-up | now, one batch | now, average | now, p95 | speed of light (kernel cycles) |
+|---|---|---|---|---|---|
+| 1 x 128 | 12.8 ms | 6.40 ms | 6.42 ms | 6.43 ms | |
+| 1 x 256 | | 6.72 ms | 6.75 ms | 6.77 ms | |
+| 1 x 512 | 15.6 ms | 8.09 ms | 8.17 ms | 8.33 ms | 32.4 % |
+| 1 x 1024 | | 16.8 ms | 19.1 ms | 20.0 ms | |
+| 8 x 512 | 76.2 ms | 35.9 ms | 49.9 ms | 50.0 ms | 57.8 % |
+| 10 x 512 \* | | 39.5 ms | 61.8 ms | 62.0 ms | 65.7 % (53.1 M cycles) |
+| 32 x 512 | 329 ms | 118 ms | 187 ms | 189 ms | **70.6 %** (158.1 M cycles) |
+| 1 x 2048 | 46.5 ms | 27.0 ms | 36.1 ms | 36.4 ms | 47.1 % |
+| 1 x 4096 | | 61.8 ms | 79.6 ms | 79.7 ms | |
+| 1 x 8192 | 362 ms | 174 ms | 219 ms | 221 ms | 50.3 % |
 
-\* 10 x 512 measured 80.3 ms average (80.9 ms p95) before its fix: with 160 tile rows over 13 cores (13 each, prime) the fused WO / FF2
-ops ran with M block 1; `_mm_grid.m_tiles_per_core` now pads such a core to 16 rows (M block 8), and
-`sdpa_mask_cache` covers batch 2-32 (86.4 -> 57.7 M cycles; 63.9 ms average in a run of its own). Two of four
-32 x 512 runs, both the last shape of a ten-shape sequence on a hot board, hit the board's harder limiter
-("Clock under load"): average 252 / 296 ms, p95 396 / 405 ms; run alone it settles at 194 ms.
+\* 10 x 512 was 80.3 ms average (80.9 ms p95) before its fixes: with 160 tile rows over 13 cores (13 each,
+prime) the fused WO / FF2 ops ran with M block 1; `_mm_grid.m_tiles_per_core` now pads such a core to 16 rows
+(M block 8), `sdpa_mask_cache` covers batch 2-32 and builds uniform mask tiles from the pair index, and FF1 +
+FF3 has its own block at 5120 rows (86.4 -> 53.1 M cycles). Under continuous load the board settles at
+860-920 MHz, so the average stays near 60 ms: 40 ms there would take ~36 M cycles, against an ideal of 34.9 M at
+these precisions. With every big matmul at LoFi and bfp4 FF1 + FF3 weights it is 46 ms (one batch 31.6 ms), at
+MIRACL Pearson 0.9916 / mean logit error 1.08 (vs 0.99957 / 0.24). Runs on a hot board (after several minutes
+of load) can hit the board's harder limiter: 32 x 512 then averaged 252-296 ms (p95 386-405 ms).
 
 A batch where every row is exactly one pair of S tokens skips the mask (`demo/bench.py --no-mask`; 32 x 512
 190 ms, 71.3 %); real traffic rarely has such a batch. FF1 + FF3 accumulates in fp32: with bf16 accumulation
@@ -209,6 +212,8 @@ Data movement, in the order they landed (32x512 unless noted):
 | SDPA block map (`attn_mask_block_map`) | blocks with no real query or key are skipped | 1x2048 802 -> 389 us |
 | SDPA without the mask when no pair is padded: `forward(masked=False)`, and `TracedReranker` keeps a second trace per bucket for such batches | an all-zero padding mask is still read from DRAM and added on every K chunk | 32x512 SDPA 1101 -> 623 us per layer; 1x8192 220 -> 188 ms sustained |
 | masked SDPA through `tt/custom_ops/sdpa_mask_cache` (batch 2-32, 128-512 tokens): ttnn's SDPA program built in Python (`op.py`, a port of `sdpa_program_factory.cpp` for this configuration) with a copy of its reader that keeps the batch's [S, S] mask tiles in an extra L1 CB; ttnn's writer and compute kernels unchanged; bit-identical output (`perf_tools/probe_sdpa_mask_cache.py`, `tests/pcc`) | the [B, 1, S, S] mask is the same for all 32 Q heads, but ttnn's reader reads it from DRAM again per head: 151 MB per 32 x 512 call against 34 MB of K / V (one call 657 us unmasked, 1251 us masked, 693 us with the mask not read). A core runs several heads of one batch in a row, so each block now comes from DRAM once | one 32x512 call 1253 -> 835 us; 32x512 SDPA 26.8 -> 17.9 M cycles, forward 169.4 -> 160.5 M cycles (65.8 -> 69.5 % of SoL); sustained 193 -> 191 ms (the clock limit takes most of it back) |
+| `sdpa_mask_cache` reads the pair index: mask tiles whose queries and keys each lie in one pair are written in L1 (all 0 / all -inf), only tiles straddling a pair boundary are read from DRAM | the [S, S] mask only encodes which pair each token belongs to; the pair index (2 KB per row) says the same for every tile that does not straddle a boundary | 10 x 512 SDPA 8.1 -> 5.6 M cycles, one batch 41.4 -> 39.5 ms; 32 x 512 194 -> 187 ms sustained |
+| FF1 + FF3 block (4, 32, 8, 1, 4) at 5120 rows (`sweep_mm.py --l1-reserve-mb 21`) | K block 32 halves the partial-sum passes; it fits next to the 10 x 512 resident residual | FF1 + FF3 27.3 -> 25.2 M cycles at 10 x 512 |
 | per-core rows padded when they cannot split into M blocks of 4-8 (`_mm_grid.m_tiles_per_core`): the resident residual and its fused ops to 16 rows per core, other matmuls to 14 | the fused ops' M block must divide a core's tile rows; 10 x 512 gives 13 (prime), so WO / FF2 ran with M block 1 and re-read their weight blocks for every tile row. Padding only splits rows (scores bit-identical) | 10 x 512: FF2 + add + norm 34.6 -> 9.8 M cycles, WO 9.5 -> 5.3 M, forward 86.4 -> 57.7 M cycles; 80.3 -> 63.9 ms |
 | softmax scale 1/8 folded into Wq (exact: power of two), SDPA at scale 1 | ttnn's SDPA wrapper otherwise multiplies the mask by 1/scale on every call | one [B, 1, S, S] pass per layer removed |
 | activations up to 8.5 MB in L1 | bs1 intermediates never touch DRAM | 1x512 10.1 -> 8.9 ms |
@@ -228,9 +233,9 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items
 
-* 32 x 512 is at 69.3 % of speed of light with the mask (75.9 % unmasked before FF1 + FF3 moved to fp32
-  accumulation). Masked SDPA still costs 17.9 vs 14.1 M cycles unmasked: the cached mask is still copied into
-  the mask CB and added per head. The rest
+* 32 x 512 is at 70.6 % of speed of light with the mask (75.9 % unmasked before FF1 + FF3 moved to fp32
+  accumulation). Masked SDPA still costs more than unmasked: mask tiles are copied into the mask CB and added per
+  head, and tiles that straddle a pair boundary are read from DRAM. The rest
   is spread over the ops: FF1 + FF3 is at 76 % (85 % with bf16 accumulation, which fails the accuracy gate
   with packed rows; the faster fp32 K-32 block is throttled by the board, see "Packed rows"); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
