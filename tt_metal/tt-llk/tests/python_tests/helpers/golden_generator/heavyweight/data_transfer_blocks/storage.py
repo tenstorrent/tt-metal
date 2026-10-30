@@ -15,29 +15,20 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 
-#: Explicit mantissa bits in an IEEE float32, the width every mask is cut from.
 FP32_MANTISSA_BITS = 23
-
-#: What an IEEE float32 adds to an exponent before storing it.
 FP32_EXPONENT_BIAS = 127
 
 #: Explicit mantissa bits a src-register datum holds (the datum is 19 bits:
 #: 1 sign + 8 exponent + 10 mantissa).
 SRC_MANT_BITS = 10
 
-#: Explicit mantissa bits a bf16 datum holds.
 BF16_MANT_BITS = 7
 
-#: Explicit mantissa bits of E8M6, the per-datum intermediate the packer
-#: narrows to before it shares a block float's exponent.
 E8M6_MANT_BITS = 6
 
-#: Largest magnitude an INT8-shaped src datum reaches. Sign-magnitude, so -128
-#: has no encoding on this path.
 INT8_MAX_MAGNITUDE = 127
 
-#: Formats the unpacker can land in a src register. ``Float16_b`` is an alias
-#: for Tf32 here, so it keeps 10 mantissa bits rather than bf16's 7.
+#: Formats the unpacker can land in a src register.
 SRC_STORAGE_FORMATS = frozenset(
     {DataFormat.Float16, DataFormat.Float16_b, DataFormat.Tf32}
 )
@@ -116,12 +107,7 @@ def round_mantissa_even(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
 
 
 def mantissa_ties(values: torch.Tensor, keep_bits: int) -> torch.Tensor:
-    """Where rounding to `keep_bits` lands exactly half an ULP from both sides.
-
-    The only place the rounding mode is observable. Everywhere else ties-to-even
-    and ties-away agree, so a model that has not pinned the mode down is still
-    right until one of these appears.
-    """
+    """Where rounding to `keep_bits` lands exactly half an ULP from both sides."""
     dropped = FP32_MANTISSA_BITS - keep_bits
     wide = values.to(torch.float32)
     low = wide.contiguous().view(torch.int32) & ((1 << dropped) - 1)
@@ -192,11 +178,8 @@ DEST_MANTISSA_BITS = {
     DataFormat.Tf32: SRC_MANT_BITS,
 }
 
-#: Explicit mantissa bits an L1 float format holds, for the formats whose
-#: lattice is a plain mantissa width. The block-scaled families are absent on
-#: purpose: their step is set by an exponent shared across the block, so a
-#: per-datum mantissa width does not describe them. See
-#: :data:`L1_BLOCK_MAGNITUDE_BITS` for the block-float ones.
+# Explicit mantissa bits an L1 float format holds, for the formats whose
+# lattice is a plain mantissa width.
 L1_MANTISSA_BITS = {
     DataFormat.Float32: FP32_MANTISSA_BITS,
     DataFormat.Tf32: SRC_MANT_BITS,
@@ -214,19 +197,16 @@ L1_MIN_NORMAL_EXP = {
     DataFormat.Fp8_e4m3: -6,
 }
 
-#: Datums a block-float format shares one exponent across.
+# Datums a block-float format shares one exponent across.
 BFP_BLOCK_SIZE = 16
 
-#: Magnitude bits a block-float datum stores, the sign bit excluded. The block
-#: exponent carries the scale, so the leading bit is stored rather than implied
-#: and Bfp8_b's 7 bits are worth 6 explicit mantissa bits plus that one.
+# Magnitude bits a block-float datum stores, the sign bit excluded.
 L1_BLOCK_MAGNITUDE_BITS = {
     DataFormat.Bfp8_b: 7,
     DataFormat.Bfp4_b: 3,
     DataFormat.Bfp2_b: 1,
 }
 
-#: Explicit mantissa bits a src register keeps per format.
 SRC_MANTISSA_BITS = {
     DataFormat.Float16: SRC_MANT_BITS,
     DataFormat.Float16_b: BF16_MANT_BITS,
@@ -312,9 +292,6 @@ def truncate_to_l1_lattice(
     For a packer that truncates where the codec rounds. Dropping whatever the
     format cannot hold lands the value on that format's lattice, so the codec's
     own conversion afterwards has nothing left to round.
-
-    Returns None for a format whose lattice this module does not describe,
-    which today means the MX family and its per-block scale.
     """
     block_bits = L1_BLOCK_MAGNITUDE_BITS.get(l1_format)
     if block_bits is not None:
@@ -343,8 +320,7 @@ def to_dest_storage(
     lands as zero. In practice only a Float16 Dest reaches that threshold.
 
     `ties_away` picks the rounding mode, and is per architecture. The default
-    is the IEEE one torch gives, ties to even. Blackhole rounds ties away from
-    zero on a 16-bit Dest write.
+    is the IEEE one torch gives, ties to even.
     """
     if not isinstance(values, torch.Tensor):
         values = torch.tensor(values)

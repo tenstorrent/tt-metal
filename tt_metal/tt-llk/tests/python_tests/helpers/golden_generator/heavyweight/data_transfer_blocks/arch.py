@@ -167,17 +167,11 @@ class QuasarArch(ArchGolden):
 
 # What the packer's early conversion narrows a 32-bit Dest to, by output
 # format: the explicit mantissa bits it keeps, and whether it rounds getting
-# there. ReLU and the edge mask run after it, so they meet these widths.
-# Float16 and Fp8_e4m3 are absent: neither is an early-conversion target from a
-# float Dest, so they convert late and the effects still see Dest.
+# there.
 _WH_BH_EARLY_CONVERSION = {
     DataFormat.Float32: (FP32_MANTISSA_BITS, True),
     DataFormat.Tf32: (SRC_MANT_BITS, True),
     DataFormat.Float16_b: (BF16_MANT_BITS, True),
-    # Every block float leaves early as E8M6, one datum at a time, and the
-    # shared block exponent is applied later by the late stage. That step is a
-    # bit-slice rather than a conversion, so it drops the low bits whatever
-    # the architecture does elsewhere.
     DataFormat.Bfp8_b: (E8M6_MANT_BITS, False),
     DataFormat.Bfp4_b: (E8M6_MANT_BITS, False),
     DataFormat.Bfp2_b: (E8M6_MANT_BITS, False),
@@ -258,19 +252,13 @@ class BlackholeArch(ArchGolden):
 
     l1 = _BLACKHOLE_L1
     unpack = Unpack(_BLACKHOLE_L1)
-    # A 16-bit Dest write rounds ties away from zero here, not to even.
-    # Measured on a card: Float16_b elwadd and elwsub match on 8192/8192 that
-    # way, against 1292 and 876 wrong with ties to even.
+    # Ties away from zero, measured on a card: 8192/8192 on Float16_b elwadd.
     fpu = Fpu(
         _BLACKHOLE_L1,
         mantissa_split=_WH_BH_MANTISSA_SPLIT,
         multiplier_srcA_bits=_WH_BH_MULTIPLIER_SRCA_BITS,
         dest_ties_away=True,
     )
-    # The packer truncates these on the card where the stimuli codecs round.
-    # The three block floats come along because they leave by the same
-    # conversion: their lattice is a shared block exponent rather than a
-    # mantissa width, but it is floored the same way.
     pack = Pack(
         _BLACKHOLE_L1,
         early_conversion=_WH_BH_EARLY_CONVERSION,

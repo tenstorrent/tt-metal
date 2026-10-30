@@ -56,31 +56,27 @@ class Pack:
         truncating_outputs: FrozenSet[DataFormat] = frozenset(),
         early_conversion: Optional[Mapping[DataFormat, Tuple[int, bool]]] = None,
     ) -> None:
-        #: Legal ``Dest -> L1`` pairs, the pack-side counterpart of the
-        #: unpacker's table. Empty means unmodelled.
+        # Legal ``Dest -> L1`` pairs.
         self.to_l1_formats = to_l1_formats or {}
 
-        #: Whether a set bit in an edge-mask register masks the datum.
-        #: False on Wormhole/Blackhole, True on Quasar.
+        # Whether a set bit in an edge-mask register masks the datum.
         self.edge_mask_masked_when_set = edge_mask_masked_when_set
 
-        #: Whether the harness promotes an exponent-B input with a Float16
-        #: output to a 32-bit Dest. Every architecture except Quasar.
+        # Whether the harness promotes an exponent-B input with a Float16
+        # output to a 32-bit Dest.
         self.promotes_outlier_to_32_bit_dest = promotes_outlier_to_32_bit_dest
 
-        #: Whether the gasket converts a 32-bit Dest before the packer sees it,
-        #: so the packer reads the *output* format rather than Dest's.
+        # Whether the gasket converts a 32-bit Dest before the packer sees it,
+        # so the packer reads the *output* format rather than Dest's.
         self.gasket_converts_wide_dest = gasket_converts_wide_dest
 
-        #: Output formats this packer truncates toward zero.
+        # Output formats this packer truncates toward zero.
         self.truncating_outputs = truncating_outputs
 
-        #: What the early conversion keeps, by output format: the explicit
-        #: mantissa bits, and whether getting there rounds. The packer converts
-        #: in two stages and runs ReLU and the edge mask between them, so a
-        #: datum meets the threshold already narrowed. Keyed by output format
-        #: because that is what the intermediate tracks. An absent format has
-        #: no early conversion, and the effects see Dest.
+        # What the early conversion keeps, by output format: the explicit
+        # mantissa bits, and whether getting there rounds. The packer converts
+        # in two stages and runs ReLU and the edge mask between them, so a
+        # datum meets the threshold already narrowed.
         self.early_conversion = early_conversion or {}
 
         self.l1 = l1
