@@ -50,6 +50,8 @@ namespace tt::tt_metal {
 namespace {
 
 constexpr const char* kRvvKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/trisc2_rvv_vadd.cpp";
+// SFPU-only pack kernel: repro for the SFPI ICE with the shared PCH and -fno-lto.
+constexpr const char* kRvvSfpuKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/trisc2_rvv_sfpu.cpp";
 // Matches the flags HalJitBuildQueryBlackHole::rvv_compile_flags emits.
 constexpr const char* kBhRvvMarch = "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f";
 // The -mcpu Blackhole TRISC compiles pass ahead of kBhRvvMarch; sfpi g++ rejects any command without one.
@@ -146,12 +148,12 @@ bool elf_contains_vector_instructions(const std::string& elf_path) {
 class Trisc2RvvMockBlackholeFixture : public MockBlackholeMeshDispatchFixture {
 protected:
     // Create + JIT-compile the RVV vadd kernel; returns the kernel (full name is set by compile).
-    std::shared_ptr<Kernel> compile_rvv_kernel(bool enable_trisc2_rvv) {
+    std::shared_ptr<Kernel> compile_rvv_kernel(bool enable_trisc2_rvv, const char* kernel_path = kRvvKernelPath) {
         distributed::MeshDevice* device = devices_.at(0).get();
         Program program = CreateProgram(*device);
         KernelHandle handle = CreateKernel(
             program,
-            kRvvKernelPath,
+            kernel_path,
             CoreCoord{0, 0},
             ComputeConfig{
                 .enable_trisc2_rvv = enable_trisc2_rvv,
@@ -231,6 +233,17 @@ TEST_F(Trisc2RvvMockBlackholeFixture, VaddKernelCompilesToVectorCode) {
     auto kernel_off = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
     EXPECT_FALSE(kernel_elf_has_vector_code(kernel_off, 2))
         << "knob-off TRISC2 ELF unexpectedly contains vector instructions";
+}
+
+// Repro: SFPU code in TRISC2 compiled with the shared PCH and -fno-lto (from the RVV opt-in)
+// ICEs in the SFPI passes (rvtt_immvar_expand / rvtt_combine / extract_insn, depending on the
+// code). The knob-off compile of the same source (-flto) is fine.
+TEST_F(Trisc2RvvMockBlackholeFixture, SfpuKernelCompilesWithPchAndNoLto) {
+    if (!sfpi_supports_bh_zve32f()) {
+        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
+    }
+    compile_rvv_kernel(/*enable_trisc2_rvv=*/false, kRvvSfpuKernelPath);
+    compile_rvv_kernel(/*enable_trisc2_rvv=*/true, kRvvSfpuKernelPath);
 }
 
 }  // namespace tt::tt_metal
