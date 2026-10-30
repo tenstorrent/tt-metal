@@ -20,14 +20,16 @@ namespace {
 constexpr uint32_t ELEM_BYTES = 2;  // bf16 (validated)
 constexpr uint32_t FACE_ROW_BYTES = 16 * ELEM_BYTES;
 constexpr uint32_t FACE_BYTES = 16 * 16 * ELEM_BYTES;
-// One NoC read covers a 64 B aligned chunk: DRAM reads need 64 B alignment (BH), so the transfer is
-// widened from the 32 B face row to 64 B; the extra bytes land in rows that are never read.
+// RM: one 64 B read per tile-column (DRAM reads need 64 B alignment on BH, so the 32 B face row is
+// widened; the extra bytes land in rows that are never read). TILE: face-0 row 0 and face-1 row 0 are
+// FACE_BYTES apart, so one read spanning both costs a single request per tile-column.
 constexpr uint32_t CHUNK_BYTES = 64;
+constexpr uint32_t TILE_SPAN_BYTES = FACE_BYTES + CHUNK_BYTES;
 constexpr uint32_t CHUNK_ELEMS = 2 * FACE_ROW_BYTES / ELEM_BYTES;  // 32 elements: one tile-column
 
-template <bool is_row_major, uint32_t stick_elems, typename Accessor>
-FORCE_INLINE void fetch_affine_rows(Noc noc, const Accessor& accessor, uint32_t cb_id, uint32_t tensor_w_tiles) {
-    DataflowBuffer rows(cb_id);
+// Issues the reads for one tensor's row-0 tiles; the caller owns the barrier so gamma and beta share one.
+template <bool is_row_major, uint32_t stick_elems, typename Accessor, typename Rows>
+FORCE_INLINE void issue_affine_reads(const Accessor& accessor, Rows& rows, uint32_t tensor_w_tiles) {
     const uint32_t tile_bytes = rows.get_tile_size();
     rows.reserve_back(tensor_w_tiles);
     const uint32_t base = rows.get_write_ptr();
@@ -40,13 +42,17 @@ FORCE_INLINE void fetch_affine_rows(Noc noc, const Accessor& accessor, uint32_t 
                 tile_addr,
                 CHUNK_BYTES);
         } else {
-            noc_async_read(accessor.get_noc_addr(col, 0), tile_addr, CHUNK_BYTES);
-            noc_async_read(accessor.get_noc_addr(col, FACE_BYTES), tile_addr + FACE_BYTES, CHUNK_BYTES);
+            noc_async_read(accessor.get_noc_addr(col), tile_addr, TILE_SPAN_BYTES);
         }
     }
-    noc_async_read_barrier();
+}
+
+// RM only: elements 16..31 arrived as face-0 row 1; face-1 row 0 needs them.
+template <bool is_row_major, typename Rows>
+FORCE_INLINE void issue_face1_copies(Noc noc, Rows& rows, uint32_t tensor_w_tiles) {
     if constexpr (is_row_major) {
-        // Elements 16..31 arrived as face-0 row 1; face-1 row 0 needs them.
+        const uint32_t tile_bytes = rows.get_tile_size();
+        const uint32_t base = rows.get_write_ptr();
         for (uint32_t col = 0; col < tensor_w_tiles; ++col) {
             const uint32_t tile_offset = col * tile_bytes;
             noc.async_read(
@@ -56,9 +62,7 @@ FORCE_INLINE void fetch_affine_rows(Noc noc, const Accessor& accessor, uint32_t 
                 dataflow_kernel_lib::local_addr(base + tile_offset + FACE_ROW_BYTES, noc.get_noc_id()),
                 {.offset_bytes = tile_offset + FACE_BYTES});
         }
-        noc.async_read_barrier();
     }
-    rows.push_back(tensor_w_tiles);
 }
 
 }  // namespace
@@ -90,8 +94,18 @@ void kernel_main() {
     Noc noc;
     const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_page_bytes);
     const auto beta_accessor = TensorAccessor(beta_args, beta_addr, beta_page_bytes);
-    fetch_affine_rows<gamma_is_rm, gamma_stick_elems>(noc, gamma_accessor, cb_gamma_rows, tensor_w_tiles);
-    fetch_affine_rows<beta_is_rm, beta_stick_elems>(noc, beta_accessor, cb_beta_rows, tensor_w_tiles);
+    DataflowBuffer gamma_rows(cb_gamma_rows);
+    DataflowBuffer beta_rows(cb_beta_rows);
+    issue_affine_reads<gamma_is_rm, gamma_stick_elems>(gamma_accessor, gamma_rows, tensor_w_tiles);
+    issue_affine_reads<beta_is_rm, beta_stick_elems>(beta_accessor, beta_rows, tensor_w_tiles);
+    noc_async_read_barrier();
+    if constexpr (gamma_is_rm || beta_is_rm) {
+        issue_face1_copies<gamma_is_rm>(noc, gamma_rows, tensor_w_tiles);
+        issue_face1_copies<beta_is_rm>(noc, beta_rows, tensor_w_tiles);
+        noc.async_read_barrier();
+    }
+    gamma_rows.push_back(tensor_w_tiles);
+    beta_rows.push_back(tensor_w_tiles);
 
     const auto output_accessor = TensorAccessor(output_args, output_addr, output_tile_bytes);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {

@@ -61,11 +61,11 @@ to the computing core; TILE gamma/beta are in DRAM. Example shape `(8, 1, 512, 7
 |--------|----------------|---------------|--------------------------|
 | input | 0 DRAM; 1 NoC crossing per tile (6 MiB) | whole `W` resident per block, so mean, variance and normalize all read the one resident copy | none |
 | residual | 0 DRAM; 1 NoC crossing per tile (6 MiB) | folded into `cb_xsum` once, never re-read | none |
-| gamma | TILE/DRAM: 1 crossing per active core of 24 x 128 B = 3 KiB (330 KiB total); RM/L1: 24 x 64 B = 1.5 KiB per core (165 KiB total) | reuse-shared operand fetched per core (row 0 only, not whole 2 KiB tiles: whole tiles would be 48 KiB per core) | none |
+| gamma | TILE/DRAM: 1 crossing per active core of 24 x 576 B = 13.5 KiB (1.45 MiB total; one read per tile-column spanning face-0 row 0 .. face-1 row 0, implementer change from 2 x 64 B reads: half the requests); RM/L1: 24 x 64 B = 1.5 KiB per core (165 KiB total) | reuse-shared operand fetched per core (row 0 only, not whole 2 KiB tiles: whole tiles would be 48 KiB per core) | none |
 | beta | same as gamma | same | none |
 | output | 0 DRAM; 1 NoC crossing per tile (6 MiB) | written once from the resident block | none |
 
-Totals for the example: NoC 18 MiB (in + res + out) + 0.33-0.66 MiB affine rows; DRAM 0 (RM gamma) or 0.66 MiB (TILE gamma).
+Totals for the example: NoC 18 MiB (in + res + out) + 0.33-2.9 MiB affine rows; DRAM 0 (RM gamma) or 2.9 MiB (TILE gamma).
 
 > Cheapest-traffic split considered: `tile_rows` across cores (`row_resident`) - delta 0 bytes per tier.
 > Implemented: `tile_rows` across cores. It is also the cheapest-traffic split. The only above-minimum
