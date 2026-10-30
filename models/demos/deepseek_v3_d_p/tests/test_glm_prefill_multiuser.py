@@ -446,8 +446,8 @@ def _packed_schedule(chunk):
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.xfail(
-    reason="#63408: top-k's tie order depends on the row split, which packing changes; the two MoE layers "
-    "then amplify it past PACKED_PCC. Remove once the top-k fix lands.",
+    reason="#63555: a token's MoE output depends on which other tokens share the MoE call; KV is bit-exact "
+    "until the first MoE layer, then the last layer drifts to PCC ~0.997-0.999, below PACKED_PCC.",
     strict=False,
 )
 @pytest.mark.timeout(0)
