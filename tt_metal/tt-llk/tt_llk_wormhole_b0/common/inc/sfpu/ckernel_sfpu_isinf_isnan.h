@@ -17,7 +17,7 @@ template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sfpu_isinf_isnan_()
 {
     // SFPU microcode
-#if !(defined(MM_THROTTLE) && MM_THROTTLE > 0)
+#if !(defined(MM_THROTTLE) && MM_THROTTLE > 0) && !defined(DISABLE_SFPLOADMACRO)
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     if constexpr (operation == SfpuType::isinf)
     {
