@@ -319,9 +319,13 @@ void set_runtime_arg_on_all_cores(Program& program, KernelHandle kernel, size_t 
     auto& runtime_args_by_core = GetRuntimeArgs(program, kernel);
     for (auto& column : runtime_args_by_core) {
         for (auto& runtime_args : column) {
-            if (runtime_args.size() > slot) {
-                runtime_args[slot] = value;
+            // The grid spans the kernel's bounding box from (0,0); cores outside the kernel have no args.
+            if (runtime_args.size() == 0) {
+                continue;
             }
+            TT_FATAL(
+                runtime_args.size() > slot, "Runtime arg slot {} out of range ({} args)", slot, runtime_args.size());
+            runtime_args[slot] = value;
         }
     }
 }
