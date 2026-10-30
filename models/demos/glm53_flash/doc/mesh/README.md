@@ -1581,6 +1581,26 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 04:25: the non-blocking replay is the default; the slot mask validated on the block
+
+The a-e gate under the non-blocking replay passed (`nb_gate_32`: first tokens exact, repeats identical, 4/4 64 K
+needles in 123 s, bench ITL 60.4 ms), so the served decode replay returns at enqueue by default (`GLM53_DECODE_REPLAY_BLOCKING=1`
+is the A/B control). The staged flip half-applied once (the constant's comment and the README flipped, the adapter's
+default not: its patch script stopped on a black-wrapped anchor and the shell chain went on) and was completed one
+commit later; the same failure mode recurred on the partition guard below. Rule: patch scripts compute every
+replacement before writing anything, and the chain is `set -e`.
+
+`slot_mask_block_v2` (pass F of `tests/test_decode_packed_inputs_mesh.py`, the (2,4) block): slot 0's KDA carry is
+byte-identical across four parked decode steps of the other slots (the gated twin leaves it alone) and its decode
+chain after the second chunk equals the uninterleaved reference (the DSA row and pool the parked steps wrote at the
+chunk end are rewritten by the chunk that starts there). The served arm `ab_slotmask_32` then died on my own guard:
+the 1 M profile runs the user-partitioned DSA cache (the planner's choice at 32 x 1 M, not the env knob). The KDA
+state per chip is `allocate_state(max_batch)` = the row's users with the heads sharded whatever the DSA partition, so
+the gate page (the row's users, replicated over the TP columns) is right for both layouts; the guard is gone, the page
+builder is `packed_inputs.gate_page` (torch-only, host-tested), pass F runs for both layouts, and the served arm is
+re-queued (`ab_slotmask_32_r2`: the gated twin's step cost at batch 32). The three draft PRs: tt-metal #63440,
+tt-inference-server #5506, vllm-tt-plugin #263.
+
 ### 2026-10-30 03:25: the non-blocking replay measured; a boot failure of my own
 
 `served_8x4_ab_async_nb_32` (`GLM53_DECODE_REPLAY_BLOCKING=0`, async on, batch 32, 128 x 128, APC on, resident): ITL
