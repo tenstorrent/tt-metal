@@ -554,6 +554,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     const auto sidx = [&](uint32_t g, uint32_t r, uint32_t c) -> uint32_t { return off[g] + r * W[g] + c; };
 
     // ---- S1: Q@K^T into the compact scratch. Units: (member, run, column batch of cw <= qk_cw_cap). ----
+    SPARSE_STAGE(st_s1, "ST_S1_QK")  // DEBUG (dev branch): per-stage zones, sparse_prof_window.hpp
     ASSERT(n_entries >= 1 && n_entries <= kStepPieces && (!apply_col_bias || n_entries == 1));
     CircularBuffer(cb_qkt_im).reserve_back(qk_cap);
     CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles * n_entries);
@@ -641,8 +642,12 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         n_init += slot_init(g) ? 1u : 0u;
     }
     bool rescale = false;
+    SPARSE_STAGE_END(st_s1)
+    SPARSE_STAGE(st_wqk, "ST_WAIT_QK")
     CircularBuffer(cb_qkt_im).wait_front(qk_cap);
+    SPARSE_STAGE_END(st_wqk)
     {
+        SPARSE_STAGE(st_s2, "ST_S2_MAX")
         // ---- S2: row max over each member's W_g columns, eltwise-max with the slot's stored max, into the scratch.
         CircularBuffer(cb_max_scratch).reserve_back(stats_cap);
         configure_single_tile_pack(cb_max_scratch);
@@ -722,6 +727,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         cb_push_back_hold_wr_ptr(cb_exp_max_diff, stats_cap);
         CircularBuffer(cb_exp_max_diff).wait_front(stats_cap);
 
+        SPARSE_STAGE_END(st_s2)
+        SPARSE_STAGE(st_s2b, "ST_S2B_TEST")
         // ---- S2b: the rescale test. d = new max - stored max of every initialized member (>= 0, column 0),
         //      column-max-reduced into one tile whose [0][0] is the largest growth. The unpack thread's RISC reads
         //      that word once the pack has landed (it polls the PACK_DONE token itself: a Tensix-side wait would not
@@ -779,6 +786,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             rescale = (growth & 0xFFFFu) > kLazyThrBits;
         }
 
+        SPARSE_STAGE_END(st_s2b)
+        SPARSE_STAGE(st_s3, "ST_S3_ALPHA")
         // ---- S3: rescale: alpha = exp((old max - new max) * scale) into cb_exp_max_diff and the new max into every
         //      member's slot; otherwise only the first-step (uninitialized) members get their max copied. ----
         // A member's new max is copied from the scratch into its slot when the step rescales (initialized members)
@@ -874,6 +883,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
         }
 
+        SPARSE_STAGE_END(st_s3)
+        SPARSE_STAGE(st_s4, "ST_S4_RESCALE")
         // ---- S4 (rescale only). ----
         if (rescale) {
             for (uint32_t g = 0; g < n_slots; ++g) {
@@ -884,8 +895,10 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                     cb_prev_out, cb_sum_in, cb_exp_max_diff, cb_prev_out, cb_sum_in, slots[g], slots[g], slots[g]);
             }
         }
+        SPARSE_STAGE_END(st_s4)
     }  // S2-S4
 
+    SPARSE_STAGE(st_s56, "ST_S56_EXP_PV")
     // ---- S5 + S6, interleaved per member. S5: in-place exp of the scores, per member over its W_g columns
     //      in units of <= max_cols_per_acq (the broadcast subtract on MATH, the exp and the packs on PACK). S6: P@V
     //      per member (res_pv_member). The two stages load complementary threads (S5 is pack-thread bound, S6
@@ -955,6 +968,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         s5_flush(st, true);
     }
 
+    SPARSE_STAGE_END(st_s56)
+    SPARSE_STAGE(st_s6b, "ST_S6B_ROWSUM")
     // ---- S6b: the row sums P@e0 in batches of stat_slots_per_acq members (the matmul takes the member's row
     //      stride W_g, re-issued when it changes). Every S5 token has been taken by now, so all exp'd scores are in
     //      L1. ----
@@ -998,6 +1013,8 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         }
     }
     sdpa_maybe_reconfig_data_format<cb_col_identity, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+    SPARSE_STAGE_END(st_s6b)
+    SPARSE_STAGE(st_end, "ST_END_SYNC")
 
     CircularBuffer(cb_qkt_im).pop_front(qk_cap);
     CircularBuffer(cb_max_scratch).pop_front(stats_cap);
@@ -1005,6 +1022,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+    SPARSE_STAGE_END(st_end)
 }
 
 /**

@@ -39,7 +39,19 @@ READER_ZONES = [  # sparse_ring_reader.cpp
 ]
 OTHER_ZONES = ["RES_NORM", "NORM_MATMUL_RECIP", "NORM_MUL_BCAST", "WR_RES_OUT"]  # compute + sparse_ring_writer.cpp
 KERNEL_ZONES = ["BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL"]
-WANTED = set([COMPUTE_ZONE] + READER_ZONES + OTHER_ZONES + KERNEL_ZONES)
+# Per-stage zones of one compute step (SPARSE_STAGE in sparse_ring_streaming.hpp, windowed like RING_STEP).
+STAGE_ZONES = [
+    "ST_S1_QK",
+    "ST_WAIT_QK",
+    "ST_S2_MAX",
+    "ST_S2B_TEST",
+    "ST_S3_ALPHA",
+    "ST_S4_RESCALE",
+    "ST_S56_EXP_PV",
+    "ST_S6B_ROWSUM",
+    "ST_END_SYNC",
+]
+WANTED = set([COMPUTE_ZONE] + READER_ZONES + OTHER_ZONES + KERNEL_ZONES + STAGE_ZONES)
 
 
 def pct(vals, p):
@@ -200,6 +212,29 @@ def main(path):
         vals = [per[k][name] for k in compute_cores]
         if any(vals):
             print("  %-14s %s" % (name, stats(vals)))
+
+    # Stage breakdown of the windowed steps: per thread (TRISC_0 unpack, TRISC_1 math, TRISC_2 pack), the median
+    # over compute cores of each stage's time per step. A stage's time on a thread includes its waits on the others,
+    # so the thread whose time matches the stage's length is the one that gates it.
+    if any(total.get((k[0], k[1], k[2], k[3], "TRISC_1", z), 0) for k in compute_cores for z in STAGE_ZONES):
+        print("\nstages per step, median over compute cores (us): unpack / math / pack, and share of the step on math")
+        step_us = {}
+        for k in compute_cores:
+            n = max(count.get((k[0], k[1], k[2], k[3], "TRISC_1", COMPUTE_ZONE), 0), 1)
+            step_us[k] = us(total.get((k[0], k[1], k[2], k[3], "TRISC_1", COMPUTE_ZONE), 0)) / n
+        med = lambda v: sorted(v)[len(v) // 2]
+        step_med = med([step_us[k] for k in compute_cores])
+        for z in STAGE_ZONES:
+            cols = []
+            for r in ("TRISC_0", "TRISC_1", "TRISC_2"):
+                v = []
+                for k in compute_cores:
+                    n = max(count.get((k[0], k[1], k[2], k[3], "TRISC_1", COMPUTE_ZONE), 0), 1)
+                    v.append(us(total.get((k[0], k[1], k[2], k[3], r, z), 0)) / n)
+                cols.append(med(v))
+            share = cols[1] / step_med if step_med else 0.0
+            print("  %-14s %8.2f %8.2f %8.2f   %5.1f%%" % (z, cols[0], cols[1], cols[2], 100 * share))
+        print("  %-14s %8s %8.2f %8s" % ("RING_STEP", "", step_med, ""))
 
     print("\nper device: span max, busy max / mean (imbalance), idle mean (us):")
     for dev in sorted({k[1] for k in compute_cores}, key=lambda d: int(d) if d.isdigit() else d):
