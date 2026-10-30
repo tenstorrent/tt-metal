@@ -1,0 +1,4 @@
+KW fwd ((8192, 5120, 1024), {'k': 8256}) {'program_config': 'MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-8,in0_block_w'}
+KW fwd ((5120, 16384, 1024), {'k': 5184}) {'core_grid': 'ttnn.CoreGrid(x=11, y=10)'}
+KW fwd ((8192, 5120, 1024), {}) {'core_grid': 'ttnn.CoreGrid(x=11, y=10)'}
+KW dx {'core_grid': ttnn.CoreGrid(x=11, y=10)}

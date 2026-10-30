@@ -1,0 +1,132 @@
+2026-10-30 19:04:13.255 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-10-30 19:04:13.792 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-30 19:04:13.792 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-30 19:04:13.792 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-30 19:04:13.792 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-30 19:04:13.803 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-30 19:04:13.803 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-30 19:04:13.882 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-30 19:04:13.882 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-30 19:04:13.882 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-30 19:04:13.882 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-30 19:04:13.884 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-30 19:04:14.090 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-30 19:04:14.124 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-30 19:04:14.124 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-30 19:04:14.124 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-30 19:04:14.165 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+[1024,5120]x[5120,8256] default: 965 us (90 TFLOP/s)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  1 sub 4x1: 968 us (89 TFLOP/s) max|diff| 0
+  grid 11x8 pcM 4 pcN 24 in0_block_w  1 sub 2x2: 986 us (88 TFLOP/s) max|diff| 0
+2026-10-30 19:04:15.759 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  1 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x8 pcM 4 pcN 24 in0_block_w  1 sub 1x4: 982 us (88 TFLOP/s) max|diff| 0
+  grid 11x8 pcM 4 pcN 24 in0_block_w  2 sub 4x1: 929 us (93 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 24 in0_block_w  2 sub 2x2: 942 us (92 TFLOP/s) max|diff| 1
+2026-10-30 19:04:16.845 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  2 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x8 pcM 4 pcN 24 in0_block_w  2 sub 1x4: 925 us (94 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 24 in0_block_w  4 sub 4x1: 902 us (96 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 24 in0_block_w  4 sub 2x2: 905 us (96 TFLOP/s) max|diff| 1
+2026-10-30 19:04:17.932 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  4 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x8 pcM 4 pcN 24 in0_block_w  4 sub 1x4: 891 us (97 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 24 in0_block_w  5 sub 4x1: 897 us (96 TFLOP/s) max|diff| 1
+  grid 11x8 pcM 4 pcN 24 in0_block_w  5 sub 2x2: 902 us (96 TFLOP/s) max|diff| 1
+2026-10-30 19:04:19.034 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  5 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x8 pcM 4 pcN 24 in0_block_w  5 sub 1x4: 891 us (97 TFLOP/s) max|diff| 1
+2026-10-30 19:04:19.782 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-7] grow to 1619328 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  8 sub 4x1: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:20.111 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-7] grow to 1619328 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:20.113 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  8 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-10-30 19:04:20.442 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-7] grow to 1619328 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 11x8 pcM 4 pcN 24 in0_block_w  8 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  grid 11x10 pcM 4 pcN 24 in0_block_w  1 sub 4x1: 970 us (89 TFLOP/s) max|diff| 0
+  grid 11x10 pcM 4 pcN 24 in0_block_w  1 sub 2x2: 984 us (88 TFLOP/s) max|diff| 0
+2026-10-30 19:04:20.511 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  1 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x10 pcM 4 pcN 24 in0_block_w  1 sub 1x4: 978 us (88 TFLOP/s) max|diff| 0
+  grid 11x10 pcM 4 pcN 24 in0_block_w  2 sub 4x1: 931 us (93 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 24 in0_block_w  2 sub 2x2: 934 us (93 TFLOP/s) max|diff| 1
+2026-10-30 19:04:20.612 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  2 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x10 pcM 4 pcN 24 in0_block_w  2 sub 1x4: 927 us (93 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 24 in0_block_w  4 sub 4x1: 894 us (97 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 24 in0_block_w  4 sub 2x2: 910 us (95 TFLOP/s) max|diff| 1
+2026-10-30 19:04:20.712 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  4 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x10 pcM 4 pcN 24 in0_block_w  4 sub 1x4: 902 us (96 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 24 in0_block_w  5 sub 4x1: 889 us (97 TFLOP/s) max|diff| 1
+  grid 11x10 pcM 4 pcN 24 in0_block_w  5 sub 2x2: 904 us (96 TFLOP/s) max|diff| 1
+2026-10-30 19:04:20.810 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  5 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 11x10 pcM 4 pcN 24 in0_block_w  5 sub 1x4: 886 us (98 TFLOP/s) max|diff| 1
+2026-10-30 19:04:20.844 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-7] grow to 1619328 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  8 sub 4x1: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:20.847 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-7] grow to 1619328 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:20.848 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  8 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-10-30 19:04:20.850 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 10-7] grow to 1619328 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 11x10 pcM 4 pcN 24 in0_block_w  8 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  grid 10x8 pcM 4 pcN 26 in0_block_w  1 sub 4x1: 1054 us (82 TFLOP/s) max|diff| 0
+  grid 10x8 pcM 4 pcN 26 in0_block_w  1 sub 2x2: 1026 us (84 TFLOP/s) max|diff| 0
+2026-10-30 19:04:21.574 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x8 pcM 4 pcN 26 in0_block_w  1 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 10x8 pcM 4 pcN 26 in0_block_w  2 sub 4x1: 1005 us (86 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 26 in0_block_w  2 sub 2x2: 1006 us (86 TFLOP/s) max|diff| 1
+2026-10-30 19:04:22.307 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x8 pcM 4 pcN 26 in0_block_w  2 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 10x8 pcM 4 pcN 26 in0_block_w  4 sub 4x1: 968 us (89 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 26 in0_block_w  4 sub 2x2: 970 us (89 TFLOP/s) max|diff| 1
+2026-10-30 19:04:23.030 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x8 pcM 4 pcN 26 in0_block_w  4 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 10x8 pcM 4 pcN 26 in0_block_w  5 sub 4x1: 956 us (91 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 4 pcN 26 in0_block_w  5 sub 2x2: 968 us (89 TFLOP/s) max|diff| 1
+2026-10-30 19:04:23.768 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x8 pcM 4 pcN 26 in0_block_w  5 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-10-30 19:04:24.106 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 9-7] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x8 pcM 4 pcN 26 in0_block_w  8 sub 4x1: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:24.438 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 9-7] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x8 pcM 4 pcN 26 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:24.439 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x8 pcM 4 pcN 26 in0_block_w  8 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 10x10 pcM 4 pcN 26 in0_block_w  1 sub 4x1: 1033 us (84 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 4 pcN 26 in0_block_w  1 sub 2x2: 1047 us (83 TFLOP/s) max|diff| 0
+2026-10-30 19:04:24.510 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x10 pcM 4 pcN 26 in0_block_w  1 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 10x10 pcM 4 pcN 26 in0_block_w  2 sub 4x1: 1001 us (86 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 26 in0_block_w  2 sub 2x2: 995 us (87 TFLOP/s) max|diff| 1
+2026-10-30 19:04:24.579 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x10 pcM 4 pcN 26 in0_block_w  2 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 10x10 pcM 4 pcN 26 in0_block_w  4 sub 4x1: 962 us (90 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 26 in0_block_w  4 sub 2x2: 976 us (89 TFLOP/s) max|diff| 1
+2026-10-30 19:04:24.648 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x10 pcM 4 pcN 26 in0_block_w  4 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+  grid 10x10 pcM 4 pcN 26 in0_block_w  5 sub 4x1: 954 us (91 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 4 pcN 26 in0_block_w  5 sub 2x2: 972 us (89 TFLOP/s) max|diff| 1
+2026-10-30 19:04:24.716 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x10 pcM 4 pcN 26 in0_block_w  5 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+2026-10-30 19:04:24.718 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 9-7] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x10 pcM 4 pcN 26 in0_block_w  8 sub 4x1: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:24.720 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 9-7] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x10 pcM 4 pcN 26 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:04:24.721 | critical |          Always | TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: out_subblock_w 2 times out_subblock_h 4 needs to be at most 4 to fit in hardware (assert.hpp:104)
+  grid 10x10 pcM 4 pcN 26 in0_block_w  8 sub 4x2: FAIL TT_FATAL @ /home/ttuser/agobeljic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_oper
+[1024,5120]x[5120,8256] default 965 us; best 5 (us, gx, gy, pcM, pcN, in0_block_w, sub_h, sub_w, max|diff|):
+    (886.2140122801065, 11, 10, 4, 24, 5, 1, 4, 1.0)
+    (889.2366196960211, 11, 10, 4, 24, 5, 4, 1, 1.0)
+    (891.1303710192442, 11, 8, 4, 24, 5, 1, 4, 1.0)
+    (891.3909085094929, 11, 8, 4, 24, 4, 1, 4, 1.0)
+    (894.285412505269, 11, 10, 4, 24, 4, 4, 1, 1.0)
+2026-10-30 19:04:24.942 | info     |    BuildKernels | JIT cache stats: 35/192 hits (18.2%) [35 cached, 238 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-30 19:04:24.942 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-30 19:04:24.957 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-30 19:04:24.957 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-30 19:04:25.234 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-30 19:04:25.234 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-30 19:04:25.234 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

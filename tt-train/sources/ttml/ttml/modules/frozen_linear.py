@@ -27,6 +27,8 @@ __all__ = [
     "transpose_frozen_weights",
     "FORWARD_CORE_GRID",
     "FORWARD_PROGRAM_CONFIG",
+    "PROGRAM_CONFIG_2D",
+    "matmul_kwargs_2d",
     "TRANSPOSED_SHAPES",
 ]
 
@@ -112,8 +114,54 @@ FORWARD_PROGRAM_CONFIG: dict[tuple[int, int], dict] = {
 }
 
 
-def forward_matmul_kwargs(in_features: int, out_features: int, rows: int) -> dict:
-    """``program_config=`` (a swept 1D config) or ``core_grid=`` keyword arguments for the forward matmul."""
+# Explicit 2D (block-multicast) program configs by (M, K, N, transpose_b) of the base matmul, from the iteration-19
+# sweep (``doc/optimization/evidence/iter19_matmul_sweep2d.py``, HiFi4 / fp32 accumulate, outputs within one bf16
+# ulp of ttnn's default choice: a different K blocking changes the fp32 accumulation order). ``grid`` is (x, y):
+# x splits N into ``per_core_N`` tiles per core, y splits M into ``per_core_M``. Shapes not listed keep ttnn's choice.
+PROGRAM_CONFIG_2D: dict[tuple[int, int, int, bool], dict] = {
+    # w2 forward [1024, 8192 + 64] x [8256, 5120]: 981 -> 882 us standalone (ttnn's choice: 88 cores, 1D).
+    (1024, 8256, 5120, False): dict(
+        grid=(11, 8), in0_block_w=6, out_subblock_h=4, out_subblock_w=1, per_core_M=4, per_core_N=15
+    ),
+}
+
+
+def matmul_kwargs_2d(m: int, k: int, n: int, transpose_b: bool) -> dict | None:
+    """``program_config=`` for a swept 2D config of the ``[m, k] x [k, n]`` matmul (``transpose_b``: the second
+    operand is stored ``[n, k]``), or ``None`` when the shape is not listed or the grid is too small."""
+    spec = PROGRAM_CONFIG_2D.get((m, k, n, transpose_b))
+    if spec is None:
+        return None
+    grid = ttml.autograd.AutoContext.get_instance().get_device().compute_with_storage_grid_size()
+    if spec["grid"][0] > grid.x or spec["grid"][1] > grid.y:
+        return None
+    return {
+        "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=spec["grid"],
+            in0_block_w=spec["in0_block_w"],
+            out_subblock_h=spec["out_subblock_h"],
+            out_subblock_w=spec["out_subblock_w"],
+            per_core_M=spec["per_core_M"],
+            per_core_N=spec["per_core_N"],
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+    }
+
+
+def dx_matmul_kwargs(m: int, k: int, n: int) -> dict:
+    """Keyword arguments for the transposed-gradient matmul ``[m, k] x [n, k]^T`` (``transpose_b=True``)."""
+    return matmul_kwargs_2d(m, k, n, True) or {"core_grid": full_core_grid()}
+
+
+def forward_matmul_kwargs(in_features: int, out_features: int, rows: int, k: int | None = None) -> dict:
+    """``program_config=`` (a swept 2D or 1D config) or ``core_grid=`` keyword arguments for the forward matmul
+    ``[rows, k] x [k, out]``; ``k`` is the actual K of the call (``in + tail`` on the fused LoRA path), ``in_features``
+    the layer's input width that keys the 1D table."""
+    kwargs_2d = matmul_kwargs_2d(rows, k if k is not None else in_features, out_features, False)
+    if kwargs_2d is not None:
+        return kwargs_2d
     spec = FORWARD_PROGRAM_CONFIG.get((in_features, out_features))
     grid = ttml.autograd.AutoContext.get_instance().get_device().compute_with_storage_grid_size()
     if (
@@ -167,7 +215,11 @@ class FrozenLinearT(Function):
         ctx.save_for_backward()
         # [in, out] @ [out, T] -> [in, T], then back to [T, in]: faster than g @ W for every transposed shape.
         dx_t = ttnn.matmul(
-            w, grad_output, transpose_b=True, compute_kernel_config=_compute_config(), core_grid=full_core_grid()
+            w,
+            grad_output,
+            transpose_b=True,
+            compute_kernel_config=_compute_config(),
+            **dx_matmul_kwargs(w.shape[-2], w.shape[-1], grad_output.shape[-2]),
         )
         dx = ttnn.transpose(dx_t, -2, -1)
         ttnn.deallocate(dx_t)

@@ -172,6 +172,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_rows/rmsnorm_bw_rows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_rows/device/rmsnorm_bw_rows_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_rows/device/rmsnorm_bw_rows_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_rows/add_rmsnorm_fw_rows.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_rows/device/add_rmsnorm_fw_rows_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_rows/device/add_rmsnorm_fw_rows_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/device/rmsnorm_bw_allcore_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/device/rmsnorm_bw_allcore_program_factory.cpp

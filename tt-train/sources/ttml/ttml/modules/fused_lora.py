@@ -29,7 +29,14 @@ import ttnn
 import ttml
 from ttml.autograd import Function
 
-from .frozen_linear import TRANSPOSED_SHAPES, _compute_config, forward_matmul_kwargs, full_core_grid, local_in_out
+from .frozen_linear import (
+    dx_matmul_kwargs,
+    TRANSPOSED_SHAPES,
+    _compute_config,
+    forward_matmul_kwargs,
+    full_core_grid,
+    local_in_out,
+)
 from .lora import lowrank_update, skinny_contract, skinny_matmul
 
 __all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "reduce_partial_lora_grads", "TAIL_ROWS"]
@@ -87,7 +94,10 @@ class FusedLoraLinearT(Function):
         x_cat = ttnn.concat([x_val, h_pad], dim=3)  # [T, in + TAIL_ROWS]
         ttnn.deallocate(h_pad)
         y = ttnn.matmul(
-            x_cat, w_val, compute_kernel_config=cfg, **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2])
+            x_cat,
+            w_val,
+            compute_kernel_config=cfg,
+            **forward_matmul_kwargs(in_features, out_features, x_cat.shape[-2], k=x_cat.shape[-1]),
         )
         ctx.save_for_backward(x_val, a_val, h, w_val)
         ctx.meta = (scaling, in_features, out_features, rank, dh_scale, reduce_axis)
@@ -101,7 +111,11 @@ class FusedLoraLinearT(Function):
         cfg = _compute_config()
         # One matmul: [in + TAIL, out] @ [out, T] -> [in + TAIL, T]; rows [:in] = dx_base^T, rows [in:in+rank] = s*dh^T.
         dcat_t = ttnn.matmul(
-            w_val, grad_output, transpose_b=True, compute_kernel_config=cfg, core_grid=full_core_grid()
+            w_val,
+            grad_output,
+            transpose_b=True,
+            compute_kernel_config=cfg,
+            **dx_matmul_kwargs(w_val.shape[-2], w_val.shape[-1], grad_output.shape[-2]),
         )
         # dx = rows [:in]^T and s_dh = dh_scale * rows [in:in+rank]^T ([T, rank], already scaled by s and 1/tp) in
         # one pass over the product (iteration 13; was two slices, two transposes and a multiply).

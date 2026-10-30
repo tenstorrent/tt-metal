@@ -1,0 +1,31 @@
+=== build _ttml 2026-10-30T19:14:33Z
+build rc=0
+=== add_rmsnorm_fw_rows check 2026-10-30T19:14:44Z
+check rc=0
+B=1 T=1024 C=5120 (rows 32, slices 3 x 54 tiles): two-phase 166 us, rows 155 us
+   rows vs two-phase sum: pcc 0.672275 rel 1.01e+00 max|diff| 28.4
+   rows vs two-phase out: pcc 0.676891 rel 3.29e+00 max|diff| 86.2
+   rows vs two-phase rms: pcc 0.347791 rel 6.59e-01 max|diff| 0.779
+   rows vs fp64 out: pcc 0.676890 rel 3.31e+00 max|diff| 86.2 | rms: pcc 0.356819 rel 6.60e-01 max|diff| 0.78
+   two-phase vs fp64 out: pcc 0.999997 rel 4.16e-03 max|diff| 0.0627
+B=1 T=2048 C=5120 (rows 64, slices 1 x 160 tiles): two-phase 320 us, rows 362 us
+   rows vs two-phase sum: pcc 0.664415 rel 1.03e+00 max|diff| 29
+   rows vs two-phase out: pcc 0.658446 rel 1.71e+01 max|diff| 669
+   rows vs two-phase rms: pcc 0.059379 rel 9.22e-01 max|diff| 1.09
+   rows vs fp64 out: pcc 0.658446 rel 1.72e+01 max|diff| 669 | rms: pcc 0.054455 rel 9.22e-01 max|diff| 1.09
+   two-phase vs fp64 out: pcc 0.999997 rel 3.48e-03 max|diff| 0.0582
+B=1 T=512 C=4096 (rows 16, slices 6 x 22 tiles): two-phase 76 us, rows 69 us
+   rows vs two-phase sum: pcc 0.675690 rel 9.90e-01 max|diff| 25.6
+   rows vs two-phase out: pcc 0.676376 rel 1.92e+00 max|diff| 52.7
+   rows vs two-phase rms: pcc 0.396049 rel 4.62e-01 max|diff| 0.559
+   rows vs fp64 out: pcc 0.676375 rel 1.92e+00 max|diff| 52.7 | rms: pcc 0.403903 rel 4.63e-01 max|diff| 0.557
+   two-phase vs fp64 out: pcc 0.999997 rel 3.18e-03 max|diff| 0.0585
+B=2 T=1024 C=5120 (rows 64, slices 1 x 160 tiles): two-phase 319 us, rows 363 us
+   rows vs two-phase sum: pcc 0.665315 rel 1.03e+00 max|diff| 33.9
+   rows vs two-phase out: pcc 0.659904 rel 1.71e+01 max|diff| 766
+   rows vs two-phase rms: pcc 0.089304 rel 9.22e-01 max|diff| 1.09
+   rows vs fp64 out: pcc 0.659904 rel 1.72e+01 max|diff| 766 | rms: pcc 0.086860 rel 9.22e-01 max|diff| 1.09
+   two-phase vs fp64 out: pcc 0.999997 rel 3.48e-03 max|diff| 0.0628
+=== norm + lora harness tests 2026-10-30T19:14:54Z
+tests rc=2
+=== done 2026-10-30T19:14:57Z

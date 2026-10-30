@@ -18,6 +18,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/add_rmsnorm_fw_allcore/add_rmsnorm_fw_allcore.hpp"
+#include "metal/ops/add_rmsnorm_fw_rows/add_rmsnorm_fw_rows.hpp"
 #include "metal/ops/lowrank_update/lowrank_update.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
@@ -782,6 +783,17 @@ void py_module(nb::module_& m) {
             nb::arg("epsilon") = 1e-6F,
             "Residual add fused with RMSNorm, every tile-row split over several cores: sum = residual + delta, "
             "out = sum / sqrt(mean(sum^2) + eps) * gamma -> [sum, out, rms].");
+        py_metal.def(
+            "add_rmsnorm_fw_rows",
+            &ttml::metal::add_rmsnorm_fw_rows,
+            nb::arg("residual"),
+            nb::arg("delta"),
+            nb::arg("gamma"),
+            nb::arg("num_slices"),
+            nb::arg("slice_tiles"),
+            nb::arg("epsilon") = 1e-6F,
+            "Single-phase add_rmsnorm_fw_allcore: one (tile-row, slice) item per core, slices resident, the row's "
+            "sums of squares exchanged over the NoC -> [sum, out, rms]. Needs rows * num_slices <= cores.");
         py_metal.def(
             "lowrank_update",
             &ttml::metal::lowrank_update,

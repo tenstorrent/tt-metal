@@ -9,7 +9,7 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 
 - Single-chip Tracy at 1/2/4/8 layers (`analyze_tracy.py` four-point fit, projection to 40) attributes and ranks; `diff_tracy.py` is the cycle-time A/B (targeted ops gone, nothing new). Tracy ms = cycles / 1.35 GHz; each run's delivered clock from `clock_analysis.py`.
 - TP=4 full-model MFU after a cool-down (600 s), tt-smi on all four chips, and a 4-layer TP profile checked per chip (`tp_analysis.py`, `tp_rank_ops.py`) for a stalled chip before a TP number is believed.
-- PCC harness `tests/python/test_mistral.py` passes before a change lands: 11 tests at the baseline, 13 (iteration 2), 14 (3), 15 (6), 16 (review 4), 20 (9), 32 (review 6), 35 (11), 38 (12), 40 (13), 42 (14), 45 (18).
+- PCC harness `tests/python/test_mistral.py` passes before a change lands: 11 tests at the baseline, 13 (iteration 2), 14 (3), 15 (6), 16 (review 4), 20 (9), 32 (review 6), 35 (11), 38 (12), 40 (13), 42 (14), 45 (18), 47 (19).
 - From iteration 4 on (user priority 2026-10-29): the TP=4 run is the result; depth runs only rank; no single-chip MFU runs, no 16-layer profiles; HiFi4 + fp32 accumulate mandatory.
 
 ## Iterations
@@ -36,7 +36,8 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | 15 | math (kernel boost) | SDPA forward chain data flow (K/V once per chain of cores) | 42 | **506.0** | **32.06 %** | landed |
 | 16 | math (kernel boost) | SDPA backward chain data flow (Q, KV kernels) | 42 | 508.4 | 31.91 % | landed, -0.13 ms per 4 layers per chip (compute-bound kernels) |
 | 17 | math (kernel boost) | single-phase RMSNorm backward (`rmsnorm_bw_rows`) | 42 | 505.6 | 32.09 % | landed |
-| 18 | math (kernel boost, partial) | LoRA gradient products: `skinny_contract` op (narrow dB) + ttnn `[r, N]` orientation (dA, wide dB) | 45 | **503.9** | **32.19 %** | landed |
+| 18 | math (kernel boost, partial) | LoRA gradient products: `skinny_contract` op (narrow dB) + ttnn `[r, N]` orientation (dA, wide dB) | 45 | 503.9 | 32.19 % | landed |
+| 19 | math (kernel boost) + config | single-phase fused add + RMSNorm forward (`add_rmsnorm_fw_rows`), 2D w2-forward matmul config | 47 | **495.4** | ****32.75 %**** | landed |
 | 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.
@@ -60,15 +61,16 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - 15: first kernel-boost iteration (user direction 2026-10-30 evening): SDPA forward 228 -> 140 us per call, bit-identical; chains of 14 cores forward the K/V chunks, DRAM traffic 67 -> ~12 MB per call.
 - 16: the same for the two backward kernels: -0.13 ms per 4 layers only; they are compute-bound (12-16 matmul tiles plus SFPU per unit), next fix is one merged backward pass with dQ partials.
 - 17: RMSNorm backward 229 -> 165 us per call (one program, operands resident, partial dots exchanged over the NoC); -0.51 ms per 4 layers per chip.
-- 18: new `skinny_contract` op beat ttnn's `[N, r]` orientation (157 -> 123 us gate_up dB) but not ttnn's `[r, N]` orientation + transpose (110 us); router sends dA and the wide dB there, the narrow qkv dB to the op (25 vs 28 us). Run A 498.0 / 32.58 %, run B 503.9 ms / 32.19 %.
+- 18: new `skinny_contract` op beat ttnn's `[N, r]` orientation (157 -> 123 us gate_up dB) but not ttnn's `[r, N]` orientation + transpose (110 us); router sends dA and the wide dB there, the narrow qkv dB to the op (25 vs 28 us). Run A (op for the wide dB, not the committed router) 498.0 / 32.58 %, run B (committed) 503.9 ms / 32.19 %; product rows 1.63 -> 1.32 ms per 4 layers per chip.
+- 19: fused norm forward in one phase 166 -> 158 us per call (bit-exact; SFPU-bound, not DRAM-bound, so below the expected 120-130); w2 forward matmul 2D config -11 % standalone (ttnn's 1D choice beaten only for this shape). 495.4 ms / 32.75 %.
 
 ## State (2026-10-30)
 
-- TP=4 full model: 598.7 (baseline) -> 556.5 (exit) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> 512.5 (14) -> 506.0 (15) -> 508.4 (16) -> 505.6 (17) -> 498.0 (18 A) -> **503.9 ms / 32.19 %** (18 B).
+- TP=4 full model: 598.7 (baseline) -> 556.5 (exit) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> 512.5 (14) -> 506.0 (15) -> 508.4 (16) -> 505.6 (17) -> 498.0 (18 A) -> 503.9 (18 B) -> **495.4 ms / 32.75 %** (19).
 - Hard constraints (user, 2026-10-30): HiFi4 + fp32 accumulate (no lower fidelity evaluated); result = full-model TP=4 MFU only; a kernel-level item every iteration; a stage-review pass is a checkpoint, not a stop; one change per commit.
 - Loss match on this path (after 14): 8-layer host loss max |diff| 0.0294 vs torch fp64 (tol 0.10); TP=4 real-weight trajectory as the baseline's (526.1 ms warm).
 - Reviews: round 3 more-work-needed, answered in the follow-up; round 4 five P3 doc / test items fixed; round 5 clean-pass; round 6 (iterations 9-10) items answered, clean-pass on re-check; round 7 (iterations 11-12, `review_round7.md`) two P2 doc / hygiene items answered, re-check pending.
-- Remaining ranking (`../perf_analysis.md`, "Ranked cost table", after iteration 12, ms/step/chip): base matmuls ~206 at ttnn's best config, collectives 40-85 (transfer at the library optimum, chip skew on top, overlap untried), LoRA adapters ~40, norms ~32, SDPA ~30, layout ~29, SwiGLU ~15, fixed ~10, adds ~5.
+- Remaining ranking (`../perf_analysis.md`, "Ranked cost table", after iteration 18, ms/step/chip): base matmuls ~206 (w2 forward at 63 % of peak, the rest 76-85 %), collectives 41-79 (transfer at the library optimum, chip skew on top, overlap untried), LoRA adapters ~34, norms ~26, SDPA ~25, layout ~17, SwiGLU ~14, fixed ~8, adds ~3.
 
 ## Exit (2026-10-29, after iteration 3)
 

@@ -1,0 +1,5 @@
+K=8192 (256 tiles): fwd 990 us (87 TFLOP/s)  dX [1024,5120]x[5120,K] 1005 us (86 TFLOP/s)
+K=8256 (258 tiles): fwd 1006 us (86 TFLOP/s)  dX [1024,5120]x[5120,K] 994 us (87 TFLOP/s)
+K=8320 (260 tiles): fwd 1003 us (87 TFLOP/s)  dX [1024,5120]x[5120,K] 995 us (88 TFLOP/s)
+K=8448 (264 tiles): fwd 891 us (99 TFLOP/s)  dX [1024,5120]x[5120,K] 1006 us (88 TFLOP/s)
+K=8704 (272 tiles): fwd 1017 us (90 TFLOP/s)  dX [1024,5120]x[5120,K] 1028 us (89 TFLOP/s)

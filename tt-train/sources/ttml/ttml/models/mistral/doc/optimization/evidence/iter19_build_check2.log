@@ -1,0 +1,31 @@
+=== build skipped
+=== add_rmsnorm_fw_rows check 2026-10-30T19:18:40Z
+check rc=0
+B=1 T=1024 C=5120 (rows 32, slices 3 x 54 tiles): two-phase 166 us, rows 158 us
+   rows vs two-phase sum: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs two-phase out: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs two-phase rms: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs fp64 out: pcc 0.999997 rel 4.16e-03 max|diff| 0.0627 | rms: pcc 0.980651 rel 3.25e-03 max|diff| 0.00674
+   two-phase vs fp64 out: pcc 0.999997 rel 4.16e-03 max|diff| 0.0627
+B=1 T=2048 C=5120 (rows 64, slices 1 x 160 tiles): two-phase 320 us, rows 375 us
+   rows vs two-phase sum: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs two-phase out: pcc 0.999998 rel 5.92e-03 max|diff| 0.0625
+   rows vs two-phase rms: pcc 0.957129 rel 6.10e-03 max|diff| 0.00781
+   rows vs fp64 out: pcc 0.999997 rel 8.34e-03 max|diff| 0.0894 | rms: pcc 0.979424 rel 7.33e-03 max|diff| 0.0121
+   two-phase vs fp64 out: pcc 0.999997 rel 3.48e-03 max|diff| 0.0582
+B=1 T=512 C=4096 (rows 16, slices 6 x 22 tiles): two-phase 75 us, rows 70 us
+   rows vs two-phase sum: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs two-phase out: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs two-phase rms: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs fp64 out: pcc 0.999997 rel 3.18e-03 max|diff| 0.0585 | rms: pcc 0.984848 rel 2.29e-03 max|diff| 0.00525
+   two-phase vs fp64 out: pcc 0.999997 rel 3.18e-03 max|diff| 0.0585
+B=2 T=1024 C=5120 (rows 64, slices 1 x 160 tiles): two-phase 321 us, rows 375 us
+   rows vs two-phase sum: pcc 1.000000 rel 0.00e+00 max|diff| 0  BIT-EXACT
+   rows vs two-phase out: pcc 0.999998 rel 5.92e-03 max|diff| 0.0625
+   rows vs two-phase rms: pcc 0.962571 rel 6.22e-03 max|diff| 0.00781
+   rows vs fp64 out: pcc 0.999997 rel 8.35e-03 max|diff| 0.094 | rms: pcc 0.980650 rel 7.47e-03 max|diff| 0.0121
+   two-phase vs fp64 out: pcc 0.999997 rel 3.48e-03 max|diff| 0.0628
+=== norm + lora harness tests 2026-10-30T19:18:47Z
+tests rc=0
+================= 17 passed, 30 deselected in 98.20s (0:01:38) =================
+=== done 2026-10-30T19:20:28Z

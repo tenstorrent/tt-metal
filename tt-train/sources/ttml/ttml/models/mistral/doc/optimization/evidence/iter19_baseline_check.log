@@ -1,0 +1,4 @@
+w2 fwd [1024,8256]x[8256,5120]: default 983 us, full core_grid 1039 us, 2D[11x8 w6 s4x1] 941 us (diff 2), 2D[11x10 w6 s4x1] 936 us (diff 2), 2D[11x8 w3 s4x1] 959 us (diff 0)
+gate_up fwd [1024,5184]x[5184,16384]: default 1720 us, full core_grid 1863 us, 2D[11x8 w1 s4x1] 2281 us (diff 1)
+w2 dX [8256,5120]x[5120,1024] tb: default 964 us, full core_grid 805 us, 2D[8x10 w5 s2x2] 1052 us (diff 1), 2D[10x10 w5 s2x2] 1028 us (diff 1)
+gate_up dX [5184,16384]x[16384,1024] tb: default 2875 us, full core_grid 1675 us, 2D[10x10 w8 s1x4] 2234 us (diff 2), 2D[10x10 w4 s1x4] 2267 us (diff 0)

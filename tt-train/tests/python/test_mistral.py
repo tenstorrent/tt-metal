@@ -437,8 +437,9 @@ def test_vp_cross_entropy_bw_matches_numpy(vocab, g, scale):
 
 @pytest.mark.parametrize(
     "n_cols, scale, transpose_out",
-    [(16384, 2.0, True), (5120, 1.0, False), (1024, 0.5, True)],
-    ids=["dB-gate_up", "dA-in5120", "dB-out-scaled"],
+    # 1536: the routed qkv dB shape (48 cores); 7072: Nt = 221 = 73 x 3 + 2, a short last column group (the padding path)
+    [(16384, 2.0, True), (5120, 1.0, False), (1024, 0.5, True), (1536, 0.5, True), (7072, 1.0, True)],
+    ids=["dB-gate_up", "dA-in5120", "dB-out-scaled", "dB-qkv-routed", "dB-short-last-group"],
 )
 def test_skinny_contract_matches_torch(n_cols, scale, transpose_out):
     """`scale * small^T @ big` over the token dimension (rank 16) in one op against torch fp64 on bf16 inputs."""

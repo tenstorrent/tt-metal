@@ -1,0 +1,103 @@
+2026-10-30 19:05:52.605 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+2026-10-30 19:05:53.141 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-30 19:05:53.141 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-30 19:05:53.141 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-30 19:05:53.141 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-30 19:05:53.152 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:695)
+2026-10-30 19:05:53.153 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-30 19:05:53.233 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-30 19:05:53.233 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-30 19:05:53.233 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-30 19:05:53.233 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-30 19:05:53.235 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-30 19:05:53.401 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-30 19:05:53.436 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-30 19:05:53.436 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-30 19:05:53.436 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-30 19:05:53.476 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+[8256,5120]x[5120,1024] (transpose_b) default: 966 us (90 TFLOP/s)
+  grid 10x8 pcM 33 pcN 4 in0_block_w  1 sub 1x4: 1309 us (66 TFLOP/s) max|diff| 0
+  grid 10x8 pcM 33 pcN 4 in0_block_w  2 sub 1x4: 1236 us (70 TFLOP/s) max|diff| 1
+  grid 10x8 pcM 33 pcN 4 in0_block_w  4 sub 1x4: 1202 us (72 TFLOP/s) max|diff| 1
+2026-10-30 19:05:56.571 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-7] grow to 1680768 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x8 pcM 33 pcN 4 in0_block_w  5 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  grid 10x10 pcM 26 pcN 4 in0_block_w  1 sub 2x2: 1064 us (81 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 26 pcN 4 in0_block_w  1 sub 1x4: 1065 us (81 TFLOP/s) max|diff| 0
+  grid 10x10 pcM 26 pcN 4 in0_block_w  2 sub 2x2: 1015 us (85 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 26 pcN 4 in0_block_w  2 sub 1x4: 1005 us (86 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 26 pcN 4 in0_block_w  4 sub 2x2: 985 us (88 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 26 pcN 4 in0_block_w  4 sub 1x4: 965 us (90 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 26 pcN 4 in0_block_w  5 sub 2x2: 964 us (90 TFLOP/s) max|diff| 1
+  grid 10x10 pcM 26 pcN 4 in0_block_w  5 sub 1x4: 967 us (90 TFLOP/s) max|diff| 1
+2026-10-30 19:05:59.923 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-9] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x10 pcM 26 pcN 4 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:00.251 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-9] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 10x10 pcM 26 pcN 4 in0_block_w  8 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  grid 8x10 pcM 26 pcN 4 in0_block_w  1 sub 2x2: 1072 us (81 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 26 pcN 4 in0_block_w  1 sub 1x4: 1071 us (81 TFLOP/s) max|diff| 0
+  grid 8x10 pcM 26 pcN 4 in0_block_w  2 sub 2x2: 1016 us (85 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 26 pcN 4 in0_block_w  2 sub 1x4: 1003 us (86 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 26 pcN 4 in0_block_w  4 sub 2x2: 984 us (88 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 26 pcN 4 in0_block_w  4 sub 1x4: 984 us (88 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 26 pcN 4 in0_block_w  5 sub 2x2: 960 us (90 TFLOP/s) max|diff| 1
+  grid 8x10 pcM 26 pcN 4 in0_block_w  5 sub 1x4: 970 us (89 TFLOP/s) max|diff| 1
+2026-10-30 19:06:00.530 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-9] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 8x10 pcM 26 pcN 4 in0_block_w  8 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:00.532 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-9] grow to 1734016 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 8x10 pcM 26 pcN 4 in0_block_w  8 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+  grid 4x10 pcM 26 pcN 8 in0_block_w  1 sub 2x2: 1983 us (44 TFLOP/s) max|diff| 0
+  grid 4x10 pcM 26 pcN 8 in0_block_w  1 sub 1x4: 1959 us (44 TFLOP/s) max|diff| 0
+2026-10-30 19:06:01.610 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 1668480 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  2 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:01.938 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 1668480 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  2 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:02.270 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 1947008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  4 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:02.600 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 1947008 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  4 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:02.930 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 2086272 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  5 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:03.259 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 3-9] grow to 2086272 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 4x10 pcM 26 pcN 8 in0_block_w  5 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:03.592 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 2839936 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  1 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:03.913 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 2839936 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  1 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:04.242 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3011968 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  2 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:04.565 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3011968 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  2 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:04.895 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3356032 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  4 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:05.216 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3356032 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  4 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:05.545 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3528064 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  5 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:05.863 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 1-9] grow to 3528064 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 2x10 pcM 26 pcN 16 in0_block_w  5 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:06.190 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 5461376 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  1 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:06.512 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 5461376 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  1 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:06.839 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 5698944 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  2 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:07.164 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 5698944 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  2 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:07.489 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 6174080 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  4 sub 2x2: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+2026-10-30 19:06:07.828 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 0-9] grow to 6174080 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+  grid 1x10 pcM 26 pcN 32 in0_block_w  4 sub 1x4: FAIL TT_THROW @ /home/ttuser/agobeljic/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3063: t
+[8256,5120]x[5120,1024] default 966 us; best 5 (us, gx, gy, pcM, pcN, in0_block_w, sub_h, sub_w, max|diff|):
+    (959.7251191735268, 8, 10, 26, 4, 5, 2, 2, 1.0)
+    (964.2327670007944, 10, 10, 26, 4, 5, 2, 2, 1.0)
+    (964.7732600569725, 10, 10, 26, 4, 4, 1, 4, 1.0)
+    (967.0662228018045, 10, 10, 26, 4, 5, 1, 4, 1.0)
+    (970.0799826532602, 8, 10, 26, 4, 5, 1, 4, 1.0)
+2026-10-30 19:06:08.063 | info     |    BuildKernels | JIT cache stats: 23/268 hits (8.6%) [23 cached, 122 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-30 19:06:08.063 | info     |    BuildKernels | JIT telemetry: 40 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-30 19:06:08.078 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-30 19:06:08.078 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-30 19:06:08.347 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-30 19:06:08.347 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-30 19:06:08.347 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

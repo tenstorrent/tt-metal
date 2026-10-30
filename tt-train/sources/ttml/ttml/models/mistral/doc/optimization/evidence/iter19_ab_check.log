@@ -1,0 +1,6 @@
+w2 fwd [1024,8256]x[8256,5120]: default min 979 med 1148 us (75 TFLOP/s); full core_grid min 1005 med 1174 us (74 TFLOP/s); 2D 11x10 w6 s4x1 min 909 med 1043 us (83 TFLOP/s); 2D 11x8 w6 s4x1 min 923 med 1058 us (82 TFLOP/s)
+gate_up fwd [1024,5184]x[5184,16384]: default min 1707 med 2065 us (84 TFLOP/s); full core_grid min 1802 med 2096 us (83 TFLOP/s)
+w2 dX [8256,5120]x[5120,1024] tb: default min 958 med 1046 us (83 TFLOP/s); full core_grid min 782 med 874 us (99 TFLOP/s); 2D 8x10 w5 s2x2 min 989 med 1133 us (76 TFLOP/s)
+gate_up dX [5184,16384]x[16384,1024] tb: default min 2855 med 3091 us (56 TFLOP/s); full core_grid min 1592 med 1861 us (93 TFLOP/s); 2D 10x10 w8 s1x4 min 2111 med 2411 us (72 TFLOP/s)
+qkv fwd [1024,5184]x[5184,1536]: default min 240 med 246 us (66 TFLOP/s); full core_grid min 209 med 213 us (77 TFLOP/s)
+out fwd [1024,1088]x[1088,5120]: default min 166 med 171 us (67 TFLOP/s); full core_grid min 175 med 175 us (65 TFLOP/s)
