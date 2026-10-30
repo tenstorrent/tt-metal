@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.experimental.bevformer.model_config import CODE_ORDER
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
     assert_topk_close,
@@ -87,5 +88,9 @@ def test_head_detections(device, reset_seeds):
     tt_cls_scores, tt_bbox_preds = tt_model(to_device(bev_embed, device))
     tt_topk = tuple(ttnn.to_torch(t) for t in TTNMSFreeCoder(device).topk(tt_cls_scores[-1], tt_bbox_preds[-1]))
     assert_topk_close(
-        cls_scores[-1], bbox_preds[-1], ttnn.to_torch(tt_cls_scores[-1]), ttnn.to_torch(tt_bbox_preds[-1]), tt_topk
+        cls_scores[-1],
+        bbox_preds[-1],
+        ttnn.to_torch(tt_cls_scores[-1]),
+        ttnn.to_torch(tt_bbox_preds[-1])[..., CODE_ORDER],
+        tt_topk,
     )

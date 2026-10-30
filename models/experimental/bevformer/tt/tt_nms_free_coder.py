@@ -18,11 +18,16 @@ import ttnn
 from models.experimental.bevformer.model_config import (
     BOX_CENTER,
     BOX_H,
+    BOX_SIZE,
+    BOX_VELOCITY,
+    BOX_YAW,
     BOX_Z,
+    CENTERS_FIRST,
     CODER_SEARCH_ROUNDS,
     CODE_COS,
     CODE_H,
     CODE_SIN,
+    CODE_SIZE,
     CODE_VELOCITY,
     CODE_WL,
     CODE_XY,
@@ -33,34 +38,23 @@ from models.experimental.bevformer.model_config import (
     SCORE_DTYPE,
 )
 
-
-def denormalize_bbox(normalized_bboxes):
-    """Box predictions (``model_config.py``'s box code, centers in metres) to
-    ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
-    return ttnn.concat(
-        [
-            normalized_bboxes[..., CODE_XY],
-            normalized_bboxes[..., CODE_Z],
-            ttnn.exp(normalized_bboxes[..., CODE_WL]),
-            ttnn.exp(normalized_bboxes[..., CODE_H]),
-            ttnn.atan2(normalized_bboxes[..., CODE_SIN], normalized_bboxes[..., CODE_COS]),
-            normalized_bboxes[..., CODE_VELOCITY],
-        ],
-        dim=-1,
-    )
-
-
 # _gather_rows' padded row width, a whole tile.
 _GATHER_WIDTH = ttnn.TILE_SIZE
 
 
-def _gather_rows(table, rows):
+def _gather_rows(table, rows, columns=None, compute_kernel_config=None):
     """Each sample's rows ``rows`` ``(bs, 1, 1, k)`` uint32 of ``table`` ``(bs, n, width)``, width at
     most ``_GATHER_WIDTH``, as ``(bs, k, width)`` in the table's dtype, exactly.
 
     ttnn.embedding gathers whole rows in one pass, far faster here than ttnn.gather, but only from a
     bfloat16 table. So a float32 table goes as three bfloat16 parts, each the next 8 significant
-    bits of its values, whose float32 sum is the table again. Rows are padded to ``_GATHER_WIDTH``."""
+    bits of its values, whose float32 sum is the table again. Rows are padded to ``_GATHER_WIDTH``.
+
+    ``columns``, a ``(_GATHER_WIDTH, W)`` bfloat16 0/1 matrix, rearranges the gathered columns:
+    each part is multiplied by it, which with ``compute_kernel_config``'s HiFi4 and fp32
+    accumulation copies bfloat16 values exactly, and the rows come out ``(bs, k, W)`` float32.
+    Moving columns there costs one small matmul where slicing at columns off a tile boundary costs
+    an untilize, a slice and a tilize each."""
     bs, n, width = table.shape
     k = rows.shape[-1]
     # Whole tiles both ways, so turning the parts to ROW_MAJOR strips no padding.
@@ -78,11 +72,19 @@ def _gather_rows(table, rows):
             part = ttnn.typecast(rest, ttnn.bfloat16)
             rest = ttnn.subtract(rest, ttnn.typecast(part, ttnn.float32))
             gathered = ttnn.embedding(sample_rows, ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT))
-            gathered = ttnn.typecast(ttnn.to_layout(gathered, ttnn.TILE_LAYOUT), ttnn.float32)
+            gathered = ttnn.to_layout(gathered, ttnn.TILE_LAYOUT)
+            if columns is None:
+                gathered = ttnn.typecast(gathered, ttnn.float32)
+            else:
+                gathered = ttnn.matmul(
+                    gathered, columns, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config
+                )
             out = gathered if out is None else ttnn.add(out, gathered)
-        samples.append(ttnn.reshape(out[..., :width], (1, k, width)))
+        if columns is None:
+            out = out[..., :width]
+        samples.append(ttnn.reshape(out, (1, k, out.shape[-1])))
     out = samples[0] if bs == 1 else ttnn.concat(samples, dim=0)
-    return out if table.dtype == ttnn.float32 else ttnn.typecast(out, table.dtype)
+    return out if table.dtype == ttnn.float32 or columns is not None else ttnn.typecast(out, table.dtype)
 
 
 class TTNMSFreeCoder:
@@ -121,9 +123,36 @@ class TTNMSFreeCoder:
         self.max_num = max_num
         self.num_classes = num_classes
         # The search's counts reach num_query * num_classes, which bfloat16 accumulation would
-        # round; float32 holds them exactly.
+        # round; float32 holds them exactly. The decoding's column moves need it, and HiFi4, too.
         self._count_config = ttnn.init_device_compute_kernel_config(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+        )
+        # The decoded box's channels from the CENTERS_FIRST box code, moved by _gather_rows: (cx,
+        # cy, cz, w, l, h, sin, vx, vy) in the first tile, w, l and h before their exp and sin
+        # before the yaw's atan2, and cos in the second tile under the sin, so the decoding works
+        # on whole tiles.
+        codes = [*range(CODE_SIZE)]
+        decoded = codes[CODE_XY] + codes[CODE_Z] + codes[CODE_WL] + codes[CODE_H] + codes[CODE_SIN]
+        decoded += codes[CODE_VELOCITY]
+        tile = ttnn.TILE_SIZE
+        columns = [0.0] * (_GATHER_WIDTH * 2 * tile)
+        for box_channel, code_channel in enumerate(decoded):
+            columns[CENTERS_FIRST.index(code_channel) * 2 * tile + box_channel] = 1.0
+        columns[CENTERS_FIRST.index(codes[CODE_COS][0]) * 2 * tile + tile + BOX_YAW.start] = 1.0
+        self._decode_columns = ttnn.to_device(
+            ttnn.Tensor(columns, [_GATHER_WIDTH, 2 * tile], ttnn.bfloat16, ttnn.TILE_LAYOUT), device
+        )
+        self._size_mask, self._yaw_mask = (
+            ttnn.to_device(
+                ttnn.Tensor(
+                    [float(c in range(channels.start, channels.stop)) for c in range(tile)],
+                    [1, 1, tile],
+                    ttnn.float32,
+                    ttnn.TILE_LAYOUT,
+                ),
+                device,
+            )
+            for channels in (BOX_SIZE, BOX_YAW)
         )
         # 1 .. 32 down dim 1: the search's thresholds, in steps of its bracket.
         self._search_steps = ttnn.to_device(
@@ -201,9 +230,10 @@ class TTNMSFreeCoder:
 
     def topk(self, cls_scores, bbox_preds):
         """``(bs, num_query, num_classes)`` ``SCORE_DTYPE`` logits and ``(bs, num_query, code_size)``
-        box predictions to each sample's top ``max_num`` scores, sorted, as device tensors: scores
-        ``(bs, max_num)`` float32, labels ``(bs, max_num)`` uint32 and query indexes ``(bs, max_num)``
-        uint32, all ROW_MAJOR, and boxes ``(bs, max_num, 9)`` in the box predictions' dtype.
+        box predictions, ``TTBEVFormerHead``'s, in ``CENTERS_FIRST`` order, to each sample's top
+        ``max_num`` scores, sorted, as device tensors: scores ``(bs, max_num)`` float32, labels
+        ``(bs, max_num)`` uint32 and query indexes ``(bs, max_num)`` uint32, all ROW_MAJOR, and
+        boxes ``(bs, max_num, 9)`` in the box predictions' dtype.
 
         ttnn.topk ranks float32 on a single core, far slower than bfloat16, whose large k takes
         a multi-core route on Blackhole; bfloat16 alone ties many scores. So the logits, which
@@ -237,10 +267,20 @@ class TTNMSFreeCoder:
         # Integer division, exact for any index; the row gather takes uint32 indexes.
         query_index = ttnn.div(ttnn.typecast(indexes, ttnn.int32), num_classes, rounding_mode="floor")
         query_index = ttnn.typecast(query_index, ttnn.uint32)
-        boxes = denormalize_bbox(_gather_rows(bbox_preds, query_index))
+        boxes = self._decode(_gather_rows(bbox_preds, query_index, self._decode_columns, self._count_config))
         outputs = tuple(ttnn.reshape(t, (bs, self.max_num)) for t in (scores, labels, query_index)) + (boxes,)
         # The caller may hold them into the next frame, whose backbone needs the L1.
         return tuple(ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in outputs)
+
+    def _decode(self, gathered):
+        """``_gather_rows``' box codes under ``self._decode_columns`` to ``(cx, cy, cz, w, l, h, yaw,
+        vx, vy)`` boxes, as the reference's ``denormalize_bbox``: w, l and h from their logs, the yaw
+        from its sine and cosine."""
+        tile = ttnn.TILE_SIZE
+        codes, cos = gathered[..., :tile], gathered[..., tile:]
+        boxes = ttnn.where(self._size_mask, ttnn.exp(codes), codes)
+        boxes = ttnn.where(self._yaw_mask, ttnn.atan2(codes, cos), boxes)
+        return boxes[..., : BOX_VELOCITY.stop]
 
     def valid(self, scores, boxes):
         """``(bs, max_num)`` validity of :meth:`topk`'s scores and boxes, 1.0 or 0.0, on device: the

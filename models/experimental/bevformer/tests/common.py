@@ -31,6 +31,7 @@ from models.experimental.bevformer.model_config import (
     CAN_BUS_DIMS,
     CENTERS_FIRST,
     CODE_CENTERS,
+    CODE_ORDER,
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -719,6 +720,7 @@ def check_head_outputs(expected, actual):
     most. The boxes go channel by channel: a joint PCC would be the centers' alone, as x and y span
     102.4 m against z's 8 m and the other channels' O(1)."""
     actual = tuple(ttnn.to_torch(t).float() for t in actual)
+    actual = (actual[0], actual[1][..., CODE_ORDER])
     for name, tensor in zip(("class logits", "box predictions"), actual):
         assert_finite(f"the head {name}", tensor)
     assert_centers_close(expected[1], actual[1])
@@ -854,12 +856,14 @@ LOW_PRECISION_BOX_CODE_PCC = 0.94
 
 def check_detector_outputs(expected, actual, pcc):
     """The TT detector's class logits, box predictions, BEV and ``TTBEVFormer.detect``'s first four
-    outputs, as torch tensors, against the reference's ``(cls_scores, bbox_preds, bev)``: finite, the
+    outputs, as torch tensors, the boxes in the head's ``CENTERS_FIRST`` order, against the
+    reference's ``(cls_scores, bbox_preds, bev)``: finite, the
     BEV, the last layer's logits and boxes at ``pcc`` (``LOW_PRECISION_BOX_CODES`` at
     ``LOW_PRECISION_BOX_CODE_PCC``), and the detections by ``assert_topk_close``.
     Logs the box center error."""
     cls_scores, bbox_preds, bev = expected
     tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk = actual
+    tt_bbox_preds = tt_bbox_preds[..., CODE_ORDER]
     for name, tensor in (("BEV", tt_bev), ("class logits", tt_cls_scores), ("boxes", tt_bbox_preds)):
         assert_finite(f"the detector's {name}", tensor)
     log_center_error(bbox_preds[-1], tt_bbox_preds[-1])
