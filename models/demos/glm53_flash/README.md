@@ -152,6 +152,13 @@ needle 104 K tokens before the question is answered exactly (`amber-falcon-7391`
 tokens before it (depth 0.56) is not and the model loops on its thinking preamble (`needle1m_r5`), the ~460 K
 retrieval limit measured in the harness. The chunk-end KDA snapshots to the host store cost nothing visible.
 
+The catalogued configuration since 2026-10-30 (async scheduling on, the slot-level prefix cache on with two host
+snapshot entries per slot, resident decode; one smoke run, `async_r4`): `vllm bench` 128 x 128 at 32 concurrent
+requests TTFT 5.4 s mean, **14.6 tok/s per user, 290 tok/s output**; 4 concurrent 65 514-token prompts TTFT 101 s
+mean (69-122 s) and, repeated, **30-40 s** served from the KDA snapshots at 49152 with the 16 K tail prefilled; the
+same four short prompts repeat their greedy texts exactly; the image, the clip and the repeated image are answered
+correctly (TTFT 5.8 / 6.4 / 5.8 s).
+
 The 128 K profile served the same way (192 distinct requests = 6 slots per chip under per-row prefill ownership, prefix
 cache off; 2026-10-29 14:58, one smoke run, 0 program-cache misses; 224 = 7 per chip runs out of DRAM at boot): 4 concurrent
 65 514-token prompts 4/4 (TTFT 49 / 64 / 106 / 113 s), `vllm bench` 128 x 128 at 192 concurrent requests TTFT 27.0 s mean,

@@ -1581,6 +1581,16 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 02:01: the gate is green (async_r4); the 1 M needle answered (needle1m_r6)
+
+`served_8x4_async_r4` on the catalogued 1 M profile with async scheduling, the cache on the host store with two
+entries, resident decode, the confirmer and the plain-path slot affinity: every stage PASS. Stage b identical across
+rounds (the repeats returned to their slots), 8/8 needles with the second round served from the snapshots (TTFT 30-40
+s against 69-122 s), bench 128 x 128 at 32 users 14.64 tok/s per user / 290 aggregate (the reload path's 11.0 / 244),
+64 K x 4 TTFT 101 s, image, video and the repeated image correct. `needle1m_r6`: the 1 039 157-token prompt with the
+needle 104 K tokens before the question answered exactly at TTFT 495 s. The catalog flips (both prefix-cache switches,
+two host entries, async on); the metal, plugin and server branches carry everything.
+
 ### 2026-10-30 01:05: the target configuration works end to end (async_r3)
 
 `served_8x4_async_r3` on the catalogued 1 M profile with async scheduling on, the cache on the host store with two
