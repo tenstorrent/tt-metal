@@ -267,19 +267,27 @@ inline void _llk_unpack_A_mop_config_(
             {
                 const std::uint32_t outerloop     = num_faces;
                 constexpr std::uint32_t innerloop = 1;
+                ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
+                tmp.set_start_op(unpack_srca);
                 if (tensor_shape.face_r_dim < FACE_R_DIM)
                 {
                     // Datacopy moves all 16 rows of a face. Zero the unpacker's own SrcA bank before each face, so the
                     // rows past the face hold zeros and not the previous op's data.
-                    static constexpr std::uint32_t clear_srca =
-                        TT_OP_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0 /*Bank_Clr_Ctrl*/, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
-                    ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb_set_dvalid);
+                    // Edit this template instead of programming a second one, so the function stays small enough to inline.
+                    static constexpr std::uint32_t clear_srca = TT_OP_UNPACR_NOP(
+                        SrcA,
+                        0 /*Stream_Id*/,
+                        0 /*Msg_Clr_Cnt*/,
+                        0 /*Set_Dvalid*/,
+                        0 /*Clr_to1_fmt_Ctrl*/,
+                        p_unpacr_nop::WAIT_LIKE_UNPACR,
+                        0 /*Bank_Clr_Ctrl*/,
+                        p_unpacr_nop::CLR_SRC_0,
+                        p_unpacr_nop::CLR_SRC);
                     tmp.set_start_op(clear_srca);
-                    tmp.program();
-                    return;
+                    tmp.set_loop_op0(unpack_srca);
+                    tmp.set_loop_op1(unpack_srcb_set_dvalid);
                 }
-                ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
-                tmp.set_start_op(unpack_srca);
                 tmp.program();
             }
         }
