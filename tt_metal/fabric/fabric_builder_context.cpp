@@ -386,17 +386,14 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
             if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc() && needs_mesh_pass_through) {
                 log_warning(
-                    tt::LogFabric,
-                    "TT_METAL_FABRIC_DISABLE_INTERMESH_VC is ignored: mesh pass-through needs VC1. The D2D relay "
-                    "stays off");
+                    tt::LogFabric, "TT_METAL_FABRIC_DISABLE_INTERMESH_VC is ignored: mesh pass-through needs VC1");
             } else if (fabric_context_.get_rtoptions().get_disable_fabric_intermesh_vc()) {
                 config = IntermeshVCConfig::disabled();
                 config.mode = IntermeshVCMode::FULL_MESH;
                 config.intermesh_vc_disabled = true;
                 log_info(
                     tt::LogFabric,
-                    "Intermesh VC disabled (TT_METAL_FABRIC_DISABLE_INTERMESH_VC): inter-mesh traffic lands on "
-                    "VC0, D2D relay on");
+                    "Intermesh VC disabled (TT_METAL_FABRIC_DISABLE_INTERMESH_VC): inter-mesh traffic lands on VC0");
             }
         }
     }
