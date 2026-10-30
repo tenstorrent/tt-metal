@@ -267,7 +267,7 @@ cleanup() {
         "chunk ${MATRIX_CHUNK}, layers per stage \`${MATRIX_LAYER_COUNTS:-even}\`, ${EXPERT_DTYPE:-bf4} experts, ${USERS} users," \
         "${ITERS} idle iterations, ${TARGET_CHUNKS} chunks per loaded cell, power class ${POWER_CLASS}," \
         "KV capacity ${KV_CAPACITY} for every row" \
-        "(one runner launch). Cached rows \`${CACHED_LIST[*]}\`. Baseline and history: tt-metal#57827."
+        "(one runner launch). Cached rows \`${CACHED_LIST[*]}\`."
       cat "${OUT_DIR}/tables.md"
     } > "${PREFILL_SUMMARIES}/perf/m3_prefill_matrix_sc4.md"
     cat "${PREFILL_SUMMARIES}/perf/m3_prefill_matrix_sc4.md"
