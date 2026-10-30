@@ -5,7 +5,9 @@
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
 
+#include <atomic>
 #include <filesystem>
+#include <future>
 #include <thread>
 
 #include "impl/context/metal_context.hpp"
@@ -397,7 +399,11 @@ void TestContext::initialize_bandwidth_results_csv_file() {
 }
 
 void TestContext::compile_programs() {
+    namespace perf_bd = tt::tt_fabric::fabric_tests::perf_breakdown;
     fixture_->setup_workload();
+    const bool latency_mode = performance_test_mode_ == PerformanceTestMode::LATENCY;
+    std::vector<TestDevice*> devices;
+    devices.reserve(test_devices_.size());
     for (auto& [coord, test_device] : test_devices_) {
         bool enable_kernel_benchmark =
             skip_packet_validation_ || (performance_test_mode_ == PerformanceTestMode::BANDWIDTH);
@@ -407,14 +413,82 @@ void TestContext::compile_programs() {
 
         auto device_id = test_device.get_node_id();
         test_device.set_sync_core(device_global_sync_cores_[device_id]);
+        devices.push_back(&test_device);
+    }
 
+    auto build_device = [&](TestDevice& test_device) {
+        const auto device_t0 = perf_bd::Clock::now();
         // Create kernels (latency or normal)
-        if (performance_test_mode_ == PerformanceTestMode::LATENCY) {
+        if (latency_mode) {
             create_latency_kernels_for_device(test_device);
         } else {
             // Normal mode: create standard kernels for all devices
             test_device.create_kernels();
         }
+        if (perf_bd::enabled() && perf_bd::host_detail()) {
+            perf_bd::Collector::get().add_device_build(perf_bd::ms_since(device_t0));
+        }
+    };
+
+    // Each device's program is built from that device's own state, so the devices can be built on parallel threads.
+    // Host writes go through the shared command queue: they are recorded during the build and issued afterwards in
+    // device order, the same order as a serial build. Latency kernels read other devices' state, and the dispatch
+    // data collection / inspector mesh-buffer logging debug options mutate shared state without a lock.
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const bool parallel = perf_bd::parallel_build() && !latency_mode && devices.size() > 1 &&
+                          !rtoptions.get_dispatch_data_collection_enabled() &&
+                          !(rtoptions.get_inspector_enabled() && rtoptions.get_inspector_log_mesh_buffers());
+    std::optional<perf_bd::ScopedDetail> devices_phase(std::in_place, "sub_ck_devices");
+    if (parallel) {
+        for (auto* test_device : devices) {
+            test_device->set_defer_host_writes(true);
+        }
+        const size_t num_threads =
+            std::min<size_t>(devices.size(), std::max(1u, std::thread::hardware_concurrency()));
+        std::atomic<size_t> next_device{0};
+        {
+            std::vector<std::future<void>> workers;
+            workers.reserve(num_threads);
+            for (size_t t = 0; t < num_threads; t++) {
+                workers.push_back(std::async(std::launch::async, [&] {
+                    for (size_t i = next_device++; i < devices.size(); i = next_device++) {
+                        build_device(*devices[i]);
+                    }
+                }));
+            }
+            // get() rethrows a build failure; the remaining futures join their threads when destroyed.
+            for (auto& worker : workers) {
+                worker.get();
+            }
+        }
+        perf_bd::ScopedDetail flush_phase("sub_ck_deferred_writes");
+        for (auto* test_device : devices) {
+            test_device->set_defer_host_writes(false);
+            test_device->flush_deferred_host_writes();
+        }
+    } else {
+        for (auto* test_device : devices) {
+            build_device(*test_device);
+        }
+    }
+    devices_phase.reset();
+
+    if (!latency_mode && (perf_bd::sfpu_payload() || perf_bd::sfpu_verify())) {
+        TestDevice::SfpuCoverage total;
+        for (const auto* test_device : devices) {
+            const auto& coverage = test_device->get_sfpu_coverage();
+            total.sender_configs += coverage.sender_configs;
+            total.generated += coverage.generated;
+            total.receiver_configs += coverage.receiver_configs;
+            total.verified += coverage.verified;
+        }
+        log_info(
+            tt::LogTest,
+            "SFPU coverage: payloads generated for {}/{} sender configs, checked for {}/{} receiver configs",
+            total.generated,
+            total.sender_configs,
+            total.verified,
+            total.receiver_configs);
     }
 
     if (show_workers_) {
@@ -451,7 +525,14 @@ void TestContext::compile_programs() {
         }
     }
 
+    // Batched host writes were issued non-blocking; make sure they have landed before the programs run.
+    if (tt::tt_fabric::fabric_tests::perf_breakdown::batched_host_writes()) {
+        perf_bd::ScopedPhase phase("sub_write_flush");  // nested inside create_kernels
+        fixture_->barrier_reads();
+    }
+
     // Enqueue all programs
+    perf_bd::ScopedDetail add_programs_phase("sub_ck_add_programs");
     for (auto& [coord, test_device] : test_devices_) {
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.impl().num_kernels()) {
