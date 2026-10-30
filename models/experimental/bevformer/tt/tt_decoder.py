@@ -25,7 +25,7 @@ import math
 
 import ttnn
 from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, GRID_DTYPE, INVERSE_SIGMOID_EPS
-from models.experimental.bevformer.tt.tt_common import TTFFN, layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import TTFFN, l1_linear, layer_norm, signpost
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
 # inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
@@ -40,24 +40,35 @@ class TTMultiheadAttention:
     ``params.qk_proj`` packs Q (pre-scaled by ``head_dim**-0.5``) and K into one Linear.
     """
 
-    def __init__(self, params):
+    def __init__(self, params, device):
         self.params = params
         self.num_heads = params.num_heads
+        grid = device.compute_with_storage_grid_size()
+        # SDPA's default 32-row chunks leave each core a sliver of the 900 queries and keys; larger
+        # chunks cut the per-chunk overhead several-fold.
+        self.sdpa_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y), q_chunk_size=128, k_chunk_size=256, exp_approx_mode=False
+        )
 
     def __call__(self, query, query_pos):
         """``query`` and ``query_pos`` are ``(bs, nq, C)``."""
         p = self.params
-        qk = ttnn.linear(ttnn.add(query, query_pos), p.qk_proj.weight, bias=p.qk_proj.bias)
-        v = ttnn.linear(query, p.v_proj.weight, bias=p.v_proj.bias)
+        qk = l1_linear(ttnn.add(query, query_pos, memory_config=ttnn.L1_MEMORY_CONFIG), p.qk_proj)
+        v = l1_linear(query, p.v_proj)
 
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.concat([qk, v], dim=-1), num_heads=self.num_heads, transpose_key=False
+            ttnn.concat([qk, v], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG),
+            num_heads=self.num_heads,
+            transpose_key=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         # scale=1: the head_dim**-0.5 is folded into the Q weights.
-        out = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=1.0)
+        out = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, scale=1.0, program_config=self.sdpa_config, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
-        out = ttnn.transformer.concatenate_heads(out)
-        return ttnn.linear(out, p.out_proj.weight, bias=p.out_proj.bias)
+        out = ttnn.transformer.concatenate_heads(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return l1_linear(out, p.out_proj)
 
 
 class TTDetrTransformerDecoderLayer:
@@ -71,7 +82,7 @@ class TTDetrTransformerDecoderLayer:
         """``params`` is one entry of ``create_decoder_parameters(...).layers``. The cross-attention
         samples a ``bev_shape`` ``(bev_h, bev_w)`` map."""
         self.params = params
-        self.self_attn = TTMultiheadAttention(params.self_attn)
+        self.self_attn = TTMultiheadAttention(params.self_attn, device)
         # The module hands reference_points to the fused op unconverted, so they stay float32.
         self.cross_attn = TTMSDeformableAttention(
             dataclasses.replace(params.cross_attn.config, batch_first=True),
@@ -79,7 +90,7 @@ class TTDetrTransformerDecoderLayer:
             params.cross_attn,
             spatial_shapes=[list(bev_shape)],
         )
-        self.ffn = TTFFN(params.ffn)
+        self.ffn = TTFFN(params.ffn, l1=True)
 
     def __call__(self, query, value, query_pos, reference_points):
         """All batch-first: ``query``/``query_pos`` ``(bs, nq, C)``, ``value`` ``(bs, bev_h * bev_w, C)``,
@@ -89,15 +100,15 @@ class TTDetrTransformerDecoderLayer:
         signpost(header="DecoderLayer SelfAttn Start")
         self_attn_output = self.self_attn(query, query_pos)
         signpost(header="DecoderLayer SelfAttn End")
-        query = layer_norm(self_attn_output, norms[0], residual=query)
+        query = layer_norm(self_attn_output, norms[0], residual=query, memory_config=ttnn.L1_MEMORY_CONFIG)
         signpost(header="DecoderLayer CrossAttn Start")
         query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
         signpost(header="DecoderLayer CrossAttn End")
-        query = layer_norm(query, norms[1])
+        query = layer_norm(query, norms[1], memory_config=ttnn.L1_MEMORY_CONFIG)
         signpost(header="DecoderLayer FFN Start")
         ffn_output = self.ffn(query)
         signpost(header="DecoderLayer FFN End")
-        query = layer_norm(ffn_output, norms[2], residual=query)
+        query = layer_norm(ffn_output, norms[2], residual=query, memory_config=ttnn.L1_MEMORY_CONFIG)
         signpost(header="TTNN DecoderLayer Forward End")
         return query
 
@@ -113,10 +124,10 @@ class TTDetectionTransformerDecoder:
 
     @staticmethod
     def _reg_branch(x, branch):
-        x = ttnn.linear(x, branch[0].weight, bias=branch[0].bias, activation="relu")
-        x = ttnn.linear(x, branch[1].weight, bias=branch[1].bias, activation="relu")
+        x = l1_linear(x, branch[0], activation=ttnn.UnaryOpType.RELU)
+        x = l1_linear(x, branch[1], activation=ttnn.UnaryOpType.RELU)
         # GRID_DTYPE, as the center channels are added to the reference points' logits.
-        return ttnn.linear(x, branch[2].weight, bias=branch[2].bias, dtype=GRID_DTYPE)
+        return l1_linear(x, branch[2], dtype=GRID_DTYPE)
 
     def __call__(self, query, value, query_pos, reference_points, reg_branches):
         """``query``/``query_pos`` ``(nq, bs, C)`` and ``value`` ``(bev_h * bev_w, bs, C)``, or
@@ -140,13 +151,18 @@ class TTDetectionTransformerDecoder:
         # The reference refines with sigmoid(delta + inverse_sigmoid(points)). Every layer's
         # points are the previous layer's sigmoid, and inverse_sigmoid(sigmoid(z)) is z clamped
         # to its eps bound, so the logits are carried instead of recomputed.
+        output, query_pos, reference_points = (
+            ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG) for t in (output, query_pos, reference_points)
+        )
         logits = ttnn.logit(reference_points, eps=INVERSE_SIGMOID_EPS)
         intermediate = []
         intermediate_reference_points = []
         box_codes = []
         for layer, branch in zip(self.layers, reg_branches, strict=True):
-            # Axis 2 is the fused op's pillar axis: R = 1, one point per query for every sample.
-            output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
+            # Axis 2 is the fused op's pillar axis: R = 1, one point per query for every sample. The
+            # op reads the points ROW_MAJOR, where adding the axis moves no data; in TILE it does.
+            points = ttnn.to_layout(reference_points[..., :2], ttnn.ROW_MAJOR_LAYOUT)
+            output = layer(output, value, query_pos, ttnn.unsqueeze(points, 2))
 
             signpost(header="Decoder RegBranch Start")
             box_code = self._reg_branch(output, branch)
