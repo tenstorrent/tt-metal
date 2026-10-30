@@ -450,7 +450,7 @@ protected:
     }
 };
 
-// Every hart of one CCE runs a kernel and posts its status. Gates every 8-hart MM4x case on this CCE.
+// Every hart of one CCE runs a kernel and posts its status.
 TEST_P(MimirCacheProbe, EightHartLaunch) {
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;

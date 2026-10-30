@@ -69,10 +69,6 @@ inline constexpr uint64_t kGddrTargetOffset = 0x100000;
 // Observer handshake lines, in the hart's data area after its source block.
 inline constexpr uint64_t kPeerFlagOffsetFromData = 0x8000;
 
-// Probe-gated values, set from the probes' results on mimir_2x_package (2026-10-22, every CCE).
-// MimirCacheProbe.EightHartLaunch: true once all 8 harts of one CCE posted their status (2x, every CCE, 2026-10-22).
-inline constexpr bool kEightHartLaunchPasses = true;
-
 // Hart data area (tl1_data) layout of the MM43 cases, clear of the observer flag lines.
 inline constexpr uint64_t kOwnDestinationOffsetFromData = 0x10000;
 inline constexpr uint64_t kTableOffsetFromData = 0x22000;
@@ -1244,9 +1240,6 @@ inline constexpr uint32_t kMultiHartCommands = 16;
 // while any hart may store its status (MIM-560). Each hart gets its own trid, because the pending counters may be
 // shared by every hart of the CCE.
 TEST_P(MimirTridIdma, MultiHart) {
-    if (!kEightHartLaunchPasses) {
-        GTEST_SKIP() << "Gated on MimirCacheProbe.EightHartLaunch (kEightHartLaunchPasses).";
-    }
     IDevice* device = open_device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     std::vector<std::unique_ptr<TridScenario>> scenarios;

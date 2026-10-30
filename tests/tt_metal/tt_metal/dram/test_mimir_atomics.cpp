@@ -55,12 +55,6 @@ inline constexpr uint64_t kAccumulateDestinationFromData = 0x10000;
 inline constexpr uint32_t kAccumulateValueMask = 0x000FFFFFu;
 inline constexpr uint32_t kLeadingGuardTag = 0x900;
 
-// Probe-gated values.
-// MimirAtomicProbe.TwoHartAmo: cross-hart amoadd.w and LR/SC totals were correct. Gates every multi-hart AMO case.
-inline constexpr bool kTwoHartAmoPassed = true;
-// MimirCacheProbe.EightHartLaunch: harts 0-7 of one CCE ran a kernel and posted status. Gates every 8-hart case.
-inline constexpr bool kEightHartLaunchPassed = true;
-
 // L1 accumulate formats (cce-dv software/lib/include/cce_dv.hpp:396-401; Quasar noc_parameters.h defines no UINT8) and
 // the one operation the emulator reference runs (emu_l1_atomic.cpp:230,239). INT32 and INT8 are sign-magnitude.
 inline constexpr uint32_t kFormatFp32 = NOC_AT_ACC_FP32, kFormatFp16A = NOC_AT_ACC_FP16_A,
@@ -157,12 +151,6 @@ std::string cce_skip_reason(uint32_t cce_index) {
     }
     return "";
 }
-
-std::string multi_hart_skip_reason() {
-    return kTwoHartAmoPassed ? "" : "Needs MimirAtomicProbe.TwoHartAmo to pass on this descriptor (kTwoHartAmoPassed).";
-}
-
-uint32_t multi_hart_count() { return kEightHartLaunchPassed ? abi::kMaxParticipants : 2; }
 
 uint32_t leg_seed(uint32_t tag) { return mimir_test_seed() ^ (tag * 0x9E3779B9u); }
 
@@ -669,7 +657,7 @@ protected:
 class MimirAtomicProbe : public MimirAtomicCceTest {};
 
 // Harts 0 and 1 each do kCount amoadd.w and kCount LR/SC increments on two cached words; the totals and the sums of
-// the returned values must show no lost or duplicated update. Gates every multi-hart AMO case on this CCE.
+// the returned values must show no lost or duplicated update.
 TEST_P(MimirAtomicProbe, TwoHartAmo) {
     constexpr uint32_t kNumHarts = 2;
     constexpr uint32_t kCount = 64;
@@ -908,16 +896,6 @@ void run_sweep_leg(IDevice* device, uint32_t cce_index, const SweepLeg& leg, uin
         read_cce_tl1(device, cce_index, layout.target, static_cast<uint32_t>(region.size() * sizeof(uint32_t)))));
 }
 
-// Runs a leg when its participant count is allowed on this descriptor; otherwise records why it did not.
-void run_gated_sweep_leg(IDevice* device, uint32_t cce_index, const SweepLeg& leg, uint32_t tag) {
-    if (leg.num_participants > 1 && !kTwoHartAmoPassed) {
-        record_leg(leg.name, "skipped", multi_hart_skip_reason());
-        log_warning(tt::LogTest, "MM42 {} on CCE{} skipped: {}", leg.name, cce_index, multi_hart_skip_reason());
-        return;
-    }
-    run_sweep_leg(device, cce_index, leg, tag);
-}
-
 class MimirAtomicLocal : public MimirAtomicCceTest {};
 
 // Every Zaamo op at both widths, the aq/rl orderings of amoadd, and LR/SC CAS (matching and failing compare) and
@@ -1030,7 +1008,7 @@ TEST_P(MimirAtomicLocal, OpMatrix) {
 }
 
 // The atomic_semaphore_bandwidth sweep (increment 1-4, 16-64 increments, and the directed 512 x 1) as amoadd.w on one
-// cached word, plus 1024 x 1 so the senders overlap: one sender, two harts and, after EightHartLaunch, all eight. Every
+// cached word, plus 1024 x 1 so the senders overlap: one sender, two harts and all eight. Every
 // point starts at a barrier. Cycles and interleaved returns (the contention evidence) are recorded only.
 TEST_P(MimirAtomicLocal, Hotspot) {
     const uint32_t cce_index = GetParam();
@@ -1046,12 +1024,8 @@ TEST_P(MimirAtomicLocal, Hotspot) {
     }
     points.push_back({1, 512});
     points.push_back({1, abi::kMaxCount});
-    std::vector<uint32_t> sender_counts = {1, 2};
-    if (kEightHartLaunchPassed) {
-        sender_counts.push_back(abi::kMaxParticipants);
-    }
-    for (const uint32_t senders : sender_counts) {
-        run_gated_sweep_leg(
+    for (const uint32_t senders : {1u, 2u, abi::kMaxParticipants}) {
+        run_sweep_leg(
             device,
             cce_index,
             SweepLeg{
@@ -1065,16 +1039,13 @@ TEST_P(MimirAtomicLocal, Hotspot) {
 
 // Every hart increments its own word: adjacent words of one line, separate doublewords of one line, separate lines.
 TEST_P(MimirAtomicLocal, Distributed) {
-    if (const std::string skip_reason = multi_hart_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     const std::vector<SweepPoint> points = {{1, 64}, {3, 32}};
-    const uint32_t harts = multi_hart_count();
+    const uint32_t harts = abi::kMaxParticipants;
     run_sweep_leg(
         device,
         cce_index,
@@ -1108,7 +1079,7 @@ TEST_P(MimirAtomicLocal, Distributed) {
 }
 
 // Increments built from LR/SC and from CAS (LR, compare, SC) on one shared word, at both widths; one hart, then every
-// hart the probes allow. SC and compare failures and the most attempts one increment took are recorded.
+// hart. SC and compare failures and the most attempts one increment took are recorded.
 TEST_P(MimirAtomicLocal, LrScCas) {
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
@@ -1116,9 +1087,9 @@ TEST_P(MimirAtomicLocal, LrScCas) {
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     uint32_t tag = 1;
-    for (const uint32_t harts : {1u, multi_hart_count()}) {
+    for (const uint32_t harts : {1u, abi::kMaxParticipants}) {
         for (const uint32_t op : {abi::kOpLrScAddW, abi::kOpLrScAddD, abi::kOpCasAddW, abi::kOpCasAddD}) {
-            run_gated_sweep_leg(
+            run_sweep_leg(
                 device,
                 cce_index,
                 SweepLeg{
@@ -1145,9 +1116,9 @@ TEST_P(MimirAtomicLocal, Wrap) {
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     uint32_t tag = 1;
-    for (const uint32_t harts : {1u, multi_hart_count()}) {
+    for (const uint32_t harts : {1u, abi::kMaxParticipants}) {
         for (const uint32_t op : {abi::kOpAmoAddW, abi::kOpAmoAddD, abi::kOpLrScAddW, abi::kOpCasAddD}) {
-            run_gated_sweep_leg(
+            run_sweep_leg(
                 device,
                 cce_index,
                 SweepLeg{
@@ -1165,9 +1136,6 @@ TEST_P(MimirAtomicLocal, Wrap) {
 // data is cached, so the gating leg flushes it from L1 D$ before the release; the release-only leg records whether the
 // consumer saw the data without that flush.
 TEST_P(MimirAtomicLocal, Ordering) {
-    if (const std::string skip_reason = multi_hart_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     constexpr uint32_t kRounds = 64;
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
@@ -1605,25 +1573,19 @@ void run_storm_leg(
 // Mixed AMO storm: increment (result discarded), read-and-increment, swap, CAS increment, xor, or, and, min, max,
 // minu and maxu at both widths, drawn per operation, on shared words and on each hart's own words.
 TEST_P(MimirAtomicLocal, Storm) {
-    if (const std::string skip_reason = multi_hart_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     constexpr uint32_t kCount = abi::kMaxCount;
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
-    run_storm_leg(device, cce_index, abi::kModeStorm, abi::kLegShared, multi_hart_count(), kCount, 1, "shared");
-    run_storm_leg(device, cce_index, abi::kModeStorm, abi::kLegDisjoint, multi_hart_count(), kCount, 2, "disjoint");
+    run_storm_leg(device, cce_index, abi::kModeStorm, abi::kLegShared, abi::kMaxParticipants, kCount, 1, "shared");
+    run_storm_leg(device, cce_index, abi::kModeStorm, abi::kLegDisjoint, abi::kMaxParticipants, kCount, 2, "disjoint");
 }
 
 // One hart makes amoadd.w on word 0 of a line while the other harts make cached ordinary stores to their own words of
 // the same line. The AMO total, each writer's last store and the untouched words are checked word by word.
 TEST_P(MimirAtomicLocal, NeighbourWriteRace) {
-    if (const std::string skip_reason = multi_hart_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     constexpr uint32_t kCount = abi::kMaxCount;
     constexpr uint32_t kValue = 1;
     const uint32_t cce_index = GetParam();
@@ -1632,7 +1594,7 @@ TEST_P(MimirAtomicLocal, NeighbourWriteRace) {
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     const AmoLayout layout = amo_layout();
-    const uint32_t harts = multi_hart_count();
+    const uint32_t harts = abi::kMaxParticipants;
     const uint32_t seed = leg_seed(1);
     const std::string label = fmt::format(
         "NeighbourWriteRace on CCE{}: hart 0 {} amoadd.w, harts 1-{} {} cached stores, seed 0x{:08x}",
@@ -1672,18 +1634,15 @@ TEST_P(MimirAtomicLocal, NeighbourWriteRace) {
 }
 
 // A seeded random soak over the storm engine: operation, slot, width, burst length and barrier placement are drawn
-// from the seed, and so are the participant count (2, or 2-8 after EightHartLaunch) and the layout.
+// from the seed, and so are the participant count (2-8) and the layout.
 TEST_P(MimirAtomicLocal, Soak) {
-    if (const std::string skip_reason = multi_hart_skip_reason(); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     const uint32_t seed = leg_seed(1);
-    const uint32_t harts = kEightHartLaunchPassed ? 2 + seed % (abi::kMaxParticipants - 1) : 2;
+    const uint32_t harts = 2 + seed % (abi::kMaxParticipants - 1);
     const uint32_t layout_leg = (seed >> 8) % 2 == 0 ? abi::kLegShared : abi::kLegDisjoint;
     RecordProperty("seed", fmt::format("0x{:08x}", seed));
     run_storm_leg(device, cce_index, abi::kModeSoak, layout_leg, harts, abi::kMaxCount, 1, "soak");
@@ -1973,7 +1932,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
-    const uint32_t harts = multi_hart_count();
+    const uint32_t harts = abi::kMaxParticipants;
     const uint32_t seed = leg_seed(1);
     std::vector<IdmaBatch> batches;
     std::vector<uint32_t> initial;
@@ -2020,7 +1979,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsDisjoint) {
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
-    const uint32_t harts = multi_hart_count();
+    const uint32_t harts = abi::kMaxParticipants;
     const uint32_t seed = leg_seed(1);
     const uint64_t region_offset = tl1_data(kCceKernelHart) + kAccumulateDestinationFromData;
     const uint32_t block_words = kBlockBytes / sizeof(uint32_t);
