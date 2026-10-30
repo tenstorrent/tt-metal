@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <functional>
+#include <limits>
+#include <stdexcept>
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/generators/xrandom.hpp>
 
@@ -29,6 +32,8 @@ constexpr uint32_t kTpSize = 2U;
 constexpr float kRtol = 2e-2F;
 constexpr float kAtol = 1e-3F;
 
+using Shape = std::vector<size_t>;
+
 struct ClipGradNormTpCase {
     std::string name;
     uint32_t num_sharded;
@@ -36,6 +41,7 @@ struct ClipGradNormTpCase {
     float max_norm_ratio;  // max_norm = ratio * true norm; > 1 means nothing is clipped
     // Adds (compute cores + 1) tensors to each group so step1/step3 need more than one launch per group.
     bool exceed_cores = false;
+    float p_norm_type = 2.0F;
 };
 
 uint32_t num_compute_cores() {
@@ -44,14 +50,14 @@ uint32_t num_compute_cores() {
 }
 
 // Values are multiples of 1/8 in [-4, 4], exactly representable in bf16, so inputs carry no rounding error.
-xt::xarray<float> random_bf16_exact(const std::vector<size_t>& shape) {
+xt::xarray<float> random_bf16_exact(const Shape& shape) {
     xt::xarray<float> values = xt::random::randint<int>(shape, -32, 33);
     return values / 8.0F;
 }
 
 struct TpGrads {
-    std::vector<xt::xarray<float>> sharded_full;  // full (unsharded) grads, shape [1,1,32,64]
-    std::vector<xt::xarray<float>> replicated;    // shape [1,1,32,32]
+    std::vector<xt::xarray<float>> sharded_full;  // full (unsharded) grads
+    std::vector<xt::xarray<float>> replicated;
     serialization::NamedParameters sharded_params;
     serialization::NamedParameters replicated_params;
 };
@@ -63,54 +69,74 @@ autograd::TensorPtr make_param(const ttnn::Tensor& grad) {
     return param;
 }
 
-TpGrads make_grads(uint32_t num_sharded, uint32_t num_replicated) {
+ttnn::Tensor shard(const xt::xarray<float>& full) {
     auto* device = &autograd::ctx().get_device();
-    const auto shard_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, kShardDim, kClusterAxis);
-    const auto replicate_mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, kShardDim, kClusterAxis);
+    return core::from_xtensor(full, device, ttnn::Layout::TILE, mapper.get());
+}
 
+ttnn::Tensor replicate(const xt::xarray<float>& values) {
+    auto* device = &autograd::ctx().get_device();
+    const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    return core::from_xtensor(values, device, ttnn::Layout::TILE, mapper.get());
+}
+
+// Sharded shapes are the full (unsharded) shapes; their last dim is split across the TP group.
+TpGrads make_grads(
+    const std::vector<Shape>& sharded_shapes,
+    const std::vector<Shape>& replicated_shapes,
+    const std::function<xt::xarray<float>(const Shape&)>& make_values = random_bf16_exact) {
     TpGrads grads;
-    for (uint32_t i = 0; i < num_sharded; ++i) {
-        auto full = random_bf16_exact({1U, 1U, 32U, 32U * kTpSize});
-        grads.sharded_params[fmt::format("sharded_{}", i)] =
-            make_param(core::from_xtensor(full, device, ttnn::Layout::TILE, shard_mapper.get()));
+    for (size_t i = 0; i < sharded_shapes.size(); ++i) {
+        auto full = make_values(sharded_shapes[i]);
+        grads.sharded_params[fmt::format("sharded_{}", i)] = make_param(shard(full));
         grads.sharded_full.push_back(std::move(full));
     }
-    for (uint32_t i = 0; i < num_replicated; ++i) {
-        auto values = random_bf16_exact({1U, 1U, 32U, 32U});
-        grads.replicated_params[fmt::format("replicated_{}", i)] =
-            make_param(core::from_xtensor(values, device, ttnn::Layout::TILE, replicate_mapper.get()));
+    for (size_t i = 0; i < replicated_shapes.size(); ++i) {
+        auto values = make_values(replicated_shapes[i]);
+        grads.replicated_params[fmt::format("replicated_{}", i)] = make_param(replicate(values));
         grads.replicated.push_back(std::move(values));
     }
     return grads;
 }
 
-// Global L2 norm over the full tensors, each replicated tensor counted once.
-float reference_norm(const TpGrads& grads) {
+TpGrads make_grads(uint32_t num_sharded, uint32_t num_replicated) {
+    return make_grads(
+        std::vector<Shape>(num_sharded, Shape{1U, 1U, 32U, 32U * kTpSize}),
+        std::vector<Shape>(num_replicated, Shape{1U, 1U, 32U, 32U}));
+}
+
+// Global p-norm over the full tensors, each replicated tensor counted once.
+float reference_norm(const TpGrads& grads, float p = 2.0F) {
     float pow_sum = 0.0F;
     for (const auto& g : grads.sharded_full) {
-        pow_sum += xt::sum(g * g)();
+        pow_sum += xt::sum(xt::pow(xt::abs(g), p))();
     }
     for (const auto& g : grads.replicated) {
-        pow_sum += xt::sum(g * g)();
+        pow_sum += xt::sum(xt::pow(xt::abs(g), p))();
     }
-    return std::sqrt(pow_sum);
+    return std::pow(pow_sum, 1.0F / p);
 }
 
 void expect_close(const xt::xarray<float>& actual, const xt::xarray<float>& expected, const std::string& label) {
     EXPECT_TRUE(xt::allclose(actual, expected, kRtol, kAtol)) << label;
 }
 
+std::vector<xt::xarray<float>> norm_per_device(const autograd::TensorPtr& norm) {
+    return core::to_xtensor(norm->get_value(), core::IdentityComposer{});
+}
+
 // Compares the on-device result against the host reference: the norm must match on every device and the
 // gradients, once gathered back, must equal the host grads times the expected coefficient.
-void verify(const TpGrads& grads, const autograd::TensorPtr& norm, float max_norm) {
+void verify(const TpGrads& grads, const autograd::TensorPtr& norm, float max_norm, float p = 2.0F) {
     auto* device = &autograd::ctx().get_device();
-    const float expected_norm = reference_norm(grads);
+    const float expected_norm = reference_norm(grads, p);
     const float coef = std::min(1.0F, max_norm / (expected_norm + 1e-6F));
 
-    const auto norm_per_device = core::to_xtensor(norm->get_value(), core::IdentityComposer{});
-    ASSERT_EQ(norm_per_device.size(), kTpSize);
+    const auto norms = norm_per_device(norm);
+    ASSERT_EQ(norms.size(), kTpSize);
     for (size_t d = 0; d < kTpSize; ++d) {
-        EXPECT_NEAR(norm_per_device[d](0), expected_norm, kRtol * expected_norm) << "norm on device " << d;
+        EXPECT_NEAR(norms[d](0), expected_norm, kRtol * expected_norm + kAtol) << "norm on device " << d;
     }
 
     const auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*device, kShardDim);
@@ -140,11 +166,12 @@ TEST_P(ClipGradNormTpTest, MatchesHostReference) {
     const auto& param = GetParam();
     const uint32_t extra = param.exceed_cores ? num_compute_cores() + 1U : 0U;
     auto grads = make_grads(param.num_sharded + extra, param.num_replicated + extra);
-    const float max_norm = param.max_norm_ratio * reference_norm(grads);
+    const float max_norm = param.max_norm_ratio * reference_norm(grads, param.p_norm_type);
 
-    auto norm = core::clip_grad_norm_tp(grads.sharded_params, grads.replicated_params, max_norm, kClusterAxis);
+    auto norm = core::clip_grad_norm_tp(
+        grads.sharded_params, grads.replicated_params, max_norm, kClusterAxis, param.p_norm_type);
 
-    verify(grads, norm, max_norm);
+    verify(grads, norm, max_norm, param.p_norm_type);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -161,7 +188,12 @@ INSTANTIATE_TEST_SUITE_P(
             .num_sharded = 1,
             .num_replicated = 1,
             .max_norm_ratio = 0.5F,
-            .exceed_cores = true}),
+            .exceed_cores = true},
+        // p != 2 takes the ttnn::pow path instead of ttnn::sqrt.
+        ClipGradNormTpCase{
+            .name = "p1", .num_sharded = 2, .num_replicated = 2, .max_norm_ratio = 0.5F, .p_norm_type = 1.0F},
+        ClipGradNormTpCase{
+            .name = "p3", .num_sharded = 2, .num_replicated = 2, .max_norm_ratio = 0.5F, .p_norm_type = 3.0F}),
     [](const ::testing::TestParamInfo<ClipGradNormTpCase>& info) { return info.param.name; });
 
 // Second call with fresh gradient buffers of the same shapes must hit the program cache and still be correct.
@@ -177,6 +209,93 @@ TEST_F(ClipGradNormTpTest, ProgramCacheHit) {
 
     EXPECT_EQ(device->num_program_cache_entries(), entries_after_first);
     verify(second, norm, 1.0F);
+}
+
+// Gradients of different sizes in one call: step1/step3 take accessor args from the first input only, so each
+// core must still read its own tensor's tile count.
+TEST_F(ClipGradNormTpTest, MixedMultiTileShapes) {
+    auto grads = make_grads(
+        {{1U, 1U, 32U, 64U}, {1U, 1U, 64U, 128U}, {2U, 1U, 32U, 256U}},
+        {{1U, 1U, 32U, 32U}, {1U, 2U, 64U, 96U}, {1U, 1U, 96U, 32U}});
+    const float max_norm = 0.5F * reference_norm(grads);
+
+    auto norm = core::clip_grad_norm_tp(grads.sharded_params, grads.replicated_params, max_norm, kClusterAxis);
+
+    verify(grads, norm, max_norm);
+}
+
+// Shapes that don't fill whole tiles: the tile padding must not leak into the norm.
+TEST_F(ClipGradNormTpTest, UnalignedShapes) {
+    auto grads = make_grads({{1U, 1U, 20U, 80U}}, {{1U, 1U, 17U, 40U}, {1U, 3U, 5U, 7U}});
+    const float max_norm = 0.5F * reference_norm(grads);
+
+    auto norm = core::clip_grad_norm_tp(grads.sharded_params, grads.replicated_params, max_norm, kClusterAxis);
+
+    verify(grads, norm, max_norm);
+}
+
+// A zero norm hits the 1e-6 guard: the coefficient clamps to 1 and the gradients stay zero instead of NaN.
+TEST_F(ClipGradNormTpTest, ZeroGradients) {
+    auto grads = make_grads(
+        std::vector<Shape>(2, Shape{1U, 1U, 32U, 32U * kTpSize}),
+        std::vector<Shape>(2, Shape{1U, 1U, 32U, 32U}),
+        [](const Shape& shape) { return xt::xarray<float>(xt::zeros<float>(shape)); });
+
+    auto norm = core::clip_grad_norm_tp(grads.sharded_params, grads.replicated_params, 1.0F, kClusterAxis);
+
+    verify(grads, norm, 1.0F);
+}
+
+// Parameters that don't require a grad, or have none yet, are left out of the norm and left untouched.
+TEST_F(ClipGradNormTpTest, SkipsParamsWithoutGrad) {
+    auto grads = make_grads(1, 1);
+    const auto frozen_values = random_bf16_exact({1U, 1U, 32U, 32U});
+    // set_requires_grad(false) drops the grad, so set the grad on a tensor that never required one.
+    auto frozen = autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 32U, 32U}), &autograd::ctx().get_device()));
+    frozen->set_grad(replicate(frozen_values));
+    grads.replicated_params["frozen"] = frozen;
+    auto no_grad = autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 32U, 32U}), &autograd::ctx().get_device()));
+    no_grad->set_requires_grad(true);
+    grads.replicated_params["no_grad"] = no_grad;
+    const float max_norm = 0.5F * reference_norm(grads);
+
+    auto norm = core::clip_grad_norm_tp(grads.sharded_params, grads.replicated_params, max_norm, kClusterAxis);
+
+    verify(grads, norm, max_norm);
+    EXPECT_FALSE(no_grad->is_grad_initialized());
+    for (const auto& values : core::to_xtensor(frozen->get_grad(), core::IdentityComposer{})) {
+        EXPECT_TRUE(xt::all(xt::equal(values, frozen_values))) << "frozen grad was scaled";
+    }
+}
+
+TEST_F(ClipGradNormTpTest, RejectsInvalidArguments) {
+    auto grads = make_grads(1, 1);
+    const auto& sharded = grads.sharded_params;
+    const auto& replicated = grads.replicated_params;
+    constexpr float kInf = std::numeric_limits<float>::infinity();
+    constexpr float kNan = std::numeric_limits<float>::quiet_NaN();
+
+    for (float p : {0.0F, -1.0F, kInf, kNan}) {
+        EXPECT_THROW(core::clip_grad_norm_tp(sharded, replicated, 1.0F, kClusterAxis, p), std::logic_error)
+            << "p_norm_type " << p;
+    }
+    EXPECT_THROW(core::clip_grad_norm_tp({}, {}, 1.0F, kClusterAxis), std::logic_error) << "no params";
+    EXPECT_THROW(core::clip_grad_norm_tp(sharded, replicated, 1.0F, /*cluster_axis=*/2U), std::logic_error)
+        << "cluster_axis out of range";
+
+    auto* device = &autograd::ctx().get_device();
+    const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    const auto values = random_bf16_exact({1U, 1U, 32U, 32U});
+
+    auto with_fp32 = replicated;
+    with_fp32["fp32"] = make_param(
+        core::from_xtensor<float, ttnn::DataType::FLOAT32>(values, device, ttnn::Layout::TILE, mapper.get()));
+    EXPECT_THROW(core::clip_grad_norm_tp(sharded, with_fp32, 1.0F, kClusterAxis), std::logic_error) << "dtype mismatch";
+
+    auto with_2d = replicated;
+    xt::xarray<float> values_2d = xt::reshape_view(values, {32U, 32U});
+    with_2d["2d"] = make_param(core::from_xtensor(values_2d, device, ttnn::Layout::TILE, mapper.get()));
+    EXPECT_THROW(core::clip_grad_norm_tp(sharded, with_2d, 1.0F, kClusterAxis), std::logic_error) << "2D grad";
 }
 
 // Single device: with everything replicated and a TP group of one, the result must match clip_grad_norm.
