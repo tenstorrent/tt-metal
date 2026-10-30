@@ -85,13 +85,38 @@ def hf_name(gguf_name: str) -> str:
     return f"model.language_model.layers.{layer}.{_STEM[stem]}"
 
 
+def row_order(gguf_name: str, kv: dict, num_rows: int) -> np.ndarray | None:
+    """GGUF -> HF row permutation for a tensor, or ``None`` for the identity.
+
+    llama.cpp tiles the GDN value heads as ``[nv // nk, nk, unit]`` where HF
+    wants ``[nk, nv // nk, unit]``.  The converter applies this only when the
+    two head counts differ, and only to the tensors that carry v-head rows:
+    ``attn_qkv`` (after the q/k prefix) and ``attn_gate``.  Scales move with
+    their rows, so this applies to the code rows, not to the activations.
+    """
+    nv = int(kv["qwen35.ssm.time_step_rank"])
+    nk = int(kv["qwen35.ssm.group_count"])
+    if nv == nk or not gguf_name.startswith("blk."):
+        return None
+    stem = gguf_name.split(".", 2)[2]  # e.g. "attn_qkv.weight"
+    hd = int(kv["qwen35.ssm.inner_size"]) // nv
+    hk = int(kv["qwen35.ssm.state_size"])
+    idx = gt.v_head_index(nv, nk, hd)
+    if stem == "attn_qkv.weight":
+        qk = 2 * nk * hk
+        return np.concatenate([np.arange(qk), qk + idx])
+    if stem == "attn_gate.weight":
+        return gt.v_head_index(nv, nk, hd)
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gguf", required=True)
     ap.add_argument("--dense", required=True)
     ap.add_argument(
         "--tensors",
-        default="blk.0.ffn_gate.weight,blk.0.attn_qkv.weight,blk.0.ssm_out.weight,blk.3.attn_q.weight,output.weight",
+        default="blk.0.ffn_gate.weight,blk.0.attn_qkv.weight,blk.0.ssm_out.weight,blk.3.attn_q.weight,blk.3.attn_output.weight",
     )
     ap.add_argument("--tol", type=float, default=0.999)
     args = ap.parse_args()
@@ -110,11 +135,17 @@ def main() -> int:
         w = t.dequant()
         if name in folded:
             w = had.unrotate(w)
+        order = row_order(name, gguf.kv, w.shape[0])
+        if order is not None:
+            w = w[order]
         ref = dense.get(hf_name(name))
         c = cosine(w, ref)
         ok = c >= args.tol
         rc |= 0 if ok else 1
-        print(f"  {name:28s} type={t.ggml_type:3d} G={t.group:3d} shape={t.codes.shape} cos={c:.7f} {'ok' if ok else 'FAIL'}")
+        print(
+            f"  {name:28s} type={t.ggml_type:3d} G={t.group:3d} shape={t.codes.shape} "
+            f"{'perm' if order is not None else '    '} cos={c:.7f} {'ok' if ok else 'FAIL'}"
+        )
     return rc
 
 

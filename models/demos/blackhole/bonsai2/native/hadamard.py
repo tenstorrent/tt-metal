@@ -10,26 +10,26 @@ rotation, so the *runtime* has to rotate activations instead::
 
 ``H`` is the normalized Sylvester Walsh-Hadamard matrix of order 1024,
 ``H H^T = I``.  ``D`` is a fixed explicit sign vector per *input width*
-(5120, 6144, 17408 — the three K dims the model uses).
+(5120, 6144, 17408 -- the three K dims the model uses).
+
+``H`` is symmetric, so ``x @ H`` and ``H @ x`` coincide.  That lets the
+reference use the fast Walsh-Hadamard butterfly (``O(n log n)``) instead of a
+dense ``O(n^2)`` product: a float64 unrotation of a 17408-wide weight is
+otherwise a 17408x17408 matmul per row.
 
 For the kernel, ``H / 32`` is a scaled integer matrix: every entry is ``+-1/32``,
-which is a power of two and therefore exact in BFP2 (1 sign bit + 1 magnitude
-bit, no mantissa).  Dividing by 32 keeps the intermediate sum in range for a
-BF16 accumulate of 1024 terms while staying exactly representable, and the
-caller folds the ``* 32`` back into the following RMSNorm/LayerNorm weight or
-into the projection's output scale.
-
-Device shape: one 32x32 BFP2 tile holds a 32x32 block of ``H/32``.  With block
-1024 the matrix is 32x32 tiles, so the rotation is a 1024x1024 matmul per
-1024-wide slice of the input; a 5120-wide input carries 5 such slices and is
-computed as one 5120x5120 block-diagonal matmul (5 tiles of K per output tile,
-of which only 1 row-block is nonzero — so it is cheaper to run it as 5 separate
-1024-deep matvecs, which is what ``hadamard/op.py`` does).
+a power of two and therefore exact in BFP2 (1 sign bit + 1 magnitude bit, no
+mantissa).  Dividing by 32 keeps the intermediate sum in range while staying
+exactly representable, and the caller folds the ``* 32`` back into the
+following norm weight or the projection's output scale.
 """
 
 from __future__ import annotations
 
 import numpy as np
+
+TILE = 32
+BFP2_TILE_BYTES = 320
 
 
 def sylvester(n: int) -> np.ndarray:
@@ -42,6 +42,32 @@ def sylvester(n: int) -> np.ndarray:
     return h / np.sqrt(n)
 
 
+def fwht(x: np.ndarray, axis: int = -1) -> np.ndarray:
+    """Unnormalized fast Walsh-Hadamard transform along ``axis``, in float64.
+
+    ``fwht(x)[..., i] == sum_j (+-1)**popcount(i & j) x[..., j]``, i.e.
+    ``sylvester(n) * sqrt(n) @ x``.  ``O(n log n)``.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    n = x.shape[axis]
+    if n & (n - 1):
+        raise ValueError(f"transform length must be a power of two, got {n}")
+    y = np.moveaxis(x, axis, -1).copy()
+    lead = y.shape[:-1]
+    y = y.reshape(-1, n)  # each row is transformed independently
+    h = 1
+    while h < n:
+        # Split the innermost axis into (chunk of 2h) -> (2, h) and butterfly.
+        z = y.reshape(-1, n // (2 * h), 2, h)
+        a = z[:, :, 0, :].copy()
+        b = z[:, :, 1, :].copy()
+        z[:, :, 0, :] = a + b
+        z[:, :, 1, :] = a - b
+        y = z.reshape(-1, n)
+        h *= 2
+    return np.moveaxis(y.reshape(*lead, n), -1, axis)
+
+
 class BlockHadamard:
     """Block-diagonal ``H`` (order ``block``) plus the per-width sign vector ``D``.
 
@@ -52,7 +78,6 @@ class BlockHadamard:
     def __init__(self, block: int, signs: dict[int, np.ndarray]):
         self.block = block
         self.signs = {int(k): np.asarray(v, dtype=np.float32) for k, v in signs.items()}
-        self._h = sylvester(block).astype(np.float32)
 
     @classmethod
     def from_metadata(cls, kv: dict) -> "BlockHadamard":
@@ -76,53 +101,29 @@ class BlockHadamard:
 
     # -- reference math ----------------------------------------------------
 
+    def _rot(self, v: np.ndarray) -> np.ndarray:
+        """Blockwise ``v @ blockdiag(H)`` via the butterfly."""
+        k = v.shape[-1]
+        if k % self.block:
+            raise ValueError(f"K={k} is not a multiple of the block size {self.block}")
+        blocks = v.reshape(*v.shape[:-1], k // self.block, self.block)
+        return (fwht(blocks) / np.sqrt(self.block)).reshape(v.shape)
+
     def rotate(self, x: np.ndarray, width: int | None = None) -> np.ndarray:
         """``H (D x)`` for ``x`` shaped ``[..., K]`` with ``K`` a multiple of ``block``."""
-        x = np.asarray(x, dtype=np.float32)
-        k = x.shape[-1]
-        width = k if width is None else width
+        x = np.asarray(x, dtype=np.float64)
+        width = x.shape[-1] if width is None else width
         if width not in self.signs:
             raise ValueError(f"no sign vector for width {width}; have {sorted(self.signs)}")
-        if k % self.block:
-            raise ValueError(f"K={k} is not a multiple of the block size {self.block}")
-        xd = x * self.signs[width]
-        return (xd.reshape(*xd.shape[:-1], k // self.block, self.block) @ self._h).reshape(x.shape)
-
-    def rotate_float64(self, x: np.ndarray) -> np.ndarray:
-        """``H (D x)`` in float64; the reference path."""
-        x = np.asarray(x, dtype=np.float64)
-        k = x.shape[-1]
-        if k not in self.signs:
-            raise ValueError(f"no sign vector for width {k}; have {sorted(self.signs)}")
-        if k % self.block:
-            raise ValueError(f"K={k} is not a multiple of the block size {self.block}")
-        h = sylvester(self.block)  # float64
-        xd = x * self.signs[k].astype(np.float64)
-        return (xd.reshape(*xd.shape[:-1], k // self.block, self.block) @ h).reshape(x.shape)
+        return self._rot(x * self.signs[width].astype(np.float64))
 
     def unrotate(self, w: np.ndarray) -> np.ndarray:
         """``W' @ diag(H) @ diag(D)`` -> the equivalent dense ``W``, shaped ``[N, K]``."""
-        w = np.asarray(w, dtype=np.float32)
-        n, k = w.shape
-        if k % self.block:
-            raise ValueError(f"K={k} is not a multiple of the block size {self.block}")
-        if k not in self.signs:
-            raise ValueError(f"no sign vector for width {k}; have {sorted(self.signs)}")
-        dense = (w.reshape(n, k // self.block, self.block) @ self._h).reshape(n, k)
-        return dense * self.signs[k][None, :]
-
-    def unrotate_float64(self, w: np.ndarray) -> np.ndarray:
-        """``W' @ diag(H) @ diag(D)`` in float64; the reference path."""
         w = np.asarray(w, dtype=np.float64)
-        n, k = w.shape
+        k = w.shape[-1]
         if k not in self.signs:
             raise ValueError(f"no sign vector for width {k}; have {sorted(self.signs)}")
-        if k % self.block:
-            raise ValueError(f"K={k} is not a multiple of the block size {self.block}")
-        h = sylvester(self.block)
-        dense = (w.reshape(n, k // self.block, self.block) @ h).reshape(n, k)
-        return dense * self.signs[k].astype(np.float64)[None, :]
-
+        return self._rot(w) * self.signs[k].astype(np.float64)[None, :]
 
     # -- device layout -----------------------------------------------------
 
@@ -134,15 +135,19 @@ class BlockHadamard:
         element order inside a tile is ttnn's face order, so the bytes can be
         copied straight into a CB.
         """
-        from .bfp2 import pack_bfp2_tile
+        from .bfp2 import pack_tiles
 
-        h = self._h / float(1 << scale_log2)
-        t = self.block // 32
-        out = np.empty((t, t, 320), dtype=np.uint8)
-        for tr in range(t):
-            for tc in range(t):
-                out[tr, tc] = pack_bfp2_tile(h[tr * 32 : (tr + 1) * 32, tc * 32 : (tc + 1) * 32])
-        return out
+        t = self.block // TILE
+        h = self._h() / float(1 << scale_log2)
+        tgt = 1.0 / (1 << scale_log2)
+        if not np.all(np.isin(h, (-tgt, tgt))):
+            raise ValueError("H scaled by a power of two is exactly +-2**-k, so this cannot happen")
+        tiles = np.sign(h).reshape(t, TILE, t, TILE).transpose(0, 2, 1, 3)
+        return pack_tiles(np.ascontiguousarray(tiles).reshape(t * t, TILE, TILE)).reshape(t, t, BFP2_TILE_BYTES)
+
+    def _h(self) -> np.ndarray:
+        """The rotation matrix itself, materialized on demand (it is 8 MB at block 1024)."""
+        return sylvester(self.block)
 
     def __repr__(self) -> str:
         return f"BlockHadamard(block={self.block}, widths={sorted(self.signs)})"
