@@ -94,7 +94,7 @@ jobs:
       TESTS_YAML_PATH: ${{ inputs.tests-yaml }}
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -158,7 +158,7 @@ jobs:
       options: "--rm"
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}
@@ -242,7 +242,7 @@ jobs:
         if: ${{ inputs.shadow-compile-runner != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}
@@ -485,7 +485,7 @@ jobs:
       options: "--rm"
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}
@@ -543,7 +543,7 @@ jobs:
       options: "--rm"
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 1

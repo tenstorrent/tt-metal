@@ -86,7 +86,7 @@ jobs:
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -255,7 +255,7 @@ jobs:
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> $GITHUB_ENV
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
       - name: Download all coverage artifacts
         uses: actions/download-artifact@v4
         with:

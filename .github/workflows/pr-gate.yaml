@@ -184,7 +184,7 @@ jobs:
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
       ttsim-ci-changed: ${{ steps.find-changes.outputs.ttsim-ci-changed }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 1
@@ -200,7 +200,7 @@ jobs:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 5
         with:
           fetch-depth: 1
@@ -474,7 +474,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
     - name: Checkout repo
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
       timeout-minutes: 20
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -709,7 +709,7 @@ jobs:
       - verify-time-budgets
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@050e3e4fdeb21b1bffb6b9d577414c30de53e0a0 # cachew checkout
         timeout-minutes: 5
         with:
           sparse-checkout: .github

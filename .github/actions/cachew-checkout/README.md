@@ -85,6 +85,15 @@ CHECKOUT_ACTION_JS=/absolute/path/to/checkout/dist/index.js \
   python3 -m unittest discover -s .github/actions/cachew-checkout/tests -v
 ```
 
+All workflow and composite-action checkout consumers use a remote reference pinned
+to the published action commit, including the vendored LLK workflows. The wrapper's
+own upstream checkout is the sole direct invocation of `actions/checkout`.
+
+Run `python3 .github/scripts/utils/cachew_checkout.py --check` to verify adoption,
+or pass `--write` to migrate newly added checkout steps. The agentic workflow
+compiler hook applies the same migration after compilation, updating generated
+steps and action manifests together. After a direct `gh aw compile`, run the
+migration with `--write` before committing.
+
 The test workflow also offers an optional manual live smoke checkout on a runner
-with access to the selected cachew endpoint. Production checkout callers are
-unchanged by this action's introduction.
+with access to the selected cachew endpoint.

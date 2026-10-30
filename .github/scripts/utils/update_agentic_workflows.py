@@ -50,6 +50,8 @@ import subprocess
 import sys
 import tempfile
 
+from cachew_checkout import migrate_file
+
 WORKFLOWS_DIR = os.path.join(".github", "workflows")
 ACTIONS_LOCK_PATH = os.path.join(".github", "aw", "actions-lock.json")
 WORKFLOW_VERSIONS_PATH = os.path.join(".github", "aw", "workflow-versions.json")
@@ -172,6 +174,10 @@ def compile_workflow(name):
 
     if result.returncode != 0:
         return False
+
+    # gh-aw emits stock checkout steps. Keep the repository's cachew replacement
+    # and generated action manifest in sync after every successful compilation.
+    migrate_file(lock_path, write=True)
 
     if not lock_existed_before or not is_tracked(lock_path):
         print(f"Created {lock_path} for the first time — `git add` it and commit again.", file=sys.stderr)
