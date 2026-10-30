@@ -24,6 +24,9 @@ from qwen36_resident import weights as Q
 
 # 1: restore the initial recurrent state before every prompt, also when the prefill handoff overwrites it (A/B)
 FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
+# 0: no host synchronization between the drafter's context fill and the prompt's verify step (the first-step race, A/B
+# only; see _fill_context)
+FILL_SYNC = os.environ.get("RESIDENT_DFLASH_FILL_SYNC", "1") == "1"
 
 
 def ccl_topology():
@@ -294,6 +297,14 @@ class ResidentDFlash:
         self.drafter.fill_context(dev, s0, valid_len=n_tokens - s0)
         for t in dev:
             ttnn.deallocate(t)
+        if FILL_SYNC:
+            # every chip done with the fill before the verify step is enqueued: a resident step's hubs push their first
+            # round into the peers' hub slots (CB 0, mlp_hub.cpp) as soon as they start, so a chip still running the
+            # fill's last ops (their CBs at those L1 addresses) loses its peers' slots and corrupts its own fill. The
+            # draft does the same before every later step (DFlash2DrafterTP.draft). 2026-10-30, whenever one chip lagged
+            # (chip 1's AICLK throttle under sustained decode): first-step logits all 0 (first token 0, "!") and a
+            # drafter context that accepted no draft for the whole request
+            ttnn.synchronize_device(self.mesh)
 
     # ------------------------------------------------------------------ serving (one request at a time)
     def start(self, ids):
