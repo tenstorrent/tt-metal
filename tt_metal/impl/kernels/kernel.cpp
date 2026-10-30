@@ -7,10 +7,12 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
+#include <internal/kernel_build_options.hpp>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <ranges>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -32,8 +34,8 @@
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "common/stable_hash.hpp"
 #include "kernel.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -113,6 +115,15 @@ fs::path resolve_compiler_include_dir(const fs::path& given) {
     }
     return resolved;
 }
+
+// The HAL decides which compute processors get RVV flags (Hal::get_supports_rvv). A kernel that opts
+// in where none do (e.g. Wormhole) would otherwise silently build scalar code.
+void validate_rvv_opt_in(const JitBuildSettings& kernel, bool any_processor_supports_rvv) {
+    TT_FATAL(
+        !kernel.get_rvv_enabled() || any_processor_supports_rvv,
+        "Kernel {} enables RVV code generation, but no compute processor on this architecture supports it",
+        kernel.get_full_kernel_name());
+}
 }  // namespace
 
 KernelSource::KernelSource(std::string source, SourceType source_type, fs::path path) :
@@ -143,7 +154,8 @@ Kernel::Kernel(
     const std::vector<std::string>& runtime_arg_names,
     const std::vector<std::string>& common_runtime_arg_names,
     const std::vector<TensorBindingHandle>& tensor_binding_handles,
-    const KernelCrtaLayout& crta_layout) :
+    const KernelCrtaLayout& crta_layout,
+    const KernelRtaLayout& rta_layout) :
     context_id_(context_id),
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
@@ -158,6 +170,7 @@ Kernel::Kernel(
     common_runtime_arg_names_(common_runtime_arg_names),
     tensor_binding_handles_(tensor_binding_handles),
     crta_layout_(crta_layout),
+    rta_layout_(rta_layout),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -267,6 +280,10 @@ void ComputeKernel::process_defines(
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
+bool ComputeKernel::get_sfpu_replay_optimization_disabled() const {
+    return this->defines_.contains(internal::DISABLE_SFPU_REPLAY_OPTIMIZATION_DEFINE);
+}
+
 void EthernetKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
     Kernel::process_defines(callback);
@@ -343,14 +360,16 @@ void Kernel::process_semaphore_binding_handles(
 void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
-                                                uint32_t addr_crta_offset,
+                                                bool is_per_node,
+                                                uint32_t addr_offset,
                                                 uint32_t num_runtime_field_crta_words,
                                                 const LLKMetadata&)>& callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(
             handle.accessor_name,
             handle.cta_offset,
-            handle.addr_crta_offset,
+            handle.is_per_node,
+            handle.is_per_node ? handle.addr_rta_offset : handle.addr_crta_offset,
             handle.num_runtime_field_crta_words,
             handle.llk_metadata);
     }
@@ -509,7 +528,8 @@ ResolvedBufRw Kernel::resolve_buf_rw(const IDevice& device, const detail::Progra
             return std::nullopt;
         }
         for (const auto& handle : this->tensor_binding_handles_) {
-            if (handle.addr_crta_offset == slot) {
+            // A per-node binding has no CRTA slot (and its device side notes OPAQUE instead of a slot).
+            if (!handle.is_per_node && handle.addr_crta_offset == slot) {
                 // param_name is a string_view into the handle -- no copy
                 return ResolvedBufRw::Access{.param_name = handle.tensor_parameter_name, .address = crta.data()[word]};
             }
@@ -731,6 +751,8 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+        hasher.update(static_cast<uint64_t>(handle.is_per_node));
+        hasher.update(static_cast<uint64_t>(handle.addr_rta_offset));
         hash_llk_fields(handle.llk_metadata);
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
@@ -1156,12 +1178,16 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
         *this,
         this->kernel_src_);
-    uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
-                                    .hal()
-                                    .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    const auto core_type = this->get_kernel_programmable_core_type();
+    uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     auto build_states = BuildEnvManager::get_instance(extract_context_id(device))
                             .get_kernel_build_states(device->build_id(), tensix_core_type, compute_class_idx);
+    validate_rvv_opt_in(
+        *this, std::ranges::any_of(std::views::iota(0u, static_cast<uint32_t>(build_states.size())), [&](uint32_t id) {
+            return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, id);
+        }));
     jit_build_subset(build_states, this);
 }
 
@@ -1673,17 +1699,24 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
         *this,
         this->kernel_src_);
-    const uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
-                                          .hal()
-                                          .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    const auto core_type = this->get_kernel_programmable_core_type();
+    const uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
 
     // One compile/link per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), shared across all NEOs using that slot.
+    std::vector<const JitBuildState*> build_states;
+    build_states.reserve(this->trisc_binary_groups_.size());
     for (const auto& group : this->trisc_binary_groups_) {
         const int processor_id = static_cast<int>(enchantum::to_underlying(group[0]));
-        const JitBuildState& build_state = BuildEnvManager::get_instance(extract_context_id(device)).get_kernel_build_state(
-            device->build_id(), tensix_core_type, compute_class_idx, processor_id);
-        jit_build(build_state, this);
+        build_states.push_back(&BuildEnvManager::get_instance(extract_context_id(device))
+                                    .get_kernel_build_state(device->build_id(), tensix_core_type, compute_class_idx, processor_id));
+    }
+    validate_rvv_opt_in(*this, std::ranges::any_of(this->trisc_binary_groups_, [&](const auto& group) {
+        return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, enchantum::to_underlying(group[0]));
+    }));
+    for (const JitBuildState* build_state : build_states) {
+        jit_build(*build_state, this);
     }
 }
 
@@ -1767,7 +1800,7 @@ std::string QuasarComputeKernel::config_hash() const {
         unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
     }
 
-    return fmt::format(
+    std::string hash = fmt::format(
         "{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
@@ -1776,6 +1809,12 @@ std::string QuasarComputeKernel::config_hash() const {
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
         unpack_mode_descriptor);
+    // Appended only when opted in, so hashes of kernels that don't use
+    // the RVV knob are unchanged.
+    if (config_.enable_trisc0_rvv) {
+        hash += "_rvv";
+    }
+    return hash;
 }
 
 uint8_t QuasarComputeKernel::expected_num_binaries() const {

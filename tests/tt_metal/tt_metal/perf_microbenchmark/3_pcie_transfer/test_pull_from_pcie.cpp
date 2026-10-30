@@ -39,9 +39,9 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
         slow_dispatch::WriteToL1(*device, logical_core, l1_unreserved_base, go_signal);
 
         // Application setup
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
 
         uint32_t kernel_read_size = 64 * 1024;
 

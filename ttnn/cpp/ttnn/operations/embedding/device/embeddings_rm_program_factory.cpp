@@ -178,7 +178,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         });
     }
 
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    uint32_t index_page_size = tt::round_up(input_element_size_bytes, 32u);
     Group<ScratchpadSpec> scratchpads;
     scratchpads.push_back(
         ScratchpadSpec{.unique_id = INDEX_SCRATCH_SP, .size_per_node = block_height * index_page_size});

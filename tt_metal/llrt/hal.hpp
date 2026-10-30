@@ -38,6 +38,7 @@
 #include <tt_stl/overloaded.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/io_window_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
@@ -132,6 +133,8 @@ struct HalJitBuildConfig {
     // Offset added to all L1 addresses when writing from host (via write_core).
     // Non-zero for cores where L1 NOC address != private address (e.g. DRAM cores: 0x2000000000).
     DeviceAddr l1_noc_offset = 0;
+    // True if this processor has a RISC-V Vector (RVV) unit that kernels can target.
+    bool supports_rvv = false;
 };
 
 // Ethernet Firmware mailbox messages
@@ -370,10 +373,11 @@ public:
     virtual std::vector<std::string> srcs(const Params& params) const = 0;
     // Returns a string of common flags to be added to compiler and linker command lines.
     virtual std::string common_flags(const Params& params) const = 0;
-    // Returns the compiler flags that enable RISC-V Vector (Zve32f) code generation for an
-    // opt-in kernel compile on this processor (see ComputeConfig::enable_trisc2_rvv), or an
-    // empty string when the processor has no vector unit / the arch does not support it.
-    // Applied per kernel at recipe-export time, never to firmware or default kernel builds.
+    // Returns the compiler flags that enable RISC-V Vector code generation for an opt-in kernel
+    // compile on this processor (ComputeConfig::enable_trisc2_rvv, QuasarComputeConfig::
+    // enable_trisc0_rvv), or an empty string when the processor has no vector unit
+    // (Hal::get_supports_rvv). Applied per kernel at recipe-export time, never to firmware or default
+    // kernel builds.
     virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
@@ -680,6 +684,9 @@ public:
     uint32_t get_read_alignment(HalMemType memory_type) const;
     uint32_t get_write_alignment(HalMemType memory_type) const;
     uint32_t get_dma_alignment() const;
+    // Smallest host-to-device write sent through PCIe DMA rather than MMIO, for a write requesting this ordering.
+    uint32_t get_dma_write_min_bytes(tt::umd::IoOrdering ordering) const;
+    bool supports_dma_reads() const;
 
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
@@ -689,6 +696,11 @@ public:
     bool get_supports_dfbs(uint32_t programmable_core_type_index) const;
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
+
+    bool get_supports_rvv(
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx) const;
 
     // The processors metal runs on a core of this type.
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
@@ -892,8 +904,8 @@ inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
 
 inline uint32_t Hal::get_dma_alignment() const {
     switch (arch_) {
-        case tt::ARCH::WORMHOLE_B0: return 4;
-        // Only Wormhole B0 devices support DMA transfers today.
+        case tt::ARCH::WORMHOLE_B0:
+        case tt::ARCH::BLACKHOLE: return 4;
         default: return 1;
     }
 }
@@ -914,6 +926,18 @@ inline bool Hal::get_supports_dfbs(uint32_t programmable_core_type_index) const 
 
 inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
+}
+
+inline bool Hal::get_supports_rvv(
+    HalProgrammableCoreType programmable_core_type,
+    HalProcessorClassType processor_class,
+    uint32_t processor_type_idx) const {
+    return this
+        ->get_jit_build_config(
+            ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type),
+            ttsl::as_underlying_type<HalProcessorClassType>(processor_class),
+            processor_type_idx)
+        .supports_rvv;
 }
 
 inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
