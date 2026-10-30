@@ -748,7 +748,7 @@ TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
 }
 
 TEST(EthFwStage, DecodesStageValues) {
-    EXPECT_EQ(llrt::eth_fw_stage_to_string(0), "UNKNOWN/BASE_FW");
+    EXPECT_EQ(llrt::eth_fw_stage_to_string(0), "UNKNOWN");
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x45534142), "BASE_FW");
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x494e4946), "APP_FW_INIT");
     EXPECT_EQ(llrt::eth_fw_stage_to_string(0x50554c46), "APP_FW");

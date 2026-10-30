@@ -1278,9 +1278,8 @@ void RiscFirmwareInitializer::initialize_firmware(
             prepare_initial_launch_msg();
             write_initial_go_launch_msg();
             // Initialize the always-on ethernet firmware stage breadcrumb to UNKNOWN (0) before the core
-            // starts. The Metal application FW stamps its own stage as it runs; a core that never reaches
-            // application FW therefore reads back as UNKNOWN (i.e. still in the external base firmware).
-            // Only the slots of the eriscs Metal FW runs on are cleared: in single-erisc mode base FW keeps
+            // starts. The Metal application FW stamps its own stage as it runs, so an erisc that never reaches
+            // application FW reads back as UNKNOWN. Only the slots of the eriscs Metal FW runs on are cleared: in single-erisc mode base FW keeps
             // running on erisc0 and stamps its own stages into slot 0.
             if (hal_.get_dev_size(core_type, HalL1MemAddrType::FW_STAGE) != 0) {
                 const DeviceAddr fw_stage_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::FW_STAGE);

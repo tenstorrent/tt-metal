@@ -326,7 +326,7 @@ void write_binary_to_address(
 
 std::string eth_fw_stage_to_string(uint32_t stage) {
     switch (stage) {
-        case ETH_FW_STAGE_UNKNOWN: return "UNKNOWN/BASE_FW";
+        case ETH_FW_STAGE_UNKNOWN: return "UNKNOWN";
         case ETH_FW_STAGE_BASE_FW: return "BASE_FW";
         case ETH_FW_STAGE_FW_INIT: return "APP_FW_INIT";
         case ETH_FW_STAGE_FW_LOOP: return "APP_FW";

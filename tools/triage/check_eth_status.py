@@ -227,7 +227,7 @@ class BlackholeEthCore(EthCore):
     PORT_STATUS_NAMES = {0: "Unknown", 1: "Up", 2: "Down", 3: "Unused"}
     # eth_fw_stage_e, ASCII-packed little-endian.
     FW_STAGE_NAMES = {
-        0: "Unknown",  # never reached metal FW, so still in base FW
+        0: "Unknown",  # nothing recorded since the slot was last cleared
         0x45534142: "Base FW",  # BASE: base FW main loop, or metal FW returned control
         0x494E4946: "FW init",  # FINI
         0x50554C46: "FW loop",  # FLUP: waiting for a go message
@@ -249,7 +249,7 @@ class BlackholeEthCore(EthCore):
         row.mailbox_other = words[self.MAILBOX + 3 * self.MAILBOX_SLOT_SIZE]
         row.err_stat = words[self.ERR_STAT]
         # Word N is erisc N's, written by metal FW and, on newer base FW, by base FW in word 0. In single-erisc mode
-        # metal runs on erisc1 while base FW keeps erisc0. Zero in the second word means erisc1 hasn't run metal FW.
+        # metal runs on erisc1 while base FW keeps erisc0. A running erisc1 with no recorded stage is left out.
         # Metal's teardown puts erisc1 in reset without rewriting its word, so a held erisc's word is stale.
         stages = []
         for erisc, reset_bit in enumerate(self.ERISC_SOFT_RESET_BITS):
