@@ -642,9 +642,22 @@ void kernel_main() {
                 continue;
             }
 
-            cb0.wait_front(1);
+            // Buffer pages of the slot starting at block `from`: a slot's worth, or with one page per tile, the tiles
+            // left (the host gives such a stream one range, so only its last slot is short).
+            auto slot_pages = [&](uint32_t from) {
+                return A2A_CB_PAGES_PER_SLOT == 1
+                           ? 1u
+                           : std::min<uint32_t>(
+                                 A2A_CB_PAGES_PER_SLOT, (block_end_id - from + block_stride - 1) / block_stride);
+            };
+            uint32_t pages_in_slot = slot_pages(block_idx);
+            cb0.wait_front(pages_in_slot);
             size_t l1_read_addr = cb0.get_read_ptr();
+            // A slot of the packet buffer: A2A_PACKETS_PER_SLOT packets in A2A_CB_PAGES_PER_SLOT buffer pages (one page
+            // per slot when the reader fills it, one per tile when the tilize kernel does).
+            constexpr uint32_t packets_per_cb_page = A2A_PACKETS_PER_SLOT;
             uint32_t pages_in_cb = 0;
+            uint32_t packets_in_cb = 0;
             uint32_t current_package_payload = 0;
             uint32_t current_part = 0;
             uint64_t dst_addrs[4] = {0};
@@ -689,11 +702,15 @@ void kernel_main() {
                 const bool schedule_complete = block_idx >= block_end_id;
                 if (pages_in_cb == max_pages_per_packet || schedule_complete) {
                     flush_packet(schedule_complete && signal_completion);
-                    cb0.pop_front(1);
                     pages_in_cb = 0;
-                    if (!schedule_complete) {
-                        cb0.wait_front(1);
-                        l1_read_addr = cb0.get_read_ptr();
+                    if (++packets_in_cb == packets_per_cb_page || schedule_complete) {
+                        cb0.pop_front(pages_in_slot);
+                        packets_in_cb = 0;
+                        if (!schedule_complete) {
+                            pages_in_slot = slot_pages(block_idx);
+                            cb0.wait_front(pages_in_slot);
+                            l1_read_addr = cb0.get_read_ptr();
+                        }
                     }
                 }
             }

@@ -9,6 +9,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ckernel.h"
 #include <cstdint>
+#include <tuple>
 
 using address_t = uint32_t;
 
@@ -128,32 +129,56 @@ void kernel_main() {
         uint32_t block_idx = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_end_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_stride = get_arg_val<uint32_t>(arg_idx++);
+#ifdef A2A_TILIZE_INPUT
+        // Row-major input: fetch each tile row (32 input rows) for the compute kernel to tilize. The host keeps
+        // every range on whole tile rows with stride 1.
+        constexpr uint32_t row_bytes = A2A_ROW_BYTES;
+        constexpr uint32_t tiles_per_row = A2A_TILES_PER_ROW;
+        constexpr uint32_t tile_height = 32;
+        CircularBuffer cb_rows(A2A_ROWS_CB);
+        const auto rows = TensorAccessor(input_tensor_args, input_address, row_bytes);
+        for (; block_idx < block_end_id; block_idx += tiles_per_row) {
+            const uint32_t tile_id = std::get<3>(calculate_tile(block_idx));
+            const uint32_t first_row = tile_id / tiles_per_row * tile_height;
+            cb_rows.reserve_back(tiles_per_row);
+            const uint32_t l1 = cb_rows.get_write_ptr();
+            for (uint32_t r = 0; r < tile_height; ++r) {
+                noc_async_read(rows.get_noc_addr(first_row + r), l1 + r * row_bytes, row_bytes);
+            }
+            noc_async_read_barrier();
+            cb_rows.push_back(tiles_per_row);
+        }
+        continue;
+#endif
+        constexpr uint32_t packets_per_cb_page = A2A_PACKETS_PER_SLOT;
         while (block_idx < block_end_id) {
             cb0.reserve_back(1);
             address_t l1_write_addr = cb0.get_write_ptr();
-            uint32_t current_package_payload = 0;
-            uint32_t current_tile = 0;
-            while (current_tile < max_pages_per_packet) {
-                if (block_idx >= block_end_id) {
-                    break;
-                }
+            for (uint32_t packet = 0; packet < packets_per_cb_page && block_idx < block_end_id; ++packet) {
+                uint32_t current_package_payload = 0;
+                uint32_t current_tile = 0;
+                while (current_tile < max_pages_per_packet) {
+                    if (block_idx >= block_end_id) {
+                        break;
+                    }
 
-                auto [split_idx, inner_idx, concat_idx, tile_id, payload_size] = calculate_tile(block_idx);
-                if (current_package_payload + payload_size > max_pages_per_packet * input_page_size) {
-                    break;
+                    auto [split_idx, inner_idx, concat_idx, tile_id, payload_size] = calculate_tile(block_idx);
+                    if (current_package_payload + payload_size > max_pages_per_packet * input_page_size) {
+                        break;
+                    }
+                    read_data(
+                        noc_obj,
+                        device_id,
+                        tile_id,
+                        l1_write_addr,
+                        input_addrgen,
+                        concat_idx,
+                        split_idx == split_num_tiles - 1,
+                        payload_size);
+                    current_package_payload += payload_size;
+                    current_tile++;
+                    block_idx += block_stride;
                 }
-                read_data(
-                    noc_obj,
-                    device_id,
-                    tile_id,
-                    l1_write_addr,
-                    input_addrgen,
-                    concat_idx,
-                    split_idx == split_num_tiles - 1,
-                    payload_size);
-                current_package_payload += payload_size;
-                current_tile++;
-                block_idx += block_stride;
             }
             noc_obj.async_read_barrier();
             cb0.push_back(1);
