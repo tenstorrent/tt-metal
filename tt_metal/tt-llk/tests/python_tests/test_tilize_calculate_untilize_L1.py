@@ -4,8 +4,8 @@
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
-    MathFidelity,
     MathOperation,
 )
 from helpers.param_config import input_output_formats, parametrize
@@ -34,12 +34,7 @@ from helpers.utils import passed_test, result_tensor
     ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_tilize_calculate_untilize_L1(
     formats,

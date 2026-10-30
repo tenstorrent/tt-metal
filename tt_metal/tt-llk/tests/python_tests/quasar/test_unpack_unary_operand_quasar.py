@@ -21,7 +21,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     Transpose,
     UnpackerEngine,
@@ -32,6 +31,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     runtime,
     select_perf_tile_sizes,
 )
@@ -82,7 +82,7 @@ def generate_unpack_unary_operand_combinations(
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     combinations = []
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     for fmt in formats_list:
         if not is_valid_data_format_conversion(fmt):

@@ -7,6 +7,7 @@ import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -53,12 +54,6 @@ mathop_mapping = {
 
 REDUCE_DIMS = [ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar]
 POOL_TYPES = [ReducePool.Max, ReducePool.Average, ReducePool.Sum]
-ALL_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 REDUCE_TILE_DIMENSIONS = [
     [1, 32],
     [2, 32],
@@ -75,7 +70,7 @@ def _fidelities_for_format(formats):
     """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
     if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
         return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
-    return ALL_FIDELITIES
+    return ALL_MATH_FIDELITIES
 
 
 def _reduce_to_one_for_format(formats):
@@ -328,7 +323,7 @@ def test_reduce(
     dest_acc=_required_dest_acc_mode,
     reduce_dim=REDUCE_DIMS,
     pool_type=POOL_TYPES,
-    math_fidelity=ALL_FIDELITIES,
+    math_fidelity=ALL_MATH_FIDELITIES,
     is_reduce_to_one=[False, True],
     tile_dimensions=[[32, 32]],
 )
