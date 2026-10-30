@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -38,8 +39,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_collector.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -57,7 +57,6 @@ using manifest::kind_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
-using manifest::schema_name;
 
 std::set<std::string> keys_of(const json& object) {
     std::set<std::string> keys;
@@ -289,13 +288,11 @@ void check_credit_transport(const json& manifest, const std::vector<RouterEntry>
     }
 }
 
-// A stream register the builder did not allocate is null. One it did is one of the streams the arch lists.
-void expect_stream(const json& stream, bool must_be_allocated, uint32_t num_streams) {
+// A stream register the builder did not allocate is null.
+void expect_stream(const json& stream, bool must_be_allocated) {
     if (stream.is_null()) {
         EXPECT_FALSE(must_be_allocated);
-        return;
     }
-    EXPECT_LT(stream.at("stream_id").get<uint32_t>(), num_streams);
 }
 
 // On L1 counters, a credit is the sender's own element of the router's counter array, which is indexed by the router's
@@ -306,11 +303,10 @@ void expect_credit(
     manifest::CreditCounterArray array,
     bool uses_counters,
     uint32_t compact,
-    bool serviced,
-    uint32_t num_streams) {
+    bool serviced) {
     if (!uses_counters) {
         ASSERT_FALSE(credit.contains("array")) << credit;
-        expect_stream(credit, serviced, num_streams);
+        expect_stream(credit, serviced);
         return;
     }
     ASSERT_TRUE(credit.is_object() && credit.contains("array")) << credit;
@@ -321,14 +317,20 @@ void expect_credit(
     EXPECT_LT(compact, router.at(pointer).at("num_elements").get<uint32_t>());
 }
 
-// Every object under `node` with an address and a size, as (address, size, path).
+// The bytes an L1 region spans.
+uint32_t get_region_size(const json& region) {
+    return region.at("num_elements").get<uint32_t>() * region.at("element_size").get<uint32_t>();
+}
+
+// Every L1 region under `node`, as (address, size, path). Stream and core registers have an address too, but no
+// element_size.
 void collect_regions(
     const json& node, const std::string& path, std::vector<std::tuple<uint32_t, uint32_t, std::string>>& regions) {
     if (!node.is_object()) {
         return;
     }
-    if (node.contains("address") && node.contains("size")) {
-        regions.emplace_back(node.at("address").get<uint32_t>(), node.at("size").get<uint32_t>(), path);
+    if (node.contains("address") && node.contains("element_size")) {
+        regions.emplace_back(node.at("address").get<uint32_t>(), get_region_size(node), path);
         return;
     }
     for (const auto& [key, child] : node.items()) {
@@ -359,15 +361,13 @@ void check_router_regions_disjoint(const json& manifest, const std::vector<Route
 // The last component of a router path, e.g. "E0" for "M0/C7/E0".
 std::string key_of_path(const std::string& path) { return path.substr(path.rfind('/') + 1); }
 
-// A ring buffer's slots are each one channel buffer, and fill its size.
+// A ring buffer's elements are its slots, each one channel buffer of raw bytes.
 void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size) {
     if (ring.is_null()) {
         return;
     }
-    EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
-    EXPECT_EQ(
-        ring.at("size").get<uint32_t>(),
-        ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
+    EXPECT_EQ(ring.at("element_size"), channel_buffer_size);
+    EXPECT_EQ(ring.at("type"), manifest::get_manifest_type_name<std::byte>());
 }
 
 // A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel (the
@@ -378,7 +378,6 @@ void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size) {
 void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
     const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
     const auto channel_buffer_size = manifest.at("fabric").at("channel_buffer_size_bytes").get<uint32_t>();
-    const auto num_streams = manifest.at("arch").at("stream_registers").at("count").get<uint32_t>();
     const bool has_trimming_profile = tt::tt_metal::MetalContext::instance().rtoptions().has_fabric_trimming_profile();
 
     for (const auto& entry : routers) {
@@ -451,8 +450,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                         manifest::CreditCounterArray::TO_SENDER_ACK,
                         uses_counters,
                         compact,
-                        serviced,
-                        num_streams);
+                        serviced);
                 }
                 expect_credit(
                     credits.at("completed"),
@@ -460,8 +458,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     manifest::CreditCounterArray::TO_SENDER_COMPLETION,
                     uses_counters,
                     compact,
-                    serviced,
-                    num_streams);
+                    serviced);
             }
         }
         EXPECT_EQ(keys_of(senders), expected_vc_keys);
@@ -545,7 +542,7 @@ void expect_fields(const json& fields, std::span<const manifest::RouterField> ta
         if (fields.contains(key) && fields.at(key).is_null()) {
             EXPECT_TRUE(
                 std::holds_alternative<manifest::content::L1>(field.content.value) ||
-                std::holds_alternative<manifest::content::StreamReg>(field.content.value))
+                std::holds_alternative<manifest::StreamRegField>(field.content.value))
                 << key;
         }
     }
@@ -639,7 +636,7 @@ void expect_diagnostic_buffer(const json& field, const FabricRouterDiagnosticBuf
     }
     ASSERT_FALSE(field.is_null());
     EXPECT_EQ(field.at("address").get<size_t>(), region.l1_address);
-    EXPECT_EQ(field.at("size").get<size_t>(), region.size_bytes);
+    EXPECT_EQ(get_region_size(field), region.size_bytes);
 }
 
 // The diagnostic buffers the kernel is fed are where the builder's buffer map puts them, and the router records a
@@ -719,19 +716,31 @@ void check_arch(const json& manifest) {
     }
 }
 
-// Every register of every stream is in the HAL's register space.
-void check_arch_stream_registers(const json& manifest) {
+// Every stream register under `node`, as (address, path).
+void collect_stream_registers(
+    const json& node, const std::string& path, std::vector<std::pair<uint32_t, std::string>>& streams) {
+    if (!node.is_object()) {
+        return;
+    }
+    if (node.contains("stream_id")) {
+        streams.emplace_back(node.at("address").get<uint32_t>(), path);
+        return;
+    }
+    for (const auto& [key, child] : node.items()) {
+        collect_stream_registers(child, path.empty() ? key : path + "/" + key, streams);
+    }
+}
+
+// Every stream register a router names is in the HAL's register space.
+void check_router_stream_registers(const std::vector<RouterEntry>& routers) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& streams = manifest.at("arch").at("stream_registers");
-    const auto base = streams.at("base").get<uint32_t>();
-    const auto stride = streams.at("stride").get<uint32_t>();
-    const auto count = streams.at("count").get<uint32_t>();
-    for (const auto& [name, reg] : streams.at("registers").items()) {
-        SCOPED_TRACE(name);
-        const auto offset = reg.at("offset").get<uint32_t>();
-        EXPECT_LT(offset, stride);
-        for (uint32_t stream_id = 0; stream_id < count; ++stream_id) {
-            EXPECT_TRUE(hal.valid_reg_addr(base + (stream_id * stride) + offset)) << stream_id;
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        std::vector<std::pair<uint32_t, std::string>> streams;
+        collect_stream_registers(*entry.router, "", streams);
+        EXPECT_FALSE(streams.empty());
+        for (const auto& [address, path] : streams) {
+            EXPECT_TRUE(hal.valid_reg_addr(address)) << path << " at " << address;
         }
     }
 }
@@ -790,82 +799,6 @@ TEST(ManifestNames, Spellings) {
     // A content type's name in snake case.
     EXPECT_EQ(kind_name<manifest::content::L1>(), "l1");
     EXPECT_EQ(kind_name<manifest::content::StreamReg>(), "stream_reg");
-
-    namespace element = layout::element;
-    EXPECT_EQ(schema_name({element::Uint{}, 4, 0}), "u32");
-    EXPECT_EQ(schema_name({element::Int{}, 2, 0}), "i16");
-    // An array's integers take their width from one element.
-    EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
-    EXPECT_EQ(schema_name({element::Enum{&layout::enum_description<RouterState>}, 4, 0}), "enum:RouterState");
-    EXPECT_EQ(schema_name({element::Struct{&layout::struct_description<WorkerXY>}, 4, 0}), "struct:WorkerXY");
-    EXPECT_EQ(
-        schema_name(
-            {element::TaggedUnion{&layout::tagged_union_description<NocCommandFields>, "noc_send_type"}, 40, 0}),
-        "union:NocCommandFields");
-    EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
-    EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
-}
-
-// Collecting a struct should also collect every struct and enum its members name, and theirs in turn, so the types
-// block describes everything a schema leads to.
-TEST(ManifestTypes, CollectorFollowsMembers) {
-    manifest::TypeCollector types;
-    types.add(layout::type_of<FabricTelemetry>());
-    for (const std::string_view name :
-         {"FabricTelemetry",
-          "StaticInfo",
-          "DynamicInfo",
-          "BandwidthTelemetry",
-          "EriscDynamicEntry",
-          "RiscTimestampV2"}) {
-        EXPECT_TRUE(types.get_structs().contains(name)) << name;
-    }
-    EXPECT_TRUE(types.get_enums().contains("RouterState"));
-    EXPECT_TRUE(types.get_tagged_unions().empty());
-
-    for (const auto& [name, description] : types.get_structs()) {
-        for (const auto& member : description->members) {
-            if (const auto* s = std::get_if<layout::element::Struct>(&member.type.element)) {
-                EXPECT_TRUE(types.get_structs().contains(s->description->name)) << name << "." << member.name;
-            } else if (const auto* e = std::get_if<layout::element::Enum>(&member.type.element)) {
-                EXPECT_TRUE(types.get_enums().contains(e->description->name)) << name << "." << member.name;
-            }
-        }
-    }
-}
-
-// Collecting a tagged union should collect its tag enum and every type its cases name, since decode reads the tag and
-// then the case it picks.
-TEST(ManifestTypes, CollectorFollowsTaggedUnionCases) {
-    manifest::TypeCollector types;
-    types.add(
-        {layout::element::TaggedUnion{&layout::tagged_union_description<NocCommandFields>, "noc_send_type"},
-         sizeof(NocCommandFields),
-         0});
-    EXPECT_TRUE(types.get_tagged_unions().contains("NocCommandFields"));
-    EXPECT_TRUE(types.get_enums().contains("NocSendType"));
-    EXPECT_TRUE(types.get_structs().contains("NocUnicastCommandHeader"));
-    EXPECT_TRUE(types.get_structs().contains("NocUnicastScatterCommandHeader"));
-}
-
-// A type with nothing to describe, such as an integer, should add nothing.
-TEST(ManifestTypes, CollectorSkipsIntegers) {
-    manifest::TypeCollector types;
-    types.add(layout::type_of<uint32_t>());
-    types.add(layout::type_of<uint8_t[4]>());
-    EXPECT_TRUE(types.get_structs().empty());
-    EXPECT_TRUE(types.get_enums().empty());
-    EXPECT_TRUE(types.get_tagged_unions().empty());
-}
-
-// Two different types with one name would make that name's schema ambiguous, so collecting the second should fail.
-TEST(ManifestTypes, CollectorRejectsTwoTypesWithOneName) {
-    static constexpr layout::StructDescription first{"Twin", 4, {}};
-    static constexpr layout::StructDescription second{"Twin", 4, {}};
-    manifest::TypeCollector types;
-    types.add({layout::element::Struct{&first}, 4, 0});
-    types.add({layout::element::Struct{&first}, 4, 0});
-    EXPECT_ANY_THROW(types.add({layout::element::Struct{&second}, 4, 0}));
 }
 
 // A chip is published once, with every router its builder initialized, and only within the chips the context holds.
@@ -923,7 +856,7 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     TEST_F(Fixture, LocalSync) { check_local_sync(manifest_); }                                            \
     TEST_F(Fixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }         \
     TEST_F(Fixture, Arch) { check_arch(manifest_); }                                                       \
-    TEST_F(Fixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }                       \
+    TEST_F(Fixture, RouterStreamRegisters) { check_router_stream_registers(routers_); }                    \
     TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                 \
     TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                             \
     TEST_F(Fixture, RouterHostCleared) { check_router_host_cleared(routers_); }

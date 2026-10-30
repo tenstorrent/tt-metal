@@ -4,51 +4,79 @@
 
 When a fabric run hangs or misbehaves, the useful questions are about the routers: which ones exist and how they
 connect, what each router kernel was configured with, and what each router is doing right now. Answering them takes
-two things: a snapshot of each router's state, and a map that says where that state lives and how to read it. The
+two things: a snapshot of each router's state, and a map that says where that state lives and what it holds. The
 fabric manifest is the map.
 
 The fabric build writes the manifest itself, from the same builder objects and compile-time arguments that configured
-the routers, so it describes exactly what ran. Capture uses it to know what to read from each router, decode uses it
-to turn those bytes into values, and the viewer uses it to draw the fabric.
+the routers, so it describes exactly what ran.
+
+## Where it fits
+
+The manifest is the first stage of the fabric visualizer's pipeline. Each later stage reads it:
+
+| Stage      | Runs                            | What it takes from the manifest                                                                                     |
+| ---------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Manifest   | Once per rank, at fabric init   | Nothing: it writes the manifest from the builders                                                                   |
+| Capture    | Once per rank, on the rank's host | Which cores to read (each router's chip and Ethernet channel), and the address of every stream register it names  |
+| Decode     | Once per rank, on the run's build | Each L1 region's and stream register's type name, which it maps back to the C++ type, and the facts it reads values against: channels, credits, fields |
+| Join       | Once per run                    | Each router's path and its link peer, which may be on another rank's chip                                           |
+| Visualizer | Once per run                    | The meshes, chips and routers, and each router's channels, fields and L1 regions                                    |
+
+Capture reads bytes and interprets nothing. Decode turns them into values using the manifest, and runs on the same
+build as the run, so a name the manifest writes is a type decode has.
 
 ## What it is
 
 One JSON file per MPI rank, written at fabric init. It describes every mesh and chip in the fabric. Chips this rank
 opened (its local chips) also list their routers. The top level blocks are described below.
 
-| Block        | What it holds                                                                                                                        |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `run`        | This process and build: host rank, MPI rank, world size, when the file was written, and the commit                                   |
-| `fabric`     | The fabric settings the run asked for (`config`), and what fabric derived from them: topology, routing mode, packet sizes            |
-| `arch`       | What the architecture fixes on every router core: L1 areas such as telemetry and the routing table, stream registers, core registers |
-| `types`      | Every struct and enum the manifest's schemas name, with their layouts and values, so a reader can interpret bytes                    |
-| `vocabulary` | Every value each label can hold, such as every channel status                                                                        |
-| `meshes`     | Each mesh's shape, its chips, and each local chip's routers: their links, channels, credits, fields and L1 regions                   |
+| Block        | What it holds                                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `run`        | This process and build: host rank, MPI rank, world size, when the file was written, and the commit                        |
+| `fabric`     | The fabric settings the run asked for (`config`), and what fabric derived from them: topology, routing mode, packet header type, packet sizes |
+| `arch`       | What the architecture fixes on every router core: L1 areas such as telemetry and the routing table, and core registers    |
+| `vocabulary` | Every value each label can hold, such as every channel status                                                             |
+| `meshes`     | Each mesh's shape, its chips, and each local chip's routers: their links, channels, credits, fields and L1 regions        |
 
-Anything in L1 or a stream register is described by its address and a **schema**, which names how to read it. A schema
-is an integer width, `bytes`, `pad`, or a `struct:`/`enum:` name that `types` describes. For example, a sender channel's
-`conn_info` field, and the type it names:
+State on a router core is described by where its bytes are and the C++ type they hold, named by the type registry.
+
+An **L1 region** is `num_elements` elements of `type`, `element_size` bytes apart from `address`. Each element holds
+a `type` in its first `sizeof(T)`bytes. The rest of the element, if any, isn't typed, and is left as raw bytes. For example, a sender channel's `conn_info` field is one
+struct:
 
 ```json
 "conn_info": {
   "category": "control_info",
   "kind": "l1",
   "address": 98528,
-  "size": 64,
-  "schema": "struct:EDMChannelWorkerLocationInfo",
+  "num_elements": 1,
+  "element_size": 64,
+  "type": "EDMChannelWorkerLocationInfo",
   "cleared_by_host": false
 }
-
-"types": {
-  "structs": {
-    "EDMChannelWorkerLocationInfo": {
-      "size": 64,
-      "members": [
-        { "name": "worker_semaphore_address", "offset": 0, "size": 4, "schema": "u32" },
-        ...
-        { "name": "worker_xy", "offset": 32, "size": 4, "schema": "struct:WorkerXY" },
-        ...
 ```
+
+and its ring buffer is fourteen slots of raw bytes:
+
+```json
+"ring_buffer": { "address": 100256, "num_elements": 14, "element_size": 4448, "type": "byte", "cleared_by_host": false }
+```
+
+A **stream register** is a word at `address`, whose low `value_bits` bits hold a `type`:
+
+```json
+"free_slots": {
+  "category": "flow_control",
+  "kind": "stream_reg",
+  "stream_id": 15,
+  "address": 4290048256,
+  "value_bits": 17,
+  "type": "unsigned int"
+}
+```
+
+A type name is the C++ type's name without its namespaces, as the build spells it. The manifest doesn't describe a
+type's members: decode gets the type back from its name and reads the bytes into it.
 
 [docs/FORMAT.md](docs/FORMAT.md) describes every block and key, and has a glossary of the terms used here.
 [`fabric_manifest_schema.json`](fabric_manifest_schema.json) is the file's JSON Schema. Readers depend on its shapes and on `manifest_version`.
@@ -76,6 +104,8 @@ collected and kept. At write time, those are combined with what the rest of the 
 
 ```mermaid
 flowchart LR
+    registry["Type registry<br/>fabric_manifest_type_registry.hpp"]
+
     subgraph build["During the fabric build (per chip)"]
         builders["Router builders<br/>fabric_router_builder.hpp<br/>compute_mesh_router_builder.cpp<br/>fabric_builder.cpp"]
         fields["Field tables<br/>fabric_manifest_fields.hpp"]
@@ -90,7 +120,7 @@ flowchart LR
         describe["Describe<br/>fabric_manifest_describe.cpp<br/>run, fabric, arch"]
         topology["Topology pass<br/>fabric_manifest_topology_pass.cpp<br/>meshes, chips, links"]
         facts["ManifestFacts<br/>fabric_manifest_model.hpp"]
-        writer["Writer + TypeCollector<br/>fabric_manifest.cpp<br/>fabric_manifest_type_collector.hpp"]
+        writer["Writer<br/>fabric_manifest.cpp"]
         json[("fabric_manifest_rank_*.json")]
         describe --> facts
         topology --> facts
@@ -100,24 +130,28 @@ flowchart LR
     published --> topology
     sources["ControlPlane, cluster, HAL,<br/>FabricContext, MPI"] --> describe
     sources --> topology
-    layouts["Struct layouts → descriptions<br/>struct_layout.hpp<br/>fabric_struct_layouts.hpp"] -. "every schema reaches its description" .-> writer
+    registry -. "names every type a region or register holds" .-> fields
+    registry -.-> router_pass
+    registry -.-> describe
 ```
 
 ### The parts
 
-**Struct layouts and descriptions** ([docs/STRUCT_LAYOUTS.md](docs/STRUCT_LAYOUTS.md)).
+**Type registry** ([docs/TYPE_REGISTRY.md](docs/TYPE_REGISTRY.md)).
 
-C++ can't list a struct's fields, so each struct the manifest describes has a hand-written layout (`fabric_struct_layouts.hpp`), checked against the real struct at compile time. The build turns each layout into a description. Every type in the manifest points to its description, which is how `types` gets written.
+The list of every type decode reads out of captured bytes, from L1 or a stream register, and the one name each goes by. An L1 region or stream register can only be made for a registered type, so the manifest can't name a type decode doesn't have. Configuration values the kernel is given, such as its direction, aren't captured bytes, so their enums aren't registered: the manifest writes the value and its enumerator's name.
 
 **Builder hooks** ([docs/BUILDER_HOOKS.md](docs/BUILDER_HOOKS.md)).
 
 The few places fabric's builders hand facts to the manifest: each router records what it passed to `CreateKernel`, each router builder answers `collect_manifest_router`, and each chip's `FabricBuilder` publishes its routers to `PublishedChips`, which outlives the builders.
 
-**Field tables** ([docs/FIELD_TABLES.md](docs/FIELD_TABLES.md), generated reference in [docs/FIELDS.md](docs/FIELDS.md)). Most of what a router records is a value the kernel was fed: an L1 address, a stream id, a flag. Each such field is one table entry saying which argument feeds it and how to read it. Every argument and define fed to the kernel must be read by a table or the router pass, or listed with a reason.
+**Field tables** ([docs/FIELD_TABLES.md](docs/FIELD_TABLES.md), generated reference in [docs/FIELDS.md](docs/FIELDS.md)).
+
+Most of what a router records is a value the kernel was fed: an L1 address, a stream id, a flag. Each such field is one table entry saying which argument feeds it and what it holds: an L1 region's type, a stream register and its type, or a number, flag or enum. Every argument and define fed to the kernel must be read by a table or the router pass, or listed with a reason.
 
 **Router pass** ([docs/ROUTER_PASS.md](docs/ROUTER_PASS.md)).
 
-Runs per router during the build. It reads the field tables, and computes the facts that need logic: the router's shape, each channel's status and who services it, credits, and the edges to its sibling routers.
+Runs per router during the build. It reads the field tables, turning each entry into a region, a stream register's address from the HAL, or a value, and computes the facts that need logic: the router's shape, each channel's status and who services it, its ring buffers, credits, and the edges to its sibling routers.
 
 **Topology pass** ([docs/TOPOLOGY_PASS.md](docs/TOPOLOGY_PASS.md)).
 
@@ -125,11 +159,11 @@ Runs at write time. It lays out every mesh and chip, decides which chips are loc
 
 **Describe** ([docs/DESCRIBE.md](docs/DESCRIBE.md)).
 
-Runs at write time. It describes the blocks stated once per manifest: the run, the fabric settings, the architecture, and each local mesh's credit transport.
+Runs at write time. It describes the blocks stated once per manifest: the run, the fabric settings and the run's packet header type, the architecture's L1 areas and core registers, and each local mesh's credit transport.
 
-**Writer and type collector** ([docs/WRITER.md](docs/WRITER.md)).
+**Writer** ([docs/WRITER.md](docs/WRITER.md)).
 
-Turns `ManifestFacts` into the JSON. The writer is the one place that decides key names and shape. Every schema it writes passes its type to a `TypeCollector`, which follows each type to the types it names, and `types` is written from what it collected.
+Turns `ManifestFacts` into the JSON. The writer is the one place that decides key names and shape. It writes each region and register as it is, with its type's name; it computes nothing.
 
 ## How it stays correct
 
@@ -139,10 +173,10 @@ writing a wrong manifest:
 - **Every kernel input is accounted for.** Every named compile-time argument and define fed to a router kernel is read
 by a field table or the router pass, or listed as left out with a reason. A new argument fails fabric init until it
 is.
-- **Layouts match their structs.** Each struct layout is checked against the struct at compile time, so adding,
-resizing or moving a field fails the build until the layout follows.
-- **Every schema resolves.** `types` is built from the schemas the manifest writes, so a schema can't name a type that
-isn't described.
+- **Every type the manifest names is one decode can read.** Regions and stream registers are made only for registered
+types, so naming any other type fails the build. The registry also checks at compile time that every name is
+distinct, that each type can be rebuilt from its bytes, that every packet header type fabric can pick is registered,
+and that a stream register's type fits in its word.
 - **What the builder and the manifest each know must agree.** For example, a chip must publish exactly the routers its
 builder initialized, and a sender that waits for a sibling must have a sibling edge landing on it.
 - **The file is all or nothing.** It's written to a temporary name and renamed into place, and a failure fails fabric
@@ -150,8 +184,8 @@ init.
 
 ## Changing fabric
 
-A fabric change the manifest doesn't account for fails with a message starting with `Fabric manifest:` that names what
-to update:
+A fabric change the manifest doesn't account for fails with a message starting with `Fabric manifest:`, or the build
+fails, naming what to update:
 
 | Change | What fails | What to edit |
 | --- | --- | --- |
@@ -159,9 +193,10 @@ to update:
 | New define | The router pass: "the define ... is fed to the router, but the router pass does not read it" | Read it in the router pass and list it in `k_router_pass_defines`, or add it to `k_unrecorded_defines` with a reason |
 | Removed argument | The router pass: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
 | Router pass code reads a new argument | `get_named_arg`: "the router pass reads ..., which no field table reads" | Add it to `k_router_pass_args` |
-| New struct in L1 | The build, when a field names a struct with no `StructLayout` | A `StructLayout<T>` in `fabric_struct_layouts.hpp` |
-| New enum | The build, only when enchantum can't find its enumerators | Nothing, or an `EnumLayout<E>` in `fabric_struct_layouts.hpp` |
-| New `EDMStatus` value | The build | `FABRIC_LAYOUT_EDM_STATUSES` in `fabric_struct_layouts.hpp` |
+| A new type in L1 or a stream register | The build: "The manifest names only registered types" | Add it to `RegisteredTypes` in `fabric_manifest_type_registry.hpp` |
+| A new packet header template | The build: "A packet header type fabric can pick isn't in PacketHeaderTypes" | `PacketHeaderTypes` in `fabric_manifest_type_registry.hpp` |
+| A registered template whose argument equals its default | The build: "A registered type's name lost a template argument that equals its default" | A `manifest_type_name` specialization next to the existing two |
+| Two registered types with one name in different namespaces | The build: "Two registered types have the same name without their namespaces" | A `manifest_type_name` specialization for one of them |
 | New field category, field kind, Z port role or channel status | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` |
 | New label key (a key whose value is one of a fixed set of names) | Nothing | A list in `k_vocabulary_lists` (`fabric_manifest_model.hpp`), and the same name in the schema's `vocabulary` |
 | New computed fact | Nothing | The model, the router pass or topology pass, the writer, the tests, the schema, and that pass's doc |
@@ -177,7 +212,7 @@ express meshes on four ranks), the schema check on every manifest they write, an
 manifests.
 - The manifest fixtures (`Manifest*Fixture` in `fabric_unit_tests`) are named outside hardware CI's fabric filters, so CI runs them only on mock clusters. On hardware they run by name, for example
 `fabric_unit_tests --gtest_filter='Manifest2DFixture.*'`.
-- `tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py` checks any manifest against the schema, and checks that `types` holds exactly what its schemas reach. It needs `jsonschema`:
+- `tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py` checks any manifest against the schema. It needs `jsonschema`:
   ```bash
   python3 tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py generated/fabric
   ```
@@ -190,13 +225,23 @@ that rank wrote, which names it back:
 
 ## Limits and future work
 
+**Only the manifest is built.**
+
+Capture, decode, join and the visualizer are designed around the manifest but not built yet. "Where it fits" above
+says what each takes from it.
+
+**Ring buffer slots are raw bytes.**
+
+A slot starts with the run's packet header, which `fabric.packet_header` names, and the rest is payload. Typing each
+slot as that header lets decode read every packet in flight without being told the header type separately.
+
 **UDM isn't described.**
 
 A UDM run (`fabric.config.udm_mode`) writes a manifest, but leaves out what UDM adds:
 
 - The tensix mux and relay cores, and their L1.
 - A receiver's path into its relay, and which routers have a relay.
-- The `UDMControlFields` that follow each packet's header. `fabric.packet_header` describes the header type before them.
+- The `UDMControlFields` that follow each packet's header. `fabric.packet_header` names the header type before them.
 
 The VC0 worker channel's `producer` can also be wrong: it reads `"worker"` even where a tensix mux feeds the channel.
 
