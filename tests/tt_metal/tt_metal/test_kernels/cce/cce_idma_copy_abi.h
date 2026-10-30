@@ -6,13 +6,15 @@
 
 #include <stdint.h>
 
+#include "cce_test_status_abi.h"
+
 // cce_idma_copy kernel ABI. The kernels (cce_idma_copy.cpp, cce_idma_gddr_round_trip.cpp) and the host tests that run
 // them (dram/test_mimir_{atomics,dm_cache,dm_idma,local_dram,trid}.cpp, context/test_mimir_emu.cpp) include it.
 // Args, modes, kinds, polls, codes and status words are append-only: a later stage adds entries after the last one and
 // never renumbers.
 namespace cce_idma_copy_abi {
 
-inline constexpr uint32_t kLineBytes = 64;
+using cce_test_status_abi::kLineBytes;
 
 // Runtime args. kArgStatusOffset is a 64 B aligned offset in the kernel's own TL1. kArgPollBudget* is rdcycle cycles
 // per bounded poll and must be nonzero. kArgExpectedXor is the XOR of the source words (kModeIdmaCopyHostVerified).
@@ -117,13 +119,16 @@ inline constexpr uint32_t kTrid = 0;
 // kStatusLastPollReady is 1 if it succeeded, 0 if it used its budget. After an XOR poll that timed out,
 // kStatusMismatchedWords is 1 and kStatusObserved / kStatusExpected hold the destination XOR and kArgExpectedXor.
 // kStatusVcSpaceCycles sums the VC space polls, one per element. kStatusElementsIssued counts the commands issued.
-inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusFlags = 2, kStatusMismatchedWords = 3,
-                          kStatusFirstMismatchWord = 4, kStatusObserved = 5, kStatusExpected = 6,
-                          kStatusVcSpaceCycles = 7, kStatusAckCycles = 8, kStatusDataCycles = 9, kStatusLastPoll = 10,
-                          kStatusLastPollReady = 11, kStatusElementsIssued = 12, kStatusPendingHighWater = 13,
-                          kStatusProbeFirst = 14, kStatusProbeSecond = 15, kStatusWords = 16;
+using cce_test_status_abi::kStatusCode;
+using cce_test_status_abi::kStatusMagic;
+inline constexpr uint32_t kStatusFlags = 2, kStatusMismatchedWords = 3, kStatusFirstMismatchWord = 4,
+                          kStatusObserved = 5, kStatusExpected = 6, kStatusVcSpaceCycles = 7, kStatusAckCycles = 8,
+                          kStatusDataCycles = 9, kStatusLastPoll = 10, kStatusLastPollReady = 11,
+                          kStatusElementsIssued = 12, kStatusPendingHighWater = 13, kStatusProbeFirst = 14,
+                          kStatusProbeSecond = 15, kStatusWords = 16;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
-inline constexpr uint32_t kDoneMagic = 0x1D3AC0DEu, kStatusPoison = 0xBADD0E00u;
+inline constexpr uint32_t kDoneMagic = 0x1D3AC0DEu;
+using cce_test_status_abi::kStatusPoison;
 inline constexpr uint32_t kFlagVcSpace = 1u << 0, kFlagAcked = 1u << 1, kFlagLanded = 1u << 2;
 inline constexpr uint32_t kPollNone = 0, kPollVcSpace = 1, kPollAck = 2, kPollData = 3, kPollPeer = 4;
 

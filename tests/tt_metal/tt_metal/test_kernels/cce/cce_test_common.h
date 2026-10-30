@@ -10,6 +10,8 @@
 #include "experimental/cce_hart.h"
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 
+#include "cce_test_status_abi.h"
+
 namespace cce_test {
 
 using experimental::cce_hart::arg_u64;
@@ -19,6 +21,7 @@ using experimental::cce_hart::wait_until;
 using experimental::cce_hart::WaitDeadline;
 
 inline constexpr uint32_t kLineBytes = L2_CACHE_LINE_SIZE;
+static_assert(kLineBytes == cce_test_status_abi::kLineBytes);
 
 inline __attribute__((always_inline)) void copy_words(
     volatile uint32_t* dst, const volatile uint32_t* src, uint32_t num_words, uint32_t& xor_accumulator) {

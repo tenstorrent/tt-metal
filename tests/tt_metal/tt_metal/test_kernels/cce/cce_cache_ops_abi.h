@@ -6,11 +6,13 @@
 
 #include <stdint.h>
 
+#include "cce_test_status_abi.h"
+
 // cce_cache_ops kernel ABI. The kernel (cce_cache_ops.cpp) and the host (dram/test_mimir_dm_cache.cpp) both include it.
 // Args, modes and codes are append-only: a later stage adds fields after the last one and never renumbers.
 namespace cce_cache_ops_abi {
 
-inline constexpr uint32_t kLineBytes = 64;
+using cce_test_status_abi::kLineBytes;
 
 // Runtime args. kArgStatusOffset is a 64 B aligned offset in the kernel's own TL1. kArgDataOffset is a hart-local TL1
 // offset in a data area. The host pre-fills word i with kArgOldValue + i; the kernel writes kArgValue + i. The store
@@ -196,12 +198,15 @@ constexpr uint32_t churn_word(uint32_t value, uint32_t round, uint32_t word) { r
 // once the hart saw the flag it waits for within its budget. kStatusCycles is the rdcycle count of the mode's work.
 // kStatusRegisterA/B/C are per-mode values, described with the mode. kStatusPasses counts an MM41 mode's completed
 // passes or rounds.
-inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusUncachedBefore = 2, kStatusStaleBefore = 3,
-                          kStatusMatches = 4, kStatusFirstMismatchWord = 5, kStatusObserved = 6, kStatusFlagReady = 7,
-                          kStatusCycles = 8, kStatusCachedBefore = 9, kStatusWarmOld = 10, kStatusRegisterA = 11,
-                          kStatusRegisterB = 12, kStatusRegisterC = 13, kStatusPasses = 14, kStatusWords = 15;
+using cce_test_status_abi::kStatusCode;
+using cce_test_status_abi::kStatusMagic;
+inline constexpr uint32_t kStatusUncachedBefore = 2, kStatusStaleBefore = 3, kStatusMatches = 4,
+                          kStatusFirstMismatchWord = 5, kStatusObserved = 6, kStatusFlagReady = 7, kStatusCycles = 8,
+                          kStatusCachedBefore = 9, kStatusWarmOld = 10, kStatusRegisterA = 11, kStatusRegisterB = 12,
+                          kStatusRegisterC = 13, kStatusPasses = 14, kStatusWords = 15;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
-inline constexpr uint32_t kDoneMagic = 0xCAC4E0DEu, kStatusPoison = 0xBADD0E00u;
+inline constexpr uint32_t kDoneMagic = 0xCAC4E0DEu;
+using cce_test_status_abi::kStatusPoison;
 
 // kCodeWipeTimeout: FULLINVALIDATE never read 0 (kModeWipeFull). kCodeDataTimeout: a data poll used its budget.
 // kCodeRaceUnresolved: kModeDirtyRace never read the external words. kCodePeerTimeout: kModeExternalReader never read

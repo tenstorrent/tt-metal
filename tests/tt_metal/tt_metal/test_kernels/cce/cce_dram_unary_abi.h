@@ -6,11 +6,13 @@
 
 #include <stdint.h>
 
+#include "cce_test_status_abi.h"
+
 // cce_dram_unary_{reader,writer} kernel ABI. Both kernels and the host (dram/test_mimir_dm_dram_unary.cpp) include it.
 // Args, codes and status words are append-only: a later stage adds entries after the last one and never renumbers.
 namespace cce_dram_unary_abi {
 
-inline constexpr uint32_t kLineBytes = 64;
+using cce_test_status_abi::kLineBytes;
 
 // Runtime args, the same vector for both kernels except kArgStatusOffset. The reader copies chunk c of the GDDR source
 // into staging slot c % num_slots in TL1 and the writer copies that slot to chunk c of the GDDR destination. GDDR
@@ -30,12 +32,15 @@ inline constexpr uint32_t kMaxChunkBytes = 4096, kMaxSlots = 4, kMaxChunks = 64;
 // the chunks the hart finished (staged, or written out). kStatusMaxWaitCycles is the longest semaphore wait. On a wait
 // timeout, kStatusTimedOutChunk is the chunk and kStatusSemaphoreObserved the last semaphore value read. The semaphore
 // addresses are TL1 offsets, and the *AtStart words are both semaphores as the hart read them before its first store.
-inline constexpr uint32_t kStatusMagic = 0, kStatusCode = 1, kStatusChunksDone = 2, kStatusMaxWaitCycles = 3,
-                          kStatusTimedOutChunk = 4, kStatusSemaphoreObserved = 5, kStatusFilledSemaphoreAddress = 6,
+using cce_test_status_abi::kStatusCode;
+using cce_test_status_abi::kStatusMagic;
+inline constexpr uint32_t kStatusChunksDone = 2, kStatusMaxWaitCycles = 3, kStatusTimedOutChunk = 4,
+                          kStatusSemaphoreObserved = 5, kStatusFilledSemaphoreAddress = 6,
                           kStatusDrainedSemaphoreAddress = 7, kStatusFilledAtStart = 8, kStatusDrainedAtStart = 9,
                           kStatusWords = 10;
 static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
-inline constexpr uint32_t kReaderDoneMagic = 0x2EAD0DEu, kWriterDoneMagic = 0x3B17E0DEu, kStatusPoison = 0xBADD0E00u;
+inline constexpr uint32_t kReaderDoneMagic = 0x2EAD0DEu, kWriterDoneMagic = 0x3B17E0DEu;
+using cce_test_status_abi::kStatusPoison;
 
 // kCodeDone: every chunk finished. kCodeWaitTimeout: a semaphore wait used its budget (the reader waits on drained to
 // reuse a slot, the writer on filled). kCodeBadArgs also covers two semaphores on one 64 B line. A hart stops at its
