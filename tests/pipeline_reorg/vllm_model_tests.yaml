@@ -520,8 +520,8 @@
   # prefix but not the whole prompt (the gate's resume) hits nothing; 1024 keeps
   # a window every 1024 tokens (a hit lands up to 1023 tokens short of the shared prefix).
   # VLLM_ENGINE_READY_TIMEOUT_S: the first-use start (TT cache build) runs for hours.
-  # MIMO_APC_DEBUG=1: per-request lane and prefix-cache hit logs (tt/apc_debug.py) while the gate misses.
-  extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400 MIMO_APC_DEBUG=1"
+  # MIMO_APC_DEBUG=1 adds per-request lane and prefix-cache hit logs (tt/apc_debug.py).
+  extra-env: "VLLM_ALLOW_LONG_MAX_MODEL_LEN=1 MIMO_KV_GB_PER_CHIP=6.7 VLLM_ENGINE_READY_TIMEOUT_S=14400"
   coherence-test: true
   # The plugin's lane coordinator builds its lanes with log_stats=False, so
   # vllm:prefix_cache_* never move (run 40908073239: 0 of 0); the gate reads the
