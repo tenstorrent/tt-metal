@@ -281,28 +281,21 @@ std::vector<uint32_t> copy_args(uint32_t cce_index, const HartCopy& copy, const 
          .poll_region_bytes = poll_region.num_bytes});
 }
 
-// Poisons every copy's status line, runs them all on `cce_index` in one Program and returns their status lines in copy
-// order; nullopt on the host deadline.
-std::optional<std::vector<std::vector<uint32_t>>> run_hart_copies(
+// Runs every copy on `cce_index` in one Program and returns their status lines in copy order; none on the host
+// deadline.
+CceStatuses run_hart_copies(
     IDevice* device, uint32_t cce_index, const std::vector<HartCopy>& copies, const PollRegion& poll_region) {
     std::vector<CceKernelLaunch> launches;
     for (const HartCopy& copy : copies) {
-        write_cce_tl1(
-            device, cce_index, tl1_done_block(copy.hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
         launches.push_back(
             {.cce_index = cce_index,
              .kernel_path = kIdmaCopyKernel,
              .runtime_args = copy_args(cce_index, copy, poll_region),
-             .hart = copy.hart});
+             .hart = copy.hart,
+             .status_line = kIdmaCopyStatusLine});
     }
     Program program = CreateProgram();
-    return run_cce_kernels_with_deadline(
-        device,
-        program,
-        launches,
-        std::vector<uint32_t>(launches.size(), abi::kDoneMagic),
-        abi::kStatusWords,
-        kHostDeadline);
+    return run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
 }
 
 std::string code_name(uint32_t code) {
@@ -466,10 +459,8 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
             }
 
             const std::string label = fmt::format("cce {} view {} {}", cce_index, view, anchor.name);
-            const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-                run_hart_copies(device, cce_index, copies, PollRegion{});
-            ASSERT_TRUE(statuses.has_value())
-                << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+            const CceStatuses statuses = run_hart_copies(device, cce_index, copies, PollRegion{});
+            ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
             for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
                 const std::string where = describe_location(
                     device, soc, cce_index, hart, view, anchor, data_offsets[hart], region_bytes_for_hart(hart));
@@ -545,10 +536,9 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
             }
 
             const std::string label = fmt::format("cce {} view {} {}", cce_index, view, anchor.name);
-            const std::optional<std::vector<std::vector<uint32_t>>> statuses =
+            const CceStatuses statuses =
                 run_hart_copies(device, cce_index, copies, poll_region_over(shared_destination_tl1(), expected_blocks));
-            ASSERT_TRUE(statuses.has_value())
-                << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+            ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
             for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
                 const std::string where = describe_location(
                     device, soc, cce_index, hart, view, anchor, data_offsets[hart], region_bytes_for_hart(hart));
@@ -642,10 +632,9 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
             }
 
             const std::string label = fmt::format("cce {} view {} {}", cce_index, view, anchor.name);
-            const std::optional<std::vector<std::vector<uint32_t>>> read_statuses = run_hart_copies(
+            const CceStatuses read_statuses = run_hart_copies(
                 device, cce_index, reads, poll_region_over(shared_destination_tl1(), intermediate_blocks));
-            ASSERT_TRUE(read_statuses.has_value())
-                << label << " read: no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+            ASSERT_TRUE(read_statuses.has_value()) << label << " read: " << read_statuses.no_status();
             for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
                 const std::string source_where = describe_location(
                     device, soc, cce_index, hart, view, anchor, source_offsets[hart], region_bytes_for_hart(hart));
@@ -658,10 +647,8 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
             }
             ASSERT_TRUE(copies_completed(reads, *read_statuses, label + " read"));
 
-            const std::optional<std::vector<std::vector<uint32_t>>> write_statuses =
-                run_hart_copies(device, cce_index, writes, PollRegion{});
-            ASSERT_TRUE(write_statuses.has_value())
-                << label << " write: no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+            const CceStatuses write_statuses = run_hart_copies(device, cce_index, writes, PollRegion{});
+            ASSERT_TRUE(write_statuses.has_value()) << label << " write: " << write_statuses.no_status();
             for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
                 const uint32_t region_bytes = region_bytes_for_hart(hart);
                 const std::string source_where =
@@ -761,10 +748,8 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
                         .num_bytes = size_bytes});
                 }
                 const std::string label = fmt::format("cce {} view {} disjoint {}", cce_index, view, case_label);
-                const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-                    run_hart_copies(device, cce_index, copies, PollRegion{});
-                ASSERT_TRUE(statuses.has_value())
-                    << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+                const CceStatuses statuses = run_hart_copies(device, cce_index, copies, PollRegion{});
+                ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
                 for (uint32_t hart = 0; hart < harts; ++hart) {
                     const std::string where =
                         describe_location(device, soc, cce_index, hart, view, anchor, data_offsets[hart], size_bytes) +
@@ -791,10 +776,8 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
                         .host_verified = true});
                 }
                 const std::string shared_label = fmt::format("cce {} view {} shared {}", cce_index, view, case_label);
-                const std::optional<std::vector<std::vector<uint32_t>>> shared_statuses =
-                    run_hart_copies(device, cce_index, shared_copies, PollRegion{});
-                ASSERT_TRUE(shared_statuses.has_value())
-                    << shared_label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+                const CceStatuses shared_statuses = run_hart_copies(device, cce_index, shared_copies, PollRegion{});
+                ASSERT_TRUE(shared_statuses.has_value()) << shared_label << ": " << shared_statuses.no_status();
                 std::vector<uint32_t> shared_block;
                 read_guarded_dram(session.mesh(), view, first_data_offset, size_bytes, shared_block);
                 EXPECT_TRUE(shared_block_matches(
@@ -935,10 +918,8 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
                                : PollRegion{};
                 const std::string label =
                     fmt::format("cce {} view {} {} repeat {} op {}", cce_index, view, anchor.name, repeat, op);
-                const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-                    run_hart_copies(device, cce_index, ops[op], poll_region);
-                ASSERT_TRUE(statuses.has_value())
-                    << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+                const CceStatuses statuses = run_hart_copies(device, cce_index, ops[op], poll_region);
+                ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
                 for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
                     const std::string where =
                         describe_location(

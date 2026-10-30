@@ -36,9 +36,10 @@ namespace tt::tt_metal::mimir_test::atomics {
 
 namespace abi = cce_amo_ops_abi;
 namespace idma_abi = cce_idma_copy_abi;
-static_assert(abi::kStatusWords == idma_abi::kStatusWords, "one Program reads both kernels' status lines");
 
 inline constexpr const char* kAmoOpsKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_amo_ops.cpp";
+inline constexpr CceStatusLine kAmoStatusLine{
+    .done_magic = abi::kDoneMagic, .num_words = abi::kStatusWords, .poison = abi::kStatusPoison};
 // One poll budget for the ready wait and one for the done wait, plus launch. The later cce_amo_ops modes and
 // cce_idma_copy share one budget per launch; the long ones take kLongBudgetCycles, four poll budgets.
 inline constexpr std::chrono::seconds kHostDeadline{300};
@@ -377,56 +378,29 @@ IdmaBatch own_accumulate(uint32_t cce_index, uint32_t hart) {
         .destination_offset = tl1_data(hart) + kAccumulateDestinationFromData};
 }
 
-struct ProgramLaunches {
-    std::vector<CceKernelLaunch> kernels;
-    std::vector<uint32_t> done_magics;
-};
-
-void add_amo_kernel(IDevice* device, const AmoLaunch& launch, ProgramLaunches& launches) {
-    write_cce_tl1(
-        device,
-        launch.cce_index,
-        tl1_done_block(launch.hart),
-        std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
-    launches.kernels.push_back(
-        {.cce_index = launch.cce_index,
-         .kernel_path = kAmoOpsKernel,
-         .runtime_args = amo_args(launch),
-         .hart = launch.hart});
-    launches.done_magics.push_back(abi::kDoneMagic);
+CceKernelLaunch idma_kernel(const IdmaBatch& batch) {
+    return {
+        .cce_index = batch.cce_index,
+        .kernel_path = kIdmaCopyKernel,
+        .runtime_args = idma_args(batch),
+        .hart = batch.hart,
+        .status_line = kIdmaCopyStatusLine};
 }
 
-void add_idma_kernel(IDevice* device, const IdmaBatch& batch, ProgramLaunches& launches) {
-    write_cce_tl1(
-        device,
-        batch.cce_index,
-        tl1_done_block(batch.hart),
-        std::vector<uint32_t>(idma_abi::kStatusWords, idma_abi::kStatusPoison));
-    launches.kernels.push_back(
-        {.cce_index = batch.cce_index,
-         .kernel_path = kIdmaCopyKernel,
-         .runtime_args = idma_args(batch),
-         .hart = batch.hart});
-    launches.done_magics.push_back(idma_abi::kDoneMagic);
-}
-
-// Runs one Program; each status line in launch order, or nullopt after an ADD_FAILURE on the host deadline.
-std::optional<std::vector<std::vector<uint32_t>>> run_program(
-    IDevice* device, const ProgramLaunches& launches, const std::string& label) {
+// Runs one Program; each status line in launch order, or none after an ADD_FAILURE on the host deadline.
+CceStatuses run_program(IDevice* device, const std::vector<CceKernelLaunch>& launches, const std::string& label) {
     log_info(tt::LogTest, "MM42 {}", label);
     Program program = CreateProgram();
-    std::optional<std::vector<std::vector<uint32_t>>> statuses = run_cce_kernels_with_deadline(
-        device, program, launches.kernels, launches.done_magics, abi::kStatusWords, kHostDeadline);
+    CceStatuses statuses = run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
     if (!statuses.has_value()) {
-        ADD_FAILURE() << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+        ADD_FAILURE() << label << ": " << statuses.no_status();
     }
     return statuses;
 }
 
 // Zeroes the flag lines of every distinct (CCE, flag offset), then runs the launches as one Program.
-std::optional<std::vector<std::vector<uint32_t>>> run_amo(
-    IDevice* device, const std::vector<AmoLaunch>& launches, const std::string& label) {
-    ProgramLaunches program_launches;
+CceStatuses run_amo(IDevice* device, const std::vector<AmoLaunch>& launches, const std::string& label) {
+    std::vector<CceKernelLaunch> program_launches;
     std::set<std::pair<uint32_t, uint64_t>> zeroed;
     for (const AmoLaunch& launch : launches) {
         if (launch.flag_offset != 0 && zeroed.insert({launch.cce_index, launch.flag_offset}).second) {
@@ -436,7 +410,12 @@ std::optional<std::vector<std::vector<uint32_t>>> run_amo(
                 launch.flag_offset,
                 std::vector<uint32_t>(2 * abi::kMaxParticipants * abi::kLineBytes / sizeof(uint32_t), 0));
         }
-        add_amo_kernel(device, launch, program_launches);
+        program_launches.push_back(
+            {.cce_index = launch.cce_index,
+             .kernel_path = kAmoOpsKernel,
+             .runtime_args = amo_args(launch),
+             .hart = launch.hart,
+             .status_line = kAmoStatusLine});
     }
     return run_program(device, program_launches, label);
 }
@@ -688,9 +667,12 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
         args[abi::kArgFlagOffset] = static_cast<uint32_t>(flag_offset);
         args[abi::kArgNumParticipants] = kNumHarts;
         args[abi::kArgParticipant] = hart;
-        write_cce_tl1(
-            device, cce_index, tl1_done_block(hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
-        launches.push_back({.cce_index = cce_index, .kernel_path = kAmoOpsKernel, .runtime_args = args, .hart = hart});
+        launches.push_back(
+            {.cce_index = cce_index,
+             .kernel_path = kAmoOpsKernel,
+             .runtime_args = args,
+             .hart = hart,
+             .status_line = kAmoStatusLine});
     }
     const std::string label = fmt::format(
         "TwoHartAmo on CCE{}: harts 0-{}, {} amoadd.w and {} LR/SC adds of {} each, seed 0x{:08x}",
@@ -702,15 +684,8 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
         seed);
     log_info(tt::LogTest, "MM42 {}", label);
     Program program = CreateProgram();
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_cce_kernels_with_deadline(
-        device,
-        program,
-        launches,
-        std::vector<uint32_t>(launches.size(), abi::kDoneMagic),
-        abi::kStatusWords,
-        kHostDeadline);
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+    const CceStatuses statuses = run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
 
     uint32_t amo_return_sum = 0;
     uint32_t lrsc_return_sum = 0;
@@ -808,7 +783,7 @@ void run_sweep_leg(IDevice* device, uint32_t cce_index, const SweepLeg& leg, uin
         launch.stride_bytes = leg.stride_bytes;
         launch.budget_cycles = kLongBudgetCycles;
     }
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_amo(device, launches, label);
+    const CceStatuses statuses = run_amo(device, launches, label);
     if (!statuses.has_value()) {
         return;
     }
@@ -956,7 +931,7 @@ TEST_P(MimirAtomicLocal, OpMatrix) {
     launch.num_points = num_entries;
     const std::string label =
         fmt::format("OpMatrix on CCE{}: {} operations, seed 0x{:08x}", cce_index, num_entries, seed);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_amo(device, {launch}, label);
+    const CceStatuses statuses = run_amo(device, {launch}, label);
     ASSERT_TRUE(statuses.has_value());
     expect_codes_done(*statuses, {launch}, label);
 
@@ -1144,7 +1119,7 @@ TEST_P(MimirAtomicLocal, Ordering) {
             launch.leg = leg;
             launch.seed = seed;
         }
-        const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_amo(device, launches, label);
+        const CceStatuses statuses = run_amo(device, launches, label);
         if (!statuses.has_value()) {
             return;
         }
@@ -1173,7 +1148,7 @@ std::vector<uint32_t> run_line_state(
     launch.leg = leg;
     launch.value = value;
     launch.seed = seed;
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_amo(device, {launch}, label);
+    const CceStatuses statuses = run_amo(device, {launch}, label);
     if (!statuses.has_value()) {
         return {};
     }
@@ -1315,10 +1290,7 @@ TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
         .len_bytes = abi::kLineBytes,
         .snoop = 1,
         .host_verified = 1};
-    ProgramLaunches writer_launch;
-    add_idma_kernel(device, writer, writer_launch);
-    const std::optional<std::vector<std::vector<uint32_t>>> writer_status =
-        run_program(device, writer_launch, label + " iDMA write");
+    const CceStatuses writer_status = run_program(device, {idma_kernel(writer)}, label + " iDMA write");
     ASSERT_TRUE(writer_status.has_value());
     const uint32_t writer_code = writer_status->front()[idma_abi::kStatusCode];
     record_leg("writer", "status", idma_status_detail(writer_status->front()));
@@ -1459,7 +1431,7 @@ void run_storm_leg(
         launch.seed = seed;
         launch.budget_cycles = kLongBudgetCycles;
     }
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_amo(device, launches, label);
+    const CceStatuses statuses = run_amo(device, launches, label);
     if (!statuses.has_value()) {
         return;
     }
@@ -1600,7 +1572,7 @@ TEST_P(MimirAtomicLocal, NeighbourWriteRace) {
         launch.value = kValue;
         launch.seed = seed;
     }
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_amo(device, launches, label);
+    const CceStatuses statuses = run_amo(device, launches, label);
     ASSERT_TRUE(statuses.has_value());
     expect_codes_done(*statuses, launches, label);
     const std::vector<uint32_t>& amo_status = statuses->front();
@@ -1679,7 +1651,7 @@ TEST_P(MimirAtomicItnControl, Cce0ToCce1PlainWrite) {
             .target_offset = layout.target,
             .flag_offset = layout.flags,
             .value = kValue}};
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_amo(device, launches, label);
+    const CceStatuses statuses = run_amo(device, launches, label);
     ASSERT_TRUE(statuses.has_value());
     expect_codes_done(*statuses, launches, label);
     const std::vector<uint32_t>& receiver = (*statuses)[1];
@@ -1814,9 +1786,7 @@ TEST_P(MimirAccumProbe, FmtOpMatrix) {
             "{}_op{}_sat{}", format_name(point.format), point.operation, point.disable_saturation ? "off" : "on");
         const std::string label = fmt::format("FmtOpMatrix {}: {}", point_name, batch_config(batch, seed));
         write_accumulate_operands(device, batch, source, initial, tag);
-        ProgramLaunches launches;
-        add_idma_kernel(device, batch, launches);
-        const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_program(device, launches, label);
+        const CceStatuses statuses = run_program(device, {idma_kernel(batch)}, label);
         ASSERT_TRUE(statuses.has_value());
         const std::vector<uint32_t>& status = statuses->front();
         const uint32_t code = status[idma_abi::kStatusCode];
@@ -1865,11 +1835,11 @@ class MimirAtomicIdmaAccum : public MimirAtomicCceTest {};
 
 // Runs the batches as one Program and checks every kernel landed. The batches must have their expected values set.
 bool run_accumulate(IDevice* device, const std::vector<IdmaBatch>& batches, const std::string& label) {
-    ProgramLaunches launches;
+    std::vector<CceKernelLaunch> launches;
     for (const IdmaBatch& batch : batches) {
-        add_idma_kernel(device, batch, launches);
+        launches.push_back(idma_kernel(batch));
     }
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_program(device, launches, label);
+    const CceStatuses statuses = run_program(device, launches, label);
     if (!statuses.has_value()) {
         return false;
     }
@@ -2073,9 +2043,7 @@ TEST_P(MimirAtomicIdmaAccum, MaxOutstanding) {
     const std::string label = "MaxOutstanding: " + batch_config(batch, seed);
     RecordProperty("config", label);
     write_accumulate_operands(device, batch, source, initial, 1);
-    ProgramLaunches launches;
-    add_idma_kernel(device, batch, launches);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_program(device, launches, label);
+    const CceStatuses statuses = run_program(device, {idma_kernel(batch)}, label);
     ASSERT_TRUE(statuses.has_value());
     const std::vector<uint32_t>& status = statuses->front();
     const uint32_t code = status[idma_abi::kStatusCode];

@@ -40,6 +40,10 @@ namespace abi = cce_dram_unary_abi;
 
 inline constexpr const char* kReaderKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_dram_unary_reader.cpp";
 inline constexpr const char* kWriterKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_dram_unary_writer.cpp";
+inline constexpr CceStatusLine kReaderStatusLine{
+    .done_magic = abi::kReaderDoneMagic, .num_words = abi::kStatusWords, .poison = abi::kStatusPoison};
+inline constexpr CceStatusLine kWriterStatusLine{
+    .done_magic = abi::kWriterDoneMagic, .num_words = abi::kStatusWords, .poison = abi::kStatusPoison};
 inline constexpr uint32_t kReaderHart = 0;
 inline constexpr uint32_t kWriterHart = 1;
 // Upstream's Quasar directed case is 4 transactions; two slots make the reader wait on drained for chunks 2 and 3.
@@ -148,12 +152,14 @@ std::vector<CceKernelLaunch> launches_for(const DramUnaryLayout& layout, const S
             .cce_index = layout.cce_index,
             .kernel_path = kReaderKernel,
             .runtime_args = kernel_args(layout, semaphores, tl1_done_block(kReaderHart)),
-            .hart = kReaderHart},
+            .hart = kReaderHart,
+            .status_line = kReaderStatusLine},
         CceKernelLaunch{
             .cce_index = layout.cce_index,
             .kernel_path = kWriterKernel,
             .runtime_args = kernel_args(layout, semaphores, tl1_done_block(kWriterHart)),
-            .hart = kWriterHart}};
+            .hart = kWriterHart,
+            .status_line = kWriterStatusLine}};
 }
 
 // Where the runtime writes the semaphore's initial value at launch (ProgramImpl::init_semaphores). Valid once the
@@ -268,10 +274,6 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
         device_closer.mesh(), layout.view, layout.destination_view_offset - kGuardBytes, destination_leading_guard);
     write_cce_tl1(device, cce_index, layout.staging_offset, staging_fill);
     write_cce_tl1(device, cce_index, layout.staging_offset - kGuardBytes, staging_leading_guard);
-    for (const uint32_t hart : {kReaderHart, kWriterHart}) {
-        write_cce_tl1(
-            device, cce_index, tl1_done_block(hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
-    }
 
     const CceSpaRoutes routes = mimir_contract::read_cce_spa_routes(device, layout.cce_index);
     const std::string source_label =
@@ -324,8 +326,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     for (const uint64_t semaphore_offset : {filled_offset, drained_offset}) {
         write_cce_tl1(device, cce_index, semaphore_offset, {kSemaphorePrefill}, Tl1Range::WholeTl1);
     }
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = launch_and_wait_for_statuses(
-        device, program, launches, {abi::kReaderDoneMagic, abi::kWriterDoneMagic}, abi::kStatusWords, kHostDeadline);
+    const CceStatuses statuses = launch_and_wait_for_statuses(device, program, launches, kHostDeadline);
     if (!statuses.has_value()) {
         const std::vector<uint32_t> reader_line =
             read_cce_tl1(device, cce_index, tl1_done_block(kReaderHart), abi::kStatusWords * sizeof(uint32_t));

@@ -421,7 +421,6 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
     write_endpoint(unit_mesh, device, leg.source, source_words);
     write_endpoint(unit_mesh, device, leg.destination, poison_and_guard);
     write_endpoint(unit_mesh, device, leading_guard_of(leg.destination), leading_guard);
-    write_cce_tl1(device, leg.cce_index, status_offset, std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
 
     const CoreCoord translated_core = translated_dram_core(soc, leg.cce_index);
     const CceSpaRoutes issuer_routes = mimir_contract::read_cce_spa_routes(device, leg.cce_index);
@@ -467,10 +466,10 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
         .cce_index = leg.cce_index,
         .kernel_path = kIdmaCopyKernel,
         .runtime_args = kernel_args(soc, leg, status_offset, xor_of(expected)),
-        .hart = kCopyHart};
+        .hart = kCopyHart,
+        .status_line = kIdmaCopyStatusLine};
     Program program = CreateProgram();
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-        run_cce_kernels_with_deadline(device, program, {launch}, {abi::kDoneMagic}, abi::kStatusWords, kHostDeadline);
+    const CceStatuses statuses = run_cce_kernels_with_deadline(device, program, {launch}, kHostDeadline);
     if (!statuses.has_value()) {
         const std::string timeout = fmt::format("no status after {} s (host deadline)", kHostDeadline.count());
         record_leg(leg.name, "status", timeout);

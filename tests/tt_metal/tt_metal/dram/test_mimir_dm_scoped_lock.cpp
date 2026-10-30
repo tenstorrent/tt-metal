@@ -42,6 +42,10 @@ namespace abi = cce_scoped_lock_abi;
 
 inline constexpr const char* kProducerKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_scoped_lock_producer.cpp";
 inline constexpr const char* kConsumerKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_scoped_lock_consumer.cpp";
+inline constexpr CceStatusLine kProducerStatusLine{
+    .done_magic = abi::kProducerDoneMagic, .num_words = abi::kStatusWords, .poison = abi::kStatusPoison};
+inline constexpr CceStatusLine kConsumerStatusLine{
+    .done_magic = abi::kConsumerDoneMagic, .num_words = abi::kStatusWords, .poison = abi::kStatusPoison};
 inline constexpr uint32_t kLockCce = 0;
 inline constexpr uint32_t kProducerHart = 0;
 inline constexpr uint32_t kConsumerHart = 1;
@@ -236,10 +240,6 @@ TEST_P(MimirDmScopedLockClm, CacheOps) {
     write_cce_tl1(device, kLockCce, layout.result_offset, result_fill);
     write_cce_tl1(device, kLockCce, layout.warmed_flag_offset, zero_line);
     write_cce_tl1(device, kLockCce, layout.published_flag_offset, zero_line);
-    for (const uint32_t hart : {kProducerHart, kConsumerHart}) {
-        write_cce_tl1(
-            device, kLockCce, tl1_done_block(hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
-    }
 
     const bool invalidate_mode = params.mode == abi::kModeInvalidateOnAcquire;
     const std::string region_label = fmt::format(
@@ -292,21 +292,21 @@ TEST_P(MimirDmScopedLockClm, CacheOps) {
     }
 
     Program program = CreateProgram();
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_cce_kernels_with_deadline(
+    const CceStatuses statuses = run_cce_kernels_with_deadline(
         device,
         program,
         {CceKernelLaunch{
              .cce_index = kLockCce,
              .kernel_path = kProducerKernel,
              .runtime_args = kernel_args(params, layout, tl1_done_block(kProducerHart)),
-             .hart = kProducerHart},
+             .hart = kProducerHart,
+             .status_line = kProducerStatusLine},
          CceKernelLaunch{
              .cce_index = kLockCce,
              .kernel_path = kConsumerKernel,
              .runtime_args = kernel_args(params, layout, tl1_done_block(kConsumerHart)),
-             .hart = kConsumerHart}},
-        {abi::kProducerDoneMagic, abi::kConsumerDoneMagic},
-        abi::kStatusWords,
+             .hart = kConsumerHart,
+             .status_line = kConsumerStatusLine}},
         kHostDeadline);
     if (!statuses.has_value()) {
         const std::string timeout = fmt::format(
@@ -407,7 +407,7 @@ struct LockKernel {
     uint32_t hart = kCceKernelHart;
     const char* kernel_path = kProducerKernel;
     std::vector<uint32_t> args;
-    uint32_t done_magic = abi::kProducerDoneMagic;
+    CceStatusLine status_line = kProducerStatusLine;
 };
 
 std::vector<uint32_t> mm41_lock_args(uint32_t mode, uint64_t region_offset, uint32_t hart) {
@@ -420,26 +420,19 @@ std::vector<uint32_t> mm41_lock_args(uint32_t mode, uint64_t region_offset, uint
     return args;
 }
 
-// Runs every kernel in one Program and returns each status line in launch order; nullopt on the host deadline.
-std::optional<std::vector<std::vector<uint32_t>>> run_lock_kernels(
-    IDevice* device, const std::vector<LockKernel>& kernels) {
+// Runs every kernel in one Program and returns each status line in launch order; none on the host deadline.
+CceStatuses run_lock_kernels(IDevice* device, const std::vector<LockKernel>& kernels) {
     std::vector<CceKernelLaunch> launches;
-    std::vector<uint32_t> done_magics;
     for (const LockKernel& kernel : kernels) {
-        write_cce_tl1(
-            device,
-            kernel.cce_index,
-            tl1_done_block(kernel.hart),
-            std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
         launches.push_back(
             {.cce_index = kernel.cce_index,
              .kernel_path = kernel.kernel_path,
              .runtime_args = kernel.args,
-             .hart = kernel.hart});
-        done_magics.push_back(kernel.done_magic);
+             .hart = kernel.hart,
+             .status_line = kernel.status_line});
     }
     Program program = CreateProgram();
-    return run_cce_kernels_with_deadline(device, program, launches, done_magics, abi::kStatusWords, kHostDeadline);
+    return run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
 }
 
 std::string mm41_lock_detail(const std::vector<uint32_t>& status) {
@@ -534,7 +527,7 @@ TEST_P(MimirCacheScopedLock, MultiConsumer) {
              .hart = hart,
              .kernel_path = kConsumerKernel,
              .args = args,
-             .done_magic = abi::kConsumerDoneMagic});
+             .status_line = kConsumerStatusLine});
     }
     const std::string label = fmt::format(
         "MultiConsumer on CCE{}: producer hart {}, consumers harts 1-{}, region TL1 0x{:x}, locked lines {}..{}",
@@ -545,9 +538,8 @@ TEST_P(MimirCacheScopedLock, MultiConsumer) {
         params.lock_first_line,
         params.lock_first_line + params.lock_num_lines - 1);
     log_info(tt::LogTest, "MM41 scoped lock {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_lock_kernels(device, kernels);
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+    const CceStatuses statuses = run_lock_kernels(device, kernels);
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     const std::vector<uint32_t>& producer = statuses->front();
     log_info(tt::LogTest, "MM41 scoped lock {}: producer {}", label, mm41_lock_detail(producer));
     RecordProperty(
@@ -626,16 +618,15 @@ TEST_P(MimirCacheScopedLock, RingWrap) {
         region_offset,
         kRingRounds);
     log_info(tt::LogTest, "MM41 scoped lock {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_lock_kernels(
+    const CceStatuses statuses = run_lock_kernels(
         device,
         {{.cce_index = cce_index, .hart = kProducerHart, .args = producer_args},
          {.cce_index = cce_index,
           .hart = kConsumerHart,
           .kernel_path = kConsumerKernel,
           .args = consumer_args,
-          .done_magic = abi::kConsumerDoneMagic}});
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+          .status_line = kConsumerStatusLine}});
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     const std::vector<uint32_t>& producer = (*statuses)[0];
     const std::vector<uint32_t>& consumer = (*statuses)[1];
     log_info(
@@ -703,16 +694,15 @@ TEST_P(MimirCacheScopedLock, NonSnoopingProducer) {
         params.lock_first_line,
         params.lock_first_line + params.lock_num_lines - 1);
     log_info(tt::LogTest, "MM41 scoped lock {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_lock_kernels(
+    const CceStatuses statuses = run_lock_kernels(
         device,
         {{.cce_index = producer_cce, .hart = kProducerHart, .args = producer_args},
          {.cce_index = cce_index,
           .hart = kConsumerHart,
           .kernel_path = kConsumerKernel,
           .args = consumer_args,
-          .done_magic = abi::kConsumerDoneMagic}});
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+          .status_line = kConsumerStatusLine}});
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     const std::vector<uint32_t>& producer = (*statuses)[0];
     const std::vector<uint32_t>& consumer = (*statuses)[1];
     log_info(

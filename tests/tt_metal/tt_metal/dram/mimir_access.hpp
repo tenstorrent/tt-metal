@@ -436,6 +436,7 @@ struct CceKernelLaunch {
     std::string kernel_path;
     std::vector<uint32_t> runtime_args;
     uint32_t hart = kCceKernelHart;
+    CceStatusLine status_line;
 };
 
 // A launch onto a CCE that is still running a kernel is lost: when that kernel finishes, firmware overwrites the new GO

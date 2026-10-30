@@ -45,6 +45,8 @@ namespace tt::tt_metal::mimir_test::dm_cache {
 namespace abi = cce_cache_ops_abi;
 
 inline constexpr const char* kCacheOpsKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_cache_ops.cpp";
+inline constexpr CceStatusLine kCacheStatusLine{
+    .done_magic = abi::kDoneMagic, .num_words = abi::kStatusWords, .poison = abi::kStatusPoison};
 inline constexpr uint32_t kCce = 0;
 inline constexpr uint32_t kProducerHart = 0;
 inline constexpr uint32_t kConsumerHart = 1;
@@ -98,27 +100,19 @@ std::vector<uint32_t> kernel_args(const HartLaunch& launch) {
     return args;
 }
 
-// Launches one Program with every hart and returns each status line in launch order. Empty on the host deadline.
-std::vector<std::vector<uint32_t>> run_program(IDevice* device, const std::vector<HartLaunch>& launches) {
+// Launches one Program with every hart and returns each status line in launch order; none on the host deadline.
+CceStatuses run_program(IDevice* device, const std::vector<HartLaunch>& launches) {
     std::vector<CceKernelLaunch> kernels;
     for (const HartLaunch& launch : launches) {
-        write_cce_tl1(
-            device, kCce, tl1_done_block(launch.hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
         kernels.push_back(
             {.cce_index = kCce,
              .kernel_path = kCacheOpsKernel,
              .runtime_args = kernel_args(launch),
-             .hart = launch.hart});
+             .hart = launch.hart,
+             .status_line = kCacheStatusLine});
     }
     Program program = CreateProgram();
-    return run_cce_kernels_with_deadline(
-               device,
-               program,
-               kernels,
-               std::vector<uint32_t>(kernels.size(), abi::kDoneMagic),
-               abi::kStatusWords,
-               kHostDeadline)
-        .value_or(std::vector<std::vector<uint32_t>>{});
+    return run_cce_kernels_with_deadline(device, program, kernels, kHostDeadline);
 }
 
 std::string status_detail(const std::vector<uint32_t>& status) {
@@ -230,11 +224,10 @@ void run_hart_to_hart(IDevice* device, uint32_t value) {
         data_offset,
         kCacheWords);
     log_info(tt::LogTest, "MM8 cache {}", label);
-    const std::vector<std::vector<uint32_t>> statuses = run_program(device, launches);
-    ASSERT_FALSE(statuses.empty()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                   << kFreshSessionNote;
-    const std::vector<uint32_t>& producer = statuses[0];
-    const std::vector<uint32_t>& consumer = statuses[1];
+    const CceStatuses statuses = run_program(device, launches);
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
+    const std::vector<uint32_t>& producer = (*statuses)[0];
+    const std::vector<uint32_t>& consumer = (*statuses)[1];
     log_info(
         tt::LogTest, "MM8 cache {}: producer {}; consumer {}", label, status_detail(producer), status_detail(consumer));
     ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label;
@@ -276,16 +269,15 @@ TEST_P(MimirDmCache, Op) {
     const std::string label = fmt::format(
         "{} on CCE{} hart {}, TL1 0x{:x}, {} words", spec.name, kCce, kProducerHart, data_offset, kCacheWords);
     log_info(tt::LogTest, "MM8 cache {}", label);
-    const std::vector<std::vector<uint32_t>> statuses = run_program(
+    const CceStatuses statuses = run_program(
         device,
         {{.hart = kProducerHart,
           .mode = spec.mode,
           .data_offset = data_offset,
           .num_words = kCacheWords,
           .value = value}});
-    ASSERT_FALSE(statuses.empty()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                   << kFreshSessionNote;
-    const std::vector<uint32_t>& status = statuses[0];
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
+    const std::vector<uint32_t>& status = (*statuses)[0];
     log_info(tt::LogTest, "MM8 cache {}: {}", label, status_detail(status));
     ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone) << label << ": " << status_detail(status);
     if (is_fresh_read(cache_case)) {
@@ -367,16 +359,15 @@ TEST_P(MimirDmCachePerf, WritePath) {
             kCce,
             kProducerHart,
             data_offset);
-        const std::vector<std::vector<uint32_t>> statuses = run_program(
+        const CceStatuses statuses = run_program(
             device,
             {{.hart = kProducerHart,
               .mode = write_path_mode(write_path),
               .data_offset = data_offset,
               .num_words = num_words,
               .value = value}});
-        ASSERT_FALSE(statuses.empty()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                       << kFreshSessionNote;
-        const std::vector<uint32_t>& status = statuses[0];
+        ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
+        const std::vector<uint32_t>& status = (*statuses)[0];
         log_info(tt::LogTest, "MM8 cache perf {}: {}", label, status_detail(status));
         ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone) << label;
         EXPECT_EQ(status[abi::kStatusMatches], num_words) << label << ": " << status_detail(status);
@@ -398,26 +389,23 @@ inline constexpr std::chrono::seconds kProbeHostDeadline{300};
 inline constexpr uint32_t kSnoopMasterDefault = 0x6;
 
 // Runs one cce_cache_ops kernel per (hart, args) on `cce_index` in one Program and returns each status line in launch
-// order; nullopt on the host deadline.
-std::optional<std::vector<std::vector<uint32_t>>> run_on_cce(
+// order; none on the host deadline.
+CceStatuses run_on_cce(
     IDevice* device,
     uint32_t cce_index,
     const std::vector<std::pair<uint32_t, std::vector<uint32_t>>>& hart_args,
     std::chrono::seconds host_deadline) {
     std::vector<CceKernelLaunch> kernels;
     for (const auto& [hart, args] : hart_args) {
-        write_cce_tl1(
-            device, cce_index, tl1_done_block(hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
-        kernels.push_back({.cce_index = cce_index, .kernel_path = kCacheOpsKernel, .runtime_args = args, .hart = hart});
+        kernels.push_back(
+            {.cce_index = cce_index,
+             .kernel_path = kCacheOpsKernel,
+             .runtime_args = args,
+             .hart = hart,
+             .status_line = kCacheStatusLine});
     }
     Program program = CreateProgram();
-    return run_cce_kernels_with_deadline(
-        device,
-        program,
-        kernels,
-        std::vector<uint32_t>(kernels.size(), abi::kDoneMagic),
-        abi::kStatusWords,
-        host_deadline);
+    return run_cce_kernels_with_deadline(device, program, kernels, host_deadline);
 }
 
 std::vector<uint32_t> probe_args(uint32_t mode, uint32_t hart) {
@@ -454,8 +442,7 @@ TEST_P(MimirCacheProbe, EightHartLaunch) {
     const std::string label =
         fmt::format("EightHartLaunch on CCE{}: null kernel on harts 0-{}", cce_index, cce_hart_count() - 1);
     log_info(tt::LogTest, "MM41 {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-        run_on_cce(device, cce_index, hart_args, kProbeHostDeadline);
+    const CceStatuses statuses = run_on_cce(device, cce_index, hart_args, kProbeHostDeadline);
     if (!statuses.has_value()) {
         std::string missing;
         for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
@@ -486,10 +473,9 @@ TEST_P(MimirCacheProbe, SnoopConfig) {
 
     const std::string label = fmt::format("SnoopConfig on CCE{} hart {}", cce_index, kProducerHart);
     const uint32_t host_snoop_master = read_snoop_master_config(cluster, device->id(), cce_index);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_on_cce(
+    const CceStatuses statuses = run_on_cce(
         device, cce_index, {{kProducerHart, probe_args(abi::kModeReadConfig, kProducerHart)}}, kProbeHostDeadline);
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kProbeHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     const std::vector<uint32_t>& status = statuses->front();
     ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone) << label << ": " << status_detail(status);
     const uint32_t snoop_master = status[abi::kStatusRegisterA];
@@ -548,6 +534,8 @@ inline constexpr std::chrono::seconds kStressHostDeadline{900};
 // Status lines of both kernels fit one line; read every word of the larger.
 inline constexpr uint32_t kMixedStatusWords = idma_abi::kStatusWords;
 static_assert(abi::kStatusWords <= kMixedStatusWords);
+inline constexpr CceStatusLine kMixedCacheStatusLine{
+    .done_magic = abi::kDoneMagic, .num_words = kMixedStatusWords, .poison = abi::kStatusPoison};
 // Flag lines in a hart's data area, after the largest data region and its guard.
 inline constexpr uint64_t kFlagLinesFromData = 0x3C000;
 static_assert(abi::kMaxWords * sizeof(uint32_t) + kGuardBytes <= kFlagLinesFromData);
@@ -567,7 +555,7 @@ struct HartKernel {
     uint32_t hart = kCceKernelHart;
     const char* kernel_path = kCacheOpsKernel;
     std::vector<uint32_t> args;
-    uint32_t done_magic = abi::kDoneMagic;
+    CceStatusLine status_line = kMixedCacheStatusLine;
 };
 
 // A TL1 word the host waits for before the second stage of run_staged.
@@ -578,9 +566,9 @@ struct HostFlag {
 };
 
 struct StagedRun {
-    // kMixedStatusWords words per kernel, the first stage then the second, in launch order. Empty on the host
+    // kMixedStatusWords words per kernel, the first stage then the second, in launch order. None on the host
     // deadline: a kernel may still be running.
-    std::vector<std::vector<uint32_t>> statuses;
+    CceStatuses statuses;
     bool flag_seen = false;
     bool second_launched = false;
 };
@@ -592,7 +580,8 @@ std::vector<CceKernelLaunch> to_launches(const std::vector<HartKernel>& kernels)
             {.cce_index = kernel.cce_index,
              .kernel_path = kernel.kernel_path,
              .runtime_args = kernel.args,
-             .hart = kernel.hart});
+             .hart = kernel.hart,
+             .status_line = kernel.status_line});
     }
     return launches;
 }
@@ -618,20 +607,10 @@ StagedRun run_staged(
     const std::vector<HartKernel>& second,
     std::chrono::seconds host_deadline) {
     StagedRun run;
-    for (const std::vector<HartKernel>* stage : {&first, &second}) {
-        for (const HartKernel& kernel : *stage) {
-            write_cce_tl1(
-                device,
-                kernel.cce_index,
-                tl1_done_block(kernel.hart),
-                std::vector<uint32_t>(kMixedStatusWords, abi::kStatusPoison));
-        }
-    }
     std::vector<CceKernelLaunch> waited = to_launches(first);
-    std::vector<uint32_t> done_magics;
-    for (const HartKernel& kernel : first) {
-        done_magics.push_back(kernel.done_magic);
-    }
+    const std::vector<CceKernelLaunch> second_launches = to_launches(second);
+    poison_status_lines(device, waited);
+    poison_status_lines(device, second_launches);
     Program first_program = CreateProgram();
     add_cce_kernels(device, first_program, waited);
     launch_on_idle_cces(device, first_program, waited);
@@ -643,27 +622,21 @@ StagedRun run_staged(
             host_action();
         }
         if (!second.empty()) {
-            const std::vector<CceKernelLaunch> second_launches = to_launches(second);
             add_cce_kernels(device, second_program, second_launches);
             launch_on_idle_cces(device, second_program, second_launches);
             run.second_launched = true;
             waited.insert(waited.end(), second_launches.begin(), second_launches.end());
-            for (const HartKernel& kernel : second) {
-                done_magics.push_back(kernel.done_magic);
-            }
         }
     }
-    if (!wait_for_status_magics(device, waited, done_magics, host_deadline)) {
+    run.statuses.host_deadline = host_deadline;
+    if (!wait_for_status_magics(device, waited, host_deadline)) {
         return run;
     }
     slow_dispatch::WaitProgramDone(*device, first_program);
     if (run.second_launched) {
         slow_dispatch::WaitProgramDone(*device, second_program);
     }
-    for (const CceKernelLaunch& launch : waited) {
-        run.statuses.push_back(
-            read_cce_tl1(device, launch.cce_index, tl1_done_block(launch.hart), kMixedStatusWords * sizeof(uint32_t)));
-    }
+    run.statuses.lines = read_status_lines(device, waited);
     return run;
 }
 
@@ -790,7 +763,7 @@ HartKernel idma_writer_kernel(const IdmaWriter& writer) {
              .trid_stride = 1,
              .peer_flag_offset = writer.start_flag_offset,
              .host_verified = writer.host_verified}),
-        .done_magic = idma_abi::kDoneMagic};
+        .status_line = kIdmaCopyStatusLine};
 }
 
 uint32_t idma_success_code(const IdmaWriter& writer) {
@@ -870,9 +843,8 @@ TEST_P(MimirCacheOps, FullInvalidate) {
     log_info(tt::LogTest, "MM41 {}", discard_label);
     const StagedRun discard =
         run_together(device, {cache_kernel(cce_index, kProducerHart, discard_args)}, kMm41HostDeadline);
-    ASSERT_FALSE(discard.statuses.empty())
-        << discard_label << ": no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
-    const std::vector<uint32_t>& discard_status = discard.statuses.front();
+    ASSERT_TRUE(discard.statuses.has_value()) << discard_label << ": " << discard.statuses.no_status();
+    const std::vector<uint32_t>& discard_status = discard.statuses->front();
     log_info(tt::LogTest, "MM41 {}: {}", discard_label, mm41_detail(discard_status));
     ASSERT_EQ(discard_status[abi::kStatusCode], abi::kCodeDone) << discard_label << ": " << mm41_detail(discard_status);
     EXPECT_EQ(discard_status[abi::kStatusCachedBefore], kCacheWords)
@@ -897,9 +869,8 @@ TEST_P(MimirCacheOps, FullInvalidate) {
         kCacheWords);
     log_info(tt::LogTest, "MM41 {}", wipe_label);
     const StagedRun wipe = run_together(device, {cache_kernel(cce_index, kProducerHart, wipe_args)}, kMm41HostDeadline);
-    ASSERT_FALSE(wipe.statuses.empty()) << wipe_label << ": no status after " << kMm41HostDeadline.count() << " s"
-                                        << kFreshSessionNote;
-    const std::vector<uint32_t>& wipe_status = wipe.statuses.front();
+    ASSERT_TRUE(wipe.statuses.has_value()) << wipe_label << ": " << wipe.statuses.no_status();
+    const std::vector<uint32_t>& wipe_status = wipe.statuses->front();
     log_info(tt::LogTest, "MM41 {}: {}", wipe_label, mm41_detail(wipe_status));
     RecordProperty("wipe_stale_words_before_drop", static_cast<int>(wipe_status[abi::kStatusCachedBefore]));
     if (wipe_status[abi::kStatusCode] == abi::kCodeWipeTimeout) {
@@ -977,10 +948,9 @@ TEST_P(MimirCacheOps, FlushFenceOrdering) {
             {cache_kernel(cce_index, kProducerHart, producer_args),
              cache_kernel(cce_index, kConsumerHart, consumer_args)},
             kMm41HostDeadline);
-        ASSERT_FALSE(run.statuses.empty())
-            << label << ": no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
-        const std::vector<uint32_t>& producer = run.statuses[0];
-        const std::vector<uint32_t>& consumer = run.statuses[1];
+        ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+        const std::vector<uint32_t>& producer = (*run.statuses)[0];
+        const std::vector<uint32_t>& consumer = (*run.statuses)[1];
         const std::string result = fmt::format(
             "complete at the flag {}/{}, complete later {} (largest lag {} cycles), never complete in the window {}, "
             "producer leg cycles {}",
@@ -1078,9 +1048,8 @@ TEST_P(MimirCacheOps, DirtyEvictionPartialLine) {
         sweep_offset);
     log_info(tt::LogTest, "MM41 {}", label);
     const StagedRun run = run_together(device, {cache_kernel(cce_index, kProducerHart, args)}, kMm41HostDeadline);
-    ASSERT_FALSE(run.statuses.empty()) << label << ": no status after " << kMm41HostDeadline.count() << " s"
-                                       << kFreshSessionNote;
-    const std::vector<uint32_t>& status = run.statuses.front();
+    ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+    const std::vector<uint32_t>& status = run.statuses->front();
     log_info(tt::LogTest, "MM41 {}: {}", label, mm41_detail(status));
     RecordProperty("lines_written_back_by_eviction", static_cast<int>(status[abi::kStatusRegisterA]));
     RecordProperty("stale_words_before_drop", static_cast<int>(status[abi::kStatusCachedBefore]));
@@ -1114,9 +1083,8 @@ void run_l1_flush_target(uint32_t cce_index, uint32_t mode, const std::string& n
         "{} on CCE{} hart {}, TL1 0x{:x}, {} words", name, cce_index, kProducerHart, data_offset, kCacheWords);
     log_info(tt::LogTest, "MM41 {}", label);
     const StagedRun run = run_together(device, {cache_kernel(cce_index, kProducerHart, args)}, kMm41HostDeadline);
-    ASSERT_FALSE(run.statuses.empty()) << label << ": no status after " << kMm41HostDeadline.count() << " s"
-                                       << kFreshSessionNote;
-    const std::vector<uint32_t>& status = run.statuses.front();
+    ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+    const std::vector<uint32_t>& status = run.statuses->front();
     log_info(tt::LogTest, "MM41 {}: {}", label, mm41_detail(status));
     const uint32_t after_l1_flush = status[abi::kStatusRegisterA];
     ::testing::Test::RecordProperty(
@@ -1237,10 +1205,9 @@ protected:
                 device,
                 {cache_kernel(cce_index, kReaderHart, reader_args), cache_kernel(cce_index, kWriterHart, writer_args)},
                 kMm41HostDeadline);
-            ASSERT_FALSE(run.statuses.empty())
-                << label << ": no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
-            const std::vector<uint32_t>& reader = run.statuses[0];
-            const std::vector<uint32_t>& writer = run.statuses[1];
+            ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+            const std::vector<uint32_t>& reader = (*run.statuses)[0];
+            const std::vector<uint32_t>& writer = (*run.statuses)[1];
             log_info(tt::LogTest, "MM41 {}: reader {}; writer {}", label, mm41_detail(reader), mm41_detail(writer));
             RecordProperty("stale_words_before_drop", static_cast<int>(reader[abi::kStatusCachedBefore]));
             RecordProperty("writer_words_in_tl1_at_flag", static_cast<int>(writer[abi::kStatusUncachedBefore]));
@@ -1292,10 +1259,9 @@ protected:
             region_offset);
         log_info(tt::LogTest, "MM41 {}", label);
         const StagedRun run = run_together(device, kernels, kMm41HostDeadline);
-        ASSERT_FALSE(run.statuses.empty())
-            << label << ": no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
+        ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
         for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
-            const std::vector<uint32_t>& status = run.statuses[hart];
+            const std::vector<uint32_t>& status = (*run.statuses)[hart];
             log_info(tt::LogTest, "MM41 {}: hart {} {}", label, hart, mm41_detail(status));
             EXPECT_EQ(status[abi::kStatusCode], abi::kCodeDone)
                 << label << ": hart " << hart << " " << mm41_detail(status);
@@ -1646,17 +1612,16 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
         writer_detail);
     log_info(tt::LogTest, "MM41 {}", label);
     record_leg("writer", "config", writer_detail);
-    ASSERT_FALSE(run.statuses.empty()) << label << ": no status after " << kMm41HostDeadline.count() << " s"
-                                       << kFreshSessionNote;
+    ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
     ASSERT_TRUE(run.flag_seen) << label << ": the reader never set the warmed flag";
-    const std::vector<uint32_t>& reader_status = run.statuses[0];
+    const std::vector<uint32_t>& reader_status = (*run.statuses)[0];
     const std::string verdict = snoop_verdict(reader_status, kExternalWords, steps);
     RecordProperty("stale_words_before_drop", static_cast<int>(reader_status[abi::kStatusCachedBefore]));
     log_info(tt::LogTest, "MM41 {}: reader {}; {}", label, mm41_detail(reader_status), verdict);
     record_leg("reader", "status", mm41_detail(reader_status));
     RecordProperty("snoop_verdict", verdict);
-    if (run.statuses.size() > 1) {
-        const std::vector<uint32_t>& writer_status = run.statuses[1];
+    if (run.statuses->size() > 1) {
+        const std::vector<uint32_t>& writer_status = (*run.statuses)[1];
         if (idma_writer.has_value()) {
             log_info(tt::LogTest, "MM41 {}: writer {}", label, idma_detail(writer_status));
             record_leg("writer", "status", idma_detail(writer_status));
@@ -1728,10 +1693,9 @@ void run_flush_remote_read(
         {cache_kernel(owner_cce, kProducerHart, producer_args),
          cache_kernel(remote_reader_cce, kReaderHart, reader_args)},
         kMm41HostDeadline);
-    ASSERT_FALSE(run.statuses.empty()) << label << ": no status after " << kMm41HostDeadline.count() << " s"
-                                       << kFreshSessionNote;
-    const std::vector<uint32_t>& producer = run.statuses[0];
-    const std::vector<uint32_t>& reader = run.statuses[1];
+    ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+    const std::vector<uint32_t>& producer = (*run.statuses)[0];
+    const std::vector<uint32_t>& reader = (*run.statuses)[1];
     log_info(tt::LogTest, "MM41 {}: producer {}; remote reader {}", label, mm41_detail(producer), mm41_detail(reader));
     ASSERT_EQ(producer[abi::kStatusCode], abi::kCodeDone) << label << ": producer " << mm41_detail(producer);
     ASSERT_EQ(reader[abi::kStatusCode], abi::kCodeDone) << label << ": remote reader " << mm41_detail(reader);
@@ -1777,10 +1741,9 @@ void run_spa_write_invalidate(
              abi::kStepDiscriminate | abi::kStepL2Invalidate),
          spa_writer_kernel(writer_cce, reader_cce, region_offset, kCacheWords, value, flag_offset)},
         kMm41HostDeadline);
-    ASSERT_FALSE(run.statuses.empty()) << label << ": no status after " << kMm41HostDeadline.count() << " s"
-                                       << kFreshSessionNote;
-    const std::vector<uint32_t>& reader = run.statuses[0];
-    const std::vector<uint32_t>& writer = run.statuses[1];
+    ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+    const std::vector<uint32_t>& reader = (*run.statuses)[0];
+    const std::vector<uint32_t>& writer = (*run.statuses)[1];
     const std::string verdict = snoop_verdict(reader, kCacheWords, abi::kStepDiscriminate | abi::kStepL2Invalidate);
     log_info(
         tt::LogTest, "MM41 {}: reader {}; writer {}; {}", label, mm41_detail(reader), mm41_detail(writer), verdict);
@@ -1864,11 +1827,10 @@ TEST_P(MimirCacheCoherence, CrossCceSnoopOn) {
         {},
         {idma_writer_kernel(writer)},
         kMm41HostDeadline);
-    ASSERT_FALSE(run.statuses.empty()) << label << ": no status after " << kMm41HostDeadline.count() << " s"
-                                       << kFreshSessionNote;
+    ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
     ASSERT_TRUE(run.second_launched) << label << ": the reader never set the warmed flag";
-    const std::vector<uint32_t>& reader = run.statuses[0];
-    const std::vector<uint32_t>& writer_status = run.statuses[1];
+    const std::vector<uint32_t>& reader = (*run.statuses)[0];
+    const std::vector<uint32_t>& writer_status = (*run.statuses)[1];
     const std::string verdict = snoop_verdict(reader, kCacheWords, abi::kStepDiscriminate | abi::kStepL2Invalidate);
     log_info(
         tt::LogTest,
@@ -1986,10 +1948,10 @@ TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
     const uint32_t sibling = sibling_cce(cce_index);
 
     const uint32_t host_config = read_snoop_master_config(cluster, device->id(), cce_index);
-    const std::optional<std::vector<std::vector<uint32_t>>> config_status = run_on_cce(
+    const CceStatuses config_status = run_on_cce(
         device, cce_index, {{kProducerHart, probe_args(abi::kModeReadConfig, kProducerHart)}}, kProbeHostDeadline);
-    ASSERT_TRUE(config_status.has_value()) << "SnoopConfig read on CCE" << cce_index << ": no status after "
-                                           << kProbeHostDeadline.count() << " s" << kFreshSessionNote;
+    ASSERT_TRUE(config_status.has_value())
+        << "SnoopConfig read on CCE" << cce_index << ": " << config_status.no_status();
     ASSERT_EQ(config_status->front()[abi::kStatusCode], abi::kCodeDone);
     const uint32_t hart_config = config_status->front()[abi::kStatusRegisterA];
     RecordProperty("snoop_master_cfg_before", fmt::format("host 0x{:x}, hart 0x{:x}", host_config, hart_config));
@@ -2065,11 +2027,10 @@ TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
                 {},
                 {idma_writer_kernel(writer)},
                 kMm41HostDeadline);
-            ASSERT_FALSE(run.statuses.empty())
-                << label << ": no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
+            ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
             ASSERT_TRUE(run.second_launched) << label << ": the hart never set its flag";
-            const std::vector<uint32_t>& hart_status = run.statuses[0];
-            const std::vector<uint32_t>& writer_status = run.statuses[1];
+            const std::vector<uint32_t>& hart_status = (*run.statuses)[0];
+            const std::vector<uint32_t>& writer_status = (*run.statuses)[1];
             const std::vector<uint32_t> observed =
                 read_cce_tl1(device, cce_index, line_offset, kWordsPerLine * sizeof(uint32_t));
             EXPECT_EQ(read_cce_tl1(device, cce_index, line_offset + abi::kLineBytes, kGuardBytes), make_guard(tag))
@@ -2190,9 +2151,8 @@ TEST_P(MimirCacheStress, ReuseThrash) {
                     seed));
             const StagedRun run =
                 run_together(device, {cache_kernel(cce_index, kProducerHart, args)}, kStressHostDeadline);
-            ASSERT_FALSE(run.statuses.empty())
-                << label << ": no status after " << kStressHostDeadline.count() << " s" << kFreshSessionNote;
-            const std::vector<uint32_t>& status = run.statuses.front();
+            ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+            const std::vector<uint32_t>& status = run.statuses->front();
             const std::vector<uint32_t> pass_cycles =
                 read_cce_tl1(device, cce_index, trace_offset, kThrashPasses * sizeof(uint32_t));
             record_leg(leg, "pass_cycles", fmt::format("{}", fmt::join(pass_cycles, " ")));
@@ -2279,10 +2239,8 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
     log_info(tt::LogTest, "MM41 {}", label);
     record_leg(leg, "config", label);
 
-    const HartKernel consumer = cache_kernel(cce_index, kReaderHart, args);
-    write_cce_tl1(
-        device, cce_index, tl1_done_block(kReaderHart), std::vector<uint32_t>(kMixedStatusWords, abi::kStatusPoison));
-    const std::vector<CceKernelLaunch> consumer_launch = to_launches({consumer});
+    const std::vector<CceKernelLaunch> consumer_launch = to_launches({cache_kernel(cce_index, kReaderHart, args)});
+    poison_status_lines(device, consumer_launch);
     Program consumer_program = CreateProgram();
     add_cce_kernels(device, consumer_program, consumer_launch);
     launch_on_idle_cces(device, consumer_program, consumer_launch);
@@ -2301,27 +2259,20 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
             .len_bytes = idma_abi::kMaxBytesInPacket,
             .snoop = snoop,
             .host_verified = true};
-        const std::vector<CceKernelLaunch> writer_launch = to_launches({idma_writer_kernel(writer)});
-        write_cce_tl1(
-            device, sibling, tl1_done_block(kReaderHart), std::vector<uint32_t>(kMixedStatusWords, abi::kStatusPoison));
         Program writer_program = CreateProgram();
-        add_cce_kernels(device, writer_program, writer_launch);
-        launch_on_idle_cces(device, writer_program, writer_launch);
-        ASSERT_TRUE(wait_for_status_magics(device, writer_launch, {idma_abi::kDoneMagic}, kMm41HostDeadline))
-            << label << ": round " << round << " writer has no status after " << kMm41HostDeadline.count() << " s"
-            << kFreshSessionNote;
-        slow_dispatch::WaitProgramDone(*device, writer_program);
-        const std::vector<uint32_t> writer_status =
-            read_cce_tl1(device, sibling, tl1_done_block(kReaderHart), kMixedStatusWords * sizeof(uint32_t));
+        const CceStatuses writer_statuses = run_cce_kernels_with_deadline(
+            device, writer_program, to_launches({idma_writer_kernel(writer)}), kMm41HostDeadline);
+        ASSERT_TRUE(writer_statuses.has_value())
+            << label << ": round " << round << " writer has " << writer_statuses.no_status();
+        const std::vector<uint32_t>& writer_status = writer_statuses->front();
         ASSERT_EQ(writer_status[idma_abi::kStatusCode], idma_success_code(writer))
             << label << ": round " << round << " writer " << idma_detail(writer_status)
             << idma_code_note(writer_status[idma_abi::kStatusCode]);
     }
-    ASSERT_TRUE(wait_for_status_magics(device, consumer_launch, {abi::kDoneMagic}, kMm41HostDeadline))
+    ASSERT_TRUE(wait_for_status_magics(device, consumer_launch, kMm41HostDeadline))
         << label << ": consumer has no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
     slow_dispatch::WaitProgramDone(*device, consumer_program);
-    const std::vector<uint32_t> status =
-        read_cce_tl1(device, cce_index, tl1_done_block(kReaderHart), kMixedStatusWords * sizeof(uint32_t));
+    const std::vector<uint32_t> status = read_status_lines(device, consumer_launch).front();
     const std::string result = fmt::format(
         "stale words before the drop {}, rounds {}, complete second reads {}, stale words at the first read {}, refill "
         "cycles {}, re-read cycles {}, warm hit cycles {}",
@@ -2396,9 +2347,8 @@ TEST_P(MimirCacheStress, PerfSweep) {
             log_info(tt::LogTest, "MM41 {}", label);
             const StagedRun run =
                 run_together(device, {cache_kernel(cce_index, kProducerHart, args)}, kStressHostDeadline);
-            ASSERT_FALSE(run.statuses.empty())
-                << label << ": no status after " << kStressHostDeadline.count() << " s" << kFreshSessionNote;
-            const std::vector<uint32_t>& status = run.statuses.front();
+            ASSERT_TRUE(run.statuses.has_value()) << label << ": " << run.statuses.no_status();
+            const std::vector<uint32_t>& status = run.statuses->front();
             log_info(tt::LogTest, "MM41 {}: {}", label, mm41_detail(status));
             RecordProperty(leg + "_cycles", static_cast<int>(status[abi::kStatusCycles]));
             ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone) << label << ": " << mm41_detail(status);

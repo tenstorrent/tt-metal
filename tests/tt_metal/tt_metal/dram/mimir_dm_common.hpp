@@ -73,20 +73,27 @@ inline uint32_t read_status_magic(IDevice* device, uint32_t cce_index, uint32_t 
     return read_cce_tl1(device, cce_index, tl1_done_block(hart), sizeof(uint32_t)).front();
 }
 
-// Reads the status magic of every launch with no sleep, so the emulated clock keeps running, until launches[i] shows
-// done_magics[i] for every i or `host_deadline` passes.
+// Fills the status line of every launch with its poison.
+inline void poison_status_lines(IDevice* device, const std::vector<CceKernelLaunch>& launches) {
+    for (const CceKernelLaunch& launch : launches) {
+        write_cce_tl1(
+            device,
+            launch.cce_index,
+            tl1_done_block(launch.hart),
+            std::vector<uint32_t>(launch.status_line.num_words, launch.status_line.poison));
+    }
+}
+
+// Reads the status magic of every launch with no sleep, so the emulated clock keeps running, until each shows its
+// done magic or `host_deadline` passes.
 inline bool wait_for_status_magics(
-    IDevice* device,
-    const std::vector<CceKernelLaunch>& launches,
-    const std::vector<uint32_t>& done_magics,
-    std::chrono::seconds host_deadline) {
-    TT_FATAL(launches.size() == done_magics.size(), "{} launches, {} done magics", launches.size(), done_magics.size());
+    IDevice* device, const std::vector<CceKernelLaunch>& launches, std::chrono::seconds host_deadline) {
     const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + host_deadline;
     std::vector<bool> done(launches.size(), false);
     while (std::chrono::steady_clock::now() < deadline) {
         for (size_t index = 0; index < launches.size(); ++index) {
             done[index] = done[index] || read_status_magic(device, launches[index].cce_index, launches[index].hart) ==
-                                             done_magics[index];
+                                             launches[index].status_line.done_magic;
         }
         if (std::all_of(done.begin(), done.end(), [](bool line_done) { return line_done; })) {
             return true;
@@ -95,39 +102,55 @@ inline bool wait_for_status_magics(
     return false;
 }
 
-// Launches `program`, which already holds the kernels of `launches`, with launch_on_idle_cces, waits for every status
-// magic, ends the Program and returns each status line (`status_words` words) in launch order. nullopt when
-// `host_deadline` passed: a kernel may still be running, and nothing else may run in this session (MIM-601).
-inline std::optional<std::vector<std::vector<uint32_t>>> launch_and_wait_for_statuses(
+// Each launch's status line in launch order, read as a std::optional: none when the host deadline passed, and then
+// no_status() is the failure text.
+struct CceStatuses {
+    std::optional<std::vector<std::vector<uint32_t>>> lines;
+    std::chrono::seconds host_deadline{0};
+
+    bool has_value() const { return lines.has_value(); }
+    const std::vector<std::vector<uint32_t>>& operator*() const { return *lines; }
+    const std::vector<std::vector<uint32_t>>* operator->() const { return &*lines; }
+    std::string no_status() const {
+        return fmt::format("no status after {} s{}", host_deadline.count(), kFreshSessionNote);
+    }
+};
+
+inline std::vector<std::vector<uint32_t>> read_status_lines(
+    IDevice* device, const std::vector<CceKernelLaunch>& launches) {
+    std::vector<std::vector<uint32_t>> lines;
+    for (const CceKernelLaunch& launch : launches) {
+        lines.push_back(read_cce_tl1(
+            device, launch.cce_index, tl1_done_block(launch.hart), launch.status_line.num_words * sizeof(uint32_t)));
+    }
+    return lines;
+}
+
+// Poisons the status line of every launch, launches `program`, which already holds their kernels, with
+// launch_on_idle_cces, waits for every status magic, ends the Program and returns each status line in launch order.
+// None when `host_deadline` passed: a kernel may still be running, and nothing else may run in this session (MIM-601).
+inline CceStatuses launch_and_wait_for_statuses(
     IDevice* device,
     Program& program,
     const std::vector<CceKernelLaunch>& launches,
-    const std::vector<uint32_t>& done_magics,
-    uint32_t status_words,
     std::chrono::seconds host_deadline) {
+    poison_status_lines(device, launches);
     launch_on_idle_cces(device, program, launches);
-    if (!wait_for_status_magics(device, launches, done_magics, host_deadline)) {
-        return std::nullopt;
+    if (!wait_for_status_magics(device, launches, host_deadline)) {
+        return {.host_deadline = host_deadline};
     }
     slow_dispatch::WaitProgramDone(*device, program);
-    std::vector<std::vector<uint32_t>> statuses;
-    for (const CceKernelLaunch& launch : launches) {
-        statuses.push_back(
-            read_cce_tl1(device, launch.cce_index, tl1_done_block(launch.hart), status_words * sizeof(uint32_t)));
-    }
-    return statuses;
+    return {.lines = read_status_lines(device, launches), .host_deadline = host_deadline};
 }
 
 // Adds every kernel to `program`, then runs launch_and_wait_for_statuses.
-inline std::optional<std::vector<std::vector<uint32_t>>> run_cce_kernels_with_deadline(
+inline CceStatuses run_cce_kernels_with_deadline(
     IDevice* device,
     Program& program,
     const std::vector<CceKernelLaunch>& launches,
-    const std::vector<uint32_t>& done_magics,
-    uint32_t status_words,
     std::chrono::seconds host_deadline) {
     add_cce_kernels(device, program, launches);
-    return launch_and_wait_for_statuses(device, program, launches, done_magics, status_words, host_deadline);
+    return launch_and_wait_for_statuses(device, program, launches, host_deadline);
 }
 
 // Reads the data with read_words(byte_offset, bytes) and compares it with `expected`. On a mismatch, records the first
