@@ -35,8 +35,7 @@ namespace tt::tt_metal::mimir_test::fw_load {
 
 constexpr ChipId kFwLoadChip = 0;
 constexpr const char* kNullKernelPath = "tests/tt_metal/tt_metal/test_kernels/cce/cce_null.cpp";
-constexpr uint64_t kFirmwareRegionBegin = MEM_CCE_MAILBOX_END;
-constexpr uint64_t kFirmwareRegionEnd = MEM_CCE_MAP_END;
+constexpr uint32_t kDramDmProcessorClass = static_cast<uint32_t>(HalProcessorClassType::DM);
 constexpr uint64_t kFirmwareTextMaxBytes = MEM_CCE_FIRMWARE_SIZE;
 constexpr uint32_t kReinitCycles = 3;
 
@@ -44,7 +43,8 @@ uint32_t emu_cce_count() { return topology_from(configured_soc_desc()).num_cces;
 
 const HalJitBuildConfig& cce_jit_build_config() {
     const Hal& hal = MetalContext::instance().hal();
-    return hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, 0);
+    return hal.get_jit_build_config(
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), kDramDmProcessorClass, 0);
 }
 
 uint64_t mailbox_field(dev_msgs::mailboxes_t::Field field) {
@@ -137,7 +137,8 @@ void expect_cce_initialized(IDevice* device, uint32_t cce_index) {
     const ChipId chip = device->id();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const uint32_t expected_reset_vector = hal.get_jit_build_config(dram_core_type_index, 0, 0).fw_launch_addr_value;
+    const uint32_t expected_reset_vector =
+        hal.get_jit_build_config(dram_core_type_index, kDramDmProcessorClass, 0).fw_launch_addr_value;
 
     EXPECT_EQ(read_globals_ready(device, cce_index), dev_msgs::SHARED_GLOBALS_READY_GO) << "CCE " << cce_index;
     EXPECT_EQ(read_subordinate_sync(device, cce_index), dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE)
@@ -204,8 +205,9 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
     const MetalContext& context = MetalContext::instance();
     const Hal& hal = context.hal();
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const std::string binary_path = BuildEnvManager::get_instance(context.get_context_id())
-                                        .get_firmware_binary_path(device->id(), dram_core_type_index, 0, 0);
+    const std::string binary_path =
+        BuildEnvManager::get_instance(context.get_context_id())
+            .get_firmware_binary_path(device->id(), dram_core_type_index, kDramDmProcessorClass, 0);
     const std::vector<CceFwSpan> spans = cce_fw_spans(binary_path);
     const uint64_t firmware_window_begin = cce_jit_build_config().fw_base_addr;
     const std::vector<CceFwSpan>::const_iterator text_span_iterator =
@@ -232,14 +234,19 @@ TEST(MimirFwLoad, ImageManifest) {
     const MetalContext& context = MetalContext::instance();
     const Hal& hal = context.hal();
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const std::string binary_path = BuildEnvManager::get_instance(context.get_context_id())
-                                        .get_firmware_binary_path(device->id(), dram_core_type_index, 0, 0);
-    const HalJitBuildConfig& jit_build_config = hal.get_jit_build_config(dram_core_type_index, 0, 0);
+    const std::string binary_path =
+        BuildEnvManager::get_instance(context.get_context_id())
+            .get_firmware_binary_path(device->id(), dram_core_type_index, kDramDmProcessorClass, 0);
+    const HalJitBuildConfig& jit_build_config =
+        hal.get_jit_build_config(dram_core_type_index, kDramDmProcessorClass, 0);
     const std::vector<CceFwSpan> spans = cce_fw_spans(binary_path);
     const uint64_t firmware_window_begin = jit_build_config.fw_base_addr;
     const uint64_t firmware_window_end = firmware_window_begin + MEM_CCE_FIRMWARE_SIZE;
     const uint64_t init_scratch_begin = jit_build_config.local_init_addr;
     const uint64_t init_scratch_end = init_scratch_begin + MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE;
+    const uint64_t firmware_region_begin = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::MAILBOX) +
+                                           hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::MAILBOX);
+    const uint64_t firmware_region_end = init_scratch_begin;
 
     ASSERT_FALSE(spans.empty());
     log_info(tt::LogTest, "CCE firmware {}", binary_path);
@@ -257,7 +264,7 @@ TEST(MimirFwLoad, ImageManifest) {
     for (const CceFwSpan& span : spans) {
         const uint64_t span_bytes = span.words.size() * sizeof(uint32_t);
         const uint64_t span_end = span.tl1_offset + span_bytes;
-        const bool in_firmware_region = span.tl1_offset >= kFirmwareRegionBegin && span_end <= kFirmwareRegionEnd;
+        const bool in_firmware_region = span.tl1_offset >= firmware_region_begin && span_end <= firmware_region_end;
         const bool in_init_scratch = span.tl1_offset >= init_scratch_begin && span_end <= init_scratch_end;
         log_info(tt::LogTest, "CCE firmware span TL1 [0x{:x}, 0x{:x}) {} bytes", span.tl1_offset, span_end, span_bytes);
         EXPECT_TRUE(in_firmware_region || in_init_scratch) << fmt::format(
@@ -275,9 +282,10 @@ TEST(MimirFwLoad, ImageManifest) {
     }
 
     // One binary for all harts: a single image, and every hart's launch config matches hart 0's.
-    EXPECT_EQ(hal.get_processor_class_num_fw_binaries(dram_core_type_index, 0), 1u);
-    for (uint32_t hart = 0; hart < hal.get_processor_types_count(dram_core_type_index, 0); ++hart) {
-        const HalJitBuildConfig& hart_config = hal.get_jit_build_config(dram_core_type_index, 0, hart);
+    EXPECT_EQ(hal.get_processor_class_num_fw_binaries(dram_core_type_index, kDramDmProcessorClass), 1u);
+    for (uint32_t hart = 0; hart < hal.get_processor_types_count(dram_core_type_index, kDramDmProcessorClass); ++hart) {
+        const HalJitBuildConfig& hart_config =
+            hal.get_jit_build_config(dram_core_type_index, kDramDmProcessorClass, hart);
         EXPECT_EQ(hart_config.fw_launch_addr, jit_build_config.fw_launch_addr) << "hart " << hart;
         EXPECT_EQ(hart_config.fw_launch_addr_value, jit_build_config.fw_launch_addr_value) << "hart " << hart;
     }

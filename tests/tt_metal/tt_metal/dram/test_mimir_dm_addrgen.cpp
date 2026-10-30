@@ -31,7 +31,7 @@ namespace abi = cce_addrgen_abi;
 
 inline constexpr const char* kAddrgenKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_addrgen.cpp";
 inline constexpr uint32_t kCce = 0;
-inline constexpr uint32_t kHart = 0;
+inline constexpr uint32_t kHart = kCceKernelHart;
 // The kernel has no polls; this covers launch on a slow emulator.
 inline constexpr std::chrono::seconds kHostDeadline{300};
 inline constexpr uint32_t kResultPoison = 0xADD60000u;

@@ -183,7 +183,7 @@ uint64_t shared_destination_tl1() { return tl1_data(0) + kSharedDestinationOffse
 
 // Hart-private TL1 source for the shared-destination case. It sits above the disjoint-case source at tl1_data(hart),
 // which later alignments reuse.
-uint64_t shared_source_tl1(uint32_t hart) { return tl1_data(hart) + kEmuPageBytes; }
+uint64_t shared_source_tl1(uint32_t hart) { return tl1_data(hart) + mimir_contract::kEmuGddrBackingPage; }
 
 // The shared block must hold, at every word, the value of some hart's source: a lost or misplaced write matches none.
 // Each word is attributed to the first hart that matches it, so the block can mix harts' words word by word.
@@ -215,7 +215,7 @@ uint32_t hart_capacity(uint32_t size_bytes, uint64_t first_block_begin, uint64_t
     if (window_end <= first_block_begin || window_end - first_block_begin < block_bytes) {
         return 0;
     }
-    if (size_bytes >= kEmuPageBytes) {
+    if (size_bytes >= mimir_contract::kEmuGddrBackingPage) {
         return 1;
     }
     const uint64_t blocks_that_fit = (window_end - first_block_begin) / block_bytes;
@@ -445,7 +445,7 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
 
     for (uint32_t view : dram_views_for_channel(soc, local_mimir)) {
         const std::vector<MimirAnchor> anchors =
@@ -512,7 +512,7 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
 
     for (uint32_t view : dram_views_for_channel(soc, local_mimir)) {
         const std::vector<MimirAnchor> anchors =
@@ -595,7 +595,7 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
 
     for (uint32_t view : dram_views_for_channel(soc, local_mimir)) {
         const std::vector<MimirAnchor> anchors =
@@ -724,10 +724,10 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    // kEmuPageBytes (32 KiB) is assumed to be the page size for the page-aligned offsets below. Page alignment is in
-    // chiplet offset space, so the emulator may map these addresses to different pages.
-    const std::vector<uint64_t> alignments = {0, 4, 60, 124, kEmuPageBytes - 4};
+    const uint64_t unreserved = dram_unreserved_base();
+    // mimir_contract::kEmuGddrBackingPage (32 KiB) is assumed to be the page size for the page-aligned offsets below.
+    // Page alignment is in chiplet offset space, so the emulator may map these addresses to different pages.
+    const std::vector<uint64_t> alignments = {0, 4, 60, 124, mimir_contract::kEmuGddrBackingPage - 4};
 
     for (uint32_t view : dram_views_for_channel(soc, local_mimir)) {
         const std::vector<MimirAnchor> anchors =
@@ -740,9 +740,9 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
         const uint64_t window_begin = window_begin_of(anchor, unreserved);
         const uint64_t window_end = window_end_of(anchor);
         // The guard before the first destination must stay inside the window.
-        const uint64_t page_base = tt::align(window_begin + kGuardBytes, kEmuPageBytes);
+        const uint64_t page_base = tt::align(window_begin + kGuardBytes, mimir_contract::kEmuGddrBackingPage);
 
-        for (uint32_t size_bytes = 4; size_bytes <= kEmuPageBytes; size_bytes *= 2) {
+        for (uint32_t size_bytes = 4; size_bytes <= mimir_contract::kEmuGddrBackingPage; size_bytes *= 2) {
             const uint32_t size_words = size_bytes / 4;
             const uint32_t source_harts = hart_capacity(size_bytes, page_base - kGuardBytes, window_end);
             ASSERT_GE(source_harts, 1u) << "size " << size_bytes;
@@ -841,7 +841,7 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
     IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
     constexpr uint32_t kCopyWords = kCopyTestBytes / 4;
     constexpr uint64_t kOverlapShiftBytes = kCopyTestBytes / 2;
     constexpr uint64_t kSpanBytes = kCopyTestBytes + kOverlapShiftBytes;

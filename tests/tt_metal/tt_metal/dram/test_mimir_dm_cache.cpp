@@ -77,7 +77,7 @@ std::string code_name(uint32_t code) {
 }
 
 struct HartLaunch {
-    uint32_t hart = 0;
+    uint32_t hart = kCceKernelHart;
     uint32_t mode = 0;
     uint64_t data_offset = 0;
     uint32_t num_words = 0;
@@ -577,7 +577,7 @@ inline constexpr uint32_t kWordsPerLine = abi::kLineBytes / sizeof(uint32_t);
 
 struct HartKernel {
     uint32_t cce_index = 0;
-    uint32_t hart = 0;
+    uint32_t hart = kCceKernelHart;
     const char* kernel_path = kCacheOpsKernel;
     std::vector<uint32_t> args;
     uint32_t done_magic = abi::kDoneMagic;
@@ -769,16 +769,14 @@ IdmaOperand gddr_operand(const metal_SocDescriptor& soc, uint32_t view, uint64_t
     return {idma_abi::kKindGddr, mimir_of_view(soc, view), chiplet_offset_of(soc, view, view_offset)};
 }
 
-uint64_t gddr_source_view_offset() {
-    return MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED) + kGddrSourceOffset;
-}
+uint64_t gddr_source_view_offset() { return dram_unreserved_base() + kGddrSourceOffset; }
 
 // One cce_idma_copy kModeTridBatch launch: num_commands commands from one source block (source stride 0) to
 // destination + i * len_bytes, on trids 1, 2, ... With a nonzero start_flag_offset (the writer's own TL1) the writer
 // issues only once that word is nonzero.
 struct IdmaWriter {
     uint32_t cce_index = 0;
-    uint32_t hart = 0;
+    uint32_t hart = kCceKernelHart;
     IdmaOperand source;
     IdmaOperand destination;
     uint32_t backend_vc = 0;
@@ -1954,8 +1952,6 @@ std::string race_action_name(uint32_t action) {
 
 inline constexpr uint32_t kRaceHartWords = 8;
 inline constexpr uint64_t kRaceLineFromData = 0x800;
-// Well above what the poll budget allows for a FLUSH64 or INVALIDATE64 action, so the budget is the bound.
-inline constexpr uint32_t kRaceMaxActions = 1u << 24;
 inline constexpr uint32_t kRaceHartValue = 0x4A000000u;
 inline constexpr uint32_t kRaceExternalValue = 0xE4000000u;
 inline constexpr uint32_t kSnoopMasterConfigs = 8;
@@ -2072,7 +2068,8 @@ TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
             args[abi::kArgOtherWords] = kRaceHartWords;
             args[abi::kArgOtherValue] = kRaceExternalValue;
             args[abi::kArgSteps] = action | (target == RaceTarget::Neighbour ? abi::kRaceRedirty : 0);
-            args[abi::kArgPasses] = kRaceMaxActions;
+            // Well above what the poll budget allows for a FLUSH64 or INVALIDATE64 action, so the budget is the bound.
+            args[abi::kArgPasses] = abi::kMaxRaceActions;
             args[abi::kArgAuxOffset] = static_cast<uint32_t>(line_offset + kL2ConflictStrideBytes);
             args[abi::kArgStrideBytes] = kL2ConflictStrideBytes;
             args[abi::kArgCount] = kL2EvictingReads;
