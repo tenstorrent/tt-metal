@@ -181,7 +181,7 @@ CENTERS_FIRST_CENTERS = slice(0, len(CODE_CENTERS))
 
 # The TTNN head's box predictions stay in CENTERS_FIRST order, the refined centers in metres in
 # its first channels, which needs no slicing on device; CODE_ORDER takes them to the box code
-# order on the host.
+# order on the host (tt_head.box_preds_to_torch).
 CODE_ORDER = [CENTERS_FIRST.index(channel) for channel in range(CODE_SIZE)]
 
 # The coder's decoded box: (cx, cy, cz, w, l, h, yaw, vx, vy), cz at the box's gravity center.
@@ -241,8 +241,8 @@ _TTNN_DTYPES = {
 _TTNN_DTYPES["BOX_DTYPE"] = _TTNN_DTYPES["GRID_DTYPE"]
 
 # Rounds of the coder's exact top-k search (TTNMSFreeCoder.topk), each of which splits the k-th
-# logit's bracket around the bfloat16 pivot, 2^-5 of the pivot wide, into 32: four take it down to
-# one float32 value, the fifth is margin.
+# logit's bracket around the bfloat16 pivot, 2^-5 of the pivot wide, into 32, a tile row of
+# thresholds: four take it down to one float32 value, the fifth is margin.
 CODER_SEARCH_ROUNDS = 5
 
 

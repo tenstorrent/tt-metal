@@ -22,6 +22,7 @@ from models.experimental.bevformer.tests.common import (
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
+from models.experimental.bevformer.tt.tt_head import box_preds_to_torch
 
 NUM_FRAMES = 2
 PCC_THRESHOLD = 0.99
@@ -55,7 +56,8 @@ def test_bevformer(device, reset_seeds):
         logger.info(f"frame {i}")
         # The outputs and the detections on device against the reference's, then the host compaction.
         scores, labels, query_index, boxes, valid = tt_detections
-        tt_bev, tt_cls_scores, tt_bbox_preds = (ttnn.to_torch(t).float() for t in (tt_prev, *tt_outputs[:2]))
+        tt_bev, tt_cls_scores = (ttnn.to_torch(t).float() for t in (tt_prev, tt_outputs[0]))
+        tt_bbox_preds = box_preds_to_torch(tt_outputs[1]).float()
         tt_topk = tuple(ttnn.to_torch(t) for t in (scores, labels, query_index, boxes))
         check_detector_outputs(
             (cls_scores, bbox_preds, torch_prev), (tt_cls_scores, tt_bbox_preds, tt_bev, tt_topk), PCC_THRESHOLD

@@ -24,13 +24,19 @@ from models.experimental.bevformer.tt.tt_perception_transformer import TTPercept
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 
+def _to_dram(*tensors):
+    """The detector's returned tensors, in DRAM: a caller may hold them into the next frame, and a
+    buffer left in L1 there can block the backbone's circular buffers."""
+    return tuple(ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in tensors)
+
+
 class TTBEVFormer:
     """The detector, pinned to the image shape ``create_bevformer_parameters`` recorded the
     backbone's and FPN's convs for."""
 
     def __init__(self, params, device, all_layers=False):
         """``params`` from ``model_preprocessing.create_bevformer_parameters``; ``all_layers`` as
-        ``TTBEVFormerHead`` takes it."""
+        ``TTBEVFormerHead`` takes it, off by default."""
         config = params.config
         assert (
             config.num_cams == params.transformer.config.num_cams
@@ -64,20 +70,20 @@ class TTBEVFormer:
         bfloat16 ROW_MAJOR, sample-major; ``frame`` from :meth:`prepare_frame`; ``prev_bev`` the
         previous frame's ``(bs, bev_h * bev_w, C)`` BEV or None. Returns the class logits
         ``(L, bs, num_query, num_classes)``, boxes ``(L, bs, num_query, code_size)`` in
-        ``TTBEVFormerHead``'s channel order, L the decoder layers with ``all_layers`` and 1, the
-        last, without, and this frame's BEV ``(bs, bev_h * bev_w, C)``; the FPN frees the
-        backbone's features, not ``img``."""
+        ``TTBEVFormerHead``'s channel order, and this frame's BEV ``(bs, bev_h * bev_w, C)``. L is
+        the number of decoder layers with ``all_layers``, else 1, the last layer. The FPN frees
+        the backbone's features, not ``img``."""
         levels = self.neck(list(self.backbone(img)))
         bev_embed = self.transformer(levels, self.params.bev_queries, self.bev_pos, frame, prev_bev=prev_bev)
         cls_scores, bbox_preds = self.head(bev_embed)
-        return cls_scores, bbox_preds, bev_embed
+        return _to_dram(cls_scores, bbox_preds) + (bev_embed,)
 
     def detect(self, cls_scores, bbox_preds):
         """The last decoder layer's detections, on device: ``TTNMSFreeCoder.topk``'s scores, labels
         and query indexes, and ``TTNMSFreeCoder.finalize``'s boxes and validity mask."""
         scores, labels, query_index, boxes = self.coder.topk(cls_scores[-1], bbox_preds[-1])
         boxes, valid = self.coder.finalize(scores, boxes)
-        return scores, labels, query_index, boxes, valid
+        return _to_dram(scores, labels, query_index, boxes, valid)
 
     @staticmethod
     def get_bboxes(scores, labels, boxes, valid):

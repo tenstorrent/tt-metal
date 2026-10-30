@@ -44,8 +44,8 @@ class TTMultiheadAttention:
         self.params = params
         self.num_heads = params.num_heads
         grid = device.compute_with_storage_grid_size()
-        # SDPA's default 32-row chunks leave each core a sliver of the 900 queries and keys; larger
-        # chunks cut the per-chunk overhead several-fold.
+        # SDPA's default 32-row chunks leave each core a sliver of the queries and keys, so the
+        # per-chunk overhead dominates.
         self.sdpa_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y), q_chunk_size=128, k_chunk_size=256, exp_approx_mode=False
         )
@@ -90,7 +90,7 @@ class TTDetrTransformerDecoderLayer:
             params.cross_attn,
             spatial_shapes=[list(bev_shape)],
         )
-        self.ffn = TTFFN(params.ffn, l1=True)
+        self.ffn = TTFFN(params.ffn)
 
     def __call__(self, query, value, query_pos, reference_points):
         """All batch-first: ``query``/``query_pos`` ``(bs, nq, C)``, ``value`` ``(bs, bev_h * bev_w, C)``,
@@ -116,10 +116,13 @@ class TTDetrTransformerDecoderLayer:
 class TTDetectionTransformerDecoder:
     """Decoder over a ``bev_shape`` ``(bev_h, bev_w)`` BEV map."""
 
-    def __init__(self, params, device, bev_shape, batch_first=False):
+    def __init__(self, params, device, bev_shape, batch_first=False, all_layers=True):
         """``params`` comes from ``create_decoder_parameters``; ``batch_first`` selects the
-        layout of ``query``, ``query_pos``, ``value`` and the stacked outputs (see ``__call__``)."""
+        layout of ``query``, ``query_pos``, ``value`` and the stacked outputs (see ``__call__``);
+        ``all_layers`` keeps every layer's outputs, without it only the last layer's, while every
+        layer still runs, as each refines the previous one's points."""
         self.batch_first = batch_first
+        self.all_layers = all_layers
         self.layers = [TTDetrTransformerDecoderLayer(p, device, bev_shape) for p in params.layers]
 
     @staticmethod
@@ -134,11 +137,12 @@ class TTDetectionTransformerDecoder:
         ``(bs, nq, C)`` and ``(bs, bev_h * bev_w, C)`` with ``batch_first``; ``reference_points``
         ``(bs, nq, 3)`` ``GRID_DTYPE`` in [0, 1] either way.
 
-        Returns every layer's output ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``),
+        Returns the layers' outputs ``(L, nq, bs, C)`` (``(L, bs, nq, C)`` with ``batch_first``),
         refined reference points ``(L, bs, nq, 3)`` and the reg branches' raw box codes
         ``(L, bs, nq, code_size)`` in ``model_config.py``'s ``CENTERS_FIRST`` order
-        (batch-first either way), both ``GRID_DTYPE``. The codes' center channels are logit
-        offsets; the refined points are their outcome.
+        (batch-first either way), both ``GRID_DTYPE``; L is the number of layers with
+        ``all_layers``, else 1, the last layer. The codes' center channels are logit offsets; the
+        refined points are their outcome.
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
@@ -171,9 +175,10 @@ class TTDetectionTransformerDecoder:
             logits = ttnn.add(box_code[..., CENTERS_FIRST_CENTERS], logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
 
-            intermediate.append(output)
-            intermediate_reference_points.append(reference_points)
-            box_codes.append(box_code)
+            if self.all_layers or layer is self.layers[-1]:
+                intermediate.append(output)
+                intermediate_reference_points.append(reference_points)
+                box_codes.append(box_code)
 
         outputs = ttnn.stack(intermediate, dim=0)
         if not self.batch_first:
