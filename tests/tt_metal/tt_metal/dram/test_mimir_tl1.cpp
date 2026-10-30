@@ -17,10 +17,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
-#include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"

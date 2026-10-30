@@ -8,7 +8,6 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>

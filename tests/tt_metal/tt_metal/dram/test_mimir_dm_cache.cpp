@@ -14,7 +14,6 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -29,7 +28,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include "llrt/hal.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"

@@ -17,9 +17,6 @@
 #include <vector>
 
 #include "dev_mem_map.h"
-#include "impl/context/metal_context.hpp"
-#include "llrt/hal.hpp"
-#include "llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"

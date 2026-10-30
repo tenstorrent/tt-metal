@@ -11,7 +11,6 @@ target_include_directories(
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/internal/tt-2xx/quasar
 )
 set_target_properties(

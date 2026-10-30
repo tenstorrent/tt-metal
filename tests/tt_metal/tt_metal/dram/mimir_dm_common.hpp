@@ -16,7 +16,6 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <optional>

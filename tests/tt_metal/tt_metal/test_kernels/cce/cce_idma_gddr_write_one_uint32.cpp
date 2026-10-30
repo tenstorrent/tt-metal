@@ -8,7 +8,6 @@
 
 #include "api/compile_time_args.h"
 #include "cce_idma_blocking_copy.h"
-#include "dev_mem_map.h"
 #include "experimental/cce_gddr.h"
 
 void kernel_main() {
