@@ -478,9 +478,9 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         self.pack_src_from_output = True
         self.block = None
 
-    def with_block(self, ct: int, rt: int, kt: int, dest_acc, throttle: int = 0, l1_acc: bool = False):
+    def with_block(self, ct: int, rt: int, kt: int, dest_acc, throttle: int = 0, l1_acc: bool = False, nb: int = 1):
         """The block the cell runs (tiles, k steps, accumulate, throttle, packer L1 accumulate), for the cells llk_matmul_forms.h keeps on main's form."""
-        self.block = (ct, rt, kt, dest_acc == DestAccumulation.Yes, throttle, bool(l1_acc))
+        self.block = (ct, rt, kt, dest_acc == DestAccumulation.Yes, throttle, bool(l1_acc), nb)
         return self
 
     def __repr__(self) -> str:
@@ -498,7 +498,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
             + (
                 "\n#define MATMUL_BLOCK\nconstexpr std::uint32_t MATMUL_BLOCK_CT = %d, MATMUL_BLOCK_RT = %d, MATMUL_BLOCK_KT = %d, MATMUL_BLOCK_THROTTLE = %d;"
-                "\nconstexpr bool MATMUL_BLOCK_ACC = %s, MATMUL_BLOCK_L1_ACC = %s;" % (*self.block[:3], self.block[4], str(self.block[3]).lower(), str(self.block[5]).lower())
+                "\nconstexpr bool MATMUL_BLOCK_ACC = %s, MATMUL_BLOCK_L1_ACC = %s;\nconstexpr std::uint32_t MATMUL_BLOCK_NB = %d;" % (*self.block[:3], self.block[4], str(self.block[3]).lower(), str(self.block[5]).lower(), self.block[6])
                 if self.block
                 else ""
             )

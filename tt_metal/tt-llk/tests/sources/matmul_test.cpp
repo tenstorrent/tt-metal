@@ -55,7 +55,7 @@ constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
 // the forms table key: main's form (0) for the blocks llk_matmul_forms.h keeps on it
 constexpr std::uint32_t matmul_kt_key = ckernel::matmul_form_k<
     MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf ? 0 : 1, MATMUL_BLOCK_ACC, MATMUL_KT_PER_SECTION, MATMUL_BLOCK_KT, MATMUL_KEY_IN0, MATMUL_KEY_IN1, MATMUL_OUT_FORMAT,
-    MATMUL_BLOCK_CT, MATMUL_BLOCK_RT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC>();
+    MATMUL_BLOCK_CT, MATMUL_BLOCK_RT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB>();
 #else
 constexpr std::uint32_t matmul_kt_key = MATMUL_KT_PER_SECTION;
 #endif

@@ -239,11 +239,43 @@ def test_perf_matmul_grid2(
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
 
+    from helpers.matmul_prod_keys import grid_main_cell
+
+    main_form = grid_main_cell(
+        math_fidelity, dest_sync == DestSync.Half, dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format,
+        dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle, l1_acc == L1Accumulation.Yes, num_blocks,
+    )
+    form_keys = [
+        k.with_block(dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_acc, throttle, l1_acc == L1Accumulation.Yes, num_blocks)
+        for k in MATMUL_FORM_KEYS.for_block(
+            formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
+            math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
+            sections=num_blocks, several_blocks=num_blocks > 1,
+        )
+    ]
+    if main_form:
+        for k in form_keys:
+            k.keep_flip = False
+            k.unfused_post = False
+            k.force_form = ""
+    # a cell that keeps main's form runs main's unpack and math bodies (llk_matmul_forms.h resolves the form key to 0); the pack form and the harness opt-ins stay
+    main_templates = [
+        MATH_FIDELITY(math_fidelity),
+        PACK_SRC_FROM_OUTPUT(),
+        DEST_SYNC(dest_sync),
+        THROTTLE_LEVEL(throttle),
+        *form_keys,
+        MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle, l1_acc=l1_acc == L1Accumulation.Yes)),
+        MATMUL_L1_ACC(l1_acc),
+        MATMUL_NB(num_blocks),
+        *([MATMUL_WIDE_WALK()] if wide_walk else []),
+    ]
+
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
         run_types,
-        templates=[
+        templates=main_templates if main_form else [
             MATH_FIDELITY(math_fidelity),
             PACK_SRC_FROM_OUTPUT(),
             *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, throttle),
@@ -270,11 +302,7 @@ def test_perf_matmul_grid2(
             *MATMUL_ROW_MOP.for_block(
                 formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim, num_blocks, num_blocks > 1
             ),
-            *MATMUL_FORM_KEYS.for_block(
-                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
-                sections=num_blocks, several_blocks=num_blocks > 1,
-            ),
+            *form_keys,
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(
                     formats,
