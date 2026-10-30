@@ -15,8 +15,7 @@ using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
-using ttnn::operations::data_movement::float_to_uint16;
-using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+using ttnn::operations::data_movement::pack_pad_value;
 
 namespace {
 // Names are prefixed per factory: all seven pad factories land in one unity-build
@@ -321,14 +320,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
 
-    uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
-        packed_pad_value = pad_value;
-    } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-    } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-    }
+    uint32_t packed_pad_value = pack_pad_value(a.dtype(), pad_value);
 
     auto all_runtime_args = get_pad_runtime_args_rm_sharded(
         a,
