@@ -11,7 +11,7 @@
 #include "api/core_local_mem.h"
 #ifndef ARCH_QUASAR
 // On Quasar, ckernel.h is the LLK header, which a data-movement build cannot include
-// (ckernel_trisc_id.h #errors without COMPILE_FOR_TRISC). It also has no load_blocking.
+// (ckernel_trisc_id.h #errors without COMPILE_FOR_TRISC).
 #include "ckernel.h"
 #endif
 #include <type_traits>
@@ -77,10 +77,11 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
     dfb.reserve_back(one_tile);
 
 #ifdef ARCH_QUASAR
-    // The NoC replication below uses ckernel::load_blocking to wait until the seed rows are in SRAM
-    // before the NoC reads them, and Quasar does not provide load_blocking. Write all 1024 entries to
-    // SRAM with ordinary RISC-V stores instead. Hold a scoped write lock while writing: releasing it
-    // flushes the reserved tile's address range from data cache, so consumer sees written data in SRAM.
+    // The NoC replication below needs the seed rows to be in SRAM before the NoC reads them. On WH/BH,
+    // ckernel::load_blocking ensures this is the case, but it doesn't support Quasar.
+    // So on Quasar, write all 1024 entries to SRAM with ordinary RISC-V stores instead. Hold a scoped
+    // write lock while writing: releasing it flushes the reserved tile's address range from data cache,
+    // so consumer sees written data in SRAM.
     {
         auto lock = dfb.scoped_write_lock(one_tile);
         detail::store_index_tile(lock.template get_ptr<volatile T>(), wt);
