@@ -9,6 +9,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/core/program_cache_l1.hpp"
@@ -145,11 +146,18 @@ DeformConvShapes derive_shapes(
             s.out_w);
     }
 
+    // The kernels size and step through every TILE operand as default 32x32 tiles in row order.
+    const auto default_tile = [](const Tensor& t) {
+        const auto& tile = t.tensor_spec().tile();
+        return tile == tt::tt_metal::Tile{} && !tile.get_transpose_within_face() && !tile.get_transpose_of_faces();
+    };
+
     const auto& w = args.weight;
     TT_FATAL(w.storage_type() == StorageType::DEVICE, "{}: weight must be on device", op);
     TT_FATAL(w.device() == args.input.device(), "{}: weight must be on the input's device", op);
     TT_FATAL(w.dtype() == DataType::BFLOAT16, "{}: weight must be BFLOAT16, got {}", op, w.dtype());
     TT_FATAL(w.layout() == Layout::TILE, "{}: weight must be TILE, got {}", op, w.layout());
+    TT_FATAL(default_tile(w), "{}: weight must use the default non-transposed 32x32 tile", op);
     TT_FATAL(
         w.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "{}: weight must be INTERLEAVED", op);
     const auto& ws = w.logical_shape();
@@ -170,6 +178,7 @@ DeformConvShapes derive_shapes(
             b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "{}: bias must be INTERLEAVED", op);
         TT_FATAL(b.dtype() == DataType::BFLOAT16, "{}: bias must be BFLOAT16, got {}", op, b.dtype());
         TT_FATAL(b.layout() == Layout::TILE, "{}: bias must be TILE, got {}", op, b.layout());
+        TT_FATAL(default_tile(b), "{}: bias must use the default non-transposed 32x32 tile", op);
         TT_FATAL(
             b.logical_shape().rank() == 2 && b.logical_shape()[0] == 1 &&
                 static_cast<uint32_t>(b.logical_shape()[1]) == s.out_channels,
