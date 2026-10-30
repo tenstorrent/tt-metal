@@ -767,42 +767,10 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // The values this program runs with. Where both inputs are borrowed the reader runs one thread, and where
     // the output is borrowed the writer does; a borrowed ring's stride is then max(R, C) or max(C, W), which the
-    // anchor's tile count divides. Beside a DRAM operand the rule batches only as below.
-    const auto in_dram = [](const Tensor& tensor) { return tensor.memory_config().buffer_type() == BufferType::DRAM; };
-    const bool any_dram = in_dram(a) || (!is_scalar && in_dram(*b_opt)) || in_dram(c);
-    // Batching beside DRAM needs interleaved a, b, c and nothing borrowed. A sharded operand that moves over the NoC
-    // stays at batch 1: batched, it aborts on ttsim (H.I.I and W.I.I).
-    const auto interleaved = [](const Tensor& tensor) { return !tensor.memory_config().is_sharded(); };
-    uint32_t tiles_per_compute_thread = 0;
-    if (anchor.kind == AnchorKind::kNone && interleaved(a) && interleaved(*b_opt) && interleaved(c) &&
-        (in_dram(a) || in_dram(*b_opt))) {
-        // The most tiles split_work_to_cores gives a cluster.
-        const uint32_t tiles_per_cluster =
-            tt::div_up(c_num_tiles, std::min<uint32_t>(op.worker_grid.num_cores(), c_num_tiles));
-        tiles_per_compute_thread = tt::div_up(tiles_per_cluster, compute_threads);
-    }
+    // anchor's tile count divides.
     const NativeConfig cfg = resolve_native_config(
         t,
-        {.inputs = !a_borrowed || !b_borrowed,
-         .output = !c_borrowed,
-         .dram = any_dram,
-         .sfpu = is_sfpu,
-         .dst_32bit = fp32_dest_acc_en,
-         .tiles_per_compute_thread = tiles_per_compute_thread,
-         // Batched fp32 divide measured slower at every size.
-         .batch_pays = !(op_type == BinaryOpType::DIV && fp32_dest_acc_en)});
-    // The settings line cannot give these batches, as they follow the tile count.
-    if (tiles_per_compute_thread > 0) {
-        log_info(
-            tt::LogOp,
-            "binary_ng Quasar-native: {} tiles beside DRAM, {} per compute thread: dm_batch={} tiles_per_cycle={} "
-            "entries_per_thread={}",
-            c_num_tiles,
-            tiles_per_compute_thread,
-            describe_native_value(t.dm_batch, cfg.dm_batch),
-            describe_native_value(t.tiles_per_cycle, cfg.tiles_per_cycle),
-            describe_native_value(t.entries_per_thread, cfg.entries_per_thread));
-    }
+        {.inputs = !a_borrowed || !b_borrowed, .output = !c_borrowed, .sfpu = is_sfpu, .dst_32bit = fp32_dest_acc_en});
     const uint32_t reader_threads = cfg.reader_threads;
     const uint32_t writer_threads = cfg.writer_threads;
     // A borrowed ring must divide by the compute count, so, until the DFB can give each tile counter its own
