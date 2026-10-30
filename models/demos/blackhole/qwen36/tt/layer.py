@@ -72,9 +72,7 @@ class Qwen36DecoderLayer:
         self.num_devices = getattr(args, "num_devices", 1)
         self.is_full_attention = args.is_full_attention_layer(layer_num)
         # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
-        self._tp1_gdn = (
-            self.num_devices == 1 and not self.is_full_attention and os.environ.get("QWEN36_TP1_GDN") == "1"
-        )
+        self._tp1_gdn = self.num_devices == 1 and not self.is_full_attention and os.environ.get("QWEN36_TP1_GDN") == "1"
 
         prefix = f"layers.{layer_num}"
 
@@ -158,6 +156,8 @@ class Qwen36DecoderLayer:
             self.attention = TPGatedDeltaNet(mesh_device, tp1, tw, None)
             # The fused all-gather + in-projection prefill needs a TP axis; here the norm hands over the full input.
             self.attention._fuse_agmm = False
+            # The single-device prefill loops read the chunk size off the GDN module.
+            self.attention.long_prefill_chunk_size = tp1.gdn_chunk_size
         else:
             gdn_state = substate(state_dict, f"layers.{layer_num}.linear_attn")
             gdn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
