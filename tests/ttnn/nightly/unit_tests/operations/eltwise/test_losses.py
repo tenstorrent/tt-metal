@@ -132,8 +132,8 @@ def test_mse_loss_with_output_tensor(device, input_shapes, loss_mode):
     actual_out = ttnn.to_torch(preallocated_out)
 
     if loss_mode[0] in ("mean", "sum"):
-        assert_with_ulp(torch_output_tensor, actual_res, ulp_threshold=3)
-        assert_with_ulp(torch_output_tensor, actual_out, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_res, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_out, ulp_threshold=3)
     else:
         assert_with_pcc(torch_output_tensor, actual_res, 0.9999)
         assert_with_pcc(torch_output_tensor, actual_out, 0.9999)
@@ -176,8 +176,8 @@ def test_l1_loss_with_output_tensor(device, input_shapes, loss_mode):
     actual_out = ttnn.to_torch(preallocated_out)
 
     if loss_mode[0] in ("mean", "sum"):
-        assert_with_ulp(torch_output_tensor, actual_res, ulp_threshold=3)
-        assert_with_ulp(torch_output_tensor, actual_out, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_res, ulp_threshold=3)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=actual_out, ulp_threshold=3)
     else:
         assert_with_pcc(torch_output_tensor, actual_res, 0.9999)
         assert_with_pcc(torch_output_tensor, actual_out, 0.9999)
