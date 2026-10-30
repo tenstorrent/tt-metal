@@ -336,6 +336,9 @@ class SlotTable:
                 raise ValueError(f"physical slot {(row, user)} outside the {self.g.rows}x{self.g.users_per_row} slots")
             best = (None, row, user)
         elif self.g.rows_independent and self.g.wave_affinity == "user":
+            # ``slot_rank`` (the prefix cache): among the candidates of each rule below, a slot without retained
+            # content comes first, then the least recently used resident prefix: without it the rules took slot index
+            # 0 on rows 0.. for every new prompt and evicted the content a repeat would hit (served apc_r5)
             if prefer_sp and self.g.sp_fallback and self.g.sp_first:
                 # sequence-parallel first: a slot index live on NO row keeps the new request SP-eligible (its chunks
                 # run alone over every row). An eager 2048-row wave costs what a 16 K sequence-parallel chunk costs
@@ -344,19 +347,22 @@ class SlotTable:
                 # wave holds it) keeps the wave-affine order: one traced wave of `rows` members beats `rows` traced SP
                 # calls. The lowest-load row (ties: the lowest).
                 live_users = {u for _, u in self._occupied}
-                for user in self.g.wave_user_order():
+                cands = []
+                for order, user in enumerate(self.g.wave_user_order()):
                     if user not in live_users:
-                        best = (None, min(range(self.g.rows), key=lambda r: (row_loads[r], r)), user)
-                        break
+                        row = min(range(self.g.rows), key=lambda r: (row_loads[r], r))
+                        cands.append(((rank(row, user), order), row, user))
+                if cands:
+                    best = min(cands, key=lambda c: c[0])
             if best is None:
                 # wave-affine: the first slot index (column-interleaved order) with a free row, its lowest free row
-                for user in self.g.wave_user_order():
+                cands = []
+                for order, user in enumerate(self.g.wave_user_order()):
                     for row in range(self.g.rows):
                         if (row, user) not in self._occupied:
-                            best = (None, row, user)
-                            break
-                    if best is not None:
-                        break
+                            cands.append(((rank(row, user), order, row), row, user))
+                if cands:
+                    best = min(cands, key=lambda c: c[0])
         else:
             rows = range(self.g.rows) if self.g.rows_independent else (0,)
             # column balance first, then row balance, then the lowest indices

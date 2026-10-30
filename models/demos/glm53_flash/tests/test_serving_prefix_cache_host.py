@@ -200,6 +200,15 @@ def test_hit_miss_reused_slot_downgrade_and_lru():
     assert (t2.allocate(0, at=(0, 2)).row, t2.physical(0).user) == (0, 2)
     with expect_error(RuntimeError, "is live"):
         t2.allocate(1, at=(0, 2))
+    # under per-row ownership the wave-affine and SP-first rules rank the same way: a fresh prompt takes a slot
+    # without retained content before it evicts a resident prefix (served apc_r5 evicted every retained slot by
+    # re-taking slot index 0 of rows 0..)
+    g2 = _geometry(rows_independent=True)
+    t3 = SlotTable(g2)
+    first = t3.allocate(0, slot_rank=apc.slot_rank)
+    assert (first.row, first.user) not in {(0, 0), (0, 2)}, "the retained slots of row 0 are not the first choice"
+    taken = {(t3.allocate(i, slot_rank=apc.slot_rank).row, t3.physical(i).user) for i in range(1, 6)}
+    assert (0, 0) not in taken and (0, 2) not in taken, "six prompts fit without evicting a resident prefix"
     # a repeated prompt re-prefills on the free slot that retains it (the same mesh row: its greedy text repeats
     # bit-exactly, rows differ in the last ulp); a live slot or an evicted content is no candidate
     assert apc.slot_holding(ids_b, [], t2) == (0, 0), "slot (0, 0) retains prompt B"
