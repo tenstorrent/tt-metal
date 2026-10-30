@@ -47,7 +47,7 @@ SUPPORTED = {
     "alignment": ["tile_aligned", "h_non_aligned"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
     "residual": ["none", "present"],
-    "affine_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "affine_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "mixed"],
 }
 
 
@@ -93,8 +93,6 @@ def _check_universe(input_tensor, gamma, beta, residual_input_tensor):
     if len(shape) != 4:
         raise ValueError(f"layer_norm: input_tensor must be rank 4, got shape {shape}")
     width = shape[-1]
-    if width % TILE != 0:
-        raise ValueError(f"layer_norm: last dim must be a multiple of {TILE}, got {width}")
 
     if residual_input_tensor is not None:
         if residual_input_tensor.layout != ttnn.TILE_LAYOUT:
@@ -106,20 +104,23 @@ def _check_universe(input_tensor, gamma, beta, residual_input_tensor):
         affine_shape = list(affine.shape)
         if math.prod(affine_shape) != width:
             raise ValueError(f"layer_norm: {name} volume must equal input width {width}, got shape {affine_shape}")
-        if affine.layout == ttnn.TILE_LAYOUT:
-            if affine_shape[-1] != width:
-                raise ValueError(f"layer_norm: TILE {name} last dim must be {width}, got shape {affine_shape}")
-        elif affine_shape[-1] % TILE != 0:
-            raise ValueError(f"layer_norm: ROW_MAJOR {name} last dim must be a multiple of {TILE}, got {affine_shape}")
+        if affine.layout == ttnn.TILE_LAYOUT and affine_shape[-1] != width:
+            raise ValueError(f"layer_norm: TILE {name} last dim must be {width}, got shape {affine_shape}")
+
+
+def _check_affine_sticks(gamma, beta):
+    """Writer mechanism cap: a 32-element row-0 chunk must lie inside one ROW_MAJOR stick."""
+    for name, affine in (("gamma", gamma), ("beta", beta)):
+        stick = affine.shape[-1]
+        if affine.layout == ttnn.ROW_MAJOR_LAYOUT and stick % TILE != 0:
+            raise UnsupportedAxisValue(f"layer_norm: ROW_MAJOR {name} stick width {stick} is not a multiple of {TILE}")
 
 
 def validate(input_tensor, gamma, beta, residual_input_tensor=None, *, compute_kernel_config):
     _check_universe(input_tensor, gamma, beta, residual_input_tensor)
 
-    if gamma.layout != beta.layout:
-        affine_layout = "mixed"
-    else:
-        affine_layout = gamma.layout
+    # The writer takes gamma's and beta's layouts as independent CT flags, so "mixed" is a real code path.
+    affine_layout = gamma.layout if gamma.layout == beta.layout else "mixed"
     tensors = [input_tensor, gamma, beta] + ([residual_input_tensor] if residual_input_tensor is not None else [])
     memory_layouts = {t.memory_config().memory_layout for t in tensors}
     memory_layout = memory_layouts.pop() if len(memory_layouts) == 1 else "mixed"
@@ -143,6 +144,8 @@ def validate(input_tensor, gamma, beta, residual_input_tensor=None, *, compute_k
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"layer_norm: unsupported combination (refinement candidate): {exc}")
+
+    _check_affine_sticks(gamma, beta)
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +172,9 @@ def layer_norm(
         fp32_dest_acc_en=bool(compute_kernel_config.fp32_dest_acc_en),
     )
     if blocking is None:
-        raise NotImplementedError("layer_norm: row_resident block does not fit L1 (w_split_combine not built)")
+        raise UnsupportedAxisValue(
+            f"layer_norm: width {input_tensor.shape[-1]} exceeds the row_resident L1 cap (w_split_combine not built)"
+        )
 
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),

@@ -28,7 +28,7 @@ Allocations: 7 with residual (`cb_input_tiles`, `cb_residual_tiles`, `cb_gamma_r
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `Wt = tensor_w_tiles` | 24 | validate: `W == 768` domain, `W % 32 == 0` |
+| `Wt = tensor_w_tiles` | 24 in the contract domain; hard bound `Wt <= 38` (fp32 DEST + residual) / `<= 47` (fp32, no residual) | `alignment` axis rejects `W % 32 != 0`; `derive_blocking()` returns `None` (typed `UnsupportedAxisValue`) when `block_height_cap(INPUT_DEPTH_MAX) < 1`, which is `Wt * (4 T_in + 2 T_in (1 + HAS_RESIDUAL) + T_acc) + T_acc > CB_L1_BUDGET_BYTES` |
 | `block_height` | `1 <= block_height <= min(max_core_rows_tiles, block_height_cap(input_depth))` | `derive_blocking()` in `op_design.md`; validate requires `block_height_cap(INPUT_DEPTH_MAX) >= 1` |
 | `block_rows` | `1 <= block_rows <= block_height` | per-block runtime extent (`last_block_extent` on the final block) |
 | `input_depth` | `{1, 2}` | 1 iff `max_core_rows_tiles <= block_height_cap(1)` |

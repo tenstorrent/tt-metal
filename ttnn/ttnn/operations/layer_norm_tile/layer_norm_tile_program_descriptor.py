@@ -45,9 +45,10 @@ class Blocking:
     input_depth: int
     tensor_w_tiles: int
     in_tile_bytes: int
-    acc_tile_bytes: int
     acc_dtype: object
     has_residual: bool
+    # {allocation: (pages, page_bytes)} from _cb_plan
+    cb_plan: dict
     all_cores: object
     # ((core, start_row, num_blocks, last_block_extent), ...)
     assignment: tuple
@@ -69,11 +70,24 @@ def _split_rows(device, tensor_rows_tiles):
     return all_cores, cores_rows, rows_g1
 
 
-def _footprint(block_height, input_depth, *, Wt, in_bytes, acc_bytes, has_residual):
-    """Per-core CB bytes (l1_ledger.md, Footprint); the single source for the L1 cap."""
-    per_row = Wt * (input_depth * in_bytes * (1 + int(has_residual)) + acc_bytes) + acc_bytes
-    fixed = Wt * in_bytes * (2 + OUTPUT_DEPTH)
-    return block_height * per_row + fixed
+def _cb_plan(block_height, input_depth, *, Wt, in_bytes, acc_bytes, has_residual):
+    """{allocation: (pages, page_bytes)} per core (l1_ledger.md). Single source for CB sizes and the L1 cap."""
+    block_tiles = block_height * Wt
+    plan = {
+        "input": (input_depth * block_tiles, in_bytes),
+        "gamma": (Wt, in_bytes),
+        "beta": (Wt, in_bytes),
+        "work": (block_tiles, acc_bytes),
+        "stats": (block_height, acc_bytes),
+        "output": (OUTPUT_DEPTH * Wt, in_bytes),
+    }
+    if has_residual:
+        plan["residual"] = (input_depth * block_tiles, in_bytes)
+    return plan
+
+
+def _footprint(block_height, input_depth, **geom):
+    return sum(pages * page_bytes for pages, page_bytes in _cb_plan(block_height, input_depth, **geom).values())
 
 
 def _block_height_cap(input_depth, **geom):
@@ -117,23 +131,16 @@ def derive_blocking(input_tensor, *, has_residual, fp32_dest_acc_en):
         input_depth=input_depth,
         tensor_w_tiles=Wt,
         in_tile_bytes=in_bytes,
-        acc_tile_bytes=acc_bytes,
         acc_dtype=acc_dtype,
         has_residual=has_residual,
+        cb_plan=_cb_plan(block_height, input_depth, **geom),
         all_cores=all_cores,
         assignment=tuple(assignment),
     )
 
 
-def _cb(index, num_pages, page_size, data_format, cores):
-    return ttnn.CBDescriptor(
-        total_size=num_pages * page_size,
-        core_ranges=cores,
-        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=page_size)],
-    )
-
-
-def _alias_group(indices, num_pages, page_size, data_format, cores):
+def _cb(indices, num_pages, page_size, data_format, cores):
+    """One allocation; several indices make an alias group (lockstep ids over the same bytes)."""
     return ttnn.CBDescriptor(
         total_size=num_pages * page_size,
         core_ranges=cores,
@@ -166,29 +173,20 @@ def create_program_descriptor(
     Wt = blocking.tensor_w_tiles
     block_height = blocking.block_height
     in_bytes = blocking.in_tile_bytes
-    acc_bytes = blocking.acc_tile_bytes
     has_residual = blocking.has_residual
     width = list(input_tensor.shape)[-1]
-    block_tiles = block_height * Wt
 
+    plan = blocking.cb_plan
     cbs = [
-        _cb(CB_INPUT_TILES, blocking.input_depth * block_tiles, in_bytes, input_tensor.dtype, cores),
-        _cb(CB_GAMMA_ROWS, Wt, ttnn.tile_size(gamma.dtype), gamma.dtype, cores),
-        _cb(CB_BETA_ROWS, Wt, ttnn.tile_size(beta.dtype), beta.dtype, cores),
-        _alias_group(WORK_GROUP, block_tiles, acc_bytes, blocking.acc_dtype, cores),
-        _alias_group(STATS_GROUP, block_height, acc_bytes, blocking.acc_dtype, cores),
-        _cb(
-            CB_OUTPUT_TILES,
-            OUTPUT_DEPTH * Wt,
-            output_tensor.tile.get_tile_size(output_tensor.dtype),
-            output_tensor.dtype,
-            cores,
-        ),
+        _cb((CB_INPUT_TILES,), *plan["input"], input_tensor.dtype, cores),
+        _cb((CB_GAMMA_ROWS,), *plan["gamma"], gamma.dtype, cores),
+        _cb((CB_BETA_ROWS,), *plan["beta"], beta.dtype, cores),
+        _cb(WORK_GROUP, *plan["work"], blocking.acc_dtype, cores),
+        _cb(STATS_GROUP, *plan["stats"], blocking.acc_dtype, cores),
+        _cb((CB_OUTPUT_TILES,), *plan["output"], output_tensor.dtype, cores),
     ]
     if has_residual:
-        cbs.append(
-            _cb(CB_RESIDUAL_TILES, blocking.input_depth * block_tiles, in_bytes, residual_input_tensor.dtype, cores)
-        )
+        cbs.append(_cb((CB_RESIDUAL_TILES,), *plan["residual"], residual_input_tensor.dtype, cores))
 
     reader_ct_args = [CB_INPUT_TILES, CB_RESIDUAL_TILES, Wt, block_height, in_bytes, int(has_residual)]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
@@ -204,7 +202,7 @@ def create_program_descriptor(
         CB_BETA_ROWS,
         Wt,
         block_height,
-        output_tensor.tile.get_tile_size(output_tensor.dtype),
+        plan["output"][1],
     ]
     writer_ct_args.extend(_affine_ct_args(gamma))
     writer_ct_args.extend(_affine_ct_args(beta))

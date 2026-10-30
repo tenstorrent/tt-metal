@@ -4,6 +4,7 @@
 from .layer_norm_tile import (
     EXCLUSIONS,
     INPUT_TAGGERS,
+    PROPERTIES,
     SUPPORTED,
     default_compute_kernel_config,
     layer_norm,
@@ -13,6 +14,7 @@ from .layer_norm_tile import (
 __all__ = [
     "EXCLUSIONS",
     "INPUT_TAGGERS",
+    "PROPERTIES",
     "SUPPORTED",
     "default_compute_kernel_config",
     "layer_norm",

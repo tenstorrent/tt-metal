@@ -1,19 +1,21 @@
 # Verification Report: layer_norm_tile
 
 Board: Blackhole p100a, 110-core compute grid (11 x 10). Op: `ttnn.operations.layer_norm_tile`, re-exported as
-`ttnn.operations.layer_norm`. Verified commit range: everything after the planner/implementer commits
-`371ba4b4ac0` .. `53c6d69912a`.
+`ttnn.operations.layer_norm` (235 B shim, `ttnn/ttnn/operations/layer_norm/__init__.py`). Verified: the
+`row_resident` build (`ab5af465d8f` planner, `489dc153a50` / `a6da58d8aea` implementer).
 
-## Golden suite status (blocker for the mechanical check)
+## Golden suite status (blocks the mechanical check)
 
-`eval/golden_tests/layer_norm_tile/` does not exist: no `feature_spec.py`, no `test_golden.py`. The design records
-this ("feature_spec.py status": `/golden-tests` must author it). As a result:
+`eval/golden_tests/layer_norm_tile/` does not exist: there is no `feature_spec.py` and no `test_golden.py`. The
+design records this (Overview, "feature_spec.py"). As a result:
 
-- `eval/eval_test_runner.sh` and `python3 -m eval.verify_supported` could not run, and **no `verifier_report.json`
-  was produced**. Inventing a feature_spec here would be the verifier authoring its own grading surface.
-- The SUPPORTED-vs-behaviour check below is manual, driven by the acceptance, extended and precision tests.
-- **Action for the user**: run `/golden-tests` for `layer_norm_tile`, then re-run the verifier CLI. Inputs for
-  that pass are in "Handoff to /golden-tests".
+- `eval/eval_test_runner.sh` and `python3 -m eval.verify_supported` cannot run, so **no `verifier_report.json`
+  was produced**. The verifier does not author `feature_spec.py`: that would mean grading against a spec it
+  wrote itself.
+- The SUPPORTED-vs-behaviour check below is manual. It is driven by the acceptance (80), extended (12),
+  precision (16) and perf (60) tests.
+- **Action for the user**: run `/golden-tests` for `layer_norm_tile`, then re-run the verifier CLI. Inputs
+  for that pass are in "Handoff to /golden-tests".
 
 ## Code Review
 
@@ -21,196 +23,227 @@ Fixed in place:
 
 | # | Finding | Fix |
 |---|---------|-----|
-| 1 | `cb_output_tiles` was always `2 * block_w_tiles` (96 KB). On every R <= 110 shape each core owns one tile-row, so the second slot is never live (ledger check 2, capacity > live set). | `output_depth_rows = min(OUTPUT_DEPTH_ROWS, max_num_blocks * block_rows)` in `select_blocking()`, the same clamp `input_depth_blocks` already used. Saves 48 KB per core on R <= 110. Device time unchanged within noise. Ledger updated. |
-| 2 | Face size derived twice on the host (`affine_tile_bytes // 4` for the reader CT arg, `FACE * FACE * element_size` in `_affine_reader_args`). DRY. | One helper `_affine_face_bytes(affine)` feeds both. |
-| 3 | Reader used bare `32` / `16` literals for tile width and face width in the RM affine address math. | Named `TILE_WIDTH` / `FACE_WIDTH` constants. |
-| 4 | `l1_ledger.md` total table labelled `block_rows = 2` cases as if built; `output_depth_rows` was a constant. | Ledger rows, symbol table and totals updated. Measured DM / compute ablation appended to the data-movement budget. |
-| 5 | `op_design.md` Phase 0 values were stale vs the build (`BLOCK_ROWS_MAX` 2 -> 1, P3 DEST accumulate, single 576 B TILE affine read). | Appended a "Post-implementation deltas (verifier)" table. The design body is unchanged. |
-| 6 | Perf test covered only 3 shapes at one config. | `test_layer_norm_tile_perf.py` now spans R = 32 / 64 / 128 / 248 x 2 affine forms x 3 compute configs. This is the guard set the perf refinements gate on. |
+| 1 | `affine_layout` was tagged `"mixed"` when gamma and beta layouts differed, and `validate()` refused it. The writer takes `gamma_is_rm` / `beta_is_rm` as independent CT flags, and the design says beta follows gamma's rules "independently". Mixed is a real, working code path, so the refusal was false (drift: the op under-claimed). | Added `"mixed"` to `SUPPORTED["affine_layout"]`. Covered by `test_affine_forms` (TILE+RM, RM+TILE, RM-DRAM+TILE), prod and `--dev`. |
+| 2 | `W % 32 != 0` raised `ValueError` in the universe check, before the `alignment` axis. That made the tagger's `w_non_aligned` value dead code, and a golden `w_non_aligned` cell would land in `xfail_wrong_mode`. Non-aligned W is a kernel capability gap, not a structural impossibility. | Removed the `ValueError`; `SUPPORTED["alignment"]` now refuses it with a typed `UnsupportedAxisValue`. |
+| 3 | A ROW_MAJOR affine stick width that is not a multiple of 32 (a writer mechanism cap: a 32-element chunk must sit in one stick) raised `ValueError`. | Moved to `_check_affine_sticks()`, run after the SUPPORTED/EXCLUSIONS gates and raising `UnsupportedAxisValue`. New test `test_rejects_rm_affine_stick_not_tile_multiple`. |
+| 4 | The L1-cap refusal (`derive_blocking()` returns `None`) raised a bare `NotImplementedError`. | Now a typed `UnsupportedAxisValue` naming the width and the deferred regime. |
+| 5 | DRY: the L1 cap's `_footprint()` restated every CB size as an independent closed-form expression, while `create_program_descriptor()` sized the CBs again on its own. A depth or block change in one would silently drift from the other. | One `_cb_plan()` returns `{allocation: (pages, page_bytes)}`. `_footprint()` sums it, `derive_blocking()` stores it on `Blocking.cb_plan`, and the descriptor builds every CB from it. `_cb` / `_alias_group` merged into one `_cb(indices, ...)`. Dead locals (`acc_bytes`, `block_tiles`, `Blocking.acc_tile_bytes`) removed. The writer's output page-size CT arg comes from the plan. |
+| 6 | `PROPERTIES` was declared in the op file but not exported from the package. `eval.dump_op_metadata` reads it from the package module, so it saw `{}`. | Exported from `__init__.py`. |
+| 7 | `test_layer_norm_tile_extended.py` was stale against this build: 4/12 failing. It expected RM-in-DRAM affine to be refused and mixed affine to be refused. | Rewritten to the current contract: DRAM-interleaved input (with and without residual); five affine forms incl. mixed and RM in DRAM; typed refusals for `w_non_aligned`, RM stick width, HEIGHT_SHARDED input. |
+| 8 | Precision baseline and perf guard set did not cover the residual path or the multi-block regime. | Baseline: 4 shapes x {tile_dram/no residual, rm_l1/residual} x {fp32, bf16 DEST}. Perf: 5 shapes (adds `(256,1,16,768)`, multi-block with residual) x 2 affine x 2 residual x 3 configs, two dispatches per case. |
+| 9 | Ledger symbol table bounded `Wt` by "validate: `W == 768`", which `validate()` does not enforce. | Bound restated from the real predicate: the L1 cap, `Wt <= 38` (fp32 + residual) / `<= 47` (fp32, no residual). |
 
 Checked, no change needed:
 
 - **Prompt contract** (`eval/prompts/layer_norm_tile.txt`, no `## Rules` section; its MUST statements apply):
-  - TILE input only; no `to_layout` / `tilize` / `pad` / `slice` on host; non-aligned S handled in kernels.
-  - Non-bf16 input raises `ValueError` mentioning `dtype`.
+  - TILE input only, with no host `to_layout` / `tilize` / `pad` / `slice`.
+  - Non-aligned S is handled in the kernels (padded rows compute finite values and are written as whole tiles).
+  - Non-bf16 input raises `ValueError`.
+  - The import path `ttnn.operations.layer_norm` works.
   - Exactly one `ttnn.generic_op` per call.
-  - The `layer_norm(input, compute_kernel_config=...)` call pattern in the prompt omits gamma/beta, which are required positional parameters. It is a `TypeError` by signature, as the design notes.
-- **Helper usage**: every compute phase is a helper call:
-  - P1 `reduce_mean`.
-  - P2 `sub`, column broadcast.
-  - P3 `eltwise_chain` (`BinaryFpu<Mul>` + `PackTile` with DEST `PerRow` accumulation).
-  - P4 `reduce`.
-  - P5 / P6 `mul`, in place.
-  - P7 `add`.
+  - The prompt's `layer_norm(input, compute_kernel_config=...)` call pattern omits gamma/beta, which the same prompt makes required. It is a `TypeError` by signature.
+- **Helper usage**: every compute phase is one helper call per block:
+  - `add`, `reduce_mean`, `sub` (Col bcast).
+  - `eltwise_chain` (`BinaryFpu<Mul>` + `PackTile`, DEST `PerRow`).
+  - `reduce` with an SFPU post-op.
+  - `mul` (Col bcast), `mul` (Row bcast), `add` (Row bcast).
 
-  The P4 finalize uses raw SFPU calls inside `reduce()`'s `post_reduce_op` slot. That slot takes a DEST-index callable, so no chain element fits. Dataflow is raw `TensorAccessor` page I/O, which the design justifies: no helper covers page reads or the face-row scatter. No multicast or semaphores exist that should use `McastArgs`.
-- **CB sync balance** (per block, nominal counts):
-  - `cb_input_tiles`: reader pushes 24 per row; P1 waits without popping; P2 pops.
-  - `cb_row_stat`: P1 pushes `block_rows`, P2 pops at end; P3 pushes one per row, P4 bulk-pops.
-  - `cb_rstd`: P4 push, P5 pop.
-  - `cb_centered`: P2 pushes N; P3 waits N without popping; P5 / P6 pop and push N each; P7 pops N.
-  - `cb_output_tiles`: P7 pushes N per tile; the writer pops 24 per row.
-  - Affine CBs: pushed once, popped once after the last block.
-- **API hygiene**: `TensorAccessor` (no `InterleavedAddrGen`); `void kernel_main()` in all three kernels; `api/dataflow/dataflow_api.h` include path.
-- **Broadcast efficiency**: COL broadcast for mean and rstd (REDUCE_ROW output, column 0 valid). ROW broadcast for gamma and beta, with only row 0 of faces 0 and 1 filled (64 valid B per tile, not full tiles). No redundant fills, and no reduce-scaler CB.
-- **Writer**: `noc_async_writes_flushed()` before each `cb_pop_front`, and one `noc_async_write_barrier()` at the end.
+  The post-op uses raw SFPU calls because `reduce()`'s post-op slot is a DEST-index callable (design, "Helpers considered and rejected"). The writer's RM face-1 copy uses `dataflow_kernel_lib::local_addr()`. There is no multicast or semaphore code that should use `McastArgs`.
+- **CB sync balance** (per block of `block_rows` tile-rows):
 
-Advisory (no fix possible on this board):
+  | CB | Producer side | Consumer side |
+  |----|---------------|---------------|
+  | `cb_input_tiles` | reader: `Wt` per row | no residual: `reduce_mean` no-pop, then `sub` pops per tile. Residual: `add` pops per tile. |
+  | `cb_residual_tiles` | reader | `add` pops per tile |
+  | `work` group | `xsum` push (add); `centered` push (sub); `normed` push (mul); `scaled` push (mul) | `xsum` pop (sub); `centered` held by `sumsq`, then pop (mul); `normed` pop (mul); `scaled` pop (add) |
+  | `stats` group | `mean` bulk push; `sumsq` push per row; `rstd` push | `mean` pop per row; `sumsq` bulk pop; `rstd` pop per row |
+  | `cb_output_tiles` | push per tile | writer pops `Wt` per row |
+  | gamma / beta | pushed once | popped once after the last block |
 
-- P3 relies on ELWMUL accumulating into DEST (`mul_init(..., acc_to_dest=1)`). The design flagged that the WH MOP hardcodes `acc_to_dest = 0` for ELWMUL. It is correct on Blackhole: acceptance passes, and the precision baseline matches the fp32 reference to 1.2 mean ULP. It is unverified on Wormhole and needs a WH board to confirm. If WH is ever a target, the packer L1-accumulate realization from the design is the fallback.
+  Each id of an alias group moves `block_rows * Wt` (work) or `block_rows` (stats) per block, lockstep.
+- **API hygiene**: `TensorAccessor` everywhere (no `InterleavedAddrGen`); `void kernel_main()`; `api/dataflow/dataflow_api.h`.
+- **Broadcast efficiency**:
+  - Col broadcast for mean / rstd (REDUCE_ROW output, col 0 valid).
+  - Row broadcast for gamma / beta, of which only face-0 row 0 and face-1 row 0 are written: one 576 B read per tile-column for TILE, a 64 B read plus a 32 B local copy for RM.
+  - No redundant fills, and no scaler CB (the aligned `AccumulateViaAdd` path never waits on one).
+
+Advisory (needs other hardware, so no fix is possible here):
+
+- `sumsq_block` accumulates ELWMUL into DEST (`DestAccumulation::PerRow`, `mul_init(..., acc_to_dest)`). It is correct on Blackhole: acceptance passes and the fp32 baseline is about 1.2 mean bf16 ULP. It is unverified on Wormhole.
 
 ## Design Conformance / Blocking Model
 
-- **Algorithm**: two-pass LayerNorm with a resident row (mean, center, sum of squares on the centered values, rstd, scale, gamma, beta), as designed.
-- **Work distribution**: `split_work_to_cores(full compute_with_storage_grid, tensor_row_tiles, row_wise=True)`, which fills min(R, 110) cores. R uses the per-image ceil. Kernels are created only on `all_cores`.
-- **Knob fidelity**:
-  - `select_blocking()` is the single source for `block_rows`, `block_w_tiles`, `input_depth_blocks`, `output_depth_rows` and the core assignment.
-  - Those values reach all three kernels as CT args (block shape) or RT args (`num_blocks`, `start_row_tile`, `core_rows`).
-  - CB page counts derive from the same values.
-  - No CB scales with an unbounded op dimension. `block_w_tiles <= W_TILES_RESIDENT_MAX` is a predicate-guarded resident row; the streaming fallback was rejected as unreachable under the contract (W = 768).
-- **Half-turned split**: `BLOCK_ROWS_MAX = 1` while some cores own 2-3 rows (R = 128, 248). The departure from the coarsest-block default is justified by measurement (implementer, overlap lamp: R = 128 39.3 -> ~35 us, R = 248 65.6 -> ~51 us). Refinement 3 re-tests it once overlap levers exist.
-- **Expression**:
-  - Reader: one handshake per tile-row block, 24 reads, one barrier, one push.
-  - Writer: one wait / 24 writes / one flush / one pop per tile-row.
-  - Compute: every phase is one helper call over `grid(block_rows, block_w_tiles)`.
-  - No unit-at-a-time synchronization at a block boundary.
-- **Performance conformance**: the grid is filled up to R; both dataflow halves are batched per tile-row; buffer depth is 2 wherever a core has a next block to prefetch.
+- **Algorithm**: matches the design. Two-pass centered variance on a resident row (`one_pass_moments` rejected), residual folded once into `cb_xsum`, `1/W` from the logical W.
+- **Pipeline topology**:
+  - The reader streams input and residual.
+  - The writer fetches gamma/beta first (stall-shadowed behind block-0 reads and phases add..normalize), then drains output.
+  - Compute runs the 8 designed phases.
+- **Work distribution**: `split_work_to_cores(grid, R, row_wise=True)` over the full runtime grid. Per-image `ceil(S/32)` row count. Kernels only on `all_cores`.
 
-  The measured gap is structural: one-tile-row cores serialize read, compute and write (see "Performance baseline"). That is filed as Refinement 3, not a conformance defect. Idle cores at R <= 55 are the design's deferred `w-split-combine` regime (Refinement 1).
+  At R = 32 / 64 the grid is under-filled (32 / 64 of 110 cores). That is the design's `w_split_combine`, deferred on a precision-baseline gate that is now met, so it is filed as Refinement 1.
+- **Knob fidelity**:
+  - `block_height`, `input_depth`, `OUTPUT_DEPTH`, `CB_L1_BUDGET_BYTES` and the per-core assignment each have one source (`derive_blocking()` / module constants).
+  - They reach the kernels as CT args (`Wt`, `block_height`) and RT args (`start_row`, `num_blocks`, `last_block_extent`).
+  - After fix #5, every CB size and the L1 cap read the same `_cb_plan()`.
+  - No CB scales with an unbounded op dimension: `Wt` is bounded by the cap predicate (fix #9).
+- **Half-turned split**: none. The per-core block is the whole assignment when it fits, otherwise the coarsest block under the cap.
+- **Expression**:
+  - The reader reserves, reads, barriers and pushes once per tile-row (24 or 48 reads in flight). The CB capacity spans the block, so the block factor sets the live set, not only the trip count. This per-tile-row handshake is the design's planned granularity.
+  - The writer waits, issues 24 writes, flushes and pops once per tile-row.
+  - Compute is one helper call per phase per block.
+  - Not an expression failure.
+- **Axis accounting**: every ledger row's span/stream claims hold against the code.
 
 ## Registry Conformance
 
-- `INPUT_TAGGERS = {"alignment": tag_alignment}` with signature `(inputs, axes)`.
-- `SUPPORTED` declares `dtype`, `fp32_dest_acc_en`, `layout`, `alignment`, `affine_layout` and `memory_layout`.
+- `INPUT_TAGGERS = {"alignment": tag_alignment}` with the `(inputs, axes)` signature.
+- `SUPPORTED`:
+  - `dtype` [bf16], `fp32_dest_acc_en` [True, False], `layout` [TILE].
+  - `alignment` [tile_aligned, h_non_aligned], `memory_layout` [INTERLEAVED].
+  - `residual` [none, present], `affine_layout` [TILE, ROW_MAJOR, mixed].
 - `EXCLUSIONS = []`.
-- `validate()` checks SUPPORTED per axis, then EXCLUSIONS (once per affine layout), raising `UnsupportedAxisValue` / `ExcludedCell`.
-- The op file does not declare `INVALID`.
-- The entry point resolves the config, raises the prompt-mandated `ValueError` for non-bf16 input, then calls `validate()` before any device work.
-- No XPASS-driven SUPPORTED changes (no golden run).
-
-Undeclared refusals (`NotImplementedError` raised outside a SUPPORTED axis):
-
-| Gate | Where | Why not added as an axis now |
-|------|-------|------------------------------|
-| gamma/beta dtype must be bf16 | `_validate_affine` | `eval.feature_matrix.unsupported_reason` treats a SUPPORTED axis missing from a cell's values as unsupported. An axis the future golden suite does not emit would xfail every golden cell. The golden suite must name the axis first. |
-| gamma/beta must be interleaved | `_validate_affine` | same |
-| ROW_MAJOR gamma/beta needs `Wg % 32 == 0` and 32-B halves aligned to the buffer's NoC alignment, so RM affine in DRAM is refused on BH (64 B DRAM alignment) | `_validate_affine` | Out of contract: the prompt's RM form is L1. The refusal is arch-dependent (it would pass on a 32 B DRAM alignment), so a static EXCLUSION would be wrong. `test_rm_affine_in_dram` pins the behaviour per arch. |
-| `ceil(W/32) <= W_TILES_RESIDENT_MAX = 32` | `validate()` | Regime predicate (resident row). Out of contract (W = 768). |
-| W not a multiple of 32 (`alignment = w_non_aligned`) | SUPPORTED["alignment"] | Declared, so already honest. Out of contract (W = 768). |
+- `validate()` order:
+  1. The universe check (`ValueError`: dtype, input/residual layout, rank, residual shape, affine volume, TILE affine last dim).
+  2. SUPPORTED per axis (`UnsupportedAxisValue`).
+  3. EXCLUSIONS (`ExcludedCell`).
+  4. The affine stick mechanism cap (`UnsupportedAxisValue`).
+- The entry point calls `validate()` before any device work. The op file does not declare `INVALID`.
+- Drift fixed in place: `affine_layout="mixed"` added to SUPPORTED (fix #1).
+- Refusal typing fixed: `w_non_aligned`, RM stick width, L1 cap (fixes #2-4).
+- `ValueError` stays only for structural / prompt-mandated rejections.
 
 ## INVALID audit
 
-Not possible: `feature_spec.py` is absent. See the handoff below.
+Not possible: `feature_spec.py` is absent.
 
 ## Handoff to /golden-tests
 
-The design's TARGET table names the axes `validate()` gates on:
+Axes `validate()` builds, with the values the design names as TARGET:
 - `dtype` = [bfloat16].
 - `fp32_dest_acc_en` = [True, False].
 - `layout` = [TILE].
 - `alignment` = [tile_aligned, h_non_aligned].
-- `affine_layout` = [TILE, ROW_MAJOR].
 - `memory_layout` = [INTERLEAVED].
+- `residual` = [none, present].
+- `affine_layout` = [TILE, ROW_MAJOR].
 
-Recommendations for the suite:
-- **Shapes**: build INPUTS from the contract (`(B, 1, S, 768)`, `1024 <= B*S <= 4096`, `S <= 512`, including non-aligned S).
-- **Affine pinning**: TILE affine in DRAM and ROW_MAJOR affine in L1. Otherwise the RM-in-DRAM cells become `supported_fail` on BH.
-- **INVALID**: nothing structural is needed. TARGET has no bf8b and no RM input, so the canonical bf8b+ROW_MAJOR entry is moot. Add it only if the suite widens dtype or layout.
-- **Affine dtype**: if the suite adds an `affine_dtype` axis, the op must add `SUPPORTED["affine_dtype"] = [bfloat16]` in the same change.
+The op also supports `affine_layout = mixed`.
+
+Suite recommendations:
+- **Shapes**: build INPUTS from the contract: `(B, 1, S, 768)` with `1024 <= B*S <= 4096`, `S <= 512`, power-of-two and non-aligned S.
+- **Affine forms**: `(768,)` TILE in DRAM and `(1,1,24,32)` ROW_MAJOR in L1. RM in DRAM also works.
+- **Structural INVALID**: none needed. There is one dtype and one input layout, so the canonical bf8b + ROW_MAJOR entry is moot unless the suite widens dtype / layout.
+- **Perf flag**: flag one `LOOSE_CASE` `attention:` at a production shape, e.g. `(8, 1, 512, 768)` with residual, so the perf queue has a pinned target.
 
 ## L1 Ledger Audit
 
-1. **Currency**: 7 CBs declared, 7 ledger rows; size expressions match `create_program_descriptor`. Fixed the `cb_output_tiles` depth expression and the totals (Code Review #1, #4).
+1. **Currency**: 7 allocations with residual, 6 without (`input`, `residual`, `gamma`, `beta`, `work` alias group of 4 ids, `stats` alias group of 3 ids, `output`). This matches the code. Every size expression matches `_cb_plan()`. Fixed: the `Wt` bound row (#9).
 2. **Capacity vs live set**:
-   - Over: `cb_output_tiles` held two rows on single-row cores. Fixed in place.
-   - `cb_input_tiles` depth 2 appears only with more than one block per core. Justified.
-   - Under: none. `cb_centered` spans `row` x `w` with capacity `block_rows * block_w_tiles`; `cb_row_stat` / `cb_rstd` span `row` with capacity `block_rows`.
-3. **Page format vs DEST width**: intermediates are Float32 if and only if `fp32_dest_acc_en`, else Float16_b. I/O and affine CBs are bf16 tensor data that never traverse DEST as an accumulation. Clean both ways.
-4. **Disjoint lifetimes**: every pair has a recorded reason:
-   - `cb_row_stat` self-shares mean and sum of squares.
-   - `cb_rstd` is concurrent with `cb_row_stat` in P4.
-   - `cb_input_tiles` / `cb_centered` differ in format and ownership.
-   - `cb_centered` / `cb_output_tiles` cannot share: that would give the writer a second consumer.
-5. **Bounds**: `block_w_tiles <= 32` (validate), `block_rows <= 1`, depths in {1, 2}, `T_int` in {2, 4} KB. The total is closed-form: 296 KB (R <= 110), 392 KB (R > 110), 784 KB at the knob bound.
+   - *Over*: on the residual path, `cb_input_tiles` / `cb_residual_tiles` hold `input_depth * block_height * Wt` while their consumer-side live set is 1 tile (`add_residual_block` streams them). The ledger gives a reason (whole-block reader run-ahead; the `Wt` window is named as the alternative). The reason is valid, but its value is unmeasured. Folded into **Refinement 2** (co-tune with the NoC levers).
+   - `cb_output_tiles` at `OUTPUT_DEPTH = 2` tile-rows is live on one-row cores only as the compute/writer overlap window. Justified.
+   - *Under*: none. The `work` group spans `tile_rows x W` with capacity `block_height * Wt`; `stats` spans `tile_rows` with `block_height`.
+3. **Page format vs DEST width**: `work` / `stats` are Float32 if and only if `fp32_dest_acc_en`, else Float16_b. I/O and affine CBs are bf16 tensor data (gamma/beta never traverse DEST as accumulators). Clean in both directions.
+4. **Disjoint lifetimes**: every non-shared pair has a recorded reason. Reader-produced vs compute-produced (no two producers on the same bytes); kernel-lifetime affine rows; `cb_output_tiles` is writer-consumed and concurrent with the next row's compute.
+5. **Bounds / closed form**: total = `block_height * (Wt * (input_depth * T_in * (1 + HAS_RESIDUAL) + T_acc) + T_acc) + Wt * T_in * (2 + OUTPUT_DEPTH)`.
+   - It scales with `block_height`, `input_depth`, `HAS_RESIDUAL` and `T_acc`.
+   - Worst built case: 598,016 B (fp32 + residual, `block_height = 2`) against the 786,432 B budget.
+   - Every symbol is bounded with its predicate.
 
-**Data-movement budget**: present and consistent with the code (input and output each cross the NoC once; affine row 0 read once per core). The cheapest-traffic split, `row`, is implemented. `w-split-combine` is a `deferred` row with a positive reason: more bytes, occupancy-only, precision-gated, and the gate is now met. Filed as Refinement 1.
+**Data-movement budget**: present and consistent with the code.
+- Input, residual and output each cross the NoC once.
+- Gamma/beta row 0 is read once per active core: 13.5 KiB TILE-DRAM or 1.5 KiB RM-L1 per tensor.
+- The cheapest-traffic split (`tile_rows`) is the one implemented. `w_split_combine` (more bytes, occupancy-motivated) and `affine_mcast` are `deferred` rows with positive reasons.
 
-`affine-read-once-mcast` was `rejected` in the design. The implementer's and the verifier's measurements reverse that for the TILE-DRAM form: about 15 us of DM at P = 110. Filed as Refinement 2.
-
-**Block-size defaults**: interleaved spreads across the full grid (held). The coarsest block was departed from (`BLOCK_ROWS_MAX` 2 -> 1) on measurement, not on budget pressure. L1 use is 296-392 KB of about 1.5 MB.
+**Block-size defaults**: interleaved spreads across the full grid, then takes the coarsest block that fits (the whole assignment). Held. The multi-block path appears only when the cap forces it (`(256,1,16,768)` with residual). Footprint is 400-600 KB of the ~1.4 MB usable L1.
 
 ## Precision Baseline
 
-`tests/ttnn/unit_tests/operations/layer_norm_tile/test_layer_norm_tile_precision_baseline.py`, seed 1234, `randn` input / gamma / beta, fp32 torch reference, HiFi4. Values are identical for the `tile_dram` and `rm_l1` affine forms (same gamma bits), so one row per shape and config is shown.
+`tests/ttnn/unit_tests/operations/layer_norm_tile/test_layer_norm_tile_precision_baseline.py`. Seed 1234, `randn` input / residual / gamma / beta, fp32 torch reference, HiFi4. Each shape is run as `tile_dram` affine without residual (`nores`) and as `rm_l1` affine with residual (`res`). The affine forms are bit-identical.
 
-| Shape | DEST | PCC | Max Abs Err | Mean Abs Err | Rel RMS Err | Mean ULP (bf16) | p99 ULP | got/true median [p5, p95] |
-|-------|------|-----|-------------|--------------|-------------|-----------------|---------|---------------------------|
-| (32,1,32,768) | fp32 | 0.9999983 | 0.0446 | 0.00180 | 0.00190 | 1.18 | 6.2 | 0.99988 [0.9958, 1.0040] |
-| (32,1,32,768) | bf16 | 0.9999914 | 0.1651 | 0.00434 | 0.00520 | 3.93 | 23.5 | 1.0017 [0.9904, 1.0162] |
-| (11,1,100,768) | fp32 | 0.9999983 | 0.0515 | 0.00176 | 0.00190 | 1.05 | 6.0 | 0.99989 [0.9958, 1.0039] |
-| (11,1,100,768) | bf16 | 0.9999916 | 0.1391 | 0.00419 | 0.00512 | 3.39 | 22.5 | 1.0017 [0.9906, 1.0157] |
-| (8,1,512,768) | fp32 | 0.9999983 | 0.0511 | 0.00176 | 0.00190 | 1.35 | 5.9 | 0.99988 [0.9958, 1.0039] |
-| (8,1,512,768) | bf16 | 0.9999918 | 0.1798 | 0.00418 | 0.00510 | 3.27 | 21.9 | 1.0017 [0.9907, 1.0156] |
-| (124,1,33,768) | fp32 | 0.9999983 | 0.0440 | 0.00177 | 0.00190 | 1.33 | 6.0 | 0.99988 [0.9958, 1.0039] |
-| (124,1,33,768) | bf16 | 0.9999918 | 0.1802 | 0.00416 | 0.00506 | 4.65 | 22.8 | 1.0017 [0.9906, 1.0158] |
+| Shape (tile-rows) | Variant | DEST | PCC | Max Abs | Mean Abs | Rel RMS | Mean ULP | p99 ULP | got/true median [p5, p95] |
+|-------------------|---------|------|-----|---------|----------|---------|----------|---------|---------------------------|
+| (32,1,32,768) R=32 | nores | fp32 | 0.9999983 | 0.0446 | 0.00180 | 0.00190 | 1.18 | 6.2 | 0.99988 [0.9958, 1.0040] |
+| | nores | bf16 | 0.9999914 | 0.1651 | 0.00434 | 0.00520 | 3.93 | 23.5 | 1.0017 [0.9904, 1.0162] |
+| | res | fp32 | 0.9999983 | 0.0473 | 0.00182 | 0.00190 | 1.21 | 5.8 | 0.99989 [0.9959, 1.0039] |
+| | res | bf16 | 0.9999906 | 0.1771 | 0.00443 | 0.00534 | 4.13 | 22.0 | 1.0016 [0.9908, 1.0159] |
+| (11,1,100,768) R=44 | nores | fp32 | 0.9999983 | 0.0515 | 0.00176 | 0.00190 | 1.05 | 6.0 | 0.99989 [0.9958, 1.0039] |
+| | nores | bf16 | 0.9999916 | 0.1391 | 0.00419 | 0.00512 | 3.39 | 22.5 | 1.0017 [0.9906, 1.0157] |
+| | res | fp32 | 0.9999983 | 0.0440 | 0.00171 | 0.00188 | 0.91 | 5.9 | 0.99992 [0.9959, 1.0039] |
+| | res | bf16 | 0.9999907 | 0.1619 | 0.00409 | 0.00529 | 3.07 | 22.5 | 1.0015 [0.9906, 1.0161] |
+| (8,1,512,768) R=128 | nores | fp32 | 0.9999983 | 0.0511 | 0.00176 | 0.00190 | 1.35 | 5.9 | 0.99988 [0.9958, 1.0039] |
+| | nores | bf16 | 0.9999918 | 0.1798 | 0.00418 | 0.00510 | 3.27 | 21.9 | 1.0017 [0.9907, 1.0156] |
+| | res | fp32 | 0.9999983 | 0.0518 | 0.00172 | 0.00188 | 3.72 | 6.1 | 0.99991 [0.9958, 1.0040] |
+| | res | bf16 | 0.9999907 | 0.1972 | 0.00416 | 0.00527 | 3.41 | 23.1 | 1.0016 [0.9903, 1.0161] |
+| (124,1,33,768) R=248 | nores | fp32 | 0.9999983 | 0.0440 | 0.00177 | 0.00190 | 1.33 | 6.0 | 0.99988 [0.9958, 1.0039] |
+| | nores | bf16 | 0.9999918 | 0.1802 | 0.00416 | 0.00506 | 4.65 | 22.8 | 1.0017 [0.9906, 1.0158] |
+| | res (multi-block) | fp32 | 0.9999983 | 0.0495 | 0.00180 | 0.00189 | 2.48 | 6.1 | 0.99988 [0.9958, 1.0040] |
+| | res | bf16 | 0.9999904 | 0.2058 | 0.00451 | 0.00545 | 3.20 | 23.9 | 1.0017 [0.9900, 1.0168] |
 
-**Assessment**: precision is at the bf16 output-rounding floor with fp32 DEST (about 1 mean ULP) and about 3-4x that with bf16 DEST. The error does not depend on shape, padding or the per-core split.
-
-The got/true ratio is tightly centred on 1.0, so there is no scale or structural bug. The +0.17% median bias under bf16 DEST is the bf16-rounded rstd: a tight bias well inside rel-RMS 0.5%, not a defect.
-
-Max ULP (not shown) reaches about 1e6 only at references near zero, where beta cancels the normalized term.
+**Assessment**:
+- fp32 DEST is at the bf16 output rounding floor: rel-RMS 0.19%, p99 6 ULP.
+- bf16 DEST costs about 2.7x in RMS (0.51-0.55%).
+- Residual, non-aligned S and the multi-block path do not move precision.
+- Mean ULP swings (0.9-3.7) come from near-zero references. p99 is the stable figure.
+- Scale-bug check: the got/true ratio is centered on 1.0 with a ±0.4% (fp32) / ±1.3% (bf16) spread. That is noise, not a constant offset. The bf16-DEST median of 1.0016-1.0017 is a small systematic bias, about 0.2x the spread. It is consistent with the variance being rounded to bf16 before `rsqrt`, not a structural bug.
 
 **Recommended tolerances**:
-- fp32 DEST: PCC >= 0.99995, rtol = 0.02, atol = 0.06.
-- bf16 DEST: PCC >= 0.9999, rtol = 0.05, atol = 0.2.
-- The acceptance gate of PCC 0.995 is loose and catches only gross bugs.
+- fp32 DEST: PCC >= 0.9999, rel-RMS <= 0.003, atol 0.08.
+- bf16 DEST: PCC >= 0.9999, rel-RMS <= 0.008, atol 0.3.
+- rtol is not meaningful: references cross zero through beta.
+
+## Performance baseline
+
+`test_layer_norm_tile_perf.py --profile`, `DEVICE KERNEL DURATION`, min of 2 dispatches per case, us. `nores` / `res` = without / with residual.
+
+| Shape (tile-rows, max rows/core) | Affine | nores default | nores fp32 off | nores LoFi | res default | res fp32 off | res LoFi |
+|---|---|---|---|---|---|---|---|
+| (32,1,32) R=32, 1 | tile_dram | 13.9 | 13.7 | 12.3 | 18.7 | 17.8 | 16.4 |
+| | rm_l1 | 14.1 | 13.8 | 12.6 | 17.7 | 17.4 | 15.8 |
+| (16,1,128) R=64, 1 | tile_dram | 21.3 | 19.0 | 18.9 | 33.7 | 32.4 | 32.2 |
+| | rm_l1 | 21.1 | 20.4 | 18.5 | 29.0 | 32.0 | 31.8 |
+| (8,1,512) R=128, 2 | tile_dram | 33.5 | 33.0 | 32.2 | 58.2 | 60.3 | 54.9 |
+| | rm_l1 | 33.3 | 33.5 | 31.5 | 59.8 | 60.2 | 54.6 |
+| (124,1,33) R=248, 3 | tile_dram | 53.4 | 51.8 | 46.6 | 95.9 | 95.4 | 98.9 |
+| | rm_l1 | 54.9 | 55.5 | 50.5 | 93.6 | 99.6 | 93.5 |
+| (256,1,16) R=256, 3 (multi-block w/ res) | tile_dram | 60.8 | 65.6 | 60.2 | 110.5 | 117.8 | 96.7 |
+| | rm_l1 | 60.2 | 59.3 | 58.5 | 96.5 | 97.5 | 92.9 |
+
+Reading:
+- **R = 32 is compute-bound.** The DM-only stub (implementer, affine fetch removed) is 2.8 us of 14 us. 78 of 110 cores are idle, so Refinement 1 (`w_split_combine`) is the lever.
+- **R >= 128 and every residual shape are NoC-bound.** The DM-only stub at `(8,1,512)` is 15.5 us without residual and 37.9 us with residual, out of 33.3 / 59.8 us. Residual adds +26 us at R = 128 but +3.6 us at R = 32: one reader RISC on NoC0 carries input plus residual. This is Refinement 2.
+- **Affine form is perf-neutral** (tile_dram vs rm_l1 within noise everywhere except a few residual cells at 3-10% spread). The writer's fetch is hidden in the stall shadow, as designed. `affine_mcast` has no measurable headroom today, so it is not queued. Re-check it if Refinement 1 shrinks the pre-affine compute window enough to expose the fetch.
+- **Fidelity / DEST width are minor terms**: LoFi saves at most 12%; `fp32_dest_acc_en=False` is within noise.
+
+Verifier ablations, measured and reverted:
+
+| Ablation | Result |
+|----------|--------|
+| Design "Overlap" lamp: force `block_height = 1`, `input_depth = 2` | With residual: R=128 59.0 -> 57.3, R=248 101.2 -> 93.9, R=256 97.5 -> 94.5 us. Without residual: neutral at R=128/248, **R=256 56.0 -> 66.6 us (-19%)**. Regime-dependent; filed as lever (d) of Refinement 2. |
+| Residual reads issued on NoC1 from the NCRISC reader | All 5 cases fail: the default dedicated-NoC mode does not let NCRISC issue on NoC1. NoC balancing needs the second RISC (`split_reader`) or dynamic-NoC mode. Recorded in Refinement 2 lever (a). |
 
 ## Verifier CLI Summary
 
-Not run: there is no golden suite (see top). Manual equivalent on this board:
+Not run: no golden suite exists (see the top section). Manual equivalent:
 
-| Bucket | Count | Source |
-|--------|-------|--------|
-| supported cells passing | 41 acceptance + 5 extended (DRAM input, one-stick RM, mixed affine forms) + 16 precision + 24 perf smoke | `scripts/run_safe_pytest.sh` (prod) + `--dev` (acceptance + extended) |
-| refusals raising `NotImplementedError` as declared | 2 (`w_non_aligned`; RM affine in DRAM on BH) | `test_layer_norm_tile_extended.py` |
-| non-bf16 input -> `ValueError` | 1 | acceptance |
-| supported_fail / xpass_drift / xfail_wrong_mode | not measurable without the golden suite; 0 observed in the manual set | - |
+| Category | Count | Note |
+|----------|-------|------|
+| supported_pass | 168 / 168 local tests | acceptance 80 (prod + `--dev`), extended 12 (prod + `--dev`), precision 16, perf 60 |
+| xfail_expected | 5 refusal tests | float32 input (`ValueError`, prompt-mandated), RM input, `w_non_aligned`, RM stick width, HEIGHT_SHARDED; all raise the intended type |
+| supported_fail | 0 | |
+| xpass_drift | 0 after fix #1 (was: `affine_layout = mixed`) | |
+| xfail_wrong_mode | 0 after fix #2 (was: `w_non_aligned` raising `ValueError`) | |
 
-## Performance baseline (device kernel ns, default config unless noted)
+## TARGET - SUPPORTED accounting
 
-| Shape (R) | cores | tile_dram | rm_l1 | rm_l1 compute-only | rm_l1 DM-only | tile_dram DM-only |
-|-----------|-------|-----------|-------|--------------------|---------------|-------------------|
-| (32,1,32,768) R=32 | 32 | 14.1 | 14.2 | 10.2 | 4.5 | 7.3 |
-| (16,1,128,768) R=64 | 64 | 21.5-21.8 | 19.1-20.9 | 10.2 | 9.0 | 16.3 |
-| (8,1,512,768) R=128 | 110 | 41.6-44.3 | 31.4-34.5 | 19.8 | 17.2 | 32.2 |
-| (124,1,33,768) R=248 | 110 | 52.9-54.0 | 46.0-54.5 | 29.4 | 27.0 | 33.3 |
+Every TARGET value (design table) is in SUPPORTED, so the queue holds only perf refinements. Documented omissions, which are outside TARGET and not queued:
 
-R = 32 under other configs: `fp32_dest_acc_en=False` 13.9 us, LoFi 12.5 us.
-
-Ablation method: kernels temporarily edited, then restored.
-- **Compute-only**: the reader and writer skip input/output NoC transfers but keep the CB handshakes and the affine fetch.
-- **DM-only**: compute is reduced to CB handshakes.
-
-Readings:
-- Compute is about 10.2 us per tile-row on every shape.
-- On one-tile-row cores, DM and compute serialize.
-- DM grows with participating cores because aggregate NoC throughput saturates near 700-900 GB/s.
-- The TILE-DRAM affine fetch costs up to about 15 us at 110 cores.
-- Run-to-run spread is 5-10% on the 110-core shapes.
+- `memory_layout` HEIGHT / WIDTH / BLOCK sharded: the requirement scope is L1 interleaved. The design keeps `height_sharded` (knob-turn) and `width_sharded` / `block_sharded` (`w_split_combine` with a pinned `k`) as deferred regime rows. Promote them if `/golden-tests` adds sharded values to TARGET.
+- `dtype` other than bf16, and ROW_MAJOR input: excluded by the prompt (`ValueError`).
+- `alignment = w_non_aligned`: outside the contract (W = 768). Refused with a typed refusal.
+- `half_tile_rows` regime: needs 16x32 tile handling in the compute helpers (a helper capability, not an op refinement).
 
 ## Recommendations
 
-- **Production affine form**: the prompt asks which form to prefer per shape. RM-L1 is as fast or faster at every measured shape: equal at R = 32, 1-2 us faster at R = 64, 8-12 us faster at R = 128. Production callers should pass `(1, 1, 24, 32)` ROW_MAJOR in L1. Refinement 2 targets closing the TILE-DRAM gap.
-- **Queue order**: Refinements 1 -> 4 build structure first:
-  1. Cross-core W-split.
-  2. Affine multicast, built on the slice groups.
-  3. DM overlap and locality, which must keep W-split groups adjacent.
-  4. Compute-local trims.
-- **Generality**: there is no generality refinement because `TARGET - SUPPORTED` is empty. Documented omissions (out of the prompt contract, so no refinement):
-  - `w_non_aligned` (W pinned to 768).
-  - ROW_MAJOR input (the prompt forbids it).
-  - Sharded placements (TARGET is interleaved). The design records HEIGHT_SHARDED as a knob-turn and WIDTH/BLOCK as the Refinement 1 combine with caller-pinned k.
-  - Non-bf16 dtypes, for input or affine.
-  - RM affine in DRAM.
-- **Golden suite**: author it (`/golden-tests`) and re-run the verifier CLI before or alongside Refinement 1. The queue's perf gates do not depend on it, but the registry check does.
-- **Wormhole**: P3's ELWMUL DEST accumulation needs a WH confirmation before the op is claimed for WH (see Code Review advisory).
+- Run `/golden-tests` first, so the next verifier pass has a mechanical SUPPORTED check and a pinned perf target.
+- Refinement order: 1 (`w_split_combine`, T3 scheme-change) before 2 (NoC throughput, T2) before 3 (compute trims, T1/T2). Refinement 1 redefines the per-core block shape that 2 and 3 tune.
+- Production callers: the affine forms perform the same, so pick by where gamma/beta already live. The residual path is the expensive one at `B*S = 4096`.
