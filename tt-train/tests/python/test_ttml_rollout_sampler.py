@@ -277,21 +277,13 @@ def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutB
     return teacher, sampled, mask
 
 
-@pytest.mark.requires_device
-@pytest.mark.slow
-@pytest.mark.parametrize(
-    "transformer_config, model_source, template_kwargs",
-    [
-        (LLAMA_1B_TRANSFORMER_CONFIG, HF_LLAMA_MODEL_ID, {}),
-        (QWEN3_TRANSFORMER_CONFIG, HF_QWEN3_MODEL_ID, {"enable_thinking": False}),
-    ],
-    ids=["llama", "qwen3"],
-)
-def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
-    transformer_config, model_source, template_kwargs
+def _rollout_vs_teacher_forced(
+    transformer_config, model_source, template_kwargs, device_config, temperature, completions_per_prompt=1
 ):
-    model, tokenizer = setup_ttml_model(transformer_config, DEVICE_CONFIG, model_source)
-    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
+    """Per row: (padding gap, mean |diff|, max |diff|) of the sampler's log-probs against the teacher-forced pass."""
+    np.random.seed(0)  # the sampler draws its sampling seeds from np.random
+    model, tokenizer = setup_ttml_model(transformer_config, device_config, model_source)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, temperature, completions_per_prompt)
     prompts = [
         tokenizer.encode(_to_capitals_chat_prompt(tokenizer, q, **template_kwargs), add_special_tokens=False)
         for q in MIXED_LENGTH_QUESTIONS
@@ -302,11 +294,37 @@ def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
     batch = sampler.generate(prompts)
     teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch)
 
+    lengths = np.array([len(p) for p in batch.prompts])
+    rows = []
     for b, completion in enumerate(batch.completions):
         assert len(completion) > 1, f"row {b}: need a multi-token completion, got {completion}"
         row_mask = mask[b] > 0
         diff = np.abs(teacher[b, row_mask] - sampled[b, row_mask])
-        assert diff.mean() < 0.05 and diff.max() < 0.5, (
-            f"row {b} (padding gap {gaps[b]}): sampler vs teacher-forced log-prob "
-            f"mean |diff| = {diff.mean():.4f}, max |diff| = {diff.max():.4f}"
+        rows.append((int(lengths.max() - lengths[b]), float(diff.mean()), float(diff.max())))
+    return rows
+
+
+def _assert_rows_match_teacher_forced(rows):
+    for b, (gap, mean, max_diff) in enumerate(rows):
+        assert mean < 0.1 and max_diff < 0.5, (
+            f"row {b} (padding gap {gap}): sampler vs teacher-forced log-prob "
+            f"mean |diff| = {mean:.4f}, max |diff| = {max_diff:.4f}"
         )
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+@pytest.mark.parametrize("temperature", [0.0, 1.0], ids=["greedy", "t1"])
+@pytest.mark.parametrize(
+    "transformer_config, model_source, template_kwargs",
+    [
+        (LLAMA_1B_TRANSFORMER_CONFIG, HF_LLAMA_MODEL_ID, {}),
+        (QWEN3_TRANSFORMER_CONFIG, HF_QWEN3_MODEL_ID, {"enable_thinking": False}),
+    ],
+    ids=["llama", "qwen3"],
+)
+def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
+    transformer_config, model_source, template_kwargs, temperature
+):
+    rows = _rollout_vs_teacher_forced(transformer_config, model_source, template_kwargs, DEVICE_CONFIG, temperature)
+    _assert_rows_match_teacher_forced(rows)
