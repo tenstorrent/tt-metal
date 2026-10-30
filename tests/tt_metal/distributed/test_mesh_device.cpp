@@ -103,7 +103,7 @@ std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
 void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
     mesh.enable_program_cache();
 
-    Program program;
+    Program program = CreateProgram(mesh);
     const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
     CreateKernel(
         program,

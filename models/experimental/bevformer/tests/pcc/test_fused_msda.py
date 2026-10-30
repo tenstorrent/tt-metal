@@ -143,9 +143,9 @@ def test_msda_output_is_deterministic(device):
     The op distributes (batch, head, query-block) work units across cores and
     accumulates each unit's `levels * points` reduction locally, so the summation
     order is fixed and the result should not vary run to run. A mismatch points
-    at uninitialized L1 being read: the reader zeroes the input rows whose
-    bilinear corner it did not gather, and that zeroing is what keeps stale CB
-    bytes out of the result.
+    at uninitialized L1 being read: a corner the gathers skip keeps whatever its
+    input slot held, so the one-time zeroing of the input CB and the zero weight
+    compute gives that corner are what keep stale bytes out of the result.
     """
     config, _, tt_parameters, torch_inputs = _build(device, "nuscenes_tiny", 1, 900, 0)
 
