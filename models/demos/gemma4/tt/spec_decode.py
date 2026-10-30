@@ -167,6 +167,10 @@ class SpeculativeDecoder:
         # the passed cache by the same last-layer-per-type map is identical on
         # metal and correct on the server.
         self._shared_kv = {lt: self.tt_kv_cache[idx] for lt, idx in target_model.last_kv_layer_by_type.items()}
+        self.target_has_pli = bool(
+            getattr(target_model, "hidden_size_per_layer_input", 0)
+            and getattr(target_model, "per_layer_input_weights", None)
+        )
         # Tracing: persistent I/O buffers + execute_trace replace per-op host
         # dispatch (the untraced loop is host-bound: ~77ms/decode vs a few ms
         # traced). Verify traces are keyed by batch (K+1 for verify, 1 for
@@ -946,7 +950,7 @@ class SpeculativeDecoder:
             "S_k": h["S_k"],
         }
 
-    def _pv_call(self, dev, P):
+    def _pv_call(self, dev, P, tokens=None):
         kv_write_idxs = None
         if os.environ.get("GEMMA4_PV_FALLBACK_WRITE") == "1":
             # Debug bisect: per-position write positions for the fallback loop
@@ -973,6 +977,7 @@ class SpeculativeDecoder:
             # exactly as wide as its type's mask. Applies unbounded too -- the
             # full-width flat table's unwritten tail diluted softmax.
             page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"]),
+            token_ids_host=tokens,
         )
 
     def _verify_packed(self, tokens, positions):
@@ -986,7 +991,7 @@ class SpeculativeDecoder:
         dev = self._pv_device_inputs(tokens, h)
         dev["pt"] = self._page_table(1)
         dev["c"] = c
-        logits, hidden = self._pv_call(dev, P)
+        logits, hidden = self._pv_call(dev, P, tokens=tokens)
         self._pv_a_prev = c // self._pv_bs
         lh = self._logits_to_host(logits).reshape(P, -1)
         logits.deallocate(True)
@@ -1052,6 +1057,10 @@ class SpeculativeDecoder:
     # ── target forwards ───────────────────────────────────────────────────
     def _verify(self, tokens, positions):
         """Batched verify. Returns (logits_host [B,vocab], hidden_device [1,1,B,h])."""
+        if self._use_trace and self.target_has_pli:
+            raise NotImplementedError(
+                "Traced verification passes no per-layer inputs; disable GEMMA4_SPEC_TRACE for this path"
+            )
         # Packed-query verify: all K+1 candidates in one batch=1 pass (positions
         # packed into the query-heads dim, loop-free staging KV write).
         # Single-token calls (seed/reseed) keep the plain verify.
@@ -1078,6 +1087,7 @@ class SpeculativeDecoder:
             page_table=pt,
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=self._page_tables_per_layer(len(tokens)),
+            token_ids_host=tokens,
         )
         lh = self._logits_to_host(logits).reshape(len(tokens), -1)
         logits.deallocate(True)
@@ -2188,6 +2198,7 @@ class SpeculativeDecoder:
             # per-layer tables under bounded sliding slices row b>=1 of a 1-row
             # table (see _capture_fused_trace).
             page_tables_per_layer=self._page_tables_per_layer_users(len(tokens)),
+            token_ids_host=tokens,
         )
         logits.deallocate(True)
         for t in (x, pu, pi, pt):
@@ -2268,6 +2279,7 @@ class SpeculativeDecoder:
             embed_idx_full=None,
             embed_idx_sliding=None,
             hot_pt=None,
+            token_ids_host=[token for user_tokens in tokens_b for token in user_tokens],
         )
         lh = self._logits_to_host(logits).reshape(B * P, -1)
         logits.deallocate(True)

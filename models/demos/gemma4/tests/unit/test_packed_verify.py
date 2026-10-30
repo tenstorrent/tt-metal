@@ -57,36 +57,6 @@ _MOE_UNSUPPORTED_REASON = (
 )
 
 
-def _is_pli_model(model_path):
-    """True for per-layer-input (MatFormer) checkpoints (e.g. gemma-4-E2B/E4B).
-
-    These models carry a per-layer input embedding (``hidden_size_per_layer_input``)
-    that must be fed to every layer. Packed verify drives ``self(...)`` through
-    ``ttnn_packed_verify_forward`` without threading PLI, so a PLI model falls into
-    ``Gemma4Model._compute_per_layer_inputs(None, None)`` and raises. PLI is not
-    wired through the speculative-verify path yet, so packed verify is unsupported
-    on these checkpoints (tracked in #49022). Dense non-PLI targets (12B, 31B) are
-    unaffected. Detect it cheaply from the config (no weights loaded) so we can skip
-    before ``from_pretrained`` — which also avoids writing the weight cache on the
-    read-only NAS mount used by CI e2e.
-    """
-    try:
-        from transformers import AutoConfig
-
-        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-        tc = getattr(cfg, "text_config", cfg)
-        return bool(getattr(tc, "hidden_size_per_layer_input", 0))
-    except Exception:
-        return False
-
-
-_PLI_UNSUPPORTED_REASON = (
-    "packed verify does not thread per-layer inputs (PLI) through the verify forward, so "
-    "PLI/MatFormer checkpoints (e.g. gemma-4-E2B/E4B) hit _compute_per_layer_inputs(None, None) "
-    "and raise. Unsupported until PLI is wired through the speculative-verify path (see #49022). "
-    "Dense non-PLI targets (12B, 31B) run this test."
-)
-
 _L1_OVERFLOW_REASON = (
     "packed-verify global-layer SDPA (head_dim=512, fp32-accum, P candidates folded into "
     "heads) exceeds this core's L1 at the current TP. The per-core footprint shrinks ~TP×, "
@@ -116,9 +86,6 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
 
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
-
-    if _is_pli_model(model_path):
-        pytest.skip(_PLI_UNSUPPORTED_REASON)
 
     # Single-device (TP=1) is unsupported for packed verify on the 12B model: the
     # global layers (global_head_dim=512) run the packed SDPA with fp32_dest_acc_en
@@ -150,6 +117,7 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
         num_layers=None,
         paged_attention_config=paged_attention_config,
         bounded_sliding_kv_cache=False,
+        multimodal=False,
     )
     target = generator.model[0]
     page_table = create_tt_page_table(1, paged_attention_config)
@@ -271,8 +239,6 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
 
-    if _is_pli_model(model_path):
-        pytest.skip(_PLI_UNSUPPORTED_REASON)
     if mesh_device.get_num_devices() == 1:
         pytest.skip("single-device L1 limit: use a TP mesh (e.g. 1x4)")
 
@@ -318,6 +284,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         num_layers=None,
         paged_attention_config=paged_attention_config,
         bounded_sliding_kv_cache=False,
+        multimodal=False,
     )
     target = generator.model[0]
     page_table_torch = create_tt_page_table(Bmax, paged_attention_config)  # [Bmax, blocks_per_user], distinct per user
@@ -426,6 +393,11 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     logger.info(
         f"=== packed-verify batch bench | ctx={ctx} P={P} (K={K}) reps={reps} tp={tp} H_local={H} S_k={S_k} ==="
     )
+
+    # PLI targets need a PLI source on these direct model calls.
+    def _pli(token_ids):
+        return {"token_ids_host": token_ids}
+
     rows = []
     for B in Bs:
         pt_b = page_table_torch[:B].to(torch.int32)
@@ -450,6 +422,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
                 embed_idx_full=None,
                 embed_idx_sliding=None,
                 hot_pt=None,
+                **_pli([t for u in range(B) for t in tokens_per_user]),
             )
 
         try:
@@ -464,13 +437,19 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         # ── batch-alias baseline ──────────────────────────────────────────────
         if B * P <= 32:
             # single-pass: B*P pseudo-users, each user's row replicated P times.
-            x_a = spec._tokens_tensor([tokens_per_user[p] for u in range(B) for p in range(P)])
+            alias_ids = [tokens_per_user[p] for u in range(B) for p in range(P)]
+            x_a = spec._tokens_tensor(alias_ids)
             pu_a, pi_a = spec._pos_tensors([c + p for u in range(B) for p in range(P)])
             pt_alias = _from(pt_b.repeat_interleave(P, dim=0), ttnn.int32)
 
             def _alias_call():
                 return target.ttnn_verify_forward(
-                    x=x_a, current_pos=pu_a, current_pos_cache=pi_a, page_table=pt_alias, kv_cache=spec.tt_kv_cache
+                    x=x_a,
+                    current_pos=pu_a,
+                    current_pos_cache=pi_a,
+                    page_table=pt_alias,
+                    kv_cache=spec.tt_kv_cache,
+                    **_pli(alias_ids),
                 )
 
             alias_ms, alias_lh = _run(_alias_call, B * P)
@@ -495,13 +474,19 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         else:
             # batch-alias can't fit B*(K+1)>32 users in one decode pass; the
             # no-packing cost is P sequential batch-B decodes.
-            x_a = spec._tokens_tensor([tokens_per_user[0]] * B)
+            alias_ids = [tokens_per_user[0]] * B
+            x_a = spec._tokens_tensor(alias_ids)
             pu_a, pi_a = spec._pos_tensors([c] * B)
             pt_alias = _from(pt_b, ttnn.int32)
 
             def _alias_call():
                 return target.ttnn_verify_forward(
-                    x=x_a, current_pos=pu_a, current_pos_cache=pi_a, page_table=pt_alias, kv_cache=spec.tt_kv_cache
+                    x=x_a,
+                    current_pos=pu_a,
+                    current_pos_cache=pi_a,
+                    page_table=pt_alias,
+                    kv_cache=spec.tt_kv_cache,
+                    **_pli(alias_ids),
                 )
 
             one_ms, _ = _run(_alias_call, B)
