@@ -526,6 +526,32 @@ ttnn::Tensor concat(
     namespace cc = dm::concat_codegen;
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     auto prepared = dm::detail::prepare_concat(input_tensors, dim, memory_config, groups);
+
+    // An operand that is empty along the concat dim contributes nothing to the result, which is what
+    // torch.cat does with it. The program factories are not written for that shape though: they divide
+    // by the output's padded last dim (concat_codegen_program_factory.cpp:164) and by per-tensor page
+    // counts derived from padded_shape()[dim] (concat_program_factory.cpp:183-186), so a zero there is
+    // an integer divide rather than an error and the process dies with SIGFPE. stack.cpp:55 carries a
+    // guard for exactly this, which is why ttnn.stack rejects zero-volume inputs while concat crashes.
+    // Drop the empty operands here instead: what remains concatenates normally, and if only one is left
+    // it is already the result (the recursive call returns it through the single-input path below).
+    if (input_tensors.size() > 1) {
+        std::vector<ttnn::Tensor> operands;
+        operands.reserve(input_tensors.size());
+        for (const auto& t : input_tensors) {
+            if (t.logical_shape()[prepared.dim] != 0) {
+                operands.push_back(t);
+            }
+        }
+        if (operands.size() != input_tensors.size()) {
+            TT_FATAL(
+                !operands.empty(),
+                "ttnn.concat: every input is empty along dim {} (the concatenated shape would have zero volume)",
+                prepared.dim);
+            return concat(operands, prepared.dim, memory_config, optional_output_tensor, groups, sub_core_grids);
+        }
+    }
+
     if (input_tensors.size() == 1) {
         return ttnn::to_memory_config(input_tensors.at(0), prepared.mem_config, std::nullopt);
     }
