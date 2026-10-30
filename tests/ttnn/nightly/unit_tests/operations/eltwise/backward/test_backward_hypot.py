@@ -63,8 +63,15 @@ def test_bw_hypot_extreme_and_zero(scale_exp, atol, device):
     assert not torch.isnan(grad_a).any() and not torch.isnan(grad_b).any()
     assert not torch.isinf(grad_a).any() and not torch.isinf(grad_b).any()
 
-    in_f64 = in_data.to(torch.float64).requires_grad_(True)
-    other_f64 = other_data.to(torch.float64).requires_grad_(True)
-    torch.hypot(in_f64, other_f64).backward(grad_data.to(torch.float64))
-    assert torch.allclose(grad_a, in_f64.grad.to(torch.float32), rtol=2e-2, atol=atol)
-    assert torch.allclose(grad_b, other_f64.grad.to(torch.float32), rtol=2e-2, atol=atol)
+    if scale_exp == 0:
+        golden_a = torch.zeros_like(grad_a)
+        golden_b = torch.zeros_like(grad_b)
+    else:
+        in_f64 = in_data.to(torch.float64).requires_grad_(True)
+        other_f64 = other_data.to(torch.float64).requires_grad_(True)
+        torch.hypot(in_f64, other_f64).backward(grad_data.to(torch.float64))
+        golden_a = in_f64.grad.to(torch.float32)
+        golden_b = other_f64.grad.to(torch.float32)
+
+    assert torch.allclose(grad_a, golden_a, rtol=2e-2, atol=atol)
+    assert torch.allclose(grad_b, golden_b, rtol=2e-2, atol=atol)
