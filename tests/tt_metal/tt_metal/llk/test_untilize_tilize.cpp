@@ -1392,7 +1392,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTile) 
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
     const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
     for (auto& cfg : test_configs) {
-        for (auto& geo : geometries) {
+        for (const auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
                     this->device(),
@@ -1415,7 +1415,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTil
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
     const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
     for (auto& cfg : test_configs) {
-        for (auto& geo : geometries) {
+        for (const auto& geo : geometries) {
             for (bool dst_full_sync_en : {true, false}) {
                 run_quasar_tilize_untilize_test(
                     this->device(),
