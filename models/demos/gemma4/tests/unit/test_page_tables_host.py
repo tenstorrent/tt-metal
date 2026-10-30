@@ -840,21 +840,18 @@ def test_slab_rows_follow_the_l1_headroom():
 def test_slab_rows_with_fp32_dest_acc():
     """The prefill linears' fp32 Dest config (compute_config.prefill_linear_compute_kernel_config) adds an fp32
     partials block per core: the slab shrinks so the CBs still fit, and an fp32 2016-row 31B gate_up (TP=4) is no
-    longer one per_core_M 7 matmul (2.6 MB of CBs; PR #60786 review). The K block (in0_block_w) is part of the plan:
-    a smaller block (4 -> 2 -> 1) halves the in0 / in1 CBs, and is taken when the slab it buys launches fewer
-    matmuls for the 2K / 4K prefill chunks (the PR's follow-up; measured in test_dram_sharded)."""
+    longer one per_core_M 7 matmul (2.6 MB of CBs; PR #60786 review). The plan carries its K block (in0_block_w):
+    a smaller block (4 -> 2 -> 1) halves the in0 / in1 CBs and buys a larger slab, which test_dram_sharded times
+    (measured 2026-10-30: the extra K iterations cost more than the launches saved), so the default keeps the bf16
+    rule's block and the smaller ones are the sweep knob."""
     import ttnn
     from models.demos.gemma4.tt.dram_sharded import (
-        _prefill_geometry,
         fp32_dest_acc,
-        prefill_block_w_candidates,
         prefill_cb_bytes,
-        prefill_in0_block_w,
         prefill_progcfg,
         prefill_row_chunks,
         prefill_slab_plan,
         prefill_slab_rows,
-        weight_tile_bytes,
     )
 
     # 31B gate_up TP=4 (bfp8) at 2016 rows: per_core_M 7, per_core_N 48, k-block 4
@@ -862,52 +859,43 @@ def test_slab_rows_with_fp32_dest_acc():
     assert prefill_cb_bytes(7, 48, 4, 1088, fp32_acc=True) == 112000 + 2596864 > 1572864
     h64 = dict(grid=(8, 10), l1_bytes=1572864, headroom=64 * 1024, max_cols=8)
     assert prefill_slab_rows(5376, 10752, ttnn.bfloat8_b, **h64) == 2560
-    # the K-block candidates: bf16 keeps its single rule; fp32 adds the halves that divide Kt (26B down: Kt 9 -> 3, 1)
-    assert prefill_block_w_candidates(5376, 10752, max_cols=8) == (4,)
-    assert prefill_block_w_candidates(5376, 10752, max_cols=8, fp32_acc=True) == (4, 2, 1)
-    assert prefill_block_w_candidates(288, 2816, max_cols=8, fp32_acc=True) == (3, 1)
-    # the fp32 plans (rows, in0_block_w) of the dense TP=4 weights at the 64 KB default
-    gate_up_31b = prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **h64)
-    assert gate_up_31b == (1280, 1)  # block 4 and 2 both stop at 960 (block 2, per_core_M 4 = 1533312 B); 1 fits 4
-    assert prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, candidates=(4, 2), **h64) == (960, 4)
-    assert prefill_slab_plan(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, **h64) == (1280, 2)  # 12B gate_up: 960 at 4
-    assert prefill_slab_plan(5376, 5376, ttnn.bfloat8_b, fp32_acc=True, **h64) == (2240, 4)  # 31B down: 2560 at 2
-    assert prefill_slab_plan(2048, 5376, ttnn.bfloat8_b, fp32_acc=True, **h64) == (2240, 4)  # 31B o_proj: no launch
-    assert prefill_slab_plan(5376, 4096, ttnn.bfloat8_b, fp32_acc=True, **h64) == (2560, 4)  # 31B wqkv: the full slab
-    assert prefill_slab_rows(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **h64) == 1280
-    assert prefill_slab_rows(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, **h64) == 1280
-    assert prefill_slab_rows(5376, 5376, ttnn.bfloat8_b, fp32_acc=True, **h64) == 2240
-    # headroom 0 drops the margin, not the L1 limit, when the fp32 block is there: block 2 then fits per_core_M 4
-    assert prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **dict(h64, headroom=0)) == (1280, 2)
-    assert prefill_slab_plan(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, **dict(h64, headroom=0)) == (1600, 2)
-    # launches of the 2K / 4K chunks: 3 + 5 at 960 rows, 2 + 4 at 1280
+    assert prefill_slab_rows(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **h64) == 960
+    assert prefill_slab_rows(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, **h64) == 960  # 12B gate_up TP=4
+    assert prefill_slab_rows(5376, 5376, ttnn.bfloat8_b, fp32_acc=True, **h64) == 2240  # 31B down TP=4
+    # headroom 0 drops the margin, not the L1 limit, when the fp32 block is there
+    assert prefill_slab_rows(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **dict(h64, headroom=0)) == 960
     assert prefill_row_chunks(2016, slab=960, remainder=960) == [(0, 960), (960, 1920), (1920, 2016)]
-    assert prefill_row_chunks(2048, slab=1280, remainder=1024) == [(0, 1280), (1280, 2048)]
+    # the plans (rows, in0_block_w) of the dense TP=4 weights: the bf16 rule's block 4 throughout
+    assert prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, **h64) == (960, 4)  # 31B gate_up
+    assert prefill_slab_plan(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, **h64) == (960, 4)  # 12B gate_up
+    assert prefill_slab_plan(5376, 5376, ttnn.bfloat8_b, fp32_acc=True, **h64) == (2240, 4)  # 31B down
+    assert prefill_slab_plan(2048, 5376, ttnn.bfloat8_b, fp32_acc=True, **h64) == (2240, 4)  # 31B o_proj
+    assert prefill_slab_plan(5376, 4096, ttnn.bfloat8_b, fp32_acc=True, **h64) == (2560, 4)  # 31B wqkv: the full slab
+    assert prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, **h64) == (2560, 4)
+    assert prefill_slab_plan(288, 2816, ttnn.bfloat8_b, fp32_acc=True, **h64)[1] == 3  # 26B down: Kt 9
+    # the sweep knob: a smaller K block buys a larger slab (block 2: 31B gate_up per_core_M 4 = 1533312 B > budget)
+    assert prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, in0_block_w=2, **h64) == (960, 2)
+    assert prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, in0_block_w=1, **h64) == (1280, 1)
+    assert prefill_slab_plan(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, in0_block_w=2, **h64) == (1280, 2)
+    assert prefill_slab_plan(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, in0_block_w=1, **h64) == (1600, 1)
+    h0 = dict(h64, headroom=0)
+    assert prefill_slab_plan(5376, 10752, ttnn.bfloat8_b, fp32_acc=True, in0_block_w=2, **h0) == (1280, 2)
+    assert prefill_slab_plan(3840, 7680, ttnn.bfloat8_b, fp32_acc=True, **h0) == (1280, 4)  # 1408 B over at 64 KB
+    # launches of the 2K / 4K prefill chunks the slab is judged on: 3 + 5 at 960 rows, 2 + 4 at 1280, 2 + 3 at 1600
+    for slab, launches in ((960, (3, 5)), (1280, (2, 4)), (1600, (2, 3))):
+        got = tuple(len(prefill_row_chunks(m, slab=slab, remainder=min(1024, slab))) for m in (2048, 4096))
+        assert got == launches, (slab, got)
     assert prefill_row_chunks(4096, slab=1280, remainder=1024) == [(0, 1280), (1280, 2560), (2560, 3840), (3840, 4096)]
-    assert len(prefill_row_chunks(4096, slab=960, remainder=960)) == 5
-    # per launch: a slab-sized launch takes the plan's block, a smaller remainder chunk the largest block that fits
-    for m, w in ((256, 4), (960, 4), (1280, 1)):
-        assert prefill_in0_block_w(5376, 10752, ttnn.bfloat8_b, m, fp32_acc=True, **h64) == w, m
-    for m, w in ((256, 4), (960, 4), (1280, 2)):
-        assert prefill_in0_block_w(3840, 7680, ttnn.bfloat8_b, m, fp32_acc=True, **h64) == w, m
-    assert prefill_in0_block_w(5376, 10752, ttnn.bfloat8_b, 1280, **h64) == 4  # bf16 Dest: the single rule
     # the program config carries the plan's block; its default (the bf16 path) is the old rule
     assert prefill_progcfg(1280, 5376, 10752, max_cols=8).in0_block_w == 4
-    assert prefill_progcfg(1280, 5376, 10752, max_cols=8, in0_block_w=1).in0_block_w == 1
+    assert prefill_progcfg(1280, 5376, 10752, max_cols=8, in0_block_w=2).in0_block_w == 2
     assert prefill_progcfg(960, 5376, 10752, max_cols=8, in0_block_w=2).per_core_M == 3
-    # the dense per-chip DRAM-sharded weights (12B / 31B, TP 2 / 4 / 8): every fp32 plan fits the budget at its block
-    # and the next per_core_M up at that block would not (or is the full slab); bf16 plans keep the block-4 rule
-    budget = 1572864 - 64 * 1024
+    # the dense per-chip DRAM-sharded weights (12B / 31B, TP 2 / 4 / 8): the fp32 slab is never above the bf16 one
     for k, n in ((3840, 7680), (3840, 3840), (3840, 15360), (5376, 10752), (5376, 5376), (5376, 21504), (2688, 5376)):
-        _, per_core_N, _ = _prefill_geometry(k, n, max_cols=8, grid=(8, 10))
         for dt in (ttnn.bfloat8_b, ttnn.bfloat16):
-            rows, w = prefill_slab_plan(k, n, dt, fp32_acc=True, **h64)
-            assert rows % 320 == 0 and 320 <= rows <= 2560 and w in (4, 2, 1), (k, n, dt, rows, w)
-            assert prefill_cb_bytes(rows // 320, per_core_N, w, weight_tile_bytes(dt), fp32_acc=True) <= budget
-            assert (
-                rows == 2560 or prefill_cb_bytes(rows // 320 + 1, per_core_N, w, weight_tile_bytes(dt), True) > budget
-            )
-            assert prefill_slab_plan(k, n, dt, **h64)[1] == 4
+            rows = prefill_slab_rows(k, n, dt, fp32_acc=True, **h64)
+            assert rows % 320 == 0 and 320 <= rows <= prefill_slab_rows(k, n, dt, **h64)
+            assert prefill_slab_plan(k, n, dt, fp32_acc=True, **h64) == (rows, 4)
     assert fp32_dest_acc(None) is False
     assert fp32_dest_acc(ttnn.WormholeComputeKernelConfig(fp32_dest_acc_en=True)) is True
 

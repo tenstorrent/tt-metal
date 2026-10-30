@@ -194,69 +194,36 @@ def _prefill_block_w_max(k_tiles, cols):
     return _find_largest_divisor(k_tiles, max_div=min(4, max(1, k_tiles // max(1, cols))))
 
 
-# in0_block_w candidates of an fp32-accumulating prefill launch, largest first: the fp32 partials block (4 KB per
-# output tile, packed every K block) leaves little L1 for the in0 / in1 blocks at the wide per-core N of a gate_up,
-# so a smaller K block (half the in0 and in1 CBs, twice the K iterations) can buy a larger slab. 1 is the last resort.
-_PREFILL_FP32_BLOCK_W = (4, 2, 1)
-# The prefill chunk sizes the slab is judged on (vLLM's 2K / 4K prefill chunks): a smaller K block is only taken when
-# its larger slab launches fewer matmuls for these.
-_PREFILL_SLAB_TARGET_ROWS = (2048, 4096)
-
-
-def prefill_block_w_candidates(k, n, max_cols=None, grid=None, fp32_acc=False):
-    """in0_block_w candidates for a prefill launch, largest first: the bf16 rule's single value; with ``fp32_acc``
-    also the smaller of ``_PREFILL_FP32_BLOCK_W`` that divide the K tiles."""
-    cols, _, k_tiles = _prefill_geometry(k, n, max_cols=max_cols, grid=grid)
-    w_max = _prefill_block_w_max(k_tiles, cols)
-    if not fp32_acc:
-        return (w_max,)
-    return (w_max,) + tuple(w for w in _PREFILL_FP32_BLOCK_W if w < w_max and k_tiles % w == 0)
-
-
-def _prefill_launches(slab):
-    """Matmul launches of the target prefill chunks at this slab (full slabs + remainder chunks; ``__call__``)."""
-    remainder = min(_PREFILL_REMAINDER_CHUNK, slab)
-    return sum(len(prefill_row_chunks(m, slab=slab, remainder=remainder)) for m in _PREFILL_SLAB_TARGET_ROWS)
-
-
 def prefill_slab_plan(
-    k, n, dtype, max_cols=None, grid=None, headroom=None, l1_bytes=None, fp32_acc=False, candidates=None
+    k, n, dtype, max_cols=None, grid=None, headroom=None, l1_bytes=None, fp32_acc=False, in0_block_w=None
 ):
     """``(rows, in0_block_w)`` of one prefill slab for a weight of this shape / dtype: the largest per_core_M <= 8
     (x grid rows x 32) whose static CBs leave ``headroom`` bytes of L1 (GEMMA4_PREFILL_L1_HEADROOM_KB; 0 = the full
-    8-tile slab, or with ``fp32_acc`` the largest slab that fits L1 at all). Calibrated examples (Blackhole): at
-    128 KB 31B gate_up bfp8 2240 rows, the same weight in bf16 (the unit tests) 1280, 12B gate_up bf16 1920; at the
-    64 KB default the 31B keeps 2560 and the 12B takes 2240; narrow weights 2560. ``fp32_acc`` (the prefill linears'
-    fp32 Dest config) adds the fp32 partials block: at in0_block_w 4 the 31B gate_up (TP=4, bfp8) drops to 960 rows,
-    the 12B's too; a smaller in0_block_w (``candidates``, default ``prefill_block_w_candidates``) is taken when its
-    slab launches fewer matmuls for the 2K / 4K prefill chunks: the 12B gate_up 1280 rows at 2, the 31B gate_up 1280
-    at 1 (2 gives it nothing under the 64 KB headroom), the 31B down / o_proj keep 2240 at 4 (2560 at 2 saves no
-    launch). The bf16 path is unchanged (the single bf16 in0_block_w)."""
+    8-tile slab, or with ``fp32_acc`` the largest slab that fits L1 at all) at the K block ``in0_block_w`` (None =
+    the bf16 rule's largest divisor of Kt <= 4, ``prefill_progcfg``). Calibrated examples (Blackhole): at 128 KB 31B
+    gate_up bfp8 2240 rows, the same weight in bf16 (the unit tests) 1280, 12B gate_up bf16 1920; at the 64 KB
+    default the 31B keeps 2560 and the 12B takes 2240; narrow weights 2560. ``fp32_acc`` (the prefill linears' fp32
+    Dest config) adds the fp32 partials block: the 31B gate_up (TP=4, bfp8) drops to 960 rows, the 12B's too.
+    A smaller block (2 or 1) halves the in0 / in1 CBs and buys a larger slab (31B gate_up 1280 rows at 1, 12B 1280
+    at 2; at headroom 0 the 31B 1280 at 2), but its extra K iterations (an fp32 partials pack per block) cost more
+    than the launches it saves (measured 2026-10-30, single chip, bfp8, 2048 / 4096 rows, the table of
+    test_dram_sharded::test_prefill_fp32_acc_fits_l1: block 2 +2-6 %, block 1 +36-47 % over block 4 at 960 rows),
+    so the plan keeps the largest block and ``in0_block_w`` is the sweep knob."""
     grid = grid or prefill_grid_default()
     headroom = _PREFILL_L1_HEADROOM if headroom is None else headroom
     rows = grid[1] * TILE_SIZE
     cols, per_core_N, k_tiles = _prefill_geometry(k, n, max_cols=max_cols, grid=grid)
-    if candidates is None:
-        candidates = prefill_block_w_candidates(k, n, max_cols=max_cols, grid=grid, fp32_acc=fp32_acc)
+    if in0_block_w is None:
+        in0_block_w = _prefill_block_w_max(k_tiles, cols)
+    assert k_tiles % in0_block_w == 0, (k_tiles, in0_block_w)
     if headroom <= 0 and not fp32_acc:
-        return 8 * rows, candidates[0]
+        return 8 * rows, in0_block_w
     headroom = max(0, headroom)
     budget = (l1_bytes or _L1_BYTES) - headroom
-    wtb = weight_tile_bytes(dtype)
-
-    def slab_at(w):
-        for m in range(8, 0, -1):
-            if prefill_cb_bytes(m, per_core_N, w, wtb, fp32_acc=fp32_acc) <= budget:
-                return m * rows
-        return rows
-
-    best = (slab_at(candidates[0]), candidates[0])
-    for w in candidates[1:]:
-        slab = slab_at(w)
-        if slab > best[0] and _prefill_launches(slab) < _prefill_launches(best[0]):
-            best = (slab, w)
-            break  # the largest K block that saves launches
-    return best
+    for m in range(8, 0, -1):
+        if prefill_cb_bytes(m, per_core_N, in0_block_w, weight_tile_bytes(dtype), fp32_acc=fp32_acc) <= budget:
+            return m * rows, in0_block_w
+    return rows, in0_block_w
 
 
 def prefill_slab_rows(k, n, dtype, max_cols=None, grid=None, headroom=None, l1_bytes=None, fp32_acc=False):
@@ -264,24 +231,6 @@ def prefill_slab_rows(k, n, dtype, max_cols=None, grid=None, headroom=None, l1_b
     return prefill_slab_plan(
         k, n, dtype, max_cols=max_cols, grid=grid, headroom=headroom, l1_bytes=l1_bytes, fp32_acc=fp32_acc
     )[0]
-
-
-def prefill_in0_block_w(k, n, dtype, m, max_cols=None, grid=None, headroom=None, l1_bytes=None, fp32_acc=False):
-    """in0_block_w of one prefill launch of ``m`` rows: the bf16 rule's value, or with ``fp32_acc`` the largest
-    candidate whose CBs fit the L1 budget at this per_core_M (a slab-sized launch lands on the slab plan's value; a
-    smaller remainder chunk may take a larger K block). Falls back to the smallest candidate."""
-    candidates = prefill_block_w_candidates(k, n, max_cols=max_cols, grid=grid, fp32_acc=fp32_acc)
-    if not fp32_acc:
-        return candidates[0]
-    grid = grid or prefill_grid_default()
-    headroom = max(0, _PREFILL_L1_HEADROOM if headroom is None else headroom)
-    budget = (l1_bytes or _L1_BYTES) - headroom
-    _, per_core_N, _ = _prefill_geometry(k, n, max_cols=max_cols, grid=grid)
-    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid[1]))
-    for w in candidates:
-        if prefill_cb_bytes(per_core_M, per_core_N, w, weight_tile_bytes(dtype), fp32_acc=True) <= budget:
-            return w
-    return candidates[-1]
 
 
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
@@ -439,8 +388,8 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     ``out_subblock_w`` (drives prefill FPU) instead of always using the full
     ``prefill_grid_default()`` width. ``max_cols`` caps that search (pass the
     device worker-grid width, 11 on BH P150, for the measured wide-grid winners).
-    ``in0_block_w`` overrides the K block (``prefill_in0_block_w`` for an fp32-accumulating launch); None = the
-    bf16 rule below.
+    ``in0_block_w`` overrides the K block (an fp32-accumulating launch passes its slab plan's); None = the bf16
+    rule below.
     """
     if grid_size is None:
         base = prefill_grid_default()
@@ -455,7 +404,7 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
     k_tiles = math.ceil(k / TILE_SIZE)
     # Kernel requires Kt % in0_block_w == 0 (``_prefill_block_w_max``: ~k_tiles/cols capped at 4, snapped down to
-    # a divisor); an fp32-accumulating launch passes its own, smaller block when the slab needs the L1.
+    # a divisor); a sweep (prefill_slab_plan) passes a smaller block.
     if in0_block_w is None:
         in0_block_w = _prefill_block_w_max(k_tiles, grid_size[0])
     assert k_tiles % in0_block_w == 0, (k_tiles, in0_block_w)
@@ -503,7 +452,7 @@ class DramShardedLinear:
         self._prefill_max_cols = prefill_max_cols_default(mesh_device)
         # the slab this weight's CBs allow, per Dest accumulation format (GEMMA4_PREFILL_CUTOFF still pins it): the
         # fp32 Dest compute config of the prefill linears adds an fp32 partials block per core
-        # (rows, in0_block_w) per format: the fp32 plan may take a smaller K block for a larger slab (prefill_slab_plan)
+        # (rows, in0_block_w) per format (prefill_slab_plan: the K block is the bf16 rule's; a sweep overrides both)
         self._slab_plan_by_acc = {
             fp32: prefill_slab_plan(k, n, dtype, max_cols=self._prefill_max_cols, fp32_acc=fp32)
             for fp32 in (False, True)
@@ -575,13 +524,9 @@ class DramShardedLinear:
             )
 
     def _prefill_pc(self, m, fp32_acc=False):
-        """The 2D config of a prefill launch of ``m`` rows; ``fp32_acc`` (fp32 Dest accumulation) sizes its K block
-        to the L1 the fp32 partials leave (``prefill_in0_block_w``: the slab plan's value at the slab)."""
-        in0_block_w = (
-            prefill_in0_block_w(self.k, self.n, self._dtype, m, max_cols=self._prefill_max_cols, fp32_acc=True)
-            if fp32_acc
-            else None
-        )
+        """The 2D config of a prefill launch of ``m`` rows; ``fp32_acc`` (fp32 Dest accumulation) takes the K block
+        of the fp32 slab plan (the bf16 rule's unless a sweep overrides the plan); the bf16 path its default."""
+        in0_block_w = self._slab_plan_by_acc[True][1] if fp32_acc else None
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols, in0_block_w=in0_block_w)
 
     def _decode_ckc(self, compute_kernel_config):

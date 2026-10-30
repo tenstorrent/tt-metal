@@ -318,24 +318,32 @@ def test_pipeline_outliers_accuracy_time(mesh_device, device_params, case, monke
 # The gate_up cases at 4096 rows also print the K-block / slab trade of prefill_slab_plan (a smaller in0_block_w
 # halves the in0 / in1 CBs and buys a larger slab at twice the K iterations): wall per call at 2048 and 4096 rows
 # for every (in0_block_w, slab) candidate at the 64 KB headroom and at headroom 0, each checked for L1 fit and pcc.
+# Measured 2026-10-30 (bh-glx-exp-b03u14 chip 8, bfp8, 5 calls; ms at 2048 / 4096 rows): 31B gate_up block 4 / 960
+# rows 2.19 / 4.01 (3 / 5 launches), block 2 / 960 2.32 / 4.22, block 2 / 1280 (headroom 0) 2.23 / 4.25, block 1 /
+# 1280 3.12 / 5.90; 12B gate_up block 4 / 960 1.43 / 2.57, block 4 / 1280 (headroom 0) 1.36 / 2.59, block 2 / 1280
+# 1.45 / 2.72, block 2 / 1600 1.43 / 2.69, block 1 / 1600 1.95 / 3.66: the launches saved are worth nothing next to
+# the extra K iterations, so the plan keeps block 4 (the PR #60786 follow-up idea, closed by this table).
 def _fp32_slab_timing(mesh_device, lin, x, ckc, golden, monkeypatch, n_calls=5):
     import time
 
     from models.demos.gemma4.tt import dram_sharded as ds
 
     K, N, dt, cols = lin.k, lin.n, lin._dtype, lin._prefill_max_cols
-    plans = []  # (in0_block_w, slab rows): the plan of each candidate block at the two headrooms
-    for w in ds.prefill_block_w_candidates(K, N, max_cols=cols, fp32_acc=True):
+    default = lin._slab_plan_by_acc[True]
+    k_tiles = K // TILE_SIZE
+    plans = []  # (in0_block_w, slab rows): the plan at each K block (the rule's, 2, 1) at the two headrooms
+    for w in (default[1], 2, 1):
         for headroom in (None, 0):
-            plan = ds.prefill_slab_plan(K, N, dt, max_cols=cols, fp32_acc=True, headroom=headroom, candidates=(w,))
+            if w > default[1] or k_tiles % w:
+                continue
+            plan = ds.prefill_slab_plan(K, N, dt, max_cols=cols, fp32_acc=True, headroom=headroom, in0_block_w=w)
             if (w, plan[0]) not in plans:
                 plans.append((w, plan[0]))
-    default = lin._slab_plan_by_acc[True]
     print(f"[K{K} N{N}] fp32 K-block / slab candidates {plans}; the rule's plan (rows, in0_block_w) {default}")
     print(f"{'in0_block_w':>11s} {'slab':>5s} {'rows':>5s} {'launches':>8s} {'ms/call':>8s} {'pcc':>9s}")
     for w, slab in plans:
+        monkeypatch.setitem(lin._slab_plan_by_acc, True, (slab, w))
         monkeypatch.setitem(lin._slab_rows_by_acc, True, slab)
-        monkeypatch.setattr(ds, "prefill_in0_block_w", lambda *a, _w=w, **kw: _w)
         for m in (2048, 4096):
             launches = len(ds.prefill_row_chunks(m, slab=slab, remainder=min(ds._PREFILL_REMAINDER_CHUNK, slab)))
             tx = ttnn.from_torch(x[:, :, :m], device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
