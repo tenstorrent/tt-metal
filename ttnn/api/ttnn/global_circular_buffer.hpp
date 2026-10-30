@@ -16,11 +16,15 @@
 namespace ttnn::global_circular_buffer {
 
 // Multi Device APIs
+// Allocate and own both GCB buffers. Supply both addresses to reserve those exact ranges,
+// or neither for automatic placement. Existing allocations cannot be viewed or adopted.
 GlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* mesh_device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    std::optional<tt::tt_metal::DeviceAddr> buffer_address = std::nullopt,
+    std::optional<tt::tt_metal::DeviceAddr> config_address = std::nullopt);
 
 // The weight <-> matmul contract of a gather-in0 or mcast-in0 1D matmul reading a DRAM weight's
 // K-blocks from `gcb`, returning the block count: gather returns the receiver/ring count; mcast returns

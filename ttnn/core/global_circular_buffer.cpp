@@ -24,9 +24,19 @@ GlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) {
+    BufferType buffer_type,
+    std::optional<tt::tt_metal::DeviceAddr> buffer_address,
+    std::optional<tt::tt_metal::DeviceAddr> config_address) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
-    return tt::tt_metal::experimental::GlobalCircularBuffer(*device, sender_receiver_core_mapping, size, buffer_type);
+    TT_FATAL(
+        buffer_address.has_value() == config_address.has_value(),
+        "Global circular buffer data and configuration addresses must be supplied together");
+    if (!buffer_address.has_value()) {
+        return tt::tt_metal::experimental::GlobalCircularBuffer(
+            *device, sender_receiver_core_mapping, size, buffer_type);
+    }
+    return tt::tt_metal::experimental::GlobalCircularBuffer(
+        *device, sender_receiver_core_mapping, size, buffer_type, buffer_address.value(), config_address.value());
 }
 
 namespace {
