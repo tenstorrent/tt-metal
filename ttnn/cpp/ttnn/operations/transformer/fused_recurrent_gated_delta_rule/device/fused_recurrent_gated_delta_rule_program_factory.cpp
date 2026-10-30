@@ -107,6 +107,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::r16, Vt);
     add_cb(cb::craw16, 1);
     add_cb(cb::ccol32, 1);
+    add_cb(cb::ebc16, 1);
     add_cb(cb::u16, Vt);
     add_state_cb(cb::s2, cb::s2_mm, kv);
     add_state_cb(cb::s3, cb::s3_mm, kv);
