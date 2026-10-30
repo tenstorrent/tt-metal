@@ -33,11 +33,11 @@ struct FusedRecurrentGatedDeltaRuleParams {
 };
 
 // All device-op input tensors are fp32, TILE layout, interleaved (DRAM or L1).
-// Head-split, L2-norm, q-scale, exp(g)->decay and the per-token tile layout are done host-side;
-// the compute kernel does only the pure recurrence.
+// Head-split, L2-norm, q-scale and the per-token tile layout are done host-side; the compute kernel
+// does the recurrence, exp(g) included.
 //   q, k : [BH*T, 1, K]   (q already scaled by `scale`; both already L2-normalized over K)
 //   v    : [BH*T, 1, V]
-//   decay: [BH*T, 1, 1]   (= exp(g_t), one scalar per (head, token) in tile element [0,0])
+//   g    : [BH*T, 1, 1]   (the log decay g_t, one scalar per (head, token) in tile element [0,0])
 //   beta : [BH*T, 1, 1]
 //   initial_state: [BH, K, V] or absent (zeros).
 //
@@ -47,7 +47,7 @@ struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor q;
     Tensor k;
     Tensor v;
-    Tensor decay;
+    Tensor g;
     Tensor beta;
     std::optional<Tensor> initial_state;
     std::optional<Tensor> initial_state_block_idx;
