@@ -94,8 +94,6 @@ tt::tt_metal::KernelDescriptor::Defines kernel_defines(tt::tt_metal::distributed
         {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(chip_ids)},
         {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(mesh_ids)},
         {"FABRIC_2D", "1"},
-        {"MESH_ROWS", std::to_string(mesh_shape[0])},
-        {"MESH_COLS", std::to_string(mesh_shape[1])},
     };
 }
 

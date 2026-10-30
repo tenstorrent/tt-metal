@@ -5,7 +5,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "sparse_push_constants.hpp"
-#include "sparse_push_route.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
@@ -36,17 +35,8 @@ namespace {
 // route as this sender's data.
 template <typename Sender>
 void send_sem_inc(
-    Sender& mux_conn,
-    volatile PACKET_HEADER_TYPE* hdr,
-    uint32_t dest_chip,
-    uint32_t dest_mesh,
-    uint64_t sem_noc_addr,
-    bool flip_turn,
-    uint32_t my_rank) {
+    Sender& mux_conn, volatile PACKET_HEADER_TYPE* hdr, uint32_t dest_chip, uint32_t dest_mesh, uint64_t sem_noc_addr) {
     fabric_set_unicast_route((HybridMeshPacketHeader*)hdr, dest_chip, dest_mesh);
-    if (flip_turn) {
-        sparse_push::flip_turn<MESH_ROWS, MESH_COLS>((volatile HybridMeshPacketHeader*)hdr, my_rank);
-    }
     hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, 1, true});
     mux_conn.wait_for_empty_write_slot();
     mux_conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
@@ -87,14 +77,11 @@ void kernel_main() {
     const size_t cores_arg = arg;  // workers x (noc x, noc y)
     arg += 2 * workers;
 
-    // Same route choice as the reader (sparse_push_route.hpp), so increments follow the data.
-    auto route_to = [&](uint32_t requester) {
-        return sparse_push::route<MESH_ROWS, MESH_COLS>(
-            my_rank,
-            requester,
-            static_cast<uint32_t>(get_next_hop_router_direction(dest_mesh_ids[requester], dest_chip_ids[requester])));
+    // The fabric's next hop, as in the reader, so increments follow the data.
+    auto next_hop = [&](uint32_t requester) {
+        return static_cast<uint32_t>(get_next_hop_router_direction(dest_mesh_ids[requester], dest_chip_ids[requester]));
     };
-    auto in_my_direction = [&](uint32_t requester) { return requester != my_rank && route_to(requester).dir == dir; };
+    auto in_my_direction = [&](uint32_t requester) { return requester != my_rank && next_hop(requester) == dir; };
 
     const uint32_t headers_l1 = get_write_ptr(kHeaders);
     auto* sem_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(headers_l1);
@@ -108,14 +95,7 @@ void kernel_main() {
             const uint64_t remote_ready = get_noc_addr(sync_core_x, sync_core_y, ready_sem);
             for (uint32_t requester = 0; requester < num_devices; ++requester) {
                 if (in_my_direction(requester)) {
-                    send_sem_inc(
-                        mux_conn,
-                        sem_hdr,
-                        dest_chip_ids[requester],
-                        dest_mesh_ids[requester],
-                        remote_ready,
-                        route_to(requester).flip_turn,
-                        my_rank);
+                    send_sem_inc(mux_conn, sem_hdr, dest_chip_ids[requester], dest_mesh_ids[requester], remote_ready);
                 }
             }
         }
@@ -169,9 +149,6 @@ void kernel_main() {
                     headers_l1 + (1 + in_flight) * sizeof(PACKET_HEADER_TYPE));
                 fabric_set_unicast_route(
                     (HybridMeshPacketHeader*)hdr, dest_chip_ids[requester], dest_mesh_ids[requester]);
-                if (route_to(requester).flip_turn) {
-                    sparse_push::flip_turn<MESH_ROWS, MESH_COLS>((volatile HybridMeshPacketHeader*)hdr, my_rank);
-                }
                 tt::tt_fabric::linear::to_noc_unicast_write(bytes, hdr, first_page, output);
                 perform_payload_send<false, false>(mux_conn, data_l1, bytes, hdr);
             }
@@ -187,14 +164,7 @@ void kernel_main() {
             if (requester == my_rank) {
                 noc_semaphore_inc(remote_done, 1);  // this chip's own: a local increment
             } else if (in_my_direction(requester)) {
-                send_sem_inc(
-                    mux_conn,
-                    sem_hdr,
-                    dest_chip_ids[requester],
-                    dest_mesh_ids[requester],
-                    remote_done,
-                    route_to(requester).flip_turn,
-                    my_rank);
+                send_sem_inc(mux_conn, sem_hdr, dest_chip_ids[requester], dest_mesh_ids[requester], remote_done);
             }
         }
         noc_async_atomic_barrier();
