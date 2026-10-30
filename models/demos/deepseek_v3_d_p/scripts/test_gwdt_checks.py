@@ -275,20 +275,6 @@ def test_status_json_has_run_fields(tmp_path):
     assert json.loads((tmp_path / "status.json").read_text()).items() >= meta.items()
 
 
-def test_models_grid_aligned_with_color(tmp_path, monkeypatch):
-    import re
-
-    from galaxy_workload_deployment_test import Screen
-    from gwdt_steps import Step
-
-    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    steps = [Step(f"{g}:m", g, g, "kimi_k2_7", True, None) for g in ("block", "smoke", "soak")]
-    steps[0].state.result = Result(Status.PASS)
-    screen = Screen(steps, ["hdr"], tmp_path / "status.json", {})
-    rows = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in screen.lines() if l.startswith((" K2.7", "MODELS"))]
-    assert rows[0].index("smoke") == rows[1].index("·")
-
-
 @pytest.mark.parametrize("tty", [True, False])
 def test_screen_columns(tmp_path, monkeypatch, tty):
     import re
@@ -320,11 +306,6 @@ def test_screen_columns(tmp_path, monkeypatch, tty):
     assert lines[gates + 6].index("fw_bundle_version") == note
     assert lines[gates + 5].index("0s") + 2 == lines[gates].index("time") + 4
     assert lines[gates + 7] == ""
-    header, k2, glm = lines[gates + 8 : gates + 11]
-    starts = [header.index(c) for c in ("block", "smoke", "soak 1/3", "soak 2/3")]
-    assert [k2[i - 1] for i in starts[1:]] == [" "] * 3
-    assert [k2.index(t) for t in ("PASS", "FAIL")] == starts[:2]
-    assert glm.index("-") == starts[1]
 
 
 def test_only_runs_exact_keys():
@@ -506,3 +487,60 @@ def test_block_random_runs_per_layer_type_random_rows():
             "test_glm_prefill_block_chunked_random[blackhole-glm53-torus-xy-8x4-moe_shared_L3-chunks2-iter100]",
         ],
     }
+
+
+R = "x.py::test_r[blackhole-kimi_k2_7-torus-xy-8x4-{}-chunks2-iter100]"
+
+
+def test_layer_label():
+    from gwdt_checks import layer_label
+
+    assert layer_label(R.format("moe_shared_L3")) == "moe_shared_L3"
+    assert (
+        layer_label("x.py::test_glm_prefill_block[blackhole-glm53-with_determinism-iter2-moe-seq5120-torus-xy-8x4]")
+        == "moe"
+    )
+    assert (
+        layer_label("x.py::t[blackhole-kimi_k2_7-torus-xy-8x4-moe-gate_host-chunks2-iter2-with_determinism]") == "moe"
+    )
+
+
+def test_row_results_from_summary():
+    from gwdt_checks import row_results
+
+    log = f"PASSED {R.format('dense_L0')}\nFAILED {R.format('moe_L1')} - AssertionError: x\n"
+    rows = row_results(log, [R.format("dense_L0"), R.format("moe_L1")])
+    assert [r.status for r in rows] == [Status.PASS, Status.FAIL]
+
+
+def test_row_results_live():
+    from gwdt_checks import row_results
+
+    log = f"{R.format('dense_L0')} \nstuff\nPASSED\n{R.format('moe_L1')} \n  pass 95/100 done\n  pass 96/100 done\n"
+    rows = row_results(log, [R.format("dense_L0"), R.format("moe_L1"), R.format("moe_L6")])
+    assert [r.status for r in rows] == [Status.PASS, Status.RUN, Status.PENDING]
+    assert rows[1].reason == "pass 96/100"
+
+
+def test_models_layout_a(tmp_path, monkeypatch):
+    import re
+
+    from galaxy_workload_deployment_test import Screen
+    from gwdt_steps import Step
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    ids = [R.format("dense_L0"), R.format("moe_L1")]
+    rand = Step("block-random:kimi_k2_7", "block-random K2.7", "block-random", "kimi_k2_7", True, None, lambda ctx: ids)
+    rand.state.result = Result(Status.PASS)
+    rand.state.rows = [Result(Status.PASS), Result(Status.PASS)]
+    smoke = Step("smoke:kimi_k2_7", "smoke K2.7", "smoke", "kimi_k2_7", True, None)
+    smoke.state.result = Result(Status.FAIL, "iter 1 KV cache DIFFERS")
+    soak = Step("soak:kimi_k2_7", "soak K2.7", "soak", "kimi_k2_7", True, None)
+    soak.state.result = Result(Status.SKIP, "by user")
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in Screen([rand, smoke, soak], ["hdr"], tmp_path / "s", {}).lines()]
+    m = lines.index("MODELS")
+    assert lines[m + 1] == " K2.7 (L61)"
+    step, l0, l1, sm, so = lines[m + 2 : m + 7]
+    assert step.startswith("   block-random ") and l0.startswith("     dense_L0 ") and l1.startswith("     moe_L1 ")
+    assert step.index("PASS") == l0.index("PASS") == l1.index("PASS") == sm.index("FAIL") == so.index("SKIP")
+    assert sm.startswith("   smoke ") and "iter 1 KV cache DIFFERS" in sm

@@ -18,8 +18,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from gwdt_checks import TOOL_NAME, Status, dur, log_root, run_name
-from gwdt_steps import MODEL_ENV, MODEL_LABEL, SOAK_LOOPS, Ctx, Step, build_steps, run_all
+from gwdt_checks import TOOL_NAME, Result, Status, dur, layer_label, log_root, run_name
+from gwdt_steps import MODEL_ENV, MODEL_LABEL, MODEL_LAYERS, Ctx, Step, build_steps, run_all
 
 try:
     from colorama import Fore, Style
@@ -30,7 +30,6 @@ except ImportError:
     sys.exit(1)
 
 REDRAW_SECS = 15
-CELL = 15
 NOTE = 33
 COLOR = {
     Status.PASS: Fore.GREEN,
@@ -54,11 +53,6 @@ class Screen:
         text = f"{text:<{width}}"
         return f"{COLOR[status]}{text}{Style.RESET_ALL}" if self.tty else text
 
-    def cell(self, step: Step) -> str:
-        s = step.state
-        took = f" {dur((s.end or time.time()) - s.start)}" if s.start else ""
-        return self.paint(s.result.status, f"{s.result.status.value}{took}", CELL)
-
     def lines(self) -> list[str]:
         gates = [s for s in self.steps if s.group == "gate"]
         out = self.header + ["", f"{'GATES':<20} {'time':>8}    note"]
@@ -69,9 +63,14 @@ class Screen:
                 f"{i:>2} {s.title:<10} {self.paint(status, status.value, 6)} {took:>8}    {s.state.result.reason}"
             )
             out += [self.gate_detail(s, d) for d in s.state.result.details]
-        out += ["", f"{'MODELS':<13}" + " ".join(f"{c:<{CELL}}" for c in self.columns())]
-        for m in dict.fromkeys(s.model for s in self.steps if s.model):
-            out.append(f" {MODEL_LABEL[m]:<12}" + " ".join(self.model_cells(m)))
+        models = list(dict.fromkeys(s.model for s in self.steps if s.model))
+        if models:
+            out += ["", "MODELS"]
+        for m in models:
+            out.append(f" {MODEL_LABEL[m]} ({MODEL_LAYERS[m]})")
+            for s in (s for s in self.steps if s.model == m):
+                out.append(self.model_row(3, s.group, s.state.result, s.state.start, s.state.end))
+                out += [self.model_row(5, label, r) for label, r in self.sub_rows(s)]
         running = next((s for s in self.steps if s.state.result.status == Status.RUN), None)
         if running:
             out += ["", f"NOW   {running.title}  {running.state.now or dur(time.time() - running.state.start)}"]
@@ -98,19 +97,21 @@ class Screen:
             return f"   {detail.removesuffix('MISSING')}{self.paint(Status.FAIL, 'MISSING')}"
         return f"   {detail}"
 
-    def columns(self) -> list[str]:
-        groups = list(dict.fromkeys(s.group for s in self.steps if s.model and s.group != "soak"))
-        return [g for g in groups] + [f"soak {i}/{SOAK_LOOPS}" for i in range(1, SOAK_LOOPS + 1)]
+    def model_row(
+        self, indent: int, label: str, r: Result, start: float | None = None, end: float | None = None
+    ) -> str:
+        took = dur((end or time.time()) - start) if start else ""
+        return f"{' ' * indent}{label:<{23 - indent}}{self.paint(r.status, r.status.value, 6)} {took:>8}    {r.reason}".rstrip()
 
-    def model_cells(self, model: str) -> list[str]:
-        cells = []
-        for g in dict.fromkeys(s.group for s in self.steps if s.model and s.group != "soak"):
-            step = next((s for s in self.steps if s.model == model and s.group == g), None)
-            cells.append(self.cell(step) if step else f"{'-':<{CELL}}")
-        soak = next((s for s in self.steps if s.model == model and s.group == "soak"), None)
-        loops = soak.state.loops if soak and soak.state.loops else [soak.state.result] * SOAK_LOOPS if soak else []
-        cells += [self.paint(r.status, r.status.value, CELL) for r in loops]
-        return cells
+    def sub_rows(self, step: Step) -> list[tuple[str, Result]]:
+        """Layer-type rows for pytest steps, loop rows for multi-loop stress steps."""
+        if len(step.state.loops) > 1:
+            return [(f"loop {i}/{len(step.state.loops)}", r) for i, r in enumerate(step.state.loops, 1)]
+        if step.collect is None or step.group in ("smoke", "soak"):
+            return []
+        ids = step.collect(None)
+        rows = step.state.rows or [Result(Status.PENDING)] * len(ids)
+        return [(layer_label(i), r) for i, r in zip(ids, rows)]
 
     def update(self, step: Step | None = None) -> None:
         self.write_status()
