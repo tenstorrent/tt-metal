@@ -684,10 +684,12 @@ public:
             default: return "";
         }
     }
-    // Matches the cores the watcher server delays; ETH kernels are only built with the delay when this is true.
+    // Must match the cores the watcher server delays.
     bool get_watcher_debug_delay_targets_eth() const {
         for (auto feature :
-             {RunTimeDebugFeatureReadDebugDelay, RunTimeDebugFeatureWriteDebugDelay, RunTimeDebugFeatureAtomicDebugDelay}) {
+             {RunTimeDebugFeatureReadDebugDelay,
+              RunTimeDebugFeatureWriteDebugDelay,
+              RunTimeDebugFeatureAtomicDebugDelay}) {
             const auto& cores = get_feature_cores(feature);
             if (auto it = cores.find(CoreType::ETH); it != cores.end() && !it->second.empty()) {
                 return true;

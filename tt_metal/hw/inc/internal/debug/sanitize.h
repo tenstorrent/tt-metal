@@ -1108,7 +1108,10 @@ inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
 
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
-#if defined(WATCHER_DEBUG_DELAY)
+// Ethernet kernels such as the fabric router have little code space to spare, so they only get the delay
+// instrumentation when an ethernet core is being delayed.
+#if defined(WATCHER_DEBUG_DELAY) && \
+    (defined(WATCHER_DEBUG_DELAY_ETH) || (!defined(COMPILE_FOR_ERISC) && !defined(COMPILE_FOR_IDLE_ERISC)))
     debug_insert_delays_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.debug_insert_delays);
 
     bool delay = false;
