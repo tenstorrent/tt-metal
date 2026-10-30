@@ -74,4 +74,14 @@ TEST_F(UnitMeshFixture, DFBKernelExitRepeatedLaunchDMDM) {
     }
 }
 
+// Programs that end on full batches, each followed by one with a partial last batch on the same txn ids. A
+// side with nothing left to credit can finish without DM0 flushing it, and its exit records must not be
+// taken as the next program's.
+TEST_F(UnitMeshFixture, DFBKernelExitFullBatchThenPartialDMDM) {
+    skip_unless_quasar(this->device());
+    for (uint32_t traffic : {8u, 9u, 16u, 9u, 8u, 11u}) {
+        run_single_dfb_program_2_0(this->device(), implicit_params(M2PorCType::DM, M2PorCType::DM, 1, 1, 8, traffic));
+    }
+}
+
 }  // namespace tt::tt_metal
