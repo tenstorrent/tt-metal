@@ -640,6 +640,13 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathUpdatePass) {
     auto tiny = run(this->devices_.at(0), config(false, kRepsPass, false));
     auto padded = run(this->devices_.at(0), config(true, kRepsPass, false));
     auto twice = run(this->devices_.at(0), config(false, 4, true));
+    // Cost decomposition (the kernel's variants 5 and 6): the same loop without the decay / without the rank-1.
+    auto cfg_no_decay = config(false, kRepsPass, false);
+    cfg_no_decay.variant = kUpdate + 3;
+    auto cfg_no_rank1 = config(false, kRepsPass, false);
+    cfg_no_rank1.variant = kUpdate + 4;
+    auto no_decay = run(this->devices_.at(0), cfg_no_decay);
+    auto no_rank1 = run(this->devices_.at(0), cfg_no_rank1);
 
     const auto t = last_rep(tiny.out_rm[0], kRepsPass), p = last_rep(padded.out_rm[0], kRepsPass);
     const double err_t = max_rel_err(t, ref), err_p = max_rel_err(p, ref);
@@ -668,6 +675,13 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathUpdatePass) {
         cyc / KV,
         double(padded.stats[1] - padded.stats[0]) / kRepsPass,
         double(twice.stats[1] - twice.stats[0]) / 4);
+    log_info(
+        tt::LogTest,
+        "update pass decomposition, cycles per S tile (groups of 3): seed + rank-1 + pack {:.1f}; seed + decay + pack "
+        "{:.1f}; seed + decay + rank-1 + pack {:.1f}",
+        double(no_decay.stats[1] - no_decay.stats[0]) / (kRepsPass * KV),
+        double(no_rank1.stats[1] - no_rank1.stats[0]) / (kRepsPass * KV),
+        cyc / KV);
 }
 
 // (c) constants pass: e within 2 ulp of fp32 std::exp in column 0 of ecol32 (all 32 rows); ebc16 carries e / beta /
@@ -795,6 +809,9 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
     auto full = run(this->devices_.at(0), config(true));
     auto regular = run(this->devices_.at(0), config(false, /*startup_reverse=*/false));
     auto on_utd = run(this->devices_.at(0), config(false, /*startup_reverse=*/false, /*startup_on_utd=*/true));
+    auto cfg_fused = config(false);
+    cfg_fused.variant = kToken + 3;  // decode_token<Kt, Vt, FuseReadVector = true>
+    auto fused = run(this->devices_.at(0), cfg_fused);
 
     const auto out_last = last_rep(half.out_rm[0], reps);
     const auto o = row_of_tiles(out_last, T16x32, 0, VT);
@@ -834,6 +851,9 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
         bit_equal(regular.out_words[0], half.out_words[0]) && bit_equal(regular.out_words[1], half.out_words[1]);
     const bool on_utd_same =
         bit_equal(on_utd.out_words[0], half.out_words[0]) && bit_equal(on_utd.out_words[1], half.out_words[1]);
+    const bool fused_same =
+        bit_equal(fused.out_words[0], half.out_words[0]) && bit_equal(fused.out_words[1], half.out_words[1]);
+    EXPECT_TRUE(fused_same) << "the fused read + vector form changes the bits";
     EXPECT_TRUE(all_finite(o) && all_finite(u) && all_finite(S_new));
     EXPECT_LT(err_u, 5e-3);
     EXPECT_LT(err_o, 5e-3);
@@ -877,6 +897,15 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeMathToken) {
         double(full.stats[3]) / reps,
         double(full.stats[4]) / reps,
         double(full.stats[5]) / reps);
+    log_info(
+        tt::LogTest,
+        "token, fused read + vector form (half-sync): bits == two-pass form {}; per token {:.0f}; constants {:.0f}, "
+        "read + vector {:.0f}, update {:.0f}",
+        fused_same,
+        double(fused.stats[1] - fused.stats[0]) / reps,
+        double(fused.stats[2]) / reps,
+        double(fused.stats[3]) / reps,
+        double(fused.stats[5]) / reps);
 }
 
 }  // namespace unit_tests::compute::gdn_decode_math
