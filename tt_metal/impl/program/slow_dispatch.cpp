@@ -271,6 +271,7 @@ void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow
     if (!force_slow_dispatch) {
         metal_ctx.device_manager()->check_dispatch_mode(/*fast_dispatch=*/false);
     }
+    program.impl().validate_scratchpad_bindings();
 
     const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -342,7 +343,6 @@ void WaitProgramDone(IDevice& device, const Program& program) {
 
 void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
-    program.impl().validate_scratchpad_bindings();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
     if (!force_slow_dispatch) {

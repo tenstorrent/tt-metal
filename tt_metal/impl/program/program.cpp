@@ -2332,6 +2332,10 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 }
 
 void detail::ProgramImpl::validate_scratchpad_bindings() const {
+    // Mock devices are exempt, as for borrowed-memory DFBs: nothing they serialize reaches hardware (issue #57022).
+    if (MetalContext::instance(this->context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
     for (const auto& kernels_of_core_type : this->kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
             for (const auto& binding : kernel->scratchpad_binding_handles()) {

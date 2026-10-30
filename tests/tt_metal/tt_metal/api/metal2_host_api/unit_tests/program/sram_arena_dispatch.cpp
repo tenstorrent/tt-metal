@@ -3,24 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
 
 #include <functional>
-#include <stdexcept>
 #include <utility>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
-#include "metal2_host_api/test_helpers/prefetcher_pipe_test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::PrefetcherPipeSpecTestGen1;
 using test_helpers::ProgramRunArgsTestGen1;
 
 ProgramSpec MakeArenaScratchpadSpecForTest() {
@@ -40,43 +35,6 @@ ProgramRunArgs MakeArenaRunArgsForTest(const SRAMArena& arena) {
     ProgramRunArgs args;
     args.advanced_options.sram_arena_args = {{SRAMArenaParamName{"arena"}, std::cref(arena)}};
     return args;
-}
-
-ProgramSpec MakePipeSenderArenaScratchpadSpecForTest() {
-    ProgramSpec spec = MakeArenaScratchpadSpecForTest();
-    spec.kernels[0].advanced_options.prefetcher_pipe_bindings = {test_helpers::BindPipe()};
-    spec.advanced_options.prefetcher_pipe_parameters = {test_helpers::MakePipeParameter()};
-    spec.work_units = {test_helpers::MakeMinimalWorkUnit("work", test_helpers::pipe_sender_node, {"writer"})};
-    return spec;
-}
-
-ProgramRunArgs MakeArenaAndPipeRunArgsForTest(const SRAMArena& arena, PrefetcherPipe& pipe) {
-    ProgramRunArgs args = MakeArenaRunArgsForTest(arena);
-    args.advanced_options.prefetcher_pipe_args = {{test_helpers::pipe_param_name, std::ref(pipe)}};
-    return args;
-}
-
-TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueRejectsUnboundScratchpad) {
-    // Enqueue rejects an arena scratchpad when initial arguments were never supplied.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto program = MakeProgramFromSpec(fixture_device, MakeArenaScratchpadSpecForTest());
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
-    EXPECT_THAT(
-        [&] { distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no bound SRAMArena")));
-}
-
-TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueRejectsMissingScratchpadAfterUncheckedSet) {
-    // Skipping argument validation does not allow an unbound arena scratchpad to be dispatched.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto program = MakeProgramFromSpec(fixture_device, MakeArenaScratchpadSpecForTest());
-    SetProgramRunArgs(program, {}, /*skip_validation=*/true);
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
-    EXPECT_THAT(
-        [&] { distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no bound SRAMArena")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAcceptsBoundScratchpad) {
@@ -112,22 +70,6 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAllowsLocalScratchpadWithoutR
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false));
-}
-
-TEST_F(PrefetcherPipeSpecTestGen1, CPU_SRAMArenaEnqueueRejectsScratchpadAfterSetRejectedByPipe) {
-    // A SetProgramRunArgs call rejected by its pipe argument does not bind the arena scratchpad.
-    distributed::MeshDevice& fixture_device = *mesh_device_;
-    auto arena = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
-    PrefetcherPipe other_sender_pipe = MakePipeFor(fixture_device, test_helpers::MakePipeParameter(), CoreCoord{2, 0});
-    auto program = MakeProgramFromSpec(fixture_device, MakePipeSenderArenaScratchpadSpecForTest());
-    ASSERT_THAT(
-        [&] { SetProgramRunArgs(program, MakeArenaAndPipeRunArgsForTest(arena, other_sender_pipe)); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the supplied pipe's sender is (2,0)")));
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
-    EXPECT_THAT(
-        [&] { distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no bound SRAMArena")));
 }
 
 }  // namespace

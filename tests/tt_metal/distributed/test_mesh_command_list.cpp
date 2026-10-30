@@ -1459,23 +1459,6 @@ TEST_F(CommandListTest, RejectsWorkloadWithUnboundArenaScratchpad) {
     EXPECT_THAT([&] { builder.add(workload); }, ThrowsMessage<std::runtime_error>(HasSubstr("has no bound SRAMArena")));
 }
 
-TEST_F(CommandListTest, SubmeshClosesAfterRejectedEnqueueWhileParentUsesTheQueue) {
-    // A rejected enqueue leaves the submesh's queue unused, so the submesh closes while its parent uses that queue.
-    std::shared_ptr<MeshDevice> submesh = mesh_device_->create_submesh(MeshShape(1, 1));
-    auto workload = m2::MakeMeshWorkloadFromSpec(*submesh, make_arena_scratchpad_spec("unbound_arena_scratchpad"));
-    CommandListBuilder builder(*submesh);
-    builder.add(workload);
-    builder.deallocate();
-    mesh_device_->quiesce_devices();
-    ASSERT_THAT(
-        [&] { EnqueueMeshWorkload(submesh->mesh_command_queue(), workload, /*blocking=*/false); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("has no bound SRAMArena")));
-    std::shared_ptr<MeshBuffer> parent_buffer = allocate_dram(*mesh_device_, /*pages_per_bank=*/1);
-    std::vector<uint32_t> zeros(parent_buffer->size() / sizeof(uint32_t), 0);
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), parent_buffer, zeros, /*blocking=*/true);
-    EXPECT_NO_THROW(submesh->close());
-}
-
 TEST_F(CommandListTest, ReplaysCommandListsUnderTheirRecordedSubDeviceLayouts) {
     // Define two distinct layouts that both contain the workload's target node.
     const auto worker_grid = mesh_device_->compute_with_storage_grid_size();
