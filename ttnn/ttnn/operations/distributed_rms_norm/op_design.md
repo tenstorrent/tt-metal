@@ -475,3 +475,28 @@ Rows of the base op (`base_ops/rms_norm/op_design.md` → API Mapping) are uncha
 ### Structural impossibilities
 
 None missing from `feature_spec.py` INVALID.
+
+
+## Implementation notes (Phase 0, ttnn-implementer)
+
+What the implementation does differently from the text above, and why. Everything binding (algorithm, regimes,
+port/relay topology, root event loop, one dispatch) is as designed.
+
+| Item | Design | Implemented | Why |
+|------|--------|-------------|-----|
+| `MIN_BLOCKS_PER_CORE` | base rule (2: interleaved cores with ≥ 2 rows walk ≥ 2 blocks) | **1** (knob kept), `x_depth = 1` for single-block cores | Each block is one exchange round that has to finish before the next block's Σx² starts, so blocks serialize the exchange; the block's waves already overlap reads, exchange and scale. Measured (1×4 ring, 2 links, fastest chip): 640×1792 30.92 → 23.93 µs (slowest 31.46 → 25.78), the other perf cases unchanged. |
+| Waves per block | `nwpb = min(R, NUM_WAVES)`, `Rw = ceil(R / nwpb)` | `nwpb` = the largest divisor of `R` ≤ `NUM_WAVES` (≤ 8), `Rw = R / nwpb` | A full block's waves are then all `Rw` rows, so every per-wave CB quantum divides its capacity (a ragged wave in a full block would push across the ring end). |
+| Gather semaphore | `SEM_GATHER` (one) | one `SEM_GATHER_k` per wave of a block | `G_w − 1` members send each wave. On one cumulative counter a fast member's wave-(k+1) increment satisfied the wave-k threshold before a slow member's wave-k partial landed: stale wave-0 rows (`test_distributed_rms_norm_debug.py`). |
+| Own slot in `collect` | from the root's own record | read back from its own port landing slot `p` | The event loop may publish wave w+1 before it collects wave w, so a single own-staging run is overwritten. The landing slot is per wave and holds the same bytes the peers receive. |
+| R1 finalize target | `cb_rms_root` → local copy → `cb_inv_rms` | packs straight into `cb_inv_rms` | No members to distribute to; one copy saved. |
+| x loads | per C-quantum, wave 0's rows first | one barrier per tile-row inside the reader's poll loop (row order = wave order) | Rows are the wave unit; one barrier per row is the base's `READ_BATCH_CHUNKS = None`. |
+| Interleaved pad tiles | zeroed once per ring slot | not zeroed; Σx² over the `V` valid tiles only | Pad output tiles are never written; the W-pad columns of the last valid tile are still zeroed. |
+| γ supply | base resident / streaming / staging row | resident only; TILE: row-0 prefix read; RM sticks: stick read into the page + 16-word face-1 move | No `cb_gamma_row`. Streaming γ is not built; the L1 solve includes the resident window. |
+| `DRMS_ABLATE_EXCHANGE` | ports copy their own slot locally | ports skip the fabric and bump each arrival counter by `num_waves` up front | Same purpose (timing only). The harness copy `tests/.../perf_ablate.py` skips the golden check. |
+
+Measured Phase 0 (1×4 ring, 2 links, `perf_measure.py`, 5 experiments, fastest / slowest chip, µs):
+640×1792 23.93 / 25.78 (target 11.9); 32×1792 12.13 / 13.51 (target 0.6); 2048×1280 44.10 / 47.30 (target 27.3).
+Exposed transport, i.e. op time minus `DRMS_ABLATE_EXCHANGE` time on the fastest chip, measured at
+`MIN_BLOCKS_PER_CORE = 1` before the gather-semaphore fix: 640×1792 ≈ 3.0, 32×1792 ≈ 1.7, 2048×1280 ≈ 9.6. The local
+half dominates every perf case. 2048×1280 runs R1 with one row per core (no overlap of read, exchange and write);
+lamp L3 (R3-i, `G_w = 3`, 105 cores) is the nearby split to measure.
