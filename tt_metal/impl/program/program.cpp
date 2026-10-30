@@ -486,9 +486,14 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 }
 
-Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+Program::Program(const ProgramDescriptor& descriptor) : Program() { populate_from_descriptor(descriptor); }
+
+Program::Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& descriptor) :
+    Program(std::make_shared<detail::ProgramImpl>(mesh_device.impl().get_context_id())) {
+    populate_from_descriptor(descriptor);
+}
+
+void Program::populate_from_descriptor(const ProgramDescriptor& descriptor) {
     ScopedBusyClock build_busy(kProgramBuildBusy);
 
     if (descriptor.reload_table.has_value()) {

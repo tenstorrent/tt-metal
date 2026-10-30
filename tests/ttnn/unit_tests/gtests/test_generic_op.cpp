@@ -1099,7 +1099,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {
         .cbs = {},
     };
 
-    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); });
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMax) {
@@ -1123,7 +1123,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorInvalidIdExceedsMa
         .cbs = {},
     };
 
-    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+    EXPECT_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); }, std::exception);
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverlappingCores) {
@@ -1153,7 +1153,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorDuplicateIdOnOverl
         .cbs = {},
     };
 
-    EXPECT_THROW({ tt::tt_metal::Program program(program_descriptor); }, std::exception);
+    EXPECT_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); }, std::exception);
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappingCores) {
@@ -1182,7 +1182,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorSameIdNonOverlappi
         .cbs = {},
     };
 
-    EXPECT_NO_THROW({ tt::tt_metal::Program program(program_descriptor); });
+    EXPECT_NO_THROW({ tt::tt_metal::Program program(*this->device_, program_descriptor); });
 }
 
 class MeshDevice1x4FabricFixture : public MeshDeviceFixtureBase {
