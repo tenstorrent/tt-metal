@@ -389,14 +389,15 @@ def test_fill(device, fill_value):
 
 @pytest.mark.parametrize("fill_values", [(0.0, -0.0, 0.0), (-0.0, 0.0, -0.0)], ids=["pos_first", "neg_first"])
 def test_fill_signed_zero_program_cache(device, fill_values):
-    """+0.0 and -0.0 fill values must not share a cached program (#62557).
+    """+0.0 and -0.0 fill values keep their sign through the program cache (#62557).
 
     | Check               | Reason                                                  |
     |---------------------|---------------------------------------------------------|
-    | exact (bit pattern) | fill_value's bits are embedded in the kernel defines    |
+    | exact (bit pattern) | every output is fill_value, sign included               |
 
-    Each sign compiles its own program on first use and hits it on reuse, so the
-    output does not depend on which sign ran first.
+    fill_value reaches the kernel as a runtime argument, so both signs may share
+    one program; a repeated value must hit the cache, and the output must not
+    depend on which sign ran first.
     """
     tt_in = to_float32_tt_tensor(torch.ones((64, 64), dtype=torch.float32), device)
     device.clear_program_cache()
@@ -410,9 +411,7 @@ def test_fill_signed_zero_program_cache(device, fill_values):
         sign = math.copysign(1.0, fill_value)
         if sign in seen_signs:
             assert entries == prev_entries, f"fill_value {fill_value} should hit its cached program"
-        else:
-            assert entries > prev_entries, f"fill_value {fill_value} should compile a new program"
-            seen_signs.add(sign)
+        seen_signs.add(sign)
         prev_entries = entries
         result = ttnn.to_torch(tt_out)
         assert torch.equal(
