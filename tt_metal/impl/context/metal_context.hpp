@@ -78,6 +78,13 @@ public:
     // Check if a MetalContext for a given context id exists.
     static bool instance_exists(ContextId context_id = DEFAULT_CONTEXT_ID);
 
+    // Deprecated thread-local command queue selection (see Push/Pop/GetCurrentCommandQueueIdForThread in host_api.hpp).
+    // Returns the id on top of this thread's stack, or 0 if the stack is empty or the default context does not exist
+    // (never creates a context). Only consulted when a caller omits the queue id; Metal-internal code and TTNN always
+    // pass one. Removed together with the public API.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/39819 (make this work for non-default contexts)
+    static uint8_t current_command_queue_id_for_thread();
+
     // Returns the id of this instance. The ID cannot be used to uniquely identify the context.
     // IDs are recycled after instances are destroyed.
     ContextId get_context_id() const { return context_id_; }

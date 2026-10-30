@@ -774,6 +774,14 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
 
 thread_local MetalContext::CommandQueueIdStack MetalContext::command_queue_id_stack_for_thread_;
 
+uint8_t MetalContext::current_command_queue_id_for_thread() {
+    if (!MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return 0;
+    }
+    const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
+    return cq_stack.empty() ? 0 : cq_stack.back();
+}
+
 MetalContext::CommandQueueIdStack& MetalContext::get_command_queue_id_stack_for_thread() {
     return MetalContext::command_queue_id_stack_for_thread_;
 }

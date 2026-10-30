@@ -12,6 +12,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     conv/test_conv2d.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
+    test_command_queue_id_stack.cpp
     test_command_queue_selection.cpp
 )
 
