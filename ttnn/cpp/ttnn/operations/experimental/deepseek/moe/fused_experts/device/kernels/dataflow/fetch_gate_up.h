@@ -871,7 +871,7 @@ inline void run_reader_loop(
 
         // ---- Synchronization: gather the block's activations + broadcast the block. ----
         {
-            DeviceZoneScopedN("FE_SYNC");
+            DeviceZoneScopedN("FE_BLOCK_SYNC");
             if (is_hub) {
                 // Cumulative target: the semaphore counts up across blocks so it never needs a reset.
                 // Per block this hub receives one scatter bump per producer per expert, plus one ack

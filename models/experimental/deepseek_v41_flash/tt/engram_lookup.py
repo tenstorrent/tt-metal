@@ -9,16 +9,24 @@ layer's table -- ~100 GB of fp8 E4M3 with one E8M0 scale per 32 values, held in 
 are dequantized exactly as ``ParallelEngramEmbedding`` does it, to bf16
 ``[B, L, n_hash_cols * head_dim]``. The device half (:mod:`.decode.engram`) receives them over an
 H2D socket.
+
+``tools/stage_engram_tables.py`` copies the tables' checkpoint files into :data:`STAGE_DIR` (tmpfs, so
+the copy stays in RAM between processes); :func:`load_engram_table` then maps the copy instead of reading
+the checkpoint.
 """
 
+import ctypes
 import importlib.util
 import json
 import math
+import mmap
+import os
 import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -27,6 +35,13 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 # One E8M0 scale per this many consecutive values of a table row.
 TABLE_BLOCK = 32
+# Where tools/stage_engram_tables.py keeps the tables' checkpoint files. tmpfs pages are not reclaimed
+# under memory pressure the way page cache is, so a staged table stays resident until removed or reboot.
+STAGE_DIR = Path(os.environ.get("DEEPSEEK_V41_ENGRAM_STAGE_DIR", "/dev/shm/deepseek_v41_engram"))
+# Linux 5.14+: fault a range's pages into the page tables without touching them from user space.
+_MADV_POPULATE_READ = 22
+_libc = ctypes.CDLL(None, use_errno=True)
+_libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
 
 
 def tensor_region(path, name: str) -> tuple[int, list]:
@@ -63,6 +78,42 @@ def read_into_memory(
     return buf.view(dtype).reshape(shape)
 
 
+def map_into_memory(
+    path, offset: int, shape, dtype: torch.dtype, threads: int = 16, chunk: int = 1 << 30, progress=None
+):
+    """The tensor at ``offset`` in ``path`` mapped rather than copied: a private mapping, which shares the
+    file's resident pages with every other process mapping it. ``threads`` ``MADV_POPULATE_READ`` calls of
+    ``chunk`` bytes fault every page in up front; a lookup would otherwise take ~60 us per new page on the
+    decode path. ``progress`` as :func:`read_into_memory`'s."""
+    nbytes = math.prod(shape) * dtype.itemsize
+    file = torch.from_file(str(path), shared=False, size=os.path.getsize(path), dtype=torch.uint8)
+    base = file.data_ptr()
+    end = offset + nbytes
+
+    def populate(begin):
+        stop = min(begin + chunk, end)
+        if _libc.madvise(base + begin, stop - begin, _MADV_POPULATE_READ):
+            raise OSError(ctypes.get_errno(), f"MADV_POPULATE_READ of {path} at {begin}")
+        if progress is not None:
+            progress(stop - max(begin, offset))
+
+    with ThreadPoolExecutor(threads) as pool:
+        list(pool.map(populate, range(offset - offset % mmap.PAGESIZE, end, chunk)))
+    return file[offset:end].view(dtype).reshape(shape)
+
+
+def staged_copy(path) -> Optional[Path]:
+    """The :data:`STAGE_DIR` copy of checkpoint file ``path``, or ``None`` if it has not been staged.
+
+    A copy is named after the file ``path`` resolves to -- in the HuggingFace cache a blob named by its
+    SHA-256, so a copy matches only the file it was made from -- and must be as long as it."""
+    path = Path(path).resolve()
+    copy = STAGE_DIR / path.name
+    if copy.is_file() and copy.stat().st_size == path.stat().st_size:
+        return copy
+    return None
+
+
 def engram_table_nbytes(loader: DeepseekV4WeightLoader, layer_idx: int) -> int:
     """Bytes of layer ``layer_idx``'s n-gram table as stored (fp8 weight plus E8M0 scales, one byte each)."""
     total = 0
@@ -73,16 +124,32 @@ def engram_table_nbytes(loader: DeepseekV4WeightLoader, layer_idx: int) -> int:
     return total
 
 
+def engram_ram_needed(loader: DeepseekV4WeightLoader, layer_ids) -> int:
+    """Bytes of free host RAM loading the tables of ``layer_ids`` takes. A staged table is already
+    resident (and not counted in ``MemAvailable``), so it needs none."""
+    return sum(
+        engram_table_nbytes(loader, i)
+        for i in layer_ids
+        if staged_copy(loader.shard_of(f"layers.{i}.engram.embed.weight", translate=False)) is None
+    )
+
+
 def load_engram_table(
     loader: DeepseekV4WeightLoader, layer_idx: int, progress=None
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Layer ``layer_idx``'s table in host RAM, as stored: ``weight`` ``[rows, head_dim]`` fp8 E4M3 and
-    ``scale`` ``[rows, head_dim / 32]`` E8M0 (~101 GB together). ``progress`` as :func:`read_into_memory`'s."""
+    ``scale`` ``[rows, head_dim / 32]`` E8M0 (~101 GB together). Mapped from its :func:`staged_copy` if
+    there is one, else read from the checkpoint. ``progress`` as :func:`read_into_memory`'s."""
     tensors = []
     for part, dtype in (("weight", torch.float8_e4m3fn), ("scale", torch.float8_e8m0fnu)):
         name = f"layers.{layer_idx}.engram.embed.{part}"
         path = loader.shard_of(name, translate=False)
-        tensors.append(read_into_memory(path, *tensor_region(path, name), dtype, progress=progress))
+        region = tensor_region(path, name)
+        copy = staged_copy(path)
+        if copy is None:
+            tensors.append(read_into_memory(path, *region, dtype, progress=progress))
+        else:
+            tensors.append(map_into_memory(copy, *region, dtype, progress=progress))
     return tuple(tensors)
 
 

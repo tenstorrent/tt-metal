@@ -40,6 +40,11 @@ tokens, so a non-zero start only matches a run that never built an Engram layer.
 
 Set ``DEEPSEEK_V4_MEMORY_REPORTS=1`` to write each program's L1 / DRAM block map as it compiles
 (``ttnn.device.EnableMemoryReports``), for tracking down circular-buffer / L1 clashes.
+
+``DEEPSEEK_V4_TEMPERATURE`` (default 0, greedy) samples each token at that temperature, on the host from the
+step's logits, or with ``DEEPSEEK_V4_DEVICE_SAMPLING=1`` on the output stage, which then sends only the token
+(:class:`~models.experimental.deepseek_v41_flash.tt.lm_head.DeepSeekV41DeviceSampler`).
+``DEEPSEEK_V4_SEED`` (default 1234) seeds either sampler.
 """
 
 from __future__ import annotations
@@ -63,7 +68,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     pipeline_stage_count,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENGRAM_WKV_GCB, O_B_GCB, SHARED_DOWN_GCB
-from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
+from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_ram_needed
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
@@ -99,10 +104,24 @@ _WEIGHT_DTYPE = ttnn.bfloat4_b
 # Accepted by prepare_static_decode for the V4 call shape. The index pool uses CSA_INDEX_BLOCK_SIZE.
 _PAGE_BLOCK_SIZE = 32
 _ENGRAM_RAM_MARGIN = 1.25
+_DEVICE_SAMPLING = os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "0") not in ("0", "", "false", "False")
+_TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_TEMPERATURE", "0"))
+_SEED = int(os.environ.get("DEEPSEEK_V4_SEED", "1234"))
 
 
 def _pad_to_tile(n: int) -> int:
     return ((n + 31) // 32) * 32
+
+
+def _next_token(out: torch.Tensor, generator: torch.Generator) -> int:
+    """The token of one step's :meth:`read_decoded_output`: the device's pick (int32, token first), or from the
+    logits on the host -- argmax, or a draw at ``_TEMPERATURE``."""
+    if out.dtype == torch.int32:
+        return int(out.reshape(-1)[0])
+    logits = out.reshape(-1).float()
+    if _TEMPERATURE == 0:
+        return int(logits.argmax())
+    return int(torch.multinomial(torch.softmax(logits / _TEMPERATURE, dim=-1), 1, generator=generator))
 
 
 def _checkpoint_available() -> bool:
@@ -306,7 +325,7 @@ def _build_and_prefill(
     )
     engram_ids = [i for i in config.engram_layer_ids if i < max_layers]
     if engram_ids:
-        nbytes = sum(engram_table_nbytes(loader, i) for i in engram_ids)
+        nbytes = engram_ram_needed(loader, engram_ids)
         if _available_bytes() < _ENGRAM_RAM_MARGIN * nbytes:
             pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables of layers {engram_ids}")
 
@@ -349,7 +368,12 @@ def _build_and_prefill(
         num_sessions=1,
         total_tokens=max_seq,
         block_size=_PAGE_BLOCK_SIZE,
+        device_sampling=_DEVICE_SAMPLING,
     )
+    generator = torch.Generator().manual_seed(_SEED)
+    if model.device_sampler is not None:
+        model.device_sampler.set_sampling(_TEMPERATURE, _SEED)
+    logger.info(f"sampling: {'device' if _DEVICE_SAMPLING else 'host'}, temperature {_TEMPERATURE}, seed {_SEED}")
     if model.context_limit is not None and model.context_limit < max_seq:
         logger.warning(f"context capped at {model.context_limit} tokens by the compressed KV")
         max_seq = model.context_limit
@@ -362,9 +386,8 @@ def _build_and_prefill(
     next_id = pad_id
     for prompt_idx in range(real_len):
         pos = start_pos + prompt_idx
-        # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
-        logits = model.decode_traced(prompt_ids[prompt_idx], pos).reshape(1, -1).float()
-        next_id = int(logits[0].argmax().item())
+        # [1, 1, vocab] logits or the device's token, lm_head in-trace and read back off the D2H socket
+        next_id = _next_token(model.decode_traced(prompt_ids[prompt_idx], pos), generator)
         # decode_traced returns once the step's output is read, so no replay is parked on a recv here.
         for sm in model.submeshes_io:
             _profile(sm["device"])
@@ -385,6 +408,7 @@ def _build_and_prefill(
         "eos_id": tokenizer.eos_token_id,
         "next_id": next_id,
         "tp_size": tp_size,
+        "generator": generator,
     }
 
 
@@ -560,9 +584,9 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
                 t0 = time.perf_counter()
                 model.write_step_packet(next_id, pos)
                 fed += 1
-                logits = model.read_decoded_output().reshape(1, -1).float()
+                out = model.read_decoded_output()
                 read += 1
-                next_id = int(logits[0].argmax().item())
+                next_id = _next_token(out, state["generator"])
                 decode_time += time.perf_counter() - t0
                 decode_tokens += 1
                 generated.append(next_id)

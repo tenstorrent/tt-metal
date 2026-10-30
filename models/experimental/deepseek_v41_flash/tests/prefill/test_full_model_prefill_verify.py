@@ -77,7 +77,7 @@ from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefil
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     EngramHostLookup,
-    engram_table_nbytes,
+    engram_ram_needed,
     load_engram_table,
 )
 from models.experimental.deepseek_v41_flash.tt.prefill.attention import PrefillShared
@@ -156,7 +156,7 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
 
     engram_ids = [i for i in config.engram_layer_ids if i < num_layers]
     if engram_ids:
-        need = _ENGRAM_RAM_MARGIN * sum(engram_table_nbytes(loader, i) for i in engram_ids)
+        need = _ENGRAM_RAM_MARGIN * engram_ram_needed(loader, engram_ids)
         available = _available_bytes()
         if available < need:
             pytest.skip(

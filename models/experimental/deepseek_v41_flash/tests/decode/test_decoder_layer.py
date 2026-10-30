@@ -35,7 +35,6 @@ host and across processes: by default the TP4 test's, and with ``--tp-size 1`` t
 """
 
 import contextlib
-import math
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -61,7 +60,11 @@ from models.experimental.deepseek_v41_flash.tt.config import (
 from models.experimental.deepseek_v41_flash.tt.decode.attention import build_decode_caches
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
-from models.experimental.deepseek_v41_flash.tt.engram_lookup import EngramHostLookup, load_engram_table, tensor_region
+from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    EngramHostLookup,
+    engram_ram_needed,
+    load_engram_table,
+)
 from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
@@ -119,8 +122,7 @@ def _available_bytes():
 
 def _engram_tables(loader, layer_ids) -> dict:
     """The n-gram tables of ``layer_ids`` in host RAM; skips without 1.25x their size free."""
-    names = [f"layers.{i}.engram.embed.{part}" for i in layer_ids for part in ("weight", "scale")]
-    nbytes = sum(math.prod(tensor_region(loader.shard_of(n, translate=False), n)[1]) for n in names)  # 1 B / value
+    nbytes = engram_ram_needed(loader, layer_ids)
     if _available_bytes() < 1.25 * nbytes:
         pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
     return {i: load_engram_table(loader, i) for i in layer_ids}

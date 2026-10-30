@@ -98,7 +98,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_config,
     pipeline_stage_count,
 )
-from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
+from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_ram_needed
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import _Progress, _env_int
@@ -241,7 +241,7 @@ def _run(
     num_layers = min(_env_int("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers), config.num_hidden_layers)
     engram_ids = [i for i in config.engram_layer_ids if i < num_layers]
     if engram_ids:
-        need = _ENGRAM_RAM_MARGIN * sum(engram_table_nbytes(loader, i) for i in engram_ids)
+        need = _ENGRAM_RAM_MARGIN * engram_ram_needed(loader, engram_ids)
         if _available_bytes() < need:
             pytest.skip(f"Engram tables for layers {engram_ids} need {need / 1e9:.0f} GB of free memory with headroom")
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id

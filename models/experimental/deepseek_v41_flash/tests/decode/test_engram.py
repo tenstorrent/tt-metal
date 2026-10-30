@@ -22,7 +22,6 @@ The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_
 """
 
 import contextlib
-import math
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -39,7 +38,11 @@ from models.experimental.deepseek_v41_flash.tests.reference import (
 )
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, engram_weights, load_config
 from models.experimental.deepseek_v41_flash.tt.decode.engram import DeepSeekV41Engram
-from models.experimental.deepseek_v41_flash.tt.engram_lookup import EngramHostLookup, load_engram_table, tensor_region
+from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
+    EngramHostLookup,
+    engram_ram_needed,
+    load_engram_table,
+)
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
@@ -73,8 +76,7 @@ def _available_bytes():
 def tables():
     """Both Engram layers' tables in host RAM, shared by every case."""
     loader = DeepseekV4WeightLoader(_snapshot())
-    names = [f"layers.{i}.engram.embed.{part}" for i in ENGRAM_LAYERS for part in ("weight", "scale")]
-    nbytes = sum(math.prod(tensor_region(loader.shard_of(n, translate=False), n)[1]) for n in names)  # 1 B / value
+    nbytes = engram_ram_needed(loader, ENGRAM_LAYERS)
     if _available_bytes() < 1.25 * nbytes:
         pytest.skip(f"needs {nbytes / 1e9:.0f} GB of free memory for the Engram tables")
     return {i: load_engram_table(loader, i) for i in ENGRAM_LAYERS}
