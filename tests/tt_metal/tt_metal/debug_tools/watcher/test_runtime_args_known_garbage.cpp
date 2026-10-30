@@ -210,7 +210,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRangeSet core_range_set(std::vector{cores_with_rtas, cores_without_rtas});
 
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device);
 
         auto kernel = CreateKernel(
             program,
@@ -255,7 +255,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     }
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
     const experimental::KernelSpecName DM_KERNEL_NAME{"rta_dm"};
 
     // Pad to match default_rtas.size() (== num_runtime_varargs in the schema).
@@ -386,7 +386,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     auto mesh_device = devices_[0];
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
 
     const experimental::KernelSpecName OOB_KERNEL_NAME{"rta_oob"};
 
@@ -478,7 +478,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     CoreRangeSet core_range_set(std::vector{core_range});
 
     distributed::MeshWorkload workload;
-    Program program;
+    Program program = CreateProgram(*mesh_device);
 
     const experimental::KernelSpecName MULTI_DM_KERNEL_NAME{"multi_dm_oob"};
     experimental::KernelSpec dm_spec{

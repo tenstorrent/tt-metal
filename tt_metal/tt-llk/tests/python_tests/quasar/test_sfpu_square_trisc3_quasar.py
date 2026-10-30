@@ -15,7 +15,6 @@ from helpers.llk_params import (
     DestSync,
     MathOperation,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     QuasarSfpuVariant,
@@ -37,7 +36,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Reuse the square input-prep and format list from the consolidated unary-SFPU
 # test (the standalone test_sfpu_square_quasar.py was folded into it).
@@ -150,7 +149,5 @@ def test_sfpu_square_trisc3_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(golden_tensor)
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

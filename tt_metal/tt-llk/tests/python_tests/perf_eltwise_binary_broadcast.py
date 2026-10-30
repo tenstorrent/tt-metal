@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.constraints import get_valid_eltwise_binary_math_fidelities
 from helpers.llk_params import DestAccumulation, DestSync, Transpose
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_binary import (
     BFP4_PERF_MATH_OPS,
-    _get_valid_math_fidelity,
     _run_eltwise_binary_test,
     get_base_perf_formats,
     get_bfp4_formats,
@@ -30,7 +30,9 @@ PERF_LOOP_FACTOR = 32
     formats=get_base_perf_formats,
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
     math_op=lambda formats: get_eltwise_binary_math_ops(formats, is_perf=True),
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
+        formats, math_op
+    ),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
     input_dimensions=get_eltwise_binary_perf_input_dimensions,
@@ -83,7 +85,9 @@ def test_perf_eltwise_binary_broadcast(
     formats=lambda: get_bfp4_formats(),
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
     math_op=BFP4_PERF_MATH_OPS,
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
+        formats, math_op
+    ),
     transpose_srca=[Transpose.No],
     tile_dimensions=get_eltwise_binary_perf_tile_dimensions,
     input_dimensions=get_eltwise_binary_perf_input_dimensions,
