@@ -123,6 +123,8 @@ constexpr uint32_t kWorkers = 5;      // BRISC, NCRISC and the three TRISCs of a
 constexpr uint32_t kChunkWords = 16;  // bitmap words per dirty chunk, the unit of the reduce step
 constexpr uint32_t kChunkRows = kChunkWords * sparse_push::plan_table::kRowsPerWord;
 constexpr uint32_t kMaxChunksPerCore = 32;  // a core's reduce chunks are the bits of one map word
+// Words between a rank range's per-owner counts: num_devices, padded so each range is whole 16 B L1 transfers.
+constexpr uint32_t owner_stride(uint32_t num_devices) { return (num_devices + 3) / 4 * 4; }
 
 // Scratch arrays are padded to whole kArrayPadWords (64 B), so each starts 64 B aligned.
 constexpr uint32_t kArrayPadWords = 16;

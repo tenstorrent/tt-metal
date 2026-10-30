@@ -64,11 +64,12 @@ inline uint32_t share_begin(uint32_t n, uint32_t worker) { return n * worker / k
 // word % kWordResidues, so the words of each worker are disjoint and the bitmap needs no atomics.
 inline uint32_t word_owner(uint32_t word) { return (word % kWordResidues) * kWorkers / kWordResidues; }
 
-// Sorts this worker's indices [begin, end) into one bucket per word owner. Bucket (worker, to) holds the rows
-// `worker` hands to word owner `to`, at buckets + (worker * kWorkers + to) * bucket_cap; bucketed[worker * kWorkers +
-// to] gets its length.
+// Sorts this worker's indices [begin, end) into one bucket per word owner, skipping the sentinel and any row past the
+// cache. Bucket (worker, to) holds the rows `worker` hands to word owner `to`, at buckets + (worker * kWorkers + to) *
+// bucket_cap; bucketed[worker * kWorkers + to] gets its length.
 inline void bucket(
     const uint32_t* idx,
+    uint32_t max_rows,
     uint32_t begin,
     uint32_t end,
     uint32_t* buckets,
@@ -82,7 +83,7 @@ inline void bucket(
     }
     for (uint32_t i = begin; i < end; ++i) {
         const uint32_t row = idx[i];
-        if (row != kSentinel) {
+        if (row < max_rows) {
             *bucket_end[word_owner(row / kRowsPerWord)]++ = row;
         }
     }
@@ -135,7 +136,7 @@ inline uint32_t scatter(
 
 // Step 1 for one worker: bucket its share of the indices, wait for the bitmap to be zero and for every worker's
 // buckets, then scatter the rows it owns. Returns the largest row + 1 it set.
-template <typename DoneSem, typename SyncZeroedBitmap>
+template <uint32_t max_rows, typename DoneSem, typename SyncZeroedBitmap>
 inline uint32_t scatter_step(
     const uint32_t* idx,
     uint32_t index_count,
@@ -149,6 +150,7 @@ inline uint32_t scatter_step(
     SyncZeroedBitmap&& sync_zeroed_bitmap) {
     bucket(
         idx,
+        max_rows,
         share_begin(index_count, worker),
         share_begin(index_count, worker + 1),
         buckets,
@@ -270,8 +272,8 @@ inline void owner_prefixes(uint32_t* partials, uint32_t ranges, uint32_t* totals
     for (uint32_t owner = worker; owner < num_devices; owner += kWorkers) {
         uint32_t rows_before = 0;
         for (uint32_t range = 0; range < ranges; ++range) {
-            const uint32_t range_rows = partials[range * num_devices + owner];
-            partials[range * num_devices + owner] = rows_before;
+            const uint32_t range_rows = partials[range * owner_stride(num_devices) + owner];
+            partials[range * owner_stride(num_devices) + owner] = rows_before;
             rows_before += range_rows;
         }
         totals[owner] = rows_before;
@@ -291,8 +293,15 @@ inline void owner_bases(const uint32_t* totals, uint32_t* run_bases, uint32_t wo
 }
 
 // Rewrites idx [begin, end) in place from cache rows to compact-buffer pages: a row's rank within its owner is its
-// range's offset + its word's rank + the needed rows below it in the word.
-template <uint32_t num_devices, uint32_t stripe_chunk, uint32_t range_blocks, uint32_t pages_per_packet, uint32_t banks>
+// range's offset + its word's rank + the needed rows below it in the word. A row past the cache (malformed top-k) was
+// never planned and becomes the sentinel, so the plan stays inside its buffers.
+template <
+    uint32_t num_devices,
+    uint32_t max_rows,
+    uint32_t stripe_chunk,
+    uint32_t range_blocks,
+    uint32_t pages_per_packet,
+    uint32_t banks>
 inline void rewrite(
     uint32_t* __restrict__ idx,
     uint32_t begin,
@@ -304,14 +313,15 @@ inline void rewrite(
 #pragma GCC unroll 2  // tuning knob
     for (uint32_t i = begin; i < end; ++i) {
         const uint32_t row = idx[i];
-        if (row == kSentinel) {
+        if (row >= max_rows) {
+            idx[i] = kSentinel;
             continue;
         }
         const uint32_t block = row / stripe_chunk;
         const uint32_t word = row / kRowsPerWord;
         const uint32_t owner = block % num_devices;
-        const uint32_t rank = range_offsets[(block / range_blocks) * num_devices + owner] + word_ranks[word] +
-                              __builtin_popcount(bitmap[word] & ((1u << (row % kRowsPerWord)) - 1u));
+        const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
+                              word_ranks[word] + __builtin_popcount(bitmap[word] & ((1u << (row % kRowsPerWord)) - 1u));
         idx[i] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
     }
 }
@@ -319,6 +329,7 @@ inline void rewrite(
 // Steps 4 and 5 for one worker: owner prefixes and totals, then run bases, then the rewrite of its share of idx.
 template <
     uint32_t num_devices,
+    uint32_t max_rows,
     uint32_t stripe_chunk,
     uint32_t range_blocks,
     uint32_t pages_per_packet,
@@ -337,7 +348,7 @@ inline void bases_and_rewrite(
     sync_workers(done_sem, worker, kTotalled);
     owner_bases<num_devices, pages_per_packet, banks>(misc + kMiscTotals, misc + kMiscBase, worker);
     sync_workers(done_sem, worker, kBased);
-    rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks>(
+    rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
         idx,
         share_begin(index_count, worker),
         share_begin(index_count, worker + 1),

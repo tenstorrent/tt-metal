@@ -183,6 +183,16 @@ _TRACE_1M = Path(
 _TRACE_1M_START = 1039360  # prompt position of the trace's first row (a whole number of 5120 slabs)
 
 
+def _trace_1m_topk(layer):
+    """The staged 1M top-k of `layer`. Skips locally when it is not staged; in CI it must be."""
+    f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
+    if not f.exists():
+        if os.environ.get("CI") == "true":
+            pytest.fail(f"1M GLM-5.3 top-k not staged on this CI machine: {f}")
+        pytest.skip(f"1M GLM-5.3 top-k not staged: {f}")
+    return f
+
+
 @run_for_blackhole()
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
@@ -196,9 +206,7 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh, packet_shape
 
-    f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
-    if not f.exists():
-        pytest.skip(f"1M GLM-5.3 top-k not staged: {f}")
+    f = _trace_1m_topk(layer)
     grid = mesh_device.compute_with_storage_grid_size()
     if (grid.x, grid.y) != (12, 10):
         pytest.skip(f"needs the 12x10 Galaxy grid, got {grid}")
@@ -335,9 +343,7 @@ def test_sparse_kv_push_glm_perf(mesh_device, layer):
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
 
-    f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
-    if not f.exists():
-        pytest.skip(f"1M GLM-5.3 top-k not staged: {f}")
+    f = _trace_1m_topk(layer)
     kv_fmt, chunk_global, links = "fp8", 5120, 2
     num_devices = mesh_device.get_num_devices()
     stripe_chunk = query_rows = chunk_global // num_devices

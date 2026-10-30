@@ -4,6 +4,8 @@
 
 #include "sparse_kv_push_device_operation.hpp"
 
+#include <tt-metalium/math.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "sparse_kv_push_common.hpp"
@@ -104,8 +106,8 @@ void validate_rows(const Tensor& tensor, const char* name, bool interleaved) {
         memory_config);
 }
 
-// What the program hash leaves out, checked on every dispatch: buffers (their addresses are patched in), the mesh
-// distribution (not part of a tensor spec), the semaphores and the cache slot.
+// What the program hash leaves out, checked on every dispatch: buffers (their addresses are patched in), the devices
+// they live on and the mesh distribution (neither is part of a tensor spec), the semaphores and the cache slot.
 void validate_runtime(const SparseKvPushParams& params, const SparseKvPushInputs& tensor_args) {
     const auto& input = tensor_args.input_tensor;
     TT_FATAL(input.buffer() != nullptr, "sparse KV push input must be allocated on device");
@@ -114,6 +116,11 @@ void validate_runtime(const SparseKvPushParams& params, const SparseKvPushInputs
     TT_FATAL(
         !tensor_args.batch_index_tensor.has_value() || tensor_args.batch_index_tensor->buffer() != nullptr,
         "sparse KV push batch_index_tensor must be allocated on device");
+    auto* mesh_device = input.device();
+    TT_FATAL(
+        tensor_args.output_tensor.device() == mesh_device && tensor_args.table.device() == mesh_device &&
+            (!tensor_args.batch_index_tensor.has_value() || tensor_args.batch_index_tensor->device() == mesh_device),
+        "sparse KV push tensors must be on one mesh device");
     const uint32_t num_devices = input.device()->shape().mesh_size();
     TT_FATAL(
         ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input),
@@ -134,9 +141,6 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
     validate_rows(input, "input", /*interleaved=*/false);
     validate_rows(output, "output", /*interleaved=*/true);
     auto* mesh_device = input.device();
-    TT_FATAL(
-        output.device() == mesh_device && table.device() == mesh_device,
-        "sparse KV push tensors must be on one mesh device");
     const auto mesh_shape = mesh_device->shape();
     const uint32_t num_devices = mesh_shape.mesh_size();
     TT_FATAL(mesh_shape.dims() == 2, "the sparse KV push needs a 2D device mesh, got {}", mesh_shape);
@@ -167,6 +171,14 @@ void validate_config(const SparseKvPushParams& params, const SparseKvPushInputs&
 
     const auto& input_shape = input.padded_shape();
     const auto& output_shape = output.padded_shape();
+    // A chip owns every num_devices-th block of the cache, so its share of a max_rows cache is at most this many rows.
+    const uint32_t local_rows = tt::div_up(params.max_rows / params.stripe_chunk, num_devices) * params.stripe_chunk;
+    TT_FATAL(
+        input_shape[2] >= local_rows,
+        "sparse KV push input has {} rows per chip, fewer than the {} a {}-row cache puts on a chip",
+        input_shape[2],
+        local_rows,
+        params.max_rows);
     TT_FATAL(
         output.dtype() == input.dtype() && output.tensor_spec().page_config() == input.tensor_spec().page_config(),
         "sparse KV push output dtype and page config must match the input");
@@ -266,18 +278,9 @@ SparseKvPushDeviceOperation::spec_return_value_t SparseKvPushDeviceOperation::co
 
 SparseKvPushDeviceOperation::topology_return_value_t SparseKvPushDeviceOperation::compute_output_topologies(
     const SparseKvPushParams&, const SparseKvPushInputs& tensor_args) {
-    // Like an all-gather over the rows: placements sharding dim 2 become replicated.
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_topology = input_tensor.tensor_topology();
-    auto placements = input_topology.placements();
-    const uint32_t rank = input_tensor.logical_shape().rank();
-    for (auto& placement : placements) {
-        if (ttnn::operations::ccl::common::placement_shards_tensor_dim(placement, kRowDim, rank)) {
-            placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-    }
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), std::move(placements), input_topology.mesh_coords())};
+    // Each chip's compact buffer holds the rows its own top-k needs, so the buffers differ: like the input, the output
+    // is sharded over its rows across every chip.
+    return {tensor_args.input_tensor.tensor_topology()};
 }
 
 SparseKvPushDeviceOperation::tensor_return_value_t SparseKvPushDeviceOperation::create_output_tensors(

@@ -41,8 +41,9 @@ void kernel_main() {
     //            fill exactly the slots a kAll push fills.
     //   kAll:    every needed row in one push, when nothing was prefetched.
     constexpr auto part = static_cast<PushPart>(get_compile_time_arg_val(10));
+    constexpr uint32_t num_slots = get_compile_time_arg_val(11);
     static_assert(stripe_chunk % plan_table::kRowsPerWord == 0 && stripe_chunk <= kMaxStripeChunk);
-    constexpr auto input_args = TensorAccessorArgs<11>();
+    constexpr auto input_args = TensorAccessorArgs<12>();
     constexpr auto table_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr uint32_t after_table = table_args.next_compile_time_args_offset();
     constexpr auto batch_args = TensorAccessorArgs<has_batch_index_tensor ? after_table : 0>();
@@ -80,6 +81,7 @@ void kernel_main() {
         invalidate_l1_cache();
         slot = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(user_id_l1) * num_layers + layer_idx;
     }
+    ASSERT(slot < num_slots);  // watcher builds only: the host checks only its own batch_index
     const uint32_t slot_base = slot * pages_per_slot;
 
     // kTable holds the requester's table header and per-owner counts, then a window of its bitmap blocks.
@@ -158,18 +160,23 @@ void kernel_main() {
                                                              : owned_below(active_blocks);
 
         // Reads local block `block`'s bitmap words into kTable window slot `window`. A block's words (at most 64 B)
-        // can start anywhere, so the read covers kWindowBytes from the kDramReadAlign boundary at or below them, in
-        // two reads when that crosses a table page.
+        // can start anywhere, so the read covers them in whole kDramReadAlign units from the boundary at or below
+        // them (at most kWindowBytes), in two reads when the words cross a table page. Reading no further than the
+        // words keeps the last block of the last requester's table inside the table.
         auto read_block_bitmap = [&](uint32_t block, uint32_t window) {
-            const uint32_t window_start = bitmap_offset(block) & ~(kDramReadAlign - 1);
+            const uint32_t words_start = bitmap_offset(block);
+            const uint32_t window_start = words_start & ~(kDramReadAlign - 1);
+            const uint32_t window_bytes =
+                (words_start - window_start + words_per_block * sizeof(uint32_t) + kDramReadAlign - 1) &
+                ~(kDramReadAlign - 1);
             const uint32_t window_page = table_page + window_start / kTablePageBytes;
             const uint32_t page_offset = window_start % kTablePageBytes;
-            const uint32_t first_bytes = std::min(kTablePageBytes - page_offset, kWindowBytes);
+            const uint32_t first_bytes = std::min(kTablePageBytes - page_offset, window_bytes);
             const uint32_t window_l1 = blocks_l1 + window * kWindowBytes;
             noc_async_read(table.get_noc_addr(window_page) + page_offset, window_l1, first_bytes);
-            if (first_bytes < kWindowBytes) {
+            if (first_bytes < window_bytes) {
                 noc_async_read(
-                    table.get_noc_addr(window_page + 1), window_l1 + first_bytes, kWindowBytes - first_bytes);
+                    table.get_noc_addr(window_page + 1), window_l1 + first_bytes, window_bytes - first_bytes);
             }
         };
 
