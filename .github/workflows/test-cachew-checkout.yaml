@@ -93,6 +93,9 @@ jobs:
       - name: Test cache reuse, immediate fallback and cleanup
         env:
           CHECKOUT_ACTION_JS: ${{ github.workspace }}/checkout-action/dist/index.js
+          # Test-only: the fixtures are plain-HTTP loopback servers. The action
+          # itself clears this variable, so it cannot affect real checkouts.
+          CACHEW_TEST_ALLOW_LOOPBACK_HTTP: '1'
         run: |
           cmake --version
           python3 -m unittest discover -s .github/actions/cachew-checkout/tests -v

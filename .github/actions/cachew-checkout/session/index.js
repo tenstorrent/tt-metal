@@ -95,9 +95,14 @@ function readState(directory) {
   return JSON.parse(fs.readFileSync(path.join(resolved, 'state.json'), 'utf8'));
 }
 
+// Plain HTTP is only for the loopback fixtures in tests/. It is enabled by a
+// test-only variable that action.yml never forwards (it clears it), so no
+// workflow input can select plain HTTP, not even to 127.0.0.1.
+function loopbackHttpAllowed() { return process.env.CACHEW_TEST_ALLOW_LOOPBACK_HTTP === '1'; }
+
 function origin(value) {
   const url = new URL(value);
-  const loopback = url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  const loopback = loopbackHttpAllowed() && url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
   if ((!loopback && url.protocol !== 'https:') || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
     throw new Error('Unsupported Git origin');
   }
@@ -116,7 +121,7 @@ function settings() {
   else {
     try {
       const cache = origin(requested);
-      if (TRUSTED_CACHES.includes(cache) || (upstream.startsWith('http:') && cache.startsWith('http:'))) caches = [cache];
+      if (TRUSTED_CACHES.includes(cache) || (loopbackHttpAllowed() && upstream.startsWith('http:') && cache.startsWith('http:'))) caches = [cache];
     } catch {}
   }
   if (!caches.length) valid = false;
@@ -251,6 +256,9 @@ function prepare() {
     }
     return {directory: existing, state, created: false};
   }
+  // An unusable or untrusted cache/upstream origin means no session at all:
+  // plain checkout, no token anywhere, no wrapper and no configuration change.
+  if (!config.valid) throw new Error('Unsupported cachew configuration');
   const realGit = executable('git');
   if (!gitVersionSupported(realGit)) throw new Error('Git 2.32 or newer is required');
   const directory = fs.mkdtempSync(path.join(fs.realpathSync(process.env.RUNNER_TEMP), 'cachew-'));

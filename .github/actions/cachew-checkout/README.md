@@ -44,8 +44,12 @@ three names to the local cluster's Service, and each cluster's certificate only
 covers its own name, so `auto` uses the first origin whose unauthenticated
 `GET /_liveness` returns 200 over verified TLS. Off the VLAN the names do not
 resolve. Only these origins ever receive a token, and only after they answered
-the probe. HTTP is accepted only when both upstream and cache are loopback test
-servers.
+the probe. Plain HTTP is never accepted for the cache or upstream, not even to
+`127.0.0.1`. Only the test suite enables loopback HTTP fixtures, through
+`CACHEW_TEST_ALLOW_LOOPBACK_HTTP=1`, which `action.yml` clears on every cachew
+step. An untrusted or non-HTTPS `cachew-url` (including the in-cluster
+`cachew.cachew.svc.cluster.local`) leaves the plain checkout: no session, token,
+wrapper or configuration change.
 
 `cachew-prefetched` reports whether cachew supplied a complete checkout object
 seed. `cachew-configured` reports whether global caching was enabled for later

@@ -40,10 +40,18 @@ class Bypass(Exception):
         self.transport = transport
 
 
-def origin(value):
+def loopback_http_allowed(environ):
+    """Plain HTTP is only for the loopback fixtures in tests/. action.yml clears
+    this test-only variable, so no workflow input can select plain HTTP."""
+    return environ.get("CACHEW_TEST_ALLOW_LOOPBACK_HTTP") == "1"
+
+
+def origin(value, environ):
     url = urllib.parse.urlsplit(value)
-    # HTTP is useful for local integration fixtures only. Never weaken TLS for cachew.
-    local_http = url.scheme == "http" and url.hostname in ("127.0.0.1", "localhost", "::1")
+    # Never weaken TLS for cachew or upstream outside the test fixtures.
+    local_http = (
+        loopback_http_allowed(environ) and url.scheme == "http" and url.hostname in ("127.0.0.1", "localhost", "::1")
+    )
     if (
         (url.scheme != "https" and not local_http)
         or not url.netloc
@@ -73,14 +81,14 @@ def duration(value, maximum):
     return seconds
 
 
-def cache_candidates(value, upstream):
+def cache_candidates(value, upstream, environ):
     """Return the trusted cache origins to probe, in order. 'auto' tries every
     trusted origin; only the runner's own cluster answers with a valid
     certificate, and off-VLAN runners fail DNS immediately."""
     if (value or "auto").strip().lower() == "auto":
         return list(TRUSTED_CACHES)
-    cache = origin(value)
-    loopback_fixture = upstream.startswith("http://") and cache.startswith("http://")
+    cache = origin(value, environ)
+    loopback_fixture = loopback_http_allowed(environ) and upstream.startswith("http://") and cache.startswith("http://")
     if cache not in TRUSTED_CACHES and not loopback_fixture:
         raise Bypass("untrusted cache origin")
     return [cache]
@@ -117,8 +125,8 @@ class Prefetch:
         # would silently ignore them and use inherited helpers and rewrites.
         if not git_version_at_least(self.git_executable, (2, 31)):
             raise Bypass("Git 2.31 or newer is required")
-        self.upstream = origin(environ.get("CACHEW_GITHUB_SERVER_URL") or environ["GITHUB_SERVER_URL"])
-        self.caches = cache_candidates(environ.get("CACHEW_CACHEW_URL", "auto"), self.upstream)
+        self.upstream = origin(environ.get("CACHEW_GITHUB_SERVER_URL") or environ["GITHUB_SERVER_URL"], environ)
+        self.caches = cache_candidates(environ.get("CACHEW_CACHEW_URL", "auto"), self.upstream, environ)
         self.cache = None
         self.health_timeout = duration(environ["CACHEW_CACHEW_HEALTH_TIMEOUT"], 30)
         # Seconds without progress before a cache transfer is abandoned.

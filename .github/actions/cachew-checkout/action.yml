@@ -101,6 +101,7 @@ runs:
       uses: tenstorrent/tt-metal/.github/actions/cachew-checkout/session@4313bf841572fc083c4ea7362b93c4c6ab6b2342
       env:
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
         CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
         CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
@@ -133,6 +134,7 @@ runs:
         CACHEW_SET_SAFE_DIRECTORY: ${{ inputs.set-safe-directory }}
         CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
         CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
       run: |
@@ -174,6 +176,7 @@ runs:
         CACHEW_AVAILABLE: ${{ steps.prefetch.outputs.available || 'unknown' }}
         CACHEW_SELECTED_URL: ${{ steps.prefetch.outputs.cache-url }}
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
+        CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
         CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
         CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}

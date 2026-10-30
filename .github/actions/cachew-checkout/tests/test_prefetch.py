@@ -237,6 +237,8 @@ class PrefetchTests(unittest.TestCase):
             CACHEW_SUBMODULES="recursive",
             CACHEW_TOKEN=TOKEN,
             CACHEW_REAL_GIT=real_git,
+            # The fixtures are plain-HTTP loopback servers; production never allows this.
+            CACHEW_TEST_ALLOW_LOOPBACK_HTTP="1",
         )
         self.env.pop("GIT_CONFIG_GLOBAL", None)
         (self.home / ".gitconfig").write_text("[user]\n\tname = Fixture\n\temail = fixture@example.com\n")
@@ -609,14 +611,47 @@ class PrefetchTests(unittest.TestCase):
         self.assertEqual(self.output()["available"], "unknown")
 
     def test_auto_url_selects_first_healthy_trusted_origin(self):
-        self.assertEqual(prefetch.cache_candidates("auto", "https://github.com"), list(prefetch.TRUSTED_CACHES))
-        self.assertEqual(prefetch.cache_candidates("", "https://github.com"), list(prefetch.TRUSTED_CACHES))
+        self.assertEqual(prefetch.cache_candidates("auto", "https://github.com", {}), list(prefetch.TRUSTED_CACHES))
+        self.assertEqual(prefetch.cache_candidates("", "https://github.com", {}), list(prefetch.TRUSTED_CACHES))
         with patch.dict(os.environ, self.env, clear=True):
             attempt = prefetch.Prefetch(self.env)
         attempt.caches = ["http://127.0.0.1:1", self.cache.url]
         attempt.probe()
         self.assertEqual(attempt.cache, self.cache.url)
         self.assertNotIn("http://127.0.0.1:1", json.dumps(dict(attempt.env)))
+
+    def rejected_cache_urls(self):
+        return [
+            "http://cachew.cachew.svc.cluster.local",
+            "https://cachew.cachew.svc.cluster.local",
+            "http://10.43.0.100:8080",
+            "http://cachew.ci.tenstorrent.net",
+            "https://evil.example",
+        ]
+
+    def test_production_rejects_plain_http_and_untrusted_cache_origins(self):
+        for url in self.rejected_cache_urls():
+            with self.subTest(url=url):
+                self.env["CACHEW_CACHEW_URL"] = url
+                self.assertFalse(self.attempt())
+                self.assertEqual(self.output()["available"], "unknown")
+                self.assertEqual(self.cache.requests, [])
+                self.assertFalse(self.target.exists())
+
+    def test_loopback_http_requires_the_test_only_variable(self):
+        del self.env["CACHEW_TEST_ALLOW_LOOPBACK_HTTP"]
+        for upstream in (self.upstream.url, "https://github.com"):
+            with self.subTest(upstream=upstream):
+                self.env.update(GITHUB_SERVER_URL=upstream, CACHEW_CACHEW_URL=self.cache.url)
+                self.assertFalse(self.attempt())
+                self.assertEqual(self.cache.requests, [])
+                self.assertFalse(self.target.exists())
+        for value in ("http://127.0.0.1:1", "http://localhost:1", "http://[::1]:1"):
+            with self.assertRaises(prefetch.Bypass):
+                prefetch.origin(value, {})
+            self.assertEqual(prefetch.origin(value, {"CACHEW_TEST_ALLOW_LOOPBACK_HTTP": "1"}), value)
+        with self.assertRaises(prefetch.Bypass):
+            prefetch.origin("http://127.0.0.1:1", {"CACHEW_TEST_ALLOW_LOOPBACK_HTTP": "true"})
 
     def test_trusted_origins_match_deployment(self):
         # tt-flux apps/cachew/README.md: one public name per cluster.

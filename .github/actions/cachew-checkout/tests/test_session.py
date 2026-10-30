@@ -389,12 +389,65 @@ class SessionTests(unittest.TestCase):
         self.finish()
         self.assertEqual(include.read_bytes(), original_include)
 
-    def test_untrusted_optional_cache_configuration_keeps_checkout_upstream(self):
-        self.env["CACHEW_CACHEW_URL"] = "https://untrusted.example"
-        self.assertEqual(self.flow(), (False, False))
+    def plain_checkout_without_cache(self, env):
+        """Prefetch and the official checkout as action.yml runs them after a skipped session."""
+        self.fixture.env = env
+        self.assertFalse(self.fixture.attempt())
         self.assertEqual(self.fixture.cache.requests, [])
-        self.assertTrue(self.fixture.upstream.requests)
-        self.finish()
+        state = self.fixture.root / "plain-checkout-state"
+        state.write_text("")
+        checkout = dict(env, GITHUB_STATE=str(state))
+        for name, value in {
+            "repository": "org/main",
+            "ref": "main",
+            "token": fixtures.TOKEN,
+            "path": "checkout",
+            "fetch-depth": "1",
+            "submodules": "recursive",
+            "clean": "true",
+            "persist-credentials": "true",
+            "set-safe-directory": "true",
+        }.items():
+            checkout["INPUT_" + name.upper()] = value
+        self.run_node(fixtures.CHECKOUT_JS, env=checkout)
+        self.assertEqual(fixtures.git(self.fixture.target, "rev-parse", "HEAD"), self.fixture.sha)
+        self.assertEqual(self.fixture.cache.requests, [], "no request, so no token, reaches any cache")
+        self.assertEqual((self.fixture.root / "path").read_text(), "", "no Git wrapper on PATH")
+        self.assertEqual((self.fixture.root / "env").read_text(), "", "no job environment change")
+        self.assertEqual(list(self.fixture.runtime.glob("cachew-*")), [])
+        self.fixture.assert_no_cache_credentials()
+
+    def test_untrusted_or_plain_http_cache_origins_leave_plain_checkout(self):
+        for url in (
+            "http://cachew.cachew.svc.cluster.local",
+            "https://cachew.cachew.svc.cluster.local",
+            "http://10.43.0.100:8080",
+            "http://cachew.ci.tenstorrent.net",
+            "https://evil.example",
+            "https://untrusted.example",
+        ):
+            with self.subTest(url=url):
+                env = dict(self.env, CACHEW_CACHEW_URL=url)
+                self.run_prepare_expecting_fallback(env)
+        shutil.rmtree(self.fixture.target, ignore_errors=True)
+        self.plain_checkout_without_cache(dict(self.env, CACHEW_CACHEW_URL="https://evil.example"))
+
+    def test_loopback_http_without_the_test_variable_leaves_plain_checkout(self):
+        env = dict(self.env)
+        del env["CACHEW_TEST_ALLOW_LOOPBACK_HTTP"]
+        # Both a loopback cache and a loopback upstream are refused in production.
+        self.run_prepare_expecting_fallback(env)
+        self.run_prepare_expecting_fallback(dict(env, CACHEW_GITHUB_SERVER_URL="https://github.com"))
+        # The plain checkout itself is unaffected (actions/checkout has its own rules).
+        self.plain_checkout_without_cache(env)
+
+    def test_action_clears_the_test_only_loopback_variable(self):
+        action = (fixtures.ACTION / "action.yml").read_text()
+        self.assertNotIn("inputs.cachew-test", action)
+        self.assertNotIn("${{ env.CACHEW_TEST_ALLOW_LOOPBACK_HTTP", action)
+        cleared = action.count("CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''")
+        self.assertEqual(cleared, action.count("CACHEW_TEST_ALLOW_LOOPBACK_HTTP"))
+        self.assertEqual(cleared, 3, "session, prefetch and configure steps each clear it")
 
     def test_original_explicit_global_file_is_restored_for_earlier_post_actions(self):
         custom = self.fixture.root / "caller-global.config"
