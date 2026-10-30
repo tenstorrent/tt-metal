@@ -328,6 +328,11 @@ def test_wave_first_token_vs_hf(mesh_device):
             f"{p_alone:.6f} (bar {bar})"
         )
     # throughput: rows x T_big-token prompts in one wave vs the SP prefill of one rows x T_big chunk
+    # (GLM53_WAVE_THROUGHPUT=0 skips it: under the user-partitioned cache on the (2,4) block the rows x 2048 SP chunk
+    # exceeds the sparse indexer's query capacity, a test-config limit of the block, not of the waves)
+    if os.environ.get("GLM53_WAVE_THROUGHPUT", "1") != "1":
+        logger.info("waves: the throughput point skipped (GLM53_WAVE_THROUGHPUT=0)")
+        return
     torch.manual_seed(2)
     big = [torch.randint(1000, 20000, (T_big,), dtype=torch.long) for _ in range(rows)]
     sp_chunk = torch.cat(big)
