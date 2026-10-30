@@ -15,9 +15,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
-#include "llrt/tt_cluster.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>

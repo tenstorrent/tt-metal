@@ -11,7 +11,6 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-logger/tt-logger.hpp>
 
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_values.hpp"

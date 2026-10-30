@@ -33,7 +33,6 @@
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include "llrt/hal.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>

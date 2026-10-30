@@ -4,22 +4,10 @@
 
 #pragma once
 
-#include <gtest/gtest.h>
-
-#include <fmt/format.h>
-
 #include <cstdint>
-#include <cstdlib>
-#include <memory>
-#include <string>
-#include <vector>
 
-#include "impl/context/metal_context.hpp"
-#include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/tt_metal/context/mimir_contract.hpp"
-#include <tt-metalium/host_api.hpp>
-#include "umd/device/types/arch.hpp"
 #include "umd/device/types/core_coordinates.hpp"
 
 namespace tt::tt_metal::mimir_test {

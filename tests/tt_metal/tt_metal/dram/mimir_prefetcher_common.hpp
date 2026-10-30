@@ -17,16 +17,8 @@
 #include <utility>
 #include <vector>
 
-#include "impl/context/metal_context.hpp"
 #include "impl/program/slow_dispatch.hpp"
-#include "llrt/hal.hpp"
-#include "llrt/tt_cluster.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
-#include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
-#include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_gcb_receiver_abi.h"
 
 namespace tt::tt_metal::mimir_test::prefetcher {

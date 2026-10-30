@@ -17,7 +17,6 @@
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <tt-metalium/host_api.hpp>
 #include "umd/device/utils/error_detail.hpp"
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"

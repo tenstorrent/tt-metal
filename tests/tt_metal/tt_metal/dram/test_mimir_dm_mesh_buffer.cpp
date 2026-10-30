@@ -19,12 +19,9 @@
 #include <string>
 #include <vector>
 
-#include "impl/context/metal_context.hpp"
-#include "llrt/tt_cluster.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
