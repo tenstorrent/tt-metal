@@ -47,7 +47,7 @@ def test_perf_fast_untilize_baseline_compare(
     block_ct_dim = baseline_pack_untilize_block_ct_dim(ct_dim, dest_acc)
 
     configuration = PerfConfig(
-        "sources/pack_untilize_perf.cpp",
+        "sources/pack_untilize_test.cpp",
         formats,
         run_types=[
             PerfRunType.L1_TO_L1,
