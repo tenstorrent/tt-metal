@@ -4809,11 +4809,12 @@ inline void _topk_large_indices_mark_neginf_indices_()
 
 // An unfused merge compares values only, so equal values land wherever the bitonic network leaves them, and a
 // row split across cores returns ties in a different order than the same row reduced on one core. These two
-// routines give the unfused survivor at dst the fused tie-break for the length of one merge: stamp writes the
-// low 16 index bits into each value's low 16 bits (zero for a bf16-sourced value), so the FP32 compare ranks
-// equal values by index exactly as the fused [bf16 value | u16 index] word does; clear restores the plain
-// values afterwards. -inf is left unstamped: a stamped -inf would be a NaN, and mark_neginf_indices needs
-// the exact -inf.
+// routines give the unfused survivor at dst the fused tie-break for the length of one merge: stamp rebuilds,
+// from each element's global index, the exact u16 stamp `_topk_xl_add_lsb_indices_rt_` gave it (chunk id at
+// [15:11], the within-chunk Dst coordinate below, the inverse of `_topk_xl_decode_row_major_index_`) and writes
+// it into the value's low 16 bits (zero for a bf16-sourced value), so the FP32 compare orders equal values
+// exactly as the fused compare does; clear restores the plain values afterwards. -inf is left unstamped: a
+// stamped -inf would be a NaN, and mark_neginf_indices needs the exact -inf.
 inline void _topk_large_indices_tiebreak_init_()
 {
     addr_mod_t {
@@ -4831,26 +4832,67 @@ inline void _topk_large_indices_stamp_tiebreak_()
     constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
     constexpr std::uint32_t indices_offset     = tiles_per_sequence * 64;
     constexpr std::uint32_t iterations         = (K == 512 ? 1 : K == 1024 ? 2 : 4) * 16;
+    constexpr int log2_k                       = K == 512 ? 9 : K == 1024 ? 10 : 11;
 
-    // LREG2 = fp32 -inf, LREG3 = value mask, LREG4 = index mask.
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0xFF80);
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
-    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0xFFFF);
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
-    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+    // LREG4 = 0xF, LREG5 = 1, LREG6 = value mask, LREG7 = 5-bit chunk-id mask.
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, 0x000F);
+    TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_USHORT, 0x0001);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x001F);
 
     for (std::uint32_t i = 0; i < iterations; ++i)
     {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset);
-        TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
-        TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG1, 0);
-        // Stamp only lanes whose value is not -inf.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
-        TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG5, 0);
-        TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
-        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+
+        // LREG2 = stamp. col_low4 (index bits 3:0) -> stamp bits 9:6.
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+        TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG2, 0);
+        TTI_SFPSHFT(6, 0, p_sfpu::LREG2, 1);
+        // row_low4 (index bits 7:4) -> stamp bits 3:0.
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG3, 1);
+        TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG3, 0);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+        // col_hi (index bit 8) -> stamp bit 10.
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT((-8) & 0xFFF, 0, p_sfpu::LREG3, 1);
+        TTI_SFPAND(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT(10, 0, p_sfpu::LREG3, 1);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+        if constexpr (K >= 1024)
+        {
+            // row_hi (index bit 9) -> stamp bit 4.
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+            TTI_SFPSHFT((-9) & 0xFFF, 0, p_sfpu::LREG3, 1);
+            TTI_SFPAND(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
+            TTI_SFPSHFT(4, 0, p_sfpu::LREG3, 1);
+            TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+        }
+        if constexpr (K == 2048)
+        {
+            // tile_in_sequence (index bit 10) -> stamp bit 5.
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+            TTI_SFPSHFT((-10) & 0xFFF, 0, p_sfpu::LREG3, 1);
+            TTI_SFPAND(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
+            TTI_SFPSHFT(5, 0, p_sfpu::LREG3, 1);
+            TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+        }
+        // chunk id (index / K, 5 bits) -> stamp bits 15:11.
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT((-log2_k) & 0xFFF, 0, p_sfpu::LREG3, 1);
+        TTI_SFPAND(0, p_sfpu::LREG7, p_sfpu::LREG3, 0);
+        TTI_SFPSHFT(11, 0, p_sfpu::LREG3, 1);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+
+        // Plain value, then the stamp on every lane whose value is not -inf.
+        TTI_SFPAND(0, p_sfpu::LREG6, p_sfpu::LREG0, 0);
+        TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+        TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0xFF80);
+        TTI_SFPXOR(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG3, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
     }
