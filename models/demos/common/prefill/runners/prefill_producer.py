@@ -512,8 +512,27 @@ def _config_from_env() -> ProducerConfig:
         pcc_threshold=float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.93")),
         interleave=interleave,
         multi_turn_prob=float(os.environ.get("PREFILL_PRODUCER_MULTI_TURN_PROB", "0.0")),
+        slot_lengths=_slot_lengths_from_env(int(os.environ.get("PREFILL_NUM_USERS", "1"))),
         forward_chunks=FORWARD_CHUNKS,
     )
+
+
+def _slot_lengths_from_env(num_users: int):
+    """PREFILL_PRODUCER_SLOT_LENGTHS=n0,n1,...: slot s's prompts are n_s tokens (one shared trace), else None.
+    Slots past the list keep random lengths."""
+    spec = os.environ.get("PREFILL_PRODUCER_SLOT_LENGTHS", "").strip()
+    if not spec:
+        return None
+    entries = spec.split(",")
+    # The last chunk is padded to CHUNK_SIZE, so a prompt must fit in whole chunks: a padded chunk past
+    # MAX_SEQ_LEN would reach the runner, whose validation stops the device-owning process.
+    max_len = MAX_SEQ_LEN // CHUNK_SIZE * CHUNK_SIZE
+    if len(entries) > num_users or not all(e.strip().isdigit() and 0 < int(e) <= max_len for e in entries):
+        raise ValueError(
+            f"PREFILL_PRODUCER_SLOT_LENGTHS={spec!r}: want at most {num_users} token counts in [1, {max_len}]"
+            " (whole PREFILL_CHUNK_SIZE chunks within PREFILL_MAX_SEQ_LEN), comma-separated"
+        )
+    return {slot: int(n) for slot, n in enumerate(entries)}
 
 
 class _Slot:
@@ -544,10 +563,11 @@ def _new_request(
     slot.turn_idx = turn_idx
     if cfg.slot_lengths is not None and slot.slot_id in cfg.slot_lengths:
         real_len = cfg.slot_lengths[slot.slot_id]
-        if prefix_len + real_len > MAX_SEQ_LEN:
+        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+        # The last chunk is padded, so the turn needs whole chunks of room past its prefix.
+        if prefix_len + slot.target_chunks * CHUNK_SIZE > MAX_SEQ_LEN:
             prefix_len = slot.prefix_len = 0
             slot.turn_idx = 0
-        slot.target_chunks = (real_len + CHUNK_SIZE - 1) // CHUNK_SIZE
         slot.actual_isl = prefix_len + real_len
         return
     remaining_chunks = (MAX_SEQ_LEN - prefix_len) // CHUNK_SIZE
@@ -1575,13 +1595,20 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
             "and its golden defines a single turn, so a resumed turn would read past its pool and mismatch "
             "the golden. Use one shared trace (unset SLOT_TRACES) for multi-turn runs."
         )
+    if spec and cfg.slot_lengths:
+        raise ValueError(
+            "PREFILL_PRODUCER_SLOT_LENGTHS cuts each slot's prompt from the one shared trace, so it can't be combined "
+            "with PREFILL_PRODUCER_SLOT_TRACES, whose traces set each slot's length. Unset one of them."
+        )
     max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
 
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
         pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
-        return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
+        if cfg.slot_lengths:
+            pool_tokens = max(pool_tokens, max(cfg.slot_lengths.values()))
+        return slot_traces, cfg.slot_lengths, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
     resolved = [resolve_trace_dir(e) for e in entries]
