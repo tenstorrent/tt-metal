@@ -46,6 +46,8 @@ void kernel_main() {
     constexpr uint32_t bucket_cap = get_compile_time_arg_val(8);    // indices per (from, to) scatter bucket
     constexpr uint32_t range_blocks = get_compile_time_arg_val(9);  // blocks per rank range, a multiple of num_devices
     constexpr uint32_t topk = get_compile_time_arg_val(10);
+    constexpr uint32_t max_rows = bitmap_words * kRowsPerWord;
+    constexpr uint32_t range_words = owner_stride(num_devices);  // a range's partials
     constexpr auto indices_args = TensorAccessorArgs<11>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
@@ -161,7 +163,7 @@ void kernel_main() {
     };
 #endif
     auto scatter_and_map = [&](uint32_t worker) {
-        misc[kMiscRowEnd + worker] = scatter_step(
+        misc[kMiscRowEnd + worker] = scatter_step<max_rows>(
             idx,
             index_count,
             buckets,
@@ -190,7 +192,7 @@ void kernel_main() {
     auto ranks = [&](uint32_t worker) {
         for_my_ranges([&](uint32_t range, uint32_t first_block, uint32_t end_block) {
             range_ranks<num_devices, words_per_block>(
-                bitmap, word_ranks, partials + range * num_devices, first_block, end_block, worker);
+                bitmap, word_ranks, partials + range * range_words, first_block, end_block, worker);
         });
     };
 
@@ -245,7 +247,7 @@ void kernel_main() {
 
     // 4. Bases and 5. rewrite; then write back the second half of the indices.
     wait_for_step(kStepBases);
-    bases_and_rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks>(
+    bases_and_rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
         idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
     write_back(brisc_indices, index_count);
 #else
@@ -373,11 +375,11 @@ void kernel_main() {
         to_root(
             word_ranks_l1 + first_block * words_per_block * rank_bytes,
             (end_block - first_block) * words_per_block * rank_bytes);
-        to_root(partials_l1 + range * num_devices * word_bytes, num_devices * word_bytes);
+        to_root(partials_l1 + range * range_words * word_bytes, range_words * word_bytes);
     });
     exchange(3, [&](auto&& send) {
         send(word_ranks_l1, active_words * rank_bytes);
-        send(partials_l1, ranges * num_devices * word_bytes);
+        send(partials_l1, ranges * range_words * word_bytes);
     });
     for_my_ranges([&](uint32_t range, uint32_t first_block, uint32_t end_block) {
         write_span(
@@ -387,7 +389,7 @@ void kernel_main() {
 
     // 4. Owner bases and 5. rewrite, all workers.
     post(sem_step, kStepBases);
-    bases_and_rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks>(
+    bases_and_rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
         idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
     wait_workers(kRewritten);
     if (core_idx == 0) {
@@ -400,7 +402,7 @@ void kernel_main() {
             const uint32_t first_from_split =
                 split_block + (owner + num_devices - split_block % num_devices) % num_devices;
             table_image[kOwnerPrefixOff + owner] =
-                first_from_split < active_blocks ? partials[(first_from_split / range_blocks) * num_devices + owner] +
+                first_from_split < active_blocks ? partials[(first_from_split / range_blocks) * range_words + owner] +
                                                        word_ranks[first_from_split * words_per_block]
                                                  : totals[owner];
         }

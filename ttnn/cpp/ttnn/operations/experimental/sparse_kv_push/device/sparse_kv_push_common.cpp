@@ -31,8 +31,7 @@ PacketShape packet_shape(tt::tt_metal::distributed::MeshDevice* mesh_device, uin
         max_payload,
         page_bytes);
     return PacketShape{
-        .pages_per_packet = max_payload / page_bytes,
-        .banks = static_cast<uint32_t>(mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM))};
+        .pages_per_packet = max_payload / page_bytes, .banks = static_cast<uint32_t>(mesh_device->num_dram_channels())};
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

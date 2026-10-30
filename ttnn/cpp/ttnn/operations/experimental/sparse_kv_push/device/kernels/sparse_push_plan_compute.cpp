@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t banks = get_compile_time_arg_val(3);
     constexpr uint32_t cores = get_compile_time_arg_val(4);
     constexpr uint32_t total_chunks = get_compile_time_arg_val(5);
+    constexpr uint32_t max_rows = get_compile_time_arg_val(7) * kRowsPerWord;  // bitmap words
     constexpr uint32_t bucket_cap = get_compile_time_arg_val(8);
     constexpr uint32_t range_blocks = get_compile_time_arg_val(9);
     constexpr uint32_t bitmap_off = sparse_push::plan_table::kBitmapOff;
@@ -72,7 +73,7 @@ void kernel_main() {
 
     // 1. Scatter and map the dirty chunks.
     wait_for_step(kStepScatter);
-    misc[kMiscRowEnd + worker] = scatter_step(
+    misc[kMiscRowEnd + worker] = scatter_step<max_rows>(
         idx,
         index_count,
         buckets,
@@ -102,12 +103,12 @@ void kernel_main() {
         misc[kMiscActiveBlocks],
         [&](uint32_t range, uint32_t first_block, uint32_t end_block) {
             range_ranks<num_devices, words_per_block>(
-                bitmap, word_ranks, partials + range * num_devices, first_block, end_block, worker);
+                bitmap, word_ranks, partials + range * owner_stride(num_devices), first_block, end_block, worker);
         });
     post(sem_done(worker), kRanked);  // report only: BRISC waits for it
 
     // 4. Bases and 5. rewrite.
     wait_for_step(kStepBases);
-    bases_and_rewrite<num_devices, stripe_chunk, range_blocks, pages_per_packet, banks>(
+    bases_and_rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
         idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
 }

@@ -19,7 +19,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
-from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart, ceil_div, sparse_kv_push_supported
+from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
+    SparseKvPushPart,
+    ceil_div,
+    sparse_kv_push_fits,
+    sparse_kv_push_supported,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -321,6 +326,7 @@ class ttMLA:
         # top-k/KV-gather sub-device-manager load and clear, which cannot occur inside one trace.
         self._trace_controller = None
         self.layer_idx = layer_idx
+        self._first_layer_idx = first_layer_idx or 0  # this pipeline stage's first layer
         self.kv_only = kv_only
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
@@ -636,24 +642,31 @@ class ttMLA:
                 layout=self.sparse_kv_cache_format.storage_layout,
             )
         # Shared layers (fed another layer's top-k) receive only the KV rows they reference, pushed by their owners
-        # (sparse_kv_push.py), on meshes the push can route; elsewhere they gather the whole prefix.
+        # (sparse_kv_push.py), on meshes the push can route and caches whose blocks it fits; elsewhere they gather the
+        # whole prefix.
         self._push = None
-        if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(mesh_device):
+        # One chip's rows of a chunk: the cache's block-cyclic block.
+        push_stripe_chunk = self.active_seq_len_local // self.tp_factor
+        if (
+            self._sparse_kv_gather_buffer is not None
+            and sparse_kv_push_supported(mesh_device)
+            and sparse_kv_push_fits(push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
+        ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
             # The cache's row page as the push reads it: the row, rounded up to the 64 B DRAM page alignment.
             element_bytes = 1 if dense.dtype == ttnn.fp8_e4m3 else 2
             row_bytes = dense.shape[-1] * element_bytes
             self._push_page_bytes = ceil_div(row_bytes, DRAM_ROW_ALIGN_BYTES) * DRAM_ROW_ALIGN_BYTES
-            # One chip's rows of a chunk: the cache's block-cyclic block.
-            self._push_stripe_chunk = self.active_seq_len_local // self.tp_factor
+            self._push_stripe_chunk = push_stripe_chunk
             _, _, query_rows, topk = self.indexer_indices_shape()
             self._push_rows = self._push.buffer_rows(
                 query_rows * topk, dense.shape[2], self._push_stripe_chunk, self._push_page_bytes
             )
             # The dense buffer is idle in shared layers, so when the push buffer fits in it, it serves as one parity.
+            # The push buffers are created on the first push (the warm pass, before any trace capture), so models
+            # whose layers all compute their own top-k never allocate one.
             self._push_reuses_dense = self._push_rows <= dense.shape[2]
-            self._push.push_buffer(0, self._push_rows, dense)
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
@@ -1765,8 +1778,13 @@ class ttMLA:
         # GLM-5.3 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
         # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
         selection_state = None
-        if indexer_indices is None and self.tt_ccl.sparse_kv_push_planner is not None:
-            self.tt_ccl.sparse_kv_push_planner.invalidate()  # this layer rewrites the shared indices buffer
+        # New indices in the shared buffer drop the cached push plan: this layer's indexer rewrites it, and a pipeline
+        # stage's first layer receives it from the previous stage. (Sending the plan along with the indices would let
+        # the next stage skip rebuilding it.)
+        if self.tt_ccl.sparse_kv_push_planner is not None and (
+            indexer_indices is None or self.layer_idx == self._first_layer_idx
+        ):
+            self.tt_ccl.sparse_kv_push_planner.invalidate()
         if indexer_indices is not None:
             indices = indexer_indices
         elif self._sparse_mla_overlap is not None:
@@ -1995,6 +2013,12 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
+        # The plan takes this chip's query rows as they are; injected indices covering more rows would overflow the
+        # compact buffer sized from them.
+        expected_shape = self.indexer_indices_shape()
+        assert (
+            tuple(indices.shape) == expected_shape
+        ), f"pushed attention needs this chip's top-k {expected_shape}, got {tuple(indices.shape)}"
         plan = self._sparse_push_plan(indices, kv_actual_isl, metadata)
         storage = kvpe_cache.storage
         # If the previous layer pushed this layer's prefix beside its attention, for these same indices (the same
