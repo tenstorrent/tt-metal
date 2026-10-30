@@ -19,26 +19,24 @@ class MeshDevice;
 
 namespace tt::tt_metal::experimental::inspector {
 
-// Inspector feature flag
-bool IsEnabled();
+// Whether the Inspector is active for the context `mesh_device` belongs to.
+bool IsEnabled(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
-// Whether tensor spec capture is enabled on op dispatch (checks rtoptions).
-bool ShouldCaptureTensorSpecs();
+// Whether tensor spec capture on op dispatch is enabled for the context `mesh_device` belongs to.
+bool ShouldCaptureTensorSpecs(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // Returns the current mesh trace id for `mesh_device` if fast dispatch is enabled; otherwise nullopt.
 // Fetching the trace id is only supported on fast dispatch and would throw on slow dispatch.
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
-    tt::tt_metal::distributed::MeshDevice* mesh_device);
+    const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
-// Emit a debug entry for a mesh workload execution, capturing the operation name and tensor specs.
+// Emit a debug entry for a mesh workload execution on `mesh_device`, capturing the operation name and tensor specs.
 void EmitMeshWorkloadDebugEntry(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
     uint64_t runtime_id,
     std::string_view operation_name,
     std::vector<TensorSpec> tensor_specs,
     std::optional<tt::tt_metal::distributed::MeshTraceId> trace_id = std::nullopt);
-
-// Drops the per-trace runtime-entry bucket. Called at trace release time.
-void ReleaseTraceDebugEntries(tt::tt_metal::distributed::MeshTraceId trace_id);
 
 }  // namespace tt::tt_metal::experimental::inspector
