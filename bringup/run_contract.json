@@ -1,0 +1,24 @@
+{
+  "hf_model": "google/gemma-4-31B-it",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "scope": "text-only",
+  "tt_metal_release": "v0.81.1",
+  "tt_metal_commit": "d80d9482a418cf04ddcbeecf6adb67010d3091e6",
+  "skills_branch": "mvasiljevic/goal12-survey-then-efforts",
+  "skills_commit": "464c892ed95ef624717c27c9b2715b4c8924bcc2",
+  "codex_home": "/home/mvasiljevic/.codex-personal-gemma4",
+  "model": "gpt-6-astra",
+  "effort": "medium",
+  "local_machine": "qb2-120-p04t04",
+  "local_hardware_authorized": true,
+  "ci_max_parallel": 6,
+  "removed_implementations": [
+    "models/demos/gemma4",
+    "models/demos/gemma4_31b_qb2",
+    "models/demos/gemma4_d_p"
+  ],
+  "local_checkout_has_remote": false,
+  "live_pipeline_started": false,
+  "advertised_context_tokens": 262144,
+  "serving_registration_requirement": "Local serving and CI must resolve the generated autoport adapter, not the stock Gemma4 adapter; adapt the dedicated TIS branch and dispatch implementation selector as needed."
+}

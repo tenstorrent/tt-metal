@@ -1,0 +1,45 @@
+{
+  "batch_sizes": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "stage_budget_hours": 24,
+  "effort_budget_hours": 16,
+  "suite_budget_hours": 8,
+  "release_spec": "https://github.com/tenstorrent/tt-inference-server/blob/411057222c2dc5a4268e693b0bd57bc0e2571f38/release_model_spec.json",
+  "compute": {
+    "kind": "github_actions",
+    "repo": "tenstorrent/tt-agentic-bringup-qb2",
+    "workflow": "manual-tt-shield-dispatch.yml",
+    "max_parallel": 6,
+    "run_timeout_hours": 18,
+    "runners": [
+      {
+        "runner_label": "bh-qb-ge",
+        "device_type": "p300x2",
+        "count": 6
+      }
+    ],
+    "dispatch_inputs": {
+      "model": "gemma-4-31B-it",
+      "workflow": "agentic",
+      "run-full-evals": false,
+      "run-ai-summary": false,
+      "create-issue-comment": false
+    },
+    "publish": {
+      "tt_metal": {
+        "remote": "https://github.com/tenstorrent/tt-metal.git",
+        "branch": "mvasiljevic/gemma4-31b-fresh-pipeline",
+        "base": "d80d9482a418cf04ddcbeecf6adb67010d3091e6"
+      },
+      "tt_inference_server": {
+        "remote": "https://github.com/tenstorrent/tt-inference-server.git",
+        "branch": "mvasiljevic/gemma4-31b-fresh-pipeline",
+        "base": "411057222c2dc5a4268e693b0bd57bc0e2571f38"
+      }
+    }
+  }
+}
