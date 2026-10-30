@@ -61,11 +61,12 @@ def block_mask(geo, S, H, density, band=1, seed=0):
     return mask.to(torch.int32)
 
 
+@pytest.mark.parametrize("q_blocks_per_pass", [None, 10], ids=["qauto", "q10"])
 @pytest.mark.parametrize("with_dense", [False, True], ids=["sparse_only", "plus_dense"])
 @pytest.mark.parametrize("density_id", list(DENSITIES))
 @pytest.mark.parametrize("k_chunk", [256, 128, 384, 512], ids=lambda k: f"k{k}")
 @pytest.mark.parametrize("shape_id", list(SHAPES))
-def test_profile(runtime, shape_id, k_chunk, density_id, with_dense):
+def test_profile(runtime, shape_id, k_chunk, density_id, with_dense, q_blocks_per_pass):
     rt = runtime
     dev = rt.mesh_device
     S = MESH_CONFIG.sp_size
@@ -108,6 +109,7 @@ def test_profile(runtime, shape_id, k_chunk, density_id, with_dense):
         t_pv,
         persistent_output_buffer_k=buf_k,
         persistent_output_buffer_v=buf_v,
+        q_blocks_per_pass=q_blocks_per_pass,
         logical_n=geo.logical_n,
         program_config=ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=rt.sdpa_compute_grid,

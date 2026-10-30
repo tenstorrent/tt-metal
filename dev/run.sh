@@ -63,7 +63,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all bench bench5 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all bench bench5 hang_ok hang_2p hang_2p19 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -130,9 +130,28 @@ case "$ONLY" in
         keep "bench_results/results.jsonl" 2>/dev/null
         ;;
 esac
+# Hang repro (2 K/V pages with group delivery hung at 10 s, 19 Q blocks per core in one pass): one sparse call at
+# 10 s, pair steps off. hang_ok: 3 pages, 10 blocks per pass (2 passes; ran before). hang_2p: 2 pages, 10 blocks per
+# pass (separates the page count from the slot count). hang_2p19: 2 pages, every block in one pass (the hanging
+# case). The two 2-page cases run under the watcher with a 15-minute timeout; a hang leaves the device stuck, so run
+# them last or in separate jobs (hang_ok first). The watcher log is copied to log_val_<step>_watcher.txt.
+case "$ONLY" in
+    hang_ok | hang_2p | hang_2p19)
+        pages=3; q=q10; watch=""
+        [ "$ONLY" != hang_ok ] && { pages=2; watch="TT_METAL_WATCHER=1"; }
+        [ "$ONLY" = hang_2p19 ] && q=qauto
+        run "$ONLY" 900 env TT_SPARSE_PAIR_STEPS=0 TT_SPARSE_KV_PAGES=$pages $watch \
+            pytest dev/profile_case.py -s -k "s10 and k256 and d020 and sparse_only and $q"
+        for d in "${TT_METAL_HOME:-.}/generated/watcher" generated/watcher; do
+            if [ -n "$watch" ] && [ -f "$d/watcher.log" ]; then
+                cp -f "$d/watcher.log" "log_val_${ONLY}_watcher.txt"; keep "log_val_${ONLY}_watcher.txt"; break
+            fi
+        done
+        ;;
+esac
 if [ "$ONLY" = profile5_nopairs ]; then  # the 5 s profile with D4 pair steps forced off (the pre-D4 baseline)
     run profile5_nopairs 1800 env TT_SPARSE_PAIR_STEPS=0 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
-        pytest dev/profile_case.py -s -k "${PROFILE_K:-s05 and k256 and d020 and sparse_only}"
+        pytest dev/profile_case.py -s -k "${PROFILE_K:-s05 and k256 and d020 and sparse_only and qauto}"
     summarize_profile profile5_nopairs_summary
 fi
 case "$ONLY" in
@@ -140,7 +159,7 @@ case "$ONLY" in
         n=${ONLY#profile}
         shape=s$(printf '%02d' "$n")
         run "$ONLY" 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
-            pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only}"
+            pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only and qauto}"
         summarize_profile "profile${n}_summary"
         ;;
     # sum5 / sum10 / sum15: the same call under TT_METAL_PROFILER_SUM=1 with the zone window empty, so the buffer
@@ -149,7 +168,7 @@ case "$ONLY" in
         n=${ONLY#sum}
         shape=s$(printf '%02d' "$n")
         run "$ONLY" 1800 env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_SUM=1 TT_SPARSE_PROF_STEPS=0 \
-            pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only}"
+            pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only and qauto}"
         summarize_profile "sum${n}_summary"
         ;;
     # perf_pairs: A/B of D4 pair steps at 5 s, separate processes (the op program cache is per process).

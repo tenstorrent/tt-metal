@@ -998,15 +998,12 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    // Single steps: group delivery's 3 K/V pages, unless 2 need fewer Q passes.
-    uint32_t fit_slots = fit_slots_for(kv_cb_pages, false);
-    if (kv_cb_pages > 2) {
-        const uint32_t fit_slots_2 = fit_slots_for(2, false);
-        if (passes_for(fit_slots_2) < passes_for(fit_slots)) {
-            kv_cb_pages = 2;
-            fit_slots = fit_slots_2;
-        }
+    // Single steps: group delivery's 3 K/V pages (2 pages with group delivery hung on device, MiniMax-H3 10 s,
+    // 2026-10-30). DEBUG (dev branch): TT_SPARSE_KV_PAGES=2|3 forces the single-step page count, for the hang repro.
+    if (const char* pages_env = std::getenv("TT_SPARSE_KV_PAGES"); pages_env != nullptr && *pages_env != 0) {
+        kv_cb_pages = std::string(pages_env) == "2" ? 2u : 3u;
     }
+    uint32_t fit_slots = fit_slots_for(kv_cb_pages, false);
     TT_FATAL(
         fit_slots > 0,
         "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
