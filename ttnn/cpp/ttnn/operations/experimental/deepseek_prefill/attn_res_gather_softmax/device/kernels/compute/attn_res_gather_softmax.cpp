@@ -42,6 +42,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_core_runs.hpp"
 
 using namespace ckernel;
 
@@ -243,9 +244,8 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
 void kernel_main() {
     // Statistics are split by token row and the fold by output tile, so a core's two
     // runs are unrelated. `num_stat_rows` is zero on a core that only folds.
-    const uint32_t num_stat_rows = get_arg_val<uint32_t>(0);
-    const uint32_t num_fold_tiles = get_arg_val<uint32_t>(1);
-    const uint32_t fold_start_tile = get_arg_val<uint32_t>(2);
+    [[maybe_unused]] const auto [num_stat_rows, stat_start_row, num_fold_tiles, fold_start_tile] =
+        attn_res_core_runs<5>();
 
     CircularBuffer cb_partial_obj(cb_partial);
     CircularBuffer cb_prefix_obj(cb_prefix);
