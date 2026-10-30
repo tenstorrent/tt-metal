@@ -6,7 +6,10 @@ import math
 import torch
 import pytest
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    compare_pcc,
+)
 
 
 @pytest.mark.parametrize(
@@ -48,13 +51,23 @@ def test_bw_hypot_extreme_and_zero(scale_exp, atol, device):
         other_data = torch.zeros(shape, dtype=torch.bfloat16)
     else:
         scale = math.ldexp(1.0, scale_exp)
-        in_data = (torch.empty(shape, dtype=torch.float32).uniform_(0.5, 2.0) * scale).to(torch.bfloat16)
-        other_data = (torch.empty(shape, dtype=torch.float32).uniform_(-2.0, -0.5) * scale).to(torch.bfloat16)
+        in_data = (
+            torch.empty(shape, dtype=torch.float32).uniform_(0.5, 2.0) * scale
+        ).to(torch.bfloat16)
+        other_data = (
+            torch.empty(shape, dtype=torch.float32).uniform_(-2.0, -0.5) * scale
+        ).to(torch.bfloat16)
     grad_data = torch.ones(shape, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    other_tensor = ttnn.from_torch(other_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    other_tensor = ttnn.from_torch(
+        other_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    grad_tensor = ttnn.from_torch(
+        grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
     tt_output = ttnn.hypot_bw(grad_tensor, input_tensor, other_tensor)
     grad_a = ttnn.to_torch(tt_output[0]).to(torch.float32)
