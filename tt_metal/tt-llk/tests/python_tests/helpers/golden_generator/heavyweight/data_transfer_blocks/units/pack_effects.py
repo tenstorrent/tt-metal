@@ -260,9 +260,6 @@ def is_deterministic(stoch_rnd: StochasticRounding) -> bool:
     Only ``No``. The others round up or down at random from a device-seeded
     sequence, so this model can only give the round-to-nearest answer.
     ``Fpu`` counts too: the randomness just moves to the FPU's Dest write.
-
-    Conservative by design, since an exact Dest write has nothing to randomise, so
-    a test that knows its own is exact can still compare exactly under ``Fpu``.
     """
     return stoch_rnd is StochasticRounding.No
 
