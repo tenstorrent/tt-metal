@@ -833,3 +833,24 @@ def test_rotary_embedding_indexed_row_major_output(device, rows, prefix_width, e
 
     with expect_error(RuntimeError, "row_major_output needs"):
         rope(x, cos, sin, trans, 0, 0, row_major_output=True)  # no concat_prefix
+
+
+def test_rotary_embedding_indexed_row_major_output_whole_seq_per_core(device):
+    """One batch per core puts all 3 tile rows of a head on one core, where compute waits for every row's sin/cos
+    before it takes any prefix: the prefix buffer must hold all 3 rows."""
+    torch.manual_seed(7)
+
+    def upload(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    grid = device.compute_with_storage_grid_size()
+    batch, heads, rows, prefix_width = grid.x * grid.y, 2, 96, 512
+    x = upload(torch.randn(batch, heads, rows, ROPE_HEAD_DIM, dtype=torch.bfloat16))
+    prefix = upload(torch.randn(batch, heads, rows, prefix_width, dtype=torch.bfloat16))
+    cos, sin = _make_cos_sin(rows, ROPE_HEAD_DIM)
+    cos, sin, trans = upload(cos), upload(sin), upload(get_rot_transformation_mat())
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+
+    tiled = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix)
+    row_major = rope(x, cos, sin, trans, 0, 0, concat_prefix=prefix, row_major_output=True)
+    assert torch.equal(ttnn.to_torch(row_major), ttnn.to_torch(tiled))
