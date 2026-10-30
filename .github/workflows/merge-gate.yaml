@@ -114,7 +114,7 @@ jobs:
     steps:
       # Use the in-tree action (same as pr-gate.yaml) so the llk-* outputs above are
       # available; the previously-pinned @v0.63.0 predates the llk-unit-tests-changed flag.
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 1
@@ -634,7 +634,7 @@ jobs:
     outputs:
       changed: ${{ steps.classify.outputs.changed }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 0
@@ -714,7 +714,7 @@ jobs:
       && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     runs-on: ubuntu-slim
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@1ef59d80b6d279f216413a99262429d8572b075d # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: tt_metal/tt-llk/perf
