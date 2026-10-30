@@ -115,7 +115,6 @@ void run_case(const AddrgenCase& addrgen_case) {
     const uint64_t status_offset = tl1_done_block(kHart);
     const uint64_t result_offset = tl1_data(kHart);
     const uint32_t result_words = addrgen_case.num_addresses * abi::kResultEntryWords64 * 2;
-    write_cce_tl1(device, kCce, status_offset, std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
     write_cce_tl1(device, kCce, result_offset, std::vector<uint32_t>(result_words, kResultPoison));
 
     std::vector<uint32_t> args(abi::kNumArgs, 0);
@@ -130,12 +129,15 @@ void run_case(const AddrgenCase& addrgen_case) {
         fmt::format("{} on CCE{} hart {} ({} addresses)", addrgen_case.name, kCce, kHart, addrgen_case.num_addresses);
     log_info(tt::LogTest, "MM8 addrgen {}", label);
 
-    const CceKernelLaunch launch{.cce_index = kCce, .kernel_path = kAddrgenKernel, .runtime_args = args, .hart = kHart};
+    const CceKernelLaunch launch{
+        .cce_index = kCce,
+        .kernel_path = kAddrgenKernel,
+        .runtime_args = args,
+        .hart = kHart,
+        .status_line = {.done_magic = abi::kDoneMagic, .num_words = abi::kStatusWords, .poison = abi::kStatusPoison}};
     Program program = CreateProgram();
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-        run_cce_kernels_with_deadline(device, program, {launch}, {abi::kDoneMagic}, abi::kStatusWords, kHostDeadline);
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+    const CceStatuses statuses = run_cce_kernels_with_deadline(device, program, {launch}, kHostDeadline);
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     const std::vector<uint32_t>& status = statuses->front();
     ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone)
         << label << ": kernel code 0x" << std::hex << status[abi::kStatusCode];

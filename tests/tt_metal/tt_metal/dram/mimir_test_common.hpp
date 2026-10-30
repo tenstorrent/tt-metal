@@ -26,6 +26,14 @@ using mimir_contract::num_cces_from_soc;
 using mimir_contract::soc_desc_of;
 using mimir_contract::translated_dram_core;
 
+// The status line a CCE test kernel writes once at exit at tl1_done_block(hart), with done_magic in word 0. The
+// runners in mimir_dm_common.hpp fill its num_words words with poison before the launch.
+struct CceStatusLine {
+    uint32_t done_magic = 0;
+    uint32_t num_words = 0;
+    uint32_t poison = 0;
+};
+
 // The next CCE on the same Mimir; the CCE itself when the descriptor has one CCE per Mimir.
 inline uint32_t sibling_cce(uint32_t cce_index) {
     return cce_index_for(

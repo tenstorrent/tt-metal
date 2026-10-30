@@ -9,6 +9,7 @@
 
 #include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
+#include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
 
 // Host side of the cce_idma_copy kernel ABI, for the dram/ suites and context/test_mimir_emu.cpp. The context target
@@ -17,6 +18,10 @@
 namespace tt::tt_metal::mimir_test {
 
 inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
+inline constexpr CceStatusLine kIdmaCopyStatusLine{
+    .done_magic = cce_idma_copy_abi::kDoneMagic,
+    .num_words = cce_idma_copy_abi::kStatusWords,
+    .poison = cce_idma_copy_abi::kStatusPoison};
 
 // One source or destination as the kernel takes it: a kKind*, its selector and its offset.
 struct IdmaOperand {

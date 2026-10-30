@@ -160,33 +160,22 @@ std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid, uint64_t peer_
          .peer_flag_offset = peer_flag_offset});
 }
 
-// Poisons every launch's status line, runs them all in one Program and returns their status lines in launch order;
-// nullopt on the host deadline.
-std::optional<std::vector<std::vector<uint32_t>>> run_kernels(
-    IDevice* device, const std::vector<CceKernelLaunch>& launches) {
-    for (const CceKernelLaunch& launch : launches) {
-        write_cce_tl1(
-            device,
-            launch.cce_index,
-            tl1_done_block(launch.hart),
-            std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
-    }
+// Runs every launch in one Program and returns their status lines in launch order; none on the host deadline.
+CceStatuses run_kernels(IDevice* device, const std::vector<CceKernelLaunch>& launches) {
     Program program = CreateProgram();
-    return run_cce_kernels_with_deadline(
-        device,
-        program,
-        launches,
-        std::vector<uint32_t>(launches.size(), abi::kDoneMagic),
-        abi::kStatusWords,
-        kHostDeadline);
+    return run_cce_kernels_with_deadline(device, program, launches, kHostDeadline);
 }
 
-std::optional<std::vector<std::vector<uint32_t>>> run_on_cce(
+CceStatuses run_on_cce(
     IDevice* device, uint32_t cce_index, const std::vector<std::pair<uint32_t, std::vector<uint32_t>>>& hart_args) {
     std::vector<CceKernelLaunch> launches;
     for (const auto& [hart, args] : hart_args) {
         launches.push_back(
-            {.cce_index = cce_index, .kernel_path = kIdmaCopyKernel, .runtime_args = args, .hart = hart});
+            {.cce_index = cce_index,
+             .kernel_path = kIdmaCopyKernel,
+             .runtime_args = args,
+             .hart = hart,
+             .status_line = kIdmaCopyStatusLine});
     }
     return run_kernels(device, launches);
 }
@@ -721,7 +710,8 @@ CceKernelLaunch scenario_launch(const TridScenario& scenario, std::vector<uint32
         .cce_index = scenario.cce_index(),
         .kernel_path = kIdmaCopyKernel,
         .runtime_args = std::move(args),
-        .hart = scenario.hart()};
+        .hart = scenario.hart(),
+        .status_line = kIdmaCopyStatusLine};
 }
 
 // The code, command count and trace of a finished launch of `scenario`.
@@ -748,11 +738,10 @@ void expect_status(
 std::optional<std::vector<uint32_t>> run_launch(
     IDevice* device, const TridScenario& scenario, std::vector<uint32_t> args, const std::string& label) {
     log_info(tt::LogTest, "MM43 {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-        run_kernels(device, {scenario_launch(scenario, std::move(args))});
+    const CceStatuses statuses = run_kernels(device, {scenario_launch(scenario, std::move(args))});
     if (!statuses.has_value()) {
         record_leg(scenario.name(), "status", fmt::format("no status after {} s", kHostDeadline.count()));
-        ADD_FAILURE() << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+        ADD_FAILURE() << label << ": " << statuses.no_status();
         return std::nullopt;
     }
     return statuses->front();
@@ -1249,9 +1238,8 @@ TEST_P(MimirTridIdma, MultiHart) {
     }
     const std::string label = fmt::format("MultiHart on CCE{}", GetParam());
     log_info(tt::LogTest, "MM43 {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_kernels(device, launches);
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+    const CceStatuses statuses = run_kernels(device, launches);
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         const TridScenario& scenario = *scenarios[hart];
         const std::string hart_label = fmt::format("{} hart {}: {}", label, hart, scenario.describe(0));
@@ -1336,9 +1324,8 @@ TEST_P(MimirTridIdma, Fairness) {
 
     const std::string label = fmt::format("Fairness with CCE{} at depth 16", heavy_cce);
     log_info(tt::LogTest, "MM43 {}", label);
-    const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_kernels(device, launches);
-    ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
-                                      << kFreshSessionNote;
+    const CceStatuses statuses = run_kernels(device, launches);
+    ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
     for (size_t source = 0; source < scenarios.size(); ++source) {
         const TridScenario& scenario = *scenarios[source];
         const std::vector<uint32_t>& status = (*statuses)[source];
@@ -1522,10 +1509,9 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
         const std::string label =
             fmt::format("NoStaleIdAfterReinit on CCE{}: pending count of trid {}", cce_index, trid);
         log_info(tt::LogTest, "MM43 {}", label);
-        const std::optional<std::vector<std::vector<uint32_t>>> statuses =
+        const CceStatuses statuses =
             run_on_cce(device, cce_index, {{kTridHart, observer_args(kTridHart, trid, peer_flag_offset)}});
-        ASSERT_TRUE(statuses.has_value())
-            << label << ": no status after " << kHostDeadline.count() << " s" << kFreshSessionNote;
+        ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
         const std::vector<uint32_t>& status = statuses->front();
         EXPECT_EQ(status[abi::kStatusCode], abi::kCodeAcked) << label << ": " << status_detail(status);
         EXPECT_EQ(status[abi::kStatusProbeFirst], 0u) << label << ": stale pending count after the reopen";
@@ -1734,11 +1720,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
     session.emplace(*mesh, *sender_bank);
     // Launched after the prefetcher started, so the stream's budget is not spent while it starts.
     const std::vector<CceKernelLaunch> stream_launch = {scenario_launch(scenario, stream_args)};
-    write_cce_tl1(
-        device,
-        route.stream_cce,
-        tl1_done_block(kTridHart),
-        std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
+    poison_status_lines(device, stream_launch);
     Program stream_program = CreateProgram();
     add_cce_kernels(device, stream_program, stream_launch);
     launch_on_idle_cces(device, stream_program, stream_launch);
@@ -1788,12 +1770,11 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
         << " s: " << overlap;
 
     write_cce_tl1(device, route.stream_cce, stop_offset, {abi::kStreamStop});
-    const bool stream_done = wait_for_status_magics(device, stream_launch, {abi::kDoneMagic}, kStreamHostDeadline);
+    const bool stream_done = wait_for_status_magics(device, stream_launch, kStreamHostDeadline);
     ASSERT_TRUE(stream_done) << label << ": trid stream: no status after " << kStreamHostDeadline.count() << " s"
                              << kFreshSessionNote;
     slow_dispatch::WaitProgramDone(*device, stream_program);
-    const std::vector<uint32_t> stream_status =
-        read_cce_tl1(device, route.stream_cce, tl1_done_block(kTridHart), abi::kStatusWords * sizeof(uint32_t));
+    const std::vector<uint32_t> stream_status = read_status_lines(device, stream_launch).front();
     expect_status(
         device,
         scenario,
