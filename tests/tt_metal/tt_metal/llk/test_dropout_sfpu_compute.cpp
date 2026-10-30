@@ -53,15 +53,24 @@ struct DropoutConfig {
     float fill_constant;
     uint32_t seed_0;
     uint32_t seed_1;
+    // Produce the tile dropout works on with an FPU add (c_0 + c_0) instead of a datacopy, so that an FPU
+    // binary init is the last ADDR_MOD_3 programmer before dropout_tile (dropout_kernel_init still runs after
+    // it and programs ADDR_MOD_7). The input is doubled, so kept = 2 * fill * scale.
+    // Defaulted: TensixComputeDropout leaves it unset.
+    bool fpu_add_input = false;
 };
 
 bool check_dropout(
-    std::vector<bfloat16>& src_vec, std::vector<bfloat16>& result_vec, float probability, float scale_factor) {
+    std::vector<bfloat16>& src_vec,
+    std::vector<bfloat16>& result_vec,
+    float probability,
+    float scale_factor,
+    float input_gain) {
     bool pass = true;
     int vec_size = src_vec.size();
     int zero_count = 0;
     for (int i = 0; i < vec_size; i++) {
-        auto srcf = static_cast<float>(src_vec[i]);
+        auto srcf = static_cast<float>(src_vec[i]) * input_gain;
         auto resf = static_cast<float>(result_vec[i]);
         if (resf == 0.0f) {
             zero_count++;
@@ -93,7 +102,8 @@ bool test_dropout_standalone(
     float probability,
     uint32_t seed,
     float const_bias,
-    std::vector<bfloat16>& res_vec) {
+    std::vector<bfloat16>& res_vec,
+    bool fpu_add_input) {
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
     float scale_factor_f = 1.0f / (1.0f - probability);
@@ -108,7 +118,7 @@ bool test_dropout_standalone(
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         distributed::MeshWorkload workload;
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -163,9 +173,12 @@ bool test_dropout_standalone(
         vector<uint32_t> compute_kernel_args = {num_tiles, 1, seed, int_probability, scale_factor};
 
         constexpr bool math_approx_mode = false;
-        const std::map<std::string, std::string> sfpu_defines = {
+        std::map<std::string, std::string> sfpu_defines = {
             {"SFPU_OP_DROPOUT_INCLUDE", "1"},
         };
+        if (fpu_add_input) {
+            sfpu_defines["DROPOUT_INPUT_FPU_ADD"] = "1";
+        }
 
         CreateKernel(
             program_,
@@ -221,7 +234,10 @@ bool test_dropout_standalone(
         std::vector<bfloat16> src0_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_identity);
         std::vector<bfloat16> result_vec_bfloat16 = unpack_uint32_vec_into_bfloat16_vec(result_vec, transform_identity);
         res_vec = result_vec_bfloat16;
-        pass &= check_dropout(src0_vec_bfloat16, result_vec_bfloat16, probability, scale_factor_f);
+        // The kernel's add_tiles(c_0, c_0) feeds dropout twice the source value.
+        constexpr float fpu_add_input_gain = 2.0f;
+        const float input_gain = fpu_add_input ? fpu_add_input_gain : 1.0f;
+        pass &= check_dropout(src0_vec_bfloat16, result_vec_bfloat16, probability, scale_factor_f, input_gain);
     } catch (const std::exception& e) {
         log_error(tt::LogTest, "Test failed with exception!");
         log_error(tt::LogTest, "{}", e.what());
@@ -239,8 +255,8 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     uint32_t seed_1 = test_config.seed_1;
 
     std::vector<bfloat16> res_0, res_1, res_2;
-    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_0);
-    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_1);
+    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_0, test_config.fpu_add_input);
+    pass &= test_dropout_standalone(mesh_device, probability, seed_0, fill_constant, res_1, test_config.fpu_add_input);
     bool repeatable = std::equal(res_0.begin(), res_0.end(), res_1.begin());
     if (!repeatable) {
         log_error(tt::LogTest, "Same parameters gave different results probability={}, seed={}", probability, seed_0);
@@ -250,7 +266,8 @@ void test_dropout(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     pass &= repeatable;
 
     if (probability != 0.0 && probability != 1.0) {
-        pass &= test_dropout_standalone(mesh_device, probability, seed_1, fill_constant, res_2);
+        pass &=
+            test_dropout_standalone(mesh_device, probability, seed_1, fill_constant, res_2, test_config.fpu_add_input);
         bool unique = !std::equal(res_0.begin(), res_0.end(), res_2.begin());
         if (!unique) {
             log_error(
@@ -284,6 +301,28 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeDropout) {
             .fill_constant = fill_constant,
             .seed_0 = static_cast<uint32_t>(rand()),
             .seed_1 = static_cast<uint32_t>(rand())};
+        unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
+    }
+}
+
+// Dropout on a tile the FPU produced (add_tiles) rather than a datacopy. The FPU binary init programs
+// ADDR_MOD_3 with a Dest increment; dropout's SFPLOAD/SFPSTORE must step Dest only through dst_reg++
+// (no-increment addressing), so every kept element must still read back as 2 * fill * scale.
+TEST_F(LLKMeshDeviceFixture, TensixComputeDropoutAfterFpuAdd) {
+    if (this->arch_ == ARCH::QUASAR) {
+        GTEST_SKIP() << "Not implemented on Quasar";
+    }
+    srand(0);
+    int num_tests = 5;
+    float fill_constant = 9.0;
+    for (int i = 0; i <= num_tests; i++) {
+        float probability = (float)i / (float)num_tests;
+        unit_tests::compute::sfpu::dropout::DropoutConfig test_config = {
+            .probability = probability,
+            .fill_constant = fill_constant,
+            .seed_0 = static_cast<uint32_t>(rand()),
+            .seed_1 = static_cast<uint32_t>(rand()),
+            .fpu_add_input = true};
         unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
     }
 }

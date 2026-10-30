@@ -43,120 +43,6 @@ struct fmt::formatter<ttnn::operations::experimental::quasar::binary_ng::Lowerca
 
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
-BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type) {
-    switch (subtile_broadcast_type) {
-        case SubtileBroadcastType::NONE:
-            reader_kernel = KernelName::ReaderNoBcast;
-            compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterScalar;
-            bcast_input = std::nullopt;
-            break;
-
-        case SubtileBroadcastType::SCALAR_A:;
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
-            break;
-
-        case SubtileBroadcastType::SCALAR_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-
-        case SubtileBroadcastType::ROW_A:
-        case SubtileBroadcastType::ROW_B:
-            compute_kernel = KernelName::ComputeNoBcast;
-            bcast_input = std::nullopt;
-            break;
-
-        case SubtileBroadcastType::COL_A:
-        case SubtileBroadcastType::ROW_B_COL_A:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 0;
-            break;
-
-        case SubtileBroadcastType::COL_B:
-        case SubtileBroadcastType::ROW_A_COL_B:
-            compute_kernel = KernelName::ComputeBcast;
-            bcast_input = 1;
-            break;
-    }
-}
-
-std::string BinaryNgKernelConfig::bcast_input_str() const {
-    if (bcast_input.has_value()) {
-        return std::to_string(*bcast_input);
-    }
-    return "";
-}
-
-std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels";
-    constexpr std::string_view root_ng = "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_ng";
-    constexpr std::string_view dataflow = "{}/dataflow/{}";
-    constexpr std::string_view compute = "{}/compute/{}";
-
-    switch (kernel_name) {
-        case KernelName::ReaderNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_no_bcast.cpp");
-        case KernelName::ReaderRowBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_row_bcast.cpp");
-        case KernelName::ReaderColBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_col_bcast.cpp");
-        case KernelName::ReaderRowBColABcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_row_col_mixed_bcast.cpp");
-        case KernelName::ReaderScalarBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
-        case KernelName::ReaderRmNoBcastNg: return fmt::format(dataflow, root_ng, "reader_interleaved_rm_no_bcast.cpp");
-        case KernelName::ReaderRmRowBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_bcast.cpp");
-        case KernelName::ReaderRmColBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_col_bcast.cpp");
-        case KernelName::ReaderRmRowBColABcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_row_col_mixed_bcast.cpp");
-        case KernelName::ReaderRmScalarBcastNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_bcast.cpp");
-        case KernelName::ReaderRmScalarOpNg:
-            return fmt::format(dataflow, root_ng, "reader_interleaved_rm_scalar_op.cpp");
-        case KernelName::WriterRmNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_rm_no_bcast.cpp");
-        case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
-        case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
-        case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
-        case KernelName::ComputeNoBcast:
-            return fmt::format(
-                compute,
-                root,
-                is_where_op ? "eltwise_where_no_bcast.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_no_bcast.cpp" : "eltwise_binary_no_bcast.cpp"));
-        case KernelName::ComputeBcast:
-            return fmt::format(
-                compute,
-                root,
-                is_where_op ? "eltwise_where_sfpu.cpp" : (is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp"));
-        case KernelName::ComputeScalar:
-            return fmt::format(
-                compute,
-                root,
-                is_where_op ? "eltwise_where_sfpu_scalar.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp"));
-        case KernelName::ComputeRowBcastNg:
-            return fmt::format(
-                compute,
-                root_ng,
-                is_where_op ? "eltwise_where_sfpu_row_bcast.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp"));
-        case KernelName::ComputeColBcastNg:
-            return fmt::format(
-                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_col_bcast.cpp" : "eltwise_binary_col_bcast.cpp");
-        case KernelName::ComputeScalarBcastNg:
-            return fmt::format(
-                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_scalar_bcast.cpp" : "eltwise_binary_scalar_bcast.cpp");
-        case KernelName::ComputeRowColBcastNg:
-            return fmt::format(
-                compute,
-                root_ng,
-                is_where_op ? "eltwise_where_sfpu_row_col_bcast.cpp"
-                            : (is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp"));
-        default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
-    }
-}
-
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
 OpConfig::OpConfig(
@@ -882,6 +768,74 @@ bool is_native_L1_sharding(
     }
 
     return false;
+}
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+std::optional<AllShardSpecs> get_shard_specs(
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
+    bool a_sharded = a.memory_config().is_sharded();
+    bool b_sharded = b.has_value() && b->memory_config().is_sharded();
+    bool c_sharded = c.memory_config().is_sharded();
+
+    if ((!a_sharded && !b_sharded) && !c_sharded) {
+        return std::nullopt;
+    }
+
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
+        return std::nullopt;
+    }
+
+    // If the output is unevenly sharded, only allow when all tensors share the same shard spec
+    // (each core sees identical tile counts for a, b, c -- no deadlock risk).
+    if (is_uneven(c)) {
+        bool all_specs_match =
+            b.has_value() && a_sharded && b_sharded && c_sharded && a.memory_config().shard_spec().has_value() &&
+            b->memory_config().shard_spec().has_value() && c.memory_config().shard_spec().has_value() &&
+            *a.memory_config().shard_spec() == *b->memory_config().shard_spec() &&
+            *a.memory_config().shard_spec() == *c.memory_config().shard_spec();
+        if (!all_specs_match) {
+            return std::nullopt;
+        }
+    }
+
+    const auto& a_shape = a.padded_shape();
+    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
+    const auto& c_shape = c.padded_shape();
+
+    TT_FATAL(get_shard_spec(c).has_value(), "C must have a shard spec");
+    return AllShardSpecs{
+        a_sharded ? *get_shard_spec(a) : adjust_to_shape(*get_shard_spec(c), c_shape, a_shape),
+        b_sharded ? *get_shard_spec(*b) : adjust_to_shape(*get_shard_spec(c), c_shape, b_shape),
+        *get_shard_spec(c)};
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
+
+    if (not shard_specs.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto a_sharded = a.memory_config().is_sharded();
+    const auto b_sharded = b.has_value() and b->memory_config().is_sharded();
+    const auto c_sharded = c.memory_config().is_sharded();
+    const auto tile_hw = c.tile().get_tile_hw();
+
+    return AllShardVolumes{
+        .a_shard_volume = a_sharded ? shard_specs->a_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .b_shard_volume = b_sharded ? shard_specs->b_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+        .c_shard_volume = c_sharded ? shard_specs->c_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
+    };
 }
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b) {

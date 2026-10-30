@@ -59,6 +59,14 @@ constexpr uint32_t NOC_OVERLAY_WR_RESP_VC = 13;
 constexpr uint32_t NOC_OVERLAY_MCAST_REQ_VC = 8;
 constexpr uint32_t NOC_OVERLAY_MCAST_RESP_VC = 14;
 
+// Quasar-only: NIU write-path deadlock; read data and write acks must use different response VCs.
+static_assert(
+    NOC_OVERLAY_RD_RESP_VC != NOC_OVERLAY_WR_RESP_VC && NOC_OVERLAY_RD_RESP_VC != NOC_OVERLAY_MCAST_RESP_VC,
+    "read data and write acks must use different response VCs");
+static_assert(
+    READ_RESPONSE_STATIC_VC == NOC_OVERLAY_RD_RESP_VC && WRITE_RESPONSE_STATIC_VC != NOC_OVERLAY_RD_RESP_VC,
+    "legacy response VC aliases must keep read data and write acks apart");
+
 // Static transaction ID used for all command buffers
 constexpr uint32_t NOC_OVERLAY_TRID_STATIC = 0;
 
@@ -80,6 +88,7 @@ constexpr uint64_t CMD_BUF_MISC_SCATTER_TO_DEST = (1 << 7);     // bit 7:  scatt
 constexpr uint64_t CMD_BUF_MISC_WRAPPING_EN = (1 << 8);         // bit 8:  address wrapping
 constexpr uint64_t CMD_BUF_MISC_WRITE_TRANS = (1 << 9);         // bit 9:  write transaction
 constexpr uint64_t CMD_BUF_MISC_ATOMIC_TRANS = (1 << 10);       // bit 10: atomic transaction
+// Quasar-only: never set; the security fence checks only 64 B of a byte-enable write that can touch 256 B.
 constexpr uint64_t CMD_BUF_MISC_BYTE_ENABLE = (1 << 11);        // bit 11: byte enable trans
 constexpr uint64_t CMD_BUF_MISC_DIS_LINKED_PER_TR = (1 << 12);  // bit 12: disable linked per trans
 constexpr uint64_t CMD_BUF_MISC_SCATTER_HAS_SIZE = (1 << 13);   // bit 13: scatter list has size
@@ -146,6 +155,17 @@ inline __attribute__((always_inline)) uint64_t NOC_CMD_BUF_READ_OVERLAY_REG(uint
         return __builtin_riscv_ttrocc_scmdbuf_rd_reg(reg_offset / 8);
     }
     return __builtin_riscv_ttrocc_cmdbuf_rd_reg(buf, reg_offset / 8);
+}
+
+// Quasar-only: NIU write-path deadlock; a buffer armed for stateful reads must answer on the read-data VC.
+inline __attribute__((always_inline)) void noc_cmd_buf_assert_rd_resp_vc(uint32_t cmd_buf) {
+#if WATCHER_ASSERT_ENABLED
+    ASSERT(
+        __builtin_riscv_ttrocc_cmdbuf_rd_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8) ==
+        NOC_OVERLAY_RD_RESP_VC);
+#else
+    (void)cmd_buf;
+#endif
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {

@@ -24,6 +24,7 @@
 #include "hostdev/streaming_profiler_common.h"
 #include "impl/device/device_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "program/program_impl.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "impl/streaming_profiler/device_programs.hpp"
 #include "impl/streaming_profiler/sync/clock_map.hpp"
@@ -201,6 +202,7 @@ struct Network {
     uint32_t chip = 0;
     std::vector<Tile> tiles;
     struct Kind {
+        explicit Kind(ContextId context_id) : program(std::make_shared<detail::ProgramImpl>(context_id)) {}
         std::set<CoreRange> cores;
         Program program;
         KernelHandle kernel = 0;
@@ -216,7 +218,8 @@ Network launch_network(IDevice* device, ContextId context_id) {
     const auto& hal = mc.hal();
     Network net{.device = device, .chip = static_cast<uint32_t>(device->id()), .tiles = plan_tiles(device, context_id)};
     for (const Tile& tile : net.tiles) {
-        net.kinds[tile.hal_type].cores.insert(CoreRange(tile.logical, tile.logical));
+        net.kinds.try_emplace(tile.hal_type, context_id)
+            .first->second.cores.insert(CoreRange(tile.logical, tile.logical));
     }
     for (auto& [hal_type, kind] : net.kinds) {
         kind.kernel = create_tile_kernel(kind.program, hal_type, CoreRangeSet(kind.cores));
@@ -228,7 +231,7 @@ Network launch_network(IDevice* device, ContextId context_id) {
             args.push_back(kernel_profiler::word_of(kernel_profiler::TileSyncRead{
                 .x = static_cast<uint32_t>(partner.x), .y = static_cast<uint32_t>(partner.y), .noc = read.noc}));
         }
-        const Network::Kind& kind = net.kinds[tile.hal_type];
+        const Network::Kind& kind = net.kinds.at(tile.hal_type);
         SetRuntimeArgs(kind.program, kind.kernel, tile.logical, args);
         zero_l1(cluster, net.chip, tile.virt, table_of(tile), offsetof(kernel_profiler::TileSyncTable, partner));
         // The firmware reads its profiler ring position from the control vector only at the first launch after it

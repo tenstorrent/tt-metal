@@ -40,7 +40,7 @@ void kernel_main() {
     // ── ROW_MAJOR path ────────────────────────────────────────────────────────
     // Pages are rows (or batches of the last dimension). TensorAccessor handles
     // any underlying buffer layout (interleaved or sharded) transparently.
-    uint32_t num_pages = get_arg_val<uint32_t>(4);
+    uint32_t total_rows = get_arg_val<uint32_t>(4);
     // Elements per page: the shard width for WIDTH/BLOCK_SHARDED, the full row width
     // otherwise. Not the tensor's last dim — for [1,1,8,16] with shard [2,8] it is 8.
     // padded_shape==logical_shape is enforced by validate_on_program_cache_miss, so this
@@ -64,7 +64,6 @@ void kernel_main() {
     // For WIDTH/BLOCK_SHARDED (shards_per_row>1), each logical row r is split across
     // that many column shards, which are consecutive logical page ids. TensorAccessor
     // maps those to the correct physical shard bank and offset.
-    const uint32_t total_rows = num_pages / shards_per_row;
     for (uint32_t r = 0; r < total_rows; ++r) {
         const uint32_t h = r % logical_H;
         const uint32_t n = (r / logical_H) % logical_N;

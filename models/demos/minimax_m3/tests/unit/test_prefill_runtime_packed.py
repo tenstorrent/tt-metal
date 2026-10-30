@@ -23,7 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 
 from ..test_factory import parametrize_mesh_with_fabric
 

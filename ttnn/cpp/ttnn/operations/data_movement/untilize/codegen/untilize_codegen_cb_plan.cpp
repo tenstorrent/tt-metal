@@ -20,8 +20,35 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim::untilize_codegen_detail {
 
+bool needs_dst_accum(DataType dtype) {
+    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
+}
+
+uint32_t max_block_ct(bool fp32) { return fp32 ? 4 : 8; }
+
+uint32_t planning_tile_size(DataType in_dtype, DataType out_dtype) {
+    return std::max(
+        tt::tile_size(datatype_to_dataformat_converter(in_dtype)),
+        tt::tile_size(datatype_to_dataformat_converter(out_dtype)));
+}
+
+PaddedGrid padded_grid(const Tensor& input) {
+    const auto& padded_shape = input.padded_shape();
+    const auto rank = padded_shape.rank();
+    const uint32_t w = padded_shape[-1];
+    const uint32_t h = padded_shape[-2];
+    const uint32_t batch_dims = rank > 2 ? rank - 2 : 0;
+    const uint32_t nc = std::accumulate(
+        padded_shape.begin(), padded_shape.begin() + batch_dims, uint32_t{1}, std::multiplies<uint32_t>{});
+    uint32_t wt = w / TILE_WIDTH;
+    uint32_t ht = h / TILE_HEIGHT;
+    const auto& logical_shape = input.logical_shape();
+    bool tile_aligned = logical_shape[-2] % TILE_HEIGHT == 0 && logical_shape[-1] % TILE_WIDTH == 0;
+    return PaddedGrid{wt, nc * ht, tile_aligned};
+}
+
 uint32_t compute_block_ct_dim(uint32_t wt, bool fp32) {
-    uint32_t max_bct = fp32 ? 4 : 8;
+    const uint32_t max_bct = max_block_ct(fp32);
     for (uint32_t bct = max_bct; bct >= 1; --bct) {
         if (wt % bct == 0) {
             return bct;
@@ -64,31 +91,6 @@ std::optional<CbPlan> plan_cb_depths(
 }
 
 namespace {
-
-bool needs_dst_accum(DataType dtype) {
-    return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
-}
-
-struct PaddedGrid {
-    uint32_t wt;
-    uint32_t total_tile_rows;
-    bool tile_aligned;
-};
-
-PaddedGrid padded_grid(const Tensor& input) {
-    const auto& padded_shape = input.padded_shape();
-    const auto rank = padded_shape.rank();
-    const uint32_t w = padded_shape[-1];
-    const uint32_t h = padded_shape[-2];
-    const uint32_t batch_dims = rank > 2 ? rank - 2 : 0;
-    const uint32_t nc = std::accumulate(
-        padded_shape.begin(), padded_shape.begin() + batch_dims, uint32_t{1}, std::multiplies<uint32_t>{});
-    uint32_t wt = w / TILE_WIDTH;
-    uint32_t ht = h / TILE_HEIGHT;
-    const auto& logical_shape = input.logical_shape();
-    bool tile_aligned = logical_shape[-2] % TILE_HEIGHT == 0 && logical_shape[-1] % TILE_WIDTH == 0;
-    return PaddedGrid{wt, nc * ht, tile_aligned};
-}
 
 struct PagesAndBlock {
     uint32_t pages_per_unit;
@@ -141,9 +143,7 @@ ChosenCodegenCbPlan choose_codegen_cb_plan(
     DataType in_dtype = input.dtype();
     DataType out_dtype = out_spec.data_type();
     bool fp32 = needs_dst_accum(in_dtype);
-    auto in_fmt = datatype_to_dataformat_converter(in_dtype);
-    auto out_fmt = datatype_to_dataformat_converter(out_dtype);
-    uint32_t tile_size_for_planning = std::max(tt::tile_size(in_fmt), tt::tile_size(out_fmt));
+    uint32_t tile_size_for_planning = planning_tile_size(in_dtype, out_dtype);
     uint64_t usable_l1 = ttnn::operations::data_movement::get_max_l1_space(input);
     usable_l1 = usable_l1 > reserved_l1_bytes_per_core ? usable_l1 - reserved_l1_bytes_per_core : 0;
     auto pages = pages_for_builder(input, fp32);

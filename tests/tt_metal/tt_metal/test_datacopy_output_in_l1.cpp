@@ -15,14 +15,14 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(UnitMeshFixture, DatacopyOutputInL1) {
-    Program program = CreateProgram();
+    Program program = CreateProgram(this->device());
 
     CoreCoord core = {0, 0};
 

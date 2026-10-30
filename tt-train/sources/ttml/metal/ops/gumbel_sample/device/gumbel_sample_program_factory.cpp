@@ -277,7 +277,8 @@ tt::tt_metal::Program build_program(
     create_circular_buffer(
         program, layout.all_cores, kScoresCbIndex, tt::DataFormat::Float32, score_tile_bytes, streamed_tiles);
     // The writer's output ring: 32 token ids, each in its own slot of at least 32 B and at least one aligned output
-    // page, since the writer sends whole aligned pages (64 B in Blackhole DRAM). The writer derives the same size.
+    // page, since the writer sends whole aligned pages (64 B in Blackhole DRAM). The writer gets this size as a
+    // compile-time arg and checks it against its output accessor's page.
     const uint32_t output_slot_bytes = std::max(32U, static_cast<uint32_t>(output.buffer()->aligned_page_size()));
     create_circular_buffer_bytes(
         program,
@@ -360,6 +361,7 @@ tt::tt_metal::Program build_program(
         tt::tt_metal::TensorAccessorArgs().append_to(writer_ct_args);
     }
     writer_ct_args.push_back(layout.position_aware ? 1U : 0U);  // do_positions
+    writer_ct_args.push_back(output_slot_bytes);
     shared_vars.writer_kernel_id =
         create_writer_kernel(program, layout.all_cores, writer_ct_args, {}, kWriterKernelPath);
 

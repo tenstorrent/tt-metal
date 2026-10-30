@@ -365,9 +365,10 @@ def test_rpow_split_overflow(device, exponent):
 def test_fill(device, fill_value):
     """fill(x, fill_value) = fill_value everywhere; x is ignored.
 
-    | fill_value | Check               | Reason                                      |
-    |------------|---------------------|---------------------------------------------|
-    | all        | exact (bit pattern) | the scalar's float32 bits are written as-is |
+    | fill_value | Check               | Reason                                         |
+    |------------|---------------------|------------------------------------------------|
+    | all        | exact (bit pattern) | the scalar's float32 bits are written as-is,   |
+    |            |                     | including the sign of -0.0                     |
 
     0.1 is not a dyadic rational, so both sides must use the same float32
     rounding of the Python float.
@@ -384,3 +385,36 @@ def test_fill(device, fill_value):
         f"fill(fill_value={fill_value}) diverged for "
         f"{int((result.view(torch.int32) != golden.view(torch.int32)).sum().item())} of {result.numel()} elements"
     )
+
+
+@pytest.mark.parametrize("fill_values", [(0.0, -0.0, 0.0), (-0.0, 0.0, -0.0)], ids=["pos_first", "neg_first"])
+def test_fill_signed_zero_program_cache(device, fill_values):
+    """+0.0 and -0.0 fill values must not share a cached program (#62557).
+
+    | Check               | Reason                                                  |
+    |---------------------|---------------------------------------------------------|
+    | exact (bit pattern) | fill_value's bits are embedded in the kernel defines    |
+
+    Each sign compiles its own program on first use and hits it on reuse, so the
+    output does not depend on which sign ran first.
+    """
+    tt_in = to_float32_tt_tensor(torch.ones((64, 64), dtype=torch.float32), device)
+    device.clear_program_cache()
+
+    seen_signs = set()
+    prev_entries = device.num_program_cache_entries()
+    for fill_value in fill_values:
+        expected = torch.full((64, 64), fill_value, dtype=torch.float32)
+        tt_out = ttnn.fill(tt_in, fill_value)
+        entries = device.num_program_cache_entries()
+        sign = math.copysign(1.0, fill_value)
+        if sign in seen_signs:
+            assert entries == prev_entries, f"fill_value {fill_value} should hit its cached program"
+        else:
+            assert entries > prev_entries, f"fill_value {fill_value} should compile a new program"
+            seen_signs.add(sign)
+        prev_entries = entries
+        result = ttnn.to_torch(tt_out)
+        assert torch.equal(
+            result.view(torch.int32), expected.view(torch.int32)
+        ), f"fill(fill_value={fill_value}) returned the wrong sign of zero"
