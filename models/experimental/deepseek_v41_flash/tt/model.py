@@ -76,9 +76,9 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
+from models.experimental.deepseek_v4_flash.tt import common as v4_common
 from models.experimental.deepseek_v4_flash.tt.common import (
     CCL_TOPOLOGY,
-    _HIFI4,
     _MASK_NEG,
     _profile,
     _region,
@@ -91,6 +91,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     _index_key_pool,
     _one_row_per_user,
     _update_cache_at,
+    make_rope_table,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import (
@@ -128,6 +129,11 @@ def _host_mem_available() -> int:
     """Bytes of host RAM ``MemAvailable`` currently reports."""
     with open("/proc/meminfo") as meminfo:
         return next(int(line.split()[1]) * 1024 for line in meminfo if line.startswith("MemAvailable:"))
+
+
+# Row width of the logits pages a decode step sends the drafter: the base model's D2H staging width, whose
+# untilize fits beside the prefetcher rings; it divides the 129280-wide vocab.
+_LOGIT_PAGE = 2020
 
 
 def _device_zeros(shape, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
@@ -426,8 +432,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._cq_lock = threading.RLock()
         self._decode_batch = 1
         self._cache_handoff: dict[tuple[int, int], tuple[list, list]] = {}
-        self._spec_hist = None
+        # Depth of the ratio > 1 compressor windows under speculative decode (None before prepare_spec_decode).
+        self.spec_window_rows: Optional[int] = None
         self.dspark: Optional[DeepSeekV41DSpark] = None
+        # Steps posted while set leave the drafter's receive of their row to spec_release_writes.
+        self._spec_hold_writes = False
+        # Outputs of dispatched steps nobody wants (a streamed round's rows past its first reject), read and
+        # dropped ahead of the next read_decoded_output.
+        self._stale_outputs = 0
 
     def _engram_ids(self) -> list[int]:
         return [i for i in self.config.engram_layer_ids if i < self.num_layers]
@@ -540,9 +552,23 @@ class DeepSeekV41Model(DeepSeekV4Model):
             rope_gen[family] = (inv_freq.reshape(1, 1, 1, -1), scaling)
 
         alignment = self.system_config.pipeline.pcie_alignment
-        # [token | ring row | pos | slot | slot's first ring row | slot's first window row], see _build_packet.
-        self._pkt_int_prefix = 6
-        self._pkt_page_bytes = math.ceil(self._pkt_int_prefix * 4 / alignment) * alignment
+        # [token | ring row | pos | slot | slot's first ring row | slot's first window row | drafter ring row],
+        # see _build_packet.
+        self._pkt_int_prefix = 7
+        # A verify block's packet (_verify_packet) shares the socket, so the page holds the larger of the two.
+        t = self.verify_rows
+        self._verify_fields = {}
+        if t > 1:
+            sizes = {"token": t, "pos": t, "sliding_pos": t, "ring_rows": t * t, "sliding_curpos": t}
+            sizes.update(win_prev=1, stash_slot=t, dspark_slot=t)
+            for r in sorted(ratios):
+                sizes.update({f"{name}{r}": t for name in ("win_slot", "entry", "start", "index_pos", "curpos")})
+            offset = 0
+            for name, size in sizes.items():
+                self._verify_fields[name] = (offset, size)
+                offset += size
+        packet_ints = max([self._pkt_int_prefix] + [o + n for o, n in self._verify_fields.values()])
+        self._pkt_page_bytes = math.ceil(packet_ints * 4 / alignment) * alignment
         self._pkt_w = self._pkt_page_bytes // 4
 
         hc, hidden, window = cfg.hc_mult, cfg.hidden_size, self.sliding_window
@@ -649,7 +675,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         device,
                         ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(*_PKT_SOCKET_CORE)),
                         ttnn.BufferType.L1,
-                        self.system_config.pipeline.h2d_fifo_bytes,
+                        # Whole packets: a verify-sized page need not divide the configured size.
+                        self.system_config.pipeline.h2d_fifo_bytes // self._pkt_page_bytes * self._pkt_page_bytes,
                         ttnn.H2DMode.HOST_PUSH,
                     )
                     self._pkt_socket.set_page_size(self._pkt_page_bytes)
@@ -881,17 +908,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
     def _build_packet(self, token_id, pos: int) -> torch.Tensor:
         """One INT32 socket page ``[1, 1, 1, _pkt_w]``: ``[token | slot * W + pos % W | pos | slot |
-        slot * W | slot * 32]`` for session slot ``_packet_slot``, then padding.
+        slot * W | slot * 32 | pos % drafter ring rows]`` for session slot ``_packet_slot``, then padding.
 
         The slot fields are what makes a session switch free: the traces read the slot's ring rows,
-        window rows and page-table row from here, so nothing on device changes between sessions.
+        window rows and page-table row from here, so nothing on device changes between sessions. The
+        drafter's ring row (0 without a drafter) is where :meth:`_spec_write_step` writes the step's row.
         """
         w, slot = self.sliding_window, self._packet_slot
+        drafter_row = pos % self.dspark.ring_rows if self.dspark is not None else 0
+        values = self._step_tokens(token_id) + [slot * w + pos % w, pos, slot, slot * w, slot * _WIN_SLOT_ROWS]
+        values.append(drafter_row)
         packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
-        packet[0, 0, 0, : self._pkt_int_prefix] = torch.tensor(
-            self._step_tokens(token_id) + [slot * w + pos % w, pos, slot, slot * w, slot * _WIN_SLOT_ROWS],
-            dtype=torch.int32,
-        )
+        packet[0, 0, 0, : len(values)] = torch.tensor(values, dtype=torch.int32)
         return packet
 
     def _write_packet(self, token_id, pos: int, sid: Optional[int] = None) -> None:
@@ -1199,7 +1227,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
         self._ensure_replay_thread()
         self._packet_sids.append(sid)
-        self._replay_queue.put((pos, sid))
+        self._replay_queue.put((pos, sid, self._spec_hold_writes))
 
     def write_step_packet(self, token_id, pos: int) -> None:
         """Push the packet of the oldest posted step, in its session's slot (eager: then run it)."""
@@ -1208,12 +1236,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self._eager_decode:
             posted = self._eager_pending.popleft()
             assert posted == (pos, sid), f"eager decode: packet for {(pos, sid)}, but {posted} was posted next"
-            self._execute_traces(posted)
+            self._execute_traces((pos, sid, False))
 
     def _execute_traces(self, step) -> None:
-        """Replay the variant of ``step`` = ``(pos, sid)`` on every submesh, after growing that session's
-        blocks for it (normally already done when it was posted)."""
-        pos, sid = step
+        """Replay the variant of ``step`` = ``(pos, sid, held)`` on every submesh, after growing that session's
+        blocks for it (normally already done when it was posted). With a drafter, the drafter's receive of the
+        step's row follows unless ``held`` (:meth:`spec_release_writes` queues it then)."""
+        pos, sid, held = step
         self.ensure_session_capacity(pos, sid)
         self._session_pos[sid] = pos + 1
         variant = self._variant_key(pos)
@@ -1223,6 +1252,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
         with self._cq_lock:
             for sm in self.submeshes_io:
                 ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
+            if self.dspark is not None and not held:
+                if "write_step" not in self._spec_tids:
+                    raise RuntimeError("the decode step sends the drafter its row: call capture_spec_traces() first")
+                ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
 
     def _step_context(self, sm: dict, pkt: ttnn.Tensor, causal: bool, r2_pool: bool, r2_select: bool) -> dict:
         """Token, positions, RoPE rows and the per-ratio mask or ``cur_pos`` for one step.
@@ -1248,6 +1281,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "mask": {},
             "curpos": {},
             "win_slot": {},
+            "win_prev": {},
             "win_rope": {},
             "entry": {},
             "index_pos": {},
@@ -1273,9 +1307,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ctx["curpos"][ratio] = self._compressed_curpos(pos_f, ratio)
             else:
                 ctx["mask"][ratio] = self._compressed_mask(sm["mask_idx"], pos_f, ratio)
+        win_rows = self.spec_window_rows
         for ratio in sm["kv_ratios"]:
             if ratio > 1:
-                ctx["win_slot"][ratio] = self._win_slot(pos_f, ratio, base_f=win_base_f)
+                ctx["win_slot"][ratio] = self._win_slot(pos_f, win_rows or ratio, base_f=win_base_f)
+            if ratio > 1 and win_rows and r2_pool:
+                prev = ttnn.add(pos_f, float(win_rows - 1))
+                prev = ttnn.subtract(
+                    prev, ttnn.multiply(ttnn.floor(ttnn.multiply(prev, 1.0 / win_rows)), float(win_rows))
+                )
+                ctx["win_prev"][ratio] = ttnn.typecast(ttnn.eq(sm["win_cols"], prev), ttnn.bfloat16)
             if ratio == 1 or (ratio == 2 and r2_pool):
                 win_pos = ttnn.add(pos_f, float(1 - ratio))
                 inv, scale = sm["rope_invfreq"]["compress"]
@@ -1288,8 +1329,6 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for ratio in sm["index_ratios"]:
             if ratio == 1 or (ratio == 2 and r2_select):
                 ctx["index_pos"][ratio] = self._index_position(pos_f, ratio)
-        if sm.get("hist_layers"):
-            ctx["hist_slot"] = self._win_slot(pos_f, self._spec_hist)
         if sm.get("taps"):
             ctx["stash_slot"] = self._win_slot(pos_f, self.dspark.stash_rows)
         return ctx
@@ -1347,7 +1386,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             inputs["pool"] = pool
             if ratio > 1:
                 inputs["win_slot"] = ctx["win_slot"][ratio]
-                inputs["hist_slot"] = ctx.get("hist_slot")
+                inputs["win_prev"] = ctx["win_prev"].get(ratio)
                 inputs["win_offset"] = ctx["win_offset"]
             if pool:
                 inputs["cos_win"], inputs["sin_win"] = ctx["win_rope"][ratio]
@@ -1394,7 +1433,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
         Entering a stage receives streams, the packet, ``pre_mix`` and the shared KV groups, in
         that order. Leaving sends the same. The global-last layer collapses, normalises, applies
-        ``lm_head`` and pushes the logits out the D2H socket.
+        ``lm_head`` and pushes the logits out the D2H socket. With a drafter, the output stage stashes the
+        stream means at its target layers and, after the last, sends them to the drafter
+        (:meth:`_send_step_row`), then its logits (:meth:`_send_step_logits`).
         """
         r2_pool = bool(pool_flags.get(2, False))
         r2_select = bool(index_sparse)
@@ -1407,6 +1448,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ctx = None
         out = None
         persistent = {sm.get("pre_mix_init"), sm.get("pre_mix_in")}
+        tapped = {}
         for li in sm["layers"]:
             layer = self.layers[li]
             is_first = li == 0
@@ -1459,6 +1501,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     w = piece.shape[-1]
                     part = ttnn.slice(row, [0, 0, 0, j * w], [1, 1, b, (j + 1) * w])
                     _update_cache_at(piece, _one_row_per_user(part), ctx["stash_slot"])
+                tapped[li] = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
+                if len(tapped) == len(sm["taps"]):
+                    self._send_step_row(tapped, sm["taps"], pkt)
             streams, pre_mix = layer.decode(
                 streams,
                 pre_mix,
@@ -1472,6 +1517,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     hidden = self._lm_head_traced(hidden)
                 out = hidden
                 self._send_output(out)
+                if "taps" in sm:
+                    self._send_step_logits(out)
             elif ids[li + 1] != stage:
                 sender, _ = self.submesh_socket_pairs[(stage, ids[li + 1])]
                 streams_rm = ttnn.to_memory_config(streams, ttnn.DRAM_MEMORY_CONFIG)
@@ -1844,16 +1891,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
         )
 
     # -- DSpark speculative decode -- #
-    def prepare_spec_decode(self, rope_main, drafter: bool = True, hist: int = 32, **drafter_kwargs) -> None:
+    def prepare_spec_decode(self, rope_main, drafter: bool = True, **drafter_kwargs) -> None:
         """Allocate what speculative decode adds to :meth:`prepare_static_decode`. Call it after that and
         before anything is compiled.
 
         A verify round decodes ``[bonus, draft_1 .. draft_k]`` at consecutive positions, and the rows the
         rejected drafts wrote must leave no trace. Every stage keeps a shadow of each sliding ring, whose
-        rows :meth:`_spec_fixup` puts back over the rejected slots. A ratio > 1 kv source also keeps a
-        ``hist``-deep history of its compressor-window rows, from which the window slot of the last
-        verified position is restored. Everything else a step writes is keyed by position, so the
-        accepted token at that position rewrites it before anything reads it.
+        rows :meth:`_spec_fixup` puts back over the rejected slots. A ratio > 1 kv source's compressor window
+        grows to :attr:`spec_window_rows` rows (slot ``pos % rows``): a round's rejected rows, fewer than
+        that, then never overwrite the row of the last verified position, which the next group pairs with
+        through ``win_prev``, and the next round rewrites them before they are read. Everything else a step
+        writes is keyed by position, so the accepted token at that position rewrites it before anything
+        reads it.
 
         ``drafter`` builds :class:`DeepSeekV41DSpark` on its own 1xTP stage, the first mesh row the pipeline
         leaves idle (build with ``num_stages`` below the mesh's row count), with its own copy of the decode
@@ -1864,34 +1913,45 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ``dspark.device`` (the model's session predates it).
 
         A model built with ``verify_rows > 1`` also gets what :meth:`decode_verify` needs: every compressed
-        group's ``verify_rows``-row selections on each stage, and the stages' verify streams layout.
+        group's ``verify_rows``-row selections on each stage, the stages' verify streams layout and the
+        buffers of its traces (:meth:`_prepare_verify_traces`).
         """
         if self._traces_compiled or self._traced_captured:
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
         if self._slotted:
             raise NotImplementedError("speculative decode restores one session's rings: prepare with num_sessions=1")
         if self.image_rows:
-            raise NotImplementedError("the drafter embeds token ids on the host vocabulary: build without image_rows")
+            raise NotImplementedError("the drafter's token table has no image rows: build without image_rows")
+        if self._decode_batch != 1:
+            raise NotImplementedError("speculative decode steps one user: prepare with batch=1")
         cfg = self.config
         window, head_dim = self.sliding_window, cfg.head_dim
-        self._spec_hist = hist
+        win_rows = _WIN_SLOT_ROWS
+        self.spec_window_rows = win_rows
         for sm in self.submeshes_io:
             device = sm["device"]
             sm["ring_shadow"] = {li: _device_zeros((1, 1, window, head_dim), device) for li in sm["layers"]}
             sm["fix_mask"] = _device_zeros((1, 1, window, 1), device)
             sm["fix_keep"] = _device_zeros((1, 1, window, 1), device)
-            sm["hist_layers"] = [
-                li for li in sm["layers"] if li in cfg.kv_source_layer_ids and int(cfg.compress_ratios[li]) > 1
-            ]
-            for li in sm["hist_layers"]:
-                scache = sm["scaches"][li]
-                scache.win_hist_kv = _device_zeros((1, 1, hist, head_dim), device)
-                scache.win_hist_gate = _device_zeros((1, 1, hist, head_dim), device)
-            hist_ratios = sorted({int(cfg.compress_ratios[li]) for li in sm["hist_layers"]})
-            if hist_ratios:
-                sm["fix_hist"] = _device_zeros((1, 1, 1, hist), device)
-                sm["fix_slot"] = {r: _device_zeros((1, 1, r, 1), device) for r in hist_ratios}
-                sm["fix_slot_keep"] = {r: _device_zeros((1, 1, r, 1), device) for r in hist_ratios}
+            sources = [li for li in sm["layers"] if li in cfg.kv_source_layer_ids and int(cfg.compress_ratios[li]) > 1]
+            sm["deep_windows"] = bool(sources)
+            for li in sources:
+                old_kv, old_gate = sm["scaches"][li].win_kv, sm["scaches"][li].win_gate
+                win_kv = _device_zeros((1, 1, win_rows, head_dim), device)
+                win_gate = _device_zeros((1, 1, win_rows, head_dim), device)
+                # Every layer of the group aliases the source's window.
+                for scache in sm["scaches"].values():
+                    if scache.win_kv is old_kv:
+                        scache.win_kv, scache.win_gate = win_kv, win_gate
+                ttnn.deallocate(old_kv)
+                ttnn.deallocate(old_gate)
+            if sources:
+                sm["win_cols"] = ttnn.from_torch(
+                    torch.arange(win_rows, dtype=torch.float32).reshape(1, 1, 1, win_rows),
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                )
         t = self.verify_rows
         if t > 1:
             split = [
@@ -1929,8 +1989,10 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     sm["verify_pre_mix_init"] = ttnn.from_torch(
                         one_hot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
                     )
+            self._prepare_verify_traces()
         self._spec_tids = {}
-        self._spec_draft_out = None
+        self._spec_verified_in = None
+        self._spec_step_in = None
         if not drafter:
             return
         if self._lm_head_traced is None:
@@ -1975,47 +2037,61 @@ class DeepSeekV41Model(DeepSeekV4Model):
             layout=ttnn.TILE_LAYOUT,
             device=out_sm["device"],
         )
+        # Where a decode step's taps, packet and logits land on the drafter (_spec_write_step).
+        vocab = cfg.vocab_size
+        if vocab % _LOGIT_PAGE:
+            raise ValueError(f"the step's logits go to the drafter in {_LOGIT_PAGE}-wide pages, but V is {vocab}")
+        drafter = self.dspark.device
+        self._spec_step_in = (
+            _device_zeros((1, 1, 1, len(taps) * cfg.hidden_size), drafter, layout=ttnn.ROW_MAJOR_LAYOUT),
+            _device_zeros((1, 1, 1, self._pkt_w), drafter, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            _device_zeros((1, 1, vocab // _LOGIT_PAGE, _LOGIT_PAGE), drafter, layout=ttnn.ROW_MAJOR_LAYOUT),
+        )
+        if t > 1:
+            # Where the verify step's taps and packet land on the drafter (_spec_write_verified).
+            self._spec_verified_in = (
+                _device_zeros((1, 1, t, len(taps) * cfg.hidden_size), self.dspark.device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                _device_zeros((1, 1, 1, self._pkt_w), self.dspark.device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            )
 
     def _spec_fixup(self, sm: dict) -> None:
         """Undo the previous round's rejected rows on ``sm``, then snapshot its rings for this round.
 
         ``fix_mask`` marks the rejected positions' ring slots (``fix_keep`` is its complement); they get
-        their shadow rows back. ``fix_hist`` picks the last verified position's row out of each window
-        history and ``fix_slot`` is the window slot it goes back to. Every product is with 0 or 1, so the
-        restore is exact.
+        their shadow rows back. Every product is with 0 or 1, so the restore is exact. The compressor
+        windows need no restore (see :meth:`prepare_spec_decode`).
         """
         for li in sm["layers"]:
             ring, shadow = sm["scaches"][li].kv, sm["ring_shadow"][li]
             ttnn.copy(ttnn.add(ttnn.multiply(ring, sm["fix_keep"]), ttnn.multiply(shadow, sm["fix_mask"])), ring)
             ttnn.copy(ring, shadow)
-        for li in sm["hist_layers"]:
-            scache = sm["scaches"][li]
-            ratio = int(self.config.compress_ratios[li])
-            slot, keep = sm["fix_slot"][ratio], sm["fix_slot_keep"][ratio]
-            for win, hist in ((scache.win_kv, scache.win_hist_kv), (scache.win_gate, scache.win_hist_gate)):
-                row = ttnn.matmul(sm["fix_hist"], hist, compute_kernel_config=_HIFI4)
-                ttnn.copy(ttnn.add(ttnn.multiply(win, keep), ttnn.multiply(slot, row)), win)
 
     def capture_spec_traces(self, token_id, pos: int) -> None:
         """Compile and then capture the decode variants, every stage's fixup and the drafter's
-        ``write_main`` / ``draft``.
+        ``write_main`` / ``draft`` / both ``accept_draft`` / :meth:`_spec_write_step` (and, with traced verify,
+        :meth:`_spec_write_verified`).
 
         All compile runs come before the first capture on any chip (see :meth:`_capture_traces`). They
-        write zeros or the rows of ``pos``, which prefill overwrites. With ``verify_rows > 1`` that includes
-        :meth:`_compile_verify`.
+        write zeros or the rows of ``pos``, which prefill overwrites. With ``verify_rows > 1`` the verify
+        step's traces are compiled (after the decode variants, whose run fixes the output socket's pages) and
+        captured too; with traced decode off, :meth:`_compile_verify` warms the eager verify instead.
         """
-        if self._spec_hist is None:
+        if self.spec_window_rows is None:
             raise RuntimeError("call prepare_spec_decode() first")
-        if self.verify_rows > 1 and self._lm_head_traced is not None:
+        verify = self.verify_rows > 1 and self._lm_head_traced is not None
+        if verify and self._eager_decode:
             self._compile_verify(token_id)
         self.compile_traces(token_id, pos)
+        verify_variants = self._compile_verify_traces(token_id) if verify and not self._eager_decode else []
         for sm in self.submeshes_io:
             self._spec_fixup(sm)
         if self.dspark is not None:
             self.dspark.send_main()
             self.dspark.write_main()
-            for out in self.dspark.draft():
-                out.deallocate(True)
+            self.dspark.refresh_uniforms(1)
+            self.dspark.draft()
+            for sampled in (False, True):
+                self.dspark.accept_draft(sampled)
             ttnn.synchronize_device(self.dspark.device)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
@@ -2041,63 +2117,611 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self._spec_tids["write_main"] = tid
             tid = ttnn.begin_trace_capture(device, cq_id=0)
             with _trace_capture_guard():
-                self._spec_draft_out = self.dspark.draft()
+                self.dspark.draft()
             ttnn.end_trace_capture(device, tid, cq_id=0)
             self._spec_tids["draft"] = tid
+            for sampled in (False, True):
+                tid = ttnn.begin_trace_capture(device, cq_id=0)
+                with _trace_capture_guard():
+                    self.dspark.accept_draft(sampled)
+                ttnn.end_trace_capture(device, tid, cq_id=0)
+                self._spec_tids["accept_sampled" if sampled else "accept_greedy"] = tid
+            tid = ttnn.begin_trace_capture(device, cq_id=0)
+            with _trace_capture_guard():
+                self._spec_write_step()
+            ttnn.end_trace_capture(device, tid, cq_id=0)
+            self._spec_tids["write_step"] = tid
+            if verify_variants:
+                tid = ttnn.begin_trace_capture(device, cq_id=0)
+                with _trace_capture_guard():
+                    self._spec_write_verified()
+                ttnn.end_trace_capture(device, tid, cq_id=0)
+                self._spec_tids["write_verified"] = tid
+        self._capture_verify_traces(verify_variants)
 
-    def spec_fixup(self, rejected, frontier: int) -> None:
+    def spec_fixup(self, rejected) -> None:
         """Queue every stage's fixup ahead of a verify round: restore the ring slots of the previous round's
-        ``rejected`` positions and the window rows of the last verified position ``frontier``."""
+        ``rejected`` positions."""
         self._wait_replays_dispatched()
-        window, hist = self.sliding_window, self._spec_hist
+        window = self.sliding_window
         mask = torch.zeros(1, 1, window, 1)
         for p in rejected:
             mask[0, 0, p % window, 0] = 1
-        pick = torch.zeros(1, 1, 1, hist)
-        pick[0, 0, 0, frontier % hist] = 1
         for sm in self.submeshes_io:
             host_to_device(mask, sm["fix_mask"])
             host_to_device(1 - mask, sm["fix_keep"])
-            if sm["hist_layers"]:
-                host_to_device(pick, sm["fix_hist"])
-                for ratio, slot in sm["fix_slot"].items():
-                    one_hot = torch.zeros(1, 1, ratio, 1)
-                    one_hot[0, 0, frontier % ratio, 0] = 1
-                    host_to_device(one_hot, slot)
-                    host_to_device(1 - one_hot, sm["fix_slot_keep"][ratio])
             ttnn.execute_trace(sm["device"], sm["fix_tid"], cq_id=0, blocking=False)
 
-    def spec_write_main(self, positions, written) -> None:
-        """Queue the drafter's ``write_main`` for verified ``positions`` (``written[j]`` False keeps row
-        ``j`` out of the rings). Their stash rows must still be in the stash."""
+    def spec_write_main(self, positions) -> None:
+        """Queue the drafter's ``write_main`` for verified ``positions``, rejected ones included (the draft
+        masks rows past its frontier). Their stash rows must still be in the stash."""
         self._wait_replays_dispatched()
-        self.dspark.set_main_rows(positions, written)
+        self.dspark.set_main_rows(positions)
         ttnn.execute_trace(self.dspark.stash_device, self._spec_tids["send_main"], cq_id=0, blocking=False)
         ttnn.execute_trace(self.dspark.device, self._spec_tids["write_main"], cq_id=0, blocking=False)
+
+    def spec_verify_async(self, tokens, start: int) -> None:
+        """Dispatch the pipelined verify of ``tokens`` at ``start, start + 1, ..`` without reading anything back,
+        for the caller to read the steps' outputs (:meth:`read_decoded_output`) and accept row by row.
+
+        With a drafter, the drafter's receive of each step's row is held: the caller queues them in step order
+        (:meth:`spec_release_writes`), one before reading each output, so a draft queued between two releases
+        sees exactly the rows released before it. Every step must be released and read eventually: its output
+        stage waits on both."""
+        if self._eager_decode:
+            raise RuntimeError("a streamed verify replays the decode traces: build with traced decode")
+        tokens = list(tokens)
+        positions = range(start, start + len(tokens))
+        self.ensure_session_capacity(positions[-1])
+        self._spec_hold_writes = True
+        try:
+            self.replay_traced_ahead(positions)
+        finally:
+            self._spec_hold_writes = False
+        for token, pos in zip(tokens, positions):
+            self.write_step_packet(token, pos)
+
+    def spec_release_writes(self, steps: int = 1) -> None:
+        """Queue the drafter's receive of the next ``steps`` held rows (:meth:`spec_verify_async`)."""
+        with self._cq_lock:
+            for _ in range(steps):
+                ttnn.execute_trace(self.dspark.device, self._spec_tids["write_step"], cq_id=0, blocking=False)
+
+    def spec_discard_outputs(self, steps: int) -> None:
+        """Mark the next ``steps`` unread outputs as unwanted: the next read drops them first."""
+        self._stale_outputs += steps
+
+    def drain_stale_outputs(self) -> None:
+        """Read and drop the outputs :meth:`spec_discard_outputs` marked, so no step is left waiting on the host."""
+        while self._stale_outputs:
+            self._stale_outputs -= 1
+            super().read_decoded_output()
+
+    def read_decoded_output(self) -> torch.Tensor:
+        """V4's :meth:`~DeepSeekV4Model.read_decoded_output`, past the stale outputs (:meth:`drain_stale_outputs`)."""
+        self.drain_stale_outputs()
+        return super().read_decoded_output()
+
+    def _send_step_row(self, tapped: dict, taps: dict, pkt: ttnn.Tensor) -> None:
+        """On the output stage, inside a decode step: send the step's target-layer means ``[1, 1, 1, targets * D]``
+        (``tapped`` by layer, in the stash's target order) and its packet to the drafter, which writes them into
+        its rings (:meth:`_spec_write_step`), rejected verify rows included.
+
+        The sends wait for the drafter's receives. A replay queues those as the drafter's trace
+        (:meth:`_execute_traces`, or :meth:`spec_release_writes` for a held step); a compile run or an eager
+        step queues them eagerly right here: the stage stalls on this send, and with it the host's enqueue of
+        the rest of the step once its queue fills. A capture records only the sends.
+        """
+        rows = ttnn.concat([tapped[target] for target in taps], dim=-1)
+        sender = self.dspark.link[0]
+        ttnn.experimental.send_direct_async(rows, sender)
+        ttnn.experimental.send_direct_async(pkt, sender)
+        rows.deallocate(True)
+        for part in tapped.values():
+            part.deallocate(True)
+        if not v4_common._IN_TRACE_CAPTURE:
+            self._spec_write_step()
+
+    def _send_step_logits(self, logits: ttnn.Tensor) -> None:
+        """On the output stage, after :meth:`_send_step_row`: send the step's logits ``[1, 1, 1, V]`` to the
+        drafter, as ``[1, 1, V / 2020, 2020]`` ROW_MAJOR pages, for its device accept. :meth:`_spec_write_step`
+        already waits for them.
+
+        Reshaped before the untilize, as in :meth:`_send_output`: untilizing one vocab-wide row needs circular
+        buffers past the L1 the stage's prefetcher rings leave."""
+        pages = ttnn.to_layout(ttnn.reshape(logits, [1, 1, -1, _LOGIT_PAGE]), ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.experimental.send_direct_async(pages, self.dspark.link[0])
+        pages.deallocate(True)
+
+    def _spec_write_step(self) -> None:
+        """On the drafter: receive one decode step's row, packet and logits (:meth:`_send_step_row`,
+        :meth:`_send_step_logits`), write the row's ``main_kv`` into the drafter rings at the packet's position and
+        drafter ring row (:meth:`_build_packet`) and keep the logits for the accept."""
+        rows, pkt, logits = self._spec_step_in
+        receiver = self.dspark.link[1]
+        ttnn.experimental.recv_direct_async(rows, receiver)
+        ttnn.experimental.recv_direct_async(pkt, receiver)
+        positions = ttnn.typecast(ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, 2], [1, 1, 1, 3]), [1, 1]), ttnn.uint32)
+        ring_row = ttnn.slice(pkt, [0, 0, 0, 6], [1, 1, 1, 7])
+        self.dspark.write_rows(rows, positions, ttnn.reshape(ring_row, [1]))
+        ttnn.experimental.recv_direct_async(logits, receiver)
+        self.dspark.write_logits(ttnn.reshape(logits, [1, 1, 1, self.config.vocab_size]), ring_row)
+
+    def _spec_write_verified(self) -> None:
+        """On the drafter: receive what the output stage's verify step sends after its last tap (the block's
+        target-layer means and its packet, see :meth:`_verify_submesh_static`) and write the block into the
+        drafter rings, rejected rows included, as :meth:`spec_write_main` would for its positions."""
+        rows, pkt = self._spec_verified_in
+        receiver = self.dspark.link[1]
+        ttnn.experimental.recv_direct_async(rows, receiver)
+        ttnn.experimental.recv_direct_async(pkt, receiver)
+        t = self.verify_rows
+        (pos_at, _), (slot_at, _) = self._verify_fields["pos"], self._verify_fields["dspark_slot"]
+        positions = ttnn.typecast(
+            ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, pos_at], [1, 1, 1, pos_at + t]), [1, t]), ttnn.uint32
+        )
+        slots = ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, slot_at], [1, 1, 1, slot_at + t]), [t])
+        self.dspark.write_rows(rows, positions, slots)
 
     def spec_seed(self, positions) -> None:
         """Write every one of ``positions`` into the drafter rings, ``main_rows`` at a time."""
         positions = list(positions)
         rows = self.dspark.main_rows
         for i in range(0, len(positions), rows):
-            chunk = positions[i : i + rows]
-            self.spec_write_main(chunk, [True] * len(chunk))
+            self.spec_write_main(positions[i : i + rows])
 
-    def spec_draft(self, token: int, frontier: int) -> tuple[list[int], list[float]]:
+    def spec_draft(
+        self, token: int, frontier: int, seed: Optional[int] = None, logits: bool = False
+    ) -> tuple[list[int], list[float], Optional[torch.Tensor]]:
         """Draft from ``token``, the next input after the last verified position ``frontier``: ``block_size``
-        proposals for positions ``frontier + 2 ..`` and their confidence logits. The drafter rings must
-        hold every verified position up to ``frontier``."""
+        proposals for positions ``frontier + 2 ..``, their confidence logits and, with ``logits``, the rows'
+        logits ``[block_size, V]``. The drafter rings must hold every verified position up to ``frontier``.
+
+        The draft samples at the drafter's temperature (``dspark.set_sampling``), from uniforms drawn on
+        device with ``seed`` first (``None`` keeps the last draw, which a greedy draft ignores)."""
         self._wait_replays_dispatched()
         d = self.dspark
         d.set_block(token, frontier)
+        if seed is not None:
+            d.refresh_uniforms(seed)
         ttnn.execute_trace(d.device, self._spec_tids["draft"], cq_id=0, blocking=False)
-        ids, conf = (ttnn.to_torch(ttnn.get_device_tensors(t)[0]) for t in self._spec_draft_out)
-        return [int(i) for i in ids.flatten()], [float(c) for c in conf.flatten()]
+        return self._read_draft(logits)
+
+    def spec_accept_draft(
+        self, start: int, drafts: int, sampled: bool, seed: Optional[int] = None
+    ) -> tuple[int, int, list[int]]:
+        """Accept the round just verified at ``start .. start + drafts`` against the last draft and draft on
+        from the result, on device (``dspark.accept_draft``): ``(m, token, proposals)``, ``m`` the drafts
+        accepted, ``token`` the next input (at ``start + m + 1``) and the ``block_size`` proposals after it.
+        ``sampled`` picks the sampled accept over the greedy one; ``seed`` draws fresh uniforms first."""
+        self._wait_replays_dispatched()
+        d = self.dspark
+        d.set_round(start, drafts)
+        if seed is not None:
+            d.refresh_uniforms(seed)
+        tid = self._spec_tids["accept_sampled" if sampled else "accept_greedy"]
+        ttnn.execute_trace(d.device, tid, cq_id=0, blocking=False)
+        accept, ids = (ttnn.to_torch(ttnn.get_device_tensors(d.out[name])[0]).flatten() for name in ("accept", "ids"))
+        m, token = (int(v) for v in accept)
+        return m, token, [int(i) for i in ids]
+
+    def _read_draft(self, logits: bool) -> tuple[list[int], list[float], Optional[torch.Tensor]]:
+        """The last draft's proposals, confidence logits and (with ``logits``) rows' logits, off the drafter."""
+        d = self.dspark
+        ids, conf = (ttnn.to_torch(ttnn.get_device_tensors(d.out[name])[0]) for name in ("ids", "conf"))
+        rows = None
+        if logits:
+            rows = ttnn.to_torch(ttnn.get_device_tensors(d.out["rows"])[0]).float().reshape(d.block, -1)
+        return [int(i) for i in ids.flatten()], [float(c) for c in conf.flatten()], rows
 
     # -- DSpark parallel verify: one step over verify_rows consecutive positions -- #
     def _verify_groups(self, sm: dict) -> set[int]:
         """The compressed groups (by kv source) ``sm``'s layers read."""
         return {self._kv_source_of[li] for li in sm["layers"] if self.config.compress_ratios[li]}
+
+    def _group_holder(self, sm: dict, src: int):
+        """The cache on ``sm`` whose ``sel_tile_rows`` / ``new_kv_rows`` / ``new_key_rows`` hold group ``src``'s
+        block: the kv source's own when it is on ``sm``, else that of the group's first layer there."""
+        if src in sm["layers"]:
+            return sm["scaches"][src]
+        return next(
+            sm["scaches"][li]
+            for li in sm["layers"]
+            if self.config.compress_ratios[li] and self._kv_source_of[li] == src
+        )
+
+    def _verify_variant(self, pos: int) -> tuple[bool, bool]:
+        """``(causal, odd)`` of the verify block at ``pos``: whether the compressed layers bound the KV axis with
+        ``cur_pos`` rather than a mask, and whether the block starts at an odd position (which rows close an
+        r=2 group)."""
+        return pos >= self.sliding_window - 1, pos % 2 == 1
+
+    def _verify_closing(self, ratio: int, odd: bool) -> tuple[int, ...]:
+        """The rows of a verify block that close a ``ratio`` group (1 or 2), for a block starting at an odd
+        position or not."""
+        return tuple(j for j in range(self.verify_rows) if (int(odd) + j + 1) % ratio == 0)
+
+    def _prepare_verify_traces(self) -> None:
+        """Allocate what the traced verify step reads beyond the eager step's buffers.
+
+        Every stage gets the RoPE tables of its families, bf16 ROW_MAJOR ``[L, Rd]`` cos / sin / -sin looked up
+        by position (so a row equals the eager step's host-built one), and a stage entered from another one the
+        receive buffers of the streams ``[1, T, hc, D]`` and ``pre_mix`` ``[1, T, 1, hc]``. A group whose new
+        rows cross an edge (``_row_groups``) gets ROW_MAJOR ``[1, 1, n, Dh]`` / ``[1, 1, n, index_head_dim]``
+        receive buffers for each count ``n`` of groups a block closes.
+
+        A block of at least ``ratio`` rows closes a group of every ratio and selects, so its programs depend
+        only on :meth:`_verify_variant`; ratios above 2 would add phases.
+        """
+        cfg, t = self.config, self.verify_rows
+        ratios = {int(r) for r in cfg.compress_ratios[: self.num_layers] if int(r)}
+        if not ratios <= {1, 2} or t < max(ratios, default=1):
+            raise NotImplementedError(f"traced verify covers compress ratios 1 and 2 in {t} rows, got {sorted(ratios)}")
+        hc, hidden = cfg.hc_mult, cfg.hidden_size
+        tables = {}
+        for family, (cos_half, sin_half) in self._rope_halves.items():
+            cos, sin = make_rope_table(cos_half, sin_half)
+            tables[family] = [x.reshape(x.shape[-2], x.shape[-1]) for x in (cos, sin, -sin)]
+        by_stage = {sm["index"]: sm for sm in self.submeshes_io}
+        self._verify_edges = {
+            (a, b): sorted(self._verify_groups(by_stage[a]) & self._verify_groups(by_stage[b]))
+            for a, b in self.pipeline_edges
+        }
+        for sm in self.submeshes_io:
+            sm["verify_rope"] = {
+                family: [
+                    ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=sm["device"])
+                    for x in tables[family]
+                ]
+                for family in sm["rope_invfreq"]
+            }
+            sm["verify_traces"], sm["verify_tids"], sm["verify_new_rows"] = {}, {}, {}
+        for (_, stage), groups in self._verify_edges.items():
+            sm = by_stage[stage]
+            device = sm["device"]
+            sm["verify_streams_in"] = _device_zeros([1, t, hc, hidden], device, layout=ttnn.ROW_MAJOR_LAYOUT)
+            sm["verify_pre_mix_in"] = _device_zeros([1, t, 1, hc], device)
+            for src in groups:
+                if src not in self._row_groups:
+                    continue
+                for odd in (False, True):
+                    n = len(self._verify_closing(int(cfg.compress_ratios[src]), odd))
+                    if (src, n) not in sm["verify_new_rows"]:
+                        sm["verify_new_rows"][(src, n)] = (
+                            _device_zeros([1, 1, n, cfg.head_dim], device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                            _device_zeros([1, 1, n, cfg.index_head_dim], device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                        )
+
+    def _verify_packet(self, ids: list[int], pos: int) -> torch.Tensor:
+        """The verify block's socket page ``[1, 1, 1, _pkt_w]`` (INT32), laid out by ``_verify_fields``: per row the
+        token, position, ring slot, causal row copies (:meth:`~.decode.attention.DeepSeekV41Attention._write_causal_rows`),
+        sliding ``cur_pos``, stash slots and drafter ring slots, the compressor-window slot of ``pos - 1``, and per
+        ratio the window slot (modulo :attr:`spec_window_rows`), select position and compressed ``cur_pos``, then the
+        entry and first position of each group the block closes, in row order. These are
+        :meth:`~.decode.attention.DeepSeekV41Attention.decode_inputs`' integers for ``rows=T``."""
+        t, w, topk = self.verify_rows, self.sliding_window, self.config.index_topk
+        win_rows = self.spec_window_rows
+        positions = list(range(pos, pos + t))
+        values = {
+            "token": ids,
+            "pos": positions,
+            "sliding_pos": [p % w for p in positions],
+            "ring_rows": [(pos + i) % w if i <= j else -1 for j in range(t) for i in range(t)],
+            "sliding_curpos": [min(p, w - 1) for p in positions],
+            "win_prev": [(pos - 1) % win_rows],
+            "stash_slot": [p % self.dspark.stash_rows for p in positions] if self.dspark is not None else [],
+            "dspark_slot": [p % self.dspark.ring_rows for p in positions] if self.dspark is not None else [],
+        }
+        for r in sorted({int(r) for r in self.config.compress_ratios[: self.num_layers] if int(r)}):
+            counts = [(p + 1) // r for p in positions]
+            closing = [p for p in positions if (p + 1) % r == 0]
+            values[f"win_slot{r}"] = [p % (win_rows if r > 1 else r) for p in positions]
+            values[f"entry{r}"] = [p // r for p in closing]
+            values[f"start{r}"] = [p + 1 - r for p in closing]
+            values[f"index_pos{r}"] = [_SELECT_KV_RATE * max(n, 1) - 1 for n in counts]
+            values[f"curpos{r}"] = [w + min(n, topk) - 1 for n in counts]
+        packet = torch.zeros(1, 1, 1, self._pkt_w, dtype=torch.int32)
+        for name, (offset, _) in self._verify_fields.items():
+            row = values[name]
+            packet[0, 0, 0, offset : offset + len(row)] = torch.tensor(row, dtype=torch.int32)
+        return packet
+
+    def _verify_context(self, sm: dict, pkt: ttnn.Tensor, causal: bool, odd: bool) -> dict:
+        """:meth:`_step_context` for a verify block: the per-row layer inputs ``sm`` needs, from the packet.
+
+        Integers are slices of the packet. RoPE rows are looked up in ``sm["verify_rope"]``: ROW_MAJOR
+        ``[1, 1, T, Rd]`` at the rows' positions, TILE ``[1, 1, n, Rd]`` at the starts of the ``n`` closing
+        groups. A masked variant builds each ratio's ``[T, 1, 1, window + index_topk]`` mask from the positions.
+        """
+        t = self.verify_rows
+
+        def field(name: str, n: Optional[int] = None) -> ttnn.Tensor:  # INT32 ROW_MAJOR [n]
+            offset, size = self._verify_fields[name]
+            n = size if n is None else n
+            return ttnn.reshape(ttnn.slice(pkt, [0, 0, 0, offset], [1, 1, 1, offset + n]), [n])
+
+        def rope_rows(tables, name: str, n: int) -> list[ttnn.Tensor]:  # ROW_MAJOR [1, 1, n, Rd] each
+            idx = ttnn.typecast(ttnn.reshape(field(name, n), [1, n]), ttnn.uint32)
+            return [
+                ttnn.reshape(ttnn.embedding(idx, table, layout=ttnn.ROW_MAJOR_LAYOUT), [1, 1, n, table.shape[-1]])
+                for table in tables
+            ]
+
+        ctx = {
+            "token": ttnn.typecast(ttnn.reshape(field("token"), [1, t]), ttnn.uint32),
+            "sliding_pos": field("sliding_pos"),
+            "ring_rows": field("ring_rows"),
+            "rope": {family: rope_rows(tables, "pos", t) for family, tables in sm["verify_rope"].items()},
+            "sliding_curpos": field("sliding_curpos") if sm["has_sliding"] else None,
+            "page_row": sm["verify_page_row"],
+            "win_prev": None,  # bf16 one-hot [1, 1, 1, spec_window_rows] of the slot of pos - 1
+            "stash_slot": field("stash_slot") if sm.get("taps") else None,
+            "mask": {},
+            "curpos": {},
+            "win_slot": {},
+            "win_rope": {},
+            "entry": {},
+            "index_pos": {},
+        }
+        if sm["deep_windows"]:
+            prev = ttnn.typecast(
+                ttnn.to_layout(ttnn.reshape(field("win_prev"), [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32
+            )
+            ctx["win_prev"] = ttnn.typecast(ttnn.eq(sm["win_cols"], prev), ttnn.bfloat16)
+        if sm["ratios"] and not causal:
+            pos_row = ttnn.typecast(
+                ttnn.to_layout(ttnn.reshape(field("pos"), [1, 1, 1, t]), ttnn.TILE_LAYOUT), ttnn.float32
+            )
+            pos_f = ttnn.transpose(pos_row, -2, -1)  # [1, 1, T, 1]
+        for ratio in sm["ratios"]:
+            if causal:
+                ctx["curpos"][ratio] = field(f"curpos{ratio}")
+            else:
+                mask = self._compressed_mask(sm["mask_idx"], pos_f, ratio)  # [1, 1, T, window + index_topk]
+                ctx["mask"][ratio] = ttnn.reshape(mask, [t, 1, 1, mask.shape[-1]])
+        for ratio in sorted(set(sm["kv_ratios"]) | set(sm["row_ratios"])):
+            ctx["entry"][ratio] = field(f"entry{ratio}", len(self._verify_closing(ratio, odd)))
+        for ratio in sm["kv_ratios"]:
+            if ratio > 1:
+                ctx["win_slot"][ratio] = field(f"win_slot{ratio}")
+            n = len(self._verify_closing(ratio, odd))
+            ctx["win_rope"][ratio] = [
+                ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+                for x in rope_rows(sm["verify_rope"]["compress"][:2], f"start{ratio}", n)
+            ]
+        for ratio in sm["index_ratios"]:
+            ctx["index_pos"][ratio] = field(f"index_pos{ratio}")
+        return ctx
+
+    def _verify_attention_inputs(self, attn, ctx: dict, causal: bool, odd: bool) -> dict:
+        """What :meth:`_decode_verify_eager` passes ``attn``'s decode, from the device-built ``ctx``."""
+        ratio = attn.compress_ratio
+        cos, sin, neg_sin = ctx["rope"]["main" if ratio == 0 else "compress"]
+        inputs = {
+            "cos": cos,
+            "sin": sin,
+            "neg_sin": neg_sin,
+            "sliding_pos": ctx["sliding_pos"],
+            "ring_rows": ctx["ring_rows"],
+        }
+        if ratio == 0:
+            inputs["sdpa_cur_pos"] = ctx["sliding_curpos"]
+            return inputs
+        inputs["page_row"] = ctx["page_row"]
+        closing = self._verify_closing(ratio, odd)
+        if attn.is_kv_source:
+            inputs["pool_rows"] = closing
+            if ratio > 1:
+                inputs["win_slot"] = ctx["win_slot"][ratio]
+                inputs["win_prev"] = ctx["win_prev"]
+            inputs["cos_win"], inputs["sin_win"] = ctx["win_rope"][ratio]
+            inputs["entry"] = ctx["entry"][ratio]
+        if attn.is_index_source:
+            inputs["select"] = True
+            inputs["index_pos"] = ctx["index_pos"][ratio]
+            if attn.layer_idx in self._row_writers:
+                inputs["received_entry"] = ctx["entry"][ratio]
+        if causal:
+            inputs["sdpa_cur_pos"] = ctx["curpos"][ratio]
+        else:
+            inputs["mask"] = ctx["mask"][ratio]
+        return inputs
+
+    def _verify_submesh_static(self, sm: dict, causal: bool, odd: bool) -> Optional[ttnn.Tensor]:
+        """One stage of the traced verify step (variant ``(causal, odd)``, see :meth:`_verify_variant`).
+
+        :meth:`_decode_submesh_static` for a ``verify_rows``-row block, with :meth:`_decode_verify_eager`'s layer
+        loop. The first stage takes the packet off the H2D socket; entering a later stage receives the streams,
+        the packet, ``pre_mix`` and each group of ``_verify_edges``: its ``sel_tile_rows`` and, for a group in
+        ``_row_groups``, its new rows ROW_MAJOR into ``verify_new_rows``, which every layer of the group then reads.
+        Leaving sends the same. The last layer's logits ``[1, 1, T, V]`` go out the D2H socket in the decode
+        output's pages, and are returned. On the output stage, the block's target-layer means and the packet go to
+        the drafter (:meth:`_spec_write_verified`) right after the last tap.
+        """
+        cfg, t, stage = self.config, self.verify_rows, sm["index"]
+        hc, hidden = cfg.hc_mult, cfg.hidden_size
+        ids, layers = self.layer_submesh_ids, sm["layers"]
+        first, last = layers[0], layers[-1]
+        if self.use_prefetcher:
+            self.layers[first].prefetch_weights()
+        for li in layers:
+            if cfg.compress_ratios[li]:
+                sm["scaches"][li].new_kv_rows = sm["scaches"][li].new_key_rows = None
+        if first == 0:
+            pkt = sm["pkt"]
+            ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
+            if self.tp_size > 1:
+                pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
+        else:
+            edge = (ids[first - 1], stage)
+            _, receiver = self.submesh_socket_pairs[edge]
+            ttnn.experimental.recv_direct_async(sm["verify_streams_in"], receiver)
+            ttnn.experimental.recv_direct_async(sm["pkt_in"], receiver)
+            ttnn.experimental.recv_direct_async(sm["verify_pre_mix_in"], receiver)
+            for src in self._verify_edges[edge]:
+                ttnn.experimental.recv_direct_async(self._group_holder(sm, src).sel_tile_rows, receiver)
+                if src in self._row_groups:
+                    n = len(self._verify_closing(int(cfg.compress_ratios[src]), odd))
+                    kv_rows, key_rows = sm["verify_new_rows"][(src, n)]
+                    ttnn.experimental.recv_direct_async(kv_rows, receiver)
+                    ttnn.experimental.recv_direct_async(key_rows, receiver)
+                    for li in layers:
+                        if self._kv_source_of.get(li) == src:
+                            sm["scaches"][li].new_kv_rows, sm["scaches"][li].new_key_rows = kv_rows, key_rows
+            pkt = sm["pkt_in"]
+            streams = ttnn.to_memory_config(sm["verify_streams_in"], sm["verify_streams_memory_config"])
+            pre_mix = sm["verify_pre_mix_in"]
+        ctx = self._verify_context(sm, pkt, causal, odd)
+        if first == 0:
+            with _region("EMBED"):
+                embedded = ttnn.embedding(
+                    ctx["token"], self.embed_tokens.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            streams = ttnn.repeat(
+                ttnn.reshape(embedded, [1, t, 1, hidden]),
+                ttnn.Shape([1, 1, hc, 1]),
+                memory_config=sm["verify_streams_memory_config"],
+            )
+            pre_mix = sm["verify_pre_mix_init"]
+        persistent = {sm.get("verify_pre_mix_init"), sm.get("verify_pre_mix_in")}
+        tapped = {}
+        for li in layers:
+            layer = self.layers[li]
+            if self.use_prefetcher and li != last:
+                self.layers[li + 1].prefetch_weights()
+            if li in sm.get("taps", {}):
+                row = self._collapse_streams(streams, sm["tap_weights"])  # [1, T, 1, D]
+                row = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, hidden])
+                for j, piece in enumerate(sm["taps"][li]):
+                    w = piece.shape[-1]
+                    part = _rows_on_one_core(ttnn.slice(row, [0, 0, 0, j * w], [1, 1, t, (j + 1) * w]))
+                    ttnn.experimental.paged_update_cache(piece, part, update_idxs_tensor=ctx["stash_slot"])
+                    ttnn.deallocate(part)
+                tapped[li] = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
+                if len(tapped) == len(sm["taps"]):
+                    # The whole block goes to the drafter's _spec_write_verified, in the stash's target order.
+                    rows = ttnn.concat([tapped[target] for target in sm["taps"]], dim=-1)
+                    ttnn.experimental.send_direct_async(rows, self.dspark.link[0])
+                    ttnn.experimental.send_direct_async(pkt, self.dspark.link[0])
+                    rows.deallocate(True)
+                    for part in tapped.values():
+                        part.deallocate(True)
+            streams, pre_mix = layer.decode(
+                streams,
+                pre_mix,
+                sm["scaches"][li],
+                **self._verify_attention_inputs(layer.self_attn, ctx, causal, odd),
+            )
+        if last == self.num_layers - 1:
+            collapsed = self._collapse_streams(streams, pre_mix)  # [1, T, 1, D]
+            logits = self._lm_head_traced(self.norm(ttnn.reshape(collapsed, [1, 1, t, hidden])))
+            # The decode output's pages: _send_output's staging, then T outputs' rows of the socket's width.
+            rows, cols = self._out_plan
+            out_rm = ttnn.to_layout(ttnn.reshape(logits, [1, 1, -1, 2020]), ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.experimental.send_async_d2h(ttnn.reshape(out_rm, [t * rows, cols]), self._out_socket)
+            return logits
+        edge = (stage, ids[last + 1])
+        sender, _ = self.submesh_socket_pairs[edge]
+        streams_rm = ttnn.to_memory_config(streams, ttnn.DRAM_MEMORY_CONFIG)
+        pre_send = ttnn.to_memory_config(pre_mix, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.experimental.send_direct_async(streams_rm, sender)
+        ttnn.experimental.send_direct_async(pkt, sender)
+        ttnn.experimental.send_direct_async(pre_send, sender)
+        for src in self._verify_edges[edge]:
+            holder = self._group_holder(sm, src)
+            ttnn.experimental.send_direct_async(holder.sel_tile_rows, sender)
+            if src in self._row_groups:
+                for rows in (holder.new_kv_rows, holder.new_key_rows):
+                    # The receive buffers are ROW_MAJOR; a source stage's rows come out of its layers tiled.
+                    rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
+                    if rows.layout != ttnn.ROW_MAJOR_LAYOUT:
+                        rows = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
+                    ttnn.experimental.send_direct_async(rows, sender)
+        streams.deallocate()
+        streams_rm.deallocate()
+        if pre_mix not in persistent and pre_mix is not pre_send:
+            pre_mix.deallocate()
+        if pre_send not in persistent:
+            pre_send.deallocate()
+        return None
+
+    def _read_verify_output(self) -> torch.Tensor:
+        """The verify block's logits ``[T, V]`` off the D2H socket (see :meth:`_verify_submesh_static`)."""
+        rows, cols = self._out_plan
+        out = torch.empty(self.verify_rows * rows, cols, dtype=self._out_torch_dtype)
+        self._out_socket.read_tensor(out)
+        return out.reshape(self.verify_rows, -1)
+
+    def _run_verify(self, dispatch: Callable[[], None], ids: list[int], pos: int, engram_rows: dict) -> torch.Tensor:
+        """``dispatch`` every stage's verify step (its programs or its traces), feed it the block's packet and
+        Engram rows ``{layer: [T, kin]}``, and return its logits ``[T, V]``.
+
+        A block's rows outnumber an Engram socket's pages and a write blocks until the device drains a page, so
+        the packet and the rows go from a second thread while this one dispatches (``write_tensor`` drops the GIL).
+        """
+        packet = self._verify_packet(ids, pos)
+
+        def feed() -> None:
+            self._pkt_socket.write_tensor(packet)
+            for layer_idx, engram in self._engram_layers:
+                engram.write_rows(engram_rows[layer_idx])
+
+        writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify_feed")
+        try:
+            fed = writer.submit(feed)
+            dispatch()
+            logits = self._read_verify_output()
+            fed.result()
+            return logits
+        finally:
+            # A stage that failed before its recv_async_h2d leaves the write blocked for good; do not wait on it.
+            writer.shutdown(wait=False)
+
+    def _compile_verify_traces(self, token_id) -> list[tuple[bool, bool]]:
+        """Pass 1 of the verify traces: one executed run of :meth:`_verify_submesh_static` on every stage per
+        reachable variant, at a block start of that variant, then rewind the resident session. Returns the
+        variants. Like :meth:`_compile_plan`, every run must come before the first capture on any chip."""
+        t, window = self.verify_rows, self.sliding_window
+        starts = {(False, False): 0, (False, True): 1, (True, True): window - 1, (True, False): window}
+        variants = []
+        for variant, start in starts.items():
+            if self._verify_variant(start) != variant or start + t > self._decode_max_seq:
+                continue
+            if self._two_level(start + t - 1):
+                continue
+            variants.append(variant)
+            self.ensure_session_capacity(start + t - 1)
+            logger.info(f"[traced-verify] compiling variant causal={variant[0]} odd={variant[1]} at {start}")
+            outs = []
+            zeros = {li: torch.zeros(t, engram.kin, dtype=torch.bfloat16) for li, engram in self._engram_layers}
+
+            def dispatch() -> None:
+                outs.extend(self._verify_submesh_static(sm, *variant) for sm in self.submeshes_io)
+                if self.dspark is not None:
+                    self._spec_write_verified()
+
+            self._run_verify(dispatch, [int(token_id)] * t, start, zeros)
+            for out in outs:
+                if out is not None:
+                    out.deallocate(True)
+        self.reset_session(self._resident[0])
+        return variants
+
+    def _capture_verify_traces(self, variants: list[tuple[bool, bool]]) -> None:
+        """Pass 2: capture each stage once per variant bit its layers branch on (compressed layers on
+        ``causal``, r=2 layers on ``odd``) and bind every variant to its trace."""
+        for causal, odd in variants:
+            for sm in self.submeshes_io:
+                key = (causal and sm["has_compressed"], odd and 2 in sm["ratios"])
+                if key not in sm["verify_traces"]:
+                    logger.info(f"[traced-verify] capturing submesh {sm['index']} causal={key[0]} odd={key[1]}")
+                    tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
+                    with _trace_capture_guard():
+                        out = self._verify_submesh_static(sm, causal, odd)
+                    ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
+                    # The last stage's logits are persistent: every replay rewrites them in place.
+                    sm["verify_traces"][key] = (tid, out)
+                sm["verify_tids"][(causal, odd)] = sm["verify_traces"][key][0]
 
     def _compile_verify(self, token_id) -> None:
         """Run :meth:`decode_verify` once at each block start that takes its own set of programs, then rewind
@@ -2128,15 +2752,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         target's token for ``pos + j + 1``.
 
         Row ``j`` sees what the single-row step at ``pos + j`` would after rows ``0 .. j - 1``, and the step
-        leaves every cache, the speculative state (rings since the last :meth:`spec_fixup`, window history,
-        stash) and the Engram hash as ``verify_rows`` single-row steps do, so a round's :meth:`spec_fixup` and
-        :meth:`spec_write_main` are unchanged.
+        leaves every cache, the speculative state (rings since the last :meth:`spec_fixup`, stash) and the
+        Engram hash as ``verify_rows`` single-row steps do, so a round's :meth:`spec_fixup` is unchanged. With a
+        drafter whose traces are captured, the step also writes its rows into the drafter rings, rejected ones
+        included: the replay hands them over device to device (:meth:`_spec_write_verified`), queued with the
+        verify and before its logits are read; the eager step follows with :meth:`spec_write_main`.
 
-        It runs eagerly, one stage after the other, between the traced steps: the layers' per-row inputs are
-        built on the host (:meth:`~.decode.attention.DeepSeekV41Attention.decode_inputs`), and the streams,
-        ``pre_mix`` and the shared groups' selections and new rows cross the stage edges through the host,
-        where the traced step sends them over D2D sockets. A block whose last row selects two-level raises;
-        verify it with :meth:`decode_prompt_traced` instead.
+        Once :meth:`capture_spec_traces` has captured the verify traces it replays them, like a traced decode
+        step: the packet (:meth:`_verify_packet`) carries the rows' integers, each stage builds its inputs on
+        device and the streams, ``pre_mix`` and shared groups cross the stage edges over the D2D sockets.
+        Otherwise it runs eagerly (:meth:`_decode_verify_eager`). A block whose last row selects two-level
+        raises; verify it with :meth:`decode_prompt_traced` instead.
         """
         t = self.verify_rows
         ids = [int(i) for i in token_ids]
@@ -2161,45 +2787,57 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 for layer_idx, _ in self._engram_layers:
                     ids_of_layer = hashes[:, :, lookup.layout.layer_ids.index(layer_idx)]
                     engram_rows[layer_idx] = lookup.gather(layer_idx, ids_of_layer).flatten(-2)
-            carried, groups = None, {}
-            last = len(self.submeshes_io) - 1
-            # A block's rows outnumber the socket's pages, and a write blocks until the device drains a page, so
-            # they go from this thread while the stage that drains them is dispatched (write_tensor drops the GIL).
-            writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="engram_rows")
-            try:
-                for i, sm in enumerate(self.submeshes_io):
-                    writes = [
-                        writer.submit(self.layers[li].engram.write_rows, engram_rows[li])
-                        for li in sm["layers"]
-                        if self.layers[li].engram is not None
-                    ]
-                    carried = self._verify_submesh(sm, ids, pos, carried, groups)
-                    for write in writes:
-                        write.result()
-                    if i == last:
-                        return carried
-                    # The groups both stages of the edge read, as the traced step's _cache_handoff sends them.
-                    groups = {}
-                    for src in self._verify_groups(sm) & self._verify_groups(self.submeshes_io[i + 1]):
-                        holder = (
-                            sm["scaches"][src]
-                            if src in sm["layers"]
-                            else next(
-                                sm["scaches"][li]
-                                for li in sm["layers"]
-                                if self.config.compress_ratios[li] and self._kv_source_of[li] == src
-                            )
-                        )
-                        rows = None
-                        if src in self._row_groups and holder.new_kv_rows is not None:
-                            rows = tuple(_replica_rows(r) for r in (holder.new_kv_rows, holder.new_key_rows))
-                        groups[src] = (ttnn.to_torch(ttnn.get_device_tensors(holder.sel_tile_rows)[0]), rows)
-            finally:
-                # A stage that failed before its recv_async_h2d leaves the write blocked for good; do not wait on it.
-                writer.shutdown(wait=False)
+            variant = self._verify_variant(pos)
+            if variant not in self.submeshes_io[0]["verify_tids"]:
+                logits = self._decode_verify_eager(ids, pos, engram_rows)
+                if self.dspark is not None and "write_main" in self._spec_tids:
+                    self.spec_write_main(range(pos, pos + t))
+                return logits
+
+            def replay() -> None:
+                for sm in self.submeshes_io:
+                    ttnn.execute_trace(sm["device"], sm["verify_tids"][variant], cq_id=0, blocking=False)
+                if self.dspark is not None:
+                    tid = self._spec_tids["write_verified"]
+                    ttnn.execute_trace(self.dspark.device, tid, cq_id=0, blocking=False)
+
+            return self._run_verify(replay, ids, pos, engram_rows)
+
+    def _decode_verify_eager(self, ids: list[int], pos: int, engram_rows: dict) -> torch.Tensor:
+        """:meth:`decode_verify` one stage after the other: the layers' per-row inputs are built on the host
+        (:meth:`~.decode.attention.DeepSeekV41Attention.decode_inputs`), and the streams, ``pre_mix`` and the
+        shared groups' selections and new rows cross the stage edges through the host."""
+        carried, groups = None, {}
+        last = len(self.submeshes_io) - 1
+        # A block's rows outnumber the socket's pages, and a write blocks until the device drains a page, so
+        # they go from this thread while the stage that drains them is dispatched (write_tensor drops the GIL).
+        writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="engram_rows")
+        try:
+            for i, sm in enumerate(self.submeshes_io):
+                writes = [
+                    writer.submit(self.layers[li].engram.write_rows, engram_rows[li])
+                    for li in sm["layers"]
+                    if self.layers[li].engram is not None
+                ]
+                carried = self._verify_submesh(sm, ids, pos, carried, groups)
+                for write in writes:
+                    write.result()
+                if i == last:
+                    return carried
+                # The groups both stages of the edge read, as the traced step's _cache_handoff sends them.
+                groups = {}
+                for src in self._verify_groups(sm) & self._verify_groups(self.submeshes_io[i + 1]):
+                    holder = self._group_holder(sm, src)
+                    rows = None
+                    if src in self._row_groups and holder.new_kv_rows is not None:
+                        rows = tuple(_replica_rows(r) for r in (holder.new_kv_rows, holder.new_key_rows))
+                    groups[src] = (ttnn.to_torch(ttnn.get_device_tensors(holder.sel_tile_rows)[0]), rows)
+        finally:
+            # A stage that failed before its recv_async_h2d leaves the write blocked for good; do not wait on it.
+            writer.shutdown(wait=False)
 
     def _verify_submesh(self, sm: dict, ids: list[int], pos: int, carried, groups: dict):
-        """One stage of :meth:`decode_verify`.
+        """One stage of :meth:`_decode_verify_eager`.
 
         ``carried`` is the previous stage's host ``(streams [1, T, hc, D], pre_mix [1, T, 1, hc])`` (``None``
         on the first stage, which embeds ``ids``) and ``groups`` its shared groups, kv source ->
@@ -2257,7 +2895,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     for r in rows
                 )
         stash_slots = int32_rows([p % self.dspark.stash_rows for p in positions]) if sm.get("taps") else None
-        hist_slot = int32_rows([p % self._spec_hist for p in positions]) if sm["hist_layers"] else None
+        win_rows = self.spec_window_rows
+        win_slot = win_prev = None
+        if sm["deep_windows"]:
+            win_slot = int32_rows([p % win_rows for p in positions])
+            one_hot = torch.zeros(1, 1, 1, win_rows)
+            one_hot[0, 0, 0, (pos - 1) % win_rows] = 1
+            win_prev = ttnn.from_torch(one_hot, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
         layers = sm["layers"]
         for li in layers:
@@ -2281,8 +2925,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             inputs = attn.decode_inputs(pos, *self._rope_halves["main" if ratio == 0 else "compress"], rows=t)
             if ratio:
                 inputs["page_row"] = sm["verify_page_row"]
-                if li in sm["hist_layers"]:
-                    inputs["hist_slot"] = hist_slot
+                if attn.is_kv_source and ratio > 1:
+                    inputs["win_slot"], inputs["win_prev"] = win_slot, win_prev
                 closing = [p // ratio for p in positions if (p + 1) % ratio == 0]
                 if li in self._row_writers and inputs.get("select") and closing:
                     inputs["received_entry"] = int32_rows(closing)
