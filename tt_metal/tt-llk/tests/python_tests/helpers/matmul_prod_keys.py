@@ -597,3 +597,23 @@ def grid_main_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, thr
     except KeyError:
         return False
     return key in _GRID_MAIN
+
+
+# Half sync cells with packer L1 accumulate where the fused section post (the post and the DEST flip in one stall) holds the packer longer than main's separate post
+_UNFUSED_POST_ROWS = (
+    ('LoFi', True, True, 'B4', 'B8', 'F32', 2, 1, 1, 0, True, 1),
+    ('LoFi', True, True, 'B4', 'F32', 'F32', 2, 1, 8, 0, True, 1),
+    ('LoFi', True, False, 'F32', 'B4', 'F16b', 1, 6, 8, 0, True, 1),
+    ('LoFi', True, True, 'F32', 'B4', 'F16b', 1, 2, 8, 0, True, 1),
+    ('HiFi2', True, True, 'F32', 'B4', 'F32', 3, 1, 1, 0, True, 1),
+    ('HiFi2', True, False, 'F32', 'B8', 'F32', 1, 4, 3, 0, True, 1),
+)
+_UNFUSED_POST = frozenset(_UNFUSED_POST_ROWS)
+
+
+def grid_unfused_post_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, throttle=0, l1_acc=False, nb=1) -> bool:
+    try:
+        key = (fidelity.name, half_sync, fp32_acc, _SHORT[in1], _SHORT[in0], _SHORT[out], rt, ct, kb, throttle, bool(l1_acc), nb)
+    except KeyError:
+        return False
+    return key in _UNFUSED_POST

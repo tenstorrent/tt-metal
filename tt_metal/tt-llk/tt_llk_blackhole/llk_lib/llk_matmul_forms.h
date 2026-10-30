@@ -637,6 +637,31 @@ constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool hal
 }
 
 
+// Half sync cells with packer L1 accumulate where the fused section post (the post and the DEST flip in one stall) holds the packer longer than main's separate post.
+inline constexpr matmul_grid_main_cell matmul_unfused_post_cells[] = {
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 2, 1, 1, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Bfp4_b, DataFormat::Float32, DataFormat::Float32, 2, 1, 8, 0, true, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 6, 8, 0, true, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 2, 8, 0, true, 1},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float32, 3, 1, 1, 0, true, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, 1, 4, 3, 0, true, 1},
+};
+
+constexpr bool matmul_unfused_post(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                   const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false,
+                                   const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_unfused_post_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The k key a block runs its forms by: 0, main's form, where the block is one of the grid cells above; the caller's k steps per section otherwise.
 template <MathFidelity math_fidelity, int sync, bool dest_acc, std::uint32_t kt_per_section, std::uint32_t kt_dim, DataFormat in0, DataFormat in1, DataFormat out_format,
           std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t throttle = 0, bool l1_acc = false, std::uint32_t nb = 1>

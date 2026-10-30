@@ -383,7 +383,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 #ifdef MATMUL_UNFUSED_POST
                 [[maybe_unused]] constexpr bool fused_post_flip = false;
                 #else
-                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
+                #ifdef MATMUL_BLOCK
+                // the cells where main's separate post reads faster under packer L1 accumulate (llk_matmul_forms.h)
+                [[maybe_unused]] constexpr bool matmul_unfused_cell = ckernel::matmul_unfused_post(
+                    MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, MATMUL_BLOCK_ACC, MATMUL_KEY_IN1, MATMUL_KEY_IN0, MATMUL_OUT_FORMAT, MATMUL_BLOCK_RT, MATMUL_BLOCK_CT,
+                    MATMUL_BLOCK_KT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB);
+                #else
+                [[maybe_unused]] constexpr bool matmul_unfused_cell = false;
+                #endif
+                [[maybe_unused]] constexpr bool fused_post_flip = !matmul_unfused_cell && !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
                 #endif
                 #else
                 [[maybe_unused]] constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
