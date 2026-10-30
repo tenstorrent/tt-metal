@@ -38,10 +38,11 @@ class Conv2d(Module):
 
     # Opt-in fallback for conv shapes missing from slice_params (off by default, so models that
     # rely on unlisted shapes running unsliced are unchanged). When on, an unlisted shape is
-    # DRAM-width-sliced at the documented max (ceil(w / TILE)) and, above 1024^2 spatial, keeps
-    # its halo/reader config tensors in DRAM. Without it an unlisted large conv runs unsliced and
-    # its static CBs can clash with resident L1 buffers. The Ideogram 4 VAE (14 output
-    # resolutions on any mesh) sets it on its convs.
+    # DRAM-width-sliced at the documented max (ceil(w / TILE)), and every conv keeps its
+    # halo/reader config tensors in DRAM instead of L1_SMALL. Without it an unlisted large conv
+    # runs unsliced and its static CBs can clash with resident L1 buffers. The Ideogram 4 VAE
+    # (14 output resolutions on any mesh) sets it on its convs: the config tensors stay allocated
+    # with each cached program, so in L1_SMALL they fill it after one or two output sizes.
     slice_fallback: bool = False
 
     slice_params = {
@@ -494,7 +495,7 @@ class Conv2d(Module):
         conv_config = ttnn.Conv2dConfig(
             act_block_h_override=32,
             weights_dtype=self.weight.dtype,
-            config_tensors_in_dram=self.slice_fallback and h * w > 1024 * 1024,
+            config_tensors_in_dram=self.slice_fallback,
         )
 
         if self._prepared_weight is None:
