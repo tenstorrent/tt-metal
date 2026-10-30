@@ -175,7 +175,7 @@ RemoteDramRun make_run(
         source_mimir,
         source_location,
         cce_index_for(source_mimir, source_location),
-        static_cast<uint32_t>(soc.get_channel_for_dram_view(static_cast<int>(dest_view))),
+        mimir_of_view(soc, dest_view),
         dest_view,
         unreserved,
         mimir_contract::read_cce_spa_routes(device, cce_index_for(source_mimir, source_location))};
@@ -243,7 +243,7 @@ bool resolve_chiplet_location(
     uint32_t size_bytes,
     ChipletLocation& location) {
     for (uint32_t view = 0; view < static_cast<uint32_t>(soc.get_num_dram_views()); ++view) {
-        if (static_cast<uint32_t>(soc.get_channel_for_dram_view(static_cast<int>(view))) != mimir_index) {
+        if (mimir_of_view(soc, view) != mimir_index) {
             continue;
         }
         const uint64_t view_base = static_cast<uint64_t>(soc.get_address_offset(static_cast<int>(view)));
@@ -547,14 +547,11 @@ void add_alias_decoys(
     const uint64_t dest_view_offset =
         chiplet_offset - static_cast<uint64_t>(run.soc.get_address_offset(static_cast<int>(run.dest_view)));
     for (uint32_t view = 0; view < static_cast<uint32_t>(run.soc.get_num_dram_views()); ++view) {
-        const bool other_remote_view =
-            view != run.dest_view &&
-            static_cast<uint32_t>(run.soc.get_channel_for_dram_view(static_cast<int>(view))) == run.dest_mimir;
+        const bool other_remote_view = view != run.dest_view && mimir_of_view(run.soc, view) == run.dest_mimir;
         if (!other_remote_view) {
             continue;
         }
-        const uint64_t other_view_chiplet =
-            static_cast<uint64_t>(run.soc.get_address_offset(static_cast<int>(view))) + dest_view_offset;
+        const uint64_t other_view_chiplet = chiplet_offset_of(run.soc, view, dest_view_offset);
         decoys.record(
             add_guard(
                 run,
