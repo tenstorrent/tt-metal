@@ -178,7 +178,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@3e80f31be6ed17175cce7877a7c727045184d2e5 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
         timeout-minutes: 20
         with:
           # With an image the source is already at /work; the workspace copy only
