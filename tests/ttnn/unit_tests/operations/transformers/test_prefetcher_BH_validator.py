@@ -45,6 +45,16 @@ def _require_tensor_prefetcher(device):
 
 _RING_DEPTH_PAGES = 4  # small ring so the validator stresses the credit handshakes
 
+# A held pipe consumer waits this many wall-clock cycles before its first pop. The wall clock ticks at
+# AICLK, which Blackhole runs at 1.35 GHz under load, and a slower clock only lengthens the hold. A
+# call that waits for the held consumer takes at least the hold; one that does not returns in
+# milliseconds. The timing checks split the two at half the hold, which leaves both outcomes the same
+# margin for host jitter.
+_HOLD_CYCLES = 1_000_000_000
+_BLACKHOLE_AICLK_HZ = 1_350_000_000
+_MIN_HOLD_S = _HOLD_CYCLES / _BLACKHOLE_AICLK_HZ
+_HELD_CALL_THRESHOLD_S = _MIN_HOLD_S / 2
+
 
 def _receiver_rows(num_dram_banks: int, recv_per_bank: int) -> int:
     """Rows the receiver grid for `recv_per_bank` receivers per bank occupies. A second delivery
@@ -593,11 +603,6 @@ def test_stop_drains_every_target_not_just_the_last(device):
         recv_per_bank=1,
         row_offset=_receiver_rows(num_dram_banks, held_recv_per_bank),
     )
-    # About 0.75 s at Blackhole's 1.35 GHz AICLK, and longer at any lower clock. Stop without the held
-    # set's acks returns in milliseconds, so half a second separates the two outcomes.
-    hold_cycles = 1_000_000_000
-    min_stop_wait_s = 0.5
-
     ttnn.experimental.start_tensor_prefetcher(device)
     held_from = None
     try:
@@ -609,16 +614,20 @@ def test_stop_drains_every_target_not_just_the_last(device):
 
         held_from = time.monotonic()
         ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=held_pipes, hold_cycles=hold_cycles
+            device,
+            num_iters=ring_size,
+            page_size_bytes=page_size,
+            prefetcher_pipes=held_pipes,
+            hold_cycles=_HOLD_CYCLES,
         )
     finally:
         ttnn.experimental.stop_tensor_prefetcher(device)
         stop_returned = time.monotonic()
         ttnn.synchronize_device(device)
     stop_waited_s = stop_returned - held_from
-    assert stop_waited_s >= min_stop_wait_s, (
+    assert stop_waited_s >= _HELD_CALL_THRESHOLD_S, (
         f"stop_tensor_prefetcher returned {stop_waited_s:.3f} s after the held pipe consumer started holding its "
-        f"acks, before the {min_stop_wait_s} s hold could have ended: it did not wait for those receivers"
+        f"acks, before the {_MIN_HOLD_S:.2f} s hold could have ended: it did not wait for those receivers"
     )
 
 
@@ -698,17 +707,16 @@ def test_pipes_carved_mid_session_wait_for_their_pages(device, cq_id):
         recv_per_bank=1,
         row_offset=_receiver_rows(num_dram_banks, held_recv_per_bank),
     )
-    # About 0.75 s at Blackhole's 1.35 GHz AICLK. A carve that drained the queue would block for most of
-    # that, while one that fences through the prefetcher returns in milliseconds.
-    hold_cycles = 1_000_000_000
-    max_carve_s = 0.5
-
     with tensor_prefetcher_session(device), ttnn.command_queue(cq_id):
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight_held, ring_size)], prefetcher_pipes=held_pipes
         )
         ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
-            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=held_pipes, hold_cycles=hold_cycles
+            device,
+            num_iters=ring_size,
+            page_size_bytes=page_size,
+            prefetcher_pipes=held_pipes,
+            hold_cycles=_HOLD_CYCLES,
         )
         carve_from = time.monotonic()
         _space, pipes = _make_tensor_prefetcher_pipes(
@@ -716,7 +724,7 @@ def test_pipes_carved_mid_session_wait_for_their_pages(device, cq_id):
         )
         carve_s = time.monotonic() - carve_from
         _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, carved_ring_size)
-    assert carve_s < max_carve_s, (
+    assert carve_s < _HELD_CALL_THRESHOLD_S, (
         f"creating the pipes took {carve_s:.3f} s while a held consumer occupied command queue {cq_id}: the carve "
         "drained the queue instead of fencing it through the running prefetcher"
     )
