@@ -4,7 +4,6 @@
 off leaves the drafter's calls exactly as they were while each flag on changes only the intended call.
 
   QWEN36_MTP_FC_PROGCFG (+ _IBW, _CORES)  explicit 1D decode progcfg for the MTP fc, L1 concat input
-  QWEN36_MTP_SDPA_WINDOW                  sliding window on the drafter's decode SDPA
   QWEN36_MTP_LAYER_BFP4                   bfloat4_b + LoFi drafter layer weights
   QWEN36_MTP_EMBED_ROW                    one-tile-row drafter token embedding
 
@@ -30,7 +29,6 @@ _FLAGS = (
     "QWEN36_MTP_FC_PROGCFG",
     "QWEN36_MTP_FC_IBW",
     "QWEN36_MTP_FC_CORES",
-    "QWEN36_MTP_SDPA_WINDOW",
     "QWEN36_MTP_LAYER_BFP4",
     "QWEN36_MTP_EMBED_ROW",
 )
@@ -48,7 +46,6 @@ def _clean_env(monkeypatch):
 # ------------------------------------------------------------------------------------------------------------------ #
 def test_all_flags_default_off():
     assert tpc.mtp_fc_decode_progcfg(10240, 640, 11) is None
-    assert tpc.mtp_sdpa_window() == 0
     assert tpc.mtp_layer_bfp4_parts() == frozenset()
     assert tpc.mtp_embed_row_enabled() is False
 
@@ -76,19 +73,6 @@ def test_fc_progcfg_real_config_shape(monkeypatch):
     grid = pc.compute_with_storage_grid_size
     assert (grid.x, grid.y) == (11, 2)
     assert pc.mcast_in0
-
-
-@pytest.mark.parametrize("raw,want", [(None, 0), ("", 0), ("0", 0), ("-5", 0), ("4096", 4096), (" 1024 ", 1024)])
-def test_window_parse(monkeypatch, raw, want):
-    if raw is not None:
-        monkeypatch.setenv("QWEN36_MTP_SDPA_WINDOW", raw)
-    assert tpc.mtp_sdpa_window() == want
-
-
-def test_window_bad_value(monkeypatch):
-    monkeypatch.setenv("QWEN36_MTP_SDPA_WINDOW", "4k")
-    with pytest.raises(ValueError):
-        tpc.mtp_sdpa_window()
 
 
 @pytest.mark.parametrize(
@@ -140,18 +124,6 @@ class _T:
 
     def deallocate(self, *_):
         self.freed = True
-
-
-# ------------------------------------------------------------------------------------------------------------------ #
-# SDPA window kwarg
-# ------------------------------------------------------------------------------------------------------------------ #
-def test_window_kwarg():
-    a = TPAttention.__new__(TPAttention)  # bare (other host tests build it this way): no window
-    assert a._decode_window_kw() == {}
-    a.decode_sdpa_window = None
-    assert a._decode_window_kw() == {}
-    a.decode_sdpa_window = 4096
-    assert a._decode_window_kw() == {"sliding_window_size": 4096}
 
 
 # ------------------------------------------------------------------------------------------------------------------ #

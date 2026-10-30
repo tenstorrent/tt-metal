@@ -259,9 +259,6 @@ class TPAttention:
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
         self.decode_sdpa_max_cores = None
-        # Per-instance decode SDPA sliding window (None = whole context). Only the MTP drafter sets it
-        # (QWEN36_MTP_SDPA_WINDOW); see Qwen36MTP.__init__.
-        self.decode_sdpa_window = None
         # False: forward_decode keeps the legacy path even where the lean one is eligible (see _decode_lean_eligible).
         self.lean_decode = True
         self.k_caches = None
@@ -1177,7 +1174,6 @@ class TPAttention:
                     # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
                     # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
                     memory_config=_L1,
-                    **self._decode_window_kw(),
                 )
                 ttnn.deallocate(q)
         else:
@@ -1252,11 +1248,6 @@ class TPAttention:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-    def _decode_window_kw(self):
-        """sliding_window_size kwarg of a decode SDPA call: {} (today's call) unless this instance has a window."""
-        w = getattr(self, "decode_sdpa_window", None)  # a TPAttention built without __init__ (host tests) has none
-        return {"sliding_window_size": int(w)} if w else {}
 
     def _kv_fused_cores_ok(self, n):
         """Whether the fused K+V cache update can take an n-row group: its two inputs need disjoint, equal-size core sets.
@@ -1646,7 +1637,6 @@ class TPAttention:
             scale=self.scale,
             program_config=sdpa_dec_cfg,
             memory_config=_L1,
-            **self._decode_window_kw(),
         )
         ttnn.deallocate(q)
 

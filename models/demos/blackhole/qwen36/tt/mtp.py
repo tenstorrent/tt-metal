@@ -150,7 +150,6 @@ class Qwen36MTP:
         #   QWEN36_MTP_FC_PROGCFG -> _fc_decode_pc (explicit 1D decode progcfg for the fc, see _fuse)
         #   QWEN36_MTP_EMBED_ROW  -> _embed_row (one-tile-row token embedding, see _embed_rows)
         #   QWEN36_MTP_LAYER_BFP4 -> bfloat4_b drafter layer weights (attention and/or MLP)
-        #   QWEN36_MTP_SDPA_WINDOW -> set on the layer's attention below
         self._fc_decode_pc = None
         self._embed_row = False
         _bfp4_parts = frozenset()
@@ -207,12 +206,6 @@ class Qwen36MTP:
         # token — that only shifts acceptance, never correctness: every draft is arbitrated by verify.
         # QWEN36_MTP_SDPA_MAX_CORES pins it (the bucket equivalence tests set 13: every row count then resolves to the same split).
         self.attention.decode_sdpa_max_cores = int(os.environ.get("QWEN36_MTP_SDPA_MAX_CORES", "64"))
-        if self.num_devices > 1:
-            # QWEN36_MTP_SDPA_WINDOW: sliding-window draft-step SDPA (this TPAttention only; tp_common.mtp_sdpa_window).
-            _win = tpc.mtp_sdpa_window()
-            if _win:
-                self.attention.decode_sdpa_window = _win
-                logger.info(f"MTP drafter: decode SDPA sliding window {_win} (QWEN36_MTP_SDPA_WINDOW)")
 
         # QWEN36_MTP_KV_ONLY=1 (TP only; default off): a need_logits=False forward (reseed / join warm / catch-up) stops
         # after the drafter layer's paged KV write and returns (None, None). See tp_common.mtp_kv_only_enabled.
