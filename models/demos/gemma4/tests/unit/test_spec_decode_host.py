@@ -2685,7 +2685,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     # a reseed is part of the overhead: 2 x (900 + 30 - 20) / (N x 20) <= 0.4 needs 228 plain steps
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
     reseeding = [RecordCandidate(s, 1024, ms, 900.0) for s, ms in _COSTS.items()]
-    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(227))
+    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(228))
     assert policy.decide(reseeding, [row], _PLAIN, 5).reason == "retry"
     # a three-step trial charges four replays: (30 - 20) x 4 / (N x 20) <= 0.03 needs 67 plain steps
     longer = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=3), 5)

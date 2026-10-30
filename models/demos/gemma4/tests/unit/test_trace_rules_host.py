@@ -533,17 +533,22 @@ def test_ladder_runs_once_per_process_and_per_model():
 
 
 def test_prefix_continuation_warmup_prefills_a_tail_past_one_chunk_once_per_process():
-    gen = _Gen(data_parallel=2)
-    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), chunk=4096)
-    assert [c["start_pos"] for c in gen.calls] == [[4096], [4096]], "one continuation per model, past one chunk"
-    assert all(c["tokens"] == (1, 4096 + 128) and c["enable_trace"] is False for c in gen.calls)
-    assert [c["model_id_warmup"] for c in gen.calls] == [0, 1]
-    gen.calls.clear()
-    assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), chunk=4096)
-    assert gen.calls == [], "once per process"
-    off = _Gen(data_parallel=1, paged=False)
-    assert not run_prefix_continuation_warmup(off, kv_cache="kv", prefill_forward=_prefill_recorder(off), chunk=4096)
-    assert off.calls == [], "no cached prefix to continue from with paged attention off"
+    calls = []
+
+    def prefill_forward(**kwargs):
+        calls.append(kwargs)
+
+    gen = _FakeGenerator(data_parallel=2)
+    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert [c["start_pos"] for c in calls] == [[4096], [4096]], "one continuation per model, past one chunk"
+    assert all(c["tokens"] == (1, 4096 + 128) and c["enable_trace"] is False for c in calls)
+    assert [c["model_id_warmup"] for c in calls] == [0, 1] and all(c["kv_cache"] == "kv" for c in calls)
+    calls.clear()
+    assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert calls == [], "once per process"
+    off = _FakeGenerator(data_parallel=1, paged=False)
+    assert not run_prefix_continuation_warmup(off, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
+    assert calls == [], "no cached prefix to continue from with paged attention off"
 
 
 def test_ladder_stops_at_the_chunk_when_paged_attention_is_off():
