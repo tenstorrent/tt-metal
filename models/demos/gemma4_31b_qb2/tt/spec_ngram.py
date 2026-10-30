@@ -309,7 +309,70 @@ def _ctl():
     return _CTL["v"]
 
 
-def propose(histories, k_max, wide=False):
+class Gate:
+    """Measured-throughput gate per batch bucket: committed tokens per second of clean step time (no prefill in the
+    period) with drafting allowed vs not. Drafting is allowed in a bucket only while its measured rate beats the
+    plain rate; blocks of BLOCK steps run in one mode, a fraction EXPLORE of blocks (and any mode with too little
+    data) run the other, so the estimate tracks traffic. Catches every cost the planner's model misses (lost async
+    overlap, the reload after a verify, host work). Exponentially decayed sums."""
+
+    BLOCK = int(os.environ.get("GEMMA_SPEC_GATE_BLOCK", "48"))
+    EXPLORE = float(os.environ.get("GEMMA_SPEC_GATE_EXPLORE", "0.1"))
+    MIN_S = 1.0
+    DECAY = 0.998
+    ENABLED = os.environ.get("GEMMA_SPEC_GATE", "1") == "1"
+
+    def __init__(self):
+        self.stats = {}
+        self.cur = {}
+        self.left = {}
+        self.blocks = 0
+        self._rng = np.random.default_rng(1234)
+
+    def record(self, bucket, mode, tokens, seconds):
+        for key in [k for k in self.stats if k[0] == bucket]:
+            t, n = self.stats[key]
+            self.stats[key] = (t * self.DECAY, n * self.DECAY)
+        t, n = self.stats.get((bucket, mode), (0.0, 0.0))
+        self.stats[(bucket, mode)] = (t + seconds, n + tokens)
+
+    def rate(self, bucket, mode):
+        t, n = self.stats.get((bucket, mode), (0.0, 0.0))
+        return (n / t if t > 0 else None), t
+
+    def mode(self, bucket):
+        if not self.ENABLED:
+            return True
+        left = self.left.get(bucket, 0)
+        if left > 0:
+            self.left[bucket] = left - 1
+            return self.cur[bucket]
+        on, t_on = self.rate(bucket, True)
+        off, t_off = self.rate(bucket, False)
+        if t_on < self.MIN_S or t_off < self.MIN_S:
+            best = t_on <= t_off
+        else:
+            best = on >= off
+            # Explore less where the measured difference is large (exploring the losing mode is what it costs).
+            explore = self.EXPLORE if abs(on / off - 1.0) < 0.15 else self.EXPLORE / 3
+            if self._rng.random() < explore:
+                best = not best
+        self.cur[bucket] = best
+        self.left[bucket] = self.BLOCK - 1
+        self.blocks += 1
+        return best
+
+    def summary(self):
+        out = {}
+        for (b, m), (t, n) in sorted(self.stats.items()):
+            out[f"b{b}{'on' if m else 'off'}"] = [round(t, 1), round(n / t, 1) if t else None]
+        return out
+
+
+GATE = Gate()
+
+
+def propose(histories, k_max, wide=False, allow=True):
     """histories: list (per row) of 1-D int arrays, or None for rows with nothing to draft.
 
     Returns (drafts [rows][k_max] int list padded with 0, num_valid [rows]).
@@ -317,7 +380,9 @@ def propose(histories, k_max, wide=False):
     ctl = _ctl()
     width = k_max
     k_max = min(k_max, MAX_DRAFT, int(ctl.get("max_draft", MAX_DRAFT)))
-    live = [] if ctl.get("disable") else [i for i, h in enumerate(histories) if h is not None and len(h) >= 2]
+    live = (
+        [] if ctl.get("disable") or not allow else [i for i, h in enumerate(histories) if h is not None and len(h) >= 2]
+    )
     props = [propose_one(histories[i], k_max) for i in live]
     take = allocate_best(props, [len(histories[i]) for i in live], wide=wide)
     drafts = [[0] * width for _ in histories]

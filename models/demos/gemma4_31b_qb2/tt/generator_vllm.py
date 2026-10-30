@@ -734,7 +734,19 @@ class Gemma4ForCausalLM:
             length, matched, full, tail = old
             if len(h) > length and len(tail) and list(h[length - len(tail) : length]) == tail:
                 spec_ngram.MODEL.observe(matched, full, [int(x) for x in h[length : length + len(full)]])
-        drafts, valid, matched, full = spec_ngram.propose(histories, int(num_drafts), wide=self.generator.spec_wide)
+        live_rows = [row for row, h in enumerate(histories) if h is not None]
+        bucket = spec_ngram.batch_bucket(max(1, len(live_rows)))
+        step = getattr(self, "_gate_step", None)
+        if step is not None and step[3] is None:
+            # Tokens this step committed, credited to the mode its plan was made under.
+            step[0] = bucket if step[0] is None else step[0]
+            step[1] = getattr(self, "_gate_mode", True)
+            step[3] = sum(int(accepted_counts[row]) for row in live_rows)
+        mode = spec_ngram.GATE.mode(bucket) if live_rows else True
+        self._gate_mode = mode
+        drafts, valid, matched, full = spec_ngram.propose(
+            histories, int(num_drafts), wide=self.generator.spec_wide, allow=mode
+        )
         self._spec_prev = {
             row: (len(h), matched[row], full[row], [int(x) for x in h[-8:]])
             for row, h in enumerate(histories)
@@ -835,7 +847,7 @@ class Gemma4ForCausalLM:
             t,
             len(need),
             rows_used,
-            width > 4,
+            max((n for _, n in need), default=1) > 4,
             float(sum(int(first[b]) for b, _ in need)) / max(1, len(need)),
         )
         if self.spec_stats["verifies"] % 256 == 1:
@@ -905,6 +917,11 @@ class Gemma4ForCausalLM:
         last = getattr(self, "_period_last", None)
         clean = not getattr(self, "_prefill_since_decode", False)
         self._prefill_since_decode = False
+        step = getattr(self, "_gate_step", None)
+        if step is not None and clean and step[3] is not None:
+            # (bucket, mode, entry time, committed tokens of that step): that step's period ends here.
+            spec_ngram.GATE.record(step[0], step[1], step[3], now - step[2])
+        self._gate_step = [None, None, now, None]
         if last is not None and clean:
             period_ms = (now - last[1]) * 1000.0
             if last[0] == "plain" and plain:
@@ -934,7 +951,11 @@ class Gemma4ForCausalLM:
         from models.demos.gemma4_31b_qb2.tt import spec_ngram
 
         stats = dict(
-            self.spec_stats, wall_s=time.time(), acceptance=spec_ngram.MODEL.summary(), cost=spec_ngram.COST.summary()
+            self.spec_stats,
+            wall_s=time.time(),
+            acceptance=spec_ngram.MODEL.summary(),
+            cost=spec_ngram.COST.summary(),
+            gate=spec_ngram.GATE.summary(),
         )
         stats.update(
             {"timing_" + k: round(v, 4) if isinstance(v, float) else v for k, v in self.generator.spec_timing.items()}
