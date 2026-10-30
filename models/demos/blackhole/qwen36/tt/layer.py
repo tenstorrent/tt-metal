@@ -6,6 +6,8 @@ Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
 
+import os
+
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -69,6 +71,10 @@ class Qwen36DecoderLayer:
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
         self.is_full_attention = args.is_full_attention_layer(layer_num)
+        # QWEN36_TP1_GDN=1: on one chip, run GDN layers with TPGatedDeltaNet at TP=1 instead of Qwen36GatedDeltaNet.
+        self._tp1_gdn = (
+            self.num_devices == 1 and not self.is_full_attention and os.environ.get("QWEN36_TP1_GDN") == "1"
+        )
 
         prefix = f"layers.{layer_num}"
 
@@ -141,6 +147,17 @@ class Qwen36DecoderLayer:
             attn_state = substate(state_dict, f"layers.{layer_num}.self_attn")
             attn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
             self.attention = Qwen36GatedAttention(mesh_device, AttentionConfig.from_args(args), attn_state, attn_cache)
+        elif self._tp1_gdn:
+            from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
+
+            tp1 = args.tp1_args(mesh_device)
+            tp1_cache = (tensor_cache_path / f"layers.{layer_num}" / "tp1") if tensor_cache_path else None
+            tw = load_gdn_weights_tp(
+                mesh_device, substate(state_dict, f"layers.{layer_num}.linear_attn"), tp1, cache_dir=tp1_cache
+            )
+            self.attention = TPGatedDeltaNet(mesh_device, tp1, tw, None)
+            # The fused all-gather + in-projection prefill needs a TP axis; here the norm hands over the full input.
+            self.attention._fuse_agmm = False
         else:
             gdn_state = substate(state_dict, f"layers.{layer_num}.linear_attn")
             gdn_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
@@ -359,6 +376,18 @@ class Qwen36DecoderLayer:
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)
+        elif self._tp1_gdn:
+            if mode == "prefill":
+                attn_output = self.attention.forward_prefill(
+                    attn_input,
+                    chunk_size=chunk_size,
+                    valid_len=valid_len,
+                    capture_state=gdn_capture_state,
+                    carry_state=gdn_carry_state,
+                )
+            else:
+                attn_output = self.attention.forward_decode(attn_input)
+            attn_output = ttnn.reshape(attn_output, list(attn_input.shape))
         elif self.is_full_attention:
             attn_output = self.attention.forward(
                 attn_input,

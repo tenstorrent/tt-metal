@@ -80,13 +80,14 @@ def test_gdn_decode_tp1(mesh_device):
     torch.manual_seed(0)
     args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     assert args.num_devices == 1, "run on a single chip (MESH_DEVICE=P150)"
-    args._init_tp_config(mesh_device)
+    tp1 = args.tp1_args(mesh_device)
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     n_gdn = sum(t == "linear_attention" for t in args.attention_type_list)
     sd = load_gdn_layer(args.CKPT_DIR, li)
 
     old = Qwen36GatedDeltaNet(mesh_device, GDNConfig.from_args(args), _single_device_keys(sd, args.linear_q_dim))
-    tp = TPGatedDeltaNet(mesh_device, args, load_gdn_weights_tp(mesh_device, sd, args), None)
+    tp = TPGatedDeltaNet(mesh_device, tp1, load_gdn_weights_tp(mesh_device, sd, tp1), None)
+    tp._fuse_agmm = False
 
     def run_old(x_tt):
         return old.forward(x_tt, mode="recurrent")

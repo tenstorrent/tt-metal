@@ -8,6 +8,7 @@ Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text confi
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
 
+import copy
 import os
 from pathlib import Path
 
@@ -337,6 +338,15 @@ class Qwen36ModelArgs(ModelArgs):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+
+    def tp1_args(self, mesh_device):
+        """A copy of these args with the TP-module configs built for TP=1, so a TP module can run on one chip
+        while every other module keeps reading the single-device args."""
+        if getattr(self, "_tp1_args", None) is None:
+            tp1 = copy.copy(self)
+            tp1._init_tp_config(mesh_device)
+            self._tp1_args = tp1
+        return self._tp1_args
 
     def _set_hf_params(self, checkpoint_dir):
         # trust_remote_code before base AutoConfig load.
