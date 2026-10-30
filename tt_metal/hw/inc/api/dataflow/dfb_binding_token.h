@@ -33,7 +33,11 @@
 // function parameter must spell `DFBBindingToken<P, C>` (or take the id).
 template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 struct DFBBindingToken {
-    explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
+    // node_ranges: Watcher builds only, the rectangles the DFB exists on, packed as x_start, y_start, x_end, y_end
+    // from the top byte down, so multicasts into it can be checked against them.
+    explicit constexpr DFBBindingToken(
+        uint16_t id, const uint32_t* node_ranges = nullptr, uint32_t num_node_ranges = 0) noexcept :
+        id_(id), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
 
     // Binding token constructor when host supplies LLK metadata.
     // See "Entry format metadata" in DataflowBufferSpec.
@@ -42,7 +46,12 @@ struct DFBBindingToken {
     //
     // Kernels that do not query the data format or construct LLK operands can use the id-only
     // constructor; tile geometry getters then return the default dimensions.
-    constexpr DFBBindingToken(uint16_t id, binding_details::LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
+    constexpr DFBBindingToken(
+        uint16_t id,
+        binding_details::LLKMetadata llk,
+        const uint32_t* node_ranges = nullptr,
+        uint32_t num_node_ranges = 0) noexcept :
+        id_(id), llk_metadata_(llk), node_ranges_(node_ranges), num_node_ranges_(num_node_ranges) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -51,6 +60,9 @@ struct DFBBindingToken {
     // compute APIs that expect a raw CB id.
     // This conversion is constexpr; it's intended for Gen1 use only.
     constexpr operator uint32_t() const noexcept { return id_; }
+
+    constexpr const uint32_t* node_ranges() const noexcept { return node_ranges_; }
+    constexpr uint32_t num_node_ranges() const noexcept { return num_node_ranges_; }
 
 private:
     template <dfb::AccessPattern P, dfb::AccessPattern C>
@@ -66,6 +78,8 @@ private:
 
     uint16_t id_;
     binding_details::LLKMetadata llk_metadata_{};
+    const uint32_t* node_ranges_ = nullptr;
+    uint32_t num_node_ranges_ = 0;
 };
 
 /**

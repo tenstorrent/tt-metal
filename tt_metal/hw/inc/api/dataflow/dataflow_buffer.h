@@ -120,14 +120,18 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
 #ifdef ARCH_QUASAR
     // The token carries the pattern pair: DataflowBuffer dfb(dfb::out) deduces it.
-    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
     // DataflowBuffer<> (UNKNOWN) accepts any token, e.g. std::optional<DataflowBuffer<>>::emplace(token).
     template <
         dfb::AccessPattern TokPap,
         dfb::AccessPattern TokCap,
         bool Agnostic = !pattern_known,
         std::enable_if_t<Agnostic, int> = 0>
-    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
     // A known pair rejects any other pair's token (otherwise it would silently convert to an id).
     template <
         dfb::AccessPattern TokPap,
@@ -137,7 +141,9 @@ public:
     DataflowBuffer(DFBBindingToken<TokPap, TokCap>) = delete;
 #else
     template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
-    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
 #endif
 
     // Relay local DFB (CrossNode / PrefetcherPipe bridge to compute). Same runtime object;
@@ -519,6 +525,19 @@ private:
 
     uint16_t logical_dfb_id_;
 
+    // Watcher: the nodes this DFB exists on, for checking multicasts into it. Only a DFB built from a binding token
+    // knows them; one built from a bare id is not checked.
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+    const uint32_t* node_ranges_ = nullptr;
+    uint32_t num_node_ranges_ = 0;
+#endif
+    void store_node_ranges([[maybe_unused]] const uint32_t* node_ranges, [[maybe_unused]] uint32_t num_node_ranges) {
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        node_ranges_ = node_ranges;
+        num_node_ranges_ = num_node_ranges;
+#endif
+    }
+
 #if defined(ARCH_QUASAR) && !DFB_IS_COMPUTE_MATH
     uint16_t stride_tiles_cache_ = 1;
     uint16_t peer_share_cache_ = 1;
@@ -594,6 +613,14 @@ struct noc_traits_t<DataflowBuffer> {
         auto local_addr = dst.get_noc_write_addr() + args.offset_bytes;
         return ::get_noc_multicast_addr(
             args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
+    }
+    // The nodes the DFB exists on, which Noc::async_write_multicast checks the rectangle against with Watcher.
+    static DebugMulticastNodeSet multicast_node_set([[maybe_unused]] const DFB_CLASS& dst) {
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        return {.packed_ranges = dst.node_ranges_, .num_ranges = dst.num_node_ranges_};
+#else
+        return {};
+#endif
     }
 };
 

@@ -4,7 +4,45 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
+#include "impl/metal2_host_api/helpers.hpp"
+
 namespace tt::tt_metal::experimental {
+
+namespace {
+
+// A node set as NoC rectangles, packed x_start, y_start, x_end, y_end from the top byte down.
+std::vector<uint32_t> PackWatcherNodeRanges(distributed::MeshDevice& mesh_device, const NodeRangeSet& nodes) {
+    std::vector<uint32_t> packed;
+    packed.reserve(nodes.ranges().size());
+    for (const NodeRange& range : nodes.ranges()) {
+        const NodeCoord start = mesh_device.virtual_core_from_logical_core(range.start_coord, CoreType::WORKER);
+        const NodeCoord end = mesh_device.virtual_core_from_logical_core(range.end_coord, CoreType::WORKER);
+        packed.push_back(((start.x & 0xFF) << 24) | ((start.y & 0xFF) << 16) | ((end.x & 0xFF) << 8) | (end.y & 0xFF));
+    }
+    return packed;
+}
+
+WatcherNodeRanges MakeWatcherNodeRanges(
+    distributed::MeshDevice& mesh_device,
+    const ProgramSpec& spec,
+    const CollectedSpecData& collected,
+    MetalEnvImpl& metal_env) {
+    WatcherNodeRanges ranges;
+    const auto& rtoptions = metal_env.get_rtoptions();
+    if (!rtoptions.get_watcher_enabled() || rtoptions.watcher_noc_sanitize_disabled()) {
+        return ranges;
+    }
+    for (const auto& [dfb_name, nodes] : collected.dfb_node_set) {
+        ranges.dfbs.emplace(dfb_name, PackWatcherNodeRanges(mesh_device, nodes));
+    }
+    for (const auto& sem : spec.semaphores) {
+        ranges.semaphores.emplace(
+            sem.unique_id, PackWatcherNodeRanges(mesh_device, to_node_range_set(sem.target_nodes)));
+    }
+    return ranges;
+}
+
+}  // namespace
 
 ProgramResources RegisterResources(
     distributed::MeshDevice& mesh_device,
@@ -27,6 +65,7 @@ ProgramResources RegisterResources(
 
     WireDFBAliases(spec, resources.dfbs.id, program_impl);
     resources.semaphores = RegisterSemaphores(spec, collected, metal_env, program_impl);
+    resources.watcher_node_ranges = MakeWatcherNodeRanges(mesh_device, spec, collected, metal_env);
     return resources;
 }
 
@@ -46,6 +85,25 @@ KernelResourceBindings ResolveKernelResourceBindings(
         .prefetcher_pipes = {}};
     if (auto pipe_it = resources.prefetcher_pipes.find(&kernel_spec); pipe_it != resources.prefetcher_pipes.end()) {
         bindings.prefetcher_pipes = pipe_it->second;
+    }
+    // Only data-movement kernels multicast, and a relay DFB's token carries no ranges, so only those bindings get them:
+    // ranges anywhere else would only make the kernel's hash depend on its placement.
+    if (!kernel_spec.is_data_movement_kernel()) {
+        return bindings;
+    }
+    const WatcherNodeRanges& watcher_node_ranges = resources.watcher_node_ranges;
+    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        DataflowBufferBindingHandle& handle = bindings.dfbs.at(dfb_binding.accessor_name);
+        if (auto it = watcher_node_ranges.dfbs.find(dfb_binding.dfb_spec_name);
+            it != watcher_node_ranges.dfbs.end() && !handle.is_relay) {
+            handle.watcher_node_ranges = it->second;
+        }
+    }
+    for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
+        if (auto it = watcher_node_ranges.semaphores.find(semaphore_binding.semaphore_spec_name);
+            it != watcher_node_ranges.semaphores.end()) {
+            bindings.semaphores.at(semaphore_binding.accessor_name).watcher_node_ranges = it->second;
+        }
     }
     return bindings;
 }

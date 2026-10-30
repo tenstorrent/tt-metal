@@ -221,6 +221,13 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 // Drivers (resource.cpp)
 // ----------------------------------------------------------------------------
 
+// Watcher: the nodes each DFB and semaphore exists on, as packed NoC rectangles, so kernels can check multicasts into
+// them. Filled only with Watcher NoC sanitizing, so kernels are unchanged without it.
+struct WatcherNodeRanges {
+    std::unordered_map<DFBSpecName, std::vector<uint32_t>> dfbs;
+    std::unordered_map<SemaphoreSpecName, std::vector<uint32_t>> semaphores;
+};
+
 // Everything kernel lowering reads that resource registration creates.
 // Used by kernel lowering.
 struct ProgramResources {
@@ -228,6 +235,7 @@ struct ProgramResources {
     DataflowBufferHandles dfbs;
     PrefetcherPipeHandlesByKernel prefetcher_pipes;
     SemaphoreHandles semaphores;
+    WatcherNodeRanges watcher_node_ranges;
 };
 
 // Register every resource with the Program (resource.cpp fixes the order).
