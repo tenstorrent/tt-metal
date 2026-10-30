@@ -1252,6 +1252,7 @@ class TestConfig:
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
+            "rc_all_configs",
             "variant_id",
             "runtime_arguments_struct",
             "runtime_format",
