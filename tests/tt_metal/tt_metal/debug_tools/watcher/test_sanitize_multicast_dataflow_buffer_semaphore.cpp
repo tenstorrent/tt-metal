@@ -121,12 +121,13 @@ void RunSemaphoreMulticastTest(distributed::MeshDevice& mesh_device, uint32_t en
 
 // The sender multicasts one entry of its DFB over the rectangle from logical node (0,0) to (end_x,0). The DFB's
 // producer and consumer kernels run on all its nodes, which is what places the DFB there. With `backing_nodes`, the DFB
-// borrows the memory of a tensor sharded over them.
+// borrows the memory of a tensor sharded over them. With `read_ptr`, the destination is the DFB's read pointer.
 void RunDataflowBufferMulticastTest(
     distributed::MeshDevice& mesh_device,
     uint32_t end_x,
     bool expect_error,
-    const std::optional<NodeRangeSet>& backing_nodes = std::nullopt) {
+    const std::optional<NodeRangeSet>& backing_nodes = std::nullopt,
+    bool read_ptr = false) {
     if (ShouldSkip(mesh_device)) {
         GTEST_SKIP();
     }
@@ -157,6 +158,7 @@ void RunDataflowBufferMulticastTest(
                             // Every node of the rectangle, which excludes the sender.
                             {"num_targets", end_x + 1},
                             {"size_bytes", entry_size},
+                            {"read_ptr", static_cast<uint32_t>(read_ptr)},
                         },
                     .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_0, NOC::NOC_0),
                 },
@@ -196,6 +198,85 @@ void RunDataflowBufferMulticastTest(
     LaunchAndCheck(mesh_device, std::move(program), expect_error);
 }
 
+// The multicasting kernel consumes the DFB and pops entry 0, so its read pointer moves to entry 1 while its write
+// pointer stays on entry 0. It multicasts entry 1 through read_ptr_view, and each receiver asserts the data landed at
+// its own read pointer, so a view that used the write pointer would trip the assert.
+void RunDataflowBufferReadPointerTest(distributed::MeshDevice& mesh_device) {
+    if (ShouldSkip(mesh_device)) {
+        GTEST_SKIP();
+    }
+    const NodeCoord sender = mesh_device.worker_core_from_logical_core(kSender);
+    const NodeCoord rect_start = mesh_device.worker_core_from_logical_core({0, 0});
+    const NodeCoord rect_end = mesh_device.worker_core_from_logical_core({1, 0});
+    const experimental::KernelSpecName producer_name{"read_pointer_producer"};
+    const experimental::KernelSpecName consumer_name{"read_pointer_multicast"};
+    const experimental::DFBSpecName dataflow_buffer_name{"target"};
+    const experimental::SemaphoreSpecName ready_name{"ready"};
+    const experimental::SemaphoreSpecName valid_name{"valid"};
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t pattern = 0x5EED0000;
+    const experimental::ProgramSpec spec{
+        .name = "watcher_multicast_dataflow_buffer_read_pointer",
+        .kernels =
+            {
+                experimental::KernelSpec{
+                    .unique_id = producer_name,
+                    .source = kKernelDirectory + "dataflow_buffer_read_pointer_producer.cpp",
+                    .dfb_bindings = {experimental::ProducerOf(dataflow_buffer_name, "target")},
+                    .compile_time_args =
+                        {
+                            {"sender_x", static_cast<uint32_t>(sender.x)},
+                            {"sender_y", static_cast<uint32_t>(sender.y)},
+                            {"size_bytes", entry_size},
+                            {"pattern", pattern},
+                        },
+                    .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_1, NOC::NOC_1),
+                },
+                experimental::KernelSpec{
+                    .unique_id = consumer_name,
+                    .source = kKernelDirectory + "dataflow_buffer_read_pointer_multicast.cpp",
+                    .dfb_bindings = {experimental::ConsumerOf(dataflow_buffer_name, "target")},
+                    .semaphore_bindings =
+                        {
+                            {.semaphore_spec_name = ready_name, .accessor_name = "ready"},
+                            {.semaphore_spec_name = valid_name, .accessor_name = "valid"},
+                        },
+                    .compile_time_args =
+                        {
+                            {"sender_x", static_cast<uint32_t>(sender.x)},
+                            {"sender_y", static_cast<uint32_t>(sender.y)},
+                            {"noc_x_start", static_cast<uint32_t>(rect_start.x)},
+                            {"noc_y_start", static_cast<uint32_t>(rect_start.y)},
+                            {"noc_x_end", static_cast<uint32_t>(rect_end.x)},
+                            {"noc_y_end", static_cast<uint32_t>(rect_end.y)},
+                            // Both nodes of the rectangle, which excludes the sender.
+                            {"num_targets", 2u},
+                            {"size_bytes", entry_size},
+                            {"pattern", pattern},
+                        },
+                    .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+                },
+            },
+        .dataflow_buffers = {experimental::DataflowBufferSpec{
+            .unique_id = dataflow_buffer_name,
+            .entry_size = entry_size,
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        }},
+        .semaphores =
+            {
+                experimental::SemaphoreSpec{.unique_id = ready_name, .target_nodes = kResourceNodes},
+                experimental::SemaphoreSpec{.unique_id = valid_name, .target_nodes = kResourceNodes},
+            },
+        .work_units = {experimental::WorkUnitSpec{
+            .name = "main",
+            .kernels = {producer_name, consumer_name},
+            .target_nodes = kResourceNodes,
+        }},
+    };
+    LaunchAndCheck(mesh_device, experimental::MakeProgramFromSpec(mesh_device, spec), /*expect_error=*/false);
+}
+
 }  // namespace
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinSemaphore) {
@@ -220,4 +301,13 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinBorrowedDataf
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastPastBorrowedDataflowBuffer) {
     RunDataflowBufferMulticastTest(*this->devices_[0], /*end_x=*/3, /*expect_error=*/true, kBackingNodes);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinDataflowBufferReadPointer) {
+    RunDataflowBufferReadPointerTest(*this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastPastDataflowBufferReadPointer) {
+    RunDataflowBufferMulticastTest(
+        *this->devices_[0], /*end_x=*/2, /*expect_error=*/true, /*backing_nodes=*/std::nullopt, /*read_ptr=*/true);
 }
