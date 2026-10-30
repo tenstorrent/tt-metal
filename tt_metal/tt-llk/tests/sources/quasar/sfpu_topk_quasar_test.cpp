@@ -210,8 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int stage_index        = static_cast<int>(stage);
                     const DataFormat math_format = static_cast<DataFormat>(math_data_types[stage_index]);
 
-                    _configure_alu_formats_<is_fp32_dest_acc_en>(
-                        math_format, math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
+                    _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
 
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
                     const int second_tile_in_pair_idx = first_tile_in_pair_idx + 1;
@@ -223,8 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
-                _configure_alu_formats_<is_fp32_dest_acc_en>(
-                    value_math_format, value_math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
+                _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(value_math_format, value_math_format);
 
                 // Run the topk stages. RC_custom issues one SFPU call per tile (no per-face walk).
                 if (first_iter)

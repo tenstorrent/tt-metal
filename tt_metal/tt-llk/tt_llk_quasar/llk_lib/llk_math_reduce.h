@@ -36,30 +36,6 @@ void tti_pool_instr_func()
 }
 
 /**
- * @brief Scope dest-format override around the reduce-row transpose.
- */
-inline void _reduce_row_transpose_alu_cfg_enter_()
-{
-    constexpr std::uint8_t dstacc_override_rmw_b3_mask = static_cast<std::uint8_t>(1u << (ALU_FORMAT_SPEC_REG_Dstacc_override_SHAMT % 8));
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
-
-    TTI_RMWCIB3(ALU_FORMAT_SPEC_REG_Dstacc_override_ADDR32, dstacc_override_rmw_b3_mask, dstacc_override_rmw_b3_mask);
-}
-
-/**
- * @brief Disable dest-format override after reduce-row transpose.
- */
-inline void _reduce_row_transpose_alu_cfg_exit_()
-{
-    constexpr std::uint8_t dstacc_override_rmw_b3_mask = static_cast<std::uint8_t>(1u << (ALU_FORMAT_SPEC_REG_Dstacc_override_SHAMT % 8));
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
-
-    TTI_RMWCIB3(ALU_FORMAT_SPEC_REG_Dstacc_override_ADDR32, dstacc_override_rmw_b3_mask, 0);
-}
-
-/**
  * @brief Int32 half-dest row transpose at dest row 0 (row-reduce result row).
  *
  * Required whenever reading/writing int32 dest datums: each 32-bit value is split across
@@ -68,8 +44,7 @@ inline void _reduce_row_transpose_alu_cfg_exit_()
  */
 inline void _reduce_row_transpose_fpu_()
 {
-    _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
-    _reduce_row_transpose_alu_cfg_enter_();
+    _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, true>(DataFormat::Int32, DataFormat::Int32);
 
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.
@@ -102,8 +77,7 @@ inline void _reduce_row_transpose_fpu_()
         TTI_MOVA2D(p_mov::DEST_32B_LOW, row, ADDR_MOD_0, FPU_MOV_ROWS, row);
     }
 
-    _reduce_row_transpose_alu_cfg_exit_();
-    _configure_default_alu_data_format_state_<true /* EN_32BIT_DEST */>(DataFormat::Int8, DataFormat::Int8);
+    _configure_alu_cfg_<AluCfgType::DEFAULT, true /* EN_32BIT_DEST */>(DataFormat::Int8, DataFormat::Int8);
 }
 
 /**

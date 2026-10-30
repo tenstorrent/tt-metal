@@ -156,12 +156,49 @@ typedef union
     alu_config_t f;
 } alu_config_u;
 
-// List of possible data format config states
-enum class DataFormatConfigSet : std::uint8_t
+// Which ALU format config type is programmed. With the SrcA/SrcB formats, the whole input to
+// _build_alu_words_.
+enum class AluCfgType : std::uint8_t
 {
-    UNCONFIGURED         = 0,
-    DEFAULT              = 1,
-    MOV_OPS_EXPLICIT_FMT = 2
+    // Nothing known about the ALU registers: never compares equal, cached words unusable.
+    // Must stay 0, it is the zero-init value.
+    UNCONFIGURED            = 0,
+    DEFAULT                 = 1,
+    MOV_OPS_EXPLICIT_FORMAT = 2
+};
+
+/**
+ * @brief One ALU format configuration, the whole input to @ref _build_alu_words_.
+ *
+ * The same type describes what a caller requests and what is currently programmed.
+ *
+ * @note EN_32BIT_DEST is deliberately absent: callers pass it explicitly as a compile-time parameter.
+ */
+struct AluCfgState
+{
+    AluCfgType type;
+    DataFormat srca_format;
+    DataFormat srcb_format;
+};
+
+inline constexpr bool operator==(const AluCfgState& lhs, const AluCfgState& rhs)
+{
+    return (lhs.type == rhs.type) && (lhs.srca_format == rhs.srca_format) && (lhs.srcb_format == rhs.srcb_format);
+}
+
+/**
+ * @brief ALU_FORMAT_SPEC words 0..2 as this TRISC last programmed them.
+ *
+ * `programmed` is the configuration that was asked for, `words` the values stored for it. Hardware is
+ * never read back, so both hold only what this TRISC wrote: ALU_FORMAT_SPEC is shared, and a second
+ * thread programming it would leave this copy stale.
+ *
+ * @note `programmed.type == UNCONFIGURED` invalidates both.
+ */
+struct AluCfgTracker
+{
+    AluCfgState programmed;
+    alu_config_u words;
 };
 
 // /**

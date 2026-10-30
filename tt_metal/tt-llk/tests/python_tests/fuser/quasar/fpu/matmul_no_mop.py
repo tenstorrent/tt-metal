@@ -8,7 +8,7 @@ from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
-from fuser.quasar.fpu.common import fidelity_source_formats
+from fuser.quasar.fpu.common import configure_alu_cfg, fidelity_source_formats
 
 from .matmul import MatmulFpu
 
@@ -28,7 +28,7 @@ class MatmulNoMopFpu(MatmulFpu):
         src_a_format, src_b_format = fidelity_source_formats(
             config, operation, compute_unit
         )
-        return (
+        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
             f"_llk_math_matmul_init_no_mop_<{math_fidelity}>"
             f"({src_a_format}, {src_b_format}, {block.block_cols}, {block.block_rows});\n"
         )

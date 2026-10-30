@@ -65,7 +65,7 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
  * unpack inits never reprogram OUT_DATA_FORMAT and reconfig_data_format is silently skipped for a
  * same-format operand. Only column reduce overrode it (SrcA -> UNP_A); restoring an operand that was
  * never overridden just reprograms it to the same table value (harmless), so this gates on MxFp4 only
- * and needs no reduce_dim template. Pair with the ALU restore in @ref llk_math_reduce_uninit.
+ * and needs no reduce_dim template.
  */
 inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
