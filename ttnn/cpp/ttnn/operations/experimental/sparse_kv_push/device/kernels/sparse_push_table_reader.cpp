@@ -7,7 +7,6 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "sparse_push_constants.hpp"
 #include "sparse_push_packet_builder.hpp"
-#include "sparse_push_route.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -92,16 +91,15 @@ void kernel_main() {
     auto* owner_prefix_rows = header + owner_prefix_off;  // [owner]: of those, rows in the prefix (kPrefix)
 
     // Whether this sender's (link, direction) channel carries `requester`'s rows; called once per requester, in
-    // order. The direction is the fabric's next hop, with ring-distance ties split between both ways
-    // (sparse_push_route.hpp, shared with the writer so the completion increments follow the data). This chip's own
-    // rows need no fabric and go to direction 0. Requesters on one direction alternate between the links.
+    // order. The direction is the fabric's next hop, as in the writer, so the completion increments follow the data.
+    // This chip's own rows need no fabric and go to direction 0. Requesters on one direction alternate between the
+    // links.
     uint32_t nth_on_dir = 0;
     auto serves = [&](uint32_t requester) {
         bool on_dir = dir == 0;
         if (requester != my_rank) {
-            const auto next_hop =
-                tt::tt_fabric::get_next_hop_router_direction(dest_mesh_ids[requester], dest_chip_ids[requester]);
-            on_dir = route<MESH_ROWS, MESH_COLS>(my_rank, requester, static_cast<uint32_t>(next_hop)).dir == dir;
+            on_dir = static_cast<uint32_t>(tt::tt_fabric::get_next_hop_router_direction(
+                         dest_mesh_ids[requester], dest_chip_ids[requester])) == dir;
         }
         return on_dir && nth_on_dir++ % links == link;
     };
