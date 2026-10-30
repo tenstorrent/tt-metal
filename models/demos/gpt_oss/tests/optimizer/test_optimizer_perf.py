@@ -36,6 +36,7 @@ from models.demos.gpt_oss.tests.optimizer.gate_support import (  # noqa: E402
     PROMPTS,
     append_history,
     build_generator,
+    device_argmax,
     device_params,
     greedy_sampling_params,
 )
@@ -133,23 +134,25 @@ def test_optimizer_direct_perf(mesh_device, device_params):
     step_ms = []
     tokens = [first]
 
-    host_argmax = getattr(model[0], "sampling", None) is None  # 1x1: no device sampler, as the demo's fallback
+    no_sampler = getattr(model[0], "sampling", None) is None  # 1x1: no device sampler; argmax on the device instead
+    vocab_size = model_args[0].vocab_size
 
     def decode_step(iteration):
-        if host_argmax:
-            logits, _ = generator.decode_forward(
+        if no_sampler:
+            tt_out = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=kv_cache,
                 sampling_params=None,
+                read_from_device=False,
                 reload_inputs=True,
                 reload_page_table=False,
                 reload_sampling_params=False,
                 reset_sampling_state=False,
             )
-            return torch.argmax(logits, dim=-1).view(-1), None
+            return device_argmax(tt_out, vocab_size), None
         return generator.decode_forward(
             out_tok,
             current_pos,

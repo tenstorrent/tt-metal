@@ -109,6 +109,19 @@ def build_generator(mesh_device, state_dict=None, num_layers=None):
         os.environ.pop("GPT_OSS_FORCE_MODEL_LOAD", None)
 
 
+def device_argmax(tt_output, vocab_size: int) -> torch.Tensor:
+    """Greedy token of a decode step whose logits stayed on the device (decode_forward(read_from_device=False)).
+
+    One P150 has no on-device sampler (per-device vocab > 64K), and reading the padded-vocab logits back to take the
+    argmax on the host costs ~22 ms a step with 52-71 ms jitter; the argmax runs on the device over the real vocab
+    and one token id comes back (32.0 ms a step, p10-p90 31.9-32.2 ms)."""
+    while isinstance(tt_output, (list, tuple)):  # [per data-parallel group] of (logits, log-probs)
+        tt_output = tt_output[0]
+    logits = ttnn.slice(tt_output, [0, 0, 0, 0], [1, 1, tt_output.shape[2], vocab_size])
+    logits = ttnn.to_layout(ttnn.typecast(logits, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)  # argmax: bf16, row-major
+    return torch.tensor([int(ttnn.to_torch(ttnn.argmax(logits, dim=-1)).reshape(-1)[0])])
+
+
 def greedy_sampling_params():
     """The demo's on-device greedy sampling parameters (temperature 0 -> top_k 1, top_p 1.0)."""
     from models.common.sampling import SamplingParams

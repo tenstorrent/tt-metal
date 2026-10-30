@@ -43,6 +43,7 @@ from models.demos.gpt_oss.tests.optimizer.gate_support import (  # noqa: E402
     REPO_ROOT,
     append_history,
     build_generator,
+    device_argmax,
     device_params,
     git_head,
     greedy_sampling_params,
@@ -157,22 +158,22 @@ def test_optimizer_full_model_pcc(mesh_device, device_params):
     first = int(prefill().reshape(-1)[: hf.shape[-1]].argmax())
     traced = [first]
     sampling = greedy_sampling_params()
-    host_argmax = getattr(model[0], "sampling", None) is None  # 1x1: no device sampler, as the demo's fallback
+    no_sampler = getattr(model[0], "sampling", None) is None  # 1x1: no device sampler; argmax on the device instead
     for i in range(G - 1):
-        out_tok, _ = generator.decode_forward(
+        out = generator.decode_forward(
             torch.tensor([[cont[i]]]),
             torch.tensor([P + i]),
             enable_trace=True,
             page_table=page_table,
             kv_cache=kv_cache,
-            sampling_params=None if host_argmax else sampling,
+            sampling_params=None if no_sampler else sampling,
+            read_from_device=not no_sampler,
             reload_inputs=True,
             reload_page_table=False,
-            reload_sampling_params=False if host_argmax else i == 0,
-            reset_sampling_state=False if host_argmax else i == 0,
+            reload_sampling_params=False if no_sampler else i == 0,
+            reset_sampling_state=False if no_sampler else i == 0,
         )
-        if host_argmax:
-            out_tok = torch.argmax(out_tok.reshape(-1)[: hf.shape[-1]])
+        out_tok = device_argmax(out, hf.shape[-1]) if no_sampler else out[0]
         traced.append(int(out_tok.reshape(-1)[0]))
     traced_seconds = time.perf_counter() - t1
     hf_argmax = hf.argmax(dim=-1).tolist()
