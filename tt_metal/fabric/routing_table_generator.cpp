@@ -114,8 +114,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                                                          RoutingDirection b,
                                                          bool prefer_b_on_tie) -> RoutingDirection {
         // Loop through intra_mesh_connectivity starting with a or b direction and return direction that matches
-        // dst_chip_id first. A tie (dst equidistant both ways, only possible on a wrapped axis) returns b if
-        // prefer_b_on_tie, else a
+        // dst_chip_id first. On a tie, returns b if prefer_b_on_tie, else a
         std::uint32_t curr_a = src_chip_id, curr_b = src_chip_id;
         bool a_valid = true, b_valid = true;
         while (a_valid or b_valid) {
@@ -158,13 +157,8 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             mesh_id_val);
         return RoutingDirection::NONE;  // This line should never be reached
     };
-    // Ties on a wrapped axis are split by the parity of the source's position along that axis (even -> N/E,
-    // odd -> S/W), so both directions of each ring carry the same load. The EW leg of a turning route is decided at
-    // the turn chip, which shares the source's column, so it resolves by the source's column parity too. Only exact
-    // ties are split: one hop later the chosen direction is strictly shorter, so every downstream chip agrees. The rule
-    // must depend only on the position along the axis: the 2D action vectors are mesh-identical, built by probing
-    // one row/column per axis. Express meshes take the NS axis from their ring decomposition, so only their EW ties
-    // are split here.
+    // Split ring ties by the source's position along the axis (even -> N/E, odd -> S/W) to balance both directions.
+    // Must depend only on that position: the 2D action vectors are built from one row/column per axis.
     const auto prefer_negative_direction_on_tie = [](std::uint32_t position_on_axis) {
         return position_on_axis % 2 == 1;
     };
