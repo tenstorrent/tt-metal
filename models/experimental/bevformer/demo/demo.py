@@ -136,9 +136,7 @@ def _load_manifest_image(frame):
         if IMAGE_COLOR_ORDER == "BGR":
             tensor = tensor.flip(0)
         tensor = (tensor - mean) / std
-        resized = cv2.resize(
-            tensor.permute(1, 2, 0).numpy(), (raw_width, raw_height), interpolation=cv2.INTER_LINEAR
-        )
+        resized = cv2.resize(tensor.permute(1, 2, 0).numpy(), (raw_width, raw_height), interpolation=cv2.INTER_LINEAR)
         tensor = torch.from_numpy(resized).permute(2, 0, 1)
         padded = torch.zeros(3, IMAGE_HEIGHT, IMAGE_WIDTH, dtype=torch.float32)
         padded[:, :raw_height, :raw_width] = tensor
