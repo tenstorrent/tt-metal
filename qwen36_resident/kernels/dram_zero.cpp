@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Zero-fills ranges of DRAM banks from a CB of zeros (common.zero_dram: device buffers without a host image).
-// Compile-time args: 0 bytes per write (the CB's size).
-// Runtime args: 0 bank, 1 ranges, then per range: bank-local address, bytes.
+// Compile-time args: 0 bytes per write (the CB's size), 1 the call's tensors (unused here: it keys the program cache on
+// the runtime args' length, 2 + 2 per tensor on every core).
+// Runtime args: 0 bank, 1 ranges, then per range: bank-local address, bytes (then zero padding to that length).
 
 #include "api/dataflow/dataflow_api.h"
 
