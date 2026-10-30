@@ -54,7 +54,7 @@ void kernel_main() {
     // UP_SPLIT up-weight read args. The per-expert `up` addresses live in the
     // runtime-arg array starting at COMMON_UP.
     const uint32_t my_nt_gu = get_arg_val<uint32_t>(2);
-    const bool is_up_sender = get_arg_val<uint32_t>(3) != 0;
+    const bool full_is_up_sender = get_arg_val<uint32_t>(3) != 0;
     // UP_SPLIT local handshake sems (see reader): up_go = slot reserved,
     // up_done = up landed.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(4);
@@ -222,13 +222,13 @@ void kernel_main() {
     // corners come in the OPPOSITE order from a NoC-0 multicast: pass them unswapped and
     // the NoC reads start > end as a torus wraparound, covers no receiver, and the run
     // deadlocks with no assert.
-    const uint32_t in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
-    const uint32_t in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
-    const uint32_t in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
-    const uint32_t in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
-    const uint32_t in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
-    Semaphore<> in1_ready_sem(get_arg_val<uint32_t>(IN1_WM_RT + 5));
-    Semaphore<> in1_valid_sem(get_arg_val<uint32_t>(IN1_WM_RT + 6));
+    const uint32_t full_in1_mc_nx_start = get_arg_val<uint32_t>(IN1_WM_RT + 2);  // NoC-0 frame's END x
+    const uint32_t full_in1_mc_ny_start = get_arg_val<uint32_t>(IN1_WM_RT + 3);  // NoC-0 frame's END y
+    const uint32_t full_in1_mc_nx_end = get_arg_val<uint32_t>(IN1_WM_RT + 0);    // NoC-0 frame's START x
+    const uint32_t full_in1_mc_ny_end = get_arg_val<uint32_t>(IN1_WM_RT + 1);    // NoC-0 frame's START y
+    const uint32_t full_in1_num_receivers = get_arg_val<uint32_t>(IN1_WM_RT + 4);
+    const uint32_t full_in1_ready_sem_id = get_arg_val<uint32_t>(IN1_WM_RT + 5);
+    const uint32_t full_in1_valid_sem_id = get_arg_val<uint32_t>(IN1_WM_RT + 6);
     Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(IN1_WM_RT + 7));
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
     // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
@@ -239,7 +239,68 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
+    // WAVE layouts (adaptive_chunk::WavePlanner). The half-grid set (sender role, NoC-0
+    // rectangle, receivers, own ready/valid sems), after the IN1_WRITER_MCAST block. Same corner swap for NoC 1 as
+    // above.
+    constexpr uint32_t HALF_RT = IN1_WM_RT + 9;
+    const bool half_is_up_sender = get_arg_val<uint32_t>(HALF_RT + 0) != 0;
+    const uint32_t half_in1_mc_nx_start = get_arg_val<uint32_t>(HALF_RT + 3);
+    const uint32_t half_in1_mc_ny_start = get_arg_val<uint32_t>(HALF_RT + 4);
+    const uint32_t half_in1_mc_nx_end = get_arg_val<uint32_t>(HALF_RT + 1);
+    const uint32_t half_in1_mc_ny_end = get_arg_val<uint32_t>(HALF_RT + 2);
+    const uint32_t half_in1_num_receivers = get_arg_val<uint32_t>(HALF_RT + 5);
+    const uint32_t half_in1_ready_sem_id = get_arg_val<uint32_t>(HALF_RT + 6);
+    const uint32_t half_in1_valid_sem_id = get_arg_val<uint32_t>(HALF_RT + 7);
+    // QUARTER (2-row groups) set, same layout as the half set minus the valid sem, which is the
+    // halves' (see the reader).
+    constexpr uint32_t QUARTER_RT = HALF_RT + 8;
+    const bool quarter_is_up_sender = get_arg_val<uint32_t>(QUARTER_RT + 0) != 0;
+    const uint32_t quarter_in1_mc_nx_start = get_arg_val<uint32_t>(QUARTER_RT + 3);
+    const uint32_t quarter_in1_mc_ny_start = get_arg_val<uint32_t>(QUARTER_RT + 4);
+    const uint32_t quarter_in1_mc_nx_end = get_arg_val<uint32_t>(QUARTER_RT + 1);
+    const uint32_t quarter_in1_mc_ny_end = get_arg_val<uint32_t>(QUARTER_RT + 2);
+    const uint32_t quarter_in1_num_receivers = get_arg_val<uint32_t>(QUARTER_RT + 5);
+    const uint32_t quarter_in1_ready_sem_id = get_arg_val<uint32_t>(QUARTER_RT + 6);
+
+    // Same clamped per-expert tile count the reader and compute plan with.
+    auto expert_tiles = [&](uint32_t e) -> uint32_t {
+        const uint32_t cv = adaptive_chunk::count_in_band(counts_ptr[idx_ptr[e]], min_active_tokens, max_active_tokens);
+        return adaptive_chunk::clamp_count_tiles(
+            (cv + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
+    };
+    adaptive_chunk::WavePlanner planner;
+
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
+        const uint32_t role = planner.role(local_expert_id, experts_per_chip, per_core_M_max, expert_tiles);
+        const bool runs_here = adaptive_chunk::role_runs_here(role, my_mt);
+        const uint32_t grp_rows = adaptive_chunk::role_rows(role);
+        const bool half = (grp_rows == adaptive_chunk::kHalfRows);
+        const bool quarter = (grp_rows == adaptive_chunk::kQuarterRows);
+        // EIGHTH: one grid row per expert -- every core reads its own `up` and multicasts nothing.
+        const bool eighth = (grp_rows == adaptive_chunk::kEighthRows);
+        const uint32_t grp_row = adaptive_chunk::role_row(role, my_mt);
+        const uint32_t grp_chunk_M = per_core_M_max * grp_rows;
+        const bool is_up_sender = eighth || (quarter ? quarter_is_up_sender
+                                             : half  ? half_is_up_sender
+                                                     : full_is_up_sender);
+        const uint32_t in1_mc_nx_start = quarter ? quarter_in1_mc_nx_start
+                                         : half  ? half_in1_mc_nx_start
+                                                 : full_in1_mc_nx_start;
+        const uint32_t in1_mc_ny_start = quarter ? quarter_in1_mc_ny_start
+                                         : half  ? half_in1_mc_ny_start
+                                                 : full_in1_mc_ny_start;
+        const uint32_t in1_mc_nx_end = quarter ? quarter_in1_mc_nx_end : half ? half_in1_mc_nx_end : full_in1_mc_nx_end;
+        const uint32_t in1_mc_ny_end = quarter ? quarter_in1_mc_ny_end : half ? half_in1_mc_ny_end : full_in1_mc_ny_end;
+        const uint32_t in1_num_receivers = eighth    ? 0u
+                                           : quarter ? quarter_in1_num_receivers
+                                           : half    ? half_in1_num_receivers
+                                                     : full_in1_num_receivers;
+        Semaphore<> in1_ready_sem(
+            quarter ? quarter_in1_ready_sem_id
+            : half  ? half_in1_ready_sem_id
+                    : full_in1_ready_sem_id);
+        Semaphore<> in1_valid_sem((quarter || half) ? half_in1_valid_sem_id : full_in1_valid_sem_id);
+
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
@@ -257,7 +318,7 @@ void kernel_main() {
         // Runtime chunk layout from THIS expert's count — the same math the reader
         // and compute kernels run, so all three agree on the row mapping (a
         // mismatch would emit this expert's rows at the wrong token offsets).
-        const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
+        const uint32_t effective_chunks = runs_here ? adaptive_chunk::num_chunks(count_tiles, grp_chunk_M) : 0;
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
@@ -311,6 +372,11 @@ void kernel_main() {
                         if constexpr (writer_mcasts_in1) {
                             ++mc_seq;
                             mcast_go_sem.wait_min(mc_seq);
+                            // EIGHTH: no receivers -- no acks, no multicast, just hand the slot back.
+                            if (in1_num_receivers == 0) {
+                                mcast_done_sem.set(mc_seq);
+                                continue;
+                            }
                             in1_ready_sem.wait(in1_num_receivers);
                             in1_ready_sem.set(0);
                             CircularBuffer cb_in1_gate_buf(cb_in1_gate);
@@ -356,6 +422,16 @@ void kernel_main() {
                                 in1_num_receivers);
                             mcast_done_sem.set(mc_seq);
                         }
+                    }
+                } else {
+                    // Wave layouts: this core is not the sender for this expert, but the counters
+                    // must still count its blocks (the slot index and the reader's sequence
+                    // depend on it), and done must keep up for when it is a sender again.
+                    up_seq += num_blocks_gu;
+                    up_done_sem.set(up_seq);
+                    if constexpr (writer_mcasts_in1) {
+                        mc_seq += num_blocks_gu;
+                        mcast_done_sem.set(mc_seq);
                     }
                 }
             }
@@ -410,6 +486,10 @@ void kernel_main() {
                         noc_up.async_read_barrier();
                         down_done_sem.set(down_seq);
                     }
+                } else {
+                    down_seq += num_blocks_d;
+                    down_blk += num_blocks_d;
+                    down_done_sem.set(down_seq);
                 }
             }
 
@@ -417,8 +497,8 @@ void kernel_main() {
             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller
             // divisor for the tail); chunk starts are uniform at chunk*chunk_M_max.
             // Contiguous row map: this core owns rows [row0, row0 + per_core_M).
-            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
-            const uint32_t row0 = chunk * chunk_M_max + my_mt * per_core_M;
+            const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, grp_chunk_M, grp_rows);
+            const uint32_t row0 = chunk * grp_chunk_M + grp_row * per_core_M;
             const uint32_t col0 = my_nt_d * per_core_N_d;
             // The DOWN matmul packs and pushes the FULL compile-time-MAX ring (its
             // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
