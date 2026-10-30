@@ -131,7 +131,8 @@ Set only what is specific to the deployment:
   `PREFILL_MIGRATION_TABLE_PATH` on storage all hosts share, and
   `PREFILL_MIGRATION_DEVICE_MAP_PATH` on host-local storage.
 - `PREFILL_HF_MODEL` / `PREFILL_TTNN_CACHE`, when the weights are not at the
-  adapter defaults.
+  adapter defaults. For an MTP variant, also `TT_GLM53_MTP_TTNN_CACHE`; the
+  manifest pins the MTP cache to the weka path.
 
 ### Launching through `ttrun`
 
