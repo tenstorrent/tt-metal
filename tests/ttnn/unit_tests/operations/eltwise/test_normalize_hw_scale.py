@@ -25,12 +25,17 @@ VAR_DEVIATION_IDS = ["1e-18", "1e-10", "1.0", "1e10", "1e18", "1e19"]
 DTYPES = ((torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16))
 DTYPE_IDS = ("float32", "bfloat16")
 
-SHAPE = torch.Size([1, 1, 32, 32])
+NORMALIZE_SHAPE = torch.Size([1, 1, 32, 32])
+
+# std_hw and var_hw send planes of at most 64 tiles to ttnn.std / ttnn.var, which run as one program and do not
+# rescale the deviation yet (#55159), so one tile would not reach the composite tested here. One 512x512 plane is
+# 256 tiles, which takes the composite.
+STATISTIC_SHAPE = torch.Size([1, 1, 512, 512])
 
 
-def _alternating(deviation, torch_dtype):
+def _alternating(deviation, torch_dtype, shape):
     """Columns of +deviation and -deviation: mean exactly 0, population std exactly |deviation|."""
-    sign = torch.ones(SHAPE)
+    sign = torch.ones(shape)
     sign[..., 1::2] = -1.0
     return sign, (sign * deviation).to(torch_dtype)
 
@@ -42,7 +47,7 @@ def _first(tt_tensor):
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("deviation", DEVIATIONS, ids=DEVIATION_IDS)
 def test_normalize_hw_is_scale_invariant(deviation, torch_dtype, ttnn_dtype, device):
-    sign, in_data = _alternating(deviation, torch_dtype)
+    sign, in_data = _alternating(deviation, torch_dtype, NORMALIZE_SHAPE)
     tt_in = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     got = ttnn.to_torch(ttnn.normalize_hw(tt_in)).float()
@@ -58,7 +63,7 @@ def test_normalize_hw_is_scale_invariant(deviation, torch_dtype, ttnn_dtype, dev
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("deviation", DEVIATIONS, ids=DEVIATION_IDS)
 def test_std_hw_matches_the_constructed_spread(deviation, torch_dtype, ttnn_dtype, device):
-    _, in_data = _alternating(deviation, torch_dtype)
+    _, in_data = _alternating(deviation, torch_dtype, STATISTIC_SHAPE)
     tt_in = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     got = _first(ttnn.std_hw(tt_in))
@@ -73,7 +78,7 @@ def test_std_hw_matches_the_constructed_spread(deviation, torch_dtype, ttnn_dtyp
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 @pytest.mark.parametrize("deviation", VAR_DEVIATIONS, ids=VAR_DEVIATION_IDS)
 def test_var_hw_matches_the_constructed_spread(deviation, torch_dtype, ttnn_dtype, device):
-    _, in_data = _alternating(deviation, torch_dtype)
+    _, in_data = _alternating(deviation, torch_dtype, STATISTIC_SHAPE)
     tt_in = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     got = _first(ttnn.var_hw(tt_in))
@@ -87,13 +92,13 @@ def test_var_hw_matches_the_constructed_spread(deviation, torch_dtype, ttnn_dtyp
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", DTYPES, ids=DTYPE_IDS)
 def test_std_hw_scales_with_its_input(torch_dtype, ttnn_dtype, device):
     """std(k*x) == k*std(x) stated directly, across the exponent range."""
-    _, base = _alternating(1.0, torch_dtype)
+    _, base = _alternating(1.0, torch_dtype, STATISTIC_SHAPE)
     tt_base = ttnn.from_torch(base, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     unit = _first(ttnn.std_hw(tt_base))
     assert abs(unit - 1.0) <= 2e-2, f"std_hw of the unit spread is {unit:g}, expected 1"
 
     for k in (1e-25, 1e-19, 1e-6, 1e6, 1e19, 1e25):
-        _, scaled = _alternating(k, torch_dtype)
+        _, scaled = _alternating(k, torch_dtype, STATISTIC_SHAPE)
         tt_scaled = ttnn.from_torch(scaled, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         got = _first(ttnn.std_hw(tt_scaled))
         want = k * unit
