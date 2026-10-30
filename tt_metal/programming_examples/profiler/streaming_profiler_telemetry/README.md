@@ -24,11 +24,12 @@ DevicePublish<TelemetryMetadata{"tt_megabytes_processed_total"_s, MetricUnit::ME
 The third argument, the unit the value is in, is optional: without it, the metric is `MetricUnit::UNITLESS`. The macro
 brings `MetricUnit` into scope, so a kernel names a unit without its namespace.
 
-A telemetry metric's name starts with `tt_`, and its value is a `uint64_t` or a `double`. The external process receives
-it as a `TelemetrySample`, from `tt-metalium/experimental/telemetry_sample.hpp`:
+A telemetry metric's name starts with `tt_`, and its value is a `uint8_t`, `uint16_t`, `uint32_t`, `uint64_t`, `float`
+or `double`. The external process receives it as a `TelemetrySample`, from
+`tt-metalium/experimental/telemetry_sample.hpp`:
 
 ```cpp
-using TelemetryValue = std::variant<uint64_t, double>;
+using TelemetryValue = std::variant<uint8_t, uint16_t, uint32_t, uint64_t, float, double>;
 using TelemetrySample = Record<TelemetryValue, TelemetryMetadata>;
 
 Callback callback = RegisterCallback(
@@ -43,16 +44,16 @@ Callback callback = RegisterCallback(
 ```
 
 The host matches a call site by its metadata type and the type of its value, so a `TelemetrySample` callback receives
-only `TelemetryMetadata` records whose value is a `uint64_t` or a `double`. A call site that passes any other type, a
-`uint32_t` included, never reaches it, so `TelemetryPublish` rejects one at compile time, along with a name that doesn't
-start with `tt_`: cast the value first.
+only `TelemetryMetadata` records whose value is one of those six types, and `payload()` holds the type the kernel
+passed. A call site that passes any other type, an `int32_t` included, never reaches it, so `TelemetryPublish` rejects
+one at compile time, along with a name that doesn't start with `tt_`: cast the value first.
 
 ## Running it
 
 This directory holds the two sides:
 
-- `kernels/publish_telemetry.cpp` sends three metrics at a fixed rate: `tt_loop_iteration`, which has no unit,
-  `tt_megabytes_processed_total`, a running total in `MEGABYTES` (MiB), and `tt_progress`, in `PERCENT`.
+- `kernels/publish_telemetry.cpp` sends three metrics at a fixed rate: `tt_loop_iteration`, a `uint32_t` with no unit,
+  `tt_megabytes_processed_total`, a running total in `MEGABYTES` (MiB), and `tt_progress`, a `float` in `PERCENT`.
 - `telemetry_metal_process.cpp` is the Metal process. It runs that kernel on four cores of device 0.
 - `telemetry_external_process.cpp` is the external process. It logs every telemetry sample it receives, with its unit.
 

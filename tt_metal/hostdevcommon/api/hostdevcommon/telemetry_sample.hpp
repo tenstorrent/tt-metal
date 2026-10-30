@@ -40,10 +40,10 @@ enum class MetricUnit : uint16_t {
  *     TelemetryPublish("tt_bytes_processed_total", bytes);
  *     TelemetryPublish("tt_memory_used", megabytes, MetricUnit::MEGABYTES);
  *
- * A telemetry metric's name starts with "tt_", and its value is a uint64_t or a double: the host reads it as a
- * TelemetrySample (tt-metalium/experimental/telemetry_sample.hpp), which matches only call sites that pass one of
- * those two, so a call site that passes any other type, a uint32_t included, never reaches it. TelemetryPublish
- * checks both at compile time.
+ * A telemetry metric's name starts with "tt_", and its value is a uint8_t, uint16_t, uint32_t, uint64_t, float or
+ * double: the host reads it as a TelemetrySample (tt-metalium/experimental/telemetry_sample.hpp), which matches only
+ * call sites that pass one of those, so a call site that passes any other type, an int32_t included, never reaches it.
+ * TelemetryPublish checks both at compile time.
  */
 struct TelemetryMetadata {
     device_observability::String name;

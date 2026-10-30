@@ -31,7 +31,7 @@
 namespace tt::tt_metal::experimental::streaming_profiler {
 
 /** @brief The types a kernel may send a telemetry sample's value as. */
-using TelemetryValue = std::variant<uint64_t, double>;
+using TelemetryValue = std::variant<uint8_t, uint16_t, uint32_t, uint64_t, float, double>;
 
 /** @brief A telemetry sample: a metric's value, sent with TelemetryMetadata. */
 using TelemetrySample = device_observability::Record<TelemetryValue, TelemetryMetadata>;

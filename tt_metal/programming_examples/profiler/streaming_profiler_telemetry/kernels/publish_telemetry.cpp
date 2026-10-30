@@ -4,8 +4,9 @@
 //
 // Sends three telemetry metrics to the external process once per interval: tt_loop_iteration, the iteration it's on,
 // tt_megabytes_processed_total, the megabytes (MiB) this core has handled so far, and tt_progress, the percent of its
-// samples it has sent. The bytes are made up: each sample adds this core's runtime argument. Telemetry values are
-// uint64_t or double, so each call passes one of those, and each but the iteration count names its MetricUnit.
+// samples it has sent. The bytes are made up: each sample adds this core's runtime argument. A telemetry value is a
+// uint8_t, uint16_t, uint32_t, uint64_t, float or double, so each call passes one of those, and each but the iteration
+// count names its MetricUnit.
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -20,8 +21,8 @@ void kernel_main() {
         riscv_wait(interval_cycles);
         bytes += bytes_per_sample;
         const double megabytes = static_cast<double>(bytes) / (1024.0 * 1024.0);
-        const double progress = 100.0 * static_cast<double>(i + 1) / static_cast<double>(samples);
-        TelemetryPublish("tt_loop_iteration", uint64_t{i});
+        const float progress = 100.0f * static_cast<float>(i + 1) / static_cast<float>(samples);
+        TelemetryPublish("tt_loop_iteration", i);
         TelemetryPublish("tt_megabytes_processed_total", megabytes, MetricUnit::MEGABYTES);
         TelemetryPublish("tt_progress", progress, MetricUnit::PERCENT);
     }
