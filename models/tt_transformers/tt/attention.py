@@ -7,11 +7,11 @@ import math
 import torch
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
 
@@ -32,6 +32,11 @@ class Attention(LightweightModule):
         prefetcher=None,
     ):
         super().__init__()
+        if getattr(configuration, "model_type", None) == "cohere2" and configuration.use_hf_rope:
+            raise NotImplementedError(
+                "cohere2 does not support the use_hf_rope rotary path "
+                "(requires Meta-style rotary with skip_qkv_permute)"
+            )
         self.args = args
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
@@ -322,7 +327,7 @@ class Attention(LightweightModule):
             return x
 
         if f"{q_norm_str}.weight" in state_dict:
-            fn_q_norm = RMSNorm(
+            fn_q_norm = LayerNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -331,6 +336,7 @@ class Attention(LightweightModule):
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
+                norm_type=LayerNormTypes.RMSNORM,
                 add_unit_offset=self.rms_norm_add_unit_offset,
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
@@ -340,7 +346,7 @@ class Attention(LightweightModule):
             self.q_norm = lambda x, mode, norm_config: x
 
         if f"{k_norm_str}.weight" in state_dict:
-            fn_k_norm = RMSNorm(
+            fn_k_norm = LayerNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -349,6 +355,7 @@ class Attention(LightweightModule):
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
+                norm_type=LayerNormTypes.RMSNORM,
                 add_unit_offset=self.rms_norm_add_unit_offset,
                 is_distributed=False,
                 tt_ccl=self.tt_ccl,
@@ -1374,8 +1381,6 @@ class Attention(LightweightModule):
         ttnn.deallocate(q_heads_1QSD)
 
         if chunk_start_idx is not None:
-            if self.sliding_window is not None:
-                raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
             if isinstance(chunk_start_idx, ttnn.Tensor):
                 attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                     input_tensor_q=q_heads_1QSD_8b,
@@ -1386,6 +1391,7 @@ class Attention(LightweightModule):
                     chunk_start_idx_tensor=chunk_start_idx,
                     compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                     program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None),
+                    sliding_window_size=self.sliding_window,
                 )
             else:
                 attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(

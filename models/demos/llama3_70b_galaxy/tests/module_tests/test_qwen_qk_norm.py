@@ -12,7 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     get_core_ranges,
 )
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.common.utility_functions import (
     torch_random,
     comp_pcc,
@@ -206,23 +206,25 @@ def test_qwen3_tg_qk_norm(
         inplace=False,
     )
 
-    q_norm = RMSNorm(
+    q_norm = LayerNorm(
         device=mesh_device,
         dim=128,
         state_dict=state_dict,
         state_dict_prefix=None,
         weight_dtype=ttnn.bfloat16,
         weight_key="q_norm",
+        norm_type="RMSNorm",
         sharded_program_config=norm_program_cfg,
         sharded_output_config=reshape_output_mem_cfg,
     )
-    k_norm = RMSNorm(
+    k_norm = LayerNorm(
         device=mesh_device,
         dim=128,
         state_dict=state_dict,
         state_dict_prefix=None,
         weight_dtype=ttnn.bfloat16,
         weight_key="k_norm",
+        norm_type="RMSNorm",
         sharded_program_config=norm_program_cfg,
         sharded_output_config=reshape_output_mem_cfg,
     )

@@ -25,7 +25,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import SHARD_HEIGHT
+from models.common.layernorm import SHARD_HEIGHT
 from models.tt_transformers.tt.common import Mode
 
 

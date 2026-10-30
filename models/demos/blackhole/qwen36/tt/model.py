@@ -15,12 +15,12 @@ from tqdm import tqdm
 from ttnn.tools import trace_allocation_tracker
 
 import ttnn
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
-from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
+from models.tt_transformers.tt.common import LayerNormTypes, Mode, get_block_size, num_blocks_in_seq
 
 
 def spec_kv_write_conflicts(page_tables, positions, T, block_size):
@@ -135,11 +135,12 @@ class Qwen36Model:
 
         # Framework RMSNorm (add_unit_offset=True). Single device: is_distributed=None.
         # 27B TP: hidden is sharded -> pass is_distributed + tt_ccl or use DistributedNorm.
-        self.norm = RMSNorm(
+        self.norm = LayerNorm(
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             weight_key="norm",
+            norm_type=LayerNormTypes.RMSNORM,
             weight_cache_path=tensor_cache_path,
             weight_dtype=ttnn.bfloat16,
             add_unit_offset=True,

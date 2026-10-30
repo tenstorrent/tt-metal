@@ -5,8 +5,14 @@
 from loguru import logger
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+from models.tt_transformers.tt.ccl import (
+    tt_distributed_layernorm,
+    tt_distributed_rmsnorm,
+    tt_sharded_distributed_layernorm,
+    tt_sharded_distributed_rmsnorm,
+)
 from models.tt_transformers.tt.common import Mode
 
 
@@ -62,7 +68,7 @@ class DistributedNorm(LightweightModule):
     def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
         if norm is None and TG:
             raise NotImplementedError("Gather-only DistributedNorm (norm=None) is not supported on Galaxy (TG)")
-        self.norm = norm
+        self.norm_type = norm.norm_type
         self.args = args
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
@@ -99,6 +105,7 @@ class DistributedNorm(LightweightModule):
                 packer_l1_acc=False,
             )
         self.TG = TG
+        self.is_layernorm = isinstance(self.norm_type, LayerNorm)
 
     def update(self, *, weight: ttnn.Tensor) -> None:
         """Pass-through to the wrapped ``RMSNorm.update`` (``DistributedNorm``
@@ -115,6 +122,27 @@ class DistributedNorm(LightweightModule):
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
 
         if self.TG:
+            # The Galaxy path bypasses norm.forward(), so pick the CCL helper to match.
+            if self.is_layernorm:
+                if mode == Mode.DECODE:
+                    return tt_sharded_distributed_layernorm(
+                        x,
+                        epsilon=self.norm.eps,
+                        gamma=self.norm.weight_distributed,
+                        mesh_device=self.args.mesh_device,
+                        tt_ccl=self.tt_ccl,
+                        ln_sharded_input_memcfg=self.gather_in_mem_cfg,
+                        ln_sharded_progcfg=self.ln_prg_cfg,
+                        ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    )
+                return tt_distributed_layernorm(
+                    x,
+                    epsilon=self.norm.eps,
+                    gamma=self.norm.weight_distributed,
+                    mesh_device=self.args.mesh_device,
+                    tt_ccl=self.tt_ccl,
+                    compute_kernel_config=self.ln_cfg,
+                )
             if mode == Mode.DECODE:
                 return tt_sharded_distributed_rmsnorm(
                     x,
@@ -126,15 +154,14 @@ class DistributedNorm(LightweightModule):
                     ln_sharded_progcfg=self.ln_prg_cfg,
                     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
                 )
-            else:
-                return tt_distributed_rmsnorm(
-                    x,
-                    epsilon=self.norm.eps,
-                    gamma=self.norm.weight_distributed,
-                    mesh_device=self.args.mesh_device,
-                    tt_ccl=self.tt_ccl,
-                    compute_kernel_config=self.ln_cfg,
-                )
+            return tt_distributed_rmsnorm(
+                x,
+                epsilon=self.norm.eps,
+                gamma=self.norm.weight_distributed,
+                mesh_device=self.args.mesh_device,
+                tt_ccl=self.tt_ccl,
+                compute_kernel_config=self.ln_cfg,
+            )
 
         input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 

@@ -7,16 +7,16 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 """
 
 import ttnn
-from models.common.rmsnorm import RMSNorm
+from models.common.layernorm import LayerNorm
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import LayerNormTypes, Mode
 
 
-class _FusedDistRMSNorm(RMSNorm):
+class _FusedDistRMSNorm(LayerNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
     (args.prefill_fused_dist_norm, see tpc.fused_distributed_rmsnorm). Decode keeps the replicated-weight rms_norm."""
 
@@ -28,6 +28,7 @@ class _FusedDistRMSNorm(RMSNorm):
         self.weight_fused = ttnn.as_tensor(
             kwargs["state_dict"][name].unsqueeze(0).view(1, 1, dim) + 1.0,  # same +1 as the base weight
             device=device,
+            norm_type=LayerNormTypes.RMSNORM,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -183,12 +184,13 @@ class Qwen36DecoderLayer:
         # 2D (rows, tp) mesh that mixes the rows' tokens, so only the fused norm (TP-axis gather) is correct there.
         if tpc.is_2d_mesh(mesh_device) and not fused:
             raise ValueError("2D meshes need the fused distributed RMSNorm (QWEN36_FUSED_DIST_NORM=1)")
-        norm_cls = _FusedDistRMSNorm if fused else RMSNorm
+        norm_cls = _FusedDistRMSNorm if fused else LayerNorm
         norm = norm_cls(
             device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             weight_key=weight_key,
+            norm_type=LayerNormTypes.RMSNORM,
             state_dict_prefix=f"layers.{layer_num}.",
             weight_cache_path=tensor_cache_path,
             weight_dtype=ttnn.bfloat16,

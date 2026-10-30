@@ -9,12 +9,12 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH, TTSampling
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, copy_host_to_device
+from models.tt_transformers.tt.common import LayerNormTypes, Mode, copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -224,6 +224,7 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+        norm_type = LayerNormTypes.LAYERNORM if args.use_layernorm else LayerNormTypes.RMSNORM
         self.norm = (
             final_norm_builder_resolved(
                 args=args,
@@ -235,7 +236,7 @@ class Transformer(LightweightModule):
             )
             if final_norm_builder_resolved is not None
             else DistributedNorm(
-                RMSNorm(
+                LayerNorm(
                     device=mesh_device,
                     dim=args.dim,
                     eps=args.norm_eps,
@@ -244,9 +245,10 @@ class Transformer(LightweightModule):
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
                     weight_key="norm",
+                    norm_type=norm_type,
                     add_unit_offset=self.args.rms_norm_add_unit_offset,
                     is_distributed=self.args.is_distributed_norm,
-                    ccl_topology=self.args.ccl_topology(),
+                    ccl_topology=args.ccl_topology(),
                     tt_ccl=self.tt_ccl,
                 ),
                 args,
@@ -459,6 +461,13 @@ class Transformer(LightweightModule):
         logits = ttnn.multiply(logits, cap)
         return logits
 
+    def _apply_logit_scale(self, logits):
+        """Cohere2: logits -> logits * logit_scale. No-op when unset."""
+        scale = self.args.logit_scale
+        if scale is None:
+            return logits
+        return ttnn.multiply(logits, scale)
+
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
         x = self.norm(
@@ -468,6 +477,7 @@ class Transformer(LightweightModule):
         if lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
+        logits = self._apply_logit_scale(logits)
         logits = self._apply_final_logit_softcapping(logits)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
@@ -1206,6 +1216,7 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
 
         x = self.lm_head(x)
+        x = self._apply_logit_scale(x)
         x = self._apply_final_logit_softcapping(x)
         if mode == Mode.PREFILL:
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
