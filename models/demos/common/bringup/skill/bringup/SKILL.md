@@ -412,6 +412,20 @@ an op request's approval and the op-gen launch (section 5), and evidence that th
 needing a shared file, a wider allowed path, a framework fix, a rerun, a retry after a stop) you decide, do, log in
 supervision.md, and report in one line.
 
+Never idle the box on a decision that does not matter (owner, 2026-10-30). A pick that is bit-identical, harmless, or
+moves the chunk by a few tenths of a millisecond (totals within run-to-run noise) is decided by you, at once, and the
+run goes on with the owner's queued plan; one line in the report says what you decided. Ask only for a choice whose
+outcome the owner would care about (a real trade-off, a regression, a change of direction), and state its impact per
+chunk (ms of the chunk, %), never per call (DeepSeek-V4.1 P.19: a -0.42 ms-a-chunk, bit-identical matmul sweep was held
+"for the owner" and the 8x4 idled ~6.5 h).
+
+Never idle the box on a decision that does not matter (owner, 2026-10-30). A pick that is bit-identical, harmless, or
+moves the chunk by a few tenths of a millisecond (totals within run-to-run noise) is decided by you, at once, and the
+run goes on with the owner's queued plan; one line in the report says what you decided. Ask only for a choice whose
+outcome the owner would care about (a real trade-off, a regression, a change of direction), and state its impact per
+chunk (ms of the chunk, %), never per call (DeepSeek-V4.1 P.19: a -0.42 ms-a-chunk, bit-identical matmul sweep was held
+"for the owner" and the 8x4 idled ~6.5 h).
+
 Verify, do not ask. When you doubt an agent's change (a fork edit, an unusual precision or config choice, a claim in
 a CHANGELOG or a commit message), check it yourself: pause at the next task boundary, run the fork's tests, a sweep
 over the shapes the model uses (every ladder rung, other block sizes), bit-identical reruns, a comparison with the
