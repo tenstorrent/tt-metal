@@ -31,7 +31,8 @@ from helpers.test_variant_parameters import (
 
 GUARD_BYTE = 0xA5
 ROW_NUM_DATUMS = 16
-# Three DEST sections, so the packs walk bank 0 -> 1 -> 0 and cover the wrap back to the first bank.
+# Three DEST sections: under DestSync.Half the packs walk bank 0 -> 1 -> 0 and cover the wrap back to the first bank;
+# under DestSync.Full they reuse all of DEST three times.
 NUM_DEST_SECTIONS = 3
 # _llk_pack_rows_ asserts is_valid_L1_address, which rejects anything below MEM_MAP_END (0x38640 in
 # tt-2xx/quasar/dev_mem_map.h). The stimuli start at 0x21000, so a small input would put the result there.

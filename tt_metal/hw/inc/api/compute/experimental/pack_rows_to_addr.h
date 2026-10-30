@@ -32,6 +32,8 @@ ALWI void pack_rows_to_addr(uint32_t idst, uint32_t l1_addr) {
 #endif
 }
 
+// On Quasar this only clears the packer counters; the row-pack MOP and BFD stay programmed, so call pack_init(cb)
+// before the next pack_tile.
 ALWI void pack_rows_to_addr_uninit() {
     PACK((llk_pack_rows_uninit()));
 #ifndef ARCH_QUASAR

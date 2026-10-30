@@ -142,7 +142,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; tile++)
         {
             const std::uint32_t input_tile = block * NUM_TILES_IN_BLOCK + tile;
-            _llk_pack_rows_(bfd_pack, tile /*dest_tile_idx*/, L1_ADDRESS(buffer_Res[2 * input_tile]) + input_tile % 4 /*16B offset*/);
+            const std::uint32_t l1_address = L1_ADDRESS(buffer_Res[2 * input_tile]) + input_tile % 4;
+            _llk_pack_rows_(bfd_pack, tile /*dest_tile_idx*/, l1_address);
         }
         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
