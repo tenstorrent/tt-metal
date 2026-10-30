@@ -166,7 +166,7 @@ class Qwen3(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         past_key_values=None,
         new_tokens: Optional[int] = None,
-        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
         **kwargs,
     ) -> ttml.autograd.Tensor:
         TILE_SIZE = 32
@@ -201,6 +201,8 @@ class Qwen3(AbstractModuleBase):
         if past_key_values is not None:
             position_offset = past_key_values.get_seq_length()
 
+        if position_ids is not None:
+            position_ids = ttml.ops.rope.RotaryEmbeddingPositionIds(position_ids)
         for i, block in enumerate(self.blocks):
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
                 out = memory_efficient_runner(block, out, mask, past_key_values, position_offset, position_ids)
