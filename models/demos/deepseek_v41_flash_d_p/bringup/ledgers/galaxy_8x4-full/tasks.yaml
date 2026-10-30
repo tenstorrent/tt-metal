@@ -1508,6 +1508,48 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: P.15
+  title: 'HOST_ALLOC: persistent CCL outputs (P.4 retried), shape-keyed MoE head / dispatch programs, fewer allocations and slices'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.14
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-30. The chunk is host-bound by ~125 ms (NOW profile, /scratch/dnijemcevic/posprof/hostprof_now.pstats:
+      ~2,600 compiled op launches at ~82 us, 372 buffer allocations 31 ms, slices 20 ms, dealloc 27 ms; DS41-171). Do,
+      measuring host time per item (cProfile of warm chunks) and keeping outputs bit-identical: (1) P.4 retried: the 212
+      per-step all_gathers (mHC row exchange 80, window KV 80, split-norm stats 40, compressor 12) write persistent
+      outputs, ALLOCATED AT LOAD TIME (never mid-forward: DS41-146, P.11''s lesson), dealloc skipping them; (2) the MoE
+      fused head (fused_head.py _run, 40 x ~0.7 ms host) and sparse_all_gather_2d (MoE dispatch, 40 x ~0.15 ms) keyed on
+      shape with addresses patched per call (prepared, as P.14 did for the tail) - wire through tt/moe_block_adapter.py
+      if models/demos/moe_block is outside your paths, as P.14 did; (3) cut the per-chunk buffer allocations: reuse
+      output tensors of fixed-shape ops (output_tensor= / preallocated buffers, in-place where the op allows), list every
+      allocation site with calls a chunk before / after; (4) cut the slices: views or sharded reads instead of copies,
+      fold a slice into its consumer (offsets in the op), drop slices whose result equals the input, list every slice
+      site before / after. One setting HOST_ALLOC (default on, ''off'' = today''s path). Report host_overhead_ms, op launches
+      a chunk, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on vs off, and the remaining top host
+      items.'
+  ab:
+    env:
+      DS41_HOST_ALLOC: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_HOST_ALLOC: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -1516,6 +1558,7 @@ tasks:
   - P.12
   - P.13
   - P.14
+  - P.15
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
