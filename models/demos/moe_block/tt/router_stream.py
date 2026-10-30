@@ -21,6 +21,7 @@ per-model priority) and sends them into the downstream router core's zone with a
 import struct
 
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 
 import ttnn
 
@@ -157,8 +158,7 @@ void kernel_main() {
     }
 #endif
 #endif
-#if RT_HALF == 0
-    {  // (my share of the joint rows: tokens 11 .. 21, once the top-K is done)
+    {  // (my share of the joint rows - tokens 8 .. 15 - once the top-K is done; split half 1: of its picks' scores)
         const uint32_t t2 = ab0 + nab + 2, words = get_arg_val<uint32_t>(t2);
         volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 64);
         while (*done == 0) invalidate_l1_cache();
@@ -166,15 +166,18 @@ void kernel_main() {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();
         invalidate_l1_cache();
-        rows_::make<K, RT_ETF>(get_arg_val<uint32_t>(t2 + 1), get_read_ptr(BIAS), get_arg_val<uint32_t>(t2 + 2),
-                               get_arg_val<uint32_t>(t2 + 3), 8, 16);
+#if RT_HALF == 0
+        rows_::make<K, RT_ETF, ET>(get_arg_val<uint32_t>(t2 + 1), get_arg_val<uint32_t>(t2 + 4), get_arg_val<uint32_t>(t2 + 2),
+                                   get_arg_val<uint32_t>(t2 + 3), 8, 16);
+#else
+        rows_::picked<K, RT_ETF, ET>(get_arg_val<uint32_t>(t2 + 1), get_arg_val<uint32_t>(t2 + 4), 8, 16);
+#endif
         set_l1_data_cache<false>();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }
-#endif
 #ifdef RA_PLAN
     {  // the second planner instance on this core (the routing exchange + planner: routing_stream)
-        const uint32_t rr = ab0 + nab + 2 + 4, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
+        const uint32_t rr = ab0 + nab + 2 + 5, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NP_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2) = 0;
         if (B) ra::plan(rr + 2, B);  // (no instance here when the chip has fewer experts than planner RISCs)
@@ -321,43 +324,45 @@ void kernel_main() {
         // (all in DEST at fp32: the partials, the bias unpacked straight to DEST, the adds on the SFPU - the FPU's
         // srcA / srcB hold TF32, a 10-bit mantissa: the sums and the bias add through them moved scores by up to ~1e-3
         // and the picks of close experts with them)
-        for (uint32_t i0 = 0; i0 < ET; i0 += 2) {  // (2 score tiles a pass: their id tiles in DEST 2 .. 3)
-            const uint32_t n = ET - i0 < 2 ? ET - i0 : 2;
+        // (a score tile a pass: DEST 0 its score, 1 its key, 2 / 3 the operands - the score is kept: packed back over
+        // its logits in HOLD, where the joint rows read the picks' weights exactly; the key's low bits are the id)
+        for (uint32_t i = 0; i < ET; ++i) {
             tile_regs_acquire();
             reconfig_data_format_srca(HOLD);
             copy_init(HOLD);
-            for (uint32_t j = 0; j < n; ++j) copy_tile(HOLD, e * ET + i0 + j, j);
+            copy_tile(HOLD, e * ET + i, 0);
             if (na) {  // (+ the last source's partial)
                 reconfig_data_format_srca(HOLD, ARRF);
                 copy_init(ARRF);
-                for (uint32_t j = 0; j < n; ++j) copy_tile(ARRF, last * ET + i0 + j, 2 + j);
+                copy_tile(ARRF, last * ET + i, 2);
                 add_binary_tile_init();
-                for (uint32_t j = 0; j < n; ++j) add_binary_tile(j, 2 + j, j);
+                add_binary_tile(0, 2, 0);
             }
             {  // the owner: scores = sigmoid(logits) (RT_SQRTSOFTPLUS: sqrt(softplus)), biased = scores + bias (bias^T: per row)
 #ifdef RT_SQRTSOFTPLUS
                 softplus_tile_init();  // (INP_FLOAT32: the fp32 polynomial, as stock ttnn.softplus on fp32; beta 1, threshold 20)
-                for (uint32_t j = 0; j < n; ++j) softplus_tile(j, 0x3F800000u, 0x3F800000u, 0x41A00000u);
+                softplus_tile(0, 0x3F800000u, 0x3F800000u, 0x41A00000u);
                 sqrt_tile_init();
-                for (uint32_t j = 0; j < n; ++j) sqrt_tile(j);
+                sqrt_tile(0);
 #else
                 sigmoid_tile_init();
-                for (uint32_t j = 0; j < n; ++j) sigmoid_tile(j);
+                sigmoid_tile(0);
 #endif
                 reconfig_data_format_srca(ARRF, BIAS);
                 copy_init(BIAS);
-                for (uint32_t j = 0; j < n; ++j) copy_tile(BIAS, RT_HB + i0 + j, 2 + j);
+                copy_tile(BIAS, RT_HB + i, 2);
                 add_binary_tile_init();
-                for (uint32_t j = 0; j < n; ++j) add_binary_tile(j, 2 + j, j);
-                // -> the top-K's keys: the expert ids into the low mantissa bits (rt_key)
+                add_binary_tile(0, 2, 1);
+                // -> the top-K's keys: the expert ids into the low mantissa bits (rt_key: the id tile two on, DEST 3)
                 reconfig_data_format_srca(BIAS, IDX);
                 copy_init(IDX);
-                for (uint32_t j = 0; j < n; ++j) copy_tile(IDX, i0 + j, 2 + j);
-                for (uint32_t j = 0; j < n; ++j) MATH((_llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rt_key<EM>, j, VectorMode::RC_custom)));
+                copy_tile(IDX, i, 3);
+                MATH((_llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::rt_key<EM>, 1, VectorMode::RC_custom)));
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t j = 0; j < n; ++j) pack_tile<true>(j, SC, i0 + j);
+            pack_tile<true>(1, SC, i);
+            pack_tile<true>(0, HOLD, e * ET + i);
             tile_regs_release();
         }
         cb_push_back(SC, ET);
@@ -440,22 +445,34 @@ void kernel_main() {
         {  // the joint rows' last two shares (tokens 16 .. 23 the MATH thread, 24 .. 31 the PACK thread; soft float):
            // the BEST page is in L1 once PACK passed its push - PACK tells MATH (RT_MSYNC)
             const uint32_t bvc = get_arg_val<uint32_t>(t1 + 1), olc = get_arg_val<uint32_t>(t1 + 2);
-            const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), bia = get_arg_val<uint32_t>(t1 + 4);
-#if RT_HALF == 0  // (half 1 hands its best K to its partner: no rows)
+            const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), sv = get_arg_val<uint32_t>(t1 + 4);
+#if RT_HALF == 0
             PACK(({
                 *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
-                rows_::make<K, RT_ETF>(bvc, bia, olc, scl, 24, 32);
+                rows_::make<K, RT_ETF, ET>(bvc, sv, olc, scl, 24, 32);
                 *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
             }));
             MATH(({
                 volatile uint32_t* ms = reinterpret_cast<volatile uint32_t*>(RT_MSYNC);
                 while (*ms == 0) {
                 }
-                rows_::make<K, RT_ETF>(bvc, bia, olc, scl, 16, 24);
+                rows_::make<K, RT_ETF, ET>(bvc, sv, olc, scl, 16, 24);
                 *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
             }));
-#else
-            (void)bvc, (void)olc, (void)scl, (void)bia;
+#else  // (half 1 hands its best K to its partner, with its picks' scores: no rows)
+            (void)olc, (void)scl;
+            PACK(({
+                *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
+                rows_::picked<K, RT_ETF, ET>(bvc, sv, 24, 32);
+                *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
+            }));
+            MATH(({
+                volatile uint32_t* ms = reinterpret_cast<volatile uint32_t*>(RT_MSYNC);
+                while (*ms == 0) {
+                }
+                rows_::picked<K, RT_ETF, ET>(bvc, sv, 16, 24);
+                *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
+            }));
 #endif
         }
 #ifdef RT_ROUTE
@@ -478,8 +495,10 @@ void kernel_main() {
 """
 
 # the joint rows of owner tokens [c0, c1) of the row tile from the top-K's last best pair (any RISC: soft float, so
-# the 32 tokens are split over four): ids = rows 0 .. K - 1 of the token's column, weights = (biased - bias[id]) /
-# their sum x scale, bf16 (round to nearest even)
+# the 32 tokens are split over four): ids = rows 0 .. K - 1 of the token's column, weights = the picks' scores / their
+# sum x scale, bf16 (round to nearest even). The scores are the fin's fp32 sigmoids, read by id where the fin packed
+# them (over its logits in HOLD) - not the keys' biased scores less the bias: a key keeps 13-15 mantissa bits of score +
+# bias, which lost the score whenever the bias dwarfed it (a score 6e-6 under a bias 0.125: weight 0)
 _ROWS = r"""
 #ifndef RT_FOLD
 #define RT_FOLD 1
@@ -498,14 +517,6 @@ _ROWS = r"""
 namespace rows_ {
 // (r, c) of a tile: face (r / 16) * 2 + c / 16, then row-major within the face
 FORCE_INLINE uint32_t fo(uint32_t r, uint32_t c) { return ((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15); }
-// fp32 bits -> fixed point Q5.26 (|v| < 32: the scores live in about [-0.1, 1.1]); exact for |v| >= 2^-26
-FORCE_INLINE int32_t fx(uint32_t u) {
-    const int32_t e = (u >> 23) & 0xFF;
-    if (e == 0) return 0;
-    const int32_t sh = e - 127 - 23 + 26, m = (u & 0x7FFFFF) | 0x800000;
-    const int32_t v = sh >= 0 ? (m << sh) : (sh > -31 ? (m >> -sh) : 0);
-    return (u >> 31) ? -v : v;
-}
 // the index of x's top bit (x > 0): five steps (no Zbb on the RISCs: __builtin_clz is a library loop)
 FORCE_INLINE int32_t msb32(uint32_t x) {
     int32_t m = 0;
@@ -535,26 +546,64 @@ FORCE_INLINE uint32_t bf16_of(uint32_t x, int32_t f) {
 }
 // the expert id bits of a top-K key (the low mantissa bits of its fp32 score)
 constexpr uint32_t em_of(uint32_t et) { return et * 32 <= 256 ? 0xFF : et * 32 <= 512 ? 0x1FF : 0x3FF; }
-template <uint32_t K, uint32_t ET>
-inline void make(uint32_t bv, uint32_t bias, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1) {
-    // weights = (biased - bias[id]) / their sum x scale in integers (the RISCs have no FPU, no 64-bit divide): scores
-    // Q5.26, the sum normalized to bit 30, its reciprocal by one 32-bit divide (16 bits: a bf16 weight needs 8 +
-    // rounding), x the scale's mantissa, then one 32 x 32 -> 64 product a weight
+// the fp32 score of expert eid (one of mine: expert tiles RT_HB .., ETL of them) for token column c - the fin's score
+// tiles at sv, transposed like the logits: (eid % 32, c) of tile eid / 32
+template <uint32_t ETL>
+FORCE_INLINE uint32_t score_of(uint32_t sv, uint32_t eid, uint32_t c) {
+    return reinterpret_cast<const uint32_t*>(sv + ((eid >> 5) - RT_HB) * 4096)[fo(eid & 31, c)];
+}
+// (split half 1) its picks' scores, for its partner's rows: the score of the key at (q, c) of the best page at (q, c)
+// of the page after its own PART page (sent with the best page)
+template <uint32_t K, uint32_t ET, uint32_t ETL>
+inline void picked(uint32_t bv, uint32_t sv, uint32_t c0, uint32_t c1) {
+#ifdef RT_PART
+    constexpr uint32_t EM = em_of(ET);
+    for (uint32_t c = c0; c < c1; ++c)
+        for (uint32_t q = 0; q < K; ++q) {
+            const uint32_t key = reinterpret_cast<const uint32_t*>(bv)[fo(q, c)];
+            reinterpret_cast<uint32_t*>(RT_PART + 4096)[fo(q, c)] = score_of<ETL>(sv, key & EM, c);
+        }
+#else
+    (void)bv, (void)sv, (void)c0, (void)c1;
+#endif
+}
+template <uint32_t K, uint32_t ET, uint32_t ETL>
+inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, uint32_t c0, uint32_t c1) {
+    // weights = score / their sum x scale in integers (the RISCs have no FPU, no 64-bit divide): the K scores in one
+    // block exponent (the largest's top bit at 25: a sum of up to 32 below 2^31), the sum normalized to bit 30, its
+    // reciprocal by one 32-bit divide (16 bits: a bf16 weight needs 8 + rounding), x the scale's mantissa, then one
+    // 32 x 32 -> 64 product a weight
     const uint32_t sc = (scale_bits & 0x7FFFFF) | 0x800000;  // (scale = sc x 2^se)
     const int32_t se = (int32_t)((scale_bits >> 23) & 0xFF) - 150;
+    constexpr uint32_t EM = em_of(ET);
     for (uint32_t c = c0; c < c1; ++c) {
-        uint32_t ids[K];
-        int32_t w[K];
-        uint32_t sum = 0;
+        uint32_t ids[K], w[K], sum = 0;  // (w: the scores' fp32 bits, then their block-exponent integers)
+        int32_t emax = 0;
         for (uint32_t q = 0; q < K; ++q) {
             const uint32_t key = reinterpret_cast<const uint32_t*>(bv)[fo(q, c)];  // (the top-K's key: id in the low bits)
-            constexpr uint32_t EM = em_of(ET);
-            const uint32_t eid = key & EM, b = key & ~EM;
+            const uint32_t eid = key & EM;
             ids[q] = eid;
-            const uint32_t bb = reinterpret_cast<const uint32_t*>(bias + (eid >> 5) * 4096)[fo(eid & 31, 0)];
-            w[q] = fx(b) - fx(bb);
-            if (w[q] < 0) w[q] = 0;  // (sigmoid and sqrt(softplus) scores are >= 0)
-            sum += (uint32_t)w[q];
+            if ((eid >> 5) - RT_HB < ETL) {
+                w[q] = score_of<ETL>(sv, eid, c);
+            } else {  // (split: the partner half's pick - its key and score at the same place of its two PART pages)
+                w[q] = 0;
+#ifdef RT_PART
+                for (uint32_t r = 0; r < K; ++r)
+                    if (reinterpret_cast<const uint32_t*>(RT_PART)[fo(r, c)] == key) {
+                        w[q] = reinterpret_cast<const uint32_t*>(RT_PART + 4096)[fo(r, c)];
+                        break;
+                    }
+#endif
+            }
+            if (w[q] >> 31) w[q] = 0;  // (sigmoid and sqrt(softplus) scores are >= 0)
+            const int32_t e = (w[q] >> 23) & 0xFF;
+            if (e > emax) emax = e;
+        }
+        for (uint32_t q = 0; q < K; ++q) {
+            const int32_t e = (w[q] >> 23) & 0xFF, sh = e - emax + 2;  // (mantissa top bit 23 -> 25 for the largest)
+            const uint32_t m = (w[q] & 0x7FFFFF) | 0x800000;
+            w[q] = e == 0 ? 0 : sh >= 0 ? (m << sh) : (sh > -31 ? (m >> -sh) : 0);
+            sum += w[q];
         }
         uint16_t* o = reinterpret_cast<uint16_t*>(o_l1 + c * 4 * K);
         const int32_t sh = sum ? 30 - msb32(sum) : 0;
@@ -613,11 +662,22 @@ void kernel_main() {
     while (*done == 0) invalidate_l1_cache();
     *done = 0;  // (re-arm)
 #if RT_HALF == 1
-    {  // my best K (the row tile's other expert half) into my partner's PART, then its word (args: the partner's NoC
-       // x | y << 16 in the out address's place)
+    {  // my best K (the row tile's other expert half) into my partner's PART, its picks' scores (built here by my four
+       // RISCs, beside my own PART page) after it, then its word (args: the partner's NoC x | y << 16 in the out
+       // address's place)
         DeviceZoneScopedN("SE-RHALF");
+        set_l1_data_cache<true>();
+        invalidate_l1_cache();
+        rows_::picked<K, RT_ETF, ET>(bv, get_arg_val<uint32_t>(t0 + 9), 0, 8);
+        set_l1_data_cache<false>();
+        for (uint32_t i = 1; i < 4; ++i) {
+            volatile tt_l1_ptr uint32_t* wd = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16 * i);
+            while (*wd == 0) invalidate_l1_cache();
+            *wd = 0;  // (re-arm)
+        }
         const uint32_t pxy = get_arg_val<uint32_t>(t0);
         noc_async_write(bv, get_noc_addr(pxy & 0xFFFF, pxy >> 16, RT_PART), 4096);
+        noc_async_write(RT_PART + 4096, get_noc_addr(pxy & 0xFFFF, pxy >> 16, RT_PART + 4096), 4096);
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(pxy & 0xFFFF, pxy >> 16, RT_PWORD), 1);
         noc_async_atomic_barrier();
@@ -629,7 +689,7 @@ void kernel_main() {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();  // (write-through; the packed tiles read after an invalidate)
         invalidate_l1_cache();
-        rows_::make<K, RT_ETF>(bv, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
+        rows_::make<K, RT_ETF, ET>(bv, get_arg_val<uint32_t>(t0 + 9), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
         set_l1_data_cache<false>();
         }
         for (uint32_t i = 1; i < 4; ++i) {
@@ -648,7 +708,7 @@ void kernel_main() {
 #ifdef RA_PLAN
     {  // the routing exchange + planner (routing_stream): every router core's rows written, then routing_a2a's planner
         DeviceZoneScopedN("SE-RPLAN");
-        const uint32_t r0 = t0 + 9, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
+        const uint32_t r0 = t0 + 10, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
         const uint32_t B = get_arg_val<uint32_t>(r0 + 2);
 #if RT_HALF == 0  // (the rows' makers: RA_NP_ of the RA_NC_ router cores - with RT_SPLIT the halves 0)
         for (uint32_t i = 0; i < RA_NC_; ++i) {  // (my rows are written: every router core's two planner RISCs told)
@@ -770,7 +830,9 @@ class RouterStream:
             ("route", 32 * 4 * 2),
             ("gate", 16),  # (the W-stream gate's source word: 1, 16-byte aligned like its destination)
             ("msync", 16),  # (the compute's PACK -> MATH: the BEST page is in L1 - their shares of the rows)
-        ] + ([("part", 4096)] if ETF != ET else []):
+        ] + (
+            [("part", 2 * 4096)] if ETF != ET else []
+        ):  # (split: the partner's best K, then its picks' scores)
             off[k], o = o, al(o + v)
         return off, o
 
@@ -863,7 +925,7 @@ class RouterStream:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(
                     ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores]),
                     [1, 32],
@@ -875,8 +937,8 @@ class RouterStream:
         self.pbase, self.words = self.base, words
         self.port_words = port_words  # (the words a port has: its units x its link's router cores)
         # (arrivals / the engine's own-block tiles / the engine cores' "partials written", router core 0: the W gate)
-        self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
-        self.arr = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
+        self.sems = [persist_l1.semaphore(mesh_device, crs, 0) for _ in range(3)]
+        self.arr = [persist_l1.address(s) for s in self.sems]
         # (the arrivals: a word a source slot, 16 B apart, zero between calls - each re-armed by the router core that
         # saw it; arr[0] is their base)
         self.slot_words = ttnn.from_torch(
@@ -886,7 +948,7 @@ class RouterStream:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(crs, [1, 4 * max(1, G - 1)], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -1104,7 +1166,11 @@ class RouterStream:
 
         def cb(i, key, size, dt, page):
             dd = ttnn.cb_descriptor_from_sharded_tensor(
-                i, self.arena, address_offset=off[key], total_size=size, core_ranges=self.crs
+                i,
+                self.arena,
+                address_offset=off[key] + getattr(self, "arena_delta", 0),
+                total_size=size,
+                core_ranges=self.crs,
             )
             dd.format_descriptors = [ttnn.CBFormatDescriptor(i, dt, page)]
             cbs.append(dd)
@@ -1134,6 +1200,9 @@ class RouterStream:
         # (my partials of the other owners - the router cores hand them to the ports; on the engine its cores write
         # them straight into the ports' sub-blocks: none here)
         hand = [] if self.on_engine else [b for d in ("fwd", "bwd") for b in self._dests(p, d)]
+        sv = (
+            b0 + off["hold"] + p * ET * 4096
+        )  # (my owner block's HOLD: the fin packs the scores there - the rows read them)
         hand.sort(key=lambda b: -self._hops(p, b))  # (the farthest first: their way is longest)
         for j, core in enumerate(self.cores):
             # entries = blocks (HOLD slot b: token tile b of my rows); the hand-offs, then my own block's fin
@@ -1143,6 +1212,7 @@ class RouterStream:
                 + [G - 1, self.arr[0]]
                 + self._arrival_order(p)
                 + tail
+                + [sv]
                 + (self._ra_args2(coord, j) if self.ra is not None else [])
             )
             ops = [1 | bb << 8 for bb in hand] + [2 | p << 8]
@@ -1151,7 +1221,7 @@ class RouterStream:
                 + ops
                 + [G - 1 if bb == p else 0 for bb in range(G)]
                 + tail
-                + [b0 + off["bias"], b0 + off["route"], 32 * (j % RB)]
+                + [sv, b0 + off["route"], 32 * (j % RB)]
             )
             hs = []
             l = j % self.nv
@@ -1181,6 +1251,7 @@ class RouterStream:
                     b0 + off["route"],
                     int(route.buffer_address()) if route is not None else 0,
                     32 * jr,
+                    sv,
                 ]
                 + (self._ra_args(coord, j) if self.ra is not None else [])
             )

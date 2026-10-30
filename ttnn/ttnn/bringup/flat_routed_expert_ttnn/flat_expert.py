@@ -24,6 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import BF8_TILE, noc_hops
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import crs_single as _crs_single
 from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import flat_layout
@@ -2051,17 +2052,33 @@ class FlatRoutedExpert:
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0) if mesh else None,
         )
         coords = [ttnn.CoreCoord(x, y) for x, y in lay["coords"]]
-        self.done = ttnn.from_torch(  # the down coordinators' done words: zero, left zeroed by every launch
-            torch.zeros(len(coords) * 32, 32),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(crs_rects(coords), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
-            ),
-        )
+        if persist_l1.small():  # (a word a down core / down reader, se6_drecv: not a 2 KB tile, in L1_SMALL)
+            nd = len(lay["down"]) + (len(lay["rdn"]) if lay.get("rdown") else 0)
+            nw = max(16, -(-nd // 16) * 16)
+            self.done = ttnn.from_torch(  # the down coordinators' done words: zero, left zeroed by every launch
+                torch.zeros(len(coords), nw, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1_SMALL,
+                    ttnn.ShardSpec(crs_rects(coords), (1, nw), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if mesh else None,
+            )
+        else:
+            self.done = ttnn.from_torch(  # the down coordinators' done words: zero, left zeroed by every launch
+                torch.zeros(len(coords) * 32, 32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(crs_rects(coords), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
 
     def replanned(self, m, layout=None):
         """This op at another per-expert capacity m (another chunk) on the same device weights: a plan of its own, the

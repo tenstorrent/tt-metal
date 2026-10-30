@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
+from ttnn.bringup.combine_rf import persist_l1
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, port_luts
 from ttnn.bringup.combine_rf.dispatch_prep import all_chips_route_words, dispatch_prep_prepare, own_rows_copy_prepare
 from ttnn.bringup.combine_rf.fabric_all_gather_py import fabric_all_gather
@@ -108,12 +109,77 @@ def combine_port_cells(mesh_device, cells, torus):
     return {(v.x, v.y) for v in place_ports(mesh_device, chips_, cells).values()}
 
 
+def combine_port_count(mesh_device, cells, torus):
+    """The cells the ports-apart accumulators lose to ports: with per-chip roles (sparse_combine_rf, SPC_ACC_PERCHIP
+    default 1) a chip's own ports - the most any chip has - else every chip's (their union: 8 to 14 of GLM-5.3's 19
+    cells, per Galaxy). Per-chip roles need a cell no chip has a port on (the collector): else the union."""
+    from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
+
+    chips_, _, _ = mesh_plan(mesh_device, 2, torus)
+    pp = place_ports(mesh_device, chips_, cells)
+    union = {(v.x, v.y) for v in pp.values()}
+    if os.environ.get("SPC_ACC_PERCHIP", "1") != "1" or len(union) >= len(cells):
+        return len(union)
+    return max(len({(v.x, v.y) for k, v in pp.items() if k[0] == ch}) for ch in chips_)
+
+
 def planned_accumulators(mesh_device, plan, torus):
     """The combine's accumulator count in the ports-apart mode: every free cell not a port, at most A_MAX."""
     from ttnn.bringup.combine_rf.sparse_combine_rf import A_MAX
 
     cells = combine_cells(mesh_device, plan)
-    return min(A_MAX, len(cells) - len(combine_port_cells(mesh_device, cells, torus)))
+    return min(A_MAX, len(cells) - combine_port_count(mesh_device, cells, torus))
+
+
+WORDS_ROWS = 192  # (the writers' words: rows of 64 B a core on top of the exchange's per-call arena)
+
+
+def exchange_arena_reserve(mesh_device, plan, S, latent, torus, dispatch_in_program):
+    """Bytes a bank the exchange keeps below its arena over a call: whichever program's static CBs are larger - the
+    fused flat op's, or the sparse dispatch's on its port cores plus its per-call manifest - with the fused op's
+    reserve, + 1 KB (the arena is the largest free L1 block less this, less the words' rows)."""
+    from ttnn.bringup.combine_rf.sparse_all_gather_2d import static_cb_bytes
+    from ttnn.bringup.combine_rf.sparse_combine_rf import fused_arena_reserve
+
+    flat_cbs = int(plan["static_l1_bytes"])
+    if os.environ.get("K3_DISPATCH", "sparse") != "sparse":
+        return fused_arena_reserve(flat_cbs, l1=True) + 1024
+    R, C = tuple(mesh_device.shape)
+    ms = manifest_spec(mesh_device, S, num_links=2, torus=tuple(torus))
+    grp = 8 if 2 * latent <= 7168 else 2  # (dispatch()'s row group)
+    man_b = (int(ms[0][-1]) * 4 + 63) // 64 * 64
+    stat = static_cb_bytes(R * C, S, latent, group=grp)
+    if dispatch_in_program:  # (one program: the manifest above both kinds of static CBs)
+        return fused_arena_reserve(max(flat_cbs, stat), l1=True) + man_b + 1024
+    return fused_arena_reserve(max(flat_cbs, man_b + stat), l1=True) + 1024
+
+
+def plan_combine(mesh_device, plan, S, latent, torus, dispatch_in_program, margin=32 * 1024):
+    """The combine's accumulator count and mode, planned before the fused head bakes the count: sized as the exchange
+    will size it (combine_auto on the arena it will get: the largest free L1 block now less its reserve, less margin
+    for what the head and tail keep). The ports-apart mode (a chip's accumulators: its free cells not its own ports -
+    combine_port_count) where it fits - it is the faster one - else the accumulators on the ports' cells. (Without the
+    per-chip roles the accumulators avoid every chip's ports, a union that varies per Galaxy - 8 to 14 of GLM-5.3's 19
+    cells - and at 14, 5 accumulators no longer hold a landing slot per source chip.) -> (n_acc, mode)."""
+    from ttnn.bringup.combine_rf.sparse_combine_rf import combine_auto
+
+    R, C = tuple(mesh_device.shape)
+    cells = combine_cells(mesh_device, plan)
+    n_ports = combine_port_count(mesh_device, cells, torus)
+    mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    free = int(mv.largest_contiguous_bytes_free_per_bank) - margin
+    reserve = exchange_arena_reserve(mesh_device, plan, S, latent, torus, dispatch_in_program)
+    rows = (free - reserve) // 64 // 32 * 32 - WORDS_ROWS
+    why = []
+    for mode in ("ports apart", "acc_on_ports"):
+        auto = combine_auto(
+            R * C, S, latent, len(cells), n_ports, arena_bytes=rows * 64, l1=True, depth=8,
+            piece_max=max(7168, 2 * latent), mode=mode,
+        )  # fmt: skip
+        if auto["fits"]:
+            return auto["n_acc"], mode
+        why.append(auto["why"])
+    raise AssertionError(f"combine: does not fit ({len(cells)} cells, ~{rows * 64 >> 10} KB): {'; '.join(why)}")
 
 
 def random_k3_weights(d: K3Dims, pool_size=8, seed=0):
@@ -424,19 +490,10 @@ class TtK3TokenSplitMoE:
         self.cells = combine_cells(mesh_device, plan)
         wcores = [tuple(c) for c in plan["down"]] + ([tuple(c) for c in plan["rdn"]] if plan["rdown"] else [])
         wcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in wcores])
-        # (the writers' words first: persistent L1 above the arena, not stranded in the middle when it is freed)
-        self.words = ttnn.from_torch(
-            torch.zeros(len(wcores) * 192, 16, dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(wcrs, [192, 16], ttnn.ShardOrientation.ROW_MAJOR),
-            ),
-            mesh_mapper=rep,
-        )
+        # (the writers' words: 192 rows of 64 B a writer core at the top of the per-call arena, past what the flat op /
+        # combine use - zeroed every call with the arena's runs, so nothing in them outlives a call; persistent L1 here
+        # (12 KB a core, reserved on every core) clashed with the chunked model's attention circular buffers)
+        WR = WORDS_ROWS
         # routed_only: the x relays' words, persistent (the fused op otherwise allocates them per call, at an address the
         # program-cache key includes but the caller cannot see: _experts_combine predicts its hits)
         self.relay_words = None
@@ -444,15 +501,16 @@ class TtK3TokenSplitMoE:
             from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import crs_rects
 
             rl = [ttnn.CoreCoord(*c) for c in plan["relays"]]
+            # (512 B a relay: the gate/up cores' freed words, then the x-ready word at X_READY_OFF 496)
             self.relay_words = ttnn.from_torch(  # (zero: the x-ready word counts from it - dispatch_in_program)
-                torch.zeros(len(rl) * 32, 32, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                torch.zeros(len(rl), 128, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
-                    ttnn.ShardSpec(crs_rects(rl), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+                    persist_l1.buffer_type(),
+                    ttnn.ShardSpec(crs_rects(rl), (1, 128), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
@@ -467,7 +525,7 @@ class TtK3TokenSplitMoE:
             pxy = sorted({(c.x, c.y) for c in _pp(mesh_device, chips_d, self.cells).values()})
             pcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in pxy])
             self.disp_cores = pxy
-            self.disp_sems = tuple(ttnn.create_global_semaphore(mesh_device, pcrs, 0) for _ in range(4))
+            self.disp_sems = tuple(persist_l1.semaphore(mesh_device, pcrs, 0) for _ in range(4))
         # the arena: the flat expert's buffers, the combine's state / rings / CBs (~all of L1 on every core). Per call:
         # allocated after the dense ops before the experts, its combine state zeroed on the device, freed after (a
         # persistent one leaves the other ops no L1 for their circular buffers). The dispatch all-gather between the
@@ -553,7 +611,7 @@ class TtK3TokenSplitMoE:
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
+                persist_l1.buffer_type(),
                 ttnn.ShardSpec(gcores, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -562,24 +620,12 @@ class TtK3TokenSplitMoE:
         if (
             combine_auto_cfg
         ):  # (the arena takes the L1 left, less the flat program's static CBs: the combine sizes from it)
-            from ttnn.bringup.combine_rf.sparse_all_gather_2d import static_cb_bytes
-            from ttnn.bringup.combine_rf.sparse_combine_rf import fused_arena_reserve
-
             mv = ttnn.device.get_memory_view(mesh_device, ttnn.BufferType.L1)
             # (below the arena, over the call: the writers' words (allocated after it) and whichever program's CBs are
             # larger - the fused op's static CBs, or the dispatch's on its port cores plus its per-call manifest)
-            flat_cbs = int(plan["static_l1_bytes"])
-            disp = 0
-            if self.sparse_dispatch:
-                ms = manifest_spec(mesh_device, S, num_links=2, torus=self.torus)
-                grp = 8 if 2 * d.latent <= 7168 else 2  # (dispatch()'s row group)
-                disp = (int(ms[0][-1]) * 4 + 63) // 64 * 64 + static_cb_bytes(self.N, S, d.latent, group=grp)
-            reserve = fused_arena_reserve(max(flat_cbs, disp), l1=True) + 1024
-            if self.dispatch_in_program:  # (one program: the manifest above both kinds of static CBs)
-                man_b = (int(ms[0][-1]) * 4 + 63) // 64 * 64
-                stat = static_cb_bytes(self.N, S, d.latent, group=grp)
-                reserve = fused_arena_reserve(max(flat_cbs, stat), l1=True) + man_b + 1024
+            reserve = exchange_arena_reserve(mesh_device, plan, S, d.latent, self.torus, self.dispatch_in_program)
             left = (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32
+            left -= WR  # (the words' rows on top)
             assert a_rows <= left, (
                 f"the flat op's arena {a_rows * 64 >> 10} KB > the L1 left {left * 64 >> 10} KB (less the dispatch's / "
                 f"the flat op's static CBs, {reserve >> 10} KB): their circular buffers would clash with it"
@@ -587,18 +633,20 @@ class TtK3TokenSplitMoE:
             a_rows = left
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
-            ttnn.Shape([grid.x * grid.y * a_rows, 16]),
+            ttnn.Shape([grid.x * grid.y * (a_rows + WR), 16]),
             ttnn.uint32,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_device,
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(all_cores, [a_rows, 16], ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(all_cores, [a_rows + WR, 16], ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
         self.arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         self.arena_addr = int(self.arena.buffer_address())
+        self.arena_bytes = a_rows * 64  # (a core; the words above it)
+        self.words_addr = self.arena_addr + a_rows * 64
         # the planner's outputs (allocated once) then the combine (its accumulator count sets the planner's A)
         luts, nps = port_luts(mesh_device, 2, self.torus)
         self.rows_cap = rows_cap
@@ -685,21 +733,27 @@ class TtK3TokenSplitMoE:
             from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan, place_ports
             from ttnn.bringup.combine_rf.sparse_combine_rf import combine_auto
 
-            port_cells = combine_port_cells(mesh_device, self.cells, self.torus)
+            n_ports = combine_port_count(mesh_device, self.cells, self.torus)
             piece = max(7168, 2 * d.latent)
             # (combine_accumulators: the count the caller planned with - the MoE block's fused head planner bakes it:
             # the ports-apart mode at exactly that many)
-            pin = dict(a_max=combine_accumulators, mode="ports apart") if combine_accumulators else {}
+            # (combine_accumulators: n, or (n, mode) - plan_combine's; n alone: the ports-apart mode)
+            acc_n, acc_mode = (
+                combine_accumulators
+                if isinstance(combine_accumulators, tuple)
+                else (combine_accumulators, "ports apart")
+            )
+            pin = dict(a_max=acc_n, mode=acc_mode) if acc_n else {}
             auto = combine_auto(
-                self.N, S, d.latent, len(self.cells), len(port_cells), arena_bytes=a_rows * 64, l1=True, depth=8,
+                self.N, S, d.latent, len(self.cells), n_ports, arena_bytes=a_rows * 64, l1=True, depth=8,
                 piece_max=piece, **pin,
             )  # fmt: skip
             assert auto[
                 "fits"
             ], f"combine: does not fit ({len(self.cells)} cells, {a_rows * 64 >> 10} KB): {auto['why']}"
             assert (
-                not combine_accumulators or auto["n_acc"] == combine_accumulators
-            ), f"combine: {auto['n_acc']} accumulators, {combine_accumulators} planned"
+                not acc_n or auto["n_acc"] == acc_n
+            ), f"combine: {auto['n_acc']} accumulators, {acc_n} planned ({acc_mode})"
             acc_on_ports = auto["acc_on_ports"]
             copt = dict(
                 n_acc=auto["n_acc"], depth=auto["depth"], inj_slots=auto["inj_slots"], local_keep=auto["local_keep"]
@@ -708,7 +762,7 @@ class TtK3TokenSplitMoE:
 
             lay_ = auto["layout"]
             logger.info(
-                f"K3 block combine (auto): {len(self.cells)} cells, {len(port_cells)} port cells, accumulators "
+                f"K3 block combine (auto): {len(self.cells)} cells, {n_ports} port cells a chip, accumulators "
                 f"{auto['n_acc']} (on the ports: {acc_on_ports}), landing pool {lay_['PSL']} slots (ring depth {lay_['D']}), "
                 f"injection ring {lay_['QP']}, local ring {lay_['QL']}; arena {a_rows * 64 >> 10} KB"
             )
@@ -723,7 +777,7 @@ class TtK3TokenSplitMoE:
             cells=self.cells,
             arena=self.arena,
             writers=self.writers,
-            l1=dict(writers=wcores, words=int(self.words.buffer_address())),
+            l1=dict(writers=wcores, words=self.words_addr),
             devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"], dord=probe.outs.get("dord"), top_k=d.K),
             deterministic=deterministic,
             snap_q=combine_snap,
@@ -740,7 +794,7 @@ class TtK3TokenSplitMoE:
                     sems=self.disp_sems,
                     relays=self.relays,
                     words=int(self.relay_words.buffer_address()),
-                    ready_off=2032,
+                    ready_off=496,  # (X_READY_OFF, flat_routed_expert_options.hpp)
                     group=8 if 2 * d.latent <= 7168 else 2,  # (dispatch()'s row group)
                 )
                 if self.dispatch_in_program
@@ -791,7 +845,7 @@ class TtK3TokenSplitMoE:
             c: [(self.arena_addr + o, b, st, n) for o, b, st, n in runs] for c, runs in self.combine.zero_runs.items()
         }
         for c in wcores:
-            zr.setdefault(c, []).append((int(self.words.buffer_address()), 192 * 16 * 4, 0, 1))
+            zr.setdefault(c, []).append((self.words_addr, WR * 64, 0, 1))
         self.zero_desc = l1_zero_program(mesh_device, zr)
         # the arena's per-call zeroing folded into the dispatch (routed_only, the separate dispatch): its kernels on the
         # cells (the dispatch's port cores' runs by other cells), each counting in on the chip's dispatch ports, whose
@@ -808,8 +862,8 @@ class TtK3TokenSplitMoE:
             pcrs = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sorted(busy)]
             )
-            self._zg_sems = [ttnn.create_global_semaphore(mesh_device, pcrs, 0) for _ in range(2)]
-            ctr, ep = (int(ttnn.get_global_semaphore_address(x)) for x in self._zg_sems)
+            self._zg_sems = [persist_l1.semaphore(mesh_device, pcrs, 0) for _ in range(2)]
+            ctr, ep = (persist_l1.address(x) for x in self._zg_sems)
             ports_of = lambda coord: sorted({(v.x, v.y) for (c_, _, _), v in dpc.items() if c_ == coord})  # noqa: E731
             fn, nz = l1_zero_kernels(mesh_device, zr, busy, ports_of, ctr)
             self.zero_gate = dict(key=("zero_gate", ctr, ep, nz, self.arena_addr), ctr=ctr, ep=ep, n=nz, kernels=fn)
@@ -1081,10 +1135,22 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(arena)
         return ok
 
+    def take_arena(self):
+        """The call's arena taken ahead (the MoE block's one L1 allocation a forward: its fused head runs in it first);
+        routed_prepped then runs on it (zeroing the combine's state there, after the head) and frees it."""
+        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        assert (
+            int(arena.buffer_address()) == self.arena_addr
+        ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
+        self._taken = arena
+        return arena
+
     def alloc_arena(self, zero=True):
         """The call's arena (uninitialized) with the combine's state zeroed (zero False: the dispatch's zero gate does
-        it - self.zero_gate)."""
-        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        it - self.zero_gate); take_arena's if taken ahead."""
+        arena, self._taken = getattr(self, "_taken", None), None
+        if arena is None:
+            arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         assert (
             int(arena.buffer_address()) == self.arena_addr
         ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
@@ -1097,7 +1163,7 @@ class TtK3TokenSplitMoE:
             self.desc = self.combine.rebind(arena)
         # (routed_only: rebound only when the experts op will build a program - _experts_combine)
         if zero:
-            prepared_generic_op([arena, self.words], self.zero_desc)
+            prepared_generic_op([arena], self.zero_desc)
         return arena
 
     def experts_combine(self, xg, pl, arena, op=None):
@@ -1545,7 +1611,7 @@ class TtK3TokenSplitMoE:
         if self.desc is None:
             self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena, dict(disp, manifest=self._man))
             self._desc_arena = arena
-        prepared_generic_op([arena, self.words], self.zero_desc)
+        prepared_generic_op([arena], self.zero_desc)
         return arena
 
     def __call__(self, x, keep=False, hook=None):

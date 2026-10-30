@@ -135,6 +135,9 @@ ttnn::Tensor hybrid_routed_expert_moe(
     std::optional<ttnn::Tensor> l1_arena;
     if (fused_half_runs && overlap_combine) {
         auto* device = dispatched_buffer.device();
+        // (combine's own ring semaphores first: persistent L1, made once - not inside the build below, under an arena
+        // holding every free byte)
+        combine::prepare_ring_semaphores(device);
         const auto grid = device->compute_with_storage_grid_size();
         const tt::tt_metal::CoreRangeSet all_workers(
             tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{grid.x - 1, grid.y - 1}));

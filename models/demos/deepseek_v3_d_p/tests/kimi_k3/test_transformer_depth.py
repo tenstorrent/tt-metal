@@ -95,6 +95,30 @@ DEEP_TRACE_FROM = 12
 # exists for full-depth bf8_b drift), so hold the tighter one and let a real regression show.
 KV_CACHE_PCC = 0.96
 
+
+def _device_params() -> dict:
+    """FABRIC_2D (K3_FABRIC=torus_xy: the XY torus); K3_MOE_IMPL=block also opens the fabric with the payload the MoE
+    block's combine needs (2 x 3584 + 32 B: K3's own FABRIC_PAYLOAD_SIZE, 7168, is short of it)."""
+    import os
+
+    # (K3_L1_SMALL: room for the MoE block's persistent words with PERSIST_L1=small - combine_rf/persist_l1.py)
+    l1s = int(os.environ.get("K3_L1_SMALL", KimiK3Config.L1_SMALL_SIZE))
+    params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": l1s}
+    if os.environ.get("K3_FABRIC") == "torus_xy":
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    if os.environ.get("K3_PERF_TRACE") == "1":  # (test_prefill_perf's traced replays: the runtime's trace region)
+        params["trace_region_size"] = 256 * 1024 * 1024
+    if os.environ.get("K3_MOE_IMPL") == "block":
+        from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
+
+        from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+
+        params = fabric2d_device_params(
+            fabric_payload_size=fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE), **params
+        )
+    return params
+
+
 PLACEMENTS = [
     pytest.param(
         (8, 4),
@@ -105,7 +129,7 @@ PLACEMENTS = [
         # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
         # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
         # clears AttnRes with margin while leaving MLA its working space.
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        _device_params(),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
     )

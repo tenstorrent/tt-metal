@@ -151,6 +151,24 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
     trace_info = {}
 
     def measure(forward, tt_moe, tt_x):
+        eager_n = int(
+            os.environ.get("KIMI_MOE_PERF_EAGER", "0")
+        )  # (untraced forwards first, each synced, input copy off)
+        if eager_n:
+            walls = []
+            for _ in range(eager_n):
+                x = ttnn.clone(tt_x)
+                ttnn.synchronize_device(mesh_device)
+                t0 = time.perf_counter_ns()
+                out, _ = forward(x)
+                ttnn.synchronize_device(mesh_device)
+                walls.append((time.perf_counter_ns() - t0) / 1e6)
+                ttnn.deallocate(out)
+            rest = sorted(walls[1:]) or walls
+            logger.info(
+                f"{case.label} moe eager: first {walls[0]:.3f} ms, median {rest[len(rest) // 2]:.3f} ms, min {rest[0]:.3f} "
+                f"ms over {len(walls) - 1} after it (untraced, synced each)"
+            )
         controller = SubDeviceTraceController(mesh_device)
         copy_tid = None
         capturing = False

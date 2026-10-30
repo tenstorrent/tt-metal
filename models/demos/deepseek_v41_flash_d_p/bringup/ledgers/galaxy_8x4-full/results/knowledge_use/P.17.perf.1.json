@@ -1,0 +1,95 @@
+{
+ "used": [
+  {
+   "id": "K-55",
+   "how": "ran pre-commit on the drop's files before finishing; kept black's 3 line rewraps so the gate's commit is not refused",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how a merge pick handles commit-hook formatting of the merged code (the drop is not black-clean: 3 files)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no DS41 change; the drop applied as is, nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched in DS41 code; drop's own programs not audited (BREADCRUMBS P.17)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run; only the measure's quick side"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.17",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T13:28:19",
+  "head": "4053399bb57",
+  "touched": [
+   "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_host_micro.py",
+   "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_moe_block_k3.py",
+   "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_moe_layer_bench.py",
+   "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_prefill_perf.py",
+   "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py",
+   "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py",
+   "models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py",
+   "models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py",
+   "models/demos/deepseek_v3_d_p/tt/kimi_k3/block.py",
+   "models/demos/deepseek_v3_d_p/tt/kimi_k3/moe_block_ffn.py",
+   "models/demos/deepseek_v3_d_p/tt/moe/init_helpers.py",
+   "models/demos/deepseek_v3_d_p/tt/moe/tt_k3_token_split_moe.py",
+   "models/demos/deepseek_v3_d_p/tt/tt_prefill_block.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.17.perf.1.json",
+   "models/demos/glm53_flash_d_p_lb/tests/test_flat_balanced_sweep.py",
+   "models/demos/moe_block/moe_block.py",
+   "models/demos/moe_block/tests/test_moe_block.py",
+   "models/demos/moe_block/tests/test_moe_block_matrix.py",
+   "models/demos/moe_block/tests/zz_scratch_gu_mm.py",
+   "models/demos/moe_block/tests/zz_scratch_port_place.py",
+   "models/demos/moe_block/tt/fused_head.py",
+   "models/demos/moe_block/tt/head_plan.py",
+   "models/demos/moe_block/tt/router_stream.py",
+   "models/demos/moe_block/tt/routing_stream.py",
+   "models/demos/moe_block/tt/se_engine3.py",
+   "models/demos/moe_block/tt/tail_a2a.py",
+   "models/demos/moe_block/tt/tail_engine.py",
+   "models/demos/moe_block/tt/x_gather3.py",
+   "tools/triage/dump_l1_diff.py",
+   "tt_metal/impl/allocator/allocator.cpp",
+   "tt_metal/impl/allocator/allocator.hpp",
+   "tt_metal/impl/buffers/buffer.cpp",
+   "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/device/combine/combine_fabric2d_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/device/combine/combine_fabric2d_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/hybrid_routed_expert_ffn.cpp",
+   "ttnn/ttnn/bringup/combine_rf/combine_plan.py",
+   "ttnn/ttnn/bringup/combine_rf/fabric_all_gather_py.py",
+   "ttnn/ttnn/bringup/combine_rf/persist_l1.py",
+   "ttnn/ttnn/bringup/combine_rf/routing_a2a.py",
+   "ttnn/ttnn/bringup/combine_rf/sparse_all_gather_2d.py",
+   "ttnn/ttnn/bringup/combine_rf/sparse_combine_l1.py",
+   "ttnn/ttnn/bringup/combine_rf/sparse_combine_rf.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_options.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_drisc.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_drisc_post.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_gather.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.cpp",
+   "ttnn/ttnn/bringup/prepared_program/device/prepared_program_device_operation.cpp",
+   "ttnn/ttnn/bringup/prepared_program/prepared_program.cpp"
+  ]
+ }
+}

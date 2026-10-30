@@ -513,6 +513,29 @@ bool AllocatorImpl::has_bank(BufferType buffer_type, const CoreCoord& logical_co
     return this->find_bank_ids(buffer_type, logical_core) != nullptr;
 }
 
+bool AllocatorImpl::all_cores_have_bank(BufferType buffer_type, const std::vector<CoreCoord>& cores) const {
+    constexpr size_t kRemembered = 16;
+    {
+        std::lock_guard<std::mutex> lock(validated_grids_mutex_);
+        for (const auto& [type, grid] : validated_grids_) {
+            if (type == buffer_type && grid == cores) {
+                return true;
+            }
+        }
+    }
+    for (const auto& core : cores) {
+        if (this->find_bank_ids(buffer_type, core) == nullptr) {
+            return false;
+        }
+    }
+    std::lock_guard<std::mutex> lock(validated_grids_mutex_);
+    if (validated_grids_.size() == kRemembered) {
+        validated_grids_.erase(validated_grids_.begin());
+    }
+    validated_grids_.emplace_back(buffer_type, cores);
+    return true;
+}
+
 const AllocatorConfig& AllocatorImpl::get_config() const { return *config_; }
 
 uint32_t AllocatorImpl::get_alignment(BufferType buffer_type) const {
