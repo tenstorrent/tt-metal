@@ -924,11 +924,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // exactly `slots` entries, filled on the first active ring iteration of a pass and neither pushed nor popped
     // until the pass's final normalization, so the unpacker's read index and the packer's write index name the same
     // tile (the buffer is exactly full, the write pointer wrapped to its base).
-    // Plan page: 16 summary words, then the Q block's full mask row (scratch the reader scans in place). The summary
-    // is [kept-block words (plan_block_words)][union piece bits lo, hi][do_pooled]. Single page: a second page pushed
-    // the static CB region past the L1 buffers the full pipeline's CCL manager pins (clash by 1792 B at the 10 s
-    // shape). One pooled chunk of bias tiles in flight; 2*Sk_chunk_t pushed the static CB region past the L1 buffers
-    // at the 10 s / 15 s shapes.
+    // Plan pages: 16 summary words, then the Q block's full mask row (scratch the reader scans in place). The summary
+    // is [kept-block words (plan_block_words)][union piece bits lo, hi][do_pooled]. Two pages: compute reads an
+    // iteration's records in place until the iteration ends (keeping them off the compute threads' stack), while the
+    // reader fills the next one. Counted in the fit check like every slot-dependent CB. One pooled chunk of bias tiles
+    // in flight; 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
     constexpr uint32_t kResidentGroup = 4;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
@@ -955,7 +955,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.prev_out = tile_cb(out_im_tiles * slots, out_tile_size, out_df);
         l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for normalize_row_streaming
         l.sum_in = tile_cb(statistics_tiles * slots, stats_tile_size, stats_df);
-        l.sparse_plan = alloc(64 + mask_row_bytes, 1, tt::DataFormat::UInt32);
+        l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
         // Without the pooled route nothing reads the bias CB; it is not allocated.
         l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive

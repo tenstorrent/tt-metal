@@ -513,7 +513,7 @@ def _cb_bytes(geo, S, slots, kv_pages):
         + 1  # recip scratch
         + sk  # pooled bias
     )
-    return tiles * 2048 + 64 + S * geo.nb_pad() * 4  # + the plan page
+    return tiles * 2048 + 2 * (64 + S * geo.nb_pad() * 4)  # + the two plan pages
 
 
 def _pass_split(geo, S, most, usable):
