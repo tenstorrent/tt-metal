@@ -237,8 +237,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_prgm_(sfpi::vFloat val, C0 c0, C1 c1
  * ADDR_MOD_6 (dest auto-increment by 2 on SFPSTORE) and to load:
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ *
+ * CLAMP_NEGATIVE is ignored (kept in the signature for tt-train's instantiation): lanes with
+ * a negative xlog2 are masked unconditionally, as the Wormhole copy's lower clamp is.
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE /*maybe_unused*/, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants. Loaded once before the loop.
     //
@@ -262,8 +265,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     // Number of instructions in one iteration of the loop body. Used by the
     // load_replay_buf record and TTI_REPLAY/replay below; MUST match exactly the
-    // count of TTI_ instructions emitted by the recorded lambda, or the replay
-    // buffer will misalign.
+    // count of instructions (TTI_ or TT_) emitted by the recorded lambda, or the
+    // replay buffer will misalign.
     //
     //   Base body:                                                15
     //     SFPLOAD, SFPMAD, SFPLOADI(255), SFPSWAP,
@@ -298,8 +301,9 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
 
         if constexpr (SCALE_EN) {
-            // Multiply LREG0 by the BF16 scale immediate in-place.
-            TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+            // Runtime scale (exp_tile's uint16_t argument), so the TT_ form: TTI_ needs a
+            // compile-time immediate. The record captures it like any other instruction.
+            TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0 /*instr_mod1*/);
         }
 
         // xlog2 = val * (1/ln2) + 127.0f, into LREG3 (preserved past int-part work).
@@ -308,7 +312,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
         // LREG1 = 255.0f. Slots into the SFPMAD's 2-cycle latency window.
         TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
-        // Upper clamp. SFPSWAP (mode VEC_MIN_MAX = "max into lreg_dest"):
+        // Upper clamp. SFPSWAP VEC_MIN_MAX leaves the max in VC and the min in VD:
         //   LREG1 = max(255, xlog2), LREG3 = min(255, xlog2).
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 
@@ -721,10 +725,8 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
-            // CLAMP_NEGATIVE is forwarded for API symmetry with the WH kernel,
-            // but on BH the negative-input handling is applied unconditionally
-            // because the SFPGT mask hides in an SFPMAD latency window and is
-            // effectively free (no other instruction to interleave with SFPMAD).
+            // CLAMP_NEGATIVE is forwarded for signature symmetry with the WH kernel; both
+            // ignore it, since the integer trick needs xlog2 >= 0 on either arch.
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
             // The replayed form uses no SFPLOADMACRO, but DISABLE_SFPLOADMACRO (TT_METAL_DISABLE_SFPLOADMACRO, the

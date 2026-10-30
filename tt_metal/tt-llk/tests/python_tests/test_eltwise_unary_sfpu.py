@@ -1638,24 +1638,19 @@ def build_eltwise_unary_sfpu_config(
     )
 
 
-# Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
-@pytest.mark.parametrize("clamp_negative", [True, False])
-def test_exponential_clamp_negative(clamp_negative: bool):
-    torch.manual_seed(0)
-    input_dimensions = [32, 32]
+# The two exp tests below share one 32x32 bf16 Dest run; each keeps only its stimuli and
+# its asserts. Returns (res_tensor, golden_tensor) for MathOperation.Exp on src_A.
+def _run_exp_on_bf16_tile(
+    src_A: torch.Tensor,
+    input_dimensions: list[int],
+    approx_mode: ApproximationMode,
+    fast_mode: FastMode,
+    clamp_negative: bool,
+):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
 
-    # Generate custom stimuli with range [-5, 0.7]
     num_elements = input_dimensions[0] * input_dimensions[1]
-    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
-    # Set some values to be large and negative:
-    src_A[0] = -10000
-    src_A[1] = -1000
-    src_A[2] = -200
-    src_A[3] = -100
-    src_A[4] = -88.5
-
     src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -1671,9 +1666,9 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     res_from_L1 = eltwise_unary_sfpu(
         formats=formats,
         dest_acc=dest_acc,
-        approx_mode=ApproximationMode.Yes,
+        approx_mode=approx_mode,
         mathop=MathOperation.Exp,
-        fast_mode=FastMode.Yes,
+        fast_mode=fast_mode,
         input_dimensions=input_dimensions,
         src_A=src_A,
         src_B=src_B,
@@ -1687,6 +1682,28 @@ def test_exponential_clamp_negative(clamp_negative: bool):
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    return res_tensor, golden_tensor
+
+
+# Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
+@pytest.mark.parametrize("clamp_negative", [True, False])
+def test_exponential_clamp_negative(clamp_negative: bool):
+    torch.manual_seed(0)
+    input_dimensions = [32, 32]
+
+    # Generate custom stimuli with range [-5, 0.7]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
+    # Set some values to be large and negative:
+    src_A[0] = -10000
+    src_A[1] = -1000
+    src_A[2] = -200
+    src_A[3] = -100
+    src_A[4] = -88.5
+
+    res_tensor, golden_tensor = _run_exp_on_bf16_tile(
+        src_A, input_dimensions, ApproximationMode.Yes, FastMode.Yes, clamp_negative
+    )
 
     # clamp_negative=False: require inputs < -88 to be negative (not necessarily
     # correct) and exclude them from the isclose check.
@@ -1705,3 +1722,69 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# Accurate exp on a bf16 Dest with CLAMP_NEGATIVE=false: the kernel's integer trick needs a
+# non-negative xlog2, so its lower clamp must stay whatever the flag says.
+def test_exponential_accurate_unclamped_large_negative():
+    torch.manual_seed(0)
+    input_dimensions = [32, 32]
+
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 10.0 - 5.0
+    # exp(x) of every one of these is below the smallest bf16 subnormal, so the only correct
+    # bf16 output is 0.0. One SFPLOAD covers 64 consecutive elements of one column parity and
+    # the iterations alternate parities, so an (even, odd) sentinel pair every
+    # SFPLOAD_WINDOW // len(large_negative) elements puts every value in every iteration.
+    large_negative = [-10000.0, -1000.0, -226.0, -200.0, -176.0, -150.0, -120.0, -100.0]
+    SFPLOAD_WINDOW = 64
+    sentinel_stride = SFPLOAD_WINDOW // len(large_negative)
+    assert (
+        SFPLOAD_WINDOW % len(large_negative) == 0 and sentinel_stride >= 2
+    ), "large_negative must divide the SFPLOAD window and leave room for a pair per stride"
+    sentinel_indices = []
+    for n, i in enumerate(range(0, num_elements, sentinel_stride)):
+        src_A[i] = large_negative[n % len(large_negative)]  # even column
+        src_A[i + 1] = large_negative[(n + 1) % len(large_negative)]  # odd column
+        sentinel_indices += [i, i + 1]
+
+    res_tensor, golden_tensor = _run_exp_on_bf16_tile(
+        src_A, input_dimensions, ApproximationMode.No, FastMode.No, clamp_negative=False
+    )
+
+    sentinel_results = res_tensor[sentinel_indices].float()
+    nonzero = (sentinel_results != 0.0).nonzero().flatten()
+    assert len(nonzero) == 0, (
+        "Accurate exp of inputs below -88 must be 0.0 on a bf16 Dest regardless of "
+        f"CLAMP_NEGATIVE; {len(nonzero)} of {len(sentinel_indices)} sentinels are not, e.g. "
+        f"{[(src_A[sentinel_indices[k]].item(), sentinel_results[k].item()) for k in nonzero[:MAX_REPORTED_MISMATCHES].tolist()]}"
+    )
+
+    atol, rtol = 0.02, 0.02
+    is_close = torch.isclose(golden_tensor, res_tensor, rtol=rtol, atol=atol)
+    assert torch.all(
+        is_close
+    ), f"Test failed: {(~is_close).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+# ExpWithBase outside the nightly sweep: the only op that drives calculate_exponential with
+# SCALE_EN, so this is what builds the runtime-scale path on the PR gate; the scale's mantissa
+# bits (EXP_WITH_BASE_SCALE) catch a kernel that drops the low bits of the scale.
+@pytest.mark.parametrize(
+    "formats",
+    [
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+    ],
+    ids=["bf16", "fp32"],
+)
+def test_exp_with_base_runtime_scale(formats):
+    dest_acc = DestAccumulation.No
+    _skip_bh_unless_fp32(formats, dest_acc)
+    eltwise_unary_sfpu(
+        formats=formats,
+        dest_acc=dest_acc,
+        approx_mode=ApproximationMode.No,
+        mathop=MathOperation.ExpWithBase,
+        input_dimensions=[32, 32],
+    )

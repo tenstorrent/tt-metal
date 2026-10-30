@@ -3161,11 +3161,10 @@ class UnarySFPUGolden:
         return torch.exp2(input_tensor).item()
 
     def _exp_with_base(self, x):
-        # Matches the dispatch: calculate_exponential with SCALE_EN and a bf16
-        # scale of EXP_WITH_BASE_SCALE (0.5), i.e. exp(0.5 * x). 0.5 is exact in bf16, so
-        # the only error versus this golden is the shared exp approximation itself.
-        input_tensor = self._work_tensor(x)
-        return torch.exp(EXP_WITH_BASE_SCALE * input_tensor).item()
+        # Matches the dispatch: calculate_exponential with SCALE_EN and the bf16 scale
+        # EXP_WITH_BASE_SCALE (exact in bf16). In fp64 so the scale product adds no error
+        # of its own; the only error versus this golden is the exp approximation itself.
+        return self._in_fp64(x, lambda t: torch.exp(EXP_WITH_BASE_SCALE * t))
 
     def _call_tile_structural(
         self,
