@@ -13,7 +13,6 @@ and the ``int32<->uint32`` pair (not a kernel pair) are excluded.
 import math
 import struct
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import (
@@ -412,22 +411,31 @@ def _uint_to_uint8_wide_range_values(input_format: DataFormat, chunk: int) -> li
 
     UInt16 is swept exhaustively (``chunk`` selects the half). Int32/UInt32 get
     every 2^k - 1, 2^k, 2^k + 1, the 256-wrap points, the top of the range and a
-    random fill. Int32 stays non-negative: Wormhole Dest holds Int32 as
-    sign-magnitude, so a negative input reads back as |x| & 0xFF there.
+    random fill. Int32 also takes negatives, including -2**31, packed as two's
+    complement: the kernel keeps the low byte of that word. Quasar still consumes
+    sign-magnitude, so there the Int32 sweep stays non-negative.
     """
     if input_format == DataFormat.UInt16:
         start = chunk * _UINT_TO_UINT8_CHUNK
         return list(range(start, start + _UINT_TO_UINT8_CHUNK))
 
+    signed = (
+        input_format == DataFormat.Int32
+        and get_chip_architecture() != ChipArchitecture.QUASAR
+    )
     top = 2**32 if input_format == DataFormat.UInt32 else 2**31
+    low = -(2**31) if signed else 0
     values = [0, 1, 254, 255, 256, 257, 511, 512, 0xFF00, 0xFFFF, 0x10000, 0x100FF]
     for k in range(1, 32):
-        values += [v for v in ((1 << k) - 1, 1 << k, (1 << k) + 1) if v < top]
+        values += [v for v in ((1 << k) - 1, 1 << k, (1 << k) + 1) if 0 <= v < top]
     values += list(range(top - 256, top))
+    if signed:
+        values += [-v for v in values if v != 0]
+        values.append(-(2**31))
     generator = torch.Generator().manual_seed(62765)
     fill = _UINT_TO_UINT8_CHUNK - len(values)
     values += torch.randint(
-        0, top, (fill,), dtype=torch.int64, generator=generator
+        low, top, (fill,), dtype=torch.int64, generator=generator
     ).tolist()
     return values
 
@@ -470,6 +478,7 @@ def test_eltwise_unary_typecast_uint_to_uint8_wide_range(
         tile_cnt_A,
         src_B,
         tile_cnt_B,
+        twos_complement=formats.input_format == DataFormat.Int32,
     )
     result = [int(v) & 0xFF for v in configuration.run().result]
     assert len(result) == len(
@@ -634,37 +643,55 @@ def _int32_negative_spec(formats: InputOutputFormat) -> StimuliSpec:
     """Int32 stimuli with negatives and signed boundaries.
 
     Block-float outputs stay inside [-15, 15], matching the positive sweep: a wider
-    range is not exact after the packer's shared-exponent quantization. UInt16 clamps,
-    and a 65535 result packs as 0xFFFF, which Blackhole NOC readback treats as a
-    timeout, so that pair stays at or below 65534. Every other output takes the full
-    signed range, including the values where sign-magnitude and two's complement differ.
+    range is not exact after the packer's shared-exponent quantization. UInt16 clamps.
+    A 65535 result packs as 0xFFFF, and a 32-bit readback word of ones is what
+    Blackhole NOC returns on a timeout, so each saturating lane sits next to a lane
+    under 128. Every other output takes the full signed range, including the values
+    where sign-magnitude and two's complement differ.
     """
     if formats.output_format.is_block_float():
         return StimuliSpec.uniform(-15, 15)
 
     if formats.output_format == DataFormat.UInt16:
-        random_low, random_high = -255, 255
+        # 65535 is the clamp ceiling; 65536 and INT32_MAX are the first and last
+        # inputs that saturate to it. Odd neighbors stay in 0..127, same as
+        # test_eltwise_unary_typecast_int_edges.
         boundaries = [_INT32_MIN, -65536, -256, -1, 0, 1, 255, 256, 65534]
-    else:
-        random_low, random_high = -512, 512
-        boundaries = [
-            _INT32_MIN,
-            -_INT32_MAX,
-            -65536,
-            -256,
-            -255,
-            -128,
-            -1,
-            0,
-            1,
-            127,
-            128,
-            255,
-            256,
-            65535,
-            65536,
-            _INT32_MAX,
-        ]
+        saturating = [65535, 65536, _INT32_MAX]
+
+        def distribution(size, dtype, generator):
+            values = torch.randint(
+                -255, 256, (size,), dtype=torch.int64, generator=generator
+            )
+            values[: len(boundaries)] = torch.tensor(boundaries, dtype=torch.int64)
+            index = (len(boundaries) + 1) & ~1
+            for saturated in saturating:
+                values[index] = saturated
+                values[index + 1] &= 0x7F
+                index += 2
+            return values.to(dtype)
+
+        return StimuliSpec(distribution=distribution, seed=56808)
+
+    random_low, random_high = -512, 512
+    boundaries = [
+        _INT32_MIN,
+        -_INT32_MAX,
+        -65536,
+        -256,
+        -255,
+        -128,
+        -1,
+        0,
+        1,
+        127,
+        128,
+        255,
+        256,
+        65535,
+        65536,
+        _INT32_MAX,
+    ]
 
     def distribution(size, dtype, generator):
         values = torch.randint(
@@ -681,7 +708,14 @@ def _int32_negative_spec(formats: InputOutputFormat) -> StimuliSpec:
 
 
 @parametrize(
-    formats=[pair for pair in TYPECAST_PAIRS if pair.input_format == DataFormat.Int32],
+    # Quasar still consumes sign-magnitude for most integer typecasts; its own
+    # suite selects the encoding per pair.
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format == DataFormat.Int32
+        and get_chip_architecture() != ChipArchitecture.QUASAR
+    ],
     dest_acc=_production_dest_acc,
     approx_mode=[ApproximationMode.No],
     input_dimensions=[[32, 32]],
@@ -698,17 +732,19 @@ def test_eltwise_unary_typecast_int32_negative(
     bit-preserving INT32 load and consume two's complement (SFPABS in its integer mode,
     and a low-byte wrap for UInt8). Non-negative stimuli hide that, because both
     encodings agree there. See #56808.
-    """
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        # Quasar still consumes sign-magnitude for most integer typecasts; its own
-        # suite selects the encoding per pair.
-        pytest.skip("Quasar Int32 typecast encoding is covered by its own suite")
 
+    Float16_b uses max_ulp=1. SFP_STOCH_RND nearest rounds ties away from zero and
+    torch rounds ties to even, so with seed 56808 some lanes (257, -449) are one
+    bfloat16 step off golden.
+    """
+    # One bfloat16 step covers the tie-rounding gap; every other output stays exact.
+    max_ulp = 1 if formats.output_format == DataFormat.Float16_b else None
     _run_typecast(
         formats,
         dest_acc,
         approx_mode,
         input_dimensions,
         _int32_negative_spec(formats),
+        max_ulp=max_ulp,
         twos_complement=True,
     )
