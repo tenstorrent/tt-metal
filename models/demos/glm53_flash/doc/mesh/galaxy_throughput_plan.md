@@ -126,6 +126,8 @@ Batch 128 (the 128 K profile, 192 slots) async ON: ITL 129.1 / 127.5 ms (P99 174
 uniform in both: one engine step prefills every arrival, and a traced wave replays the smallest captured per-row
 bucket (256 rows x 8 rows = 2048 padded tokens at the model's ~2 K tok/s prefill rate = ~1 s per wave, whether it
 carries 1 or 8 prompts); `ab_wave128_32` adds the 128-row bucket. The prefill rate itself is workstream C.
+`ab_async_nb_32` (the non-blocking replay): ITL 59.5 / 60.0 ms (P99 66.2), TTFT 5.54 s = -13 % vs the blocking
+replay; the adapter's wall is 0.3 ms, so the remaining 11 ms over the device step is the engine's host path per step.
 
 ## 3. Workstream B: the decode step to the roofline floor
 
