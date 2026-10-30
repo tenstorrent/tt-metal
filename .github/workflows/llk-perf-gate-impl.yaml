@@ -135,8 +135,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
+        # Only the scripts, with no history and no blobs. The full clone took up to 13 of
+        # the 15 minutes an ubuntu-slim job gets. The warehouse step fetches the history it needs.
         with:
-          fetch-depth: 0
+          sparse-checkout: |
+            .github/scripts
+            tt_metal/tt-llk/perf
+          filter: blob:none
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
@@ -216,6 +221,8 @@ jobs:
         run: |
           COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
+            # Commits and trees only: enough for the merge base and the 200 commits before it.
+            git fetch --no-tags --filter=blob:none --depth=250 origin "$(git rev-parse HEAD)"
             # An empty list is passed on, so the reader skips instead of taking any run.
             COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF") \
               || { echo "::warning::No LLK perf change found before ${MATCH_REF}; no baseline."; COMMITS=""; }
@@ -233,8 +240,28 @@ jobs:
             --out baseline_perf/baseline.csv \
             --metadata baseline_metadata.json
 
+      # The REST budget belongs to the installation and is shared by every
+      # workflow in the repository, so a busy hour can refuse a download although
+      # the data is there. It resets on the hour, and the refusal we saw cleared
+      # 41 seconds later, so one wait and one more attempt are enough.
       - name: Download the baseline from a workflow run
+        id: baseline_run_download
         if: inputs.baseline_run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-${{ inputs.arch }}-*
+          merge-multiple: true
+          path: baseline_perf
+          run-id: ${{ inputs.baseline_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait, then download the baseline again
+        if: steps.baseline_run_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Download the baseline from a workflow run, second attempt
+        if: steps.baseline_run_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: perf-data-${{ inputs.arch }}-*
@@ -272,7 +299,21 @@ jobs:
           echo "Baseline commit: ${BASELINE_SHA:-unknown}"
 
       - name: Take the baseline from this run's artifacts
+        id: baseline_artifact_download
         if: inputs.baseline_artifact_pattern != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.baseline_artifact_pattern }}
+          merge-multiple: true
+          path: baseline_perf
+
+      - name: Wait, then take the baseline again
+        if: steps.baseline_artifact_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Take the baseline from this run's artifacts, second attempt
+        if: steps.baseline_artifact_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: ${{ inputs.baseline_artifact_pattern }}
@@ -298,6 +339,22 @@ jobs:
           echo "true" > have_baseline.txt
 
       - name: Download the PR's perf data
+        id: current_download
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}
+          merge-multiple: true
+          path: current_perf
+          run-id: ${{ inputs.perf_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait, then download the PR's perf data again
+        if: steps.current_download.outcome == 'failure'
+        run: sleep 90
+
+      - name: Download the PR's perf data, second attempt
+        if: steps.current_download.outcome == 'failure'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: ${{ inputs.current_artifact_pattern || format('perf-data-{0}-*', inputs.arch) }}

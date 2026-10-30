@@ -27,13 +27,13 @@ from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIM, round_to_dest_width
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CLAMPED_SILU_PARAMS, TILE_COUNT
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Same format in and out, as these are activations applied in place on Pack.
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
@@ -110,12 +110,6 @@ def _clamped_silu_golden(x, op, scalar0, scalar1, dest_acc):
     return round_to_dest_width(y, dest_acc)
 
 
-def _valid_dest_acc(formats):
-    if formats.input.is_32_bit():
-        return [DestAccumulation.Yes]
-    return get_valid_dest_accumulation_modes(formats)
-
-
 def _run(formats, dest_acc, op, scalars, input_range):
     scalar0, scalar1 = scalars
 
@@ -154,14 +148,14 @@ def _run(formats, dest_acc, op, scalars, input_range):
     )
 
     res_from_L1 = configuration.run().result
-    res = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res = result_tensor(res_from_L1, formats.output_format)
     return res.to(torch.float32), golden, src_A.to(torch.float32)
 
 
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    dest_acc=lambda formats: _valid_dest_acc(formats),
+    dest_acc=get_valid_dest_accumulation_modes,
     op=ALL_OPS,
     scalars=lambda op: _op_scalars(op),
     input_range=lambda op: _op_ranges(op),

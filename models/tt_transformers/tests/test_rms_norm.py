@@ -112,3 +112,22 @@ def test_rms_norm_inference(
         logger.warning("rms_norm Failed!")
 
     assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("dim", [128, 256, 896, 1152, 2304, 3072])
+@pytest.mark.parametrize("seq_len", [32, 64, 96, 128, 160])
+def test_rms_norm_short_prefill(device, seq_len, dim, reset_seeds):
+    weight = torch.rand(dim) + 0.5
+    tt_norm = RMSNorm(device=device, dim=dim, state_dict={"norm.weight": weight}, weight_key="norm", eps=1e-6)
+
+    x = torch.randn(1, 1, seq_len, dim)
+    reference = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * weight
+
+    tt_input = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_output = tt_norm(tt_input, mode=Mode.PREFILL)
+    assert tt_output.memory_config() == tt_input.memory_config()
+
+    passing, pcc_message = comp_pcc(reference, ttnn.to_torch(tt_output), pcc=0.9999)
+    logger.info(f"PCC: {pcc_message}")
+    assert passing, f"rms_norm output does not meet PCC requirement 0.9999: {pcc_message}"

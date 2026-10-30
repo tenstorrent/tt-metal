@@ -40,10 +40,9 @@ The `do_restore` toggle makes this a controlled experiment:
 from dataclasses import dataclass
 
 import pytest
-import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import ALL_MATH_FIDELITIES, DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
@@ -56,7 +55,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # The matmul victim is always a regular 32x32 (4-face) tile.
 MATMUL_NUM_FACES = 4
@@ -104,12 +103,7 @@ class POLLUTER_CT_DIM(TemplateParameter):
         same=False,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     # Polluter (run-0) tilize face row count: 16 == regular (control), <16 == tiny.
     polluter_face_r_dim=[16, 4, 1],
     do_restore=[True, False],
@@ -124,7 +118,6 @@ def test_tilize_polluter_matmul(
     if not do_restore and formats.input_format != formats.output_format:
         pytest.skip("negative control requires matching input/output formats")
 
-    torch_format = format_dict[formats.output_format]
     mm_dimensions = [32, 32]
 
     # Independent, regular 32x32 matmul operands (run 1 reads these tilized).
@@ -208,11 +201,7 @@ def test_tilize_polluter_matmul(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     result_matches = passed_test(
         golden_tensor,
