@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -105,6 +106,15 @@ std::string eth_fw_stage_to_string(uint32_t stage);
 // Index of the eth firmware stage slot written by a processor of core_type: the physical erisc it runs on.
 uint32_t eth_fw_stage_slot(const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, uint32_t processor);
 
+// Read the raw eth firmware stage breadcrumb of an ethernet core via UMD, one slot per physical erisc, including
+// slots no Metal processor writes (base FW's erisc0 in single-erisc mode). Empty when core_type doesn't map it.
+std::vector<uint32_t> read_eth_fw_stage_slots(
+    const tt_metal::Hal& hal,
+    const tt::Cluster& cluster,
+    ChipId device_id,
+    const tt::tt_metal::CoreCoord& virtual_core,
+    tt_metal::HalProgrammableCoreType core_type);
+
 // Read the eth firmware stage breadcrumb of every processor running Metal FW on an ethernet core via UMD,
 // indexed by logical processor (as in get_hw_thread_idx()) and taken from the slot of the physical erisc that
 // processor runs on. Empty when core_type doesn't map the breadcrumb.
@@ -115,10 +125,13 @@ std::vector<uint32_t> read_eth_fw_stages(
     const tt::tt_metal::CoreCoord& virtual_core,
     tt_metal::HalProgrammableCoreType core_type);
 
-// Format stages returned by read_eth_fw_stages() as "<processor>=<stage>" pairs labelled with the HAL
-// processor names of core_type, or "n/a" when there are none.
-std::string format_eth_fw_stages(
-    const tt_metal::Hal& hal, tt_metal::HalProgrammableCoreType core_type, const std::vector<uint32_t>& stages);
+// Format slots returned by read_eth_fw_stage_slots() as "erisc<N>=<stage>" pairs joined by separator, marking a
+// slot no Metal processor of core_type writes (base FW's) as "erisc<N>(base)", or "n/a" when there are none.
+std::string format_eth_fw_stage_slots(
+    const tt_metal::Hal& hal,
+    tt_metal::HalProgrammableCoreType core_type,
+    const std::vector<uint32_t>& slots,
+    std::string_view separator = ", ");
 
 namespace internal_ {
 

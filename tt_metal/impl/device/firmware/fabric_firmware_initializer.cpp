@@ -213,19 +213,20 @@ std::string diagnostic_hint_for_stuck_stage(EdmInitProgress stuck_stage, uint32_
         const bool is_laggard = min_stage && r.stage == *min_stage;
         const CoreCoord virtual_core =
             dev->ethernet_core_from_logical_core(CoreCoord{r.logical_core.x, r.logical_core.y});
-        const std::string metal_fw_stage = tt::llrt::format_eth_fw_stages(
+        const std::string eth_fw_stage = tt::llrt::format_eth_fw_stage_slots(
             hal,
             HalProgrammableCoreType::ACTIVE_ETH,
-            tt::llrt::read_eth_fw_stages(hal, cluster, dev->id(), virtual_core, HalProgrammableCoreType::ACTIVE_ETH));
+            tt::llrt::read_eth_fw_stage_slots(
+                hal, cluster, dev->id(), virtual_core, HalProgrammableCoreType::ACTIVE_ETH));
         log_error(
             tt::LogMetal,
-            "  {} chan={:2d} logical={} status=0x{:08x} ({}) metal_fw_stage=[{}]{}",
+            "  {} chan={:2d} logical={} status=0x{:08x} ({}) eth_fw_stage=[{}]{}",
             r.is_master ? "master" : "sub   ",
             r.chan,
             r.logical_core.str(),
             r.raw_status,
             progress_name(r.stage),
-            metal_fw_stage,
+            eth_fw_stage,
             is_laggard ? "  <-- least progress" : "");
     }
 

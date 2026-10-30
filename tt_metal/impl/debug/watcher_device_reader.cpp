@@ -1350,22 +1350,16 @@ void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
 
 void WatcherDeviceReader::Core::DumpEthFwStage() const {
     const auto& hal = reader_.env.get_hal();
-    const std::vector<uint32_t> stages = tt::llrt::read_eth_fw_stages(
+    const std::vector<uint32_t> slots = tt::llrt::read_eth_fw_stage_slots(
         hal, reader_.env.get_cluster(), reader_.device_id, virtual_coord_, programmable_core_type_);
-    if (stages.empty()) {
+    if (slots.empty()) {
         // FW stage breadcrumb not mapped for this arch (only instrumented on Blackhole).
         return;
     }
-    fprintf(reader_.f, "fw_stage:");
-    for (uint32_t i = 0; i < stages.size(); i++) {
-        fprintf(
-            reader_.f,
-            "%s%s=%s",
-            (i > 0) ? "|" : "",
-            get_riscv_name(hal, programmable_core_type_, i),
-            tt::llrt::eth_fw_stage_to_string(stages[i]).c_str());
-    }
-    fprintf(reader_.f, "  ");
+    fprintf(
+        reader_.f,
+        "fw_stage:%s  ",
+        tt::llrt::format_eth_fw_stage_slots(hal, programmable_core_type_, slots, "|").c_str());
 }
 
 void WatcherDeviceReader::Core::DumpSyncRegs() const {
