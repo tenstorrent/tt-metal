@@ -13,8 +13,6 @@
 #include <map>
 #include <optional>
 #include <set>
-#include <string_view>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -22,7 +20,6 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 
@@ -78,9 +75,9 @@ bool is_wrap_link(
 
 // The router the builder, to the router on `chan`, that faces `direction`: the other end of the chip's
 // connected pair that holds both.
-const manifest::Router& get_connected_sibling(
+manifest::Router& get_connected_sibling(
     const std::vector<manifest::ConnectedRouters>& connected_routers,
-    const std::map<chan_id_t, const manifest::Router*>& routers_by_chan,
+    const std::map<chan_id_t, manifest::Router*>& routers_by_chan,
     FabricNodeId node,
     chan_id_t chan,
     eth_chan_directions direction) {
@@ -115,15 +112,6 @@ tt::tt_metal::CoreCoord get_router_logical_core(const tt::Cluster& cluster, Chip
 tt::tt_metal::CoreCoord get_router_virtual_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
     return cluster.get_virtual_coordinate_from_logical_coordinates(
         physical_chip_id, get_router_logical_core(cluster, physical_chip_id, chan), CoreType::ETH);
-}
-
-// The value of the flag field keyed `key`.
-bool read_flag_field(const std::vector<manifest::Field>& fields, std::string_view key) {
-    const auto it = std::ranges::find(fields, key, &manifest::Field::key);
-    TT_FATAL(it != fields.end(), "Fabric manifest: no field keyed {}", key);
-    const auto* flag = it->content.has_value() ? std::get_if<manifest::content::Flag>(&*it->content) : nullptr;
-    TT_FATAL(flag != nullptr, "Fabric manifest: field {} is not a flag", key);
-    return flag->value;
 }
 
 // Resolves each collected router's identity from its Ethernet channel: its key (direction and routing plane, ie. E0)
@@ -213,30 +201,24 @@ void resolve_link_peer(
 }
 
 // Resolves each downstream edge to the sibling router it lands on: the router the builder connected this one to, facing
-// the edge's direction.
+// the edge's direction. An edge on a VC the sibling's tensix mux owns ends at the mux, by the rule the builder places
+// the connection with (builder_type_for_vc). Any other edge makes this router the producer of the sender channel it
+// lands on.
 void resolve_edge_siblings(
     std::vector<manifest::Router>& routers,
     const std::vector<manifest::ConnectedRouters>& connected_routers,
     FabricNodeId node) {
     // Create (eth channel, router) mapping
-    std::map<chan_id_t, const manifest::Router*> by_chan;
-    for (const auto& router : routers) {
+    std::map<chan_id_t, manifest::Router*> by_chan;
+    for (auto& router : routers) {
         by_chan.emplace(router.identity.eth_chan, &router);
     }
 
-    struct Landing {
-        const manifest::Router* router;
-        bool through_tensix_mux;
-    };
-    // (sibling's channel, VC, sender channel) to the edge that lands there.
-    std::map<std::tuple<chan_id_t, uint32_t, uint32_t>, Landing> landed_by;
     for (auto& router : routers) {
         const chan_id_t chan = router.identity.eth_chan;
         for (uint32_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
             for (auto& edge : router.intra_chip_downstream_edges[vc]) {
-                const auto& sibling =
-                    get_connected_sibling(connected_routers, by_chan, node, chan, edge.target.direction);
-                const auto target = static_cast<chan_id_t>(sibling.identity.eth_chan);
+                auto& sibling = get_connected_sibling(connected_routers, by_chan, node, chan, edge.target.direction);
                 const auto num_senders = sibling.shape.senders_per_vc.at(vc);
                 TT_FATAL(
                     edge.landing_channel < num_senders,
@@ -246,56 +228,14 @@ void resolve_edge_siblings(
                     vc,
                     edge.edge,
                     edge.landing_channel,
-                    target,
+                    sibling.identity.eth_chan,
                     num_senders);
                 edge.through_tensix_mux =
                     builder_type_for_vc(vc, sibling.shape.has_tensix_extension) == BuilderType::TENSIX;
-                const auto [landed, inserted] = landed_by.emplace(
-                    std::tuple{target, vc, edge.landing_channel},
-                    Landing{.router = &router, .through_tensix_mux = edge.through_tensix_mux});
-                TT_FATAL(
-                    inserted,
-                    "Fabric manifest: {} channels {} and {} both have an edge into channel {}'s VC{} sender {}",
-                    node,
-                    landed->second.router->identity.eth_chan,
-                    chan,
-                    target,
-                    vc,
-                    edge.landing_channel);
-            }
-        }
-    }
-
-    for (auto& router : routers) {
-        const chan_id_t chan = router.identity.eth_chan;
-        for (uint32_t vc = 0; vc < router.channels.senders.size(); ++vc) {
-            for (uint32_t ch = 0; ch < router.channels.senders[vc].size(); ++ch) {
-                auto& sender = router.channels.senders[vc][ch];
-                const auto landed = landed_by.find({chan, vc, ch});
-                if (landed == landed_by.end()) {
-                    TT_FATAL(
-                        !read_flag_field(sender.fields, manifest::k_static_connection_key),
-                        "Fabric manifest: {} channel {}'s VC{} sender {} waits for a sibling to connect, but no "
-                        "sibling's edge lands on it",
-                        node,
-                        chan,
-                        vc,
-                        ch);
-                    continue;
+                if (!edge.through_tensix_mux) {
+                    sibling.channels.senders.at(vc).at(edge.landing_channel).producer =
+                        manifest::SiblingRouterRef{.direction = router.identity.direction};
                 }
-                if (landed->second.through_tensix_mux) {
-                    continue;
-                }
-                TT_FATAL(
-                    !sender.producer.has_value(),
-                    "Fabric manifest: {} channel {}'s VC{} sender {} is fed by the local worker or tensix mux, but "
-                    "channel {}'s edge lands on it",
-                    node,
-                    chan,
-                    vc,
-                    ch,
-                    landed->second.router->identity.eth_chan);
-                sender.producer = manifest::SiblingRouterRef{.direction = landed->second.router->identity.direction};
             }
         }
     }
