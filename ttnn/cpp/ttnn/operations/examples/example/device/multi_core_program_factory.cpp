@@ -12,7 +12,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
-    const operation_attributes_t& /*operation_attributes*/,
+    const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -28,11 +28,9 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
 
     uint32_t num_tiles = input_tensor.physical_volume() / constants::TILE_HW;
 
-    MeshDevice* device = input_tensor.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    // Split the tiles over the cores of the operation's sub-device, never over the device's whole grid.
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        split_work_to_cores(operation_attributes.assigned_sub_device.worker_cores, num_tiles);
 
     ProgramDescriptor desc;
 
@@ -95,8 +93,9 @@ ProgramDescriptor ExampleDeviceOperation::MultiCore::create_descriptor(
     };
 
     // Runtime args per core
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    // In the column-major order split_work_to_cores filled them.
+    uint32_t num_tiles_written = 0;
+    for (const CoreCoord& core : corerange_to_cores(all_cores, num_cores, /*row_wise=*/false)) {
         uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;

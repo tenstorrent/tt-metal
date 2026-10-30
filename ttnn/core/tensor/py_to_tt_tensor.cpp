@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/sub_device_scope.hpp"
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
@@ -81,10 +82,12 @@ bool can_construct_on_device(
         return false;
     }
 
+    // Under a sub-device manager, or inside a sub-device scope, the conversion ops would run where their own code puts
+    // them (inside a scope they are refused), so the tensor is converted on the host there.
     bool res = device != nullptr && !device->is_remote_only() &&
                (device->get_active_sub_device_manager_id() == device->get_default_sub_device_manager_id()) &&
-               tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) && can_exec_ops_on_device(dst_dtype) &&
-               enable_device_typecast &&
+               !ttnn::in_sub_device_scope() && tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) &&
+               can_exec_ops_on_device(dst_dtype) && enable_device_typecast &&
                // TODO: Remove preserve_nan_values check after
                // https://github.com/tenstorrent/tt-metal/issues/31406
                !preserve_nan_values;

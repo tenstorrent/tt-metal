@@ -33,6 +33,8 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation_detail.hpp"
+#include "ttnn/assigned_sub_device.hpp"
+#include "ttnn/sub_device_scope.hpp"
 
 namespace ttnn::device_operation {
 
@@ -348,6 +350,12 @@ void create_and_cache_mesh_workload(
         }
         auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
             operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+        if constexpr (RecordsSubDevice<mesh_device_operation_t>) {
+            check_workload_on_sub_device(
+                cached_workload.workload,
+                mesh_device_operation_t::assigned_sub_device(operation_attributes),
+                get_operation_name<mesh_device_operation_t>(operation_attributes));
+        }
         // Cached only after this use returns, so a use that throws leaves the cache unchanged.
         use_workload(cached_workload.workload);
 
@@ -410,6 +418,13 @@ ProgramCacheLookup look_up_program_cache(
         ttsl::get_type_name<typename mesh_device_operation_t::device_operation_t>(),
         operation_attributes,
         tensor_args);
+    if constexpr (RecordsSubDevice<mesh_device_operation_t>) {
+        // Whatever the operation's own hash covers (a compute_program_hash, to_hash or attribute_values may leave the
+        // record out), its programs are keyed by the sub-device they were built for.
+        const auto& sub_device = mesh_device_operation_t::assigned_sub_device(operation_attributes);
+        lookup.key.hash = ttsl::hash::hash_objects(lookup.key.hash, sub_device);
+        lookup.key.canonical += ttsl::hash::canonical_key(sub_device);
+    }
     lookup.hit = program_cache.contains(lookup.key);
     if (!lookup.hit && !program_cache.cache_misses_allowed()) {
         auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
@@ -479,6 +494,12 @@ void launch_operation_with_adapter(
         mesh_device,
         lookup,
         [&](tt::tt_metal::distributed::MeshWorkload& workload) {
+            if constexpr (!RecordsSubDevice<mesh_device_operation_t>) {
+                if (ttnn::in_sub_device_scope()) [[unlikely]] {
+                    check_unrecorded_workload_in_composite(
+                        workload, *mesh_device, get_operation_name<mesh_device_operation_t>(operation_attributes));
+                }
+            }
             enqueue_mesh_workload<mesh_device_operation_t>(
                 operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, lookup.hit);
         });
@@ -567,6 +588,53 @@ void validate_input_tensors(
     }
 }
 
+// Inside a sub-device scope, refuses an operation that does not record the sub-device it runs on, or records another.
+template <DeviceOperationConcept device_operation_t>
+void check_sub_device_scope(const typename device_operation_t::operation_attributes_t& operation_attributes) {
+    if (!ttnn::in_sub_device_scope()) [[likely]] {
+        return;
+    }
+    const ttnn::AssignedSubDevice* recorded = nullptr;
+    if constexpr (RecordsSubDevice<device_operation_t>) {
+        recorded = &device_operation_t::assigned_sub_device(operation_attributes);
+    }
+    check_sub_device_scope(recorded, get_operation_name<device_operation_t>(operation_attributes));
+}
+
+// Refuses an operation that records a sub-device but was not assigned one. On a device with several sub-devices, an
+// output it allocated in L1 other than sharded within its sub-device is refused inside a sub-device scope and logged
+// once per operation outside one (see l1_output_check). Outputs found among the tensor arguments were allocated by the
+// caller.
+template <DeviceOperationConcept device_operation_t>
+void check_assigned_sub_device(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshDevice& mesh_device) {
+    if constexpr (RecordsSubDevice<device_operation_t>) {
+        const auto& sub_device = device_operation_t::assigned_sub_device(operation_attributes);
+        const auto l1_check = l1_output_check(mesh_device);
+        if (sub_device.assigned() && l1_check == L1OutputCheck::none) [[likely]] {
+            return;
+        }
+        const auto operation_name = get_operation_name<device_operation_t>(operation_attributes);
+        check_assigned(sub_device, operation_name);
+        ttsl::reflection::visit_object_of_type<Tensor>(
+            [&](const Tensor& output) {
+                bool allocated_by_caller = false;
+                ttsl::reflection::visit_object_of_type<Tensor>(
+                    [&](const Tensor& input) {
+                        allocated_by_caller = allocated_by_caller || input.buffer() == output.buffer();
+                    },
+                    tensor_args);
+                if (!allocated_by_caller) {
+                    check_l1_output_in_sub_device(sub_device, output, operation_name, l1_check);
+                }
+            },
+            tensor_return_value);
+    }
+}
+
 // Restricts the outputs to the mesh coordinates the inputs occupy and assigns the output topologies.
 template <DeviceOperationConcept device_operation_t>
 void place_output_tensors(
@@ -618,6 +686,7 @@ typename device_operation_t::tensor_return_value_t launch(
     tt::tt_metal::internal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
 
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
+    detail::check_sub_device_scope<device_operation_t>(operation_attributes);
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
@@ -630,6 +699,9 @@ typename device_operation_t::tensor_return_value_t launch(
         tracked_function.end(tensor_return_value);
         return tensor_return_value;
     }
+
+    detail::check_assigned_sub_device<device_operation_t>(
+        operation_attributes, tensor_args, tensor_return_value, *mesh_device);
 
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
@@ -656,10 +728,13 @@ void prepare(
     ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
+    detail::check_sub_device_scope<device_operation_t>(operation_attributes);
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
     TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
+    detail::check_assigned_sub_device<device_operation_t>(
+        operation_attributes, tensor_args, tensor_return_value, *mesh_device);
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
     detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(

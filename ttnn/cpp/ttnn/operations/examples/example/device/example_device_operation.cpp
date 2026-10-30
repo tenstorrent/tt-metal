@@ -39,8 +39,13 @@ ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_out
 namespace ttnn::prim {
 ttnn::operations::examples::ExampleDeviceOperation::tensor_return_value_t example(const Tensor& input_tensor) {
     using OperationType = ttnn::operations::examples::ExampleDeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{true, 42};
     auto tensor_args = OperationType::tensor_args_t{input_tensor};
+    // Nothing but a sub-device scope, or where the input's L1 shards live, names the sub-device: the operation reads
+    // its input from anywhere over the NoC.
+    auto operation_attributes = OperationType::operation_attributes_t{
+        true,
+        42,
+        ttnn::assign_sub_device(input_tensor.device(), {.data = ttnn::l1_shard_cores(tensor_args)}, "example")};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

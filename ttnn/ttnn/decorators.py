@@ -298,6 +298,9 @@ push_current_command_queue_id_for_thread = ttnn._ttnn.core.push_current_command_
 pop_current_command_queue_id_for_thread = ttnn._ttnn.core.pop_current_command_queue_id_for_thread
 get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
 
+push_sub_device_for_thread = ttnn._ttnn.core.push_sub_device_for_thread
+pop_sub_device_for_thread = ttnn._ttnn.core.pop_sub_device_for_thread
+
 
 @contextmanager
 def register_pre_operation_hook(hook):
@@ -354,6 +357,46 @@ def command_queue(cq_id: int):
                 f"Restoring to original value {cq_id}."
             )
         pop_current_command_queue_id_for_thread()
+
+
+@contextmanager
+def sub_device(sub_device_id):
+    """Context manager that runs every TTNN operation launched within it on one sub-device of its device.
+
+    An operation runs here only if it records the sub-device it runs on (``ttnn::AssignedSubDevice`` in its
+    attributes); one that does not raises instead of placing kernels elsewhere on the device, and launch checks that
+    every program an operation builds keeps its kernels on that sub-device's cores. On a device with several
+    sub-devices, an output an operation allocates in L1 must be sharded within the sub-device: interleaved L1 reaches
+    the cores of the other sub-devices, where a running program can overwrite it or be overwritten by it. (Outside a
+    scope, an operation that records its sub-device logs a warning in the same case, once per operation.) Tensors
+    created from the host are not checked: inside a scope they are converted on the host. Scopes nest, and the
+    innermost one applies; they are per thread. Load sub-device managers outside them: a scope keeps
+    the manager its first operation ran under, and once another is loaded its operations raise.
+
+    The scope does not order work across sub-devices: an operation reading what another sub-device's operation wrote
+    must wait for it explicitly.
+
+    A composite operation (one that launches others) is checked one launched operation at a time, so it can be refused
+    partway, for example when it reaches an operation that records no sub-device. What it launched before is not
+    undone: an output tensor passed to it may already hold their results. Calling it outside the scope is no way around
+    this: there, such an operation runs where its own code puts it, which nothing orders against the rest of the call
+    when that lies on another sub-device.
+
+    Args:
+        sub_device_id (ttnn.SubDeviceId or int): the sub-device of the active sub-device manager to run on.
+
+    Example::
+
+        with ttnn.sub_device(1):
+            y = ttnn.my_op(x)  # runs on sub-device 1's cores, or raises
+    """
+    if isinstance(sub_device_id, int):
+        sub_device_id = ttnn.SubDeviceId(sub_device_id)
+    token = push_sub_device_for_thread(sub_device_id)
+    try:
+        yield
+    finally:
+        pop_sub_device_for_thread(token)
 
 
 @contextmanager

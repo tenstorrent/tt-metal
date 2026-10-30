@@ -183,6 +183,86 @@ with ``create_descriptor`` and put them in a variant:
    This enables automated tooling to introspect which circular buffers each kernel
    references without parsing the kernel source.
 
+**Where the kernels run: the operation's sub-device**
+
+A device runs each program on one of its sub-devices: a dispatch lane whose programs are dispatched,
+completed and synchronized in its order, on its cores. With no sub-device manager loaded there is one,
+the whole compute grid. An operation opts in to sub-devices by recording the one it is assigned in its
+attributes and exposing it through a static hook:
+
+.. code-block:: cpp
+
+   struct operation_attributes_t {
+       // ...
+       ttnn::AssignedSubDevice assigned_sub_device;   // {SubDeviceId id; CoreRangeSet worker_cores;}
+   };
+   static const ttnn::AssignedSubDevice& assigned_sub_device(const operation_attributes_t& a) {
+       return a.assigned_sub_device;
+   }
+
+Its prim assigns it once, before anything is sized from it, from what names a sub-device:
+
+.. code-block:: cpp
+
+   tensor_args_t tensor_args{input, optional_output};
+   auto assigned = ttnn::assign_sub_device(
+       input.device(),
+       {.sub_device = sub_device_id,                                  // the caller's id, if it takes one
+        .cores = sub_core_grids,                                      // caller narrowing: must lie in the sub-device
+        .data = ttnn::l1_shard_cores(tensor_args, memory_config)},    // where its L1 shards live
+       "my_op");
+
+``assign_sub_device`` takes the innermost ``ttnn.sub_device`` scope's sub-device (an id must agree);
+otherwise the id; otherwise the sub-device holding the cores; otherwise the one holding the data;
+otherwise the only one. With several sub-devices loaded and nothing naming one, it raises rather than
+guess. Cores must lie in the sub-device assigned. Data spanning two sub-devices names neither; once a scope, an
+id or cores name one, the operation reads data beyond it over the NoC, or refuses it where it reads shards in
+place.
+
+Validation, output specs, factory selection and factories then take placement only from the record:
+
+* Kernels, circular/dataflow buffers and semaphores go on ``worker_cores``. Work is split with
+  ``split_work_to_cores(worker_cores, ...)`` (it need not start at (0, 0)), and a multicast grid is a
+  rectangle inside ``worker_cores`` (``ttnn::rectangle_in``), never ``compute_with_storage_grid_size()``.
+* ``id`` is for what is keyed by the lane: host synchronization and semaphores.
+* A path that reads or writes shards in place (native sharding, borrowed buffers) is taken only when the
+  operation's own cores hold the shards; otherwise it reads and writes them over the NoC, or, with no such
+  path, refuses them in validation.
+
+An operation that launches other operations (a composite) assigns its sub-device once at its entry, before
+it launches anything, with ``ttnn::CompositeSubDevice``, and sizes itself from ``assigned()``. Give the guard
+everything its arguments name: inside a ``ttnn.sub_device`` scope it checks that request against the scope,
+so arguments that contradict it are refused before anything runs. The operations it launches that record a
+sub-device run on the composite's. Those that record none run where their own code puts them; when that is
+off the composite's sub-device, launch logs it once per operation, and inside a scope they are refused when
+the composite reaches them, naming the composite. Composites are not transactional: what a composite launched
+before a refusal is not undone, and an output tensor its caller passed may already hold those results.
+
+Callers name sub-devices with a scope:
+
+.. code-block:: python
+
+   with ttnn.sub_device(1):
+       y = ttnn.my_op(x)   # runs on sub-device 1, or raises
+
+Inside a scope, ``launch`` refuses an operation that records no sub-device, or records another, before
+allocating its outputs. On a device with several sub-devices it also refuses a new output in L1 that is
+not sharded within the sub-device, since interleaved L1 reaches the cores of the others; outside a scope
+an operation that records its sub-device logs a warning for the same output, once per operation. The
+scope does not order work across sub-devices: reading what another sub-device's operation wrote needs an
+explicit wait. A scope keeps the sub-device manager its first operation ran under; once another is loaded,
+its operations are refused, since the same id can name other cores. Load sub-device managers outside
+scopes.
+
+Whenever an operation records its sub-device, ``launch`` checks that every program it builds keeps its
+Tensix kernels on ``worker_cores``, and keys the program cache by the record. Metal, with a sub-device
+manager loaded, refuses any program, recorded or not, whose semaphores or circular/dataflow buffers reach the
+cores of another sub-device than the one its kernels run on, since fast dispatch writes their initial values
+and configs to the cores they are on. It checks the cores each circular buffer is created on, whatever memory
+backs it. A program is checked when it is placed under a manager: a Metal 2.0 factory's when it is built under
+one, any other on its first enqueue under each. Neither check sees where kernels write over the NoC: a
+multicast or semaphore set must land only where the operation placed the object it targets.
+
 Full example files:
 
 .. literalinclude::  examples/example/device/example_device_operation.hpp
