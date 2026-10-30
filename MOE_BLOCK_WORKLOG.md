@@ -2651,3 +2651,49 @@ passes of a start entry) | RS ~63 us (floor) | fins + y writes ~10-15 (the cores
   neutral (A/B interleaved 191.4 / 191.7 vs 191.9 / 191.2); PCC unchanged, 0 of 20 replays differ.
 - Tried, not kept: the h exchange family without the receivers' readiness round (kernel_lib handshake=False, a
   counter): HX 17 us (15.7) - the per-round cost is the multicast + signal + fence, not the handshake.
+
+### Tried, not kept: the h exchange gathered at a row's first core, one multicast (and the gather step-major again)
+- h exchange (one chunk, no router buffers over h-all): every core writes its h block into its row's first core's h-all
+  slot and counts it there; that core multicasts the whole h-all once all are in (a kernel_lib fixed sender). SE-HX
+  15.7 -> 11.5 us, but the down's first pass no longer overlaps the rounds. A/B (head us, x0 / x1): GLM-5.3 ring 640
+  183.0 / 182.2, GLM-5.3 2x4 1280 310.4 / 309.1, DSv4.1 ring 640 191.5 / 191.6, K3 ring 640 385.6 / 391.2 (its h blocks
+  are larger: the gather into one core and one large multicast lose to the rotation). ~1 us on GLM, -5.6 on K3: not
+  kept (patch in the scratchpad). What HX is waiting for now is the row's slowest gate / up end (the 2-pair columns),
+  not the rounds.
+- The gather step-major again on top of the pieces (+ the bwd ports walking the rows in reverse, so the two
+  directions read different owner cores at a time; protocol model updated, 14 pass): 181.6 / 181.5 vs 181.9 -
+  neutral. XRSTAT: the neighbour shards' steps are now consumed as they land, but gate / up's own steps start late (W
+  round 0 at ~28-31 us) and the steady state runs ~2.5-3.6 us a step: the matmul cores' rate, not the gather's
+  readiness, sets gate / up's end (~85-90 us).
+- Logits priority, measured on the ring with the current tree (head us / routing chain end, dev 1): x first (the
+  default on <= 8 chips) 183.0 / ~169; logits first (the default the Galaxy's rule picks on a TP ring) 196.1 / ~133;
+  logits after the own shard (a probe) 192.8 / ~145. The logits (fp32 partials, ~250 KB a ring direction, the far
+  owner's two hops) cost the gather ~10 us of link time either way. With the worklog's +20 us for the Galaxy's N 32
+  routing chain, x first would end ~189 (chain-bound) vs ~196 logits first: the Galaxy rule (logits first on a ring)
+  is worth re-checking on the Galaxy now that the SE path is shorter - not changed here.
+
+### Where the heads stand after this push (2026-10-30, bh-lb-09, traced, slowest chip, profiler on, snap 2^-14)
+| head program us (PCC) | before | after | same-x replays differing |
+|---|---|---|---|
+| **GLM-5.3 ring 640** (the Galaxy's TP ring, chunk 5120) | 235.8 | **182.7** (0.98657) | 0 / 20 |
+| GLM-5.3 2x4 1280 (TP line) | 338.4 | 309.2 (0.98664) | 0 / 20 |
+| GLM-5.3-Flash 2x4 5120 (owners) | ~960 | 886.5 (0.98687) | 0 / 20 |
+| GLM-5.3-Flash 2x4 1280 | 246.8 | 221.9 (0.98657) | 0 / 20 |
+| K3 ring 640 | 394.7 | 387.0 (0.99613) | 0 / 20 |
+| K3 line 640 | 514.1 | 505.2 (0.99613) | 0 / 20 |
+| DSv4.1 ring 640 | 212.5 | 191.0 (0.99084) | 0 / 20 |
+| DSv4.1 2x4 5120 (x from DRAM, router cores) | 431.5 | 431.7 (0.99111) | 0 / 20 |
+PERSIST_L1=small GEN_L1_SMALL=8192 GLM-5.3 ring 640: 182.9, PCC 0.98657. Host: test_rs_protocol_model +
+test_head_protocol_model 226 pass, test_head_plan -k "not sweep" 3 pass (the plan's layouts and predictions unchanged).
+Soak (gen harness, GEN_SOAK: replays over 6 inputs, every 1000th checked, two fresh processes a config): GLM-5.3 ring
+640 2 x 30000, 2x4 1280 2 x 20000, K3 ring 640 2 x 20000, line 640 2 x 10000, GLM-Flash 2x4 5120 2 x 10000, DSv4.1
+ring 640 2 x 20000 - no hang, PCC unchanged, 0 same-x replays differing.
+
+GLM-5.3 ring 640 now (182.7 us): the gather runs at link rate from ~7-10 us (its start waits on the owner columns'
+own-x loads) to ~73; gate / up ends ~85-90 (the 2-pair columns: 16 K steps at ~2.4-3 us after the router phase's ~21
+us, the far shard's last steps after it lands); the h exchange ~10-15 (the row's slowest gate / up end, then the
+rounds); the RS from ~100 (right after it) to ~170 at ~link rate (65-70 us vs 62.5); the last core's fin + y ~5-12.
+Critical-path floor (gather + last shard's steps + h + first pass + RS) ~150-155 us. The routing chain (x first)
+ends ~169 on the LoudBox; the Galaxy's N 32 chain (+~20 by the worklog's projection) would end ~189 - past the SE
+path - while the Galaxy's rule (logits first on a ring) gives SE ~196 / chain ~153: on the Galaxy the head is ~189-196
+either way by these numbers, and the chain (or the logits' link time) is the next thing to cut there.
