@@ -24,6 +24,7 @@ from gwdt_checks import (
     missing_node_ids,
     mla_determinism_reps,
     read_tail,
+    row_results,
     stress_result,
 )
 
@@ -33,6 +34,7 @@ HANG_SECS = 120
 
 MODEL_ENV = {"kimi_k2_7": "KIMI_K2_7", "glm53": "GLM5_3"}
 MODEL_LABEL = {"kimi_k2_7": "K2.7", "glm53": "GLM5.3"}
+MODEL_LAYERS = {"kimi_k2_7": "L61", "glm53": "L78"}
 MODEL_PATH_VARS = {
     "kimi_k2_7": ["KIMI_K2_7_HF_MODEL", "TT_KIMI_PREFILL_TTNN_CACHE", "PREFILL_TRACE_DIR"],
     "glm53": ["GLM53_HF_MODEL", "TT_GLM53_PREFILL_TTNN_CACHE", "PREFILL_TRACE_DIR"],
@@ -50,6 +52,7 @@ class State:
     start: float | None = None
     end: float | None = None
     loops: list[Result] = field(default_factory=list)
+    rows: list[Result] = field(default_factory=list)
     now: str = ""
 
 
@@ -190,7 +193,18 @@ def pytest_step(
         log, csv = d / "log_01", d / "crash_triage_01.csv"
         state.log = str(log)
         cmd = "pytest -vs -rA " + " ".join(f"'{a}'" for a in ids + opts)
-        sh(ctx, cmd, log, {**(common_sh(ctx.repo, model)[0] if model else {}), **triage_env(ctx.repo, csv)})
+
+        def tick():
+            if log.is_file():
+                state.rows = row_results(read_tail(log), ids)
+            outer_tick()
+
+        outer_tick, ctx.tick = ctx.tick, tick
+        try:
+            sh(ctx, cmd, log, {**(common_sh(ctx.repo, model)[0] if model else {}), **triage_env(ctx.repo, csv)})
+        finally:
+            ctx.tick = outer_tick
+        state.rows = row_results(read_tail(log), ids)
         if csv.is_file() and csv.stat().st_size > 0:
             return Result(Status.HANG, f"triage {csv}")
         text = log.read_text(errors="replace")

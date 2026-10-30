@@ -169,6 +169,38 @@ def missing_node_ids(wanted: list[str], collected: list[str]) -> list[str]:
     return [w for w in wanted if w.split("::")[-1] not in names]
 
 
+def layer_label(node_id: str) -> str:
+    m = re.search(r"-(dense_L\d+|moe_(?:full_|shared_)?L\d+|dense|moe)-", node_id)
+    return m.group(1) if m else node_id.split("::")[-1]
+
+
+_VERDICT = {"PASSED": Status.PASS, "FAILED": Status.FAIL, "ERROR": Status.FAIL, "SKIPPED": Status.FAIL}
+
+
+def row_results(log_text: str, ids: list[str]) -> list[Result]:
+    """Per-node-id result of one pytest run: the -rA summary when it is there, else the live -v stream."""
+    names = [i.split("::")[-1] for i in ids]
+    summary = {n: v for v, n in re.findall(r"^(PASSED|FAILED|ERROR|SKIPPED) \S*::(\S+)", log_text, re.MULTILINE)}
+    starts = [log_text.find(n) for n in names]
+    rows = []
+    for k, n in enumerate(names):
+        if n in summary:
+            rows.append(Result(_VERDICT[summary[n]]))
+            continue
+        if starts[k] < 0:
+            rows.append(Result(Status.PENDING))
+            continue
+        later = [p for p in starts[k + 1 :] if p > starts[k]]
+        seg = log_text[starts[k] : min(later) if later else len(log_text)]
+        verdict = re.search(r"\b(PASSED|FAILED|ERROR|SKIPPED)\b", seg[len(n) :])
+        if verdict:
+            rows.append(Result(_VERDICT[verdict.group(1)]))
+        else:
+            done = re.findall(r"pass (\d+/\d+) done", seg)
+            rows.append(Result(Status.RUN, f"pass {done[-1]}" if done else ""))
+    return rows
+
+
 def didt_bad_devices(log_text: str) -> dict[int, int]:
     found = re.findall(r"non-deterministic outputs on device (\d+) is (\d+)", log_text)
     return {int(d): int(k) for d, k in found if int(k) > 0}
