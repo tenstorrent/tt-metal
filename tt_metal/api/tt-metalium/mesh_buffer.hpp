@@ -159,6 +159,9 @@ public:
     // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
     // at its specific address. The backing buffer will not be populated if an address was passed
     // into the creation API.
+    [[deprecated(
+        "Use unique_id() to identify the allocation, get_device_buffer() for per-device attributes, or a MeshTensor "
+        "to bind a circular buffer. This API will be removed after 2026-12-03.")]]
     Buffer* get_backing_buffer() const;
 
     // Identifies the device allocation this MeshBuffer owns. The Buffers holding the allocation share this ID, so the
