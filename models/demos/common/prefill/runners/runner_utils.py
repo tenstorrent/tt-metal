@@ -35,9 +35,10 @@ def _create_fabric_router_config(max_payload_size):
 
 
 def open_mesh_device(
-    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0
+    mesh_shape: tuple, max_payload_size: int, l1_small_size: int = 0, trace_region_size: int = 0, sp_axis: int = 0
 ) -> ttnn.MeshDevice:
-    sp = mesh_shape[0]
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    sp = mesh_shape[sp_axis]
     fabric_mode = os.environ.get("PREFILL_FABRIC_MODE", "").strip().lower()
     fabric_mode_map = {
         "1d": ttnn.FabricConfig.FABRIC_1D,
@@ -52,9 +53,12 @@ def open_mesh_device(
     elif fabric_mode:
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
-        # The torus modes need a descriptor declaring RING on both axes; a LINE one hangs at bring-up.
-        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
-    logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
+        # A torus mode needs a descriptor declaring RING on each wrapped axis; a LINE one hangs at bring-up.
+        # SP on axis 1 is the 4x4 tray-half stage, whose descriptor is [LINE, RING]: wrap X only.
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if sp_axis == 0 else ttnn.FabricConfig.FABRIC_2D_TORUS_X
+    logger.info(
+        f"Fabric config: {fabric_config} (sp={sp} on axis {sp_axis}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})"
+    )
 
     fabric_router_config = _create_fabric_router_config(
         max_payload_size=max_payload_size,
