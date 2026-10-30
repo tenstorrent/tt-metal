@@ -344,6 +344,7 @@ void kernel_main() {
     // Runtime args
     // For standard mode: arg0 = start_row
     // For balanced mode: arg0 = start_pair_idx, arg1 = num_pairs
+    // For work-list mode: arg0 = the item count (reused as `start_idx` below), args 1.. = the items
     const uint32_t start_idx = get_arg_val<uint32_t>(0);
 
 #ifdef BALANCED_PARALLELISM

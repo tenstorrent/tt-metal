@@ -117,6 +117,20 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Chain `O/iter11.sh` -> `O/iter11.log`: harness 35 passed, TP=4 gradient check PASS, cooled TP=4 MFU 524.7 ms / 30.92 % (`O/iter11_tp_mfu_tp4.*`), 4-layer TP profile `O/iter11_tp_tracy_tp4_4layers` (`O/iter11_tp_analysis.txt`, `O/iter11_tp_ranked_ops.txt`; chips 1.149-1.273 GHz, matmul rows equal on all four).
 - Code: `metal/common/program_utils.hpp` (`lpt_schedule`, `work_list_runtime_args`), `metal/ops/sdpa_fw/`, `metal/ops/sdpa_bw/` (work-list modes, head split, `sdpa_bw_kv_reduce_*` op and kernels), `nanobind/nb_ops.cpp`, `tests/python/test_mistral.py` (`test_sdpa_causal_gqa_forward_and_gradients`).
 
+### Iteration 13: transpose_split
+
+- Op `metal/ops/transpose_split/` (device op, factory, reader / writer / compute kernels), registered in `CMakeLists.txt`, `metal/operations.hpp`, `nanobind/nb_ops.cpp` (`ttml.ops.metal.transpose_split(input, rows, tail_rows, tail_scale)`); used by `fused_lora.py` backward.
+- Build + standalone check + LoRA tests: `O/iter13_build_check.sh` -> `O/iter13_build_check.log` (the chain's grep hid the check lines; they are in `O/iter13_transpose_split_check.log`).
+- Chain `O/iter13.sh` -> `O/iter13.log`: harness 40 passed, TP=4 gradient check PASS, cooled TP=4 MFU 516.4 ms / 31.42 % (`O/iter13_tp_mfu_tp4.*`), 4-layer TP profile `O/iter13_tp_tracy_tp4_4layers` (`O/iter13_tp_analysis.txt`, `O/iter13_tp_ranked_ops.txt`).
+
+### Stage review round 7 (iterations 11-12)
+
+- `review_round7.md`: more-work-needed (UMD pointer in the iteration-11 commit; ranked table and attribution cells); answered in the same day's commits (pointer restored `415ec0f1d3e`, docs regenerated, runtime-arg guards, router M check); loss match rerun scheduled in the iteration-14 chain.
+
+### Build environment note (review round 7)
+
+- Every measurement of this branch was built against the worktree's local UMD checkout `292fe208659` (the submodule pointer in `main` is `7eb549a29db`; the worktree has carried the newer checkout since before the bring-up started). The iteration-11 commit `7f0a7f1f896` accidentally recorded that pointer through a blanket `git add -u`; `415ec0f1d3e` restores `7eb549a` in the tree without touching the worktree.
+
 ### Iteration 12 candidate: TP collective parameters (rejected)
 
 - Env knobs `TTML_CCL_NUM_LINKS`, `TTML_CCL_{RS,AG}_{CHUNKS_PER_SYNC,WORKERS_PER_LINK,BUFFERS_PER_CHANNEL}` read per call in `ttnn_fixed/distributed/ttnn_ops.cpp` (unset = library defaults); sweep `O/iter12_ccl_sweep.sh` -> `O/iter12_ccl_sweep.log`: defaults fastest (reduce-scatter 122 us, all-gather 114 us standalone vs 281 / 120 in the step: the difference is chip skew).
@@ -162,6 +176,9 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | docs restructure | `884e0eedff6` | skimmable format for `perf_analysis.md`, README and this log; `O/perf_analysis_details.md` |
 | 11 | `7f0a7f1f896` | SDPA work lists (LPT) in the forward and Q backward, head-split KV backward with the `sdpa_bw_kv_reduce` op, harness cases, iteration-11 evidence |
 | 12 candidate | `2c3a0d63846` | TP collective parameter knobs and sweep: no win, recorded as rejected |
-| 12 | (this commit) | `lowrank_update` op, LoRA routing, harness cases, iteration-12 evidence |
+| 12 | `a95fcbdf37d` | `lowrank_update` op, LoRA routing, harness cases, iteration-12 evidence |
+| UMD pointer | `415ec0f1d3e` | the submodule pointer bumped by the iteration-11 commit restored |
+| review 7 | (this commit) | round-7 items: ranked table regenerated, attribution cells, runtime-arg guards, router M check, review record |
+| 13 | (next commit) | `transpose_split` op, fused backward routing, harness cases, iteration-13 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

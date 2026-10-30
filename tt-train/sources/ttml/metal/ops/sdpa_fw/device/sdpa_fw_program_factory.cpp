@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -345,6 +346,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             weights[row] = ((q_row_tile + 1U + Sk_chunk_t - 1U) / Sk_chunk_t) * Sk_chunk_t + 1U;
         }
         work_list = lpt_schedule(weights, num_cores);
+        TT_FATAL(
+            work_list.max_items + 16U <= tt::tt_metal::max_runtime_args,
+            "SDPA work list: a core would receive {} items, more than the runtime-arg limit allows",
+            work_list.max_items);
         num_rows_per_core_group_1 = work_list.max_items;
     }
 

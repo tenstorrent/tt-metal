@@ -37,7 +37,13 @@ def lowrank_update(acc, a, b, scale=1.0, transpose_b=False):
     (`ttml.ops.metal.lowrank_update`, iteration 12) in place of ttnn's 33-core matmul plus a separate add when the
     shapes fit, else the two ops."""
     k = a.shape[-1]
-    if k <= 32 and b.shape[0] == 1 and b.shape[1] == 1 and list(acc.shape)[:3] == list(a.shape)[:3]:
+    if (
+        k <= 32
+        and acc.shape[-2] <= 4096
+        and b.shape[0] == 1
+        and b.shape[1] == 1
+        and list(acc.shape)[:3] == list(a.shape)[:3]
+    ):
         return ttml.ops.metal.lowrank_update(acc, a, b, scale, transpose_b)
     update = ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=lora_matmul_config())
     return ttnn.addalpha(acc, update, scale)

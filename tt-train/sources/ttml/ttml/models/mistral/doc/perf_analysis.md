@@ -34,7 +34,8 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 10 | K-split `skinny_matmul` for the LoRA products | 536.1 (531.2) | 30.27 % | `O/iter10_tp_mfu_tp4.log` |
 | 10 | real weights, warm | 543.0 | - | `O/iter10_full_tp4_real.log` |
 | 11 | SDPA work lists (LPT rows; head-split KV backward) | 524.7 (520.2) | 30.92 % | `O/iter11_tp_mfu_tp4.log` |
-| 12 | `lowrank_update` op: LoRA add and `dx += dh @ A` in one pass | **518.5 (511.8)** | **31.29 %** | `O/iter12_tp_mfu_tp4.log` |
+| 12 | `lowrank_update` op: LoRA add and `dx += dh @ A` in one pass | 518.5 (511.8) | 31.29 % | `O/iter12_tp_mfu_tp4.log` |
+| 13 | `transpose_split` op: dX and s dh from the fused backward product in one pass | **516.4 (512.0)** | **31.42 %** | `O/iter13_tp_mfu_tp4.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -57,23 +58,21 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 
 ## Ranked cost table
 
-- Source: TP=4 after iteration 6, chip 2 of `O/iter6_tp_ranked_ops.txt`; cycle-time, per-layer rows scaled 4 -> 40 layers, fixed rows as measured (57.0 ms of kernels per 4-layer step per chip).
-- State per row and the next rung: `D`, "Ranked cost table".
-- Order after iterations 9-12: matmuls ~208, collectives ~56, layout ~48, norms ~32 (adds folded in), SDPA ~30 (was ~39), SwiGLU ~15, adapters ~9 (was ~19), fixed ~11, adds ~3 (was ~13).
+- Source: TP=4 after iteration 12, chip 0 of `O/iter12_tp_ranked_ops.txt` (steady steps 3-4, cycle-time); per-layer rows x10 (4 -> 40 layers), fixed rows as measured; 54.6 ms of kernels per 4-layer step on chip 0, of which 8.5 collectives.
+- Collectives on chip 0 carry the clock skew of the box (chip 3: 4.0 ms per 4 layers = 17 x (122 + 114 us), the standalone transfer time); overlap with compute not tried.
+- Older tables (composite baseline, loop exit with rooflines, TP after iteration 6): `D`, "Ranked cost table".
 
-| ms/step/chip | class | item | sub-items (ms) |
-|---|---|---|---|
-| ~208 | math | base matmuls at TP-local shapes | gate_up fwd 61.5 (76 %) / dX 55.2 (85 %), w2 fwd 36.9 (63 %) / dX 28.0 (83 %), qkv 7.6 + 7.8, out 5.9 + 4.8 |
-| ~56 | collectives | 18 reduce-scatter `[1024, 5120]` + 18 all-gather per 4 layers | 35 + 21; 17 + 17 after review 3 |
-| ~48 | layout | heads create / concat, fused-route concat / slice / transposes, LoRA-grad stack / unstack | ~28 + ~14 + ~6 |
-| ~39 | math | SDPA, 8 heads per chip | bwd KV 18.3, bwd Q 10.5, fwd 10.4; after iteration 11: bwd KV 11.5 + reduce 1.1, bwd Q 8.6, fwd 9.2 = ~30, all three near the DRAM-bandwidth bound of single-row K/V and Q/dO re-reads |
-| ~31 | math | RMSNorm | fwd 13.8 (32 cores) + bwd 17.5 (96 cores); fwd fused with the adds in iteration 9 |
-| ~25 | math + glue | composite LoRA adapters of qkv / out at TP | skinny matmuls, scale, add; ~19 after iteration 10; ~9 after iteration 12 (`lowrank_update` folds the add) |
-| ~18 | glue | residual and gradient adds `[1024, 5120]` | 31 per 4 layers; ~13 after iteration 9; ~3 after iteration 12 (7 adds per 4 layers left) |
-| ~15 | math | SwiGLU | bwd 10.5 + fwd 4.4 |
-| ~11 | fixed | LM head, cross-entropy, LoRA-grad collectives | fwd 3.0 + dX 2.8, CE chain 3.8, collectives 0.1 |
-
-Earlier tables, kept in full: composite baseline at 40 layers (31 rows, single chip) and the single-chip table at loop exit with rooflines (19 rows): `D`, "Ranked cost table".
+| ms/step/chip | class | item | rows (ms per 4 layers, chip 0) | remaining rung |
+|---|---|---|---|---|
+| ~206 | math | base matmuls at TP-local shapes | gate_up fwd 6.15 (76 % of peak) / dX 5.52 (85 %), w2 fwd 3.69 (63 %) / dX 2.80 (83 %), qkv 0.76 + 0.59, out 0.48 + 0.59 | library kernels at ttnn's best config (sweeps, iterations 4 and 7) |
+| 40-85 | collectives | 17 reduce-scatter `[1024, 5120]` + 17 all-gather `[1024, 1280]` per 4 layers | chip 0 5.87 + 2.21 (waiting included), chip 3 4.0 | transfer at the library optimum (iteration 12 sweep); overlap not tried |
+| ~40 | math + glue | LoRA adapters (rank 16) | `dB` 0.58 + 0.39 + 0.19, `dA`-side matmuls 0.29 + 0.17 + 0.19, `skinny_matmul` 0.29 + 0.22 + 0.15, `lowrank_update` 0.52 + 0.38 + 0.13 | `dA` / `dB` products on 33-88 cores (K-split like `skinny_matmul`) |
+| ~32 | math | RMSNorm | bwd 1.10 + 0.74 (96 cores), fused fwd 0.59 + 0.58, first-layer plain fwd 0.15 | bandwidth-bound two-phase kernels; gamma re-read ~0.2 |
+| ~30 | math | SDPA, 8 heads per chip | bwd KV 1.16 + reduce 0.11, fwd 0.91, bwd Q 0.86 | K/V and Q/dO re-read per Q row (iteration 11): multicast or merged K-splits |
+| ~29 | layout | fused-route slices / transposes / concats, heads, LoRA-grad stacking | w2 route 0.33 + 0.33 + 0.32, gate_up route 0.26 + 0.21 + 0.20, RoPE 0.21, heads 0.15, stack 0.3; ~23 after iteration 13 (`TransposeSplit` 0.31 + 0.19 replace 1.07 of slices / transposes) | forward K-concat (0.52) needs wide producer buffers |
+| ~15 | math | SwiGLU | bwd 1.05 + fwd 0.45 | at ~75 % of bandwidth |
+| ~10 | fixed | LM head, cross-entropy chain, AdamW, embedding | LM head 3.04 + 2.76; CE chain 1.64 + 1.12 + 0.67 + 0.33 (four passes, 32-core target patch); AdamW 0.4 | fused vocab-parallel CE backward (iteration 14) |
+| ~5 | glue | remaining adds | 7 adds of `[1024, 1024]`-class shapes 0.25, LoRA-grad scaling 0.14 | - |
 
 ## Iteration 0: composite baseline (2026-10-29)
 
@@ -183,7 +182,7 @@ Earlier tables, kept in full: composite baseline at 40 layers (31 rows, single c
 
 - **Change**: math, rung extend, kernels we own: `WORK_LIST` mode in `sdpa_fw` and `sdpa_bw_q` (host LPT schedule of the causal rows, `lpt_schedule` in `metal/common/program_utils.hpp`, per-core row lists as runtime args; the pair scheme had 18 of 110 cores doing two pairs) and `HEAD_SPLIT` in `sdpa_bw_kv` (one item per (K/V row, query head), 256 items on 110 cores instead of 64 rows on 64 cores with a 32:1 work spread; fp32 per-head partials summed by the new `ttml_sdpa_kv_bw_reduce` op).
 - **Result**: TP=4 524.7 ms / 30.92 % vs 536.1 (-2.1 %) at 1.149-1.273 GHz effective (iteration 10's run 1.148-1.210), chips 50-75 C.
-- **Attribution**: chip 0, per 4 layers, cycle-time: SDPA forward 1.072 -> 0.915 (268 -> 229 us per call), backward Q 1.084 -> 0.862 (271 -> 216), backward KV 1.839 -> 1.154 + reduce 0.113 (460 -> 289 + 28); SDPA 3.995 -> 3.044 (-0.95 ms, ~-9.5 ms per 40 layers per chip); other rows unchanged within 1 %. Smaller than the core-balance arithmetic (1.7x / 3.3x) because all three kernels re-read K/V (forward, Q backward: 67 MB per call) or Q/dO/lse/u (KV backward: ~100 MB) per single Q tile-row and now run at 280-350 GB/s: bandwidth-bound; the next rung is Q-chunking (several Q rows per item sharing the K/V reads), `D`, "Iteration 11".
+- **Attribution**: chip 0, per 4 layers, cycle-time: SDPA forward 1.072 -> 0.915, backward Q 1.084 -> 0.862, backward KV 1.839 -> 1.154 + reduce 0.113; SDPA 3.995 -> 3.044 (-0.95, ~-9.5 ms per 40 layers per chip); other rows unchanged within 1 %. Below the core-balance arithmetic because the kernels re-read K/V or Q/dO per Q row (`D`, "Iteration 11").
 - **Verification**: standalone vs the previous kernels at six shapes (`O/iter11_sdpa_check.log` vs `O/iter11_baseline.log`): forward and dQ bit-identical, dK / dV PCC 0.999999, max |diff| one bf16 ulp (fp32 partials summed in a different order); harness 35 passed (new `test_sdpa_causal_gqa_forward_and_gradients` at three shapes vs torch fp64); TP gradient check PASS. Bug found on the way: the KV kernel's 2-arg `pack_reconfig_data_format(cb_grad_key, cb_attention_weights)` skips the reprogram when both CBs are fp32 and left the packer in its start-up bf16 state; unconditional reconfig under `HEAD_SPLIT`.
 - **Evidence**: `O/iter11_baseline.{sh,log}`, `O/iter11_build_check.{sh,log}`, `O/iter11_sdpa_check.{py,log}`, `O/iter11.{sh,log}`, `O/iter11_harness.log`, `O/iter11_tp_grad_check_tp4.log`, `O/iter11_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter11_tp_mfu_tp4_tt-smi.txt`.
 
@@ -191,9 +190,17 @@ Earlier tables, kept in full: composite baseline at 40 layers (31 rows, single c
 
 - **Change**: glue + math, rung write new: `metal/ops/lowrank_update/` (`out = acc + s * a @ b`, one K tile: the product per output tile in fp32 DEST, the acc tile added there, one bf16 rounding; items = output tiles column-major, the a column resident in L1, 110 cores) routed from `modules/lora.py::lowrank_update` for `base + s * h @ B^T` (composite qkv / out adapters, forward) and `dx += dh @ A` (fused gate_up / w2 backward); replaces a 33-88-core matmul writing a bf16 intermediate plus an add per call.
 - **Result**: TP=4 518.5 ms / 31.29 % vs 524.7 (-1.2 %) at 1.111-1.197 GHz effective (iteration 11's run 1.149-1.273), chips 49-73 C.
-- **Attribution**: chip 0, per 4 layers, cycle-time: the two LoRA-product matmul rows 0.567 + 0.534 and 16 adds (0.641 of the `[1024, 8192]`-labelled row, 0.357 of the `[1024, 1536]` row) -> `LowrankUpdate` 0.520 + 0.378 + 0.133; -1.07 ms per 4 layers (~-11 ms per 40 layers per chip); 7 adds per 4 layers remain (0.254); math 39.21 -> 37.89, glue 4.64 -> 3.59; kernels excluding collectives ~47.5 -> ~46.3.
+- **Attribution**: chip 0, per 4 layers, cycle-time (CSV diff, review 7): gone are the adapter-forward matmuls `[1024,32[16]] x [5120,32[16]]` 0.196 and `[1536,32[16]]` 0.075, half of the `[32[16]] x [32[16],5120]` row (0.567 -> 0.189; the 4 qkv composite dx matmuls stay) and the `[32[16],8192]` row 0.534, plus 16 adds (0.641 + 0.357); new `LowrankUpdate` 0.520 + 0.378 + 0.133; net -1.15 (chip 2: -1.18); ops 528 -> 512 per step; kernels excluding collectives 47.5 -> 46.1.
 - **Verification**: standalone vs `ttnn.matmul` + `addalpha` at five shapes PCC 0.999998-0.999999, rel 1.5-2.0e-3 (one rounding instead of two), 124 -> 72 us (N=5120), 188 -> 105 (8192), 52 -> 36 (1536); harness 38 passed (new `test_lowrank_update_matches_torch` at three shapes incl. two images); TP gradient check PASS. Bug found on the way: the compute kernel skipped the pop of the column's w tile when the image changed (two-image case wrong, PCC 0.99985); fixed, covered by the two-image test.
 - **Evidence**: `O/iter12_lowrank_check.{py,log}`, `O/iter12_build_check.{sh,log}`, `O/iter12_lora_tests.log`, `O/iter12.{sh,log}`, `O/iter12_harness.log`, `O/iter12_tp_grad_check_tp4.log`, `O/iter12_tp_{mfu_tp4,analysis,ranked_ops}.*`.
+
+## Iteration 13 (2026-10-30): transpose and split in one pass
+
+- **Change**: layout, rung write new: `metal/ops/transpose_split/` (`{input[:rows]^T, s * input[rows:rows+tail]^T}` for the fused LoRA backward's `[in + TAIL, T]` product: one tile transpose per output tile, the tail scaled in DEST, 110 cores) in place of two `ttnn.slice`, two `ttnn.transpose` and a `multiply` per fused layer (`modules/fused_lora.py`).
+- **Result**: TP=4 516.4 ms / 31.42 % vs 518.5 (-0.4 %) at 1.093-1.210 GHz effective (iteration 12's run 1.111-1.197), chips 50-74 C.
+- **Attribution**: chip 0, per 4 layers, cycle-time: `Slice [8256,1024]` 0.329 + `Transpose [8192,1024]` 0.331 + `Slice [5184,1024]` 0.206 + 4 of the 5 `Transpose [5120,1024]` calls 0.208 -> `TransposeSplit` 0.309 + 0.193; -0.57 ms per 4 layers (~-5.7 ms per 40 layers per chip); ops 512 -> 488 per step; kernels excluding collectives 46.1 -> 45.3.
+- **Verification**: standalone vs slice + transpose (+ multiply) at four shapes bit-exact (`max |diff| 0`), 117 -> 54 us (gate_up route), 184 -> 85 (w2), 120 -> 54 with the TP scale; harness 40 passed (new `test_transpose_split_matches_numpy` at two shapes); TP gradient check PASS.
+- **Evidence**: `O/iter13_transpose_split_check.{py,log}`, `O/iter13_build_check.{sh,log}`, `O/iter13_lora_tests.log`, `O/iter13.{sh,log}`, `O/iter13_harness.log`, `O/iter13_tp_grad_check_tp4.log`, `O/iter13_tp_{mfu_tp4,analysis,ranked_ops}.*`.
 
 ## Loop exit (2026-10-29, after iteration 3) and resumed state
 
@@ -201,7 +208,7 @@ Earlier tables, kept in full: composite baseline at 40 layers (31 rows, single c
 - Full-model report at exit: 556.5 ms / 29.15 % random init; 574.8 ms real weights warm, loss 0.4453 -> 0.1406 -> 0.4531 vs the baseline's 0.4453 -> 0.1436 -> 0.4551.
 - Final verification at exit: harness 14; TP gradient check PASS on the composite and the fused paths (first attempt un-interleaved, Ledger); loss match max |diff| 0.026 (composite 0.075); device bf16 loss quantised to 0.0625.
 - Memory peak: 13.79 GiB after the forward at 8 layers (weights + LoRA state 11.61), 279 MiB retained per layer (composite 778); TP=4 40 layers ~11 GiB weights + ~2.3 GiB activations per chip (scaled, not probed).
-- Resumed loop (iterations 4-10): TP=4 556.5 -> 547.5 (6) -> 545.9 (8) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 ms / 30.27 % (10); single-chip projection 1339 -> ~1242 (attribution only). Remaining: matmuls at ttnn's optimum for the TP shapes, inherent collectives, rank-16 layout glue, SDPA and attention-on-fused-heads kernel projects.
+- Resumed loop (iterations 4-12): TP=4 556.5 -> 547.5 (6) -> 545.9 (8) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 ms / 31.29 % (12); single-chip projection 1339 -> ~1242 (attribution only, up to iteration 9). Remaining: see the ranked table (matmuls at ttnn's best config, collectives at the library optimum with overlap untried, adapters, norms, SDPA, layout).
 
 Gap decomposition at exit (cycle-time, 40 layers; notes per term in `D`, "Loop exit"):
 
@@ -223,7 +230,6 @@ Gap decomposition at exit (cycle-time, 40 layers; notes per term in `D`, "Loop e
 |---|---|---|---|
 | TP-local program configs (gate_up / w2 / qkv / out fwd, gate_up / w2 dX) | ~208 (TP matmul row) | 1D-mcast sweeps `O/iter5_matmul_sweep1d_gateup_fwd_tp.log`, `O/iter7_matmul_sweep1d_*.log` | ttnn's choice at the optimum: 1.67 vs 1.66, 1.01 vs 0.99, 0.22 vs 0.21 ms; qkv 0.25 vs 0.46 (worse); dX shapes 0 configs tried |
 | Iteration 7: qkv / out TP shards on the fused path | ~25 (adapter row) | measured, `O/iter7_tp_*` | 551.3 vs 547.5 ms; -1.0 ms adapters paid back by +0.79 layout and a slower out fwd (0.65 vs 0.59) |
-| HiFi2 math fidelity for the base matmuls | 15-25 % of ~770 | microbenchmark `O/iter2_matmul_bench_n*.log` | rel err 4.7e-3 vs HiFi4; HiFi4 + fp32 accumulate is a user requirement |
 | Fastest-overall gate_up 1D config (7.09 vs 7.35 ms) | ~10 (single chip only) | sweep `O/iter4_matmul_sweep1d_gateup_fwd.log` | max \|diff\| 3.1e-2 (one bf16 ulp); not taken without a loss rerun; deferred |
 | dX^T route for w2 (`32768 -> 5120`) | 121.6 (w2 dX) | `O/iter2_matmul_bench3.log` | 3.72 -> 5.29 ms; the `[32768,1024]` transpose costs more than it saves |
 | 8x11 grid for the LM head forward | 20.2 | `O/iter2_matmul_bench3.log` | 58.97 vs 21.48 ms, L1 overflow into a slow path |
@@ -235,7 +241,7 @@ Gap decomposition at exit (cycle-time, 40 layers; notes per term in `D`, "Loop e
 | 320 tiny per-adapter scale ops | 31 (stale-shape row) | iteration 3 fusion | absorbed for qkv / out / gate_up; w2's remain (~8) |
 | Gamma re-read per work item in the fused norm forward | ~0.2 per 4 layers per chip | not attempted | multicast or resident copy; listed |
 | `UnpackToDestFp32` read-back of fp32 partials (three all-core ops) | 0 | review round 6 note | relative 2^-11, below bf16 rounding; PCCs 0.999997-0.999999; left as is |
-| TP collective parameters (links, workers per link, chunks per sync, buffers per channel) through env knobs in `ttnn_fixed/distributed/ttnn_ops.cpp` | 6.8 ms per 4 layers per chip on chip 0 (17 reduce-scatters at 281 us + 17 all-gathers at 120 us) | standalone sweep on the 1x4 mesh at the step's shapes (`O/iter12_ccl_sweep.{py,sh,log}`): reduce-scatter 122 us, all-gather 114 us with the defaults (2 links, 8 workers per link); 1 link 217 / 209, 1-2 workers 176 / 148-278, chunks per sync 1-4 slower for the all-gather, buffers per channel no effect | the library defaults are the fastest; the in-step 281 / 120 us vs 122 / 114 standalone is waiting for the slower chips (1.149-1.273 GHz effective), i.e. the collectives carry the clock skew, not a transfer cost; nothing kernel-level to gain |
+| TP collective parameters (links, workers per link, chunks per sync, buffers per channel) through env knobs in `ttnn_fixed/distributed/ttnn_ops.cpp` | 6.8 ms per 4 layers per chip on chip 0 (17 reduce-scatters at 281 us + 17 all-gathers at 120 us) | standalone sweep on the 1x4 mesh at the step's shapes (`O/iter12_ccl_sweep.{py,sh,log}`): reduce-scatter 122 us, all-gather 114 us with the defaults (2 links, 8 workers per link); 1 link 217 / 209, 1-2 workers 176 / 148-278, chunks per sync 1-4 slower for the all-gather, buffers per channel no effect | parameter tuning rejected: defaults fastest; the in-step excess over 122 / 114 us is chip skew; overlap with compute untried |
 
 Full text of each: `D`, "Rejected".
 
@@ -257,3 +263,5 @@ Full text of each: `D`, "Rejected".
 - Numbers that appear twice with different sources: iteration 1 clock 1104 (MFU run) / 1101 MHz (profiled run); iteration 4 sweep 1624 distinct / 1564 timed configs; baseline gate_up fwd 424.9 (depth fit) / 424.3 (per-call sum at 8 layers), LM head 20.2 / 13.6 (fit) vs 19.1 / 13.7 (per call); gate_up fwd after iteration 2 at 63 % (7.33 ms per call = 94 TFLOP/s of 148.5); iteration 5 temperatures 52-76 C per tt-smi.
 
 Full ledger entries: `D`, "Ledger".
+- HiFi2 (iteration 2, before the hard-constraints block): a microbenchmark of the base matmuls at HiFi2 (`O/iter2_matmul_bench_n*.log`, rel err 4.7e-3 vs HiFi4) was taken once; HiFi4 + fp32 accumulate is a user requirement and no lower fidelity has been evaluated since.
+- Rank-16 K lanes: `lowrank_update` and the previous `ttnn.matmul` path both rely on the padded lanes 16..31 of `h` / `dh` and of `A` / `B` being zero (zero-padded parameters; `h` from `skinny_matmul` whose padded output columns are exact zeros); not validated on device.
