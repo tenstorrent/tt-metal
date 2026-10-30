@@ -791,8 +791,13 @@ class TtLatentCache:
 
     # The whole-prefix copy below is bandwidth-bound (~90 GB/s: 1.5 ms at 131 K, 13 ms at 1 M positions on one chip,
     # tests/test_prefix_rows.py), so it is a negligible part of a long-context prefill chunk; the direct untilize of the
-    # cache pages (no slice) is 1.4-1.6x cheaper from ~512 K positions on but has a ~2.7 ms floor, hence the threshold.
-    DIRECT_UNTILIZE_MIN_ROWS = 524288
+    # cache pages (no slice) is 1.4-1.6x cheaper from ~512 K positions on but has a ~2.7 ms floor. Memory decides the
+    # threshold, not time: the slice path holds TWO copies of the prefix at once (the TILE slice and its ROW_MAJOR
+    # layout), the direct path one. Per-row waves on the 1 M profile ran out of DRAM at ~378 K positions (2 x 378 MiB
+    # against ~0.8 GiB of headroom, served capstone r3 2026-10-30) while the single copy fits at 1 M (the SP path's
+    # 1 M prompts take it), so the default is 128 K rows (the double copy stays under 256 MiB; the floor costs ~1 ms per
+    # layer-chunk above it). GLM53_DIRECT_UNTILIZE_MIN_ROWS overrides (524288 = the time-optimal threshold).
+    DIRECT_UNTILIZE_MIN_ROWS = int(os.environ.get("GLM53_DIRECT_UNTILIZE_MIN_ROWS", 131072))
 
     def user_rows_rm(self, user: int, n_rows: int, direct: bool = True) -> ttnn.Tensor:
         """``user_rows`` as a fresh ROW_MAJOR [1, 1, rows, 512] tensor (the sparse_sdpa kv contract). ``direct``:

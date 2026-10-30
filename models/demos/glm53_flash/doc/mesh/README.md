@@ -1581,6 +1581,19 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 13:15: the wave wall was the double copy below the direct-untilize threshold; what r4 measures
+
+r3's OOM frame is `user_rows_rm` line 812, the slice path (`user_rows` TILE slice, then `to_layout` ROW_MAJOR): two
+copies of the prefix live at once, and `DIRECT_UNTILIZE_MIN_ROWS` (524288, the time-optimal threshold of
+`test_prefix_rows.py`) kept every wave below 512 K positions on that path: 2 x 378 MiB against ~0.8 GiB of headroom.
+The SP path's 1 M prompts (r4) are past the threshold and hold one copy (1 GiB), which fits. The threshold is now a
+memory decision: 131072 rows by default (`GLM53_DIRECT_UNTILIZE_MIN_ROWS`), so a wave's copy past 128 K rows is single
+and waves should reach 1 M as SP does; queued `served_8x4_needle1m_8_direct_r1` (8 x 1 M through waves of 8). r4 itself
+proves 32 distinct 1 M requests at 4 in flight, not 32 resident at 1 M: the SP path writes slot index u on every row,
+so a resident SP user blocks index u for further SP prefills (at most 4 concurrent users above the wave wall), and with
+the interleave on a lone decoding user gets one token per 7.6 s prefill chunk of the others (0.1 tok/s). The resident
+capstone (r5: 32 in flight, wave-affine) follows a green direct run.
+
 ### 2026-10-30 12:10: the wave path's DRAM wall at 1 M; the capstone r4 in the shape the server can prefill
 
 r3 (wave-affine placement) ran waves of 8 at 2.2 K tok/s for 45 min and died when its rows reached ~360-378 K:
