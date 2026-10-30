@@ -28,7 +28,9 @@ struct H2DStreamServiceDescriptor {
     // global_dtype is serialized as a raw DataType ordinal, so the bump forces a version mismatch (hard error)
     // between old/new processes instead of an old peer decoding ordinal 9 as INVALID rather than INT8.
     // v3: the MX formats were added to DataType at ordinals 10-17, moving INVALID 10->18.
-    static constexpr uint32_t kVersion = 3;
+    // Held at 2 on this branch: tt-d-gen's dgen-worker still reads v2, and the schema and every ordinal up to
+    // INT8 are unchanged, so a v2 reader decodes a non-MX spec (the prefill runner's UINT32 tokens) correctly.
+    static constexpr uint32_t kVersion = 2;
 
     // Source-tensor spec snapshot. Limited to ROW_MAJOR / DRAM-interleaved today.
     tt::tt_metal::Shape global_shape;
