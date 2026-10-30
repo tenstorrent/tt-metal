@@ -487,13 +487,17 @@ RmsNormResult rms_norm_full(
     const std::optional<ProgramConfigArg>& program_config,
     const std::optional<ComputeConfigArg>& compute_kernel_config,
     bool return_residual_sum,
-    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config) {
+    const std::optional<ttnn::MemoryConfig>& residual_sum_memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor) {
     const auto cfg = normalize_compute_kernel_config(compute_kernel_config);
     const auto resolved =
         validate(input_tensor, weight, bias, residual_input_tensor, memory_config, program_config, cfg);
     const auto residual_sum_mc =
         check_residual_sum(input_tensor, residual_input_tensor, return_residual_sum, residual_sum_memory_config);
     const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    if (output_tensor.has_value() && resolved.inplace) {
+        throw ValueErrorCpp("rms_norm_ttnn: output_tensor and program_config inplace exclude each other");
+    }
 
     // The ROW_MAJOR BAND scheme's output-placement limit (rms_norm_ttnn_program_descriptor.py _plan_band),
     // raised here so it keeps its type whatever the launch path does with exceptions.
@@ -536,7 +540,8 @@ RmsNormResult rms_norm_full(
         resolved.subblock_w,
         resolved.inplace,
         output_mem_config,
-        residual_sum);
+        residual_sum,
+        output_tensor);
     return RmsNormResult{
         .output = std::move(out), .inplace = resolved.inplace, .residual_sum = std::move(residual_sum)};
 }
@@ -619,7 +624,8 @@ ttnn::Tensor rms_norm_split_full(
     const std::optional<const ttnn::Tensor>& partial_stats,
     int64_t stats_width,
     const std::optional<std::pair<int64_t, int64_t>>& input_window,
-    const std::optional<tt::tt_metal::DataType>& dtype) {
+    const std::optional<tt::tt_metal::DataType>& dtype,
+    const std::optional<ttnn::Tensor>& output_tensor) {
     const auto cfg = normalize_compute_kernel_config(compute_kernel_config);
     const int64_t width = input_tensor.logical_shape()[-1];
     const auto [c0, c1] = input_window.value_or(std::pair<int64_t, int64_t>{0, width});
@@ -638,7 +644,8 @@ ttnn::Tensor rms_norm_split_full(
     attrs.fp32_dest_acc_en = cfg.fp32_dest_acc_en;
     attrs.math_approx_mode = cfg.math_approx_mode;
     attrs.dst_full_sync_en = cfg.dst_full_sync_en;
-    return ttnn::prim::bringup::rms_norm_split(input_tensor, as_optional(weight), as_optional(partial_stats), attrs);
+    return ttnn::prim::bringup::rms_norm_split(
+        input_tensor, as_optional(weight), as_optional(partial_stats), attrs, output_tensor);
 }
 
 }  // namespace ttnn::operations::bringup::rms_norm_ttnn

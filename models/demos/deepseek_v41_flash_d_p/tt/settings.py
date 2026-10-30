@@ -766,6 +766,19 @@ TABLE = {
         "carry's two slices write load-time outputs (output_tensor / optional_output_tensor), one per site for every "
         "layer (tt/host_alloc.py). off = today's path",
     ),
+    "FORK_OUT_BUFFERS": Setting(
+        "on",
+        ("on", "off"),
+        "P.16 (galaxy 8x4, owner 2026-10-30; DS41-171 / DS41-172: ~500 bring-up fork calls a chunk each allocate their "
+        "output, ~35 us of host a call). on = the forks ttnn.bringup.rms_norm, mhc_pre_xing, mhc_post (stats variant) "
+        "and rotary_embedding_indexed write load-time outputs (fork options output_tensor / hc_output / y_output / "
+        "stats_output / stats_scratch) at every call site whose output is read and dropped inside its layer: attn_norm, "
+        "q_norm, kv_norm, ffn_norm (stats and output), attn_hc (hc and y), ffn_hc (y), attn_residual's stats row, both "
+        "residuals' partials scratch, the kv / q / output RoPE. Outputs kept across layers or chunks keep allocating: the "
+        "mHC streams, ffn_hc's hc (the next layer's pending pre), ffn_residual's stats row (the next layer's), the "
+        "final norm, the compressor / indexer sites. Buffers allocated at load time (tt/host_alloc.reserve_forks), one "
+        "per site for every layer; outputs bit-identical. off = today's path (the ops allocate)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

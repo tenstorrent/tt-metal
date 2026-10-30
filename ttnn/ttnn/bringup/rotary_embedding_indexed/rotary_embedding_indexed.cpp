@@ -22,7 +22,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
-    bool uniform) {
+    bool uniform,
+    const std::optional<ttnn::Tensor>& output_tensor) {
     return ttnn::prim::bringup::rotary_embedding_indexed(
         input,
         cos,
@@ -37,7 +38,8 @@ ttnn::Tensor rotary_embedding_indexed(
         rotary_dim,
         rotary_offset,
         concat_prefix,
-        uniform);
+        uniform,
+        output_tensor);
 }
 
 // Tensor form: kv_actual_global is a 1-element uint32 DRAM tensor read on-device (element [0]); the

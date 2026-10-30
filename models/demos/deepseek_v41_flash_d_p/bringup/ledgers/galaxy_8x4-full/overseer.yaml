@@ -229,6 +229,37 @@ notes:
     by hand.'
   closed: '2026-10-29T16:49:14'
   why_closed: FIX.13 closed by hand (records)
+- id: OV-23
+  tasks:
+  - P.*
+  - FIX.*
+  - X.*
+  status: open
+  t: '2026-10-29T20:22:07'
+  text: 'OWNER 2026-10-29: no Python-built op stays non-prepared. Any op whose program is built in Python (ttnn.generic_op
+    / a ProgramDescriptor, the ttnn.bringup Python forks) that you add or touch must dispatch through the prepared path
+    (ttnn.bringup.prepare_program / run_prepared, as ckv_bfp4 / bfp_round prepared=True and P.7): built once per shape and
+    memory config, addresses patched per call, outputs reused where possible; measure its host time per call. Report any
+    such op you call that is not prepared.'
+- id: OV-24
+  tasks:
+  - P.16
+  status: open
+  t: '2026-10-30T09:19:29'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 09:20: stop the fork regression suites now; the 8x4''s time is too
+    expensive for them (task F.1 runs every fork''s full suite once at the end). Your code and the on/off census are done
+    (host -13.5 ms in the four forks, wall ~333 -> ~306 ms). Next attempt: do NOT run any fork regression or unit suite;
+    only finish the records (BREADCRUMBS, known_issues incl. the ''eval'' package import errors in the rms_norm / mhc golden
+    tests, knowledge-use report) and stop, so the orchestrator runs the A/B.'
+- id: OV-25
+  tasks:
+  - P.*
+  - FIX.*
+  status: open
+  t: '2026-10-30T09:19:30'
+  text: 'OWNER 2026-10-30: do not run fork regression / unit suites on the 8x4 in a perf or fix step (the machine is too
+    expensive for it); run only the new tests you add for your change and the model-level checks. Task F.1 runs every fork''s
+    full suite once at the end.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -555,6 +586,31 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   released: '2026-10-29T15:36:21'
   placed: '2026-10-29T16:02:40'
+- id: FIX.14
+  title: 'Integrate the 2x2''s lowbit phase 2 at full size: window KV bfloat8_b blocks, index K / Q bfloat4_b (merged 1f45dcccf1c)'
+  gate:
+  - P.10
+  status: placed
+  t: '2026-10-29T16:49:50'
+  text: 'OWNER DECISION 2026-10-29 13:00; the 2x2 marked READY FOR GALAXY (df92663a019, merged in 1f45dcccf1c, no host C++
+    change so no ttnn rebuild). Defaults now on: WINDOW_KV_FORMAT=bfp8_blocks, INDEX_K_FORMAT=bfp4, INDEX_Q_FORMAT=bfp4
+    (bf16 = the path before); the served caches stay bf16 (contract unchanged; they must hold the rounded values attention
+    reads). Do: run the gate (P.10''s units) on the 8x4; anything that breaks at 8x4 sizes (SP=32 / 160 rows a chip, 40
+    layers, the window carry, the per-chip index slabs) is fixed in the forks / tt behind the same behaviour, keeping the
+    2x2 working (derive from shapes, no box literals). Measure on vs off (env WINDOW_KV_FORMAT=bf16 INDEX_K_FORMAT=bf16
+    INDEX_Q_FORMAT=bf16 = off): per-chip DRAM of the window and index tables at 1,044,480 tokens (plan numbers), window
+    / index ring or gather bytes, sparse_sdpa and indexer score per call, the new writes (ckv_bfp4 blocks, bfp_round) per
+    call, attention / indexer / device / wall per chunk from the plain profile (rung last). Accuracy: every ladder metric
+    against its limit. KNOWN, OWNER-ACCEPTED on the 2x2 at 16:50 (2x2 spec tests.waivers indexer and state.topk_idx, F226):
+    the reference''s own fp4 selection error moves the top-k state (2x2: L14 0.185 vs 0.165) and the indexer step; if the
+    8x4 misses exactly those (err_state_topk_idx_* or the indexer step) and nothing else, STOP and report the numbers per
+    layer - the overseer adds the owner''s waivers to this spec; never loosen a limit, never raise precision above the reference.
+    Any other miss is a bug to find. DS41-141''s unit waiver (L20 window_kv last-window PCC >= 0.985) may stop matching
+    once the window is bfloat8_b: report the new value, do not touch the waiver.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  placed: '2026-10-29T16:50:05'
 classified:
   L.smoke:
     kind: framework

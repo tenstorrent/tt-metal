@@ -93,6 +93,11 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
                 (comb_col + i*n + j) in their tensors (default 0 / 0: as above). Nonzero: n is the residual's stream
                 count, post and comb may be one packed tensor, e.g. the mHC mixes [pre | post | comb] with
                 post=comb=mixes, post_col=n, comb_col=2n (no slices; deepseek_v41_flash_d_p P.19).
+            output_tensor / stats_output / stats_scratch (ttnn.Tensor, optional; default None = the op allocates
+                them; deepseek_v41_flash_d_p P.16): the caller's buffers for X', the stats row and (stats_weight
+                only) the partials scratch ([1, 1, R, 32 blocks] float32 TILE DRAM, blocks = the op's column-block
+                count, mhc_post_stats_plan). Each must have exactly the spec the op would allocate (checked on every
+                call) and must not be an input; the results are tensors of those buffers (new Python objects).
 
         Returns:
             ttnn.Tensor: X' (..., T, n*C), the residual's dtype, TILE, DRAM interleaved; with stats_weight the tuple
@@ -108,7 +113,10 @@ void bind_mhc_post_ttnn(nb::module_& mod) {
         nb::arg("comb_transposed") = true,
         nb::arg("stats_weight") = nb::none(),
         nb::arg("post_col") = 0,
-        nb::arg("comb_col") = 0);
+        nb::arg("comb_col") = 0,
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("stats_output") = nb::none(),
+        nb::arg("stats_scratch") = nb::none());
 
     mod.def(
         "_mhc_post_ttnn_program_descriptor",

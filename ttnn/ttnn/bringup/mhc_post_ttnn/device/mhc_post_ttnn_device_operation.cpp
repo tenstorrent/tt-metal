@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mhc_post_ttnn_device_operation.hpp"
+#include "mhc_post_given_output.hpp"
 
 #include <vector>
 
@@ -34,7 +35,13 @@ MhcPostDeviceOperation::spec_return_value_t MhcPostDeviceOperation::compute_outp
 
 MhcPostDeviceOperation::tensor_return_value_t MhcPostDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.residual.device());
+    const auto& t = tensor_args;
+    return given_or_new(
+        t.output,
+        compute_output_specs(attrs, t),
+        t.residual,
+        {&t.input, &t.residual, &t.post, &t.comb},
+        "output_tensor");
 }
 
 ttsl::hash::hash_t MhcPostDeviceOperation::compute_program_hash(
@@ -78,14 +85,16 @@ ttnn::Tensor mhc_post_ttnn(
     const tt::tt_metal::ComputeConfigDescriptor& compute_config,
     bool comb_transposed,
     uint32_t post_col,
-    uint32_t comb_col) {
+    uint32_t comb_col,
+    const std::optional<ttnn::Tensor>& output_tensor) {
     using OperationType = ttnn::operations::bringup::mhc_post_ttnn::MhcPostDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .compute_config = compute_config,
         .comb_transposed = comb_transposed,
         .post_col = post_col,
         .comb_col = comb_col};
-    auto args = OperationType::tensor_args_t{.input = input, .residual = residual, .post = post, .comb = comb};
+    auto args = OperationType::tensor_args_t{
+        .input = input, .residual = residual, .post = post, .comb = comb, .output = output_tensor};
     return ttnn::device_operation::launch<OperationType>(attrs, args);
 }
 

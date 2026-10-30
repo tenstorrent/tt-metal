@@ -271,3 +271,11 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 - Needed by: rebase 2026-10-27
 - Files: `kernels/perf_instrumentation.hpp`, `kernels/rms_norm_ttnn_compute.cpp`, `kernels/rms_norm_split_reader.cpp`,
   `device/rms_norm_ttnn_program_factory.cpp`
+
+### output_tensor: write a caller's output buffer (2026-10-30)
+- What: `output_tensor=` (default None = the op allocates its output, unchanged). Given, the op writes that tensor, which must have exactly the output's spec (shape, dtype, layout, memory config; checked on every call, miss and hit) and must not be the input; default and split programs; not with `inplace`. The result is a tensor of its buffer. Kernels and programs unchanged; outputs byte-identical to the allocating call.
+- Why: each call allocated its output (~35 us of host). The model passes load-time buffers at the call sites whose
+  output is read and dropped inside the layer. Measured: rms_norm 65.9 -> 43.6 us of host a call (8x4, 208 calls a chunk, census of the profile rung's last chunk).
+- Tests: `tests/unit/test_rms_norm_ttnn_output_tensor.py` 4 passed on the 8x4 (bytes equal to the allocating call, refusals). Source regression: 26 passed; the unit suite was stopped by the owner (F.1 runs it).
+- Needed by: deepseek_v41_flash_d_p P.16 (FORK_OUT_BUFFERS, 2026-10-30)
+- Files: `rms_norm_ttnn.{hpp,cpp}`, `rms_norm_ttnn_nanobind.cpp`, `device/rms_norm_ttnn_device_operation{.hpp,.cpp,_types.hpp}`, `device/rms_norm_split_device_operation.{hpp,cpp}`, `tests/unit/test_rms_norm_ttnn_output_tensor.py`

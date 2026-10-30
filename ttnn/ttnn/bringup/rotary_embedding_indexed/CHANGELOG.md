@@ -30,3 +30,11 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Needed by: deepseek_v41_flash_d_p P.5 (ROPE_UNIFORM_PROGRAM)
 - Files: device/rotary_embedding_indexed_device_operation.{hpp,cpp}, rotary_embedding_indexed.{hpp,cpp},
   rotary_embedding_indexed_nanobind.cpp, tests/unit/test_uniform.py, tests/source.yaml, tests/source_baseline.json
+
+### output_tensor: write a caller's output buffer (2026-10-30)
+- What: `output_tensor=` (scalar form only, default None = the op allocates its output, unchanged): the op writes that tensor, whose spec must be exactly the output spec (checked on every call, miss and hit), and returns a tensor of its buffer. Not the input. Kernels and programs unchanged; outputs byte-identical to the allocating call.
+- Why: each call allocated its output (~35 us of host). The model passes load-time buffers at the call sites whose
+  output is read and dropped inside the layer. Measured: rotary_embedding_indexed 69.1 -> 50.8 us of host a call (8x4, 136 calls a chunk).
+- Tests: `tests/unit/test_output_tensor.py` passed on the 8x4 (with the fork's uniform tests: 14 passed). Regression: unit 22 passed / 44 skipped, source 9 passed.
+- Needed by: deepseek_v41_flash_d_p P.16 (FORK_OUT_BUFFERS, 2026-10-30)
+- Files: `rotary_embedding_indexed.{hpp,cpp}`, `rotary_embedding_indexed_nanobind.cpp`, `device/rotary_embedding_indexed_device_operation.{hpp,cpp}`, `tests/unit/test_output_tensor.py`

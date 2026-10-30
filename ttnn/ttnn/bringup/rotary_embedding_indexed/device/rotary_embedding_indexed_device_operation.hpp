@@ -54,6 +54,9 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // `kv_actual_global` attribute.
         std::optional<Tensor> metadata;
         std::optional<Tensor> concat_prefix;
+        // Bring-up option (DeepSeek-V4.1 P.16), default empty = the op allocates its output. Set: the op writes
+        // this tensor (its spec must equal compute_output_specs'; checked on every call) and returns it.
+        std::optional<Tensor> output;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -124,6 +127,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
-    bool uniform = false);
+    bool uniform = false,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn::prim::bringup
