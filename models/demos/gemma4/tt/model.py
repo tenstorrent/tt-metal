@@ -1609,6 +1609,32 @@ class Gemma4Model:
         taps, self._dflash_taps = self._dflash_taps, []
         return taps
 
+    def _verify_pli_device_tensors(self, token_ids_host, pli_device_tensors):
+        """Build one PLI tensor per layer for speculative verification."""
+        if pli_device_tensors is not None:
+            if self.hidden_size_per_layer_input and len(pli_device_tensors) != len(self.layers):
+                raise ValueError(
+                    f"pli_device_tensors has {len(pli_device_tensors)} entries "
+                    f"but PLI model has {len(self.layers)} layers"
+                )
+            return pli_device_tensors
+        if not (self.hidden_size_per_layer_input and self.per_layer_input_weights):
+            return None
+        if token_ids_host is None:
+            raise ValueError(
+                "This target uses per-layer inputs, so verification requires token_ids_host or pli_device_tensors"
+            )
+        pli_host = self.compute_host_pli_batch(token_ids_host)
+        pli_all = ttnn.from_torch(
+            pli_host,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return [pli_all[i : i + 1] for i in range(pli_host.shape[0])]
+
     def ttnn_verify_forward(
         self,
         x,
@@ -1618,6 +1644,8 @@ class Gemma4Model:
         kv_cache=None,
         page_tables_per_layer=None,
         hidden_only=False,
+        token_ids_host=None,
+        pli_device_tensors=None,
     ):
         """Multi-token speculative *verify* forward (batch holds the candidates).
 
@@ -1639,12 +1667,16 @@ class Gemma4Model:
             hidden_only: return ``(None, hidden)`` without the lm_head, its
                 softcap and the vocab all-gather (the serving records' seed
                 forward under GEMMA4_SPEC_LEAN_SEED only feeds the drafter).
+            token_ids_host: host candidate ids used to compute PLI for PLI targets.
+            pli_device_tensors: optional list with exactly one PLI tensor per layer.
 
         Returns:
             (logits, hidden) — logits [1,1,K,vocab] from the post-norm hidden;
             ``hidden`` is the post-final-norm hidden [1,1,K,hidden], the
             it-assistant drafter's recurrent seed.
         """
+        pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
+
         if x.dtype in (ttnn.uint32, ttnn.int32):
             input_embeds = self.embed_tokens(x)
             if len(input_embeds.shape) == 3:
@@ -1667,6 +1699,7 @@ class Gemma4Model:
             token_index=token_index,
             position_idx_cache=current_pos_cache if current_pos_cache is not None else current_pos,
             page_tables_per_layer=page_tables_per_layer,
+            pli_device_tensors=pli_device_tensors,
             return_hidden=True,
             # Default True (race-safe). A timing/experiment harness can set
             # `_verify_seq_kv_write=False` to measure the cost of the per-candidate
@@ -1692,6 +1725,8 @@ class Gemma4Model:
         hot_pt_sliding=None,
         page_tables_per_layer=None,
         keep_logits_sharded=False,
+        token_ids_host=None,
+        pli_device_tensors=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
 
@@ -1720,11 +1755,14 @@ class Gemma4Model:
                 sharded verify argmax, GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX: no
                 vocab all-gather in the record). Default False gathers the
                 full vocab as before.
+            token_ids_host: host candidate ids used to compute PLI for PLI targets.
+            pli_device_tensors: optional list with exactly one PLI tensor per layer.
 
         Returns:
             (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
             ``ttnn_verify_forward``.
         """
+        pli_device_tensors = self._verify_pli_device_tensors(token_ids_host, pli_device_tensors)
         input_embeds = self.embed_tokens(x)
         if len(input_embeds.shape) == 3:
             input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
@@ -1772,6 +1810,7 @@ class Gemma4Model:
             packed=packed,
             page_tables_per_layer=page_tables_per_layer,
             keep_sharded_for_sampling=bool(keep_logits_sharded),
+            pli_device_tensors=pli_device_tensors,
         )
         for cos_bp, sin_bp in rope_packed.values():
             cos_bp.deallocate(True)
@@ -1798,6 +1837,35 @@ class Gemma4Model:
         if pli_list is None:
             return None
         return torch.stack(pli_list, dim=2)  # [1, 1, n_layers, pli_size]
+
+    def compute_host_pli_batch(self, token_ids):
+        """Compute deterministic per-candidate PLI.
+
+        Returns ``[n_layers, 1, B, pli_size]`` bfloat16, or ``None`` for a
+        target without per-layer inputs. Each candidate is evaluated through
+        the same single-row host path as plain decode. Host BLAS can select a
+        different reduction kernel for a multi-row matrix, and its small FP32
+        differences can cross a bfloat16 rounding boundary.
+        """
+        if not self.hidden_size_per_layer_input or not self.per_layer_input_weights:
+            return None
+
+        import torch.nn.functional as F
+
+        tokens = torch.as_tensor(token_ids, dtype=torch.long).reshape(1, -1)
+        if tokens.shape[1] == 0:
+            raise ValueError("compute_host_pli_batch requires at least one token id")
+        embeds = F.embedding(tokens, self._embed_weight_cpu).float() * self.embed_scale
+        per_row = [
+            self._compute_per_layer_inputs(tokens[:, row : row + 1].int(), embeds[:, row : row + 1])
+            for row in range(tokens.shape[1])
+        ]
+        if per_row[0] is None:
+            return None
+        pli_by_layer = [torch.cat([row[layer] for row in per_row], dim=1) for layer in range(len(per_row[0]))]
+        return torch.stack([layer_pli.reshape(1, -1, layer_pli.shape[-1]) for layer_pli in pli_by_layer], dim=0).to(
+            torch.bfloat16
+        )
 
     def compute_host_embeddings(self, token_id):
         """Host token embedding + PLI (legacy fallback).
