@@ -19,6 +19,8 @@
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
+#include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
+#include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
 #include "nb_export_enum.hpp"
@@ -40,6 +42,7 @@
 #include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
+#include "ops/qkv_causal_conv1d_silu_op.hpp"
 #include "ops/rand_op.hpp"
 #include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
@@ -138,6 +141,24 @@ void py_module(nb::module_& m) {
 
     {
         auto py_conv = static_cast<nb::module_>(m.attr("conv"));
+        py_conv.def(
+            "qkv_causal_conv1d_silu",
+            &ttml::ops::qkv_causal_conv1d_silu,
+            nb::arg("input"),
+            nb::arg("history"),
+            nb::arg("tap0"),
+            nb::arg("tap1"),
+            nb::arg("tap2"),
+            nb::arg("tap3"),
+            nb::arg("q_width"),
+            nb::arg("k_width"),
+            nb::arg("v_width"),
+            nb::arg("channel_chunk_size") = 0,
+            "Fused causal depthwise conv1d (4 taps) + SiLU over the packed [q|k|v] channels, with the fused backward.\n"
+            "input:   [1, T, Q+K+V] or [1, 1, T, Q+K+V] TILE bf16 (autograd).\n"
+            "history: [1, 3, Q+K+V] or [1, 1, 3, Q+K+V], the three rows before the sequence; no gradient.\n"
+            "tap0..3: logical volume Q+K+V each (autograd; frozen taps skip the tap-gradient work).\n"
+            "Returns (q, k, v) with widths Q, K, V and the input's rank.");
         py_conv.def(
             "conv3d",
             [](const autograd::TensorPtr& input,
@@ -358,7 +379,12 @@ void py_module(nb::module_& m) {
 
     {
         auto py_multi_head_utils = static_cast<nb::module_>(m.attr("multi_head_utils"));
-        py_multi_head_utils.def("heads_creation", &ttml::ops::heads_creation, nb::arg("qkv"), nb::arg("num_heads"));
+        py_multi_head_utils.def(
+            "heads_creation",
+            &ttml::ops::heads_creation,
+            nb::arg("qkv"),
+            nb::arg("num_heads"),
+            nb::arg("num_groups") = nb::none());
         py_multi_head_utils.def(
             "split_heads",
             &ttml::ops::split_heads,
@@ -524,6 +550,16 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("gamma"),
             nb::arg("epsilon"));
+        py_rmsnorm.def(
+            "gated_rmsnorm",
+            &ttml::ops::gated_rmsnorm,
+            nb::arg("input"),
+            nb::arg("gate"),
+            nb::arg("gamma"),
+            nb::arg("epsilon") = 1e-6F,
+            "Per-head gated RMSNorm: input head-major [B*H,1,T,V] (bf16 or fp32), gate head-merged [B,1,T,H*V], "
+            "gamma [1,1,1,V] -> rmsnorm over V * gamma * silu(gate), [B,1,T,H*V]. Skips dL/dgamma when gamma is "
+            "frozen.");
     }
 
     m.def(
@@ -716,6 +752,26 @@ void py_module(nb::module_& m) {
             nb::arg("preallocated_dL_dpacked") = nb::none(),
             "Backward of swiglu_packed_fw: (packed [gate|up], dL_dh [.., R, I]) -> "
             "dL/dpacked [.., R, 2*I] = [dgate|dup].");
+        py_metal.def(
+            "rmsnorm_fw",
+            &ttml::metal::rmsnorm_fw,
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("return_intermediates") = true,
+            nb::arg("epsilon") = 1e-6F,
+            nb::arg("gate") = nb::none(),
+            "RMSNorm forward -> [output, rms or None]. With `gate`, output = rmsnorm(input) * gamma * silu(gate) for "
+            "a head-major input [B*H,1,T,V] and a head-merged gate [B,1,T,H*V], which the output takes.");
+        py_metal.def(
+            "rmsnorm_bw",
+            &ttml::metal::rmsnorm_bw,
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("rms"),
+            nb::arg("dL_dout"),
+            nb::arg("compute_dgamma") = true,
+            nb::arg("gate") = nb::none(),
+            "Backward of rmsnorm_fw -> [dL/dinput, dL/dgamma [1,1,1,V] or None, dL/dgate or None].");
     }
 }
 

@@ -224,6 +224,8 @@ jobs:
       build-inplace-wheel: true
       tracy: false
       skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
+      # UMD legs run binaries from build/test/umd/, which only a build-umd-tests build has.
+      build-umd-tests: ${{ contains(needs.scope.outputs.matrix, 'build/test/umd/') }}
 
   build-profiler:
     name: Build (profiler)
@@ -238,6 +240,8 @@ jobs:
       build-inplace-wheel: true
       tracy: true
       skip-tt-train: ${{ !contains(needs.scope.outputs.matrix, 'tt-train') }}
+      # UMD legs run binaries from build/test/umd/, which only a build-umd-tests build has.
+      build-umd-tests: ${{ contains(needs.scope.outputs.matrix, 'build/test/umd/') }}
 
   fetch-ttsim:
     name: Fetch ttsim (${{ matrix.lib }})

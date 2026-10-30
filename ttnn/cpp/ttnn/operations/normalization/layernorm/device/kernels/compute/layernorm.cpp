@@ -67,8 +67,8 @@ void kernel_main() {
     constexpr auto block_size = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
     constexpr auto do_beta = get_arg(args::do_beta);
-    constexpr bool activate_after_normalize = fused_activation_enabled && !do_gamma && !do_beta;
-    constexpr bool activate_after_gamma = fused_activation_enabled && !do_beta;
+    constexpr bool activate_after_normalize = fused_activation_enabled && do_gamma == 0 && do_beta == 0;
+    constexpr bool activate_after_gamma = fused_activation_enabled && do_beta == 0;
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
     constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
     constexpr auto W = get_arg(args::W);
@@ -414,7 +414,7 @@ void kernel_main() {
 #endif  // FUSE_BETA
         }
         dfb_ex2pe.pop_front(1);
-        dfb_xmm.pop_front(total_buffer_size);
+        dfb_xmm.pop_front(static_cast<uint16_t>(total_buffer_size));
 
 #ifdef UNTILIZE_OUT
         untilize_all_blocks_from_dfb<block_size>(dfb_out, dfb_out_rm, Wt);

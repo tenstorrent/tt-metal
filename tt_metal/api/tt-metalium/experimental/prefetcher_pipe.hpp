@@ -251,8 +251,10 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
 
-// The receiver-contiguous weight shard the Tensor prefetcher delivers to one receiver: the shard the
-// weight holds at bank-local index `bank_local_shard` of DRAM bank `bank`.
+// The part of a weight the Tensor prefetcher delivers to one receiver: for a receiver-contiguous
+// weight, the shard it holds at bank-local index `bank_local_shard` of DRAM bank `bank`; for a legacy
+// K-row-major weight (one shard per bank), slice `bank_local_shard` of bank `bank`'s shard, the shard
+// cut across that bank's receivers in order.
 struct TensorPrefetcherReceiverShard {
     CoreCoord receiver;
     uint32_t bank = 0;
