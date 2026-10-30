@@ -2200,25 +2200,33 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const MeshGraphDe
 ```
 
 ```cpp
-// --- what the session's next() returns (P5; edge_channels and required_links P6) ---
-// Each pipeline's result in FabricNodeIds: the chips each stage holds, the chip each edge leaves and enters, and
-// the host I/O chips, plus every channel that can carry each edge that crosses meshes. The resolver names a chip
-// only by submesh index and slot-local (row, col); next() translates them once, so nothing downstream needs the
-// resolver's input.
+// --- what the session's next() returns (P5; channels_by_resolved_edge and required_links P6) ---
+// One pipeline on one carve: the resolver's own input and output (the same layout blaze gets at runtime), and the
+// PSD channels behind each resolved edge. The resolver names a chip only by submesh index and slot-local (row, col),
+// so the layout is always read together with the chips it was given:
+//   - stage S sits in submesh i = layout.node_to_submesh.at(S); its chips are stage_chips_by_submesh[i];
+//   - resolved edge k leaves the chip at (exit_row, exit_col) in submesh node_to_submesh.at(edge.src) and enters the
+//     chip at (entry_row, entry_col) in submesh node_to_submesh.at(edge.dst);
+//   - H2D enters at (h2d_entry_row, h2d_entry_col) and D2H leaves at (d2h_exit_row, d2h_exit_col), both in the
+//     submesh of layout.stage_order[0];
+//   - each InternalChip holds its FabricNodeId (fid), so a (submesh, row, col) gives the chip with no reverse map.
 struct PipelinePlacement {
-    std::map<std::string, std::vector<FabricNodeId>> stage_chips;   // each stage's chips on this carve
-    GraphLayoutResult layout;                            // resolver output, for stage_order, the edges' stage names
-                                                         // and loopback marks, and the core slots; its (row, col)
-                                                         // are slot-local and already translated below
-    std::vector<std::pair<FabricNodeId, FabricNodeId>> edge_chips;   // one per layout.resolved_edges entry:
-                                                         // the exit chip and the entry chip
-    std::optional<FabricNodeId> h2d_chip;                // stage 0's chip that receives host-to-device data
-    std::optional<FabricNodeId> d2h_chip;                // stage 0's chip that sends device-to-host data
-                                                         // (both set on success; FabricNodeId has no default)
-    std::vector<std::vector<tt::tt_metal::ExitNodeConnection>> edge_channels;   // P6: one per layout.resolved_edges
-                                                         // entry: every PSD channel of every link between its two
-                                                         // stage positions, the resolver's chip pair first; empty
-                                                         // inside a mesh
+    std::vector<std::vector<::tt::tt_fabric::detail::InternalChip>> stage_chips_by_submesh;
+        // Resolver input, indexed by submesh index (the values of layout.node_to_submesh). On this carve submesh i
+        // is the position of stage_order[i]; entry i lists every chip of that position: its FabricNodeId and its
+        // slot-local (row, col), the coordinates the layout's rows and columns refer to.
+    GraphLayoutResult layout;
+        // Resolver output, as the resolver returns it: stage_order; node_to_submesh (stage -> submesh index above);
+        // resolved_edges, one per MGD edge in the same order (src and dst stage names, the loopback mark, the exit and
+        // entry (row, col), the exit and entry core slots); and the H2D and D2H chips' (row, col) and core slots.
+    std::vector<std::vector<tt::tt_metal::ExitNodeConnection>> channels_by_resolved_edge;
+        // P6, indexed like layout.resolved_edges: entry k belongs to resolved_edges[k]. Empty for an edge inside one
+        // mesh (intra-mesh fabric; the inter-mesh pairing does not touch it). For an edge between two meshes: the
+        // PSD's ExitNodeConnections that can carry it, each {src_exit_node, dst_exit_node (AsicID), eth_conn
+        // {src_chan, dst_chan, is_local, port_type}} with src on edge.src's side; std::hash of each is the pairing's
+        // connection_hash. The layout fixes the chip pair, not the channel, so every channel on a chip pair is listed.
+        // Which chip pairs is open question 25: option 1 (the code below) every link between the edge's two stage
+        // positions, the resolver's chip pair first; option 2 only the resolver's chip pair.
 };
 
 // P6: one crossing: a pair of stage positions on two meshes that pipeline edges join. It lists every link (chip
@@ -2237,8 +2245,10 @@ struct RequiredCrossing {
     std::uint32_t min_channels = 1;                      // the minimum to bind, across all links: the pipeline edges
                                                          // between the two stages, either direction (a repeated
                                                          // edge or a loopback is another channel; Tier B's count)
-    std::vector<Link> links;                             // every link that can carry the crossing: the resolver's
-                                                         // chip pair first, then chip-id order
+    std::vector<Link> links;                             // links[0] is the resolver's chip pair (the one the layout
+                                                         // determined). Open question 25: option 1 (the code below)
+                                                         // adds every other link between the two positions, in
+                                                         // chip-id order; option 2 keeps links[0] only
 };
 
 // One carve, resolved, its channels recorded and checked. TopologyMappingResult::pipeline keeps the accepted one.
@@ -2294,8 +2304,7 @@ private:
         std::map<std::string, std::uint32_t> capacity_overrides;  // blaze's core defaults
     };
 
-    // One pipeline's chips and links on a carve, keyed by submesh index (positions in stage order): the resolver's
-    // input only; next() keeps FabricNodeIds (translate_layout).
+    // One pipeline's chips and links on a carve, keyed by submesh index (positions in stage order).
     std::vector<std::vector<::tt::tt_fabric::detail::InternalChip>> submesh_chips(
         const std::vector<std::size_t>& positions) const;
     ::tt::tt_fabric::detail::DirectLinks submesh_links(const std::vector<std::size_t>& positions) const;
@@ -2306,7 +2315,7 @@ private:
         const LogicalMultiMeshGraph& logical, const tt::tt_metal::PhysicalSystemDescriptor& psd,
         const TopologyMappingResult& full) const;
 
-    // P6: for one pipeline on the carve (positions in submesh order), fills placement.edge_channels and adds one R
+    // P6: for one pipeline on the carve (positions in submesh order), fills placement.channels_by_resolved_edge and adds one R
     // entry per crossing, with its min_channels counted from in.edges.
     void record_channels(const std::string& pipeline,
                          const ResolverInputs& in,
@@ -2351,13 +2360,13 @@ Derived when needed, not stored:
 #### Channels, `R` and the demand check, inside `next()` (`pipeline_builder.cpp`, P6)
 
 `GraphLayoutResult` says which chips each crossing leaves and enters (`resolved_edges`, slot-local
-`(row, col)`, which P5 translates into `PipelinePlacement::edge_chips`), but not which ETH channel it
+`(row, col)`, read back through `node_to_submesh` and `stage_chips_by_submesh`), but not which ETH channel it
 uses, and two positions can be joined by several chip pairs, each with several channels. Any of
 them can carry the crossing (the resolver chose among exactly these links), so `next()` records
 all of them, in two private functions, before it returns: each edge's channels in
-`PipelinePlacement::edge_channels`, the resolver's chip pair first, and one entry per crossing in
+`PipelinePlacement::channels_by_resolved_edge`, the resolver's chip pair first, and one entry per crossing in
 `PipelineLayoutResult::required_links` (`R`). The demand check adds up each crossing's `min_channels`, the pipeline edges between its two stages. Phase 1 (`generate_rank_bindings`) and Phase 2
-(`TopologyMapper` at control-plane init) run this same code on their own PSD, and both record `edge_channels` and `R` in
+(`TopologyMapper` at control-plane init) run this same code on their own PSD, and both record `channels_by_resolved_edge` and `R` in
 their result; only Phase 2 binds `R`, and no channel is written into the rank bindings (4.3, "Both
 phases"). There is no separate per-seating check: the enumerator
 (P8) builds the session and takes one `next()`.
@@ -2372,7 +2381,7 @@ phases"). There is no separate per-seating check: the enumerator
  // pipeline_builder.cpp, PipelinePlacementEnumerationSession::next, the resolver loop and after it
 +    // IMPORTANT: one R entry per crossing: every channel that can carry it and how many it needs.
      for (const auto& [pipeline, in] : resolver_inputs_) {
-         ...                                                            // positions, submesh_chips, the resolver (P5)
+         ...                                                            // positions, stage_chips_by_submesh, the resolver (P5)
          } catch (const std::runtime_error& e) {
              result.pipelines.clear();
 +            result.required_links.clear();
@@ -2392,7 +2401,8 @@ phases"). There is no separate per-seating check: the enumerator
      return result;
  }
 
-+// Each resolved edge's two stage positions come from node_to_submesh and the carve; its chips from edge_chips. Between two meshes every link between the two positions can carry the edge (the resolver
++// Each resolved edge's two stage positions come from node_to_submesh and the carve; its chips from the edge's
++// slot-local row and col. Between two meshes every link between the two positions can carry the edge (the resolver
 +// chose among exactly these), so every channel of every one is recorded: the resolver's chip pair first, then the
 +// others in chip-id order. C1 links only cabled chip pairs, so each lookup finds at least one channel.
 +void PipelinePlacementEnumerationSession::record_channels(
@@ -2405,16 +2415,19 @@ phases"). There is no separate per-seating check: the enumerator
 +        return chip_at(position_chips_[position], row, col);
 +    };
 +    std::set<std::pair<std::size_t, std::size_t>> recorded;     // position pairs, lower index first
-+    for (std::size_t k = 0; k < placement.layout.resolved_edges.size(); ++k) {
-+        const ResolvedEdge& edge = placement.layout.resolved_edges[k];
++    for (const ResolvedEdge& edge : placement.layout.resolved_edges) {
 +        const std::size_t p = positions.at(placement.layout.node_to_submesh.at(edge.src));
 +        const std::size_t q = positions.at(placement.layout.node_to_submesh.at(edge.dst));
-+        const auto& [exit, entry] = placement.edge_chips[k];       // the link the resolver chose (P5)
++        const FabricNodeId exit = chip(p, edge.exit_row, edge.exit_col);       // the link the resolver chose
++        const FabricNodeId entry = chip(q, edge.entry_row, edge.entry_col);
 +        if (exit.mesh_id == entry.mesh_id) {
-+            placement.edge_channels.emplace_back();                 // intra-mesh fabric; the pairing does not touch it
++            placement.channels_by_resolved_edge.emplace_back();                 // intra-mesh fabric; the pairing does not touch it
 +            continue;
 +        }
 +        std::vector<RequiredCrossing::Link> links{{exit, entry, channels_.at({exit, entry})}};   // the resolver's
++        // Open question 25. Option 1 (shown): also every other link between the two positions, which the resolver
++        // could have chosen but did not check. Option 2: skip this loop, so R carries only the chip pair the layout
++        // determined, with every channel on it.
 +        for (const LinkPair& link : position_links_.at({p, q})) {   // every other path between the two positions
 +            const FabricNodeId a = chip(p, link.exit_row, link.exit_col);
 +            const FabricNodeId b = chip(q, link.entry_row, link.entry_col);
@@ -2422,7 +2435,7 @@ phases"). There is no separate per-seating check: the enumerator
 +                links.push_back({a, b, channels_.at({a, b})});
 +            }
 +        }
-+        auto& channels = placement.edge_channels.emplace_back();   // the per-edge view: the same channels, flat
++        auto& channels = placement.channels_by_resolved_edge.emplace_back();   // the per-edge view: the same channels, flat
 +        for (const RequiredCrossing::Link& link : links) {
 +            std::ranges::copy(link.channels, std::back_inserter(channels));
 +        }
@@ -2460,12 +2473,13 @@ phases"). There is no separate per-seating check: the enumerator
 +}
 
  // pipeline_builder.cpp, anonymous namespace
++FabricNodeId chip_at(const std::vector<InternalChip>& chips, std::uint32_t row, std::uint32_t col);   // by slot-local row, col
 +std::uint32_t edges_between(const std::vector<EdgeInputTuple>& edges, const std::string& a, const std::string& b);
 +                                                                // either direction, repeats included (Tier B's count)
 +std::size_t channel_count(const RequiredCrossing& crossing);      // channels over all its links
 ```
 
-File-local helpers beside the session: for the result, `translate_layout` and `chip_at` (P5); for `R`, `connected_mesh_pairs`, `channel_demand`, `ordered`, `edges_between` and `channel_count`. For C1 and
+File-local helpers beside the session: for `R`, `connected_mesh_pairs`, `channel_demand`, `ordered` and `chip_at`. For C1 and
 C2's solve: `host_ranges_filling` and `chip_id` (positions), `mgd_connects` and
 `drop_fanned_out_sources` (the gather's rules inside `inter_mesh_cables`), `pipeline_pre_checks` (4.2, "Solve
 cost"), `positions_that_fit`, `both_ways` and `add_resource_completeness` (4.2, "No solver changes"),
@@ -2560,7 +2574,7 @@ First version (STRICT), in order. Each PR lands with its tests; P5 and P6 change
 | PR | Scope | Files | Done when |
 |---|---|---|---|
 | **P5** Pipeline graphs and the footprint solve (C1, C2's solve) | `PipelineStageNode` and its formatter; `PipelineStageInfo`; `LogicalMultiMeshGraph::pipeline_stage_graph_` (all pipelines merged), `pipeline_stages_` (shape and loopback marks per stage) and `mesh_host_grids_`, filled by `build_logical_multi_mesh_adjacency_graph`; `PipelinePlacementEnumerationSession(logical, psd, full)` (its private `inter_mesh_cables`, the one PSD read): the positions with their chips, slices and links, the pre-checks, the constraints (resource completeness included) on the stage graph, and each pipeline's resolver inputs; `next()`, one more carve per call with the resolver run on it, returned as `PipelineLayoutResult` (each pipeline's `PipelinePlacement`: its chips and `GraphLayoutResult`) | utils `.hpp/.cpp`, pipeline_builder `.cpp`, `test_topology_mapper_utils.cpp`, `test_pipeline_builder.cpp` | the stage graph of the GPT-OSS ring, the dflash fork, two pipelines that both have a stage 0, two merged MGD parts whose pipelines land in one stage graph, a repeated edge and an isolated stage; each `mesh_host_grids_` cell equals `get_coord_range` for the rank at that coordinate; stage shapes match `dims`, edges are stored one way and `loopback_to` marks each loopback; no pipeline: the three fields are empty; positions on mixed slice shapes; overlapping positions are never adjacent and never both chosen; brute-force agreement up to 8 stages; a stage that cannot fit is filtered before the solve; area and counting failures stop at the pre-check; every `next()` is a new carve; a resolver throw is `pipeline_layout`; inter-mesh links follow the gather's rules on the SC16 and galaxy PSDs |
-| **P6** Channels, `R` and the demand check, in `next()` (C2) | private `record_channels` (every channel of every link between each crossing's two positions into `PipelinePlacement::edge_channels`, one entry per crossing into `PipelineLayoutResult::required_links`, `R`) and `first_over_demand` (crossings per mesh pair) | utils `.hpp`, pipeline_builder `.cpp`, `test_pipeline_builder.cpp` | blaze-rejected rings accepted; `mixed4` (P,R) accepts, (P,Q) and Case B reject; every crossing's `edge_channels` entry holds every channel between its two positions, the resolver's chip pair first; cable hashes equal today's gather on the SC16 and galaxy PSDs; a ring over a count-1 connection: `next()` returns `pipeline_binding` with the pair |
+| **P6** Channels, `R` and the demand check, in `next()` (C2) | private `record_channels` (every channel of every link between each crossing's two positions into `PipelinePlacement::channels_by_resolved_edge`, one entry per crossing into `PipelineLayoutResult::required_links`, `R`) and `first_over_demand` (crossings per mesh pair) | utils `.hpp`, pipeline_builder `.cpp`, `test_pipeline_builder.cpp` | blaze-rejected rings accepted; `mixed4` (P,R) accepts, (P,Q) and Case B reject; every crossing's `channels_by_resolved_edge` entry holds every channel between its two positions, the resolver's chip pair first; cable hashes equal today's gather on the SC16 and galaxy PSDs; a ring over a count-1 connection: `next()` returns `pipeline_binding` with the pair |
 | **P8** Tier C in the mapper (C4) | `check_pipelines`; the `next()` hook on `logical_` (private `place_pipelines`: one session, one `next()`) with `exclude_mapping` and the rejection cap; `unique_shapes` off; result, stats and part split; `TopologyMapper` storage and `R` broadcast | utils `.hpp/.cpp`, `topology_mapper.cpp`, `generate_rank_bindings.cpp` | `mesh4x4_stage4x2` Cases A, B, C: accept, reject, reject; GPT-OSS galaxy and llama_8b_pod accepted and built by blaze; the swapped-seat regression; no pipeline: every mapper golden unchanged |
 | **P9** Bind `R` (C3) | phase 0 in `pair_logical_intermesh_ports`: at least `min_channels` per crossing in `R`, the resolver's chip pair first, more if the budget allows; single-host phase 0; every rank checks each crossing in `R` got its `min_channels` | `control_plane.cpp` | a crossing keeps a channel when the budget is tight, on another link of the two positions when its own cannot be placed; an unplaceable crossing fails on every rank together, no hang; no pipeline: `AnnotatedIntermeshConnections` byte-identical |
 | **P15** Exit-node retry (C4) | retry the intra-mesh solve with the failing slice signature blocked, up to `kMaxLayoutRetries` | `topology_mapper_utils.cpp` | a seating whose first layout fails and second passes is accepted after one retry |
@@ -2578,9 +2592,9 @@ s2→s3, s3→s0 (loopback). Output:
 
 | Field | Value |
 |---|---|
-| `stage_chips` | s0: M0 cols 0–1, s1: M0 cols 2–5, s2: M1 cols 2–5, s3: M1 cols 0–1, as `FabricNodeId`s |
+| `stage_chips_by_submesh` | four submeshes: s0 M0 cols 0–1, s1 M0 cols 2–5, s2 M1 cols 2–5, s3 M1 cols 0–1 |
 | `layout` | `stage_order` s0, s1, s2, s3; `resolved_edges` s0→s1 and s2→s3 inside a mesh, s1→s2 exits on A2 and enters on B2, s3→s0 on B0 → A0; H2D and D2H on two chips of A0 |
-| `edge_channels` | s1→s2: every channel between s1's and s2's positions, the A2–B2 chip pair the resolver chose first; s3→s0: every channel between s3's and s0's positions, B0–A0 first; empty for the two edges inside a mesh |
+| `channels_by_resolved_edge` | s1→s2: every channel between s1's and s2's positions, the A2–B2 chip pair the resolver chose first; s3→s0: every channel between s3's and s0's positions, B0–A0 first; empty for the two edges inside a mesh |
 | `required_links` (`R`) | one entry per crossing, those channels with their `connection_hash`: two crossings, demand 2, fits |
 | derived by P12 | host ranks s0 {0}, s1 {1, 2}, s2 {1, 2}, s3 {0}; idle M0 {3}, M1 {3} |
 
@@ -2766,14 +2780,16 @@ When several cables join them, the mapping does not pick one. The resolver's lin
 and `resolved_edges` returns the exit and entry chip of the link it used. So `R` comes from the
 resolver, not from the mapping:
 
-1. For each resolved edge whose two slots are on different meshes, take its exit and entry chips from `edge_chips` (P5 translated the resolver's submesh index and slot-local `(row, col)` into `FabricNodeId`s).
+1. For each resolved edge whose two slots are on different meshes, read its exit and entry
+   chips back from `stage_chips_by_submesh`: `layout.node_to_submesh` gives the submesh, the edge's
+   `(row, col)` the `InternalChip`, and its `fid` the `FabricNodeId`.
 2. Take every link between the edge's two positions (`position_links_`, the same links the
    resolver chose from) and look each chip pair up in `channels_` (3.3), which holds every PSD
    `ExitNodeConnection` between the two ASICs. Keep **all** of them: the resolver's chip pair
    first (the one the check verified), then the others in chip-id order (best tier first once
    P16 lands). In the example below, a crossing between `a0` and `b0` that can use chip 0's
    cable or chip 1's records both.
-3. Store them as is in the edge's `edge_channels` entry, and add them to `R` (4.3) as one `RequiredCrossing` per crossing, with `min_channels` = the pipeline edges between the two stages in either direction (a repeated edge or a loopback is another channel, Tier B's count), unless `R` already holds that position pair (a loopback back over the same two
+3. Store them as is in the edge's `channels_by_resolved_edge` entry, and add them to `R` (4.3) as one `RequiredCrossing` per crossing, with `min_channels` = the pipeline edges between the two stages in either direction (a repeated edge or a loopback is another channel, Tier B's count), unless `R` already holds that position pair (a loopback back over the same two
    positions shares it); `std::hash` of each is the pairing's `connection_hash`. Edges inside one
    mesh get an empty entry. Each crossing adds its `min_channels` to its mesh pair for the demand check.
 
@@ -2791,9 +2807,10 @@ This is the session's private `record_channels`, run inside `next()` right after
 >   other link, preferring the resolver's chip pair (4.3). Keeping all of them lets phase 0 use
 >   another link when one cannot be placed, and a channel that was gathered when one is down
 >   (rank 0's PSD has no link state).
-> - The resolver checked the carve on its chosen chip pair only. Another link between the same two
->   positions is one the resolver could have chosen, but its layout is not re-checked (open
->   question 25).
+> - Which chip pairs to keep is open question 25: option 1 keeps every link between the two
+>   positions (a fallback, but only the resolver's chip pair was checked); option 2 keeps only the
+>   chip pair the layout determined. Either way every channel on a kept chip pair is listed,
+>   because the layout fixes the chip pair, not the channel.
 > - A crossing with no channel bound at control-plane init is a hard error naming the crossing and
 >   its pipeline edge. It is never silently replaced by a link elsewhere.
 > - The demand check below adds up `min_channels` per mesh pair, and rejects a crossing with fewer channels than that between its positions.
@@ -2891,7 +2908,8 @@ Steps, in order:
 2. **Slots.** In `next()`, after the solve: the positions of the pipeline's stages, in stage order,
    each looked up as `carve.target_to_global.at(stage)`. A slot may span several host slices.
 3. **`chips`.** `submesh_chips(slots)` (private): `position_chips_[p]` for each slot `p`, copied as is: the `(row, col)`
-   were made slot-local when C1 built the position. No reverse map is kept: each `InternalChip` already holds its `FabricNodeId`, so after the resolver `translate_layout` reads every chip the layout names back through them once, into `stage_chips`, `edge_chips`, `h2d_chip` and `d2h_chip`. The slot-local chips are not kept in the result.
+   were made slot-local when C1 built the position. No reverse map is kept: each `InternalChip`
+   already holds its `FabricNodeId`, so `R` reads a resolved chip back from `PipelinePlacement::stage_chips_by_submesh`.
 4. **`submesh_links`.** `submesh_links(slots)` (private): for each pair of slots `(a, b)` at submesh
    indices `(i, j)`, copy `position_links_[{a, b}]` under `{i, j}`. Pairs with no entry do not touch. Nothing is recomputed.
 5. **Stage inputs.** `stage_order`, `edges` with the MGD's loopback marks, `stage_chip_counts` from each
@@ -3064,7 +3082,7 @@ joins (an edge and its loopback over the same two positions share one). The entr
 channel of every link between those two positions, each as the PSD's `ExitNodeConnection` (both
 ASICs, both ETH channels, the cable's connection hash), the resolver's chip pair first. C2
 records it when it accepts the mapping (4.2, "Which cable each crossing uses");
-`PipelinePlacement::edge_channels` keeps the per-edge view.
+`PipelinePlacement::channels_by_resolved_edge` keeps the per-edge view.
 
 **What `R` is not.** It is not every bound link, and not every inter-mesh channel. It holds only
 the channels that can carry the crossings pipeline edges make (loopback edges included). Edges
@@ -3075,7 +3093,7 @@ output is still the full list.
 
 **Both phases compute it; only Phase 2 binds it.** Phase 1 (`generate_rank_bindings`) and
 Phase 2 (`TopologyMapper` on rank 0 at control-plane init) run the same session on their own PSD,
-so both record `edge_channels` and `R` in their result, with no phase-specific code. Phase 1
+so both record `channels_by_resolved_edge` and `R` in their result, with no phase-specific code. Phase 1
 keeps them in its `TopologyMappingResult` (for logs and tests) and uses only the mapping: no
 channel is written into the rank bindings (4.6 writes stage fields only). Phase 2 recomputes
 `R` from its own PSD, broadcasts it and binds it. A hash is only compared within one phase:
@@ -3982,9 +4000,20 @@ at runtime as today.
     No benchmark case did (101 of 101 first carves passed). Keep one carve, or allow a few more
     (more `next()` calls on the seating's `PipelinePlacementEnumerationSession`, existing API) before failing the
     seating, and if so how many?
-25. **Other links of a crossing** (4.2, "Which cable each crossing uses"). `R` records every
-    link between a crossing's two positions, for example chip 0's and chip 1's cables between
-    slices `a0` and `b0`, but the resolver verified the carve on its own choice only. Another
-    link moves the exit or entry chip, which can collide with a chip another edge uses. Re-run
-    the resolver with each other link pinned before recording it, or trust the runtime's
-    resolver, which re-resolves over the bound links and fails cleanly?
+25. **What the pipeline mapping carries per crossing** (4.2, "Which cable each crossing uses";
+    `PipelinePlacement::channels_by_resolved_edge` and `RequiredCrossing::links`). `GraphLayoutResult`
+    already fixes one chip pair per edge (its exit and entry `(row, col)`); it does not fix a
+    channel, so either option lists every channel on a chip pair. Two options:
+    1. **Carry every chip pair and channel that can make the connection**: every link between
+       the crossing's two positions, each with all its channels, the resolver's chip pair first.
+       Phase 0 can fall back to another link when the resolver's cannot be placed or is down
+       (for example chip 0's and chip 1's cables between slices `a0` and `b0`). But the resolver
+       checked only its own choice: another link moves the exit or entry chip, which can collide
+       with a chip another edge uses; the runtime's resolver re-resolves over the bound links and
+       fails cleanly if so. This is what the plan's code shows.
+    2. **Carry only what the layout determined**: the resolver's chip pair per crossing
+       (`links[0]`), with every channel on it. Exactly what the check verified, and a smaller `R`.
+       No fallback: if that chip pair cannot get `min_channels` bound, control-plane init fails
+       (`pipeline_binding`). The code change is to drop the loop over `position_links_` in
+       `record_channels`.
+    Which one?
