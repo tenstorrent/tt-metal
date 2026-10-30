@@ -181,10 +181,13 @@ class TTMLRolloutSampler(RolloutSampler):
     def _unpadded_token_positions_decode(self, positions: np.ndarray) -> "ttml.autograd.Tensor":
         """``[B, query_rows]`` RoPE positions: row ``b`` starts at ``positions[b]``."""
         query_rows = TILE_SIZE if self._kind == "llama" else 1
+        assert (
+            positions.max() < self._max_seq_len
+        ), f"RoPE position {positions.max()} >= max_seq_len {self._max_seq_len}"
         ids = positions[:, None] + np.arange(query_rows)[None, :]
-        ids = np.minimum(ids, self._max_seq_len - 1).astype(np.uint32)
+        ids[:, 1:] = np.minimum(ids[:, 1:], self._max_seq_len - 1)
         return ttml.autograd.Tensor.from_numpy(
-            ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
+            ids.astype(np.uint32), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._batch_layout.mapper
         )
 
     def _cache_position(self, kv: Any) -> int:
