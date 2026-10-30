@@ -287,7 +287,7 @@ class SpecDecodeP150:
         self.vtok = self._buf(z(1, T, dtype=torch.int32), u32, rm)
         self.forced = False  # verify staged tokens (vtok) instead of drafting: teacher-forced scoring
         self.traces = {}  # forced -> (trace id, output tensors)
-        self.stats = {"verifies": 0, "accepted": 0, "iter_s": 0.0}
+        self._reset_stats()
 
     # ----------------------------------------------------------------------------------------- #
     def _buf(self, t, dtype, layout):
@@ -296,6 +296,77 @@ class SpecDecodeP150:
     @staticmethod
     def _stage(t, buf, dtype, layout):
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(t, dtype=dtype, layout=layout), buf)
+
+    def set_page_table(self, page_table):
+        """Stage a [1, nb] page table into the fixed-width verify / drafter tables (zero-padded or trimmed)."""
+        w = int(self.pt_one.shape[-1])
+        pt = torch.zeros(1, w, dtype=torch.int32)
+        n = min(w, int(page_table.shape[-1]))
+        pt[:, :n] = page_table[:1, :n].to(torch.int32)
+        self._stage(pt, self.pt_one, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage(pt.repeat(self.T, 1), self.pt_rows, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _warm_mtp(self, hidden, token_ids, S):
+        """MTP KV over slots 0..S-2 from a masked-bucket prefill's pre-norm hidden [1, bucket, dim].
+
+        Runs at the full bucket length (fixed programs per bucket, so nothing compiles at request time);
+        rows >= S-1 write throwaway KV that the first draft steps overwrite. Returns post-norm h_{S-1}."""
+        model, mtp, dev = self.model, self.model.mtp, self.device
+        bucket = int(hidden.shape[-2])
+        h = model.norm(hidden, mode=Mode.PREFILL)
+        nxt = torch.zeros(1, bucket, dtype=torch.int32)
+        nxt[0, : S - 1] = token_ids[0, 1:S].to(torch.int32)
+        tok = ttnn.from_torch(nxt, dtype=ttnn.uint32, device=dev)
+        emb = mtp.embd(tok)
+        ttnn.deallocate(tok)
+        fused = mtp._fuse(emb, h, Mode.PREFILL)
+        ttnn.deallocate(emb)
+        mcos, msin = model.rope.get_prefill_rot_mats(0, bucket)
+        out = mtp.decoder.forward(
+            fused,
+            cos=mcos,
+            sin=msin,
+            mode="prefill",
+            page_table=self.pt_one,
+            chunk_page_table=self.pt_one,
+            chunk_start_idx=0,
+        )
+        ttnn.deallocate(fused)
+        ttnn.deallocate(out)
+        sel = torch.zeros(1, 1, bucket)
+        sel[0, 0, S - 1] = 1.0
+        sel_tt = ttnn.from_torch(sel, dtype=h.dtype, layout=ttnn.TILE_LAYOUT, device=dev)
+        last = ttnn.matmul(sel_tt, h)
+        ttnn.deallocate(sel_tt)
+        ttnn.deallocate(h)
+        row = ttnn.to_torch(last).float().reshape(-1)[: self.args.dim]
+        ttnn.deallocate(last)
+        return row
+
+    def prefill_served(self, token_ids, page_table):
+        """Serving prefill [1, S] on the model's traced / masked-bucket path -> host logits [vocab].
+
+        Prompts shorter than one prefill chunk also warm the MTP KV and the first anchor hidden. Longer
+        prompts go through the chunk trace, which exposes no per-position hidden on a single device, so
+        their drafter starts cold: drafts are weaker, but verify keeps the output exact."""
+        model = self.model
+        S = int(token_ids.shape[1])
+        self.release()
+        self.set_page_table(page_table)
+        rows = torch.zeros(1, 1, self.T, self.args.dim)
+
+        def warm(hidden, _chunk_start, valid_len):
+            rows[0, 0, 0] = self._warm_mtp(hidden, token_ids, valid_len)
+
+        short = S < (model._chunked_chunk_size or 2048)
+        logits = model.prefill_traced_chunked(token_ids, page_table, actual_len=S, on_chunk=warm if short else None)
+        logits = ttnn.to_torch(logits).float().reshape(-1)[: self.args.vocab_size]
+        self._stage(rows, self.hn_buf, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        for gv in self.gdn.values():
+            gv.seed()
+        self.mi, self.P = 0, S
+        self.pending = int(logits.argmax())
+        return logits
 
     def prefill(self, token_ids):
         """Prompt [1, S] -> first generated token. Warms base KV / GDN state and the MTP KV over the prompt."""
@@ -466,8 +537,11 @@ class SpecDecodeP150:
                 self.capture()
         return drafts, ids
 
-    def step(self, use_trace=True):
-        """One draft + verify iteration -> newly committed tokens (accepted drafts + bonus)."""
+    def step(self, use_trace=True, max_new=None):
+        """One draft + verify iteration -> newly committed tokens (accepted drafts + bonus).
+
+        ``max_new`` commits only the first max_new of them; verify row len(new) - 1 holds exactly that
+        state, so the next iteration resumes there."""
         t0 = time.perf_counter()
         timed = use_trace and self.forced in self.traces
         drafts, ids = self._run(use_trace)
@@ -475,11 +549,13 @@ class SpecDecodeP150:
         while m < self.K and drafts[m] == ids[m]:
             m += 1
         new = drafts[:m] + [ids[m]]
-        self.mi, self.P, self.pending = m, self.P + m + 1, new[-1]
+        if max_new is not None:
+            new = new[:max_new]
+        self.mi, self.P, self.pending = len(new) - 1, self.P + len(new), new[-1]
         if timed or not use_trace:
             s = self.stats
             s["verifies"] += 1
-            s["accepted"] += m
+            s["accepted"] += len(new) - 1
             s["tokens"] += len(new)
             s["iter_s"] += time.perf_counter() - t0
         return new

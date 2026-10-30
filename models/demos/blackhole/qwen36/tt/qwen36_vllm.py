@@ -699,3 +699,137 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         if parent is not None:
             parent()
         logger.info("[spec] release_persistent_capture: done")
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor, info=TT_Qwen3_5SpecProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+)
+class Qwen36P150MTPForCausalLM(Qwen36ForCausalLM):
+    """Single-P150 MTP speculative serving for Qwen3.5-2B / 4B over tt/spec_p150.py (B=1, greedy, text-only).
+
+    Block-output rail: prefill returns logits for the host-sampled anchor; every decode step runs fused
+    draft + verify iterations until it has committed output_tokens_per_step tokens, and returns them as one
+    host row. The engine's buffers are allocated before any trace is recorded; its iteration trace is
+    captured on a request's first decode step and released before the next prefill.
+    """
+
+    _ENABLE_MTP = True
+    _SPEC_K = int(os.environ.get("QWEN35_P150_SPEC_K", "2"))
+    _SPEC_N = int(os.environ.get("QWEN35_P150_SPEC_BLOCK", "8"))
+    decode_input_update_contract = 0
+
+    model_capabilities = {
+        **{k: v for k, v in Qwen36ForCausalLM.model_capabilities.items() if k != "max_device_top_k"},
+        "supports_prefix_caching": False,
+        "supports_async_decode": False,
+        "supports_sample_on_device": True,
+        "supports_device_grammar": False,
+        "output_tokens_per_step": _SPEC_N,
+        "tt_adaptive_block_output": True,
+        # the last iteration of a step starts at most N-1 past the step's first position and writes K+1 rows
+        "tt_block_kv_extent_tokens": _SPEC_N + _SPEC_K + 1,
+    }
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len, *args, **kwargs):
+        assert max_batch_size == 1, "single-P150 MTP serving is B=1 (max_num_seqs=1)"
+        self = super().initialize_vllm_model(hf_config, mesh_device, max_batch_size, max_seq_len, *args, **kwargs)
+        model = self.model[0]
+        assert model.num_devices == 1 and model.mtp is not None, "needs one device and a checkpoint with MTP weights"
+        tc = hf_config.get_text_config() if hasattr(hf_config, "get_text_config") else hf_config
+        eos = getattr(tc, "eos_token_id", None) or getattr(hf_config, "eos_token_id", 0)
+        self._eos_id = int(min(eos)) if isinstance(eos, (list, tuple)) else int(eos)
+        self._spec = None
+        self._owner_slot = None
+        self._last_pt = None
+        logger.info(f"Qwen3.5 P150 MTP serving: K={cls._SPEC_K}, {cls._SPEC_N} tokens per step")
+        return self
+
+    def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
+        from models.demos.blackhole.qwen36.tt.spec_p150 import SpecDecodeP150
+
+        model = self.model[0]
+        if enable_trace and model._chunked_trace_id is not None:
+            return
+        super().warmup_model_prefill(kv_cache, False, *args, **kwargs)
+        if self._spec is None:
+            # paged_update_cache needs table width <= cache blocks; vLLM's rows are never wider than the pool
+            pool = int(model._paged_kv_caches[0][0].shape[0])
+            self._spec = SpecDecodeP150(model, torch.zeros(1, pool, dtype=torch.int32), draft_len=self._SPEC_K)
+            self._warm_spec(pool)
+        if enable_trace:
+            model.record_prefill_trace_chunked(self.mesh_device)
+
+    def _warm_spec(self, pool):
+        """Compile the MTP warm at every masked-prefill bucket and the iteration body, eagerly (no trace live)."""
+        model, spec = self.model[0], self._spec
+        table = torch.arange(pool, dtype=torch.int32).reshape(1, -1)
+        chunk = model._chunked_chunk_size or 2048
+        lens = [b - 7 for b in model._PREFILL_MASK_BUCKETS if b - 7 < chunk and b <= model.args.max_seq_len]
+        for i, S in enumerate(lens):
+            spec.prefill_served(torch.ones(1, S, dtype=torch.int32), table)
+            if i == 0:
+                spec.step(use_trace=False)
+        spec.release()
+        logger.info(f"Qwen3.5 P150 MTP warmup: prompt buckets {lens} + iteration body compiled")
+
+    def warmup_model_decode(self, *args, **kwargs):
+        """Nothing to warm: plain decode traces are never used, and the iteration body was compiled with prefill."""
+
+    def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
+        if self._has_visual(kwargs, "pixel_values") or self._has_visual(kwargs, "pixel_values_videos"):
+            raise ValueError("Qwen36P150MTPForCausalLM is text-only; image/video requests are not supported")
+        start_pos = kwargs.get("start_pos")
+        assert start_pos is None or all(int(s) == 0 for s in start_pos), "no chunked prefill / prefix caching"
+        assert tokens.shape[0] == 1, "single-P150 MTP serving is B=1"
+        S = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
+        pt = page_table[:1] if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)[:1]
+        logger.info(f"Prefilling User 1 up to {S} tokens (MTP)")
+        logits = self._spec.prefill_served(tokens[:, :S], pt)
+        self._owner_slot = int((kwargs.get("empty_slots") or [0])[0])
+        self._last_pt = pt.clone()
+        return logits.reshape(1, 1, -1), torch.zeros(1, dtype=torch.long)
+
+    def decode_forward(self, *args, **kwargs):
+        def _read(name, pos):
+            return kwargs[name] if name in kwargs else (args[pos] if pos < len(args) else None)
+
+        tokens, start_pos, page_table = _read("tokens", 0), _read("start_pos", 1), _read("page_table", 2)
+        spec, N = self._spec, self._SPEC_N
+        pos = int(torch.as_tensor(start_pos).reshape(-1)[0])
+        if pos != spec.P:
+            logger.warning(f"Qwen3.5 P150 MTP: runner position {pos} != engine position {spec.P}")
+        spec.pending = int(torch.as_tensor(tokens).reshape(-1)[0])
+        if page_table is not None:
+            row = page_table[:1] if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)[:1]
+            if self._last_pt is None or not torch.equal(self._last_pt, row):
+                spec.set_page_table(row)
+                self._last_pt = row.clone()
+        limit = min(self.model[0].args.max_seq_len, int(self.model[0].rope.cos_cpu.shape[0])) - 1
+        block = []
+        while len(block) < N and spec.P + spec.T <= limit:
+            block.extend(spec.step(use_trace=True, max_new=N - len(block)))
+        out = torch.full((int(tokens.shape[0]), N), self._eos_id, dtype=torch.int32)
+        out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
+        return out
+
+    def read_decode_output(self, tt_out, async_read=False, *_, **__):
+        return (tt_out, []) if async_read else tt_out
+
+    def release_request(self, slot):
+        if self._owner_slot is not None and slot is not None and int(slot) != self._owner_slot:
+            return
+        self._owner_slot = None
+        if self._spec is not None:
+            self._spec.release()
+
+    def note_state_slots_moved(self, moves):
+        if self._owner_slot is not None and moves:
+            self._owner_slot = int(moves.get(self._owner_slot, self._owner_slot))
+
+    def release_persistent_capture(self):
+        if self._spec is not None:
+            self._spec.release()
+        parent = getattr(super(), "release_persistent_capture", None)
+        if parent is not None:
+            parent()
