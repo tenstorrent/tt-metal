@@ -5,6 +5,8 @@
 #
 #   ./dev/run.sh            # = all: the correctness steps (smoke, check, prod, dense)
 #   ./dev/run.sh a b c      # several steps in one call; presets: quick, night (see below)
+#   ./dev/run.sh bench_ab   # traced sol at 10 s / 15 s: baseline, pair steps off (10 s), fast_rescale on; logs
+#                           # log_val_bench_ab_{base,nopairs,rescale}.txt
 #   ./dev/run.sh bench      # THE timing to quote: MiniMax-H3 attention module, traced, dense vs sol at tau 1 and
 #                           # the gather alone, 5 / 10 / 15 s (bench5: 5 s only); log_val_bench.txt
 
@@ -63,7 +65,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all bench bench5 hang_ok hang_2p hang_2p19 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all bench bench5 bench_ab hang_ok hang_2p hang_2p19 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -122,6 +124,17 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 # so all numbers come from the same machine state. These are the numbers to quote. bench5: 5 s only.
 BENCH=models/tt_dit/tests/models/minimax_h3/test_sol_bench_minimax_h3.py
 case "$ONLY" in
+    # bench_ab: the same traced module bench, sol only, at the compute-bound lengths: the baseline, D4 pair steps
+    # forced off (10 s; at 15 s the factory already leaves them off), and fast_rescale on (10 s and 15 s). One process
+    # per variant (the knobs are read at program build; the program cache is per process).
+    bench_ab)
+        run bench_ab_base 3600 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_TAU=1.0 SOL_BENCH_PREFIX=off \
+            pytest "$BENCH" -s -k "4x8 and not dense and not agather and (768p_10s or 768p_15s)"
+        run bench_ab_nopairs 3600 env TT_SPARSE_PAIR_STEPS=0 SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_TAU=1.0 \
+            SOL_BENCH_PREFIX=off pytest "$BENCH" -s -k "4x8 and not dense and not agather and 768p_10s"
+        run bench_ab_rescale 3600 env TT_SPARSE_FAST_RESCALE=1 SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_TAU=1.0 \
+            SOL_BENCH_PREFIX=off pytest "$BENCH" -s -k "4x8 and not dense and not agather and (768p_10s or 768p_15s)"
+        ;;
     bench | bench5)
         k="4x8"
         [ "$ONLY" = bench5 ] && k="4x8 and 768p_5s"
