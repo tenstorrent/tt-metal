@@ -447,9 +447,15 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         self.in0 = None
         self.in1 = None
         self.pack_src_from_output = True
+        self.block = None
+
+    def with_block(self, ct: int, rt: int, kt: int, dest_acc, throttle: int = 0, l1_acc: bool = False):
+        """The block the cell runs (tiles, k steps, accumulate, throttle, packer L1 accumulate), for the cells llk_matmul_forms.h keeps on main's form."""
+        self.block = (ct, rt, kt, dest_acc == DestAccumulation.Yes, throttle, bool(l1_acc))
+        return self
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', in ' + self.in0.name + ' ' + self.in1.name if self.in0 is not None else ''}{', force ' + self.force_form if self.force_form else ''})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', in ' + self.in0.name + ' ' + self.in1.name if self.in0 is not None else ''}{', force ' + self.force_form if self.force_form else ''}{', block ' + str(self.block) if self.block else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -461,6 +467,12 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             + ("\n#define MATMUL_KEEP_FLIP_WRITE" if self.keep_flip else "")
             + (f"\n#define MATMUL_KEY_IN0 DataFormat::{self.in0.name}\n#define MATMUL_KEY_IN1 DataFormat::{self.in1.name}" if self.in0 is not None else "")
             + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
+            + (
+                "\nconstexpr std::uint32_t MATMUL_BLOCK_CT = %d, MATMUL_BLOCK_RT = %d, MATMUL_BLOCK_KT = %d, MATMUL_BLOCK_THROTTLE = %d;"
+                "\nconstexpr bool MATMUL_BLOCK_ACC = %s, MATMUL_BLOCK_L1_ACC = %s;" % (*self.block[:3], self.block[4], str(self.block[3]).lower(), str(self.block[5]).lower())
+                if self.block
+                else ""
+            )
         )
 
     @staticmethod

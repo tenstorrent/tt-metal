@@ -463,6 +463,14 @@ constexpr bool matmul_grid_main_form(const MathFidelity fidelity, const bool hal
 }
 
 
+// The k key a block runs its forms by: 0, main's form, where the block is one of the grid cells above; the caller's k steps per section otherwise.
+template <MathFidelity math_fidelity, int sync, bool dest_acc, std::uint32_t kt_per_section, std::uint32_t kt_dim, DataFormat in0, DataFormat in1, DataFormat out_format,
+          std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t throttle = 0, bool l1_acc = false>
+constexpr std::uint32_t matmul_form_k()
+{
+    return matmul_grid_main_form(math_fidelity, sync == 0, dest_acc, in1, in0, out_format, rt_dim, ct_dim, kt_dim, throttle, l1_acc) ? 0 : kt_per_section;
+}
+
 // Cells that take a form of their own whatever the table says, keyed on the input format and the block shape (the table keys the output
 // format, which cells of different input formats share): form 'R' is the hoisted rows form, 'h' the tile MOP with the hoisted unpack. The
 // kernels key a forced cell as Bfp2 ('R'), Bfp2_b ('h') or Bfp4 ('r'), which matmul_default_form reads as that form (none is a ttnn type).

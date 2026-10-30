@@ -223,6 +223,13 @@ def test_perf_matmul_grid(
         math_fidelity, dest_sync == DestSync.Half, dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format,
         dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle, l1_acc == L1Accumulation.Yes,
     )
+    form_keys = [
+        k.with_block(dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_acc, throttle, l1_acc == L1Accumulation.Yes)
+        for k in MATMUL_FORM_KEYS.for_block(
+            formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
+            math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
+        )
+    ]
     keyed_templates = [
             MATH_FIDELITY(math_fidelity),
             PACK_SRC_FROM_OUTPUT(),
@@ -250,10 +257,7 @@ def test_perf_matmul_grid(
             *MATMUL_ROW_MOP.for_block(
                 formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim
             ),
-            *MATMUL_FORM_KEYS.for_block(
-                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True, throttle=throttle,
-            ),
+            *form_keys,
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(
                     formats,
@@ -267,13 +271,13 @@ def test_perf_matmul_grid(
             ),
             MATMUL_L1_ACC(l1_acc),
         ]
-    # a cell that keeps main's form runs main's unpack and math bodies; the pack form and the harness opt-ins stay
+    # a cell that keeps main's form runs main's unpack and math bodies (llk_matmul_forms.h resolves the form key to 0); the pack form and the harness opt-ins stay
     main_templates = [
         MATH_FIDELITY(math_fidelity),
         PACK_SRC_FROM_OUTPUT(),
         DEST_SYNC(dest_sync),
         THROTTLE_LEVEL(throttle),
-        MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(dims.ct_dim, dims.rt_dim) <= 8),
+        *form_keys,
         MATMUL_PACK_BLOCK(matmul_pack_form(formats, dest_sync, math_fidelity, dims.rt_dim, dims.ct_dim, dims.kt_dim, throttle=throttle)),
         MATMUL_L1_ACC(l1_acc),
     ]
