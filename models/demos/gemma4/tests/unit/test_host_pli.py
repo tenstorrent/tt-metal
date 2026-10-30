@@ -75,6 +75,25 @@ def test_stacked_pli_validates_layer_count(expect_error):
         model._validate_pli_stacked(torch.empty(2, 1, 4, 2))
 
 
+@pytest.mark.parametrize(
+    "pli_size,weights,env,expected",
+    [
+        (2, {"present": True}, "device", True),
+        (2, {"present": True}, None, False),
+        (2, {}, "device", False),
+        (0, {}, "device", False),
+    ],
+)
+def test_decode_device_pli_requires_loaded_pli_weights(monkeypatch, pli_size, weights, env, expected):
+    monkeypatch.delenv("GEMMA4_PLI", raising=False)
+    if env is not None:
+        monkeypatch.setenv("GEMMA4_PLI", env)
+    model = Gemma4Model.__new__(Gemma4Model)
+    model.hidden_size_per_layer_input = pli_size
+    model.per_layer_input_weights = weights
+    assert model._decode_pli_on_device() is expected
+
+
 @pytest.mark.parametrize("packed", [False, True])
 def test_verify_rejects_device_pli_with_explicit_tensors(packed, expect_error):
     model, _ = _host_pli_model()

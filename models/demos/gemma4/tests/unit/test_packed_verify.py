@@ -489,10 +489,14 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     logger.info(
         f"=== packed-verify batch bench | ctx={ctx} P={P} (K={K}) reps={reps} tp={tp} H_local={H} S_k={S_k} ==="
     )
+    # PLI targets need a PLI source on these direct model calls; mirror the
+    # mechanism SpeculativeDecoder._verify selects.
+    device_pli = spec.target_has_pli and spec._pli_dev_host
+    if device_pli:
+        target.init_pli_device_weights()
 
-    # PLI targets need a PLI source on these direct model calls.
     def _pli(token_ids):
-        return {"token_ids_host": token_ids}
+        return {"pli_on_device": device_pli, "token_ids_host": None if device_pli else token_ids}
 
     rows = []
     for B in Bs:

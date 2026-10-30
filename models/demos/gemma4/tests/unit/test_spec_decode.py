@@ -3263,3 +3263,176 @@ def test_spec_decode_batched(mesh_device, reset_seeds):
         f"batched user-0 diverged from plain greedy at a CONFIDENT token (idx {first_div}, "
         f"top-2 gap={gap:.3f} >= {near_tie_gap}); indicates a batched accept/commit/KV-write bug"
     )
+
+
+@pytest.mark.parametrize("accepted,expected", [(0, 0), (1, 1), (2, 2), (3, 3)])
+def test_fused_pli_current_seed_row(accepted, expected):
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    decoder._fused_shift_seed = "current"
+    assert decoder._fused_shift_seed_row(accepted, 3) == expected
+
+
+def test_fused_pli_route_uses_single_user_fused_body():
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    decoder._use_trace = True
+    decoder.target_has_pli = True
+    decoder._pli_dev_host = True
+    decoder.target = SimpleNamespace(max_seq_len=1024)
+    decoder.generate_batched = lambda *args, **kwargs: pytest.fail("single user reached the batched body")
+    calls = []
+    decoder.generate_fused = lambda *args, **kwargs: calls.append((args, kwargs)) or ([17, 23], [2])
+
+    assert decoder.generate(5, 12, 2) == ([17, 23], [2])
+    assert calls == [((5, 12, 2), {"_nested": True})]
+
+
+@pytest.mark.parametrize("reseed,packed", [(False, True), (False, False), (True, False)])
+def test_fused_body_passes_device_pli_to_every_verify(monkeypatch, reseed, packed):
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt import spec_decode
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    class Tensor:
+        def deallocate(self, force=False):
+            pass
+
+    for name in ("reshape", "concat", "repeat"):
+        monkeypatch.setattr(spec_decode.ttnn, name, lambda *args, **kwargs: Tensor())
+    monkeypatch.setattr(spec_decode.ttnn, "Shape", lambda dims: dims)
+    calls = []
+    target = SimpleNamespace(
+        ttnn_verify_forward=lambda **kwargs: (calls.append(kwargs) or Tensor(), Tensor()),
+        ttnn_packed_verify_forward=lambda **kwargs: (calls.append(kwargs) or Tensor(), Tensor()),
+    )
+    decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    decoder.draft_len = 3
+    decoder.target = target
+    decoder.target_has_pli = True
+    decoder._fused_reseed = reseed
+    decoder.tt_kv_cache = []
+    decoder._shared_kv = {}
+    decoder._shared_kv_page_tables = lambda page_table: {}
+    decoder._packed_H = lambda: 1
+    decoder._argmax_last = lambda logits, rows: Tensor()
+    decoder.assistant = SimpleNamespace(step=lambda *args: (Tensor(), Tensor()))
+    tr = {key: Tensor() for key in ("anchor_tok", "h", "d_pu", "d_pi", "d_pt", "v_pu", "v_pi", "v_pt")}
+    tr.update(d_ptl=None, v_ptl=None)
+    if packed:
+        tr.update(
+            pv=True,
+            pv_mask_full=Tensor(),
+            pv_mask_slide=Tensor(),
+            pv_pos=Tensor(),
+            pv_embed={},
+            pv_hot={},
+            pv_ptl=None,
+        )
+
+    decoder._fused_body(tr)
+
+    assert len(calls) == (2 if reseed else 1)
+    assert all(call["pli_on_device"] is True for call in calls)
+
+
+def test_fused_pli_requires_device_weights_before_single_user_capture(expect_error):
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    decoder.target_has_pli = True
+    decoder.target = SimpleNamespace(_pli_dev_ready=False)
+    with expect_error(RuntimeError, "initialized before fused trace capture"):
+        decoder._capture_fused_trace(1, None, 0, max_new_tokens=1)
+
+
+def test_fused_pli_requires_device_weights_before_capture(expect_error):
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+    decoder = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    decoder.target_has_pli = True
+    decoder.target = SimpleNamespace(_pli_dev_ready=False)
+    with expect_error(RuntimeError, "initialized before fused trace capture"):
+        decoder._capture_fused_trace_batched([1], None, [0], 64)
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 1), {"trace_region_size": 256_000_000}, id="1x1")],
+    indirect=True,
+)
+def test_fused_pli_single_device_four_replays(mesh_device, reset_seeds, monkeypatch):
+    """E2B TP=1 K=3: capture one fused trace and replay it repeatedly."""
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL to run fused PLI")
+    config = _target_text_config()
+    if not getattr(config, "hidden_size_per_layer_input", 0):
+        pytest.skip("requires E2B/E4B PLI target")
+
+    from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+
+    monkeypatch.setenv("GEMMA4_SPEC_TRACE", "1")
+    monkeypatch.delenv("GEMMA4_PLI", raising=False)
+    monkeypatch.setenv("GEMMA4_SPEC_DRAFT_LEN", "3")
+    max_seq_len, block_size = 1024, 64
+    paged = PagedAttentionConfig(block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size))
+    generator, kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        num_layers=None,
+        paged_attention_config=paged,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+    )
+    page_table = create_tt_page_table(1, paged)
+    prompt = "The capital of France is"
+    prepared, encoded, positions, lengths = preprocess_inputs_prefill(
+        [prompt], tokenizer, generator.model_args, True, 24, max_prefill_len=max_seq_len
+    )
+    generator.prefill_forward_text(
+        torch.stack(prepared).view(1, -1),
+        page_table=page_table,
+        kv_cache=kv_cache,
+        prompt_lens=positions,
+        warmup_prefill=False,
+    )
+    decoder = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=kv_cache,
+        page_table_torch=page_table,
+        # No stop tokens: a short correct answer must not end the run before four replays.
+        stop_tokens=set(),
+        draft_len=3,
+    )
+    anchor_pos = lengths[0] - 1
+    anchor_token = int(encoded[0][anchor_pos])
+    output, accepted = decoder.generate(anchor_token, anchor_pos, 24)
+    assert len(accepted) >= 4
+    assert all(0 <= count <= 3 for count in accepted)
+    assert output

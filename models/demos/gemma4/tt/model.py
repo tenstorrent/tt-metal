@@ -26,6 +26,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
+from models.demos.gemma4.tt import pli_env
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
@@ -873,6 +874,12 @@ class Gemma4Model:
 
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
+
+    def _decode_pli_on_device(self):
+        """Plain decode uses device PLI only on a loaded PLI target with GEMMA4_PLI=device."""
+        if not (self.hidden_size_per_layer_input and self.per_layer_input_weights):
+            return False
+        return pli_env.pli_on_device(default=False)
 
     def _validate_pli_stacked(self, pli_stacked):
         if self.hidden_size_per_layer_input and pli_stacked.shape[0] != len(self.layers):
@@ -2950,11 +2957,16 @@ class Gemma4Model:
         if self.hidden_size_per_layer_input and self.per_layer_input_weights:
             if batch != 1:
                 raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
-            _, pli = self.compute_host_embeddings(int(tok_flat[0].item()))
-            if pli is not None:
-                pli_tt = ttnn.from_torch(
-                    pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
-                )
+            if self._decode_pli_on_device():
+                # Host preparation precedes trace capture; upload the opt-in
+                # table here so no weight allocation occurs inside capture.
+                self.init_pli_device_weights()
+            else:
+                _, pli = self.compute_host_embeddings(int(tok_flat[0].item()))
+                if pli is not None:
+                    pli_tt = ttnn.from_torch(
+                        pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+                    )
 
         return (tokens_tt, pos_tt, pos_int32_tt, page_table_tt, pli_tt)
 
@@ -3056,6 +3068,13 @@ class Gemma4Model:
         if pli_combined is None:
             pli_combined = self._decode_pli_combined
 
+        pli_stacked = None
+        if self._decode_pli_on_device():
+            if x.dtype not in (ttnn.uint32, ttnn.int32):
+                raise ValueError("device PLI decode requires token-id input")
+            pli_stacked = self.compute_pli_device(x_embed, input_embeds)
+            pli_combined = None
+
         logits = self(
             hidden_states=input_embeds,
             position_idx=current_pos,
@@ -3065,11 +3084,14 @@ class Gemma4Model:
             token_index=token_index,
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
+            pli_stacked=pli_stacked,
             page_tables_per_layer=page_tables_per_layer,
             # Only skip vocab all-gather when this step feeds on-device sampling.
             # Host-sample decode must gather full 262k vocab (see _apply_lm_head).
             keep_sharded_for_sampling=on_device_logits,
         )
+        if pli_stacked is not None:
+            pli_stacked.deallocate(True)
 
         if on_device_logits:
             assert self.sampling is not None, (

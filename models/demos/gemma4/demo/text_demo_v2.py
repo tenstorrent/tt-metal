@@ -140,7 +140,10 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
 
 
 def load_inputs(user_input, batch, instruct):
-    """Load prompts from a json file (optionally fetching a gutenberg context), repeated to `batch`."""
+    """Load prompts, with an optional override for matched plain/spec benchmarks."""
+    prompt_override = os.getenv("GEMMA4_PROMPT")
+    if prompt_override:
+        user_input = [{"prompt": prompt_override} for _ in range(max(batch, 1))]
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
@@ -1061,6 +1064,9 @@ def _run_spec_decode(
     use_fused = (
         batch_size == 1 and ((not temperature) or temperature <= 0) and os.environ.get("GEMMA4_SPEC_FUSED", "1") != "0"
     )
+    # A per-layer-input target needs device PLI for the fused iteration; with
+    # GEMMA4_PLI=host it runs the host loop, as generate() does.
+    use_fused = use_fused and (not spec.target_has_pli or spec._pli_dev_host)
     # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
     # SLOWER than plain decode); the single fused Metal trace removes that
     # overhead (>3x, exceeding plain decode). Default tracing to the demo's
@@ -1075,7 +1081,6 @@ def _run_spec_decode(
         f"seed={'reseed' if spec._fused_reseed else 'shift'}, "
         f"shift_seed={getattr(spec, '_fused_shift_seed', 'n/a')})..."
     )
-    t0 = time.time()
     if use_fused:
         generated, accepts = spec.generate_fused(
             anchor_token=anchor_token, anchor_pos=anchor_pos, max_new_tokens=max_generated_tokens
@@ -1089,37 +1094,32 @@ def _run_spec_decode(
             top_p=top_p,
             top_k=top_k,
         )
-    elapsed = time.time() - t0
 
     text = tokenizer.decode(generated)
     n_tokens = len(generated)
     n_iters = len(accepts)
     mean_accept = (sum(accepts) / n_iters) if n_iters else 0.0
-    setup_elapsed = getattr(spec, "_last_fused_setup_s", 0.0) if use_fused else 0.0
-    steady_elapsed = getattr(spec, "_last_fused_replay_s", elapsed) if use_fused else elapsed
-    # batch=1 single-user: per-user rate == aggregate throughput (kept explicit
-    # so the line is coherent with the plain-decode demo's metric format). Match
-    # the plain demo's steady-state decode convention by excluding one-time spec
-    # setup/trace capture from the main Decode line; report wall throughput too.
-    tok_s_u = n_tokens / steady_elapsed if steady_elapsed > 0 else 0.0
-    tok_s = tok_s_u * batch_size
-    ms_per_token = (steady_elapsed * 1000.0 / n_tokens) if n_tokens else 0.0
-    ms_per_iter = (steady_elapsed * 1000.0 / n_iters) if n_iters else 0.0
-    wall_tok_s_u = n_tokens / elapsed if elapsed > 0 else 0.0
+    metrics = spec._last_metrics
+    wall_rate = n_tokens / metrics["wall_s"] if metrics["wall_s"] > 0 else 0.0
 
     logger.info(f"\n== SPEC-DECODE GENERATION ==\n{text.strip()}\n")
     logger.info("=== Speculative decoding metrics ===")
     logger.info(f"Prompt tokens: {prompt_len}, generated tokens: {n_tokens}")
+    logger.info(f"Effective route: {spec._last_route}")
     logger.info(f"Time to First Token (TTFT): {prefill_elapsed * 1000.0 / batch_size:.1f} ms")
     logger.info(
         f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} (tokens/iter: {mean_accept + 1:.2f})"
     )
-    if setup_elapsed > 0:
-        logger.info(
-            f"Spec setup/trace capture: {setup_elapsed:.2f}s (wall decode incl. setup: {wall_tok_s_u:.2f} tok/s/user)"
-        )
-    logger.info(f"Verify iterations: {n_iters} ({ms_per_iter:.2f} ms/iter)")
-    logger.info(f"Decode: {ms_per_token:.2f} ms/token @ {tok_s_u:.2f} tok/s/user " f"({tok_s:.2f} tok/s throughput)")
+    logger.info(f"Setup (PLI upload, seed, compile/capture): {metrics['setup_s']:.3f}s")
+    logger.info(
+        f"First iteration: {metrics['first_s']:.3f}s, {metrics['first_tokens']} tokens; "
+        f"remaining: {metrics['rest_s']:.3f}s, {metrics['rest_tokens']} tokens in {metrics['rest_iters']} iterations"
+    )
+    if metrics["rest_iters"] and metrics["rest_s"] > 0:
+        logger.info(f"Steady decode: {metrics['rest_tokens'] / metrics['rest_s']:.2f} tok/s/user")
+    else:
+        logger.info("Steady decode: unavailable (fewer than two iterations)")
+    logger.info(f"Generation-call wall: {metrics['wall_s']:.3f}s @ {wall_rate:.2f} tok/s/user")
     assert n_tokens > 0, "speculative decode produced no tokens"
     return generated, accepts
 
@@ -1295,7 +1295,6 @@ def _run_spec_decode_batched(
     spec._use_trace = enable_trace if _trace_env is None else (_trace_env == "1")
 
     logger.info(f"Spec-decode batched generate (B={B}, draft_len={draft_len}, greedy, trace={spec._use_trace})...")
-    t0 = time.time()
     outs, accepts = spec.generate_batched(
         anchor_tokens=anchor_tokens,
         anchor_positions=anchor_positions,
@@ -1304,31 +1303,37 @@ def _run_spec_decode_batched(
         temperature=0.0,
     )
     ttnn.synchronize_device(mesh_device)
-    elapsed = time.time() - t0
 
     total_tokens = sum(len(o) for o in outs)
     all_accepts = [m for a in accepts for m in a]
     mean_accept = (sum(all_accepts) / len(all_accepts)) if all_accepts else 0.0
-    # Steady decode excludes one-time trace capture (mirrors the single-user path).
-    setup_s = getattr(spec, "_last_fused_setup_s", 0.0) if spec._use_trace else 0.0
-    steady_s = getattr(spec, "_last_fused_replay_s", elapsed) if spec._use_trace else elapsed
-    tok_s = total_tokens / steady_s if steady_s > 0 else 0.0
+    metrics = spec._last_metrics
 
     logger.info("\n== BATCHED SPEC-DECODE GENERATION ==")
     for b in range(B):
         logger.info(f"[user {b}] {tokenizer.decode(outs[b]).strip()}")
     logger.info("=== Batched speculative decoding metrics ===")
     logger.info(f"Users (batch): {B}; prompt tokens (max): {max_prompt}; total generated tokens: {total_tokens}")
+    logger.info(f"Effective route: {spec._last_route}")
     logger.info(f"Time to First Token (TTFT, mean prefill/user): {prefill_elapsed * 1000.0 / B:.1f} ms")
     logger.info(
         f"Drafter: {draft_len} drafts/iter; mean accepted {mean_accept:.2f}/{draft_len} "
         f"(tokens/iter: {mean_accept + 1:.2f})"
     )
-    if setup_s > 0:
-        logger.info(f"Spec setup/trace capture: {setup_s:.2f}s (excluded from steady rate)")
+    logger.info(f"Setup (PLI upload, seed, compile/capture): {metrics['setup_s']:.3f}s")
     logger.info(
-        f"Decode: {steady_s:.2f}s steady @ {tok_s:.2f} tok/s aggregate, {tok_s / B:.2f} tok/s/user "
-        f"({'traced' if spec._use_trace else 'untraced'})"
+        f"First iteration: {metrics['first_s']:.3f}s, {metrics['first_tokens']} tokens; "
+        f"remaining: {metrics['rest_s']:.3f}s, {metrics['rest_tokens']} tokens in {metrics['rest_iters']} iterations"
+    )
+    if metrics["rest_iters"] and metrics["rest_s"] > 0:
+        aggregate = metrics["rest_tokens"] / metrics["rest_s"]
+        logger.info(f"Steady decode: {aggregate:.2f} tok/s aggregate, {aggregate / B:.2f} tok/s/user")
+    else:
+        logger.info("Steady decode: unavailable (fewer than two iterations)")
+    wall_rate = total_tokens / metrics["wall_s"] if metrics["wall_s"] > 0 else 0.0
+    logger.info(
+        f"Generation-call wall: {metrics['wall_s']:.3f}s @ {wall_rate:.2f} tok/s aggregate, "
+        f"{wall_rate / B:.2f} tok/s/user"
     )
     assert total_tokens > 0, "batched speculative decode produced no tokens"
     return outs, accepts
