@@ -8,7 +8,7 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics, merge_gate_subset
 
 UINT16_MAX = 65535
 # Smallest tile-aligned width whose indices need 32 bits: 65536 still fits (largest index 65535).
@@ -843,16 +843,21 @@ def test_topk_w4096_low_ht_default_routes_to_composite(H, W, k, device):
 
 
 @pytest.mark.parametrize(
-    "N, C, H, W, dim, k",
-    (
-        (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
-        (1, 1, 32, 4224, 3, 32),  # larger dim, non-pow2 -> genuinely single-core
-        (1, 1, 32, 4096, 3, 32),  # pow2 low-tile-row dim -> multi-core path (Ht-aware gate)
-        (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
-    ),
+    *merge_gate_subset(
+        {
+            "largest": (True, False),
+            "index_dtype": (ttnn.int32, ttnn.uint32),
+            "N, C, H, W, dim, k": (
+                (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
+                (1, 1, 32, 4224, 3, 32),  # larger dim, non-pow2 -> genuinely single-core
+                (1, 1, 32, 4096, 3, 32),  # pow2 low-tile-row dim -> multi-core path (Ht-aware gate)
+                (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
+            ),
+        },
+        keep=lambda largest, index_dtype, W, k, **_: (largest and W == 4224)
+        or (not largest and index_dtype == ttnn.int32 and W == 8192 and k == 50),
+    )
 )
-@pytest.mark.parametrize("index_dtype", (ttnn.int32, ttnn.uint32))
-@pytest.mark.parametrize("largest", (True, False))
 def test_topk_int32_indices(N, C, H, W, dim, k, index_dtype, largest, device):
     # Exercises 32-bit (UINT32/INT32) index outputs on both the single-core and multi-core paths.
     torch.manual_seed(2005)
@@ -1174,11 +1179,11 @@ def test_topk_large_k_routing_engages(device):
     (
         (64, 4),
         (64, 8),
-        (64, 16),
+        pytest.param(64, 16, marks=pytest.mark.merge_gate),
         (64, 32),
         (64, 64),
         (8192, 32),  # W >= 8192 -> multi-core path
-        (8192, 64),
+        pytest.param(8192, 64, marks=pytest.mark.merge_gate),
     ),
 )
 @pytest.mark.parametrize("largest", [True, False])

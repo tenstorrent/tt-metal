@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import itertools
 import json
 import time
+from types import BuiltinFunctionType, FunctionType, ModuleType
 
 from loguru import logger
 from tt_py_test_utils_common.utility_functions import comp_pcc, comp_allclose, comp_ulp, comp_equal, divup, roundup
@@ -59,6 +61,63 @@ TORCH_INTEGER_DTYPES = [
     torch.uint8,
 ]
 NP_INTEGER_DTYPES = [np.byte, np.int16, np.int32, np.int64, np.uint16, np.uint32, np.uint64]
+
+
+def format_parametrize_id(argname, val):
+    """Stable `argname=value` fragment for a pytest parametrize ID.
+
+    pytest-xdist requires every worker to collect the same node IDs. The default
+    repr of a ttnn op, Python function, or TensorSpec embeds a process address,
+    so workers disagree and the session aborts. Used by `merge_gate_subset` (which
+    sets `id=` itself) and by `pytest_make_parametrize_id` in tests/ttnn/conftest.py.
+    """
+    if isinstance(val, ModuleType):
+        val = val.__name__
+    elif hasattr(val, "python_fully_qualified_name"):
+        val = val.python_fully_qualified_name
+    elif type(val).__name__ == "TensorSpec":
+        val = f"TensorSpec({val.shape},{val.dtype},{val.layout})"
+    elif isinstance(val, (BuiltinFunctionType, FunctionType)):
+        val = val.__name__
+    return f"{argname}={val}"
+
+
+def merge_gate_subset(axes, keep):
+    """Cross product of `axes` for a single `pytest.mark.parametrize`, marking `merge_gate` only where `keep(**case)` is true.
+
+    Marks on stacked parametrize decorators combine as a union across axes, so a subset of the cross
+    product can only be gated from one parametrize. `axes` maps each argname to its values, or to a
+    dict of id -> value for an axis that needs explicit ids. A key of comma-separated argnames takes
+    tuples of values, like a multi-argname parametrize. List the axes in test-ID order: IDs use
+    `format_parametrize_id`, so they match the IDs of the equivalent stacked decorators, whose
+    bottom decorator comes first.
+
+    Usage: @pytest.mark.parametrize(*merge_gate_subset({...}, keep=lambda **case: ...))
+    """
+    import pytest
+
+    argnames = []
+    ids_and_values_per_axis = []
+    for axis, values in axes.items():
+        names = [name.strip() for name in axis.split(",")]
+        argnames += names
+        if isinstance(values, dict):
+            ids_and_values_per_axis.append([(id_, (value,)) for id_, value in values.items()])
+            continue
+        value_tuples = values if len(names) > 1 else [(value,) for value in values]
+        ids_and_values_per_axis.append(
+            [
+                ("-".join(format_parametrize_id(name, value) for name, value in zip(names, vt)), tuple(vt))
+                for vt in value_tuples
+            ]
+        )
+    params = []
+    for case in itertools.product(*ids_and_values_per_axis):
+        ids, value_tuples = zip(*case)
+        values = [value for vt in value_tuples for value in vt]
+        marks = [pytest.mark.merge_gate] if keep(**dict(zip(argnames, values))) else []
+        params.append(pytest.param(*values, id="-".join(ids), marks=marks))
+    return argnames, params
 
 
 def make_disjoint_dram_core_range_set(device):
