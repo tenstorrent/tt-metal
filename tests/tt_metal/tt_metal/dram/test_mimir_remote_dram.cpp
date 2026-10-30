@@ -41,6 +41,13 @@ inline constexpr uint64_t kRemoteGuardDistance = 4 * kGiB;
 inline constexpr uint32_t kMixedSlotBytes = 32 * 1024;
 inline constexpr uint32_t kMixedRemoteSlotBytes = 8 * 1024;
 inline constexpr uint32_t kTrafficReadBackTl1Offset = 64 * 1024;
+// Address bits 7-8 pick the GDDR channel slice.
+inline constexpr uint32_t kChannelSliceBytes = 128;
+inline constexpr uint32_t kChannelSliceCount = 4;
+inline constexpr std::array<uint32_t, 2> kSliceTrafficSizeBytes = {4, 64};
+inline constexpr uint32_t kSliceStraddleBytes = 8;
+inline constexpr uint32_t kSliceStraddleOffsetBytes = 124;
+inline constexpr uint32_t kSliceStraddleSlice = 1;
 inline constexpr std::array<uint32_t, 6> kTrafficSizeBytes = {4, 64, 124, 512, 4 * 1024, 32 * 1024};
 inline constexpr std::array<uint32_t, 5> kTrafficAlignments = {0, 4, 60, 124, static_cast<uint32_t>(kEmuPageBytes - 4)};
 // Test kinds salt the seeds and the pre-fill tags. AddressDerived and the constant patterns ignore the seed, so data
@@ -1320,10 +1327,44 @@ TEST_P(MimirRemoteDram, Tl1RoundTrip) {
     }
 }
 
+const MimirAnchor& view_end_anchor(const RemoteDramRun& run, const std::vector<MimirAnchor>& anchors) {
+    for (const MimirAnchor& anchor : anchors) {
+        if (anchor.view_offset == run.soc.dram_view_size - kAnchorBytes) {
+            return anchor;
+        }
+    }
+    TT_FATAL(false, "No DRAM anchor ends at the end of view {}", run.dest_view);
+    return anchors.front();
+}
+
+// 4 B and 64 B copies at the start of each channel slice of the anchor, then an 8 B copy across the boundary between
+// two slices.
+RunOutcome check_slice_traffic(
+    const RemoteDramRun& run, const MimirAnchor& anchor, uint32_t& case_index, uint32_t& next_guard_tag) {
+    const uint64_t slice_base =
+        (anchor.view_offset + kChannelSliceBytes - 1) / kChannelSliceBytes * kChannelSliceBytes + kGuardBytes;
+    for (uint32_t size_bytes : kSliceTrafficSizeBytes) {
+        for (uint32_t slice = 0; slice < kChannelSliceCount; ++slice) {
+            if (check_traffic_case(
+                    run, slice_base + slice * kChannelSliceBytes, size_bytes, case_index++, next_guard_tag) ==
+                RunOutcome::Threw) {
+                return RunOutcome::Threw;
+            }
+        }
+    }
+    return check_traffic_case(
+        run,
+        slice_base + kSliceStraddleSlice * kChannelSliceBytes + kSliceStraddleOffsetBytes,
+        kSliceStraddleBytes,
+        case_index++,
+        next_guard_tag);
+}
+
 class MimirRemoteDramTrafficMatrix : public ::testing::TestWithParam<RemoteDramSourceParam> {};
 
-// One anchor per remote view, every size and alignment case. Each window starts and ends at least 64 B inside the
-// anchor, so its guards are inside the anchor too.
+// Every size and alignment case at one anchor per remote view. Each window starts and ends at least 64 B inside the
+// anchor, so its guards are inside the anchor too. The channel slice cases run at that anchor and at the view-end
+// anchor.
 TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
@@ -1363,6 +1404,11 @@ TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
                     size_bytes,
                     case_index++,
                     next_guard_tag) == RunOutcome::Threw) {
+                return;
+            }
+        }
+        for (const MimirAnchor* slice_anchor : {&anchor, &view_end_anchor(run, anchors)}) {
+            if (check_slice_traffic(run, *slice_anchor, case_index, next_guard_tag) == RunOutcome::Threw) {
                 return;
             }
         }
