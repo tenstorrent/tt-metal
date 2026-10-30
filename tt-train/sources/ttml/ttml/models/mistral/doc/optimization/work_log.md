@@ -155,6 +155,18 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 18: LoRA gradient products `dB = s g^T h`, `dA = dh^T x` (kernel boost checklist)
+
+- Roofline / bytes: per fused layer the four products read the `[1024, N]` activation or gradient once (N = 16384 / 5120 / 1536 for dB, 5120 / 8192 / 1024 for dA): gate_up dB 32 MB -> 81 us at 400 GB/s, measured 144 us (ttnn `transpose_a` matmul, `[N, r]` orientation, 225 GB/s) plus a scale multiply; the out / w2 dB 10 MB -> 25 us, measured 49 us; dA 10 MB, measured 32 us (ttnn's `[r, N]` orientation, 312 GB/s). 1.8 ms per 4 layers per chip across the six rows of the ranked table (`O/iter17_tp_ranked_ops.txt`).
+- Where the cores go: ttnn uses 33-88 cores for these shapes; the `[N, r]` orientation runs the strided transposed read of the wide operand.
+- Structural fix tried: `metal/ops/skinny_contract/` (`scale * small^T @ big`, the small operand transposed once on the host and resident in L1; items = groups of up to 4 adjacent output columns over all 110 cores, each K row of the group streamed in 8-row batches; `transpose_dest` for the `[N, r]` output; scale folded into the pack).
+- Expected: bandwidth-bound at ~330 GB/s (`rmsnorm_bw_rows`' streaming rate): gate_up dB ~100 us, N = 5120 ~32 us, dA no worse than ttnn; -0.6 to -0.8 ms per 4 layers per chip.
+- Standalone (`O/iter18_build_check.log`, prefetch version; PCC 0.999999 / 1.000000 at all seven shapes vs ttnn): dB N = 16384 157 -> 123 us, 5120 56 -> 54, 1536 28 -> 25; dA N = 5120 32 -> 53, 8192 50 -> 71, 1024 18 -> 20; r = 32 N = 2048 dB 44 -> 58. Below half the expected gain: per item one `cols`-tile row of `big` per K step (8 x 8 KB strided reads per barrier) and 32 `matmul_tiles` per output tile for 16 useful rows; the op streams at 190-265 GB/s where ttnn's `[r, N]` orientation reaches 312.
+- Orientation check (`O/iter18_orientation_check.{py,log}`): ttnn `[r, N]` product + transpose of the small output 110 / 41 / 39 us at N = 16384 / 5120 / 1536 vs ttnn `[N, r]` 156 / 55 / 28 vs the op 123 / 53 / 25. Router (`modules/lora.py::skinny_contract`): dA and wide dB (N >= 4096) on ttnn's `[r, N]` product (+ transpose for dB), the narrow dB (qkv, N = 1536) on the op.
+- Run A (op for all dB with N >= 4096; `O/iter18.sh` -> `O/iter18_chain.log`): harness 45 passed (3 new `skinny_contract` cases), TP gradient check PASS, cooled TP=4 MFU 498.0 ms / 32.58 % (`O/iter18_tp_mfu_tp4.log`); in the step gate_up dB 0.575 -> 0.472, N = 5120 dB 0.389 -> 0.387 ms per 4 layers (`O/iter18_tp_ranked_ops.txt`).
+- Run B (final router; `TAG=iter18b bash O/iter18.sh` -> `O/iter18b_chain.log`): harness 45 passed, TP gradient check PASS, cooled TP=4 MFU 503.9 ms / 32.19 % (best 495.1; run A 498.0 / 32.58 % at a different clock mix, the per-step spread inside one run is 484-511 ms) (`O/iter18b_tp_mfu_tp4.log`); in the step gate_up dB 0.369 (92 us per call; run A 0.472, iteration 17 0.575), N = 5120 dB 0.234 (A 0.387, 17 0.389), the `[16, N]` transposes + pads 0.09; the products 1.11 vs 1.28 (A) vs ~1.45 (17) ms per 4 layers; chip 0 kernels 45.9 vs 46.0 (A) vs 48.2 (17) ms per profiled step (`O/iter18b_tp_analysis.txt`) (`O/iter18b_tp_ranked_ops.txt`).
+- Next structural fix for these products: none at the kernel level worth its cost (the wide operand is read once at ttnn's streaming rate); the remaining 1.8 ms per 4 layers is the bandwidth floor of the six reads plus the `[16, N]` transposes (~5 us each).
+
 ### Stage review round 7 (iterations 11-12)
 
 - `review_round7.md`: more-work-needed (UMD pointer in the iteration-11 commit; ranked table and attribution cells); answered in the same day's commits (pointer restored `415ec0f1d3e`, docs regenerated, runtime-arg guards, router M check); loss match rerun scheduled in the iteration-14 chain.
@@ -215,6 +227,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 14 | `8b86016e718` | `vp_cross_entropy_bw` op, loss backward routing, harness cases, loss match, iteration-14 evidence |
 | 15 | `7a21a21258a` | SDPA forward chain mode (`metal/ops/sdpa_fw/`), iteration-15 evidence |
 | 16 | `f045fb8eba8` | SDPA backward chain mode (`metal/ops/sdpa_bw/`), iteration-16 evidence |
-| 17 | (this commit) | `rmsnorm_bw_rows` op and its dispatch from `rmsnorm_bw_allcore`, iteration-17 evidence |
+| 17 | `f07712081ba` | `rmsnorm_bw_rows` op and its dispatch from `rmsnorm_bw_allcore`, iteration-17 evidence |
+| 18 | (this commit) | `skinny_contract` op, `skinny_contract` router in `lora.py` (ttnn `[r, N]` orientation for dA and the wide dB), iteration-18 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

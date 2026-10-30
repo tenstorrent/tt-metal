@@ -25,6 +25,7 @@
 #include "metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.hpp"
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_kv_reduce_device_operation.hpp"
+#include "metal/ops/skinny_contract/skinny_contract.hpp"
 #include "metal/ops/skinny_matmul/skinny_matmul.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
@@ -813,6 +814,15 @@ void py_module(nb::module_& m) {
             nb::arg("scale") = 1.0F,
             "scale * g * (exp(logits - log_normalizer) - one_hot(target - first_v)) over a local vocab shard in one "
             "pass (the vocab-parallel cross-entropy backward).");
+        py_metal.def(
+            "skinny_contract",
+            &ttml::metal::skinny_contract,
+            nb::arg("small"),
+            nb::arg("big"),
+            nb::arg("scale") = 1.0F,
+            nb::arg("transpose_out") = false,
+            "scale * small^T @ big over the token dimension (small [T, r <= 32], big [T, N]) -> [r, N], or [N, r] with "
+            "transpose_out: the LoRA gradient products dB = s g^T h and dA = dh^T x on all cores, HiFi4 / fp32 acc.");
         py_metal.def(
             "skinny_matmul",
             &ttml::metal::skinny_matmul,

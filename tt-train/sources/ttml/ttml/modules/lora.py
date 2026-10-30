@@ -30,6 +30,9 @@ def lora_matmul_config():
 # tiles and runs them on T/32 cores (33 of 110 at T=1024, 75-120 us for K=5120-8192). `skinny_matmul` splits K over
 # the cores instead (iteration 10); below this K the two are equal within dispatch noise.
 SKINNY_MIN_K = 2048
+SKINNY_CONTRACT_MAX_N = (
+    4096  # skinny_contract beats ttnn's [r, N] product + transpose only for narrow dB (iteration 18)
+)
 
 
 def lowrank_update(acc, a, b, scale=1.0, transpose_b=False):
@@ -47,6 +50,35 @@ def lowrank_update(acc, a, b, scale=1.0, transpose_b=False):
         return ttml.ops.metal.lowrank_update(acc, a, b, scale, transpose_b)
     update = ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=lora_matmul_config())
     return ttnn.addalpha(acc, update, scale)
+
+
+def skinny_contract(small, big, scale=1.0, transpose_out=False):
+    """``scale * small^T @ big`` over the token dimension (``small`` ``[T, r <= 16]``).
+
+    Routing by the iteration-18 standalone table (``O/iter18_orientation_check.log``, ``O/iter18_build_check.log``):
+    ``dA = dh^T x`` (``[r, N]``) stays on ttnn's transposed-a matmul, its fast orientation (312 GB/s at N = 5120);
+    wide ``dB = s g^T h`` (``[N, r]``, ``N >= 4096``: gate_up / out / w2) is that same product plus a transpose of
+    the small ``[r, N]`` output (110 / 41 us vs 156 / 55 for ttnn's ``[N, r]`` orientation and 123 / 53 for the op
+    at N = 16384 / 5120); the narrow dB (qkv, N = 1536) goes to the all-core op (25 vs 28 / 39 us)."""
+    r, T = small.shape[-1], small.shape[-2]
+    N = big.shape[-1]
+    cfg = lora_matmul_config()
+    if (
+        transpose_out
+        and N < SKINNY_CONTRACT_MAX_N
+        and r <= 16
+        and T % 32 == 0
+        and T <= 4096
+        and small.shape[0] == 1
+        and small.shape[1] == 1
+        and big.shape[0] == 1
+        and big.shape[1] == 1
+    ):
+        return ttml.ops.metal.skinny_contract(small, big, scale, transpose_out)
+    out = ttnn.matmul(small, big, transpose_a=True, compute_kernel_config=cfg)  # [r, N]
+    if scale != 1.0:
+        out = ttnn.multiply(out, scale)
+    return ttnn.transpose(out, -2, -1) if transpose_out else out
 
 
 def skinny_matmul(a, b, transpose_b=False):
@@ -96,13 +128,13 @@ class LoraApply(Function):
         cfg = lora_matmul_config()
         s = ctx.scaling
         grad_h = ttnn.multiply(skinny_matmul(grad_output, b_val), s)
-        grad_b = ttnn.multiply(ttnn.matmul(grad_output, h, transpose_a=True, compute_kernel_config=cfg), s)
+        grad_b = skinny_contract(h, grad_output, s, transpose_out=True)  # s * g^T h -> [out, r]
         if ctx.mask is not None:
             grad_b = ttnn.multiply(grad_b, ctx.mask)
         grad_x = ttnn.matmul(grad_h, a_val, compute_kernel_config=cfg)
         if ctx.reduce_axis is not None:
             grad_h = ttml.core.distributed.all_reduce(grad_h, ctx.reduce_axis)
-        grad_a = ttnn.matmul(grad_h, x_val, transpose_a=True, compute_kernel_config=cfg)
+        grad_a = skinny_contract(grad_h, x_val)  # dh^T x -> [r, in]
         return grad_output, grad_x, grad_a, grad_b
 
 
@@ -122,9 +154,7 @@ class _LoraUpdateAdd(Function):
         ctx.save_for_backward()
         cfg = lora_matmul_config()
         grad_h = ttnn.multiply(skinny_matmul(grad_output, b_val), ctx.scaling)
-        grad_b = ttnn.multiply(
-            ttnn.matmul(grad_output, h_val, transpose_a=True, compute_kernel_config=cfg), ctx.scaling
-        )
+        grad_b = skinny_contract(h_val, grad_output, ctx.scaling, transpose_out=True)  # s * g^T h -> [out, r]
         return grad_output, grad_h, grad_b
 
 

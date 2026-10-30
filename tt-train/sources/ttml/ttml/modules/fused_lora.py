@@ -30,7 +30,7 @@ import ttml
 from ttml.autograd import Function
 
 from .frozen_linear import TRANSPOSED_SHAPES, _compute_config, forward_matmul_kwargs, full_core_grid, local_in_out
-from .lora import lowrank_update, skinny_matmul
+from .lora import lowrank_update, skinny_contract, skinny_matmul
 
 __all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "reduce_partial_lora_grads", "TAIL_ROWS"]
 
@@ -109,13 +109,10 @@ class FusedLoraLinearT(Function):
         ttnn.deallocate(dcat_t)
         # dx += (s dh) @ A ; dB = s * g^T h ; dA = (s dh)^T x (dh all-reduced first when B is column-sharded)
         dx = lowrank_update(dx, s_dh, a_val)
-        grad_b = ttnn.multiply(
-            ttnn.matmul(grad_output, h, transpose_a=True, compute_kernel_config=cfg, core_grid=full_core_grid()),
-            scaling,
-        )
+        grad_b = skinny_contract(h, grad_output, scaling, transpose_out=True)  # s * g^T h -> [out, r]
         if reduce_axis is not None:
             s_dh = ttml.core.distributed.all_reduce(s_dh, reduce_axis)
-        grad_a = ttnn.matmul(s_dh, x_val, transpose_a=True, compute_kernel_config=cfg, core_grid=full_core_grid())
+        grad_a = skinny_contract(s_dh, x_val)  # (s dh)^T x -> [r, in]
         return dx, None, grad_a, grad_b
 
 

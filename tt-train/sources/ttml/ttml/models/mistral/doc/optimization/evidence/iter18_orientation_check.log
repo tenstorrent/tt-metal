@@ -1,0 +1,3 @@
+T=1024 r=16 N=16384: rel(rn_t) 1.19e-03 rel(op) 1.19e-03 | wall us ttnn[N,r] 156 ttnn[r,N]+T 110 skinny_contract 123
+T=1024 r=16 N=5120: rel(rn_t) 1.22e-03 rel(op) 1.23e-03 | wall us ttnn[N,r] 55 ttnn[r,N]+T 41 skinny_contract 53
+T=1024 r=16 N=1536: rel(rn_t) 1.17e-03 rel(op) 1.17e-03 | wall us ttnn[N,r] 28 ttnn[r,N]+T 39 skinny_contract 25

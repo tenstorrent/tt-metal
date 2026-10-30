@@ -26,6 +26,7 @@
 #include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/select_target_logit/select_target_logit.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
+#include "ops/skinny_contract/skinny_contract.hpp"
 #include "ops/skinny_matmul/skinny_matmul.hpp"
 #include "ops/softmax/softmax.hpp"
 #include "ops/softmax_backward/softmax_backward.hpp"

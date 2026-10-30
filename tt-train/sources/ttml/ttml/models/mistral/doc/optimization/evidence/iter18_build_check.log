@@ -1,0 +1,16 @@
+=== build _ttml 2026-10-30T18:06:58Z
+build rc=0
+=== skinny_contract check 2026-10-30T18:07:01Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+T=1024 r=16 N=16384 s=2.0 transpose_out=True: shape (1, 1, 16384, 16) pcc 0.999999 rel 1.19e-03 | wall us ttnn 157 skinny_contract 123
+T=1024 r=16 N=5120 s=2.0 transpose_out=True: shape (1, 1, 5120, 16) pcc 0.999999 rel 1.23e-03 | wall us ttnn 56 skinny_contract 54
+T=1024 r=16 N=1536 s=0.5 transpose_out=True: shape (1, 1, 1536, 16) pcc 0.999999 rel 1.17e-03 | wall us ttnn 28 skinny_contract 25
+T=1024 r=16 N=5120 s=1.0 transpose_out=False: shape (1, 1, 16, 5120) pcc 1.000000 rel 2.07e-05 | wall us ttnn 32 skinny_contract 53
+T=1024 r=16 N=8192 s=1.0 transpose_out=False: shape (1, 1, 16, 8192) pcc 1.000000 rel 4.36e-05 | wall us ttnn 50 skinny_contract 71
+T=1024 r=16 N=1024 s=1.0 transpose_out=False: shape (1, 1, 16, 1024) pcc 1.000000 rel 7.64e-06 | wall us ttnn 18 skinny_contract 20
+T=2048 r=32 N=2048 s=1.0 transpose_out=True: shape (1, 1, 2048, 32) pcc 0.999999 rel 1.19e-03 | wall us ttnn 44 skinny_contract 58
+=== lora harness tests 2026-10-30T18:07:07Z
+tests rc=0
+================= 8 passed, 37 deselected in 98.67s (0:01:38) ==================
+=== done 2026-10-30T18:08:48Z

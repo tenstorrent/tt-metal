@@ -435,6 +435,29 @@ def test_vp_cross_entropy_bw_matches_numpy(vocab, g, scale):
     rep.done()
 
 
+@pytest.mark.parametrize(
+    "n_cols, scale, transpose_out",
+    [(16384, 2.0, True), (5120, 1.0, False), (1024, 0.5, True)],
+    ids=["dB-gate_up", "dA-in5120", "dB-out-scaled"],
+)
+def test_skinny_contract_matches_torch(n_cols, scale, transpose_out):
+    """`scale * small^T @ big` over the token dimension (rank 16) in one op against torch fp64 on bf16 inputs."""
+    rng = seeded(18)
+    small_np = bf16(rng.normal(0, 1, (1, 1, SEQ, 16)))
+    big_np = bf16(rng.normal(0, 1, (1, 1, SEQ, n_cols)))
+    got = to_host(
+        ttml.ops.metal.skinny_contract(
+            to_device(small_np).get_value(), to_device(big_np).get_value(), scale, transpose_out
+        )
+    )
+    ref = scale * (t(small_np).transpose(-1, -2) @ t(big_np))
+    if transpose_out:
+        ref = ref.transpose(-1, -2)
+    rep = Report(f"skinny_contract N={n_cols} scale={scale} transpose_out={transpose_out}")
+    rep.check("out", got, ref.numpy(), 0.9999, 1e-2)
+    rep.done()
+
+
 def test_fused_residual_norm_model_matches_the_block_path():
     """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
     the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number

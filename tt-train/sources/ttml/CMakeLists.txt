@@ -188,6 +188,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/vp_cross_entropy_bw/vp_cross_entropy_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/vp_cross_entropy_bw/device/vp_cross_entropy_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/vp_cross_entropy_bw/device/vp_cross_entropy_bw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_contract/skinny_contract.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_contract/device/skinny_contract_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_contract/device/skinny_contract_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/skinny_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/device/skinny_matmul_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/device/skinny_matmul_program_factory.cpp

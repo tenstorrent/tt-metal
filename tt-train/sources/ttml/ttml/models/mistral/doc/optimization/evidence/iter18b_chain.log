@@ -1,0 +1,14 @@
+=== iter18b harness 2026-10-30T18:32:28Z
+harness rc=0
+================== 45 passed, 2 warnings in 235.77s (0:03:55) ==================
+=== iter18b TP=4 gradient check 2026-10-30T18:36:28Z
+tp4 rc=0
+tp 4: transposed 3, fused 2
+PASS
+=== iter18b_tp TP=4 MFU after 600s cool-down 2026-10-30T18:37:13Z
+rc=0
+40 of 40 layers, tp 4: 503.9 ms/step over 6 steps (best 495.1), 191.2 TFLOP/s, MFU 32.19%
+=== iter18b_tp TP=4 Tracy 4 layers 2026-10-30T18:50:39Z
+rc=1
+=== done 2026-10-30T18:51:42Z
+=== iter18b chain finished 2026-10-30T18:51:42Z
