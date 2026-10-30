@@ -1137,3 +1137,17 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   658 pass, 1 pre-existing failure (xing40 contract test_no_runner_contract_test_takes_a_fixed_threshold).
 - Queued P.17 MOE_DROP (perf, ab.before, ab_positions 51200 / 512000, DS41_ENGRAM_TABLE=resident both sides; X.3 deps
   += P.17). Launch: resume --until P.17.
+- 13:28 P.17 attempt 1 ended with 12 settings-lint problems: new environment reads in the combine_rf fork (combine_plan,
+  fabric_all_gather_py, persist_l1, routing_a2a, sparse_all_gather_2d, sparse_combine_rf), all Marko's own knobs that
+  arrive with the drop. Classification: FRAMEWORK (F231): F106 exempts a fork's knobs only when they existed at HEAD; an
+  imported drop's new lines are charged to the agent, whose only ways out (convert them, or mark them diagnostic) both
+  alter the drop. Aborted attempt 2 (note OV-26: take the drop as is), paused; attempt 3 had started before the pause
+  (it rebuilds; kept). Fix after it ends: tasks.yaml `imports: [<ref>]`, lines verbatim in the import ref count as the
+  fork's own; then resume.
+- 14:00 P.17 A/B (before / after, 50k / 500k): device 208.4 -> 209.8 / 243.1 -> 237.1 (experts -5.4 / -5.6; attention
+  +6.5 at 50k only, in the all_to_all and window gathers after the MoE), wall 318.0 -> 315.6 / 321.3 -> 299.6, host
+  cProfile 328.8 -> 331.7 / 335.8 -> 316.2; accuracy worst share 0.90 (0.93 before). Not a clean win at 50k.
+- 14:20 OWNER: accept P.17. Then: sweep EVERY matmul on the Galaxy at SP=32 (P.19, MATMUL_CONFIG=galaxy vs tuned), then
+  SP=8 x TP=4 with its shapes swept in the same pick (P.20; both sides galaxy-tuned: apples to apples). P.18 (window
+  tiles, designed for SP=32) and K.1R wait for P.20's answer. Framework: F231 / F232 / F233 (BREADCRUMBS), selftests.
+  P.17 tasks.yaml gets imports: [origin/dnijemcevic/model_bringup_lowbit].

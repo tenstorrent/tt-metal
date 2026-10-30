@@ -7,7 +7,8 @@
   bring-up forks  `ttnn/ttnn/bringup/**` (not tests/): behaviour comes in as op arguments set from the model's
                   settings; an environment knob is allowed only for diagnostics, marked `diagnostic` on its line.
                   F106: only the lines a change adds count (vs ``base``, default HEAD): an imported fork's own knobs
-                  (e.g. 170 MIMO_FL_* reads in flat_routed_expert) are not the editing agent's to convert
+                  (e.g. 170 MIMO_FL_* reads in flat_routed_expert) are not the editing agent's to convert; F231:
+                  nor are the lines of a branch the task imports as is (tasks.yaml ``imports``)
   emulation       F137 (owner): no setting's default is an emulation (a choice that rounds to a format the device
                   neither computes nor stores in, agents' rule 17: Setting(emulation=...)); a choice whose name looks
                   like one (EMULATION_HINT) must be declared, so the check cannot be dodged by leaving it out
@@ -34,7 +35,12 @@ def _base_lines(repo: Path, rel: str, base: str | None) -> set[str]:
     return {ln.strip() for ln in r.stdout.splitlines()} if r.returncode == 0 else set()
 
 
-def violations(repo: Path, model_dir: str, files: list[str], base: str | None = "HEAD") -> list[str]:
+def violations(
+    repo: Path, model_dir: str, files: list[str], base: str | None = "HEAD", imports: list[str] | None = None
+) -> list[str]:
+    """``imports`` (F231, tasks.yaml ``imports``): refs a task takes code from as is (a branch merge); a fork line that
+    is verbatim in an import's version of the file is the import's own knob, as F106 treats a line already at ``base``.
+    """
     out = []
     model_dir = model_dir.rstrip("/") + "/"
     for rel in files:
@@ -46,6 +52,8 @@ def violations(repo: Path, model_dir: str, files: list[str], base: str | None = 
         if not (in_model or in_fork) or rel == model_dir + "tt/settings.py":
             continue
         had = _base_lines(repo, rel, base) if in_fork else set()
+        for ref in (imports or []) if in_fork else []:
+            had |= _base_lines(repo, rel, ref)
         for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
             if not ENV_READ.search(line) or line.lstrip().startswith(("#", "//", "*")):
                 continue
