@@ -166,9 +166,7 @@ Set the same variables in each rank's container environment, plus
 set; a rank that differs fails later with a D2D chunk plan mismatch.
 
 Remove any variable the manifest or the runner already decides, since the
-container environment wins over both. `PREFILL_FABRIC_MODE=2d`,
-`PREFILL_OVERLAP_SHARED_EXPERT=0`, `PREFILL_USE_TRACE=0` and a D2D FIFO size
-override all move the deployment off the configuration CI validates.
+container environment wins over both.
 
 Use `ci/sc4_mgd.textproto` (4×[8,4] `RING,RING`) as the mesh-graph descriptor,
 not a `LINE,RING` copy.
