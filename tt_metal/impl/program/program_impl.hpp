@@ -787,7 +787,7 @@ private:
         std::vector<std::pair<Kernel*, ScratchpadBindingHandle*>> bindings;
     };
     // Reconstructed from binding metadata; used consistently for registration and allocation.
-    std::vector<ScratchpadAllocationGroup> scratchpad_allocation_groups() const;
+    std::vector<ScratchpadAllocationGroup> scratchpad_allocation_groups();
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;

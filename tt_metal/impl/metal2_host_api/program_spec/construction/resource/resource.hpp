@@ -121,6 +121,10 @@ DataflowBufferHandles RegisterDataflowBuffers(
     const KernelRiscMaskMap& kernel_to_risc_mask,
     detail::ProgramImpl& program_impl);
 
+// Check that assigned DFB slots support each node's configuration and each kernel's metadata.
+void ValidateDFBDeviceSlots(
+    const ProgramSpec& spec, const CollectedSpecData& collected, const DFBNameToSlotMap& slots, const Hal& hal);
+
 void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_id, detail::ProgramImpl& program_impl);
 
 // Register DFBs with a Kernel

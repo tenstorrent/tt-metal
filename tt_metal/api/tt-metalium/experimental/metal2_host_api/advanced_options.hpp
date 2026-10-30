@@ -216,12 +216,12 @@ struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
 
     // A DFB is a software FIFO. By default, a DFB instance (i.e., a DFB on a
-    // particular node) with an endpoint must have exactly one producer kernel instance and exactly
-    // one consumer kernel instance. Reserved nodes with neither endpoint are permitted.
+    // particular node) must have exactly one producer kernel instance and exactly
+    // one consumer kernel instance.
     //
     // This invariant holds at the INSTANCE level; a *DFBSpec* (spanning multiple
     // nodes) can have more than one KernelSpec producer or more consumer bindings,
-    // as long as every reserved node with an endpoint has one producer and one consumer.
+    // as long as every reserved node has one producer and one consumer.
     // (This enables, for example, a grid-spanning compute kernel to be fed data by
     // different types of producer kernels on different nodes.)
     //
@@ -279,11 +279,12 @@ struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
 
     // Replace placement inferred from the endpoint kernels. Must be non-empty and within
-    // the logical worker grid; may omit endpoint nodes and include nodes with no endpoint.
+    // the logical worker grid; may omit endpoint nodes. Every reserved node must have both endpoint roles.
     // Placement is fixed for the Program lifetime; per-node size and kernel placement are unchanged.
-    // Reserved nodes must have both endpoint roles or neither. Existing endpoint configuration
-    // and allow_instance_multi_binding restrictions still apply.
+    // Existing endpoint configuration and allow_instance_multi_binding restrictions still apply.
     // Cannot be combined with borrowed_from or prefetcher_pipe_relays.
+    // DFBs sharing a device slot on a kernel's nodes must have compatible format, tile, and unpack metadata.
+    // On Quasar, assigned device slots must be contiguous from zero on every reserved node.
     //
     // CAUTION: Access outside this set is undefined behavior. Kernel code must guard
     // such accesses; the framework adds no device-side checks. Unset preserves inferred placement.

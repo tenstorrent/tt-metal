@@ -2244,7 +2244,7 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-std::vector<detail::ProgramImpl::ScratchpadAllocationGroup> detail::ProgramImpl::scratchpad_allocation_groups() const {
+std::vector<detail::ProgramImpl::ScratchpadAllocationGroup> detail::ProgramImpl::scratchpad_allocation_groups() {
     std::vector<ScratchpadAllocationGroup> groups;
     std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, ScratchpadAllocationGroup> shared;
     for (const auto& kernels_of_core_type : kernels_) {
@@ -2261,7 +2261,7 @@ std::vector<detail::ProgramImpl::ScratchpadAllocationGroup> detail::ProgramImpl:
             }
         }
     }
-    // Preserve the existing allocation order: private bindings first, shared specs second.
+    // Allocate private bindings first, then shared specs.
     for (auto& [identifier, group] : shared) {
         groups.push_back(std::move(group));
     }
@@ -2272,8 +2272,7 @@ void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     // Register precisely the ranges that allocation will request, including override-only
     // nodes, before preparing bases/seals and allocating DFBs.
     for (const auto& group : scratchpad_allocation_groups()) {
-        // Retain the individual binding ranges as well as their union, matching the
-        // existing registration behavior when no override is supplied.
+        // Register each binding range and the union used by its allocation group.
         for (const auto& [kernel, handle] : group.bindings) {
             register_ephemeral_allocation(this->dfb_allocation_metadata_, handle->placement);
         }
@@ -2322,7 +2321,8 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     for (const auto& group : scratchpad_allocation_groups()) {
         const auto size_bytes = group.bindings.front().second->size_bytes;
-        const DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, group.cores, size_bytes, alignment);
+        const DeviceAddr addr =
+            allocate_program_resource(this->dfb_allocation_metadata_, group.cores, size_bytes, alignment);
         for (const auto& [kernel, handle] : group.bindings) {
             set_address_on_scratchpad(addr, *handle, *kernel);
         }
@@ -2403,7 +2403,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             continue;
         }
 
-        const uint64_t computed_addr = allocate_dfb(
+        const uint64_t computed_addr = allocate_circular_buffer(
             this->cb_allocation_metadata_,
             circular_buffer->core_ranges(),
             circular_buffer->size(),

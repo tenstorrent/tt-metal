@@ -183,9 +183,12 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnInconsistentBorrowedFrom) {
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsAliasesWithDifferentEndpointNodes) {
-    // Aliased DFBs with different endpoint nodes and identical placement overrides are accepted.
+    // Kernels on different node sets can alias DFBs on their common endpoint node.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeSeparateDFBEndpointPairs(tt::ARCH::QUASAR);
+    spec.kernels[3].hw_config = DataMovementHardwareConfig{};
+    spec.work_units.push_back(MakeMinimalWorkUnit(
+        "common", NodeCoord{2, 0}, {"dm_kernel", "compute_kernel", "other_producer", "other_consumer"}));
     spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
     spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
     for (auto& dfb : spec.dataflow_buffers) {
@@ -198,6 +201,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsDifferentAliasNodes) {
     // Aliased DFBs with different reserved nodes are rejected even when their endpoint nodes match.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, 2);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
     spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
     spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
     spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));

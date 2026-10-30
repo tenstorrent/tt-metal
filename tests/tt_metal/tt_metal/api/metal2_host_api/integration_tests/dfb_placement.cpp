@@ -114,7 +114,7 @@ ProgramRunArgs MakeGuardedDFBTransferArgsForTest(uint32_t pattern) {
 
 void ClearDFBReportsForTest(distributed::MeshDevice& device) {
     std::vector<uint32_t> zeros(dfb_report_words, 0);
-    for (uint32_t x = 0; x < 3; ++x) {
+    for (uint32_t x = 0; x < 2; ++x) {
         slow_dispatch::WriteToL1(device, {x, 0}, dfb_report_address, zeros);
     }
 }
@@ -145,14 +145,14 @@ uint32_t DFBStorageAddressForTest(const Program& program) {
     return program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("buffer"))->uniform_alloc_addr();
 }
 
-void FillExtraDFBStorageForTest(distributed::MeshDevice& device, const Program& program) {
+void FillExcludedDFBStorageForTest(distributed::MeshDevice& device, const Program& program) {
     std::vector<uint32_t> sentinel(dfb_storage_bytes / sizeof(uint32_t), dfb_sentinel);
-    slow_dispatch::WriteToL1(device, {2, 0}, DFBStorageAddressForTest(program), sentinel);
+    slow_dispatch::WriteToL1(device, {1, 0}, DFBStorageAddressForTest(program), sentinel);
 }
 
-std::vector<uint32_t> ReadExtraDFBStorageForTest(distributed::MeshDevice& device, const Program& program) {
+std::vector<uint32_t> ReadExcludedDFBStorageForTest(distributed::MeshDevice& device, const Program& program) {
     std::vector<uint32_t> storage;
-    slow_dispatch::ReadFromL1(device, {2, 0}, DFBStorageAddressForTest(program), dfb_storage_bytes, storage);
+    slow_dispatch::ReadFromL1(device, {1, 0}, DFBStorageAddressForTest(program), dfb_storage_bytes, storage);
     return storage;
 }
 
@@ -161,11 +161,11 @@ namespace {
 
 using test_helpers::ExpectedDFBReportForTest;
 using test_helpers::ExpectedDFBReportsForTest;
-using test_helpers::FillExtraDFBStorageForTest;
+using test_helpers::FillExcludedDFBStorageForTest;
 using test_helpers::MakeGuardedDFBTransferArgsForTest;
 using test_helpers::MakeGuardedDFBTransferSpecForTest;
 using test_helpers::ReadDFBReportForTest;
-using test_helpers::ReadExtraDFBStorageForTest;
+using test_helpers::ReadExcludedDFBStorageForTest;
 
 template <typename DispatchFixture>
 class DFBPlacementHardwareTest : public DispatchFixture {
@@ -180,8 +180,8 @@ protected:
         if (fixture_device().arch() != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Requires Wormhole hardware";
         }
-        if (fixture_device().compute_with_storage_grid_size().x < 3) {
-            GTEST_SKIP() << "Requires three worker columns";
+        if (fixture_device().compute_with_storage_grid_size().x < 2) {
+            GTEST_SKIP() << "Requires two worker columns";
         }
         test_helpers::ClearDFBReportsForTest(fixture_device());
     }
@@ -211,7 +211,7 @@ TYPED_TEST(DFBPlacementHardwareTest, GuardedAccessSkipsExcludedNode) {
     // Endpoint kernels transfer data on a reserved node and skip DFB access on an excluded node.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = MakeGuardedDFBTransferSpecForTest();
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(std::vector<CoreCoord>{{0, 0}, {2, 0}});
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
     auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
     Program& program = workload.get_programs().begin()->second;
     SetProgramRunArgs(program, MakeGuardedDFBTransferArgsForTest(0x100));
@@ -220,25 +220,24 @@ TYPED_TEST(DFBPlacementHardwareTest, GuardedAccessSkipsExcludedNode) {
     EXPECT_EQ(ReadDFBReportForTest(fixture_device, {1, 0}), ExpectedDFBReportForTest(0, false));
 }
 
-TYPED_TEST(DFBPlacementHardwareTest, ReservationOnlyNodeRemainsUntouched) {
-    // A node with only a DFB reservation keeps its backing storage and kernel report unchanged.
+TYPED_TEST(DFBPlacementHardwareTest, ExcludedNodeStorageRemainsUntouched) {
+    // A kernel on an excluded node leaves memory at the DFB address unchanged.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = MakeGuardedDFBTransferSpecForTest();
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(std::vector<CoreCoord>{{0, 0}, {2, 0}});
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
     auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
     Program& program = workload.get_programs().begin()->second;
     SetProgramRunArgs(program, MakeGuardedDFBTransferArgsForTest(0x100));
-    FillExtraDFBStorageForTest(fixture_device, program);
+    FillExcludedDFBStorageForTest(fixture_device, program);
     this->EnqueueFromTestFixture(workload);
-    EXPECT_EQ(ReadExtraDFBStorageForTest(fixture_device, program), std::vector<uint32_t>(16, 0xDEADBEEF));
-    EXPECT_EQ(ReadDFBReportForTest(fixture_device, {2, 0}), std::vector<uint32_t>(10, 0));
+    EXPECT_EQ(ReadExcludedDFBStorageForTest(fixture_device, program), std::vector<uint32_t>(16, 0xDEADBEEF));
 }
 
 TYPED_TEST(DFBPlacementHardwareTest, RepeatedEnqueueTransfersNewData) {
     // Repeated enqueue transfers each new pattern through the same DFB placement override.
     distributed::MeshDevice& fixture_device = this->fixture_device();
     auto spec = MakeGuardedDFBTransferSpecForTest();
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(std::vector<CoreCoord>{{0, 0}, {2, 0}});
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
     auto workload = MakeMeshWorkloadFromSpec(fixture_device, spec);
     Program& program = workload.get_programs().begin()->second;
     std::vector<std::vector<uint32_t>> reports;

@@ -104,15 +104,16 @@ void ValidateDFBSpec(
     if (dfb.advanced_options.override_placement) {
         TT_FATAL(
             !dfb.advanced_options.override_placement->empty(),
-            "DFB '{}' has an empty override_placement",
+            "DataflowBufferSpec '{}' has an empty override_placement",
             dfb.unique_id);
         TT_FATAL(
             !dfb.borrowed_from.has_value(),
-            "DFB '{}' sets both override_placement and borrowed_from; this combination is not supported",
+            "DataflowBufferSpec '{}' sets both override_placement and borrowed_from; this combination is not supported",
             dfb.unique_id);
         TT_FATAL(
             dfb.advanced_options.prefetcher_pipe_relays.empty(),
-            "DFB '{}' sets both override_placement and prefetcher_pipe_relays; this combination is not supported",
+            "DataflowBufferSpec '{}' sets both override_placement and prefetcher_pipe_relays; this combination is not "
+            "supported",
             dfb.unique_id);
     }
 
@@ -491,8 +492,7 @@ void ValidateDFBEndpointCoverage(const DataflowBufferSpec& dfb, const CollectedS
     const bool allow_multi = dfb.advanced_options.allow_instance_multi_binding;
 
     // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
-    // every reserved node with an endpoint must run exactly one producer instance and exactly one
-    // consumer instance. Reserved nodes with neither endpoint are permitted. Tally instances on
+    // every reserved node must run exactly one producer instance and exactly one consumer instance. Tally instances on
     // the effective placement: this checks within-role disjointness (a node with >1 same-role instance)
     // and cross-role coverage (a node with one role but not the other), and reports the offending node in
     // node terms rather than WorkUnitSpec terms. It counts actual node occupancy, so overlapping
@@ -503,15 +503,9 @@ void ValidateDFBEndpointCoverage(const DataflowBufferSpec& dfb, const CollectedS
     const auto producers_on_node = CollectDFBEndpointsByNode(endpoints.producers, collected, placement);
     const auto consumers_on_node = CollectDFBEndpointsByNode(endpoints.consumers, collected, placement);
 
-    // Footprint = every reserved node hosting any instance of either role. A std::set gives deterministic
-    // iteration order, hence deterministic error messages.
-    std::set<NodeCoord> footprint;
-    for (const auto& [node, kernels] : producers_on_node) {
-        footprint.insert(node);
-    }
-    for (const auto& [node, kernels] : consumers_on_node) {
-        footprint.insert(node);
-    }
+    // A sorted node set gives deterministic error messages.
+    const auto nodes = corerange_to_cores(placement);
+    const std::set<NodeCoord> footprint(nodes.begin(), nodes.end());
 
     auto names_at = [](const DFBEndpointsByNode& on_node, const NodeCoord& node) -> std::string {
         auto it = on_node.find(node);
@@ -539,7 +533,9 @@ void ValidateDFBEndpointCoverage(const DataflowBufferSpec& dfb, const CollectedS
             continue;
         }
         std::string_view guidance;
-        if (num_producers == 0) {
+        if (num_producers == 0 && num_consumers == 0) {
+            guidance = "This node has no producer or consumer; remove it from the DFB placement.";
+        } else if (num_producers == 0) {
             guidance =
                 "This node has a consumer but no producer — ensure a producer kernel covers it "
                 "(via its WorkUnitSpec membership).";
@@ -659,11 +655,11 @@ void ValidateDFBRoleProcessors(const DataflowBufferSpec& dfb, const CollectedSpe
 // Validate local DFB endpoint placement and multi-binding consistency.
 //
 // The hardware invariant is local: a local DFB lives in shared SRAM on each node, so at every
-// reserved node with an endpoint, exactly one producer kernel instance and exactly one
-// consumer kernel instance must run. Reserved nodes with neither endpoint are permitted. Metal 2.0 permits
+// reserved node, exactly one producer kernel instance and exactly one consumer kernel instance must run.
+// Metal 2.0 permits
 // multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) per DFB, so we enforce that invariant directly
 // as a per-node census, plus per-role uniformity of the binding-site config:
-//   1./2. Placement: every reserved node with an endpoint runs exactly one producer instance and exactly
+//   1./2. Placement: every reserved node runs exactly one producer instance and exactly
 //         one consumer instance (the per-node census). This subsumes both "no node has two
 //         same-role instances" and "producer and consumer node coverage coincide".
 //   3. All bindings on the same role have matching `access_pattern` (the DFB scheduler

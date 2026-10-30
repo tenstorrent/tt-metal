@@ -136,6 +136,77 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
 
 namespace {
 
+void ValidateDFBSlotFormats(
+    const KernelSpec& kernel,
+    const ProgramSpec& spec,
+    const CollectedSpecData& collected,
+    const DFBNameToSlotMap& slots) {
+    const auto& kernel_nodes = collected.kernel_node_set.at(kernel.unique_id);
+    std::unordered_map<uint32_t, const DataflowBufferSpec*> formats;
+    // JIT metadata includes every DFB on the kernel's nodes, including unbound DFBs.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (!dfb.data_format_metadata || *dfb.data_format_metadata == DataFormat::Invalid ||
+            !collected.dfb_node_set.at(dfb.unique_id).intersects(kernel_nodes)) {
+            continue;
+        }
+        const auto slot = slots.at(dfb.unique_id);
+        const auto [it, inserted] = formats.try_emplace(slot, &dfb);
+        const auto& first = *it->second;
+        TT_FATAL(
+            inserted || (first.data_format_metadata == dfb.data_format_metadata &&
+                         first.tile_format_metadata.value_or(Tile{}) == dfb.tile_format_metadata.value_or(Tile{})),
+            "KernelSpec '{}' receives conflicting format or tile metadata from DataflowBufferSpecs '{}' and '{}' "
+            "on device slot {}",
+            kernel.unique_id,
+            first.unique_id,
+            dfb.unique_id,
+            slot);
+    }
+}
+
+void ValidateDFBSlotUnpackModes(const KernelSpec& kernel, const DFBNameToSlotMap& slots) {
+    if (!kernel.is_compute_kernel()) {
+        return;
+    }
+    const auto& modes = std::get<ComputeHardwareConfig>(kernel.hw_config).unpack_modes;
+    std::unordered_map<uint32_t, std::pair<DFBSpecName, UnpackMode>> modes_by_slot;
+    for (const auto& binding : kernel.dfb_bindings) {
+        const auto mode_it = modes.find(binding.dfb_spec_name);
+        if (binding.endpoint_type != DFBEndpointType::CONSUMER && mode_it == modes.end()) {
+            continue;
+        }
+        const auto mode = mode_it == modes.end() ? UnpackMode::UnpackToSrc : mode_it->second;
+        const auto slot = slots.at(binding.dfb_spec_name);
+        const auto [it, inserted] = modes_by_slot.try_emplace(slot, binding.dfb_spec_name, mode);
+        TT_FATAL(
+            inserted || it->second.second == mode,
+            "KernelSpec '{}' has conflicting unpack modes for DataflowBufferSpecs '{}' and '{}' on device slot {}",
+            kernel.unique_id,
+            it->second.first,
+            binding.dfb_spec_name,
+            slot);
+    }
+}
+
+void ValidateContiguousDFBSlots(
+    const ProgramSpec& spec, const CollectedSpecData& collected, const DFBNameToSlotMap& slots) {
+    std::map<NodeCoord, std::set<uint32_t>> slots_by_node;
+    for (const auto& dfb : spec.dataflow_buffers) {
+        for (const auto& node : corerange_to_cores(collected.dfb_node_set.at(dfb.unique_id))) {
+            slots_by_node[node].insert(slots.at(dfb.unique_id));
+        }
+    }
+    for (const auto& [node, node_slots] : slots_by_node) {
+        TT_FATAL(
+            *node_slots.rbegin() == node_slots.size() - 1,
+            "Quasar requires contiguous DFB device slots starting at 0 on node {}; "
+            "{} DFBs use a highest slot of {}. Change DFB placement or declaration order.",
+            node.str(),
+            node_slots.size(),
+            *node_slots.rbegin());
+    }
+}
+
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
@@ -243,6 +314,17 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 }
 
 }  // namespace
+
+void ValidateDFBDeviceSlots(
+    const ProgramSpec& spec, const CollectedSpecData& collected, const DFBNameToSlotMap& slots, const Hal& hal) {
+    if (hal.has_tile_counter_registers()) {
+        ValidateContiguousDFBSlots(spec, collected, slots);
+    }
+    for (const auto& kernel : spec.kernels) {
+        ValidateDFBSlotFormats(kernel, spec, collected, slots);
+        ValidateDFBSlotUnpackModes(kernel, slots);
+    }
+}
 
 DataflowBufferHandles RegisterDataflowBuffers(
     const ProgramSpec& spec,

@@ -18,6 +18,7 @@ ProgramResources RegisterResources(
     ProgramResources resources;
     resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl);
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);
+    ValidateDFBDeviceSlots(spec, collected, resources.dfbs.slot, metal_env.get_hal());
 
     // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register
     // relay DFBs against them, and record each parameter's placement for SetProgramRunArgs. Must
