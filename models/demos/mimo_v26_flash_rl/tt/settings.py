@@ -45,11 +45,12 @@ TABLE = {
         "0.88, 160 0.87, 320 0.99, 640 0.94 (C.attn_dense.attention)",
     ),
     "SDPA_EXACT_EXP": Setting(
-        True,
+        False,
         (True, False),
         "full-attention ring SDPA softmax exp: True = accurate exp through the fork ttnn.bringup."
         "ring_joint_scaled_dot_product_attention(exact_exp=True); False = the source op's Schraudolph approximation "
-        "(layer 0: output column rel up to 0.12) (C.attn_dense.attention)",
+        "(layer 0: output column rel up to 0.12) (C.attn_dense.attention). Off: the pinned tt-metal has no exact_exp "
+        "variant; the e2e test passes with the stock op (run 20261030-132711-mimo-e2e-noexactexp)",
     ),
     "SDPA_SEGMENTED": Setting(
         True,
@@ -193,7 +194,7 @@ MAX_PRECISION = {
     "ATTN_FP32_ACC": True,
     "ATTN_OUT_FP32": True,
     "SDPA_FIDELITY": "HiFi4",
-    "SDPA_EXACT_EXP": True,
+    "SDPA_EXACT_EXP": False,  # the pinned tt-metal has no ttnn.bringup fork
     "SWA_OUT_FP32": True,
     "QKV_FP32": True,
     "SWA_QKV_FP32": True,
