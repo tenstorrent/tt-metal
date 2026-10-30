@@ -112,7 +112,7 @@ def test_splitfree_matches_torch(mesh_device, device_params, S, reset_seeds):
             cur_pos[1] = 0  # a one-token row
             cur_pos[B - 1] = -1  # a padding row
         tables = case.random_tables(B, seed=B)
-        out = case.run(*case.inputs(B, cur_pos, tables))
+        out = case.run(*case.inputs(B, cur_pos, tables, q))
         got = _to_rows(out, B, 4)
         ref = case.golden(q, cur_pos, tables)[0]
         live = [b for b in range(B) if cur_pos[b] >= 0]
@@ -143,7 +143,7 @@ def test_splitfree_gqa_and_window(mesh_device, device_params, H_q, H_kv, window,
     else:
         tables = case.random_tables(B, seed=7)
     kw = dict(num_kv_heads=H_kv, block_size=BLOCK, sliding_window=window, cache_position_modulo=modulo)
-    out = case.run(*case.inputs(B, cur_pos, tables), **kw)
+    out = case.run(*case.inputs(B, cur_pos, tables, q), **kw)
     got = _to_rows(out, B, H_q)
     ref = case.golden(q, cur_pos, tables, **kw)[0]
     live = [b for b in range(B) if cur_pos[b] >= 0]
@@ -169,7 +169,7 @@ def test_splitfree_row_bits_independent_of_batch_and_grid(mesh_device, device_pa
         cur_pos[0] = S - 1
         tables = case.random_tables(B, seed=100 + B)
         tables[0] = table0
-        out = case.run(*case.inputs(B, cur_pos, tables))
+        out = case.run(*case.inputs(B, cur_pos, tables, q))
         bits[B] = _to_rows(out, B, 4).view(torch.int16).clone()[0]
         out.deallocate(True)
     monkeypatch.setenv("GEMMA4_TEST_GRID", "8x8")
@@ -203,7 +203,7 @@ def test_splitfree_timing_vs_stock(mesh_device, device_params, reset_seeds):
         cur_pos = torch.full((B,), -1)
         cur_pos[0] = S - 1
         tables = table.unsqueeze(0).repeat(B, 1)
-        tt_q, tt_pos, tt_tab = case.inputs(B, cur_pos, tables)
+        tt_q, tt_pos, tt_tab = case.inputs(B, cur_pos, tables, q)
 
         def custom():
             return case.run(tt_q, tt_pos, tt_tab)
