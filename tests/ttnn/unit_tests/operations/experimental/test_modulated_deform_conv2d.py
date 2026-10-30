@@ -60,6 +60,12 @@ def random_inputs(batch, in_h, in_w, channels, c_out, kernel_size, stride, paddi
     return x, offset, logits, weight, bias
 
 
+def grid_shard_rows(device, rows):
+    """Rows per core for ``rows`` height-sharded evenly over the whole grid in whole 32-row blocks."""
+    grid = device.compute_with_storage_grid_size()
+    return math.ceil(rows / (grid.x * grid.y) / 32) * 32
+
+
 def height_sharded(device, tensor, shard_rows):
     """``tensor`` (B, H, W, C) height-sharded in L1 over the whole grid, ``shard_rows`` rows per core."""
     batch, height, width, channels = tensor.shape
@@ -73,26 +79,33 @@ def height_sharded(device, tensor, shard_rows):
     return ttnn.reshape(sharded, (batch, height, width, channels))
 
 
-def run_conv(device, x, offset, logits, weight, bias, kernel_size, stride, padding, dilation, relu, shard_rows=None):
-    """The op's output as a (B*Ho*Wo, C_out) float64 tensor; ``bias`` may be None. With
+def device_inputs(device, x, offset, logits, weight, bias, shard_rows=None):
+    """The op's input, offset_mask, weight and bias on ``device``; ``bias`` may be None. With
     ``shard_rows``, the input goes height-sharded with that many rows per core."""
     row_major = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     tiled = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     tt_x = row_major(x) if shard_rows is None else height_sharded(device, row_major(x), shard_rows)
-    out = ttnn.experimental.modulated_deform_conv2d(
-        tt_x,
-        row_major(torch.cat([offset, logits], dim=-1)),
-        tiled(weight),
-        None if bias is None else tiled(bias),
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        relu=relu,
+    return tt_x, row_major(torch.cat([offset, logits], dim=-1)), tiled(weight), None if bias is None else tiled(bias)
+
+
+def call_conv(inputs, kernel_size, stride, padding, dilation, relu):
+    return ttnn.experimental.modulated_deform_conv2d(
+        *inputs, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, relu=relu
     )
+
+
+def output_rows(out, offset, weight):
+    """The op's output as a (B*Ho*Wo, C_out) float64 tensor."""
     rows = offset.shape[0] * offset.shape[1] * offset.shape[2]
     assert tuple(out.shape) == (1, 1, rows, weight.shape[1])
     return ttnn.to_torch(out).double().reshape(rows, -1)
+
+
+def run_conv(device, x, offset, logits, weight, bias, kernel_size, stride, padding, dilation, relu, shard_rows=None):
+    """The op's output as a (B*Ho*Wo, C_out) float64 tensor; see ``device_inputs``."""
+    inputs = device_inputs(device, x, offset, logits, weight, bias, shard_rows)
+    out = call_conv(inputs, kernel_size, stride, padding, dilation, relu)
+    return output_rows(out, offset, weight)
 
 
 def assert_close(expected, actual):
@@ -155,8 +168,7 @@ def test_modulated_deform_conv2d_sharded_input(device, batch, in_h, in_w, channe
     are read from changes. ``shard_rows`` None shards the rows as the model does, evenly over the
     whole grid in whole 32-row blocks."""
     if shard_rows is None:
-        grid = device.compute_with_storage_grid_size()
-        shard_rows = math.ceil(batch * in_h * in_w / (grid.x * grid.y) / 32) * 32
+        shard_rows = grid_shard_rows(device, batch * in_h * in_w)
     conv = ((3, 3), (1, 1), (1, 1), (1, 1))
     x, offset, logits, weight, bias = random_inputs(batch, in_h, in_w, channels, c_out, *conv, 4.0)
     interleaved = run_conv(device, x, offset, logits, weight, bias, *conv, True)
@@ -197,6 +209,49 @@ def test_modulated_deform_conv2d_matches_torchvision(device):
     weight = torch_weight.permute(2, 3, 1, 0).reshape(-1, torch_weight.shape[0])
     actual = run_conv(device, x, offset, logits, weight, bias, kernel_size, stride, padding, dilation, False)
     assert_close(expected.permute(0, 2, 3, 1).reshape(actual.shape), actual)
+
+
+@pytest.mark.parametrize("sharded", [False, True])
+def test_modulated_deform_conv2d_cache_hit_fresh_buffers(device, sharded):
+    """A second call of the same specification on other tensors, the first call's still live, reuses
+    the cached program and reads and writes the new tensors' buffers."""
+    conv = ((3, 3), (1, 1), (1, 1), (1, 1))
+    cases = [random_inputs(1, 16, 20, 64, 64, *conv, 2.0) for _ in range(2)]
+    shard_rows = grid_shard_rows(device, 16 * 20) if sharded else None
+    inputs = [device_inputs(device, *case, shard_rows) for case in cases]
+    outs, entries = [], []
+    for case_inputs in inputs:
+        outs.append(call_conv(case_inputs, *conv, True))
+        entries.append(device.num_program_cache_entries())
+    assert entries[1] == entries[0], f"the second call added {entries[1] - entries[0]} program cache entries"
+    for (x, offset, logits, weight, bias), out in zip(cases, outs):
+        expected = (reference_columns(x, offset, logits.sigmoid(), *conv) @ weight + bias).clamp(min=0)
+        assert_close(expected, output_rows(out, offset, weight))
+
+
+def test_modulated_deform_conv2d_less_l1_misses_cache(device):
+    """Less free L1 gives the op a smaller budget, which keys the program cache: the program sized for
+    more L1 is not reused, and the new one gives the same output."""
+    conv = ((3, 3), (1, 1), (1, 1), (1, 1))
+    x, offset, logits, weight, bias = random_inputs(1, 16, 20, 64, 64, *conv, 2.0)
+    inputs = device_inputs(device, x, offset, logits, weight, bias)
+    first = output_rows(call_conv(inputs, *conv, True), offset, weight)
+    entries = device.num_program_cache_entries()
+    # 128 KB per L1 bank, several times the budget's granule, written from the host so that no
+    # program of its own enters the cache.
+    grid = device.compute_with_storage_grid_size()
+    channels = 1024
+    filler = ttnn.from_torch(
+        torch.zeros(1, 1, 128 * 1024 * grid.x * grid.y // (channels * 2), channels),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    out = call_conv(inputs, *conv, True)
+    assert device.num_program_cache_entries() > entries, "the smaller budget reused the cached program"
+    assert torch.equal(output_rows(out, offset, weight), first)
+    ttnn.deallocate(filler)
 
 
 def test_modulated_deform_conv2d_l1_too_small(device, expect_error):
