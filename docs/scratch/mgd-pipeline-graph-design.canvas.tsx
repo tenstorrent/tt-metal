@@ -971,8 +971,7 @@ function BindingCompare() {
           <TwoMesh labels={{ a0: "s0", a1: "s1", b0: "s3", b1: "s2" }} cables={proposed} />
           <Text tone="secondary">
             R = one entry per crossing, holding every cable between its two slices: chips 1 and 0 for s3 {">"} s0, chips 2
-            and 3 for s1 {">"} s2, the resolver&apos;s choice first. Both phases record all four. Phase 0 binds one channel of each
-            crossing (chip 1 and chip 2, or the other path when one cannot be placed), then today&apos;s phases fill whatever
+            and 3 for s1 {">"} s2, the resolver&apos;s choice first. Both phases record all four. Phase 0 binds min_channels of each crossing (chip 1 and chip 2, or the other path when one cannot be placed), then today&apos;s phases fill whatever
             budget is left. Same count, different cables, and the ring closes (Case A).
           </Text>
         </Stack>
@@ -1070,6 +1069,17 @@ struct PipelinePlacement {
                                                          // inside a mesh
 };
 
+// P6: one crossing, a pair of stage positions on two meshes that pipeline edges join, and what it needs bound.
+struct RequiredCrossing {
+    std::string pipeline;
+    std::pair<std::string, std::string> stages;          // as in resolved_edges; the first stage's mesh is meshes.first
+    std::pair<MeshId, MeshId> meshes;
+    std::uint32_t min_channels = 1;                      // pipeline edges between the two stages, either direction:
+                                                         // a repeated edge or a loopback is another channel (Tier B)
+    std::vector<tt::tt_metal::ExitNodeConnection> channels;   // every channel of every link between the two
+                                                         // positions, the resolver's chip pair first
+};
+
 // One carve, resolved, its channels recorded and checked. TopologyMappingResult::pipeline keeps the accepted one.
 struct PipelineLayoutResult {
     bool success = false;
@@ -1077,10 +1087,8 @@ struct PipelineLayoutResult {
     std::string error_message;
     std::chrono::microseconds solve_time{};              // the solver's elapsed_time; feeds pipeline_solve_seconds
     std::map<std::string, PipelinePlacement> pipelines;  // by pipeline name, when success
-    std::vector<std::vector<tt::tt_metal::ExitNodeConnection>> required_links;   // P6, R: one entry per crossing (a
-                                                         // pair of stage positions on two meshes), every channel that
-                                                         // can carry it, the resolver's chip pair first; phase 0 binds
-                                                         // at least one of each entry (P9)
+    std::vector<RequiredCrossing> required_links;        // P6, R: one entry per crossing; phase 0 binds at least
+                                                         // min_channels of each, more if the budget allows (P9)
 };
 
 // --- the pipeline placement session (P5): the pipeline twin of SatPlacementEnumerationSession ---
@@ -1108,9 +1116,10 @@ public:
     ~PipelinePlacementEnumerationSession();
 
     // Solves for the next carve (never one solved before), runs the resolver on it once per pipeline, records the
-    // channels that can carry every crossing (R) and checks the crossings against each connection's demand. success = false with
-    // failure_stage pipeline_carve (no carve left, a pre-check, a stage with no position, the conflict cap),
-    // pipeline_layout (the resolver threw on this carve) or pipeline_binding (more crossings than a demand).
+    // channels that can carry every crossing and how many each needs (R), and checks them against each connection's
+    // demand. success = false with failure_stage pipeline_carve (no carve left, a pre-check, a stage with no position,
+    // the conflict cap), pipeline_layout (the resolver threw on this carve) or pipeline_binding (a crossing with fewer
+    // channels than it needs, or crossings that need more than a connection's demand).
     PipelineLayoutResult next();
 
 private:
@@ -1118,7 +1127,8 @@ private:
     struct ResolverInputs {
         std::vector<PipelineStageNode> stages;                    // in stage_order
         std::vector<std::string> stage_order;                     // topological_sort of the stage ids as text
-        std::vector<::tt::tt_fabric::EdgeInputTuple> edges;       // (src, dst, dst in src's loopback_to)
+        std::vector<::tt::tt_fabric::EdgeInputTuple> edges;       // (src, dst, dst in src's loopback_to), every
+                                                                  // MGD edge, repeated ones included
         std::map<std::string, std::uint32_t> stage_chip_counts;   // shape.mesh_size()
         std::map<std::string, std::uint32_t> capacity_overrides;  // blaze's core defaults
     };
@@ -1134,17 +1144,16 @@ private:
         const LogicalMultiMeshGraph& logical, const tt::tt_metal::PhysicalSystemDescriptor& psd,
         const TopologyMappingResult& full) const;
 
-    // P6: the crossings, per mesh pair (lower id first): position pairs, lower index first. Each needs one bound
-    // channel.
-    using Crossings = std::map<std::pair<MeshId, MeshId>, std::set<std::pair<std::size_t, std::size_t>>>;
-    // P6: for one pipeline on the carve (positions in submesh order), fills placement.edge_channels and adds an R
-    // entry for each crossing R does not hold yet.
-    void record_channels(PipelinePlacement& placement,
+    // P6: for one pipeline on the carve (positions in submesh order), fills placement.edge_channels and adds one R
+    // entry per crossing, with its min_channels counted from in.edges.
+    void record_channels(const std::string& pipeline,
+                         const ResolverInputs& in,
+                         PipelinePlacement& placement,
                          const std::vector<std::size_t>& positions,
-                         std::vector<std::vector<tt::tt_metal::ExitNodeConnection>>& required_links,
-                         Crossings& crossings) const;
-    // P6: the first mesh pair with more crossings than its demand (strict + relaxed), as a reason.
-    std::optional<std::string> first_over_demand(const Crossings& crossings) const;
+                         std::vector<RequiredCrossing>& required_links) const;
+    // P6: the first crossing with fewer channels than its min_channels, or mesh pair whose crossings need more than
+    // its demand (strict + relaxed), as a reason.
+    std::optional<std::string> first_over_demand(const std::vector<RequiredCrossing>& required_links) const;
 
     // Position i is a rectangle of host slices on one mesh that some stage's dims fill exactly.
     std::vector<std::vector<::tt::tt_fabric::detail::InternalChip>> position_chips_;   // FabricNodeId, slot-local row and col
@@ -1849,8 +1858,8 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
     steps: [
       "Why the layout is not enough: GraphLayoutResult gives each edge's exit and entry chip (slot-local row and col, read back through node_to_submesh and submesh_chips), not its ETH channel. Two chips can share several channels, and phase 0 binds by channel (connection_hash). Two positions can be joined by several chip pairs too, and the resolver chose among exactly these links (position_links_), so any of them can carry the crossing: the session records all of them, the resolver's chip pair first. The resolver checked only its own choice; re-checking the others is open question 25.",
       "Constructor: channel_demand_, strict + relaxed per MGD connection. The channels come from P5's channels_ (the PSD's, per chip pair, lowest source channel first), so there is no second PSD read.",
-      "IMPORTANT: record_channels (private), per pipeline right after the resolver, with that pipeline's positions. Inside a mesh, edge_channels gets an empty entry (intra-mesh fabric; the pairing does not touch it). Across meshes, every channel of every link between the edge's two positions (position_links_ through channels_): the resolver's chip pair first, then the others in chip-id order (best tier first after P16), stored as is, so each std::hash is the pairing's connection_hash. R gets one entry per crossing (position pair, both directions), holding those channels.",
-      "first_over_demand (private): crossings per mesh pair <= channel_demand_, since each needs one bound channel; over demand clears the result and returns failure_stage pipeline_binding with the mesh pair.",
+      "IMPORTANT: record_channels (private), per pipeline right after the resolver, with that pipeline's positions. Inside a mesh, edge_channels gets an empty entry (intra-mesh fabric; the pairing does not touch it). Across meshes, every channel of every link between the edge's two positions (position_links_ through channels_): the resolver's chip pair first, then the others in chip-id order (best tier first after P16), stored as is, so each std::hash is the pairing's connection_hash. R gets one RequiredCrossing per crossing (position pair, both directions): those channels, the pipeline, stages and meshes, and min_channels, the edges between the two stages in in.edges, either direction (a repeated edge or a loopback is another channel).",
+      "first_over_demand (private): every crossing has at least min_channels channels between its positions, and the min_channels per mesh pair add up to at most channel_demand_ (Tier B's sum, on the carve); otherwise it clears the result and returns failure_stage pipeline_binding with the crossing or the mesh pair.",
       "Both phases: generate_rank_bindings (Phase 1) and TopologyMapper at control-plane init (Phase 2) run the same session on their own PSD, so both record edge_channels and R in their TopologyMappingResult, with no phase-specific code. Phase 1 keeps them for logs and tests and uses only the mapping; it writes no channel into the rank bindings. Phase 2 recomputes R and binds it (P9). Hashes are compared only within Phase 2: is_local, part of the hash, comes from host ids and can differ between a single-process Phase 1 PSD and Phase 2's.",
       "Not stored, derived when needed: each stage's host ranks and the idle ranks (the ranks at the mesh_host_grids_ coordinates its position covers, read from get_host_ranks, and the rest, computed by P12); the host I/O stage (layout.stage_order.front()).",
     ],
@@ -1876,8 +1885,7 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
 +    }
 
  // pipeline_builder.cpp, PipelinePlacementEnumerationSession::next, the resolver loop and after it
-+    // IMPORTANT: one R entry per crossing, holding every channel that can carry it; phase 0 binds one of each.
-+    Crossings crossings;
++    // IMPORTANT: one R entry per crossing: every channel that can carry it and how many it needs.
      for (const auto& [pipeline, in] : resolver_inputs_) {
          ...                                                            // positions, submesh_chips, the resolver (P5)
          } catch (const std::runtime_error& e) {
@@ -1885,10 +1893,10 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
 +            result.required_links.clear();
              ...
          }
-+        record_channels(placement, positions, result.required_links, crossings);
++        record_channels(pipeline, in, placement, positions, result.required_links);
          result.pipelines.emplace(pipeline, std::move(placement));
      }
-+    if (auto over = first_over_demand(crossings)) {
++    if (auto over = first_over_demand(result.required_links)) {
 +        result.pipelines.clear();
 +        result.required_links.clear();
 +        result.failure_stage = "pipeline_binding";
@@ -1904,13 +1912,15 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
 +// chose among exactly these), so every channel of every one is recorded: the resolver's chip pair first, then the
 +// others in chip-id order. C1 links only cabled chip pairs, so each lookup finds at least one channel.
 +void PipelinePlacementEnumerationSession::record_channels(
++    const std::string& pipeline,
++    const ResolverInputs& in,
 +    PipelinePlacement& placement,
 +    const std::vector<std::size_t>& positions,
-+    std::vector<std::vector<tt::tt_metal::ExitNodeConnection>>& required_links,
-+    Crossings& crossings) const {
++    std::vector<RequiredCrossing>& required_links) const {
 +    const auto chip = [&](std::size_t position, std::uint32_t row, std::uint32_t col) {
 +        return chip_at(position_chips_[position], row, col);
 +    };
++    std::set<std::pair<std::size_t, std::size_t>> recorded;     // position pairs, lower index first
 +    for (const ResolvedEdge& edge : placement.layout.resolved_edges) {
 +        const std::size_t p = positions.at(placement.layout.node_to_submesh.at(edge.src));
 +        const std::size_t q = positions.at(placement.layout.node_to_submesh.at(edge.dst));
@@ -1929,25 +1939,43 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
 +            }
 +        }
 +        placement.edge_channels.push_back(channels);
-+        if (crossings[ordered(exit.mesh_id, entry.mesh_id)].insert(ordered(p, q)).second) {
-+            required_links.push_back(std::move(channels));         // one R entry per crossing, both directions
++        if (recorded.insert(ordered(p, q)).second) {               // an edge and its loopback share one crossing
++            required_links.push_back(RequiredCrossing{
++                .pipeline = pipeline,
++                .stages = {edge.src, edge.dst},
++                .meshes = {exit.mesh_id, entry.mesh_id},
++                .min_channels = edges_between(in.edges, edge.src, edge.dst),
++                .channels = std::move(channels)});
 +        }
 +    }
 +}
 +
-+// A crossing needs one bound channel, so it counts once against the connection's channel count.
-+std::optional<std::string> PipelinePlacementEnumerationSession::first_over_demand(const Crossings& crossings) const {
-+    for (const auto& [meshes, position_pairs] : crossings) {
-+        if (const std::uint32_t allowed = channel_demand_.at(meshes); position_pairs.size() > allowed) {
-+            return fmt::format("meshes {} and {}: the layout crosses between them {} times, the MGD connection has {} "
-+                               "channels (strict + relaxed)", meshes.first, meshes.second, position_pairs.size(), allowed);
++// Each crossing needs min_channels bound between its two positions, and they all come out of the MGD connection's
++// count: the same sum Tier B checks per projection, here on the carve.
++std::optional<std::string> PipelinePlacementEnumerationSession::first_over_demand(
++    const std::vector<RequiredCrossing>& required_links) const {
++    std::map<std::pair<MeshId, MeshId>, std::uint32_t> needed;
++    for (const RequiredCrossing& crossing : required_links) {
++        if (crossing.channels.size() < crossing.min_channels) {
++            return fmt::format("pipeline '{}': stages {} and {} need {} channels and the carve joins their positions "
++                               "with {}", crossing.pipeline, crossing.stages.first, crossing.stages.second,
++                               crossing.min_channels, crossing.channels.size());
++        }
++        needed[ordered(crossing.meshes.first, crossing.meshes.second)] += crossing.min_channels;
++    }
++    for (const auto& [meshes, count] : needed) {
++        if (const std::uint32_t allowed = channel_demand_.at(meshes); count > allowed) {
++            return fmt::format("meshes {} and {}: the layout's crossings need {} channels, the MGD connection has {} "
++                               "(strict + relaxed)", meshes.first, meshes.second, count, allowed);
 +        }
 +    }
 +    return std::nullopt;
 +}
 
  // pipeline_builder.cpp, anonymous namespace
-+FabricNodeId chip_at(const std::vector<InternalChip>& chips, std::uint32_t row, std::uint32_t col);   // by slot-local row, col`,
++FabricNodeId chip_at(const std::vector<InternalChip>& chips, std::uint32_t row, std::uint32_t col);   // by slot-local row, col
++std::uint32_t edges_between(const std::vector<EdgeInputTuple>& edges, const std::string& a, const std::string& b);
++                                                                // either direction, repeats included (Tier B's count)`,
       },
     ],
     tests: [
@@ -1959,7 +1987,8 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
       "First carve passes the resolver on every benchmark case (the 101 of footprint_then_resolver).",
       "A slot spanning two host slices gets slot-local (row, col) starting at (0, 0); every crossing's edge_channels entry starts with the channels between the two ASICs its resolved edge names.",
       "Each R channel's connection_hash equals std::hash<ExitNodeConnection> of the PSD entry, and the hashes equal today's gather on the SC16 and galaxy PSDs.",
-            "An edge and its loopback over the same two positions list the same channels; R holds one entry and the demand check counts the crossing once.",
+            "An edge and its loopback over the same two positions list the same channels; R holds one entry with min_channels 2, and the demand check counts 2 (Tier B's count).",
+      "Two copies of one edge across meshes: min_channels 2; a carve whose two positions share 1 channel is rejected with pipeline_binding, naming the pipeline and stages.",
       "Two positions joined on chip 0 and chip 1 (the lowest-chip-id example): the crossing's entry holds both chip pairs' channels, the resolver's first; the demand check counts 1.",
       "Phase 1 and Phase 2 on the same machine: the same edge_channels by (ASIC, channel); the rank bindings hold no channel.",
       "A ring across two meshes over a count-1 connection: the layout crosses twice; next() returns pipeline_binding with the pair in error_message, and no pipelines.",
@@ -2041,12 +2070,12 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
  class TopologyMapper {
      ...
 +    const std::optional<PipelineLayoutResult>& get_pipeline_mapping() const { return pipeline_mapping_; }
-+    const std::vector<std::vector<tt::tt_metal::ExitNodeConnection>>& get_pipeline_required_links() const {
++    const std::vector<RequiredCrossing>& get_pipeline_required_links() const {
 +        return pipeline_required_links_;                                // every rank
 +    }
  private:
 +    std::optional<PipelineLayoutResult> pipeline_mapping_;             // rank 0, from mapping_result.pipeline
-+    std::vector<std::vector<tt::tt_metal::ExitNodeConnection>> pipeline_required_links_;  // every rank: rank 0's R, broadcast
++    std::vector<RequiredCrossing> pipeline_required_links_;  // every rank: rank 0's R, broadcast
  };`,
       },
       {
@@ -2142,18 +2171,18 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
     milestone: "M3 Tier C (STRICT)",
     size: "M",
     deps: ["P8"],
-    goal: "Have the control plane bind at least one channel of every crossing in R (every channel that can carry it, recorded and checked against demand in P6), the resolver's chip pair when it can, before any other link, and fail on every rank together if a crossing gets none. IMPORTANT: R is one entry per crossing, each with every channel of every link between its two positions.",
+    goal: "Have the control plane bind, before any other link, at least min_channels of every crossing in R (the number the topology mapper says it needs: the pipeline edges between its two stages, recorded and checked against demand in P6), the resolver's chip pair first, and more when the budget allows; and fail on every rank together if a crossing gets fewer. IMPORTANT: R is one entry per crossing, each with every channel of every link between its two positions and its min_channels.",
     files: [
       "tt_metal/fabric/topology_mapper.cpp",
       "tt_metal/fabric/control_plane.cpp",
     ],
     steps: [
       "No PortDescriptor change: each rank sends rank 0 a proto with only hash, src chip and dst chip, and only rank 0 has R. Rank 0 passes R's hashes to pair_logical_intermesh_ports(port_descriptors, required_crossings).",
-      "Broadcast R with the chip info (TopologyMapper), so validate_requested_intermesh_connections can check on every rank that every crossing in R has at least one of its hashes in the broadcast AnnotatedIntermeshConnections.",
-      "Phase 0 in pair_logical_intermesh_ports: count the crossings per boundary, then for each crossing place its first link that fits (the chip pairs holding one of its hashes, the resolver's first) with its boundary's Z rule, trimmed to the budget left after reserving one channel for each crossing still to come, never below one. Every channel of those links is in the crossing's R entry, so whichever the trim keeps (today it keeps the lowest hash values) serves it. A crossing another already served is skipped. Never TT_FATAL on rank 0: the other ranks are already waiting in recv for the broadcast. A crossing left unplaced fails the check after the broadcast, on every rank together (pipeline_binding).",
-      "Fill after phase 0: today's order.",
-      "Single host: phase 0 in generate_intermesh_connections_on_local_host (one channel of each crossing in R first), or a warning until it lands.",
-      "No rerun over the bound links: once every crossing in R has a bound channel, the witness carve is valid over the bound set.",
+      "Broadcast R with the chip info (TopologyMapper): each crossing's channels, min_channels and names. validate_requested_intermesh_connections then checks on every rank that every crossing in R has at least min_channels distinct hashes of its channels in the broadcast AnnotatedIntermeshConnections (each bound channel appears once per direction).",
+      "Phase 0 in pair_logical_intermesh_ports: sum min_channels per boundary, then for each crossing place its links in R's order (the chip pairs holding one of its hashes, the resolver's first) with its boundary's Z rule until min_channels are bound. Each link is trimmed to the budget left after the other crossings' minimums, so it keeps more than this crossing's minimum when the budget allows. Every channel of those links is in the crossing's R entry, so whichever the trim keeps (today it keeps the lowest hash values) serves it. Channels an earlier crossing bound count. Never TT_FATAL on rank 0: the other ranks are already waiting in recv for the broadcast. A crossing left short fails the check after the broadcast, on every rank together (pipeline_binding).",
+      "Fill after phase 0: today's order, up to the MGD's count, so a crossing can end up with more than its min_channels when there are channels left; that is fine.",
+      "Single host: phase 0 in generate_intermesh_connections_on_local_host (min_channels of each crossing in R first, matched by src_chan and dst_chan, then today's greedy for the rest), or a warning until it lands; the same validate rule runs after it.",
+      "No rerun over the bound links: once every crossing in R has its min_channels bound, the witness carve is valid over the bound set.",
     ],
     code: [
       {
@@ -2161,23 +2190,32 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
         mode: "diff",
         language: "cpp",
         src: `
-+    // Phase 0: every crossing in R gets one link (chip pair) first, the resolver's when it can, with at least one
-+    // channel, so the fill cannot strand it. Every channel of those links is in the crossing's R entry.
++    // Phase 0: every crossing in R gets at least min_channels bound first, on its links in R's order (the resolver's
++    // chip pair first), so the fill cannot strand it. A placed link keeps every channel the budget allows beyond the
++    // minimum, as long as the other crossings' minimums still fit; today's phases then fill the rest.
 +    // No throw here: rank 0 must still broadcast; the check after the broadcast fails on every rank.
-+    auto crossings_left = count_crossings(order, required_crossings);       // per boundary
-+    for (const std::vector<std::size_t>& crossing : required_crossings) {   // R's hashes, one list per crossing
-+        auto links = links_holding(order, crossing);                         // R's order: the resolver's chip pair first
-+        if (links.empty() || std::ranges::any_of(links, [](const auto* l) { return l->placed; })) {
-+            continue;                                              // not gathered, or already served by another crossing
-+        }
-+        const auto boundary = boundary_of(*links.front());
-+        const std::uint32_t reserve = --crossings_left[boundary];  // one channel for each crossing still to come
-+        for (auto* link : links) {
-+            if (has_budget_after_trim(boundary, *link, reserve) &&   // trims to the budget minus reserve, never below 1
++    auto still_needed = min_channels_per_boundary(order, required_crossings);   // per boundary: sum of min_channels
++    for (const RequiredCrossing& crossing : required_crossings) {
++        const auto hashes = connection_hashes(crossing);              // std::hash of each channel
++        std::uint32_t bound = count_bound(order, hashes);             // bound for a crossing before this one
++        for (auto* link : links_holding(order, hashes)) {             // R's order: the resolver's chip pair first
++            if (bound >= crossing.min_channels) {
++                break;
++            }
++            if (link->placed) {
++                continue;
++            }
++            const auto boundary = boundary_of(*link);
++            const std::uint32_t short_by = crossing.min_channels - bound;
++            // Trim to the budget minus the other crossings' minimums; fail if that leaves fewer than this link can give.
++            if (has_budget_after_trim(boundary, *link, /*reserve=*/still_needed[boundary] - short_by,
++                                      /*at_least=*/std::min<std::uint32_t>(short_by, link->connection_hashes.size())) &&
 +                (is_marked_z(boundary) ? place_link(*link, /*want_z=*/true)
 +                                       : (place_link(*link, /*want_z=*/false) || place_link(*link, /*want_z=*/true)))) {
++                const auto kept = static_cast<std::uint32_t>(link->connection_hashes.size());
 +                account_placed(boundary, *link);
-+                break;
++                still_needed[boundary] -= std::min(kept, short_by);
++                bound += kept;
 +            }
 +        }
 +    }
@@ -2196,19 +2234,21 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
      if (my_rank == 0) {
 -        intermesh_connections = this->pair_logical_intermesh_ports(port_descriptors);
 +        intermesh_connections = this->pair_logical_intermesh_ports(
-+            port_descriptors, required_crossings(topology_mapper_->get_pipeline_required_links()));
++            port_descriptors, topology_mapper_->get_pipeline_required_links());
      }
      this->forward_intermesh_connections_from_controller(intermesh_connections);   // rank 0 -> every rank
      // each rank: hash -> its own ETH channel and peer from its PSD copy (cable_lookup), as today
 
  // validate_requested_intermesh_connections, every rank, same broadcast list
-+    for (const auto& crossing : topology_mapper_->get_pipeline_required_links()) {   // one entry per crossing
-+        TT_FATAL(std::ranges::any_of(crossing, [&](const tt::tt_metal::ExitNodeConnection& c) {
-+                     return contains_hash(intermesh_connections, std::hash<tt::tt_metal::ExitNodeConnection>{}(c));
-+                 }),
-+                 "pipeline_binding: no channel bound for the crossing {} -> {} (or any other link between its positions)",
-+                 get_fabric_node_id_from_asic_id(crossing.front().src_exit_node),
-+                 get_fabric_node_id_from_asic_id(crossing.front().dst_exit_node));
++    // Every crossing in R must have at least min_channels of its channels bound; more is fine. Each bound channel
++    // appears once per direction, so count distinct hashes.
++    for (const RequiredCrossing& crossing : topology_mapper_->get_pipeline_required_links()) {
++        const std::uint32_t bound = count_bound_hashes(intermesh_connections, crossing);
++        TT_FATAL(bound >= crossing.min_channels,
++                 "pipeline_binding: pipeline '{}', stages {} and {} (meshes {} and {}) need {} channels between "
++                 "their positions and {} are bound",
++                 crossing.pipeline, crossing.stages.first, crossing.stages.second, crossing.meshes.first,
++                 crossing.meshes.second, crossing.min_channels, bound);
 +    }`,
       },
     ],
@@ -2216,9 +2256,12 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
       "RELAXED count 2 with four candidates where the lowest chip ids share a slice pair: today Case B, after P9 Case A.",
       "R empty (no pipeline): AnnotatedIntermeshConnections byte-identical to today.",
       "Multi-host: R broadcast with the chip info is identical on every rank; validate_requested_intermesh_connections passes everywhere.",
-            "Each crossing in R has at least one channel in the broadcast list, and every rank resolves it to a channel recorded in R.",
+            "Each crossing in R has at least min_channels distinct channels in the broadcast list, and every rank resolves them to channels recorded in R.",
       "A crossing whose positions are joined on chip 0 and chip 1, budget 1: phase 0 binds the resolver's chip pair; if it cannot be placed, the other one; either passes the check.",
-      "Two crossings on one boundary with budget 2, the first with 3 channels: each keeps one; the first does not take the second's budget.",
+      "Two crossings on one boundary with budget 3, the first needing 2 (an edge and its loopback) with 3 channels, the second needing 1: the first keeps 2, the second 1; the first does not take the second's budget.",
+      "One crossing needing 1 with 4 channels, budget 4: phase 0 binds 1 or more, the fill binds the rest; the check passes with 4 bound.",
+      "A crossing needing 2 whose resolver chip pair has 1 channel and another link has 3: phase 0 binds the resolver's channel, then one on the other link.",
+      "A crossing needing 2 with only 1 channel bound (the other link's exit chip already faces a third mesh): every rank fails the check together, naming the pipeline, the stages, the meshes, 2 needed and 1 bound.",
       "Phase 0 cannot place any link of a crossing (every exit chip already facing a third mesh): no hang; every rank fails the check together, naming the crossing and its edge.",
       "A crossing with one channel down: phase 0 binds another gathered channel of its links; with all of them down, every rank fails the check together (open question 20).",
     ],
@@ -2414,7 +2457,7 @@ const auto host_cuts = unmatched_soft_edges(carve);   // inside next(), from the
 for (const auto& chain : fabric_chains(edges_minus(pipeline.edges, host_cuts))) {
     auto layout = resolve_chain(chain, slots_of(m), links);
     if (!layout) { return failed("pipeline_layout", layout.error()); }
-    record_channels(*layout, positions, R, crossings);   // matched crossings only
+    record_channels(pipeline, in, *layout, positions, R);   // matched crossings only
 }`,
       },
     ],
@@ -2948,7 +2991,7 @@ const TIER_C_FILES: string[][] = [
   ["topology_mapper_utils.cpp", "build_logical_multi_mesh_adjacency_graph fills the three logical fields (P5); the next() hook and place_pipelines (one session, one next()), exclude_mapping and the rejection cap (P8)", "P5, P8"],
   ["pipeline_builder.cpp", "per seating: the session's methods (positions, pre-checks, constraints, the footprint solve, the resolver on every carve; P6: inter_mesh_cables, each edge's channel and R, the demand check)", "P5, P6"],
   ["topology_mapper.cpp", "kill switch; the mapping saved on rank 0; R broadcast with the chip info", "P8"],
-  ["control_plane.cpp", "phase 0 binds at least one channel per crossing in R; every rank checks each got one", "P9"],
+  ["control_plane.cpp", "phase 0 binds at least min_channels per crossing in R; every rank checks each got them", "P9"],
   ["test_pipeline_builder.cpp / test_topology_mapper_utils.cpp", "the session (positions, carves, channels and R) on CPU PSD fixtures / the logical graph's pipeline fields and the hook", "P5, P6, P8"],
 ];
 
@@ -2987,7 +3030,7 @@ per seating (MultiMeshSolutionEnumerator::next; physical = build_hierarchical_fr
           pipelines.next()                         one carve, then the resolver on it per pipeline
                                                    (a throw: pipeline_layout)
             record_channels -> edge_channels, R    the exact PSD channel of every crossing edge (P6)
-            first_over_demand                      R per mesh pair <= strict + relaxed (P6)
+            first_over_demand                      min_channels per mesh pair <= strict + relaxed (P6)
           PipelineLayoutResult                     per pipeline: submesh_chips, GraphLayoutResult,
                                                    edge_channels; and R
   reject: full.success = false, failure_stage, error_message;
@@ -4782,7 +4825,7 @@ function MapperTab() {
         <BindingPiece
           title="New: R must fit each connection's demand"
           tag="C2: P6"
-          what="Phase 0 needs one channel per crossing in R, counted against the pair's demand. Tier B's channel rule does not guarantee this: it checks that some projection fits, and C1 may carve one with more crossings."
+          what="Phase 0 needs min_channels per crossing in R (the pipeline edges between its two stages), counted against the pair's demand. Tier B's channel rule does not guarantee this: it checks that some projection fits, and C1 may carve one with more crossings."
           todo={[
             "Budget: crossings in R on a mesh pair <= strict + relaxed; R uses the STRICT part first, then RELAXED.",
             "RELAXED and BEST_EFFORT pairs with no link in R keep the policy plan's rules, zero-link included; pairs with links in R need them.",
@@ -4811,15 +4854,15 @@ function MapperTab() {
             ["Cap hit", "reads as no carve with today's API; the seating fails and C4 runs (open question 13)"],
           ]}
         />
-        <Callout tone="warning" title="IMPORTANT: record every channel that can carry each crossing, and bind at least one per crossing">
+        <Callout tone="warning" title="IMPORTANT: record every channel that can carry each crossing, and bind at least as many as it needs">
           The mapping only says two rectangles touch through some cable; with several cables between them it does not pick
           one. The resolver&apos;s link step does, and resolved_edges gives the exit and entry chip. Any link between the two
           positions can carry the crossing (the resolver chose among exactly these), so C2 records every PSD
           ExitNodeConnection of every one in edge_channels, the resolver&apos;s chip pair first, and adds one entry per crossing
           to R; each std::hash&lt;ExitNodeConnection&gt; is the hash the pairing and its broadcast use. If two stage positions
           are joined on chip 0 and on chip 1, both are recorded. C3 publishes R through get_pipeline_required_links(), and
-          phase 0 of pair_logical_intermesh_ports binds at least one channel of every crossing before any other link,
-          preferring the resolver&apos;s chip pair. A crossing with no channel bound is a hard error naming the pipeline edge.
+          phase 0 of pair_logical_intermesh_ports binds at least min_channels of every crossing (the pipeline edges between its two stages) before any other link,
+          preferring the resolver&apos;s chip pair. A crossing with fewer bound is a hard error naming the pipeline and stages.
           Both phases record edge_channels and R in their result; only Phase 2 binds R, and no channel is written into the
           rank bindings.
         </Callout>
@@ -5186,20 +5229,22 @@ function BindingPiece(props: { title: string; tag: string; what: string; todo: s
 }
 
 const REQUIRED_LINKS_SRC = `
-// No new type: R is the PSD's own ExitNodeConnection entries, one list per crossing: every channel that can carry it.
-// ExitNodeConnection = {src_exit_node, dst_exit_node (AsicID), eth_conn {src_chan, dst_chan, is_local, port_type}};
-// std::hash<ExitNodeConnection> is the connection_hash the pairing and the broadcast use.
-// FabricNodeIds come from the mapping; each edge's channels are PipelinePlacement::edge_channels.
+// R: one RequiredCrossing per crossing (P6): the PSD's own ExitNodeConnection entries that can carry it, and
+// min_channels, the pipeline edges between its two stages in either direction (a repeated edge or a loopback is
+// another channel; Tier B's count). ExitNodeConnection = {src_exit_node, dst_exit_node (AsicID),
+// eth_conn {src_chan, dst_chan, is_local, port_type}}; std::hash of it is the connection_hash the pairing uses.
 
 // PipelineLayoutResult
-std::vector<std::vector<tt::tt_metal::ExitNodeConnection>> required_links;   // R, one entry per crossing
+std::vector<RequiredCrossing> required_links;   // R, one entry per crossing
 
-// TopologyMapper, every rank (broadcast with the chip info via exit_node_connection_to_proto)
-const std::vector<std::vector<tt::tt_metal::ExitNodeConnection>>& get_pipeline_required_links() const;
+// TopologyMapper, every rank (broadcast with the chip info: channels via exit_node_connection_to_proto,
+// min_channels, and the names for the error)
+const std::vector<RequiredCrossing>& get_pipeline_required_links() const;
 
-// Rank 0 only: phase 0 binds at least one hash of each crossing, first. No PortDescriptor change.
+// Rank 0 only: phase 0 binds at least min_channels of each crossing first, more if the budget allows.
+// No PortDescriptor change.
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(
-    const PortDescriptorTable& port_descriptors, const std::vector<std::vector<std::size_t>>& required_crossings);`;
+    const PortDescriptorTable& port_descriptors, const std::vector<RequiredCrossing>& required_crossings);`;
 
 function BindingTab() {
   return (
@@ -5277,9 +5322,9 @@ function BindingTab() {
         </Row>
         <PhaseStrip />
         <Text tone="secondary">
-          Phase 0 takes each crossing in R, reserves one channel of the budget for it, and places its first link that fits
+          Phase 0 takes each crossing in R, reserves its min_channels of the budget, and places its links until that many are bound
           (the resolver&apos;s chip pair first, then the other links between the two positions), with the pair&apos;s Z rule,
-          trimmed to the budget left but never below one channel. Today&apos;s work-list then fills the rest. With no
+          each trimmed to the budget left after the other crossings' minimums, so it keeps more when it can. Today&apos;s work-list then fills the rest. With no
           required links the output is byte-identical to today. Phase 0 never throws on rank 0 (the other ranks are
           waiting for the broadcast); a crossing with no channel placed, or none gathered because its links are down,
           fails the check after the broadcast on every rank together, naming the crossing and its edge.
