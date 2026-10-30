@@ -300,6 +300,12 @@ def run_demo(args):
         # as a per-frame golden model by this demo.
         tt_model = TTBEVFormer(create_bevformer_parameters(parameter_model, first_batch, device), device)
 
+        def detect_frame(cls_scores, bbox_preds):
+            scores, labels, _, boxes, valid = tt_model.detect(cls_scores, bbox_preds)
+            if args.score_threshold is not None:
+                valid = ttnn.logical_and(valid, ttnn.ge(scores, args.score_threshold))
+            return tt_model.get_bboxes(scores, labels, boxes, valid)
+
         tt_image = to_conv_layout(first_images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         prepared = tt_model.prepare_frame(first_metas)
         *_, prev_bev = tt_model(tt_image, prepared)
@@ -313,7 +319,7 @@ def run_demo(args):
         warm_image = to_conv_layout(warm_images, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         prepared = tt_model.prepare_frame(warm_metas, prepared)
         warm_outputs = tt_model(warm_image, prepared, prev_bev=prev_bev)
-        warm_detections = tt_model.detect(*warm_outputs[:2])
+        warm_detections = detect_frame(*warm_outputs[:2])
         ttnn.synchronize_device(device)
         ttnn.deallocate(warm_image)
         del warm_outputs, warm_detections
@@ -327,11 +333,11 @@ def run_demo(args):
 
             device_start = time.perf_counter()
             cls_scores, bbox_preds, next_bev = tt_model(tt_image, prepared, prev_bev=prev_bev)
-            scores, labels, _, boxes, valid = tt_model.detect(cls_scores, bbox_preds)
+            compacted = detect_frame(cls_scores, bbox_preds)
             ttnn.synchronize_device(device)
             ttnn.deallocate(tt_image)
             device_latency = time.perf_counter() - device_start
-            compacted = tt_model.get_bboxes(scores, labels, boxes, valid)[0]
+            compacted = compacted[0]
             end_to_end_latency = time.perf_counter() - end_to_end_start
             prev_bev = next_bev
 
