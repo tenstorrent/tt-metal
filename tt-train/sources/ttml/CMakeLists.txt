@@ -176,6 +176,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_allcore/add_rmsnorm_fw_allcore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_allcore/device/add_rmsnorm_fw_allcore_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_allcore/device/add_rmsnorm_fw_allcore_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/lowrank_update/lowrank_update.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/lowrank_update/device/lowrank_update_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/lowrank_update/device/lowrank_update_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/skinny_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/device/skinny_matmul_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/skinny_matmul/device/skinny_matmul_program_factory.cpp

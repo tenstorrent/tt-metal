@@ -18,6 +18,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/add_rmsnorm_fw_allcore/add_rmsnorm_fw_allcore.hpp"
+#include "metal/ops/lowrank_update/lowrank_update.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
@@ -778,6 +779,16 @@ void py_module(nb::module_& m) {
             nb::arg("epsilon") = 1e-6F,
             "Residual add fused with RMSNorm, every tile-row split over several cores: sum = residual + delta, "
             "out = sum / sqrt(mean(sum^2) + eps) * gamma -> [sum, out, rms].");
+        py_metal.def(
+            "lowrank_update",
+            &ttml::metal::lowrank_update,
+            nb::arg("acc"),
+            nb::arg("a"),
+            nb::arg("w"),
+            nb::arg("scale") = 1.0F,
+            nb::arg("transpose_b") = false,
+            "acc + scale * (a @ W) for a one-tile K (K <= 32; w is [N, K] with transpose_b, else [K, N]): the "
+            "product formed in fp32 per output tile, the acc tile added there, one bf16 rounding. HiFi4.");
         py_metal.def(
             "skinny_matmul",
             &ttml::metal::skinny_matmul,

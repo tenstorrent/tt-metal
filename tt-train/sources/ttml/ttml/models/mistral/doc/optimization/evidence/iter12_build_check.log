@@ -1,0 +1,13 @@
+=== build skipped
+=== lowrank_update check 2026-10-30T15:12:12Z
+check rc=0
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+B=1 M=1024 N=5120 K=16 s=1.0 transpose_b=False: pcc 0.999999 rel 1.62e-03 max|diff| 3.12e-02 | wall us ttnn matmul+add 124 lowrank_update 72
+B=1 M=1024 N=8192 K=16 s=1.0 transpose_b=False: pcc 0.999999 rel 1.62e-03 max|diff| 3.12e-02 | wall us ttnn matmul+add 188 lowrank_update 105
+B=1 M=1024 N=1536 K=16 s=2.0 transpose_b=True: pcc 0.999998 rel 1.95e-03 max|diff| 3.12e-02 | wall us ttnn matmul+add 52 lowrank_update 36
+B=1 M=1024 N=5120 K=16 s=2.0 transpose_b=True: pcc 0.999998 rel 1.95e-03 max|diff| 3.12e-02 | wall us ttnn matmul+add 120 lowrank_update 73
+B=2 M=512 N=1024 K=32 s=0.5 transpose_b=True: pcc 0.999999 rel 1.53e-03 max|diff| 3.12e-02 | wall us ttnn matmul+add 35 lowrank_update 24
+=== lora harness tests 2026-10-30T15:12:17Z
+tests rc=0
+================= 8 passed, 30 deselected in 94.34s (0:01:34) ==================
+=== done 2026-10-30T15:13:54Z

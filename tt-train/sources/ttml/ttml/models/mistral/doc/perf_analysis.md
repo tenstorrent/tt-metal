@@ -33,7 +33,8 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 9 | residual add fused into all-core RMSNorm | 537.4 (533.9) | 30.19 % | `O/iter9_tp_mfu_tp4.log` |
 | 10 | K-split `skinny_matmul` for the LoRA products | 536.1 (531.2) | 30.27 % | `O/iter10_tp_mfu_tp4.log` |
 | 10 | real weights, warm | 543.0 | - | `O/iter10_full_tp4_real.log` |
-| 11 | SDPA work lists (LPT rows; head-split KV backward) | **524.7 (520.2)** | **30.92 %** | `O/iter11_tp_mfu_tp4.log` |
+| 11 | SDPA work lists (LPT rows; head-split KV backward) | 524.7 (520.2) | 30.92 % | `O/iter11_tp_mfu_tp4.log` |
+| 12 | `lowrank_update` op: LoRA add and `dx += dh @ A` in one pass | **518.5 (511.8)** | **31.29 %** | `O/iter12_tp_mfu_tp4.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -58,7 +59,7 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 
 - Source: TP=4 after iteration 6, chip 2 of `O/iter6_tp_ranked_ops.txt`; cycle-time, per-layer rows scaled 4 -> 40 layers, fixed rows as measured (57.0 ms of kernels per 4-layer step per chip).
 - State per row and the next rung: `D`, "Ranked cost table".
-- Order after iterations 9-11: matmuls ~208, collectives ~56, layout ~48, norms ~32 (adds folded in), SDPA ~30 (was ~39), adapters ~19, adds ~13, SwiGLU ~15, fixed ~11.
+- Order after iterations 9-12: matmuls ~208, collectives ~56, layout ~48, norms ~32 (adds folded in), SDPA ~30 (was ~39), SwiGLU ~15, adapters ~9 (was ~19), fixed ~11, adds ~3 (was ~13).
 
 | ms/step/chip | class | item | sub-items (ms) |
 |---|---|---|---|
@@ -67,8 +68,8 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 | ~48 | layout | heads create / concat, fused-route concat / slice / transposes, LoRA-grad stack / unstack | ~28 + ~14 + ~6 |
 | ~39 | math | SDPA, 8 heads per chip | bwd KV 18.3, bwd Q 10.5, fwd 10.4; after iteration 11: bwd KV 11.5 + reduce 1.1, bwd Q 8.6, fwd 9.2 = ~30, all three near the DRAM-bandwidth bound of single-row K/V and Q/dO re-reads |
 | ~31 | math | RMSNorm | fwd 13.8 (32 cores) + bwd 17.5 (96 cores); fwd fused with the adds in iteration 9 |
-| ~25 | math + glue | composite LoRA adapters of qkv / out at TP | skinny matmuls, scale, add; ~19 after iteration 10 |
-| ~18 | glue | residual and gradient adds `[1024, 5120]` | 31 per 4 layers; ~13 after iteration 9 |
+| ~25 | math + glue | composite LoRA adapters of qkv / out at TP | skinny matmuls, scale, add; ~19 after iteration 10; ~9 after iteration 12 (`lowrank_update` folds the add) |
+| ~18 | glue | residual and gradient adds `[1024, 5120]` | 31 per 4 layers; ~13 after iteration 9; ~3 after iteration 12 (7 adds per 4 layers left) |
 | ~15 | math | SwiGLU | bwd 10.5 + fwd 4.4 |
 | ~11 | fixed | LM head, cross-entropy, LoRA-grad collectives | fwd 3.0 + dX 2.8, CE chain 3.8, collectives 0.1 |
 
@@ -185,6 +186,14 @@ Earlier tables, kept in full: composite baseline at 40 layers (31 rows, single c
 - **Attribution**: chip 0, per 4 layers, cycle-time: SDPA forward 1.072 -> 0.915 (268 -> 229 us per call), backward Q 1.084 -> 0.862 (271 -> 216), backward KV 1.839 -> 1.154 + reduce 0.113 (460 -> 289 + 28); SDPA 3.995 -> 3.044 (-0.95 ms, ~-9.5 ms per 40 layers per chip); other rows unchanged within 1 %. Smaller than the core-balance arithmetic (1.7x / 3.3x) because all three kernels re-read K/V (forward, Q backward: 67 MB per call) or Q/dO/lse/u (KV backward: ~100 MB) per single Q tile-row and now run at 280-350 GB/s: bandwidth-bound; the next rung is Q-chunking (several Q rows per item sharing the K/V reads), `D`, "Iteration 11".
 - **Verification**: standalone vs the previous kernels at six shapes (`O/iter11_sdpa_check.log` vs `O/iter11_baseline.log`): forward and dQ bit-identical, dK / dV PCC 0.999999, max |diff| one bf16 ulp (fp32 partials summed in a different order); harness 35 passed (new `test_sdpa_causal_gqa_forward_and_gradients` at three shapes vs torch fp64); TP gradient check PASS. Bug found on the way: the KV kernel's 2-arg `pack_reconfig_data_format(cb_grad_key, cb_attention_weights)` skips the reprogram when both CBs are fp32 and left the packer in its start-up bf16 state; unconditional reconfig under `HEAD_SPLIT`.
 - **Evidence**: `O/iter11_baseline.{sh,log}`, `O/iter11_build_check.{sh,log}`, `O/iter11_sdpa_check.{py,log}`, `O/iter11.{sh,log}`, `O/iter11_harness.log`, `O/iter11_tp_grad_check_tp4.log`, `O/iter11_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter11_tp_mfu_tp4_tt-smi.txt`.
+
+## Iteration 12 (2026-10-30): low-rank update in one pass
+
+- **Change**: glue + math, rung write new: `metal/ops/lowrank_update/` (`out = acc + s * a @ b`, one K tile: the product per output tile in fp32 DEST, the acc tile added there, one bf16 rounding; items = output tiles column-major, the a column resident in L1, 110 cores) routed from `modules/lora.py::lowrank_update` for `base + s * h @ B^T` (composite qkv / out adapters, forward) and `dx += dh @ A` (fused gate_up / w2 backward); replaces a 33-88-core matmul writing a bf16 intermediate plus an add per call.
+- **Result**: TP=4 518.5 ms / 31.29 % vs 524.7 (-1.2 %) at 1.111-1.197 GHz effective (iteration 11's run 1.149-1.273), chips 49-73 C.
+- **Attribution**: chip 0, per 4 layers, cycle-time: the two LoRA-product matmul rows 0.567 + 0.534 and 16 adds (0.641 of the `[1024, 8192]`-labelled row, 0.357 of the `[1024, 1536]` row) -> `LowrankUpdate` 0.520 + 0.378 + 0.133; -1.07 ms per 4 layers (~-11 ms per 40 layers per chip); 7 adds per 4 layers remain (0.254); math 39.21 -> 37.89, glue 4.64 -> 3.59; kernels excluding collectives ~47.5 -> ~46.3.
+- **Verification**: standalone vs `ttnn.matmul` + `addalpha` at five shapes PCC 0.999998-0.999999, rel 1.5-2.0e-3 (one rounding instead of two), 124 -> 72 us (N=5120), 188 -> 105 (8192), 52 -> 36 (1536); harness 38 passed (new `test_lowrank_update_matches_torch` at three shapes incl. two images); TP gradient check PASS. Bug found on the way: the compute kernel skipped the pop of the column's w tile when the image changed (two-image case wrong, PCC 0.99985); fixed, covered by the two-image test.
+- **Evidence**: `O/iter12_lowrank_check.{py,log}`, `O/iter12_build_check.{sh,log}`, `O/iter12_lora_tests.log`, `O/iter12.{sh,log}`, `O/iter12_harness.log`, `O/iter12_tp_grad_check_tp4.log`, `O/iter12_tp_{mfu_tp4,analysis,ranked_ops}.*`.
 
 ## Loop exit (2026-10-29, after iteration 3) and resumed state
 

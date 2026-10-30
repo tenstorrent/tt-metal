@@ -409,3 +409,7 @@ Why the gain is smaller than the core-balance arithmetic. Before: forward and Q 
 The LPT weights: forward `round_up(row + 1, Sk_chunk_t) + 1`, Q backward `row + 2`, KV backward `(St - row) * heads_per_item + 1`; the `+ 1` stands for the per-item fixed cost (Q read, normalisation, output write). With 256 items on 110 cores the heaviest core carries 39-40 units against an even share of 38.4.
 
 Standalone wall times (one chip, `O/iter11_baseline.log` vs `O/iter11_sdpa_check.log`): q8 kv2 S1024 fw 282 -> 238 us, bw 759 -> 568; q32 kv8 S1024 fw 901 -> 882, bw 2335 -> 2178; q8 kv8 S1024 (MHA, no head split, work list only) fw 279 -> 238, bw 680 -> 552; q4 kv1 S1024 fw 173 -> 144, bw 564 -> 346; q8 kv2 S2048 fw 887 -> 827, bw 2212 -> 1984; q6 kv2 S512 D64 fw 46 -> 47, bw 195 -> 126.
+
+## Iteration 12
+
+Traffic per call at N=5120 (M=1024, bf16): before, the matmul `[1024, 16] x [16, 5120]` on 33-88 cores writes the 10 MB update and the add reads 20 MB and writes 10 MB: 40 MB in 124 us; `lowrank_update` reads acc (10 MB), the a column once per core (64 KB x 110) and one w tile per output column, writes 10 MB: ~27 MB in 72 us (~375 GB/s). The product is accumulated in fp32 DEST and the acc tile added there, so the result is rounded to bf16 once instead of twice (rel 1.6e-3 against the two-op reference, PCC 0.999999). Items are the output tiles in column-major order per image so that a core's range changes column every Mt items (one w tile read) and never re-reads a.

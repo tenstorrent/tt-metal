@@ -32,6 +32,17 @@ def lora_matmul_config():
 SKINNY_MIN_K = 2048
 
 
+def lowrank_update(acc, a, b, scale=1.0, transpose_b=False):
+    """``acc + scale * (a @ b)`` for a rank <= 32 ``a`` (``b`` is ``[N, rank]`` with ``transpose_b``): one metal op
+    (`ttml.ops.metal.lowrank_update`, iteration 12) in place of ttnn's 33-core matmul plus a separate add when the
+    shapes fit, else the two ops."""
+    k = a.shape[-1]
+    if k <= 32 and b.shape[0] == 1 and b.shape[1] == 1 and list(acc.shape)[:3] == list(a.shape)[:3]:
+        return ttml.ops.metal.lowrank_update(acc, a, b, scale, transpose_b)
+    update = ttnn.matmul(a, b, transpose_b=transpose_b, compute_kernel_config=lora_matmul_config())
+    return ttnn.addalpha(acc, update, scale)
+
+
 def skinny_matmul(a, b, transpose_b=False):
     """``a @ (b^T if transpose_b else b)`` (HiFi4, fp32 accumulation) for a rank-wide ``b``: the K-split op when it
     pays, ttnn's matmul otherwise."""
@@ -68,10 +79,9 @@ class LoraApply(Function):
         x_val, a_val = x.get_value(), lora_A.get_value()
         b_val = lora_B.get_value() if mask is None else ttnn.multiply(lora_B.get_value(), mask)
         h = skinny_matmul(x_val, a_val, transpose_b=True)
-        update = ttnn.matmul(h, b_val, transpose_b=True, compute_kernel_config=cfg)
         ctx.save_for_backward(x_val, a_val, b_val, h)
         ctx.mask, ctx.scaling, ctx.reduce_axis = mask, scaling, reduce_axis
-        return ttnn.addalpha(base.get_value(), update, scaling)
+        return lowrank_update(base.get_value(), h, b_val, scaling, transpose_b=True)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -98,8 +108,7 @@ class _LoraUpdateAdd(Function):
         h_val, b_val = h.get_value(), lora_B.get_value()
         ctx.save_for_backward(h_val, b_val)
         ctx.scaling = scaling
-        update = ttnn.matmul(h_val, b_val, transpose_b=True, compute_kernel_config=lora_matmul_config())
-        return ttnn.addalpha(base.get_value(), update, scaling)
+        return lowrank_update(base.get_value(), h_val, b_val, scaling, transpose_b=True)
 
     @staticmethod
     def backward(ctx, grad_output):

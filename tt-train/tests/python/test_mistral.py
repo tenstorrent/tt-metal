@@ -366,6 +366,30 @@ def test_skinny_matmul_matches_torch(k, batches, n_cols, transpose_b):
     rep.done()
 
 
+@pytest.mark.parametrize(
+    "n_cols, scale, transpose_b, images",
+    [(5120, 1.0, False, 1), (1536, 2.0, True, 1), (1024, 0.5, True, 2)],
+    ids=["dx-plus-dh-A", "base-plus-s-h-Bt", "two-images"],
+)
+def test_lowrank_update_matches_torch(n_cols, scale, transpose_b, images):
+    """`acc + scale * a @ b` (rank 16, one K tile) in one metal op against torch fp64 on bf16-rounded inputs."""
+    rng = seeded(12)
+    rows = 1024 if images == 1 else 256
+    acc_np = bf16(rng.normal(0, 1, (1, images, rows, n_cols)))
+    a_np = bf16(rng.normal(0, 1, (1, images, rows, 16)))
+    b_np = bf16(rng.normal(0, 0.05, (1, 1, n_cols, 16) if transpose_b else (1, 1, 16, n_cols)))
+    got = to_host(
+        ttml.ops.metal.lowrank_update(
+            to_device(acc_np).get_value(), to_device(a_np).get_value(), to_device(b_np).get_value(), scale, transpose_b
+        )
+    )
+    b_t = t(b_np).transpose(-1, -2) if transpose_b else t(b_np)
+    ref = (t(acc_np) + scale * (t(a_np) @ b_t)).numpy()
+    rep = Report(f"lowrank_update N={n_cols} scale={scale} transpose_b={transpose_b} images={images}")
+    rep.check("out", got, ref, 0.9999, 1e-2)
+    rep.done()
+
+
 def test_fused_residual_norm_model_matches_the_block_path():
     """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
     the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number

@@ -9,7 +9,7 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 
 - Single-chip Tracy at 1/2/4/8 layers (`analyze_tracy.py` four-point fit, projection to 40) attributes and ranks; `diff_tracy.py` is the cycle-time A/B (targeted ops gone, nothing new). Tracy ms = cycles / 1.35 GHz; each run's delivered clock from `clock_analysis.py`.
 - TP=4 full-model MFU after a cool-down (600 s), tt-smi on all four chips, and a 4-layer TP profile checked per chip (`tp_analysis.py`, `tp_rank_ops.py`) for a stalled chip before a TP number is believed.
-- PCC harness `tests/python/test_mistral.py` passes before a change lands: 11 tests at the baseline, 13 (iteration 2), 14 (3), 15 (6), 16 (review 4), 20 (9), 32 (review 6), 35 (11).
+- PCC harness `tests/python/test_mistral.py` passes before a change lands: 11 tests at the baseline, 13 (iteration 2), 14 (3), 15 (6), 16 (review 4), 20 (9), 32 (review 6), 35 (11), 38 (12).
 - From iteration 4 on (user priority 2026-10-29): the TP=4 run is the result; depth runs only rank; no single-chip MFU runs, no 16-layer profiles; HiFi4 + fp32 accumulate mandatory.
 
 ## Iterations
@@ -29,7 +29,9 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | review 3 | wasted | graph-free frozen embedding and no-grad norm | 15 | 545.7 | 29.73 % | landed |
 | 9 | math + glue | `add_rmsnorm_fw_allcore` op, residual grad in the backward | 20 | 537.4 | 30.19 % | landed |
 | 10 | math | `skinny_matmul` op for the LoRA products | 20 | 536.1 | 30.27 % | landed |
-| 11 | math | SDPA LPT work lists, head-split KV backward + reduce op | 35 | **524.7** | **30.92 %** | landed |
+| 11 | math | SDPA LPT work lists, head-split KV backward + reduce op | 35 | 524.7 | 30.92 % | landed |
+| 12 | glue + math | `lowrank_update` op (LoRA add and `dx += dh @ A` in one pass) | 38 | **518.5** | **31.29 %** | landed |
+| 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.
 
@@ -46,10 +48,11 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - 9: -0.86 ms per 4 layers per chip, collectives excluded (the removed adds; the fused forward costs what the 32-core norm did, moving 3x the bytes at bandwidth); latent CB wrap hazard of the ported backward fixed, two-items-per-core cases added; 2-layer model equals the block path.
 - 10: 76-122 -> 45-65 us per call, -0.60 ms per 4 layers per chip; standalone PCC 0.999999 vs `ttnn.matmul`; measured at lower effective clocks than iteration 9's run.
 - 11: SDPA 3.995 -> 3.044 ms per 4 layers per chip (fwd 268 -> 229 us, bwd Q 271 -> 216, bwd KV 460 -> 289 + 28 reduce); the kernels are now bandwidth-bound on single-row K/V re-reads, next rung Q-chunking. Lesson: a 2-arg `pack_reconfig_data_format(prev, next)` encodes an assumption about the previous pack target; changing an output CB's format invalidates it.
+- 12: 16 LoRA-product matmuls + 16 adds per 4 layers -> 16 `lowrank_update` calls, -1.07 ms per 4 layers per chip; standalone 124 -> 72 us at N=5120. Collective sweep: defaults already fastest; the in-step collective time is chip skew.
 
 ## State (2026-10-30)
 
-- TP=4 full model: 598.7 (baseline) -> 556.5 (exit) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> **524.7 ms / 30.92 % MFU** (11).
+- TP=4 full model: 598.7 (baseline) -> 556.5 (exit) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> **518.5 ms / 31.29 % MFU** (12).
 - Hard constraints (user, 2026-10-30): HiFi4 + fp32 accumulate (no lower fidelity evaluated); result = full-model TP=4 MFU only; a kernel-level item every iteration; a stage-review pass is a checkpoint, not a stop; one change per commit.
 - Loss match on this path (after 9 and 10): 8-layer host loss max |diff| 0.0273 vs torch fp64 (tol 0.10); TP=4 real-weight trajectory as the baseline's.
 - Reviews: round 3 more-work-needed, answered in the follow-up; round 4 five P3 doc / test items fixed; round 5 clean-pass; round 6 (iterations 9-10) items answered, clean-pass on re-check.

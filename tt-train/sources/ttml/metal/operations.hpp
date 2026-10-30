@@ -12,6 +12,7 @@
 #include "ops/k_split_gram_matmul/k_split_gram_matmul.hpp"
 #include "ops/layernorm_bw/layernorm_bw.hpp"
 #include "ops/layernorm_fw/layernorm_fw.hpp"
+#include "ops/lowrank_update/lowrank_update.hpp"
 #include "ops/mla_kv_assemble_bw/mla_kv_assemble_bw.hpp"
 #include "ops/mla_kv_assemble_fw/mla_kv_assemble_fw.hpp"
 #include "ops/mla_q_rope/mla_q_rope.hpp"

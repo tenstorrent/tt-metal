@@ -121,6 +121,12 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 
 - Env knobs `TTML_CCL_NUM_LINKS`, `TTML_CCL_{RS,AG}_{CHUNKS_PER_SYNC,WORKERS_PER_LINK,BUFFERS_PER_CHANNEL}` read per call in `ttnn_fixed/distributed/ttnn_ops.cpp` (unset = library defaults); sweep `O/iter12_ccl_sweep.sh` -> `O/iter12_ccl_sweep.log`: defaults fastest (reduce-scatter 122 us, all-gather 114 us standalone vs 281 / 120 in the step: the difference is chip skew).
 
+### Iteration 12: lowrank_update
+
+- Op `metal/ops/lowrank_update/` (device op, factory, reader / writer / compute kernels), registered in `CMakeLists.txt`, `metal/operations.hpp`, `nanobind/nb_ops.cpp` (`ttml.ops.metal.lowrank_update(acc, a, w, scale, transpose_b)`); routed from `modules/lora.py::lowrank_update` (used by `LoraApply.forward`, `_LoraUpdateAdd.forward`, `fused_lora.py` backward).
+- Build + standalone check + LoRA tests: `O/iter12_build_check.sh` -> `O/iter12_build_check.log` (first run: the two-image case failed on a missing pop at the image switch, and the router sliced a `ttnn.Shape`; both fixed, rerun with `SKIP_BUILD=1`).
+- Chain `O/iter12.sh` -> `O/iter12.log`: harness 38 passed, TP=4 gradient check PASS, cooled TP=4 MFU 518.5 ms / 31.29 % (`O/iter12_tp_mfu_tp4.*`), 4-layer TP profile `O/iter12_tp_tracy_tp4_4layers` (`O/iter12_tp_analysis.txt`, `O/iter12_tp_ranked_ops.txt`).
+
 ### Loss match and review round 6
 
 - Loss match after iterations 9 and 10: `O/iter10_loss.sh` -> `O/iter10_loss.log`: 8-layer real-weight host loss `O/iter10_train_8layers_hostloss.log` + `O/iter10_loss_8layers_hostloss.json` -> `O/iter10_loss_comparison.txt` (max |diff| 0.0273, PASS); TP=4 40 layers real weights `O/iter10_full_tp4_real.{log,json}` (baseline trajectory, 543.0 ms warm). Produced after commit `53ec655a9f9`, committed with the review-round-6 items.
@@ -155,6 +161,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review 6 close | `5084c423f54` | round-6 re-check clean-pass recorded, steady-step wording |
 | docs restructure | `884e0eedff6` | skimmable format for `perf_analysis.md`, README and this log; `O/perf_analysis_details.md` |
 | 11 | `7f0a7f1f896` | SDPA work lists (LPT) in the forward and Q backward, head-split KV backward with the `sdpa_bw_kv_reduce` op, harness cases, iteration-11 evidence |
-| 12 candidate | (this commit) | TP collective parameter knobs and sweep: no win, recorded as rejected |
+| 12 candidate | `2c3a0d63846` | TP collective parameter knobs and sweep: no win, recorded as rejected |
+| 12 | (this commit) | `lowrank_update` op, LoRA routing, harness cases, iteration-12 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

@@ -30,7 +30,7 @@ import ttml
 from ttml.autograd import Function
 
 from .frozen_linear import TRANSPOSED_SHAPES, _compute_config, forward_matmul_kwargs, full_core_grid, local_in_out
-from .lora import skinny_matmul
+from .lora import lowrank_update, skinny_matmul
 
 __all__ = ["FusedLoraLinearT", "fuse_lora_into_frozen_weights", "reduce_partial_lora_grads", "TAIL_ROWS"]
 
@@ -114,7 +114,7 @@ class FusedLoraLinearT(Function):
         if dh_scale != 1.0:
             s_dh = ttnn.multiply(s_dh, dh_scale)
         # dx += (s dh) @ A ; dB = s * g^T h ; dA = (s dh)^T x (dh all-reduced first when B is column-sharded)
-        dx = ttnn.add(dx, ttnn.matmul(s_dh, a_val, compute_kernel_config=cfg, core_grid=full_core_grid()))
+        dx = lowrank_update(dx, s_dh, a_val)
         grad_b = ttnn.multiply(
             ttnn.matmul(grad_output, h, transpose_a=True, compute_kernel_config=cfg, core_grid=full_core_grid()),
             scaling,
