@@ -201,6 +201,14 @@ private:
 
     node_id add_tensor(const Tensor& t);
     node_id add_buffer(const tt::tt_metal::Buffer* buffer);
+    // Adds the node of the allocation that `mesh_buffer` owns. `mesh_buffer` must own one.
+    node_id add_buffer(const tt::tt_metal::distributed::MeshBuffer& mesh_buffer);
+    node_id add_buffer(
+        std::size_t unique_id,
+        uint64_t size,
+        tt::tt_metal::BufferType buffer_type,
+        tt::tt_metal::TensorMemoryLayout layout,
+        int device_id);
 
     void begin_function_process(const Tensor& tensor);
 

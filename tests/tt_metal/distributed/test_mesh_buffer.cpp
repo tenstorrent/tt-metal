@@ -634,6 +634,26 @@ TEST_F(MeshBufferTest2x4, GetDeviceBufferAfterDeallocate) {
     }
 }
 
+TEST_F(MeshBufferTestSuite, UniqueId) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    auto owner = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    auto other = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+
+    const auto owner_id = owner->unique_id();
+    ASSERT_TRUE(owner_id.has_value());
+    ASSERT_TRUE(other->unique_id().has_value());
+    EXPECT_NE(*owner_id, *other->unique_id());
+
+    // A MeshBuffer created at an explicit address doesn't own the allocation.
+    auto view = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), owner->address());
+    EXPECT_FALSE(view->unique_id().has_value());
+
+    owner->deallocate();
+    EXPECT_FALSE(owner->unique_id().has_value());
+}
+
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
