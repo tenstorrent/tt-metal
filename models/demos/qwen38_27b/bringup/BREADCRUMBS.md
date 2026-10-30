@@ -33,3 +33,32 @@
   FastOperation skips the pre-operation hooks the device proof counts ops with (device_ops was 0).
 - Result: PCC 0.999998, rel vs CPU 0.0020 (limit 0.0064), auto_margin_min 3.2, deterministic.
 - Re-run: `bfw job check --task C.linear.attn_norm --gate-only`.
+
+## C.linear.attention (device Gated DeltaNet, layer 0), 2026-10-30
+
+- `tt/gdn.py` `TtGatedDeltaNet`, stock TTNN only, on the plan's layout. TP column c holds key heads 4c..4c+3 and value
+  heads 12c..12c+11. Each chip projects its own 640 rows: [qkv 2560 | z 1536] in one matmul, a / b in another (both
+  fp32 out); g and beta are computed in fp32 32 wide (12 heads plus zero padding). `all_gather(axis 0)` of qkv / g /
+  beta, then a reorder from chip order to natural order by `chip_order_runs(start)` (slice + concat; the identity at
+  chunk-aligned starts). `qkv_causal_conv1d_silu` runs on the whole chunk, with the conv state as history
+  (actual_start 0, predecessor_carry = history). Then `chunk_gated_delta_rule` -> back to chip order ->
+  `mesh_partition(axis 0)` -> per-head `rms_norm` (plain w) -> `nlp_concat_heads` -> * silu(z) fp32 -> out_proj
+  (fp32 partials) -> `all_reduce(axis 1)` -> bf16. The 8 SP rows of a column run the conv and the recurrence
+  redundantly (V-split over rows is the perf follow-up).
+- State layout (`state_to_device`): conv history `[1, 3, 2560]` bf16 ROW_MAJOR (the reference's conv[:, 1:]
+  transposed, the column's channels) and recurrent `[1, 12, 128, 128]` fp32 TILE per TP column, replicated over SP
+  rows. `__call__` returns the new state (the last 3 conv inputs, the final recurrent state). The component hook
+  uploads the golden prefix state (zeros at start 0) at the boundary.
+- Decision 1: weights stay `[out, in]` and run with `ttnn.linear(..., transpose_b=True)`. The bfp8 exponent blocks
+  then run along the reduction dim. With pre-transposed `[in, out]` weights, out_proj output column 3993 had rel
+  0.50 (limit 0.096): a small output channel shared its exponent with 15 larger ones.
+- Decision 2: `GDN_CHUNK` = 64 (rank-4 path; q / k l2-normalised in fp32 by the model) instead of the rank-3 flat
+  path at chunk 32. Both are equally exact on a zero state. From a non-zero state, the op's error grows with the
+  number of inter-chunk state updates. Measured with the golden state at 5120 and layer-3 inputs: o rel 0.060 / state
+  rel 0.139 at chunk 32 (fused, phased, HORNER and FORWARD_SUBSTITUTION all the same) vs 0.028 / 0.066 at chunk 64.
+  At chunk 32 the gate's `layer3` probe failed (rel 0.0409 > 0.0388).
+- Result: PCC 0.999994, rel vs CPU 0.0032 (limit 0.015), auto_margin_min 1.32 (closest check: the layer3 probe, rel
+  0.0293 vs 0.0388), 46 device ops, host FLOPs 0, deterministic.
+- Not done yet (later tasks): pad masking past actual_end (g = beta = 0), the restart snapshot split, and the
+  served state buffers.
+- Re-run: `bfw job check --task C.linear.attention --gate-only`.

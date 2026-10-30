@@ -63,6 +63,28 @@ def device_component(mesh, spec, layer, step):
                 return _to_host(mesh, norm(_to_device(mesh, x)), x.shape)
 
         return run
+    if step == "attention" and spec.block_type_of(layer) == "linear":
+        from models.demos.qwen38_27b.tt.gdn import TtGatedDeltaNet
+
+        cfg = Config.load(str(spec.hf_dir))
+        ckpt = Checkpoint(str(spec.hf_dir))
+        p = f"{PREFIX}layers.{layer}.linear_attn."
+        w = {"linear_attn." + n[len(p) :]: ckpt.get(n, torch.bfloat16) for n in ckpt.index if n.startswith(p)}
+        gdn = TtGatedDeltaNet(mesh, cfg, w)
+
+        def run(ctx, x):
+            # the state as of ctx.start (golden prefix, or zeros at 0) uploaded at the component boundary
+            prefix = ctx.extra.get("state_prefix") or {}
+            conv = prefix.get("conv", torch.zeros(cfg.conv_dim, cfg.conv_k))
+            rec = prefix.get("recurrent", torch.zeros(cfg.lv_heads, cfg.lk_dim, cfg.lv_dim))
+            if not ctx.start:
+                conv, rec = torch.zeros_like(conv), torch.zeros_like(rec)
+            state = gdn.state_to_device(conv, rec)
+            with _hooked_dispatch():
+                out, _ = gdn(_to_device(mesh, x), ctx.start, state)
+                return _to_host(mesh, out, x.shape)
+
+        return run
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
