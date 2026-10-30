@@ -12,6 +12,7 @@ import torch
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 from models.demos.gemma4.tt import generator_trace as gt
+from models.demos.gemma4.tt.attention.continuation import continuation_sdpa_table_cols
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Mixin
 from models.demos.gemma4.tt.generator import filter_warmup_sampling_params
@@ -502,6 +503,7 @@ class _FakeGenerator:
         self.data_parallel = data_parallel
         self.paged = paged
         self.calls = []
+        self.tables = []
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         # the stock mock table: all zeros (every column the null block 0), 128-token blocks
@@ -514,6 +516,7 @@ def _prefill_recorder(gen):
         gen.calls.append(
             (kwargs["model_id_warmup"], kwargs["tokens"][1], kwargs["enable_trace"], kwargs["warmup_prefill"])
         )
+        gen.tables.append(kwargs["page_table"])
 
     return prefill_forward
 
@@ -530,6 +533,11 @@ def test_ladder_runs_once_per_process_and_per_model():
         (1, 4096, False, False),
         (1, 8192, False, False),
     ]
+    # the mock tables hold real block ids (one per column): the 8192 ladder's second chunk is an eager
+    # continuation over them, as a served chunk is, with no "chunk_page_table has no real block ids" warning
+    for table, (_, isl, _, _) in zip(gen.tables, gen.calls):
+        assert tuple(table.shape) == (1, isl // 128) and bool((table > 0).all()), "real block ids"
+        assert len(set(table.flatten().tolist())) == table.numel(), "one block per column"
     # second (capture) pass: nothing runs again
     assert (
         run_prefill_ladder(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), ladder=[4096, 8192], chunk=4096)
@@ -569,6 +577,20 @@ def test_prefix_continuation_warmup_prefills_every_reachable_tail_past_one_chunk
     ]
     real = torch.tensor([[9, 4, 0]], dtype=torch.int32)
     assert warmup_page_table_with_real_blocks(real) is real and warmup_page_table_with_real_blocks(None) is None
+    # the global layers' SDPA table (attention/continuation.py): one width per model and tail - the context's
+    # blocks plus the tail's, at the stick multiple - for the warmup past one chunk and for a served hit at any
+    # position, so the warmup's tail compiles the program the hit runs
+    assert [continuation_sdpa_table_cols(262144, 4096, t, 64) for t in (128, 1024, 2048, 4096)] == [
+        4104,
+        4112,
+        4128,
+        4160,
+    ]
+    assert all(
+        continuation_sdpa_table_cols(262144, start, t, 64) == continuation_sdpa_table_cols(262144, 4096, t, 64)
+        for start in (128, 2432, 130944, 258048)
+        for t in (128, 1024, 2048, 4096)
+    )
     calls.clear()
     assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=prefill_forward, chunk=4096)
     assert calls == [], "once per process"

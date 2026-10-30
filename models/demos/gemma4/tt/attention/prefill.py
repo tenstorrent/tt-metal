@@ -963,6 +963,30 @@ def _sliding_continuation_inputs(continuation, tt_q, k_cache, config, weights, t
     return window_table, start_tensor, program_config, geometry
 
 
+def _global_continuation_sdpa_inputs(continuation, page_table, block_size, chunk_offset):
+    """``(page_table, start)`` of a global layer's eager-continuation chunked SDPA.
+
+    The op's tensor-start path compiles its K extent from the page table's width (``Sk = Sq + cols * block``,
+    sdpa_program_factory.cpp ``max_prefix_tokens_flexible``) and walks K at run time only up to the start tensor
+    plus the chunk (reader_interleaved.cpp ``valid_Skt_bound = min(chunk_start / 32 + valid_Sqt, valid_Skt)``), so
+    the group's host table goes in at one width per model and chunk length (``PrefillContinuation.padded_table``:
+    the served context's blocks plus the chunk's) with the device start tensor: a program keyed on neither the
+    position nor the prompt length, and the null-block columns past the user's blocks are never read. The device
+    table at its own width (the prompt's chunk grid, which the generator already pads to the stick multiple) keyed
+    one program per 512 prompt tokens: the served 12B QB2's first 5122-token prompt compiled its second chunk for
+    1.4 s after a boot warmup of the same start and tail at another width (2026-10-30). Without a host table (a
+    device table handed straight through) that table is used as is: with the start tensor when its row is a whole
+    number of 32-byte sticks, else with the Python-int start (the legacy path, keyed on the position).
+    """
+    padded = continuation.padded_table(block_size)
+    if padded is not None:
+        return padded, continuation.start_tensor
+    width = int(page_table.shape[-1])
+    if width == pad_page_table_cols(width):
+        return page_table, continuation.start_tensor
+    return page_table, chunk_offset
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -1615,20 +1639,13 @@ def _prefill_forward_single(
         nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         recompute = mm_attn_mask is not None and os.environ.get("GEMMA4_MM_PAGED_RECOMPUTE", "1") != "0"
         q_tiles, q_device = _vision_q_tiles(tt_q, mm_attn_mask) if recompute else ([], None)
-        # The continuation's device-tensor start (read at run time) keeps the SDPA program off the position. That
-        # (flexible) path reads the user's row as one stick of ``cols * 4`` bytes, a multiple of 32 (the generator
-        # sizes the table to the prompt's blocks: 66 columns for 4096 + 128 tokens at 64-token blocks), so a table
-        # off the stick multiple is replaced by the group's host table padded to it; without a host table the
-        # Python-int start keeps the legacy path, keyed on the position.
+        # The eager continuation: the group's table at the served context's width with the device-tensor start
+        # (``_global_continuation_sdpa_inputs``), one SDPA program per model and chunk length.
         sdpa_table, base_offset = page_table, chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset
         if eager_continuation:
-            width = int(page_table.shape[-1])
-            if width == pad_page_table_cols(width):
-                base_offset = continuation.start_tensor
-            else:
-                padded = continuation.padded_table(width, effective_block_size(k_cache, config.head_dim, nkv_local))
-                if padded is not None:
-                    sdpa_table, base_offset = padded, continuation.start_tensor
+            sdpa_table, base_offset = _global_continuation_sdpa_inputs(
+                continuation, page_table, effective_block_size(k_cache, config.head_dim, nkv_local), chunk_offset
+            )
         tt_sdpa = chunked_prefill_sdpa(
             tt_q,
             k_cache,

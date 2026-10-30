@@ -640,7 +640,8 @@ def test_prefill_forward_without_metadata_or_payloads_stays_text(bridge, monkeyp
 # block ids (the RoPE slice, the per-block tail gathers, the page-table chunk slice, the int chunk start of the
 # chunked SDPA). The recorder below stubs ``ttnn`` so every op records its name and the integers among its
 # arguments; two continuations at different positions over different block sets must record the same multiset,
-# and no recorded integer may be a block id or a position.
+# and no recorded integer may be a block id or a position. The global layers' SDPA table has one width per model
+# and chunk length (the served context's blocks plus the chunk's), whatever the prompt's or the device table's.
 
 from models.demos.gemma4.tt.attention import continuation as continuation_mod  # noqa: E402
 from models.demos.gemma4.tt.attention import operations as operations_mod  # noqa: E402
@@ -775,6 +776,8 @@ def _continuation_recorder(monkeypatch):
         CoreCoord=lambda x, y: SimpleNamespace(x=x, y=y),
         PagedCacheGeometryOverride=_geometry,
         transformer=SimpleNamespace(chunked_scaled_dot_product_attention=_chunked_sdpa),
+        init_device_compute_kernel_config=lambda arch, **kwargs: "hifi4_fp32acc",
+        MathFidelity=SimpleNamespace(HiFi4="hifi4"),
         int32="int32",
         uint32="uint32",
         ROW_MAJOR_LAYOUT="row_major",
@@ -834,6 +837,38 @@ def _run_continuation(ops, chunk_start, blocks):
     }
 
 
+_CTX, _GLOBAL_BLOCK, _GLOBAL_HD = 131072, 64, 512
+
+
+def _run_global_continuation(ops, chunk_start, seq_len, host_row, device_width):
+    """One global layer's continuation of ``seq_len`` rows at ``chunk_start``: ``host_row`` is the full-attention
+    group's host table (the prompt's blocks), ``device_width`` the width of the device table the layer was handed
+    (the generator's chunk grid, or the bridge's persistent per-layer table). Runs the SDPA input selection and the
+    chunked SDPA over it; returns the table handed to the op."""
+    cont = continuation_mod.PrefillContinuation(
+        "mesh",
+        None,
+        chunk_start=chunk_start,
+        seq_len=seq_len,
+        legacy_table=host_row,
+        legacy_mapper=None,
+        max_seq_len=_CTX,
+    )
+    view = cont.for_layer(0)
+    tt_q = _Dev((1, 4, seq_len, _GLOBAL_HD))
+    k_cache, v_cache = _Dev((64, _KV, _GLOBAL_BLOCK, _GLOBAL_HD)), _Dev((64, _KV, _GLOBAL_BLOCK, _GLOBAL_HD))
+    table, start = prefill_mod._global_continuation_sdpa_inputs(
+        view, _Dev((1, device_width)), operations_mod.effective_block_size(k_cache, _GLOBAL_HD, _KV), chunk_start
+    )
+    assert start is cont.start_tensor, "the device start tensor, never the Python-int position"
+    out = operations_mod.chunked_prefill_sdpa(
+        tt_q, k_cache, v_cache, table, 0, _GLOBAL_HD, scale=1.0, base_offset=start, num_kv_heads=_KV
+    )
+    assert out.shape == tt_q.shape
+    cont.release()
+    return table
+
+
 def test_continuation_records_the_same_programs_at_two_positions_over_two_block_sets(monkeypatch):
     ops = _continuation_recorder(monkeypatch)
     # Blocks 1.. of a 64-block pool at 2432 (an admission chunk inside a 256-token block) and at 8448 (a block
@@ -870,6 +905,33 @@ def test_continuation_records_the_same_programs_at_two_positions_over_two_block_
         first, covered = origin // _BLOCK, -(-(run["rel_start"] + _SEQ) // _BLOCK)  # the columns the K walk reads
         assert covered == 5 and run["window"][:covered] == blocks[first : first + covered]
         assert all(v == 0 for v in run["window"][covered:]), "every column past the walk is the null block"
+    # The global layers: two prompts of different lengths (81 and 108 blocks; device tables at the bridge's 88- and
+    # 128-column widths, both whole sticks), the boot warmup's legacy table (96 blocks with real ids, 2048 tokens
+    # past 4096 cached) and a hit deep in the context hand the chunked SDPA one table width - the context's blocks
+    # plus the chunk's (2048 + 32) - so one program: the op compiles its K extent from that width, and a device
+    # table at its own stick-aligned width keyed one program per 512 prompt tokens (12B QB2 2026-10-30: 1.4 s on
+    # the first 5122-token prompt's second chunk, after a boot warmup of the same start and tail).
+    global_runs = {}
+    for name, chunk_start, host_row, device_width in (
+        ("5122 tokens", 4096, torch.arange(101, 101 + 81).view(1, 81), 88),
+        ("6896 tokens", 4096, torch.arange(301, 301 + 108).view(1, 108), 128),
+        ("warmup", 4096, torch.arange(1, 97).view(1, 96), 96),
+        ("deep hit", 130944, torch.arange(1, 2049).view(1, 2048), 2048),
+    ):
+        del ops[:]
+        global_runs[name] = (_run_global_continuation(ops, chunk_start, 2048, host_row, device_width), list(ops))
+    assert {table.shape for table, _ in global_runs.values()} == {(1, 2080)}, "one width: 131072 / 64 + 2048 / 64"
+    assert len({tuple(sorted(recorded)) for _, recorded in global_runs.values()}) == 1, "one program set per tail"
+    recorded = global_runs["5122 tokens"][1]
+    assert [op for op, _ in recorded].count("chunked_sdpa") == 1 and (
+        "chunked_sdpa",
+        (1, 4, 2048, 512, 1, 2080, 128, 128),
+    ) in recorded
+    assert not (
+        {4096, 130944, 88, 128, 96, 81, 108} & {v for _, values in recorded for v in values} - {128}
+    ), "no position or prompt width"
+    table = global_runs["5122 tokens"][0]
+    assert table.host[0, :81].tolist() == list(range(101, 182)) and int(table.host[0, 81:].max()) == 0
 
 
 def test_continuation_window_plan_is_a_fixed_number_of_sticks_and_covers_the_window(monkeypatch):
@@ -897,22 +959,37 @@ def test_continuation_window_plan_is_a_fixed_number_of_sticks_and_covers_the_win
     cut = continuation_mod.continuation_window_table
     assert cut(torch.tensor([[7, 8, 9]]), 0, 8).tolist() == [[7, 8, 9, 0, 0, 0, 0, 0]]
     assert cut(torch.tensor([[7, 8, 9]]), 0, 8, valid_cols=2).tolist() == [[7, 8, 0, 0, 0, 0, 0, 0]]
-    # the global layers' table: the context's block count (one K extent, hence one SDPA binary, for every prompt
-    # length), never below the device table's width, at the stick multiple; without a context the width itself
+    # the global layers' table: the context's blocks plus the chunk's (one K extent, hence one SDPA binary, per
+    # model and chunk length, whatever the prompt's or the device table's width), never below the columns the K
+    # walk reads, at the stick multiple; without a context that need alone
+    cols = continuation_mod.continuation_sdpa_table_cols
+    assert cols(131072, 2432, 128, 64) == 2056 and cols(131072, 126976, 4096, 64) == 2112
+    assert cols(131072, 131008, 128, 64) == 2056, "a padded chunk ending past the context is inside the allowance"
+    assert cols(131072, 140000, 128, 64) == 2192, "a prompt past the context: the walk's need"
+    assert cols(None, 2432, 128, 64) == 40 and cols(None, 2432, 128, 256) == 16
+    assert len({cols(262144, start, 2048, 64) for start in range(128, 262144, 128)}) == 1, "one width per tail"
     cont = continuation_mod.PrefillContinuation(
         "mesh", None, chunk_start=2432, seq_len=128, legacy_table=torch.arange(1, 67).view(1, 66), max_seq_len=131072
     )
-    full = cont.for_layer(0).padded_table(66, 64)
+    full = cont.for_layer(0).padded_table(64)
     assert (
-        full.shape == (1, 2048)
+        full.shape == (1, 2056)
         and full.host[0, :66].tolist() == list(range(1, 67))
         and int(full.host[0, 66:].max()) == 0
     )
-    assert cont.for_layer(0).padded_table(2100, 64).shape == (1, 2104)
+    wide = continuation_mod.PrefillContinuation(
+        "mesh",
+        None,
+        chunk_start=2432,
+        seq_len=128,
+        legacy_table=torch.arange(1, 2101).view(1, 2100),
+        max_seq_len=131072,
+    )
+    assert wide.for_layer(0).padded_table(64).shape == (1, 2056), "a wider table (another group's stride) is cut"
     plain = continuation_mod.PrefillContinuation(
         "mesh", None, chunk_start=2432, seq_len=128, legacy_table=torch.ones(1, 66)
     )
-    assert plain.for_layer(0).padded_table(66, 64).shape == (1, 72)
+    assert plain.for_layer(0).padded_table(64).shape == (1, 40)
     # the SDPA chunk fit: capped at the hit alignment, shrunk to a 32-multiple divisor of an off-grid start
     cfg = SimpleNamespace(
         compute_with_storage_grid_size="grid", q_chunk_size=256, k_chunk_size=128, exp_approx_mode=False

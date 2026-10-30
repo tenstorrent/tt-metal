@@ -76,7 +76,11 @@ def run_prefill_ladder(
     fails the boot, so there is nothing to retry on the second pass.
 
     With paged attention off (no page table) a length beyond one chunk cannot
-    be prefilled, so the ladder stops at the first such length.
+    be prefilled, so the ladder stops at the first such length. The mock page
+    table carries real block ids (``warmup_page_table_with_real_blocks``): the
+    chunks past the first of a length above the chunk are eager continuations,
+    which then run the served programs over real blocks instead of logging the
+    generator's "chunk_page_table has no real block ids" warning on every one.
     """
     if getattr(generator, "_warmed_prefill_isl_ladder", False):
         return []
@@ -92,6 +96,9 @@ def run_prefill_ladder(
                     chunk,
                 )
                 break
+            warmup_args["page_table"] = warmup_page_table_with_real_blocks(
+                warmup_args["page_table"], pool_blocks=_kv_pool_blocks(kv_cache, model_id)
+            )
             logger.info("Warming up eager prefill at ISL {} ({})", isl, ENV_VAR)
             prefill_forward(
                 **warmup_args,
@@ -156,8 +163,10 @@ def run_prefix_continuation_warmup(
     length (``continuation_tails``). The continuation is eager by design and its first use compiled on the request
     that hit the cache (the 12B QB2's first cached request took 2.7 s against 0.6 s for the next, 2026-10-30). The
     mock page table carries real block ids (``warmup_page_table_with_real_blocks``) so the continuation runs the same
-    programs a served hit runs (the prior window read from the paged cache). Returns whether it ran: with paged
-    attention off (no page table) there is no cached prefix to continue from."""
+    programs a served hit runs (the prior window read from the paged cache). The global layers' SDPA table is sized
+    from the served context, not the prompt (``attention/continuation.py`` ``continuation_sdpa_table_cols``), so one
+    tail here compiles the program a hit of that tail runs at any position and prompt length. Returns whether it
+    ran: with paged attention off (no page table) there is no cached prefix to continue from."""
     if getattr(generator, "_warmed_prefix_continuation", False):
         return False
     generator._warmed_prefix_continuation = True

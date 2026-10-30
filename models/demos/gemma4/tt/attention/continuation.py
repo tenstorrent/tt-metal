@@ -17,8 +17,10 @@ stay fixed:
 * ``positions``: uint32 ``[1, seq_len]`` absolute positions, the RoPE cos / sin gather (``ttnn.embedding`` on the 2-D
   caches, as decode does) instead of the 4-D cache slice;
 * per kv-cache group, a page-table cut built on the host from the group's table (the fill table for this chunk's
-  blocks, and the sliding layers' *window frame*: the blocks covering ``[chunk_start - window, chunk_start +
-  seq_len)`` with a relative start tensor), uploaded as fixed-shape tensors.
+  blocks, the global layers' table at the served context's width (``continuation_sdpa_table_cols``: the chunked
+  SDPA compiles its K extent from that width, so it must not follow the prompt), and the sliding layers' *window
+  frame*: the blocks covering ``[chunk_start - window, chunk_start + seq_len)`` with a relative start tensor),
+  uploaded as fixed-shape tensors.
 
 The sliding layers then run one chunked paged SDPA with ``sliding_window_size`` over the window frame, replacing the
 per-block gather + concat + cut + square SDPA. The frame keeps the K walk bounded (``window + seq_len`` rows) under
@@ -55,6 +57,28 @@ PAGE_TABLE_STICK_COLS = 8
 def pad_page_table_cols(cols: int) -> int:
     """``cols`` rounded up to the chunked SDPA's stick multiple (8 int32 columns = 32 bytes)."""
     return -(-int(cols) // PAGE_TABLE_STICK_COLS) * PAGE_TABLE_STICK_COLS
+
+
+def continuation_sdpa_table_cols(max_seq_len, chunk_start, seq_len, block_size) -> int:
+    """Columns of the page table a global layer's continuation hands the chunked SDPA, at the stick multiple.
+
+    The op's tensor-start path compiles its K extent from that width (``Sk = Sq + cols * block``,
+    sdpa_program_factory.cpp ``max_prefix_tokens_flexible``: one kernel binary per value) and walks K at run time
+    only up to the start tensor plus the chunk (reader_interleaved.cpp ``valid_Skt_bound = min(chunk_start / 32 +
+    valid_Sqt, valid_Skt)``), so the width is free to be one value per model and padded chunk length instead of
+    the prompt's block count: the served context's blocks plus the chunk's own (a prompt within a chunk of the
+    context ends past it once padded; the walk reads columns up to ``ceil((chunk_start + seq_len) / block)``).
+    The chunk length is a program key already (``Sq``), so this adds no program, and the columns past the walk
+    hold the null block 0 and are never read. Never below the walk's own need (a prompt past the configured
+    context stays correct, on a program of its own); that need alone without a context (``max_seq_len`` None).
+    """
+    block_size = int(block_size)
+    if block_size <= 0:
+        raise ValueError(f"continuation SDPA table needs block_size > 0 ({block_size})")
+    cols = -(-(int(chunk_start) + int(seq_len)) // block_size)
+    if max_seq_len:
+        cols = max(cols, -(-int(max_seq_len) // block_size) + -(-int(seq_len) // block_size))
+    return pad_page_table_cols(cols)
 
 
 TILE = 32
@@ -253,8 +277,9 @@ class PrefillContinuation:
     ):
         self.chunk_start = int(chunk_start)
         self.seq_len = int(seq_len)
-        # The served context: the global layers' full table is padded to its block count so the chunked SDPA's
-        # K extent (a compile-time kernel argument, one binary per distinct value) is the same for every prompt.
+        # The served context: the global layers' table is sized from it (``continuation_sdpa_table_cols``) so the
+        # chunked SDPA's K extent (a compile-time kernel argument, one binary per distinct value) is the same for
+        # every prompt length and position.
         self.max_seq_len = int(max_seq_len) if max_seq_len else None
         self.mesh_device = mesh_device
         self._mapper = mesh_mapper
@@ -327,21 +352,19 @@ class PrefillContinuation:
             self._cache[cache_key] = dev
         return dev
 
-    def padded_table(self, layer_idx, width, block_size=None):
-        """The group's whole table (``width`` columns, zero-padded) at the stick multiple, for the global layers'
-        chunked SDPA when the device table's own width is not one (the generator sizes it to the prompt's blocks);
-        None without a host table. With the context length and the layer's ``block_size`` the width is the
-        context's block count: the SDPA kernels are compiled per K extent (``Sq + cols * block``), so a width that
-        followed the prompt would compile the global layers again for every prompt-length class (the legacy
-        int-start path did so for every position: 1.4-2.1 s per new hit on the 12B QB2, 2026-10-30)."""
+    def padded_table(self, layer_idx, block_size):
+        """The group's table for the global layers' chunked SDPA, ``continuation_sdpa_table_cols`` wide on the
+        layer's ``block_size`` grid (the served context's blocks plus the chunk's): the host table's first columns,
+        the rest the null block; None without a host table. The width follows neither the prompt nor the device
+        table it was uploaded at (the generator sizes that to the prompt's chunk grid, the vLLM bridge's persistent
+        per-layer tables grow to the widest prompt so far): the SDPA kernels are compiled per K extent
+        (``Sq + cols * block``), and every such width compiled the global layers again (12B QB2, 2026-10-30:
+        1.4-2.1 s on the first hit of each 512-token prompt-length class, after a boot warmup at another width)."""
         group = self._group(layer_idx)
         if group is None:
             return None
         key, table, layout, mapper = group
-        cols = max(int(width), int(table.shape[-1]))
-        if self.max_seq_len and block_size:
-            cols = max(cols, -(-self.max_seq_len // int(block_size)))
-        cols = pad_page_table_cols(cols)
+        cols = continuation_sdpa_table_cols(self.max_seq_len, self.chunk_start, self.seq_len, block_size)
         cache_key = (key, "full", int(cols))
         dev = self._cache.get(cache_key)
         if dev is None:
@@ -429,5 +452,5 @@ class LayerContinuation:
     def sliding_inputs(self, block_size, sliding_window, align):
         return self._parent.sliding_inputs(self.layer_idx, block_size, sliding_window, align)
 
-    def padded_table(self, width, block_size=None):
-        return self._parent.padded_table(self.layer_idx, width, block_size)
+    def padded_table(self, block_size):
+        return self._parent.padded_table(self.layer_idx, block_size)
