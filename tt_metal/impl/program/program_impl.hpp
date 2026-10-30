@@ -294,7 +294,7 @@ public:
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
     void allocate_scratchpads(const IDevice* device);
-    // Reject arena scratchpads whose storage has not been bound before execution.
+    // Reject arena scratchpads whose storage has not been bound before execution. Mock devices are exempt.
     void validate_scratchpad_bindings() const;
     bool is_finalized() const;
     bool is_compiled() const { return !compiled_.empty(); }
