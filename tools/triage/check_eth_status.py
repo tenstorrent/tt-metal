@@ -13,7 +13,7 @@ Description:
     hosts are not checked).
     Reads base-firmware state once and reports port and link state, retrain, CRC and FEC counts, the firmware
     signature and, on Blackhole, ERR_STAT, the TX resend and RX drop totals, the raw eth firmware mailbox messages and
-    the eth firmware stage each erisc last recorded (base FW, metal FW or a kernel).
+    the eth firmware stage each erisc last recorded (base FW, metal FW or a kernel), or In reset for a halted erisc.
     The heartbeat is read on every core first and compared after a single 100 ms wait; one that has not moved is
     reported Down, as a warning. On Blackhole, a core base firmware released to metal reads Released instead unless a
     fabric router is running its main loop there, since nothing else writes the heartbeat on such a core.
@@ -215,7 +215,9 @@ class BlackholeEthCore(EthCore):
     MAILBOX_SLOT_SIZE = 16  # msg + 3 args
     PCS_STATUS = 0xFFB9800C  # live link status, up only when it equals 1
     ERR_STAT = 0xFFB980D8  # latched ETH_CTRL error status; reading does not clear it
-    EXTRA_WORDS = (PCS_STATUS, ERR_STAT)
+    SOFT_RESET = 0xFFB121B0  # RISCV_DEBUG_REG_SOFT_RESET_0, a set bit holds that erisc in reset
+    ERISC_SOFT_RESET_BITS = (1 << 11, 1 << 18)  # erisc0 (BRISC bit), erisc1 (NCRISC bit)
+    EXTRA_WORDS = (PCS_STATUS, ERR_STAT, SOFT_RESET)
 
     # Oldest eth FW these addresses hold for (UMD's minimum ERISC FW version).
     MIN_ETH_FW_VERSION = (1, 4, 1)
@@ -248,10 +250,15 @@ class BlackholeEthCore(EthCore):
         row.err_stat = words[self.ERR_STAT]
         # Word N is erisc N's, written by metal FW and, on newer base FW, by base FW in word 0. In single-erisc mode
         # metal runs on erisc1 while base FW keeps erisc0. Zero in the second word means erisc1 hasn't run metal FW.
-        stages = [words[self.FW_STAGE], words[self.FW_STAGE + 4]]
-        row.fw_stage = " / ".join(
-            self.FW_STAGE_NAMES.get(stage, f"0x{stage:08x}") for stage in (stages if stages[1] else stages[:1])
-        )
+        # Metal's teardown puts erisc1 in reset without rewriting its word, so a held erisc's word is stale.
+        stages = []
+        for erisc, reset_bit in enumerate(self.ERISC_SOFT_RESET_BITS):
+            stage = words[self.FW_STAGE + 4 * erisc]
+            if words[self.SOFT_RESET] & reset_bit:
+                stages.append("In reset")
+            elif erisc == 0 or stage:
+                stages.append(self.FW_STAGE_NAMES.get(stage, f"0x{stage:08x}"))
+        row.fw_stage = " / ".join(stages)
         # PCS_STATUS is a live register; port_status and rx_link_up are snapshots base FW may not have refreshed.
         row.link_raw = words[self.PCS_STATUS]
         row.link = "Up" if row.link_raw == 1 else "Down"
