@@ -980,6 +980,8 @@ class ttMLA:
         kv_actual_isl: int,
         metadata: Optional[ttnn.Tensor] = None,
         concat_prefix: Optional[ttnn.Tensor] = None,
+        seq_subshard_axis: Optional[int] = None,
+        row_major_output: bool = False,
     ) -> ttnn.Tensor:
         """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
         block-cyclic-sharded cos/sin (built once via RotarySetup.get_rope_tensors_indexed); the op
@@ -997,6 +999,8 @@ class ttMLA:
             kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
             cluster_axis=self.sp_axis,
             concat_prefix=concat_prefix,
+            seq_subshard_axis=seq_subshard_axis,
+            row_major_output=row_major_output,
         )
 
     def _apply_rope_none(
@@ -1276,6 +1280,8 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
+        if self._early_q_reshard:
+            return self._q_stem_seq_sharded(tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata)
 
         tt_q_nope = ttnn.linear(
             tt_q_nope,
@@ -1295,6 +1301,49 @@ class ttMLA:
                 ttnn.deallocate(rotated_q_rope)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
+        return tt_q
+
+    @property
+    def _early_q_reshard(self) -> bool:
+        """Sparse layers whose head shard is too thin for sparse_sdpa move q to sequence sharding before the wkv_b1
+        absorption, where it is 256 channels wide instead of 576, and RoPE writes it row-major for sparse_sdpa, so
+        no untilize follows; sparse_sdpa's row-major output then goes to the all-to-all back to heads, which tilizes
+        it on the way. Costs all heads' wkv_b1 on every chip."""
+        return self._has_indexer and self._use_indexed_rope and self._needs_head_to_seq_reshard
+
+    def _q_stem_seq_sharded(self, tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata):
+        """_q_stem after the head split, for _early_q_reshard: all-to-all heads -> sequence, wkv_b1 over all heads on
+        this chip's quarter of the rows, then RoPE with the prefix, row-major. Returns [1, H, S/(sp*tp), 576]."""
+        a2a = lambda t: ttnn.experimental.all_to_all_async_generic(
+            t,
+            in_dim=1,
+            out_dim=2,
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=self.tp_axis,
+        )
+        nope_seq, rope_seq = a2a(tt_q_nope), a2a(tt_q_rope)
+        ttnn.deallocate(tt_q_nope)
+        ttnn.deallocate(tt_q_rope)
+        if getattr(self, "_wkv_b1_all_heads", None) is None:
+            # Every head's wkv_b1, gathered once from the TP shards (the warm pass runs this before any capture).
+            self._wkv_b1_all_heads = ttnn.all_gather(
+                self.wkv_b1_weight, dim=1, cluster_axis=self.tp_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        # The tuned config's blocks are one head x 5 row tiles x the full width: the same blocks at either shape.
+        prefix = ttnn.linear(nope_seq, self._wkv_b1_all_heads, **self._get_mm_kwargs("wkv_b1", seq_len_local))
+        ttnn.deallocate(nope_seq)
+        tt_q = self._apply_rope_padded(
+            rope_seq,
+            rope_tensors,
+            kv_actual_isl,
+            metadata=metadata,
+            concat_prefix=prefix,
+            seq_subshard_axis=self.tp_axis,
+            row_major_output=True,
+        )
+        ttnn.deallocate(prefix)
+        ttnn.deallocate(rope_seq)
         return tt_q
 
     def _llama4_scale(self, kv_actual_isl: Optional[int], seq_len_local: int, metadata) -> ttnn.Tensor:
@@ -2287,7 +2336,9 @@ class ttMLA:
         single [1, 1, T, row_width] slot (single-shot path)."""
         assert self.sp_axis == 0 and self.tp_axis == 1, "sparse_mla assumes sp_axis=0 (outer), tp_axis=1"
         sp = self.sp_factor
-        seq_len_local = q.shape[2]  # per-chip query rows == S / sp
+        # A row-major q comes from _q_stem_seq_sharded, already sequence-sharded over TP.
+        q_seq_ready = q.layout == ttnn.ROW_MAJOR_LAYOUT
+        seq_len_local = q.shape[2] * (self.tp_factor if q_seq_ready else 1)  # per-chip query rows == S / sp
 
         # sparse_sdpa requires per-chip heads H % 32 == 0 and H >= 32. When the TP head shard is too
         # thin (e.g. GLM's 64 heads at tp=4 → 16), transpose the TP sharding axis from heads to sequence
@@ -2300,7 +2351,7 @@ class ttMLA:
         transpose_head_to_seq = self._needs_head_to_seq_reshard
 
         q_seq_sharded = q
-        if transpose_head_to_seq:
+        if transpose_head_to_seq and not q_seq_ready:
             q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
                 q,
                 in_dim=1,
@@ -2310,7 +2361,8 @@ class ttMLA:
                 cluster_axis=self.tp_axis,
             )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
-        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
+        # the op is ROW_MAJOR-only; q comes in TILE unless _q_stem_seq_sharded already wrote it row-major
+        q_rm = q if q_seq_ready else ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
 
@@ -2347,11 +2399,16 @@ class ttMLA:
             block_cyclic_cache_tp_sharded=True,
             cache_batch_idx=cache_batch_idx,
         )
-        ttnn.deallocate(q_rm)
+        if q_rm is not q:  # the caller owns q
+            ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)
-        ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
-        ttnn.deallocate(out)
+        if self._early_q_reshard:
+            # The all-to-all back to heads reads sparse_sdpa's row-major output and tilizes it on the way.
+            ret = out
+        else:
+            ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
+            ttnn.deallocate(out)
 
         if transpose_head_to_seq:
             # Invert the redistribution so the result matches the head-sharded
