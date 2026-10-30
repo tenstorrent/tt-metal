@@ -19,6 +19,7 @@
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "dev_mem_map.h"
+#include "hostdev/cce_spa_routes.h"
 #include "umd/device/utils/error_detail.hpp"
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_fw_loader.hpp"
@@ -187,6 +188,11 @@ std::vector<PreflightChunk> firmware_load_chunks(const CceFwManifest& manifest, 
              static_cast<uint32_t>(part_bytes),
              4});
     }
+    chunks.push_back(
+        {"CCE SPA routes",
+         manifest.bank_to_noc_scratch + manifest.bank_to_noc_size,
+         static_cast<uint32_t>(sizeof(CceSpaRoutes)),
+         4});
 
     chunks.push_back(
         {"launch message buffer",
