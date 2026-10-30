@@ -14,6 +14,7 @@ Description:
     Reads base-firmware state once and reports port and link state, retrain, CRC and FEC counts, the firmware
     signature and, on Blackhole, ERR_STAT, the TX resend and RX drop totals, the raw eth firmware mailbox messages and
     the eth firmware stage each erisc last recorded (base FW, metal FW or a kernel), or In reset for a halted erisc.
+    Erisc0's stage reads "-" in single-erisc mode on eth firmware older than 1.13.1, where nothing records it.
     The heartbeat is read on every core first and compared after a single 100 ms wait; one that has not moved is
     reported Down, as a warning. On Blackhole, a core base firmware released to metal reads Released instead unless a
     fabric router is running its main loop there, since nothing else writes the heartbeat on such a core.
@@ -217,12 +218,18 @@ class BlackholeEthCore(EthCore):
     ERR_STAT = 0xFFB980D8  # latched ETH_CTRL error status; reading does not clear it
     SOFT_RESET = 0xFFB121B0  # RISCV_DEBUG_REG_SOFT_RESET_0, a set bit holds that erisc in reset
     ERISC_SOFT_RESET_BITS = (1 << 11, 1 << 12)  # erisc0 (BRISC bit), erisc1 (TRISC0 bit, UMD's RiscType::ERISC1)
-    EXTRA_WORDS = (PCS_STATUS, ERR_STAT, SOFT_RESET)
+    ERISC1_RESET_PC = 0xFFB14008  # SUBORDINATE_AERISC_RESET_PC: where erisc1 starts after a reset
+    # Metal points erisc1 at the subordinate FW in 2-erisc mode and at the active FW in single-erisc mode. The value
+    # outlives teardown, so it tells which mode the last metal session used (blackhole/dev_mem_map.h).
+    SUBORDINATE_AERISC_FIRMWARE_BASE = 0x9330
+    EXTRA_WORDS = (PCS_STATUS, ERR_STAT, SOFT_RESET, ERISC1_RESET_PC)
 
     # Oldest eth FW these addresses hold for (UMD's minimum ERISC FW version).
     MIN_ETH_FW_VERSION = (1, 4, 1)
     # First eth FW that writes the TXQ/RXQ counters.
     QUEUE_COUNTERS_MIN_ETH_FW_VERSION = (1, 5, 0)
+    # First eth FW whose base FW stamps its own stages into eth_fw_stage word 0.
+    FW_STAGE_MIN_ETH_FW_VERSION = (1, 13, 1)
 
     PORT_STATUS_NAMES = {0: "Unknown", 1: "Up", 2: "Down", 3: "Unused"}
     # eth_fw_stage_e, ASCII-packed little-endian.
@@ -248,23 +255,28 @@ class BlackholeEthCore(EthCore):
         row.mailbox_cmfw = words[self.MAILBOX + 2 * self.MAILBOX_SLOT_SIZE]
         row.mailbox_other = words[self.MAILBOX + 3 * self.MAILBOX_SLOT_SIZE]
         row.err_stat = words[self.ERR_STAT]
+        version_word = words[self.ETH_FW_VERSION]
+        version = (version_word >> 16) & 0xFF, (version_word >> 8) & 0xFF, version_word & 0xFF
+        row.eth_fw = ".".join(str(part) for part in version)
         # Word N is erisc N's, written by metal FW and, on newer base FW, by base FW in word 0. In single-erisc mode
-        # metal runs on erisc1 while base FW keeps erisc0. A running erisc1 with no recorded stage is left out.
+        # metal runs on erisc1 while base FW keeps erisc0, so on older base FW word 0 is 0 or left over from an
+        # earlier 2-erisc run and is shown as "-". A running erisc1 with no recorded stage is left out.
         # Metal's teardown puts erisc1 in reset without rewriting its word, so a held erisc's word is stale.
+        base_fw_writes_stage = not version_word or version >= self.FW_STAGE_MIN_ETH_FW_VERSION
+        metal_ran_on_erisc0 = words[self.ERISC1_RESET_PC] == self.SUBORDINATE_AERISC_FIRMWARE_BASE
         stages = []
         for erisc, reset_bit in enumerate(self.ERISC_SOFT_RESET_BITS):
             stage = words[self.FW_STAGE + 4 * erisc]
             if words[self.SOFT_RESET] & reset_bit:
                 stages.append("In reset")
+            elif erisc == 0 and not (base_fw_writes_stage or metal_ran_on_erisc0):
+                stages.append("-")
             elif erisc == 0 or stage:
                 stages.append(self.FW_STAGE_NAMES.get(stage, f"0x{stage:08x}"))
         row.fw_stage = " / ".join(stages)
         # PCS_STATUS is a live register; port_status and rx_link_up are snapshots base FW may not have refreshed.
         row.link_raw = words[self.PCS_STATUS]
         row.link = "Up" if row.link_raw == 1 else "Down"
-        version_word = words[self.ETH_FW_VERSION]
-        version = (version_word >> 16) & 0xFF, (version_word >> 8) & 0xFF, version_word & 0xFF
-        row.eth_fw = ".".join(str(part) for part in version)
         # Older FW may lay L1 out differently, so only raw values are kept. No FW writes a version of 0.
         if version_word and version < self.MIN_ETH_FW_VERSION:
             row.port_status = "Unsupported FW"
