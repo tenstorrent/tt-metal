@@ -53,7 +53,7 @@ struct MulReduceScalarConfig {
 };
 
 bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     // bfloat16: 2 bytes per element; a 16x32 tiny tile is half a full tile.

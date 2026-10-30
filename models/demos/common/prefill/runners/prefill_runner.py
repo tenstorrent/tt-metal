@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.prefill_chunk import CHUNK_BYTES
 from models.demos.common.prefill.prefill_chunk import SHUTDOWN_WORD as SHUTDOWN_METADATA_WORD
 from models.demos.common.prefill.prefill_chunk import WARMUP_WORD as WARMUP_METADATA_WORD
 from models.demos.common.prefill.prefill_chunk import (
@@ -118,6 +119,13 @@ assert (
     FORWARD_TOKENS_BUDGET >= CHUNK_SIZE and FORWARD_TOKENS_BUDGET % CHUNK_SIZE == 0
 ), f"PREFILL_FORWARD_TOKENS_BUDGET={FORWARD_TOKENS_BUDGET} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
 FORWARD_CHUNKS = FORWARD_TOKENS_BUDGET // CHUNK_SIZE
+# Without the adapter's prefill_forward, a forward of several chunks runs prefill_chunk once per chunk.
+PER_CHUNK_FORWARDS = FORWARD_CHUNKS > 1 and not ADAPTER.supports_packed_forward
+# Each chunk's output is written at a tile-row offset of the forward's activation (ttnn.fill_cache).
+assert not PER_CHUNK_FORWARDS or (CHUNK_SIZE // _sp) % 32 == 0, (
+    f"PREFILL_CHUNK_SIZE={CHUNK_SIZE} over PREFILL_SP={_sp} is {CHUNK_SIZE // _sp} rows per chip, "
+    "not a whole number of 32-row tiles"
+)
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
@@ -277,6 +285,14 @@ def _make_socket_metadata_buffer(mesh_device, metadata_size_bytes: int) -> ttnn.
     )
 
 
+def _layer_ack_record_bytes(rank: int) -> int:
+    """The D2H layer-ack record: each chunk's own record when a forward runs chunk by chunk, else the
+    metadata this rank received."""
+    if PER_CHUNK_FORWARDS:
+        return CHUNK_BYTES
+    return CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES
+
+
 def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
     return ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         h2d_service,
@@ -296,6 +312,14 @@ def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
     tokens, overhang = (outs[0], outs[1]) if n_mtp else (outs[0], None)
     sockets.metadata = outs[-1]
     return tokens, overhang, _decode_metadata(sockets.metadata)
+
+
+# Fabric lease groups (D2DStreamConfig::fabric_link_group). A rank's two inbound services (activations,
+# indexer indices) take turns on the fabric, and so do its two outbound ones (see _d2d_recv_indices and
+# _d2d_send_indices), so each pair may share routers. An inbound and an outbound service lease
+# independently and can be connected at once, so the two groups never share one.
+D2D_INBOUND_LINK_GROUP = "d2d-inbound"
+D2D_OUTBOUND_LINK_GROUP = "d2d-outbound"
 
 
 def build_d2d_pipeline_endpoints(
@@ -328,13 +352,21 @@ def build_d2d_pipeline_endpoints(
     if rank > 0:
         logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
         inbound = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common(inbound_planes)
+            receiver_mesh=mesh_device,
+            sender_rank=rank - 1,
+            receiver_rank=rank,
+            fabric_link_group=D2D_INBOUND_LINK_GROUP,
+            **_common(inbound_planes),
         )
     outbound = None
     if rank < num_ranks - 1:
         logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
         outbound = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common(outbound_planes)
+            sender_mesh=mesh_device,
+            sender_rank=rank,
+            receiver_rank=rank + 1,
+            fabric_link_group=D2D_OUTBOUND_LINK_GROUP,
+            **_common(outbound_planes),
         )
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'}/{inbound_planes}p "
@@ -361,13 +393,21 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
     if inbound:
         logger.info(f"[pp rank {rank}] [d2d-idx] creating inbound index receiver from rank {rank - 1}")
         idx_in = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
+            receiver_mesh=mesh_device,
+            sender_rank=rank - 1,
+            receiver_rank=rank,
+            fabric_link_group=D2D_INBOUND_LINK_GROUP,
+            **_common(),
         )
     idx_out = None
     if outbound:
         logger.info(f"[pp rank {rank}] [d2d-idx] creating outbound index sender to rank {rank + 1}")
         idx_out = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
+            sender_mesh=mesh_device,
+            sender_rank=rank,
+            receiver_rank=rank + 1,
+            fabric_link_group=D2D_OUTBOUND_LINK_GROUP,
+            **_common(),
         )
     logger.info(
         f"[pp rank {rank}] [d2d-idx] endpoints up (inbound={'yes' if idx_in else 'no'} "
@@ -427,29 +467,35 @@ def _metadata_record_words(meta: dict) -> torch.Tensor:
     return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
 
 
-def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
-    backing = outbound.get_backing_tensor()
+def _device_record(words: torch.Tensor, dev) -> ttnn.Tensor:
     return ttnn.from_torch(
-        _metadata_record_words(meta),
+        words,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=backing.device(),
+        device=dev,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(
-            backing.device(),
-            ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+            dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
         ),
     )
 
 
-def _fill_send_record(record: ttnn.Tensor, meta: dict) -> None:
+def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
+    return _device_record(_metadata_record_words(meta), outbound.get_backing_tensor().device())
+
+
+def _fill_record(record: ttnn.Tensor, words: torch.Tensor) -> None:
     src = ttnn.from_torch(
-        _metadata_record_words(meta),
+        words,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(record.device()),
     )
     ttnn.copy_host_to_device_tensor(src, record)
+
+
+def _fill_send_record(record: ttnn.Tensor, meta: dict) -> None:
+    _fill_record(record, _metadata_record_words(meta))
 
 
 def _d2d_send(
@@ -550,6 +596,7 @@ class SocketBuffers:
         self.tokens = tokens
         self.overhang = overhang
         self.send_record = send_record
+        self.per_chunk = PerChunkBuffers()
         self.drain_trace = None
         self.send_trace = None
 
@@ -648,6 +695,84 @@ def _with_hang_timeout():
         ttnn.device.SetOperationTimeoutSeconds(saved)
 
 
+def _chunk_rows(inp: ttnn.Tensor, k: int, rows: int) -> ttnn.Tensor:
+    """Chunk k's rows; dim 2 is the sequence for both token rows and activations."""
+    start = [0] * len(inp.shape)
+    end = list(inp.shape)
+    start[2], end[2] = k * rows, (k + 1) * rows
+    return ttnn.slice(inp, start, end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+class PerChunkBuffers:
+    """The device tensors a forward run chunk by chunk reuses across forwards: chunk k's 12 B record and, on a
+    non-last rank, the forward-size output each chunk's activation is written into."""
+
+    def __init__(self):
+        self.records = {}
+        self.out = None
+        self.zero_chunk = None
+        # Leading chunks of `out` holding the previous forward's activations; later ones are already zero.
+        self.written = 0
+
+
+def _chunk_record(bufs: PerChunkBuffers, k: int, chunk, dev) -> ttnn.Tensor:
+    words = torch.tensor(forward_metadata_words([chunk], 1), dtype=torch.int32).reshape(1, 1, 1, -1)
+    record = bufs.records.get(k)
+    # A runtime may free the record it was handed (Gemma4 does).
+    if record is not None and record.is_allocated():
+        _fill_record(record, words)
+    else:
+        record = bufs.records[k] = _device_record(words, dev)
+    return record
+
+
+def _write_chunk(bufs: PerChunkBuffers, act: ttnn.Tensor, k: int, rows: int, forward_rows: int) -> None:
+    if bufs.out is None:
+        shape = list(act.shape)
+        kw = dict(dtype=act.dtype, layout=act.layout, device=act.device(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        bufs.zero_chunk = ttnn.zeros(shape, **kw)
+        shape[2] = forward_rows
+        bufs.out = ttnn.zeros(shape, **kw)
+    ttnn.fill_cache(bufs.out, act, batch_idx=0, update_idx=k * rows)
+
+
+def _prefill_chunks(
+    runtime, kv_caches, inp, chunks: list, request_id: int, bufs: PerChunkBuffers, d2h_service=None, free_input=True
+):
+    """A packed forward run one non-empty chunk at a time through prefill_chunk, chunk k as request_id + k.
+    Returns None on the last rank, else ``bufs.out``: the activation in the packed layout, empty chunks as
+    zero rows. ``bufs.out`` is rewritten by the next forward, so the caller must not free it."""
+    rows = CHUNK_SIZE // _sp
+    dev = inp.device()
+    last = runtime.config.is_last_rank
+    real = [c for c in chunks if not c.is_empty]
+    for k, chunk in enumerate(real):
+        out = runtime.prefill_chunk(
+            _chunk_rows(inp, k, rows),
+            kv_caches,
+            slot_id=chunk.slot_id,
+            actual_start=chunk.actual_start,
+            actual_end=chunk.actual_end,
+            request_id=request_id + k,
+            d2h_service=d2h_service,
+            metadata_msg=_chunk_record(bufs, k, chunk, dev),
+        )
+        if last:
+            assert out is None, f"the last rank's prefill_chunk returned an activation for chunk {k}"
+            continue
+        assert out is not None, f"prefill_chunk returned no activation for chunk {k} of {len(real)}"
+        _write_chunk(bufs, out, k, rows, len(chunks) * rows)
+        ttnn.deallocate(out)
+    if free_input:
+        ttnn.deallocate(inp)
+    if last:
+        return None
+    for k in range(len(real), bufs.written):
+        ttnn.fill_cache(bufs.out, bufs.zero_chunk, batch_idx=0, update_idx=k * rows)
+    bufs.written = len(real)
+    return bufs.out
+
+
 def _compute_and_send(
     runtime,
     kv_caches,
@@ -673,7 +798,20 @@ def _compute_and_send(
     )
 
     with _with_hang_timeout():
-        if FORWARD_CHUNKS > 1:
+        if PER_CHUNK_FORWARDS:
+            out = _prefill_chunks(
+                runtime,
+                kv_caches,
+                inp,
+                meta["chunks"],
+                c * FORWARD_CHUNKS,
+                sockets.per_chunk,
+                d2h_service=d2h_service,
+                free_input=sockets.tokens is None,
+            )
+            if sockets.persistent_metadata() is None:
+                ttnn.deallocate(sockets.metadata)
+        elif FORWARD_CHUNKS > 1:
             out = runtime.prefill_forward(
                 inp, kv_caches, meta["chunks"], request_id=c, d2h_service=d2h_service, metadata_msg=sockets.metadata
             )
@@ -709,7 +847,8 @@ def _compute_and_send(
             out,
             rank,
             meta,
-            deallocate=not runtime.config.use_trace,
+            # Both a traced runtime's output and the per-chunk output buffer are reused by the next forward.
+            deallocate=not (runtime.config.use_trace or PER_CHUNK_FORWARDS),
             metadata_msg=forward_md,
             trace=sockets.send_trace,
         )
@@ -832,20 +971,26 @@ def run_request_loop(
             before_first_chunk = None
         if warmup:
             continue
-        t = _compute_and_send(
-            runtime,
-            kv_caches,
-            rank,
-            c,
-            inp,
-            meta,
-            d2d_out,
-            sockets,
-            d2h_service=d2h_service,
-            mtp_tokens=mtp_tokens,
-            indices=indices,
-            idx_out=idx_out,
-        )
+        try:
+            t = _compute_and_send(
+                runtime,
+                kv_caches,
+                rank,
+                c,
+                inp,
+                meta,
+                d2d_out,
+                sockets,
+                d2h_service=d2h_service,
+                mtp_tokens=mtp_tokens,
+                indices=indices,
+                idx_out=idx_out,
+            )
+        except BaseException:
+            # The next rank waits in _d2d_recv for this forward; the shutdown sentinel releases it. The
+            # input may already be freed here, so this frees nothing.
+            forward_shutdown()
+            raise
         if first is None:
             first = t
         c += 1
@@ -1015,6 +1160,12 @@ def main() -> None:
             f"PREFILL_USE_TRACE=1 but runtime {type(runtime).__name__} does not implement "
             "capture_trace(kv_caches); run with PREFILL_USE_TRACE=0."
         )
+    if FORWARD_CHUNKS > 1 and hasattr(runtime, "prefill_forward") != ADAPTER.supports_packed_forward:
+        raise RuntimeError(
+            f"PREFILL_FORWARD_TOKENS_BUDGET of {FORWARD_CHUNKS} chunks: adapter {ADAPTER.name!r} sets "
+            f"supports_packed_forward={ADAPTER.supports_packed_forward}, but runtime {type(runtime).__name__} "
+            f"{'implements' if hasattr(runtime, 'prefill_forward') else 'does not implement'} prefill_forward."
+        )
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
 
@@ -1150,7 +1301,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             global_spec=None,
             fifo_size_bytes=fifo_size_bytes,
             worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
+            metadata_size_bytes=_layer_ack_record_bytes(rank),
             metadata_ring=True,
         )
         # The D2H record is the chunk's metadata {slot_id, actual_start, actual_end}; LayerAckService labels it

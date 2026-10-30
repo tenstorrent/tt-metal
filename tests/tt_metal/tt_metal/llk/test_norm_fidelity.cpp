@@ -57,7 +57,7 @@ std::vector<float> run(
     constexpr std::uint32_t input_tile_bytes = tile_elements * sizeof(bfloat16);
     const auto output_format = config.fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t output_tile_bytes = tile_elements * (config.fp32_dest ? sizeof(float) : sizeof(bfloat16));
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto& cq = mesh.mesh_command_queue();
     auto make_buffer = [&](std::uint32_t bytes) {
         return distributed::MeshBuffer::create(

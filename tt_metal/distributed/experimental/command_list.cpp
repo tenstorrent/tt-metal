@@ -554,16 +554,18 @@ void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking)
     for (const auto& [name, value] : patch.runtime_args) {
         const auto it = registry.runtime_targets.find(name);
         TT_FATAL(it != registry.runtime_targets.end(), "Unknown command-list runtime parameter '{}'", *name);
+        const uint32_t word = value.to_uint32();
         for (const auto& target : it->second) {
-            stage(target, ttsl::Span<const uint32_t>(&value, 1));
+            stage(target, ttsl::Span<const uint32_t>(&word, 1));
         }
     }
     for (const auto& [name, value] : patch.common_runtime_args) {
         const auto it = registry.common_runtime_targets.find(name);
         TT_FATAL(
             it != registry.common_runtime_targets.end(), "Unknown command-list common-runtime parameter '{}'", *name);
+        const uint32_t word = value.to_uint32();
         for (const auto& target : it->second) {
-            stage(target, ttsl::Span<const uint32_t>(&value, 1));
+            stage(target, ttsl::Span<const uint32_t>(&word, 1));
         }
     }
     std::vector<uint32_t> tensor_words;
@@ -974,6 +976,10 @@ void CommandListBuilderImpl::resolve_parameters(
                     if (handle.tensor_parameter_name != *info.param_name) {
                         continue;
                     }
+                    TT_FATAL(
+                        !handle.is_per_node,
+                        "TensorParameter '{}' is per-node allocated, which command lists cannot patch",
+                        info.param_name);
                     bound = true;
                     auto binding = std::make_shared<const TensorPatchBinding>(TensorPatchBinding{
                         .binding = handle, .expected_spec = *expected_spec, .relaxations = relaxations});

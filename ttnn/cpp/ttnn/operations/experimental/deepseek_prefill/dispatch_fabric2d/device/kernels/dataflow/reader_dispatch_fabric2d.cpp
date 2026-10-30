@@ -221,26 +221,39 @@ uint32_t chunk_len(const Scratch& c, uint32_t origin_pos, uint32_t e, uint32_t i
     return slice_begin(n, idx + 1, count) - slice_begin(n, idx, count);
 }
 
-// Page offset of each chunk of a descriptor list within a stream's fwd_section. The section holds only pages,
-// so a chunk starts at the sum of the lengths before it. Both chips of a section run this over the same list;
-// the host function validate_descriptor_agreement guarantees that.
-uint32_t chunk_starts(const Scratch& c, uint32_t block_base, volatile tt_l1_ptr uint32_t* start) {
-    uint32_t at = 0;
-    for (uint32_t d = 0; d < ct.num_forward; d++) {
-        const uint32_t base = block_base + d * dspf2d::CHUNK_DESCRIPTOR_WORDS;
-        const uint32_t origin = kernel_compile_time_args[base + 0];
-        const uint32_t dst = kernel_compile_time_args[base + 1];
-        const uint32_t idx = kernel_compile_time_args[base + 2];
-        const uint32_t cnt = kernel_compile_time_args[base + 3];
-        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-            const uint32_t e = c.chip_experts[dst * ct.experts_per_chip + j];
-            start[d * ct.experts_per_chip + j] = at;
-            at += chunk_len(c, origin, e, idx, cnt);
-        }
+// Page of one CHANNEL of this stream's section. Each channel is its own ring of ct.vc_pages pages, written
+// by one producer and read by one consumer, so a running page count is still all the two chips agree on --
+// there are simply num_vcs of them now instead of one flat section. Wrapping costs nothing: both sides
+// address the region a page at a time, so nothing ever straddles the wrap.
+uint32_t fwd_page(uint32_t vc, uint32_t page_in_vc) {
+    return (ct.stream * ct.num_vcs + vc) * ct.vc_pages + page_in_vc % ct.vc_pages;
+}
+
+// Pages a reader sits on before posting them back upstream. Capped at a quarter of the channel, because a
+// threshold comparable to the channel's depth starves the producer: hold 15 credits back on a 17-page
+// channel and the chip upstream sees two pages free and stops. With capacity a free parameter, every
+// constant measured in pages has to scale with it.
+uint32_t credit_flush_at() {
+    const uint32_t quarter = ct.vc_pages / 4;
+    const uint32_t cap = dspf2d::CREDIT_RETURN_BATCH;
+    return quarter < 1 ? 1u : (quarter < cap ? quarter : cap);
+}
+
+// Pages that will arrive in channel d: descriptor d's chunks, summed over the experts the destination
+// hosts. A channel IS a descriptor's movement class, so the two are the same index -- which is why nothing
+// here has to map between them.
+uint32_t channel_expected(const Scratch& c, uint32_t d) {
+    const uint32_t base = ct.in_descriptors_base + d * dspf2d::CHUNK_DESCRIPTOR_WORDS;
+    const uint32_t origin = kernel_compile_time_args[base + 0];
+    const uint32_t dst = kernel_compile_time_args[base + 1];
+    const uint32_t idx = kernel_compile_time_args[base + 2];
+    const uint32_t cnt = kernel_compile_time_args[base + 3];
+    uint32_t total = 0;
+    for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
+        const uint32_t e = c.chip_experts[dst * ct.experts_per_chip + j];
+        total += chunk_len(c, origin, e, idx, cnt);
     }
-    // The host sizes the section without knowing these lengths; this checks the data fits.
-    ASSERT(at <= ct.fwd_pages_per_stream);
-    return at;
+    return total;
 }
 
 uint32_t entry_addr(uint32_t entry) { return ct.queue_addr + entry * ct.entry_stride(); }
@@ -249,21 +262,177 @@ volatile tt_l1_ptr dspf2d::FwdMetadata* entry_meta(uint32_t entry) {
     return reinterpret_cast<volatile tt_l1_ptr dspf2d::FwdMetadata*>(entry_addr(entry) + ct.token_size_bytes);
 }
 
+// Per-channel accounting, and the scheduler that moves pages between channels.
+//
+// Three running counts per channel, each with a single writer. `consumed` is what this reader has lifted
+// out of its own channel; `out_page` is what it has placed in the DOWNSTREAM chip's channel, which is what
+// that chip's credits are read against; `credits_pending` is what it owes the chip upstream and has not
+// posted yet.
+template <typename FwdAcc>
+struct Channels {
+    const Scratch& c;
+    TokenQueue& queue;
+    const FwdAcc& fwd_acc;
+
+    uint32_t expected[dspf2d::MAX_VCS] = {};
+    uint32_t consumed[dspf2d::MAX_VCS] = {};
+    uint32_t out_page[dspf2d::MAX_VCS] = {};
+    uint32_t credits_pending[dspf2d::MAX_VCS] = {};
+
+    void plan_arrivals() {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            expected[v] = channel_expected(c, v);
+        }
+    }
+
+    // Free space in the downstream chip's channel `vc`, in pages.
+    uint32_t downstream_credit(uint32_t vc) {
+        volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_freed_addr(vc));
+        invalidate_l1_cache();
+        return ct.vc_pages - (out_page[vc] - *freed);
+    }
+
+    // How much of `want` may be staged into channel `vc` right now, at least one. While that channel is full
+    // we do OTHER work rather than spin -- which is the whole point of splitting the section up: some channel
+    // always has a page it can move, because the ones that deliver to the next chip's output need no space
+    // anywhere and so can always drain.
+    uint32_t reserve_downstream(uint32_t vc, uint32_t want) {
+        uint32_t credit = downstream_credit(vc);
+        while (credit == 0) {
+            queue.flush_publish();  // never make the sender wait on entries we are holding
+            if (!serve_one_channel()) {
+                flush_credits();  // nothing of ours to move; make sure what we owe is posted
+            }
+            credit = downstream_credit(vc);
+        }
+        return credit < want ? credit : want;
+    }
+
+    // Hand `n` pages of our channel `vc` back to the chip that wrote them. It cannot be told directly -- a
+    // stream's fabric connection only points downstream -- so the credit goes to the opposite direction's
+    // worker on this chip, whose sender is aimed at exactly that chip and carries it across.
+    void credit_upstream(uint32_t vc, uint32_t n) {
+        credits_pending[vc] += n;
+        if (credits_pending[vc] >= credit_flush_at()) {
+            flush_credits();
+        }
+    }
+
+    void flush_credits() {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            if (credits_pending[v] > 0) {
+                noc_semaphore_inc(
+                    get_noc_addr(ct.credit_outbox_noc_x, ct.credit_outbox_noc_y, ct.vc_outbox_addr(v)),
+                    credits_pending[v]);
+                credits_pending[v] = 0;
+            }
+        }
+    }
+
+    // Lift `k` pages out of channel `v` and push them one hop: delivered to the next chip's output when this
+    // was their last hop, otherwise staged into that chip's channel `next`.
+    void take_from_channel(uint32_t v, uint32_t next, uint32_t k) {
+        uint32_t claimed[dspf2d::BATCH];
+        for (uint32_t j = 0; j < k; j++) {
+            claimed[j] = queue.claim_entry();
+            noc_async_read(
+                fwd_acc.get_noc_addr(fwd_page(v, consumed[v] + j)),
+                entry_addr(claimed[j]),
+                ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
+        }
+        noc_async_read_barrier();  // fwd_meta decides the next hop, so it must have landed
+        // The reads bypass the data cache and these entries held other pages before, so a cached fwd_meta
+        // could be stale.
+        invalidate_l1_cache();
+        for (uint32_t j = 0; j < k; j++) {
+            volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(claimed[j]);
+            if (next == dspf2d::VC_NONE) {
+                fwd_meta->cmd = dspf2d::CMD_FINAL_WRITE;
+                fwd_meta->this_addr = fwd_meta->final_payload_addr;
+            } else {
+                fwd_meta->cmd = dspf2d::CMD_FORWARD;
+                fwd_meta->vc = next;
+                fwd_meta->this_addr = fwd_acc.get_noc_addr(fwd_page(next, out_page[next]++));
+            }
+            queue.mark_ready();
+        }
+        consumed[v] += k;
+        // The barrier above is what makes these pages free -- their tokens are in L1, so the chip that wrote
+        // them may write them again.
+        credit_upstream(v, k);
+    }
+
+    // Move up to one batch out of the highest-priority channel that can move anything, and say whether
+    // anything moved. A channel can move when pages have arrived in it and either it delivers to the next
+    // chip's output -- needing no space at all -- or the channel it feeds has room.
+    bool serve_one_channel() {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            const uint32_t remaining = expected[v] - consumed[v];
+            if (remaining == 0) {
+                continue;
+            }
+            volatile tt_l1_ptr uint32_t* arrived =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_arrived_addr(v));
+            invalidate_l1_cache();
+            const uint32_t avail = *arrived - consumed[v];
+            if (avail == 0) {
+                continue;
+            }
+            uint32_t k = avail < remaining ? avail : remaining;
+            if (k > ct.batch) {
+                k = ct.batch;
+            }
+            const uint32_t next = ct.vc_next(v);
+            if (next != dspf2d::VC_NONE) {
+                const uint32_t credit = downstream_credit(next);
+                if (credit == 0) {
+                    continue;  // blocked; some other channel will not be
+                }
+                if (k > credit) {
+                    k = credit;
+                }
+            }
+            take_from_channel(v, next, k);
+            return true;
+        }
+        return false;
+    }
+
+    bool all_drained() const {
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            if (consumed[v] != expected[v]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Keep serving until every channel has passed on everything that will arrive in it.
+    void drain() {
+        while (!all_drained()) {
+            if (!serve_one_channel()) {
+                queue.flush_publish();
+                flush_credits();
+            }
+        }
+        queue.flush_publish();
+        flush_credits();
+    }
+};
+
 // This chip's own tokens for its remote destinations.
 template <typename InAcc, typename OutAcc, typename MetaAcc, typename FwdAcc>
 void own_phase(
     const Scratch& c,
     TokenQueue& queue,
+    Channels<FwdAcc>& channels,
     const InAcc& in_acc,
     const OutAcc& out_acc,
     const MetaAcc& meta_acc,
-    const FwdAcc& fwd_acc,
-    uint32_t my_fwd_section) {
-    // Own assignments, furthest first. The nearest is the downstream chip: one hop, straight into its output.
-    // Anything further goes into the downstream chip's fwd_section. Own assignment a is outgoing descriptor a,
-    // because dispatch_fabric2d_assignments.cpp emits both lists furthest-first. The last own assignment is
-    // the downstream chip, written directly with no outgoing descriptor, so forward_phase's descriptors start
-    // at num_own - 1.
+    const FwdAcc& fwd_acc) {
+    // Own assignments, furthest first. The nearest is the downstream chip: one hop, straight into its
+    // output, so it needs no channel. Anything further is staged into the downstream chip's channel for
+    // that distance, which the host named in own_vc(a).
     for (uint32_t a = 0; a < ct.num_own; a++) {
         const uint32_t base = ct.assignment_base + a * dspf2d::ASSIGNMENT_WORDS;
         const uint32_t dst_chip = kernel_compile_time_args[base + 0];
@@ -271,117 +440,68 @@ void own_phase(
         const uint32_t split_idx = kernel_compile_time_args[base + 2];
         const uint32_t split_count = kernel_compile_time_args[base + 3];
         const bool direct = (dst_chip == ct.downstream_chip_id);
+        const uint32_t own_vc = ct.own_vc(a);
+        ASSERT(direct == (own_vc == dspf2d::VC_NONE));
         for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
             const uint32_t b = dst_pos * ct.experts_per_chip + j;
             const uint32_t first_record = c.bucket_start[b];
             const uint32_t n = c.bucket_start[b + 1u] - first_record;
             const uint32_t from = slice_begin(n, split_idx, split_count);
             const uint32_t to = slice_begin(n, split_idx + 1, split_count);
-            const uint32_t out_base = direct ? 0 : c.out_start[a * ct.experts_per_chip + j];
-            for (uint32_t i = from; i < to; i++) {
-                const uint32_t at = (first_record + i) * dspf2d::record_words();
-                const uint32_t token = c.records[at + 0];
-                const uint32_t page = c.records[at + 1];
-                const uint32_t entry = queue.claim_entry();
-                noc_async_read(in_acc.get_noc_addr(token), entry_addr(entry), ct.token_size_bytes);
-
-                // Both final addresses are computed here and travel with the token. Every buffer is
-                // interleaved DRAM with the same base on every chip, so a page index names the same place
-                // on any chip.
-                volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(entry);
-                fwd_meta->final_payload_addr = out_acc.get_noc_addr(page);
-                fwd_meta->final_meta_addr = meta_acc.get_noc_addr(page);
-                fwd_meta->dst_chip = dst_chip;
-                fwd_meta->meta[0] = ct.linearized_coord;
-                fwd_meta->meta[1] = token;
-                fwd_meta->meta[2] = c.records[at + 2];
-                fwd_meta->pad = 0;
-                if (direct) {
-                    fwd_meta->cmd = dspf2d::CMD_FINAL_WRITE;
-                    fwd_meta->this_addr = fwd_meta->final_payload_addr;
-                } else {
-                    // A chunk's last page forces the downstream signal; without it the downstream reader
-                    // hangs waiting for the chunk to finish.
-                    fwd_meta->cmd = (i + 1 == to) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
-                    fwd_meta->this_addr = fwd_acc.get_noc_addr(my_fwd_section + out_base + (i - from));
+            uint32_t i = from;
+            while (i < to) {
+                // A staged run needs room in the downstream channel before any of it is aimed. Reserving a
+                // span at a time keeps the credit read off the per-token path; while the channel is full
+                // this serves our own channels instead of spinning, which is what keeps credits flowing
+                // back to the chip upstream.
+                uint32_t span = to - i;
+                if (!direct) {
+                    span = channels.reserve_downstream(own_vc, span);
                 }
-                queue.mark_ready();
-            }
-        }
-    }
-}
-
-// Pages this stream forwards: read from its fwd_section and sent one hop further, or delivered if the
-// downstream chip is their destination.
-template <typename FwdAcc>
-uint32_t forward_phase(
-    const Scratch& c, TokenQueue& queue, const FwdAcc& fwd_acc, uint32_t my_fwd_section, uint32_t downstream_pos) {
-    uint32_t consumed = 0;  // pages taken out of this stream's section, which is what end_stream gives back
-    // Arriving descriptors, in the order upstream wrote them.
-    uint32_t out_d = ct.num_own - 1;  // own assignments occupy the first num_own - 1 outgoing descriptors
-    for (uint32_t d = 0; d < ct.num_forward; d++) {
-        const uint32_t base = ct.in_descriptors_base + d * dspf2d::CHUNK_DESCRIPTOR_WORDS;
-        const uint32_t origin = kernel_compile_time_args[base + 0];
-        const uint32_t dst_pos = kernel_compile_time_args[base + 1];
-        const uint32_t idx = kernel_compile_time_args[base + 2];
-        const uint32_t cnt = kernel_compile_time_args[base + 3];
-        const bool continues = (dst_pos != downstream_pos);
-        const uint32_t dst_chip = kernel_compile_time_args[ct.ring_chip_ids_base + dst_pos];
-        const uint32_t this_out_d = continues ? out_d++ : 0;
-        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-            const uint32_t e = c.chip_experts[dst_pos * ct.experts_per_chip + j];
-            const uint32_t len = chunk_len(c, origin, e, idx, cnt);
-            consumed += len;
-            const uint32_t in_base = c.in_start[d * ct.experts_per_chip + j];
-            const uint32_t out_base = continues ? c.out_start[this_out_d * ct.experts_per_chip + j] : 0;
-            volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
-            // Pages are read a batch at a time so several DRAM reads are in flight. BATCH <= QUEUE_DEPTH is
-            // enough to avoid deadlock, since claim_entry publishes before it blocks; BATCH <= QUEUE_DEPTH/2
-            // lets the sender drain one batch while the next is read.
-            for (uint32_t p = 0; p < len;) {
-                const uint32_t n = (len - p < ct.batch) ? (len - p) : ct.batch;
-                uint32_t claimed[dspf2d::BATCH];
-                for (uint32_t i = 0; i < n; i++) {
-                    // Upstream fills the section in order, so a page is ready once the arrival count
-                    // passes its offset. An upstream chip increments the counter, so invalidate first.
-                    while (true) {
-                        invalidate_l1_cache();
-                        if (*arrived > in_base + p + i) {
-                            break;
-                        }
-                        queue.flush_publish();  // let our own sender work while we wait on upstream
-                    }
-                    claimed[i] = queue.claim_entry();
-                    noc_async_read(
-                        fwd_acc.get_noc_addr(my_fwd_section + in_base + p + i),
-                        entry_addr(claimed[i]),
-                        ct.token_size_bytes + dspf2d::FWD_EXTRA_BYTES);
+                if (span > ct.batch) {
+                    span = ct.batch;
                 }
-                noc_async_read_barrier();  // fwd_meta decides the next hop, so it must have landed
-                // The reads bypass the data cache and these entries held other pages before, so a cached
-                // fwd_meta could be stale.
-                invalidate_l1_cache();
+                for (uint32_t k = 0; k < span; k++, i++) {
+                    const uint32_t at = (first_record + i) * dspf2d::record_words();
+                    const uint32_t token = c.records[at + 0];
+                    const uint32_t page = c.records[at + 1];
+                    const uint32_t entry = queue.claim_entry();
+                    noc_async_read(in_acc.get_noc_addr(token), entry_addr(entry), ct.token_size_bytes);
 
-                for (uint32_t i = 0; i < n; i++) {
-                    volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(claimed[i]);
-                    // Every page of (origin, dst_pos) shares one destination, so whether this hop is the
-                    // last comes from the descriptor. fwd_meta is only checked: an unwritten one reads as
-                    // chip 0, which is also a valid chip id.
-                    ASSERT(fwd_meta->dst_chip == (uint64_t)dst_chip);
-                    if (!continues) {
+                    // Both final addresses are computed here and travel with the token. Every buffer is
+                    // interleaved DRAM with the same base on every chip, so a page index names the same
+                    // place on any chip.
+                    volatile tt_l1_ptr dspf2d::FwdMetadata* fwd_meta = entry_meta(entry);
+                    fwd_meta->final_payload_addr = out_acc.get_noc_addr(page);
+                    fwd_meta->final_meta_addr = meta_acc.get_noc_addr(page);
+                    fwd_meta->dst_chip = dst_chip;
+                    fwd_meta->meta[0] = ct.linearized_coord;
+                    fwd_meta->meta[1] = token;
+                    fwd_meta->meta[2] = c.records[at + 2];
+                    fwd_meta->pad = 0;
+                    if (direct) {
                         fwd_meta->cmd = dspf2d::CMD_FINAL_WRITE;
                         fwd_meta->this_addr = fwd_meta->final_payload_addr;
                     } else {
-                        fwd_meta->cmd = (p + i + 1 == len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
-                        fwd_meta->this_addr = fwd_acc.get_noc_addr(my_fwd_section + out_base + p + i);
+                        // No chunk-end term: with the section split by movement class a channel has no
+                        // chunk boundaries to close, so the only reason to announce early is the sender's
+                        // batch count.
+                        fwd_meta->cmd = dspf2d::CMD_FORWARD;
+                        fwd_meta->vc = own_vc;
+                        fwd_meta->this_addr = fwd_acc.get_noc_addr(fwd_page(own_vc, channels.out_page[own_vc]++));
                     }
                     queue.mark_ready();
                 }
-                p += n;
+                queue.flush_publish();
+                // Serve a channel between spans, not only when a span blocks for credit. The chip upstream
+                // cannot write to us again until we credit the pages it already sent, and those credits are
+                // ours alone to produce -- so a reader that spends a whole own phase without looking at its
+                // channels leaves every upstream chip stalled on it, which lands on the slowest chip rather
+                // than on this one. Cheap when there is nothing to move: one counter read per channel.
+                channels.serve_one_channel();
             }
         }
     }
-    return consumed;
 }
 
 // Tokens routed to an expert this chip hosts. They do not use the fabric: each is one DRAM read and two DRAM
@@ -450,6 +570,45 @@ void local_phase(
     queue.release_unready();
 }
 
+// Tokens the upstream chip on this stream writes straight into this chip's output over the whole launch. The
+// host lists those chunks from the assignments and descriptors the upstream chip's program is built from
+// (incoming_final_descriptors), and their lengths come from the same replicated tables the upstream chip sizes its
+// sends with, so this equals what the upstream sender counts. Short of it, the wait below never ends.
+uint32_t expected_final_writes(const Scratch& c) {
+    uint32_t total = 0;
+    for (uint32_t d = 0; d < ct.num_final; d++) {
+        const uint32_t base = ct.final_descriptors_base + d * dspf2d::CHUNK_DESCRIPTOR_WORDS;
+        const uint32_t origin = kernel_compile_time_args[base + 0];
+        const uint32_t dst = kernel_compile_time_args[base + 1];
+        const uint32_t idx = kernel_compile_time_args[base + 2];
+        const uint32_t cnt = kernel_compile_time_args[base + 3];
+        for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
+            total += chunk_len(c, origin, c.chip_experts[dst * ct.experts_per_chip + j], idx, cnt);
+        }
+    }
+    return total;
+}
+
+// Block until the upstream sender has counted every token it wrote straight into this chip's output. The
+// sender's drain only holds back the upstream chip's own program, so without this the next op on this chip
+// could read an output whose last tokens are still on the way. The signal is a flushing atomic, so the far
+// router has finished the writes ahead of it before they are counted.
+//
+// `>=` and a subtraction rather than `==` and a reset: like the channel counters, this stays right without
+// relying on the launch credit to keep the next launch's signals out.
+void wait_for_final_writes(const Scratch& c) {
+    const uint32_t expected = expected_final_writes(c);
+    volatile tt_l1_ptr uint32_t* final_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.final_sem_addr);
+    while (true) {
+        // The upstream chip increments this counter, so drop any cached copy before each read.
+        invalidate_l1_cache();
+        if (*final_arrived >= expected) {
+            break;
+        }
+    }
+    noc_semaphore_inc(get_noc_addr(ct.final_sem_addr), 0u - expected);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -483,37 +642,31 @@ void kernel_main() {
     const auto meta_acc =
         TensorAccessor(dspf2d::ReaderCtArgs::out_meta_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kOutMetaAddr));
 
-    const auto fwd_acc =
-        TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFwdAddr));
-    const uint32_t my_fwd_section = ct.stream * ct.fwd_pages_per_stream;
-
-    // The downstream chip's position on the axis. A page bound for it is delivered, not forwarded.
-    uint32_t downstream_pos = 0;
-    for (uint32_t pos = 0; pos < ct.extent; pos++) {
-        if (kernel_compile_time_args[ct.ring_chip_ids_base + pos] == ct.downstream_chip_id) {
-            downstream_pos = pos;
-        }
-    }
+    // Not const: Channels is instantiated on this type and own_phase deduces the same one from a
+    // `const FwdAcc&` parameter, which would deduce the unqualified type and not match a const decltype.
+    auto fwd_acc = TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFwdAddr));
 
     TokenQueue queue;
+    Channels<decltype(fwd_acc)> channels{c, queue, fwd_acc};
     {
         DeviceZoneScopedN("dspf2d_starts");
-        chunk_starts(c, ct.in_descriptors_base, c.in_start);
-        chunk_starts(c, ct.out_descriptors_base, c.out_start);
+        channels.plan_arrivals();
     }
     wait_for_untilize();  // the own phase is the first thing that reads a token
     {
+        // Own tokens first: the chips downstream are waiting on them, and staging one blocks only when the
+        // channel it goes to is full, at which point this serves our own channels instead.
         DeviceZoneScopedN("dspf2d_own");
-        own_phase(c, queue, in_acc, out_acc, meta_acc, fwd_acc, my_fwd_section);
+        own_phase(c, queue, channels, in_acc, out_acc, meta_acc, fwd_acc);
         queue.flush_publish();
     }
-    uint32_t consumed = 0;  // pages this stream took out of its fwd_section
     {
+        // Everything still owed to us, in channel priority order.
         DeviceZoneScopedN("dspf2d_forward");
-        consumed = forward_phase(c, queue, fwd_acc, my_fwd_section, downstream_pos);
-        queue.flush_publish();
+        channels.drain();
     }
-    // Local tokens go last because they never leave the chip, while earlier pages have chips downstream waiting.
+    // Local tokens go last because they never leave the chip, while earlier pages have chips downstream
+    // waiting.
     {
         DeviceZoneScopedN("dspf2d_local");
         local_phase(c, queue, in_acc, out_acc, meta_acc);
@@ -526,12 +679,39 @@ void kernel_main() {
         queue.mark_ready();
         queue.flush_publish();
 
+        // Everything we owed upstream is posted before the courier is told to stop, or those pages are
+        // stranded with the chip that wrote them still waiting on them.
+        channels.flush_credits();
         noc_async_atomic_barrier();
-        // Subtract what this launch consumed rather than zeroing. The upstream sender's launch credit
-        // (sender_dispatch_fabric2d.cpp) keeps its next launch's signals out until this chip has started that
-        // launch; subtracting stays right without relying on it. The NoC only has an atomic add, so this adds the
-        // two's complement; both counts are bounded by the section, so the wrap is exact.
-        noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), (uint32_t)(0u - consumed));
+        noc_semaphore_inc(get_noc_addr(ct.credit_outbox_noc_x, ct.credit_outbox_noc_y, ct.credit_done_addr), 1);
+
+        // After CMD_END and credit_done, so neither our own sender nor the courier waits on this. The upstream
+        // sender we wait on needs only its own reader and the credits already posted, never this reader's end,
+        // so this cannot close a cycle around the ring.
+        {
+            DeviceZoneScopedN("dspf2d_wait_final");
+            wait_for_final_writes(c);
+        }
+
+        // Leave the cross-chip counters as the next launch expects them. Both are bumped from another chip,
+        // so they are drained by subtraction rather than zeroed: the NoC only has an atomic add, so this
+        // adds the two's complement, and both counts are bounded by the channel, so the wrap is exact.
+        //
+        // The credits are WAITED for first. The launch credit keeps the upstream sender's NEXT launch out
+        // until this chip has started it, but it says nothing about credits still in flight for pages this
+        // launch placed downstream: one landing after the subtraction would sit on the next launch's
+        // counter and let that launch run a whole channel ahead of a reader that has not got there, which
+        // is a silent overwrite of live tokens rather than a hang. It costs nothing on the common path --
+        // by here the downstream chip has long since consumed what we sent it.
+        for (uint32_t v = 0; v < ct.num_vcs; v++) {
+            volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.vc_freed_addr(v));
+            invalidate_l1_cache();
+            while (*freed < channels.out_page[v]) {
+                invalidate_l1_cache();
+            }
+            noc_semaphore_inc(get_noc_addr(ct.vc_arrived_addr(v)), (uint32_t)(0u - channels.consumed[v]));
+            noc_semaphore_inc(get_noc_addr(ct.vc_freed_addr(v)), (uint32_t)(0u - channels.out_page[v]));
+        }
         noc_async_atomic_barrier();
         if constexpr (ct.untilize_tile_rows > 0) {
             // Safe only here: the wait before the first token read saw all untilize_tile_rows increments,
