@@ -257,25 +257,25 @@ TEST_F(MeshDispatchFixture, TensixTestHostTransferStatsCountProgramLoads) {
     const auto no_time = HostTransferStats::Clock::duration::zero();
     if (this->slow_dispatch_) {
         // Slow dispatch rewrites the binaries, config and runtime args on every launch.
-        const auto binaries = transfer_stats.totals(HostTransfer::ProgramBinariesSlowDispatch);
+        const auto binaries = transfer_stats.totals(HostTransferCategory::ProgramBinariesSlowDispatch);
         EXPECT_GT(binaries.bytes, 0u);
         EXPECT_EQ(binaries.bytes % num_launches, 0u);
         EXPECT_EQ(binaries.transfers, num_launches);
         EXPECT_GT(binaries.busy, no_time);
-        const auto config = transfer_stats.totals(HostTransfer::ProgramConfigSlowDispatch);
+        const auto config = transfer_stats.totals(HostTransferCategory::ProgramConfigSlowDispatch);
         EXPECT_GT(config.bytes, min_config_bytes);
         EXPECT_GT(config.busy, no_time);
     } else {
         // Fast dispatch uploads the binaries once and stages each launch's commands in the issue queue.
-        const auto binaries = transfer_stats.totals(HostTransfer::ProgramBinariesFastDispatch);
+        const auto binaries = transfer_stats.totals(HostTransferCategory::ProgramBinariesFastDispatch);
         EXPECT_GT(binaries.bytes, 0u);
         EXPECT_EQ(binaries.transfers, 1u);
         EXPECT_GT(binaries.busy, no_time);
-        const auto config = transfer_stats.totals(HostTransfer::ProgramConfigFastDispatch);
+        const auto config = transfer_stats.totals(HostTransferCategory::ProgramConfigFastDispatch);
         EXPECT_GT(config.bytes, min_config_bytes);
         EXPECT_EQ(config.transfers, num_launches);
         EXPECT_EQ(config.busy, no_time);
-        EXPECT_EQ(transfer_stats.totals(HostTransfer::BufferWriteFastDispatch).transfers, 0u);
+        EXPECT_EQ(transfer_stats.totals(HostTransferCategory::BufferWriteFastDispatch).transfers, 0u);
     }
 }
 

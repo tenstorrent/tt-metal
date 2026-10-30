@@ -805,7 +805,7 @@ bool H2DSocketImpl::acked_past(uint32_t watermark) {
 
 void H2DSocketImpl::count_staged_bytes(uint32_t num_bytes) {
     if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
-        transfer_stats_->add_bytes(HostTransfer::SocketPull, num_bytes);
+        transfer_stats_->add_bytes(HostTransferCategory::SocketPull, num_bytes);
     }
 }
 
@@ -909,7 +909,7 @@ void H2DSocketImpl::write(void* data, uint32_t num_pages) {
     this->reserve_bytes(num_bytes);
 
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransfer::SocketPush, num_bytes);
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
@@ -942,7 +942,7 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
 
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
-        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransfer::SocketPush, num_bytes);
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
@@ -981,7 +981,7 @@ uint32_t H2DSocketImpl::try_stage(const uint8_t* const* pages, uint32_t num_page
         if (h2d_mode_ == H2DMode::HOST_PUSH) {
             stage_buffer_.resize(num_bytes);
             gather(stage_buffer_.data());
-            ScopedHostTransfer transfer_stats(transfer_stats_, HostTransfer::SocketPush, num_bytes);
+            ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
             pcie_writer(stage_buffer_.data(), num_bytes, aligned_data_buf_start_ + write_ptr_);
         } else {
             gather(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_);

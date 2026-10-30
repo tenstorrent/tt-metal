@@ -1946,7 +1946,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
     // The pinned write's interval closes once the device has read the host memory, not when the command is issued.
     Finish(mesh_device_->mesh_command_queue());
     if (tt::tt_metal::test::buffer_transfers_recorded()) {
-        const auto writes = transfer_stats.totals(tt::tt_metal::test::buffer_write_transfer());
+        const auto writes = transfer_stats.totals(tt::tt_metal::test::buffer_write_category());
         EXPECT_EQ(writes.bytes, buf_size);
         EXPECT_GT(writes.busy, HostTransferStats::Clock::duration::zero());
     }
@@ -1991,7 +1991,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
             // Only the filtered core's pages count as written.
             const auto& pages_per_core = test_config.num_pages_per_core;
             EXPECT_EQ(
-                transfer_stats.totals(tt::tt_metal::test::buffer_write_transfer()).bytes,
+                transfer_stats.totals(tt::tt_metal::test::buffer_write_category()).bytes,
                 pages_per_core.height() * pages_per_core.width() * test_config.page_size());
         }
     }
@@ -2069,11 +2069,11 @@ TEST_F(MeshBufferTestSuite, HostTransferStatsCountShardWritesAndReads) {
     EXPECT_EQ(dst, src);
     Finish(mesh_device_->mesh_command_queue());
 
-    const auto writes = transfer_stats.totals(tt::tt_metal::test::buffer_write_transfer());
+    const auto writes = transfer_stats.totals(tt::tt_metal::test::buffer_write_category());
     EXPECT_EQ(writes.bytes, buf_size);
     EXPECT_EQ(writes.transfers, 1u);
     EXPECT_GT(writes.busy, HostTransferStats::Clock::duration::zero());
-    const auto reads = transfer_stats.totals(tt::tt_metal::test::buffer_read_transfer());
+    const auto reads = transfer_stats.totals(tt::tt_metal::test::buffer_read_category());
     EXPECT_EQ(reads.bytes, buf_size);
     EXPECT_EQ(reads.transfers, 1u);
     EXPECT_GT(reads.busy, HostTransferStats::Clock::duration::zero());
@@ -2098,7 +2098,7 @@ TEST_F(MeshBufferTestSuite, HostTransferStatsCountReplicatedMeshBufferWrite) {
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), buf, src, /*blocking=*/true);
     Finish(mesh_device_->mesh_command_queue());
 
-    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_write_transfer()).bytes, buf_size * num_local_devices);
+    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_write_category()).bytes, buf_size * num_local_devices);
 }
 
 TEST_F(MeshBufferTestSuite, HostTransferStatsCountShardedMeshBufferWriteAndRead) {
@@ -2132,8 +2132,8 @@ TEST_F(MeshBufferTestSuite, HostTransferStatsCountShardedMeshBufferWriteAndRead)
     EXPECT_EQ(dst, src);
     Finish(mesh_device_->mesh_command_queue());
 
-    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_write_transfer()).bytes, global_size);
-    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_read_transfer()).bytes, global_size);
+    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_write_category()).bytes, global_size);
+    EXPECT_EQ(transfer_stats.totals(tt::tt_metal::test::buffer_read_category()).bytes, global_size);
 }
 
 TEST_F(MeshBufferTestSuite, HostTransferStatsRecordNothingWhileOff) {
@@ -2240,11 +2240,11 @@ TEST_F(SDMeshBufferFixture, HostTransferStatsCountWritesAndReads) {
     EXPECT_EQ(dst, src);
 
     // Slow dispatch transfers are done when the call returns, and each shard is one transfer.
-    const auto writes = transfer_stats.totals(HostTransfer::BufferWriteSlowDispatch);
+    const auto writes = transfer_stats.totals(HostTransferCategory::BufferWriteSlowDispatch);
     EXPECT_EQ(writes.bytes, global_size);
     EXPECT_EQ(writes.transfers, mesh_device_->num_devices());
     EXPECT_GT(writes.busy, HostTransferStats::Clock::duration::zero());
-    const auto reads = transfer_stats.totals(HostTransfer::BufferReadSlowDispatch);
+    const auto reads = transfer_stats.totals(HostTransferCategory::BufferReadSlowDispatch);
     EXPECT_EQ(reads.bytes, global_size);
     EXPECT_EQ(reads.transfers, mesh_device_->num_devices());
     EXPECT_GT(reads.busy, HostTransferStats::Clock::duration::zero());
@@ -2280,7 +2280,7 @@ TEST_F(SDMeshBufferFixture, HostTransferStatsCountOnlyCoreFilteredPages) {
 
     const auto& pages_per_core = test_config.num_pages_per_core;
     EXPECT_EQ(
-        transfer_stats.totals(HostTransfer::BufferWriteSlowDispatch).bytes,
+        transfer_stats.totals(HostTransferCategory::BufferWriteSlowDispatch).bytes,
         pages_per_core.height() * pages_per_core.width() * test_config.page_size());
 }
 

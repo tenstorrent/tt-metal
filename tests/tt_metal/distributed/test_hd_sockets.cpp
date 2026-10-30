@@ -575,8 +575,8 @@ TEST_F(H2DSocketStatsFixture, H2DSocketHostTransferStats) {
             num_iterations,
             MeshCoreCoord(recv_coord, CoreCoord(0, 0)));
 
-        const auto pushed = transfer_stats.totals(HostTransfer::SocketPush);
-        const auto staged = transfer_stats.totals(HostTransfer::SocketPull);
+        const auto pushed = transfer_stats.totals(HostTransferCategory::SocketPush);
+        const auto staged = transfer_stats.totals(HostTransferCategory::SocketPull);
         const auto& recorded = h2d_mode == H2DMode::HOST_PUSH ? pushed : staged;
         const auto& unused = h2d_mode == H2DMode::HOST_PUSH ? staged : pushed;
         EXPECT_EQ(recorded.bytes, data_size * num_iterations);

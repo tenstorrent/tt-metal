@@ -23,7 +23,7 @@ public:
     HostTransferStatsScope(const HostTransferStatsScope&) = delete;
     HostTransferStatsScope& operator=(const HostTransferStatsScope&) = delete;
 
-    HostTransferStats::Totals totals(HostTransfer kind) const { return stats_.totals(kind); }
+    HostTransferStats::Totals totals(HostTransferCategory category) const { return stats_.totals(category); }
 
 private:
     HostTransferStats& stats_;
@@ -41,14 +41,16 @@ inline bool buffer_transfers_recorded(ContextId context_id = DEFAULT_CONTEXT_ID)
     return !(context.rtoptions().get_fast_dispatch() && target == tt::TargetDevice::Emule);
 }
 
-inline HostTransfer buffer_write_transfer(ContextId context_id = DEFAULT_CONTEXT_ID) {
-    return MetalContext::instance(context_id).rtoptions().get_fast_dispatch() ? HostTransfer::BufferWriteFastDispatch
-                                                                              : HostTransfer::BufferWriteSlowDispatch;
+inline HostTransferCategory buffer_write_category(ContextId context_id = DEFAULT_CONTEXT_ID) {
+    return MetalContext::instance(context_id).rtoptions().get_fast_dispatch()
+               ? HostTransferCategory::BufferWriteFastDispatch
+               : HostTransferCategory::BufferWriteSlowDispatch;
 }
 
-inline HostTransfer buffer_read_transfer(ContextId context_id = DEFAULT_CONTEXT_ID) {
-    return MetalContext::instance(context_id).rtoptions().get_fast_dispatch() ? HostTransfer::BufferReadFastDispatch
-                                                                              : HostTransfer::BufferReadSlowDispatch;
+inline HostTransferCategory buffer_read_category(ContextId context_id = DEFAULT_CONTEXT_ID) {
+    return MetalContext::instance(context_id).rtoptions().get_fast_dispatch()
+               ? HostTransferCategory::BufferReadFastDispatch
+               : HostTransferCategory::BufferReadSlowDispatch;
 }
 
 }  // namespace tt::tt_metal::test

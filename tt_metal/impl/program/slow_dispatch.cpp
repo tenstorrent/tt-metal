@@ -81,7 +81,9 @@ template <typename Data>
 void write_program_config(
     MetalContext& metal_ctx, ChipId device_id, const CoreCoord& core, const Data& data, uint64_t addr) {
     ScopedHostTransfer upload(
-        &metal_ctx.host_transfer_stats(), HostTransfer::ProgramConfigSlowDispatch, std::span(data).size_bytes());
+        &metal_ctx.host_transfer_stats(),
+        HostTransferCategory::ProgramConfigSlowDispatch,
+        std::span(data).size_bytes());
     metal_ctx.get_cluster().write_core(device_id, core, data, addr);
 }
 
@@ -173,7 +175,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
             if (!is_emulated) {
                 ScopedHostTransfer binary_upload(
                     transfer_stats,
-                    HostTransfer::ProgramBinariesSlowDispatch,
+                    HostTransferCategory::ProgramBinariesSlowDispatch,
                     transfer_stats->enabled() ? kernel_group_binary_bytes(program, kernel_group, device) : 0);
                 ConfigureKernelGroup(program, index, kernel_group, device, logical_core, hal);
             }
@@ -287,7 +289,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
             }
             ScopedHostTransfer semaphore_upload(
                 transfer_stats,
-                HostTransfer::ProgramConfigSlowDispatch,
+                HostTransferCategory::ProgramConfigSlowDispatch,
                 transfer_stats->enabled()
                     ? program.impl().semaphores_on_core(logical_core, core_type).size() * sizeof(uint32_t)
                     : 0);
@@ -466,7 +468,7 @@ void WriteLaunchMsgToCore(
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     ScopedHostTransfer upload(
         &metal_ctx.host_transfer_stats(),
-        HostTransfer::ProgramConfigSlowDispatch,
+        HostTransferCategory::ProgramConfigSlowDispatch,
         launch_msg.size() + (send_go ? go_msg.size() : 0));
     tt::llrt::write_launch_msg_to_core(
         MetalEnvAccessor(metal_ctx.get_env()).impl(), device.id(), virtual_core, launch_msg, go_msg, send_go);

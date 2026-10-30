@@ -1197,7 +1197,7 @@ void RiscFirmwareInitializer::initialize_firmware(
 
                     if (not rtoptions_.get_skip_loading_fw()) {
                         ScopedHostTransfer firmware_upload(
-                            transfer_stats, HostTransfer::Firmware, binary_mem.get_packed_size());
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_multicast_write_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1266,7 +1266,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         ScopedHostTransfer firmware_upload(
-                            transfer_stats, HostTransfer::Firmware, binary_mem.get_packed_size());
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1327,7 +1327,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         ScopedHostTransfer firmware_upload(
-                            transfer_stats, HostTransfer::Firmware, binary_mem.get_packed_size());
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1382,7 +1382,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                             dm_id,
                             fw_size);
                         ScopedHostTransfer firmware_upload(
-                            transfer_stats, HostTransfer::Firmware, binary_mem.get_packed_size());
+                            transfer_stats, HostTransferCategory::Firmware, binary_mem.get_packed_size());
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,

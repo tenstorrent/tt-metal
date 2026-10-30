@@ -148,7 +148,7 @@ TEST(DevicePool, HostTransferStatsCountFirmwareLoads) {
     test::HostTransferStatsScope transfer_stats;
     context.initialize_device_manager(
         device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, context.resolve_dispatch_core_config());
-    const auto firmware = transfer_stats.totals(HostTransfer::Firmware);
+    const auto firmware = transfer_stats.totals(HostTransferCategory::Firmware);
     CloseDevicesInPool();
 
     EXPECT_GT(firmware.bytes, 0u);

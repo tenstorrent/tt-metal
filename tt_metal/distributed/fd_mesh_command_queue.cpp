@@ -620,7 +620,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
 
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
-    ScopedTransferStats transfer_stats(*this, HostTransfer::CoreWriteFastDispatch, size_bytes);
+    ScopedTransferStats transfer_stats(*this, HostTransferCategory::CoreWriteFastDispatch, size_bytes);
 
     Device* device = mesh_device_->impl().get_device(address.device_coord);
     address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
@@ -709,7 +709,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
 
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
-    ScopedTransferStats transfer_stats(*this, HostTransfer::CoreReadFastDispatch, size_bytes);
+    ScopedTransferStats transfer_stats(*this, HostTransferCategory::CoreReadFastDispatch, size_bytes);
 
     Device* device = mesh_device_->impl().get_device(address.device_coord);
     address.address = device_dispatch::add_bank_offset_to_address(device, address.virtual_core_coord, address.address);
@@ -740,7 +740,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     }
 }
 
-void FDMeshCommandQueue::begin_transfer_stats(HostTransfer kind) {
+void FDMeshCommandQueue::begin_transfer_stats(HostTransferCategory category) {
     const auto target = this->get_target_device_type();
     transfer_stats_events_ =
         target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule && !trace_id_.has_value();
@@ -749,21 +749,21 @@ void FDMeshCommandQueue::begin_transfer_stats(HostTransfer kind) {
     }
     // The interval opens when the device has finished the work queued before the transfer, not when the host
     // enqueues it.
-    this->record_event_to_host_nolock({}, std::nullopt, [this, kind](std::chrono::steady_clock::time_point time) {
+    this->record_event_to_host_nolock({}, std::nullopt, [this, category](std::chrono::steady_clock::time_point time) {
         transfer_stats_start_ = time;
-        host_transfer_stats_->begin(kind);
+        host_transfer_stats_->begin(category);
     });
 }
 
-void FDMeshCommandQueue::end_transfer_stats(HostTransfer kind, uint64_t bytes) {
+void FDMeshCommandQueue::end_transfer_stats(HostTransferCategory category, uint64_t bytes) {
     if (!std::exchange(transfer_stats_events_, false)) {
         return;
     }
     // Completes once the device has consumed the transfer's commands, and for reads after the reader thread has
     // copied the data out, since the completion queue is read in order.
     this->record_event_to_host_nolock(
-        {}, std::nullopt, [this, kind, bytes](std::chrono::steady_clock::time_point time) {
-            host_transfer_stats_->end(kind, transfer_stats_start_, time, bytes);
+        {}, std::nullopt, [this, category, bytes](std::chrono::steady_clock::time_point time) {
+            host_transfer_stats_->end(category, transfer_stats_start_, time, bytes);
         });
 }
 
@@ -1325,7 +1325,7 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
         const auto target = this->get_target_device_type();
         if (target != tt::TargetDevice::Mock && target != tt::TargetDevice::Emule) {
             host_transfer_stats_->add_bytes(
-                HostTransfer::ProgramConfigFastDispatch,
+                HostTransferCategory::ProgramConfigFastDispatch,
                 devices.size() * program_cmd_seq.get_one_shot_fetch_size(stall_first, stall_before_program, true));
         }
     }

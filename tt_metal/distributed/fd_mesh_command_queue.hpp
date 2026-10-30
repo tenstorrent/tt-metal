@@ -228,8 +228,8 @@ private:
     std::chrono::steady_clock::time_point transfer_stats_start_;
 
 protected:
-    void begin_transfer_stats(HostTransfer kind) override;
-    void end_transfer_stats(HostTransfer kind, uint64_t bytes) override;
+    void begin_transfer_stats(HostTransferCategory category) override;
+    void end_transfer_stats(HostTransferCategory category, uint64_t bytes) override;
     bool write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
