@@ -670,6 +670,7 @@ jobs:
                       h += float(line.rsplit(" ", 1)[1])
               return q, h
 
+          qs, hs = cache_counters()
           cold_ttft, cold, cold_usage = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
           q0, h0 = cache_counters()
           warm_ttft, warm, warm_usage = ask("Quote the vault passphrase from the archive above, and nothing else.")
@@ -677,6 +678,7 @@ jobs:
           queried, hits = q1 - q0, h1 - h0
           print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r} usage={cold_usage}")
           print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r} usage={warm_usage}")
+          print(f"/metrics vllm:prefix_cache_queries/hits: before cold {qs:.0f}/{hs:.0f}, after cold {q0:.0f}/{h0:.0f}, after resume {q1:.0f}/{h1:.0f}")
           print(f"resume prefix-cache counters: queried={queried:.0f} tokens, hits={hits:.0f} tokens")
           cached = ((warm_usage or {}).get("prompt_tokens_details") or {}).get("cached_tokens")
           if cached is not None:
