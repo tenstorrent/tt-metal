@@ -93,6 +93,22 @@ void ChunkGatedDeltaRuleBackwardDeviceOperation::validate_on_program_cache_miss(
         tensor_args.v.logical_shape(),
         tensor_args.g.logical_shape(),
         tensor_args.d_out.logical_shape());
+    for (const auto& [tensor, name] :
+         {std::pair{&tensor_args.q, "q"},
+          std::pair{&tensor_args.k, "k"},
+          std::pair{&tensor_args.v, "v"},
+          std::pair{&tensor_args.g, "g"},
+          std::pair{&tensor_args.beta, "beta"},
+          std::pair{&tensor_args.d_out, "d_out"}}) {
+        check_tile_padding(*tensor, kOp, name);
+    }
+    for (const auto& [optional_tensor, name] :
+         {std::pair{&tensor_args.initial_state, "initial_state"},
+          std::pair{&tensor_args.d_final_state, "d_final_state"}}) {
+        if (optional_tensor->has_value()) {
+            check_tile_padding(**optional_tensor, kOp, name);
+        }
+    }
     const uint32_t B = qs[0];
     const uint32_t T = qs[2];
     const uint32_t HV = gs[3];

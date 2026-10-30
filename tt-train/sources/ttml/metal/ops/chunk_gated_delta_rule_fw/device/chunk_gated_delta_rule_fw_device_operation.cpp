@@ -101,6 +101,14 @@ void ChunkGatedDeltaRuleForwardPrepDeviceOperation::validate_on_program_cache_mi
         qs,
         vs,
         gs);
+    for (const auto& [tensor, name] :
+         {std::pair{&tensor_args.q, "q"},
+          std::pair{&tensor_args.k, "k"},
+          std::pair{&tensor_args.v, "v"},
+          std::pair{&tensor_args.g, "g"},
+          std::pair{&tensor_args.beta, "beta"}}) {
+        check_tile_padding(*tensor, kOp, name);
+    }
     const uint32_t B = qs[0];
     const uint32_t T = qs[2];
     const uint32_t HV = gs[3];
@@ -258,6 +266,7 @@ void ChunkGatedDeltaRuleForwardScanDeviceOperation::validate_on_program_cache_mi
         const auto& h0 = *tensor_args.initial_state;
         check_device_tensor(h0, kOp, "initial_state", fp32);
         check_same_device(h0, tensor_args.v_beta, kOp, "initial_state", "v_beta");
+        check_tile_padding(h0, kOp, "initial_state");
         const ttnn::Shape state_shape({BH / HV, HV, K, V});
         TT_FATAL(
             h0.logical_shape() == state_shape,

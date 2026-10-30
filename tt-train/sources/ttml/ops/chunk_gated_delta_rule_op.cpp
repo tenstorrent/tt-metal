@@ -38,8 +38,9 @@ autograd::TensorPtr chunk_gated_delta_rule(
     std::optional<ttnn::Tensor> h0_fw;
     std::optional<ttnn::Tensor> h0_bw;
     if (initial_state != nullptr) {
-        h0_fw = as_dtype(initial_state->get_value(), tt::tt_metal::DataType::FLOAT32);
-        h0_bw = as_dtype(initial_state->get_value(), dtype);
+        h0_fw =
+            as_dtype(initial_state->get_value(autograd::PreferredPrecision::NATIVE), tt::tt_metal::DataType::FLOAT32);
+        h0_bw = as_dtype(initial_state->get_value(autograd::PreferredPrecision::NATIVE), dtype);
     }
 
     // The saved state only feeds the backward; skip writing it when no backward node will exist.
@@ -49,8 +50,8 @@ autograd::TensorPtr chunk_gated_delta_rule(
         q->get_value(),
         k->get_value(),
         v->get_value(),
-        g->get_value(),
-        beta->get_value(),
+        g->get_value(autograd::PreferredPrecision::NATIVE),
+        beta->get_value(autograd::PreferredPrecision::NATIVE),
         key_head_dim,
         h0_fw,
         chunk_size,
@@ -90,8 +91,8 @@ autograd::TensorPtr chunk_gated_delta_rule(
             q->get_value(),
             k->get_value(),
             v->get_value(),
-            g->get_value(),
-            beta->get_value(),
+            g->get_value(autograd::PreferredPrecision::NATIVE),
+            beta->get_value(autograd::PreferredPrecision::NATIVE),
             as_dtype(out->get_grad(), dtype),
             key_head_dim,
             h0_bw,
@@ -116,13 +117,14 @@ autograd::TensorPtr chunk_gated_delta_rule(
         }
         // dg / dbeta come back in q's dtype; the gates may be in the other one.
         if (grads[3]) {
-            g->add_grad(as_dtype(*grads[3], g->get_value().dtype()));
+            g->add_grad(as_dtype(*grads[3], g->get_value(autograd::PreferredPrecision::NATIVE).dtype()));
         }
         if (grads[4]) {
-            beta->add_grad(as_dtype(*grads[4], beta->get_value().dtype()));
+            beta->add_grad(as_dtype(*grads[4], beta->get_value(autograd::PreferredPrecision::NATIVE).dtype()));
         }
         if (grads[5]) {
-            initial_state->add_grad(as_dtype(*grads[5], initial_state->get_value().dtype()));
+            initial_state->add_grad(
+                as_dtype(*grads[5], initial_state->get_value(autograd::PreferredPrecision::NATIVE).dtype()));
         }
     };
 
