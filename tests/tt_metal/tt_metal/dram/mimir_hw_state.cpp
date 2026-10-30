@@ -641,7 +641,7 @@ std::vector<D2dTile> live_d2d_tiles(const metal_SocDescriptor& soc) {
 D2dErrorSnapshot snapshot_d2d_errors(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
     D2dErrorSnapshot snapshot;
     for (const D2dTile& tile : live_d2d_tiles(soc)) {
-        // DEBUG_MISC bits 9-11 are assumed sticky; no chippy source states it.
+        // DEBUG_MISC bits 9-11 are sticky until chip reset per the register description, with no software clear.
         snapshot.debug_misc.push_back(hw_state_impl::read_named(
             cluster,
             soc,

@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 
 #include <algorithm>
@@ -380,6 +381,29 @@ bool check_guards(const RemoteDramRun& run, const std::vector<GuardRegion>& guar
     return ok;
 }
 
+// The CCE AXI error registers are write-1-to-clear. Clears them on every CCE by writing back what was read, then
+// fails the test if any error bit is still set. The D2D ATT DEBUG_MISC bits are sticky until chip reset.
+D2dErrorSnapshot snapshot_d2d_errors_after_clearing_axi_errors(
+    const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip) {
+    for (const MimirRegister& axi_error : snapshot_d2d_errors(cluster, soc, chip).axi_errors) {
+        const CoreCoord smc_core = mimir_smc_core(soc, axi_error.mimir_index);
+        const tt_cxy_pair smc_target(static_cast<std::size_t>(chip), smc_core.x, smc_core.y);
+        const uint32_t low_word = static_cast<uint32_t>(axi_error.value);
+        const uint32_t high_word = static_cast<uint32_t>(axi_error.value >> 32);
+        cluster.write_reg(&low_word, smc_target, axi_error.address);
+        cluster.write_reg(&high_word, smc_target, axi_error.address + sizeof(uint32_t));
+    }
+    D2dErrorSnapshot snapshot = snapshot_d2d_errors(cluster, soc, chip);
+    D2dErrorSnapshot axi_only;
+    axi_only.axi_errors = snapshot.axi_errors;
+    const D2dErrorDelta remaining = new_error_bits(D2dErrorSnapshot{}, axi_only);
+    TT_FATAL(
+        remaining.new_bits.empty(),
+        "CCE AXI error bits are still set after the write-1-to-clear: {}",
+        fmt::format("{}", fmt::join(remaining.new_bits, "; ")));
+    return snapshot;
+}
+
 // Passed and Failed are results the test reports on. Threw means the launch raised an exception, so the caller
 // returns without touching the device again.
 enum class RunOutcome { Passed, Failed, Threw };
@@ -580,7 +604,7 @@ RunOutcome write_from_tl1_anchor(
     write_guards(run, guards);
     bool ok = true;
 
-    const D2dErrorSnapshot before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
+    const D2dErrorSnapshot before = snapshot_d2d_errors_after_clearing_axi_errors(run.cluster, run.soc, run.chip);
     std::vector<CceCopyResult> results;
     const RunOutcome launched = run_launches(run.device, launches, results, records, expected_xors);
     if (launched == RunOutcome::Threw) {
@@ -638,7 +662,7 @@ RunOutcome read_to_tl1_anchor(
 
     write_guards(run, guards);
 
-    const D2dErrorSnapshot before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
+    const D2dErrorSnapshot before = snapshot_d2d_errors_after_clearing_axi_errors(run.cluster, run.soc, run.chip);
     std::vector<CceCopyResult> results;
     const RunOutcome launched = run_launches(run.device, launches, results, records, expected_xors);
     if (launched == RunOutcome::Threw) {
@@ -723,7 +747,7 @@ RunOutcome round_trip_anchor(
 
     write_guards(run, guards);
 
-    const D2dErrorSnapshot before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
+    const D2dErrorSnapshot before = snapshot_d2d_errors_after_clearing_axi_errors(run.cluster, run.soc, run.chip);
     std::vector<CceCopyResult> write_results;
     const RunOutcome write_outcome =
         run_launches(run.device, write_launches, write_results, write_records, expected_xors);
@@ -825,7 +849,7 @@ RunOutcome check_traffic_case(
     std::vector<CceCopyResult> results;
     std::vector<MimirTransferRecord> records{record};
     const std::vector<uint32_t> expected_xors{xor_of(pattern)};
-    const D2dErrorSnapshot before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
+    const D2dErrorSnapshot before = snapshot_d2d_errors_after_clearing_axi_errors(run.cluster, run.soc, run.chip);
     const RunOutcome launched = run_launches(run.device, launches, results, records, expected_xors);
     if (launched == RunOutcome::Threw) {
         return RunOutcome::Threw;
@@ -864,7 +888,7 @@ RunOutcome check_traffic_case(
     std::vector<CceCopyLaunch> read_launches{read_launch};
     std::vector<CceCopyResult> read_results;
     std::vector<MimirTransferRecord> read_records{read_record};
-    const D2dErrorSnapshot read_before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
+    const D2dErrorSnapshot read_before = snapshot_d2d_errors_after_clearing_axi_errors(run.cluster, run.soc, run.chip);
     const RunOutcome read_launched = run_launches(run.device, read_launches, read_results, read_records, expected_xors);
     if (read_launched == RunOutcome::Threw) {
         return RunOutcome::Threw;
@@ -1083,7 +1107,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         write_guards(decoy_run, decoys);
     }
 
-    const D2dErrorSnapshot before = snapshot_d2d_errors(cluster, soc, chip);
+    const D2dErrorSnapshot before = snapshot_d2d_errors_after_clearing_axi_errors(cluster, soc, chip);
     std::vector<CceCopyResult> results;
     const RunOutcome launched = run_launches(device, launches, results, records, expected_xors);
     if (launched == RunOutcome::Threw) {
@@ -1164,7 +1188,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         read_expected_xors.push_back(xor_of(transfer.pattern));
     }
 
-    const D2dErrorSnapshot read_before = snapshot_d2d_errors(cluster, soc, chip);
+    const D2dErrorSnapshot read_before = snapshot_d2d_errors_after_clearing_axi_errors(cluster, soc, chip);
     std::vector<CceCopyResult> read_results;
     const RunOutcome read_launched =
         run_launches(device, read_launches, read_results, read_records, read_expected_xors);
