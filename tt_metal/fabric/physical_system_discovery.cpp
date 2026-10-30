@@ -307,22 +307,12 @@ void validate_eth_fw_versions(
         peer_ethernet_firmware_version.to_string());
 }
 
-bool skip_fw_bundle_version_check() {
-    // The equality includes the patch, so 19.16.0 next to 19.16.1 aborts discovery.
-    // Skip while a point release shares the cluster. Set
-    // TT_METAL_SKIP_FW_BUNDLE_VERSION_CHECK=0 to make a mismatch fatal again.
-    const char* value = std::getenv("TT_METAL_SKIP_FW_BUNDLE_VERSION_CHECK");
-    if (value == nullptr || value[0] == '\0') {
-        return true;
-    }
-    return !(value[0] == '0' && value[1] == '\0');
-}
-
 void validate_fw_bundle_versions(
     PhysicalSystemDescriptor& psd,
     const std::optional<tt::umd::FirmwareBundleVersion>& peer_firmware_bundle_version,
     const std::string& my_host_name,
-    const std::string& peer_host_name) {
+    const std::string& peer_host_name,
+    bool check_fw_bundle_version) {
     // Skip validation if firmware bundle versions are not available (e.g., CPU-only tests, older UMD)
     if (!psd.get_firmware_bundle_version().has_value() || !peer_firmware_bundle_version.has_value()) {
         log_warning(
@@ -344,12 +334,11 @@ void validate_fw_bundle_versions(
         peer_host_name,
         peer_firmware_bundle_version->to_string());
 
-    if (peer_firmware_bundle_version.value() != psd.get_firmware_bundle_version().value() &&
-        skip_fw_bundle_version_check()) {
+    if (!check_fw_bundle_version && peer_firmware_bundle_version.value() != psd.get_firmware_bundle_version().value()) {
         log_warning(
             tt::LogMetal,
-            "Firmware bundle versions differ between {} ({}) and {} ({}). Skipping the check. Set "
-            "TT_METAL_SKIP_FW_BUNDLE_VERSION_CHECK=0 to make this fatal.",
+            "Firmware bundle versions differ between {} ({}) and {} ({}). Continuing because the firmware "
+            "bundle version check is disabled.",
             my_host_name,
             psd.get_firmware_bundle_version()->to_string(),
             peer_host_name,
@@ -640,7 +629,8 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
 void exchange_metadata(
     PhysicalSystemDescriptor& psd,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    bool issue_gather) {
+    bool issue_gather,
+    bool check_fw_bundle_version) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t controller_rank = 0;
     auto my_rank = *(distributed_context->rank());
@@ -712,7 +702,8 @@ void exchange_metadata(
                 psd,
                 peer_desc.get_firmware_bundle_version(),
                 psd.get_asic_descriptors().begin()->second.host_name,
-                peer_desc.get_asic_descriptors().begin()->second.host_name);
+                peer_desc.get_asic_descriptors().begin()->second.host_name,
+                check_fw_bundle_version);
             psd.merge(std::move(peer_desc));
         }
     }
@@ -868,7 +859,8 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool run_global_discovery,
-    bool run_live_discovery) {
+    bool run_live_discovery,
+    bool check_fw_bundle_version) {
     // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
     distributed_context->barrier();
 
@@ -893,7 +885,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     psd.set_discovery_data(get_local_discovery_hostname(cluster_desc), my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
-        exchange_metadata(psd, distributed_context, true);
+        exchange_metadata(psd, distributed_context, true, check_fw_bundle_version);
         auto my_rank_val = *(distributed_context->rank());
         constexpr uint32_t controller_rank = 0;
         if (my_rank_val == controller_rank) {
@@ -901,7 +893,7 @@ PhysicalSystemDescriptor run_physical_system_discovery(
             generate_cross_host_connections(psd);
             validate_graphs(psd);
         }
-        exchange_metadata(psd, distributed_context, false);
+        exchange_metadata(psd, distributed_context, false, check_fw_bundle_version);
     }
 
     return psd;
