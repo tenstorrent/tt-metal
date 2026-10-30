@@ -84,13 +84,17 @@ private:
 // can hold a weak_ptr back and survive close_impl() without UAF.
 class DriscL1Arena : public std::enable_shared_from_this<DriscL1Arena> {
 public:
-    // A PrefetcherPipe set's per-core config pages all share one offset, so a
+    // Blackhole: a PrefetcherPipe set's per-core config pages all share one offset, so a
     // whole set costs one page per sender core: 384 B at 8 receivers (a 40 B
     // header and 8 NOC XY pairs padded to 128 B, then the SENT and ACKED blocks
     // of 8 L1-aligned slots, 128 B each on their own 64 B lines), so the zone
     // holds two such sets live on a core at once. The remaining ~92 KB above the
     // zone is reported by kernel_working_region_size() so callers placing a
     // co-resident DRISC kernel know how much L1 they have.
+    //
+    // Quasar: kQuasarSenderStateZoneSize and kQuasarReceiverZoneSize. A pipe set with DRAM receivers
+    // gives each pages_sent and pages_acked counter its own line (dram_receiver_config_page.hpp),
+    // and the receiver zone holds those sets' receiver config pages and FIFOs.
     static constexpr uint32_t kSenderStateZoneSize = 1 * 1024;
     static constexpr uint32_t kQuasarSenderStateZoneSize = 16 * 1024;
     static constexpr uint32_t kQuasarReceiverZoneSize = 1024 * 1024;
