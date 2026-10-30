@@ -21,6 +21,7 @@
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
+#include "tt_metal/tt_metal/dram/mimir_remote_test.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 
 namespace tt::tt_metal::mimir_test::tl1 {
@@ -606,111 +607,83 @@ TEST_P(MimirLocalTl1, SameChipletControl) {
 
 INSTANTIATE_TEST_SUITE_P(MM5, MimirLocalTl1, ::testing::ValuesIn(same_chiplet_pairs()), local_pair_name);
 
-class MimirRemoteTl1Direct : public ::testing::TestWithParam<RemotePair> {};
+class MimirRemoteTl1Direct : public MimirRemoteParamTest<RemotePair> {};
 
 TEST_P(MimirRemoteTl1Direct, WriteRead) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     run_remote_write_read(device, {pair}, fmt::format("{} WriteRead", remote_pair_label(pair)));
 }
 
 TEST_P(MimirRemoteTl1Direct, HostInitRemoteRead) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     run_remote_host_init_read(device, pair);
 }
 
 TEST_P(MimirRemoteTl1Direct, SizeAlignment) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     run_remote_size_alignment(device, pair);
 }
 
 INSTANTIATE_TEST_SUITE_P(MM5, MimirRemoteTl1Direct, ::testing::ValuesIn(direct_remote_pairs()), remote_pair_name);
 
-class MimirRemoteTl1Routed : public ::testing::TestWithParam<RemotePair> {};
+class MimirRemoteTl1Routed : public MimirRemoteParamTest<RemotePair> {};
 
 TEST_P(MimirRemoteTl1Routed, WriteRead) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     run_remote_write_read(device, {pair}, fmt::format("{} WriteRead", remote_pair_label(pair)));
 }
 
 TEST_P(MimirRemoteTl1Routed, HostInitRemoteRead) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     run_remote_host_init_read(device, pair);
 }
 
 TEST_P(MimirRemoteTl1Routed, SizeAlignment) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     run_remote_size_alignment(device, pair);
 }
 
 INSTANTIATE_TEST_SUITE_P(MM5, MimirRemoteTl1Routed, ::testing::ValuesIn(routed_remote_pairs()), remote_pair_name);
 
-class MimirRemoteTl1Bidir : public ::testing::Test {};
+class MimirRemoteTl1Bidir : public MimirRemoteTest {};
 
 TEST_F(MimirRemoteTl1Bidir, Concurrent) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
     const std::vector<RemotePair> pairs = direct_remote_pairs();
     if (const std::string skip_reason = remote_skip_reason(pairs.front()); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     run_remote_write_read(device, pairs, "MimirRemoteTl1Bidir.Concurrent");
 }
 
@@ -719,17 +692,12 @@ TEST_F(MimirRemoteTl1Bidir, Concurrent) {
 // M0.CCE0 (from M1.CCE1 two hops and M1.CCE0 one hop). All in one program, and each written window is read back by
 // the next hart of its source CCE. The windows are disjoint because each landing slot is keyed by source CCE and
 // hart. Each destination CCE is treated as the excluded CCE for its own transfers.
-// Plain TEST, not a fixture: test_mimir_remote_dram.cpp defines MimirRemoteMixed.Concurrent under the same suite name.
-TEST(MimirRemoteMixed, FanOutFanIn) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
+TEST_F(MimirRemoteMixed, FanOutFanIn) {
     if (const std::string skip_reason = remote_skip_reason(RemotePair{0, 0, 1, 1}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     MIMIR_REQUIRE_REMOTE_PREFLIGHT();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    IDevice* device = open_remote_device();
     const uint32_t mimir0_cce0 = cce_index_for(0, 0);
     const uint32_t mimir0_cce1 = cce_index_for(0, 1);
     const uint32_t mimir1_cce0 = cce_index_for(1, 0);
