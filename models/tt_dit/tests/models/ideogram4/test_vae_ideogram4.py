@@ -110,6 +110,22 @@ def _make_akl(weights: str, torch_dtype) -> AutoencoderKL:
             "random",
             id="bh_galaxy_tp4_1024px",
         ),
+        # Non-square API sizes, where the default 8x8 GroupNorm grid does not divide Ht.
+        *[
+            pytest.param(
+                (4, 8),
+                (4, 8),
+                0,
+                2,
+                {**ring_params, **_L1},
+                ttnn.Topology.Ring,
+                h // 8,
+                w // 8,
+                "random",
+                id=f"bh_galaxy_tp4_{w}x{h}",
+            )
+            for w, h in [(1248, 832), (832, 1248), (1280, 720), (1152, 864)]
+        ],
     ],
     indirect=["mesh_device", "device_params"],
 )
