@@ -107,41 +107,24 @@ std::vector<dspf2d::ChunkDescriptor> forwarding_descriptors(
     return descriptors;
 }
 
-// A channel IS a forward descriptor's movement class, so this is the descriptor enumeration itself rather
-// than a parallel list: descriptor d of a stream and channel d are the same (origin, destination) offsets,
-// which is what lets the reader map an arriving descriptor to its channel by index alone.
-std::vector<std::pair<int32_t, int32_t>> forwarding_classes(uint32_t ring_extent) {
-    return descriptors_in_forwarder_ref_frame(ring_extent);
-}
+uint32_t fwd_pages_per_stream(
+    uint32_t ring_extent,
+    uint32_t num_links,
+    uint32_t seq_len_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t experts_per_chip) {
+    const uint32_t m = ring_extent / 2;
+    const uint32_t per_pair = seq_len_per_chip * std::min(num_experts_per_tok, experts_per_chip);
+    const uint32_t sc = stream_count(num_links);
+    const auto div_up = [](uint32_t a, uint32_t b) { return (a + b - 1) / b; };
 
-uint32_t vc_after_hop(uint32_t vc, uint32_t ring_extent) {
-    const auto classes = forwarding_classes(ring_extent);
-    const auto [src, dst] = classes[vc];
-    if (dst == 1) {
-        return dspf2d::VC_NONE;  // delivered on the next chip, not queued there
+    uint32_t pages = 0;
+    for (uint32_t dd = 1; dd < m; dd++) {
+        const uint32_t origins = m - dd;
+        pages += (origins - 1) * div_up(per_pair, num_links);
+        pages += div_up(per_pair, sc);
     }
-    // One hop on: the origin is one further behind and the destination one nearer.
-    for (uint32_t v = 0; v < classes.size(); v++) {
-        if (classes[v].first == src - 1 && classes[v].second == dst - 1) {
-            return v;
-        }
-    }
-    TT_FATAL(false, "dispatch_fabric2d: class ({},{}) has no successor channel", src, dst);
-    return dspf2d::VC_NONE;
-}
-
-uint32_t vc_for_own(uint32_t distance, uint32_t ring_extent) {
-    if (distance <= 1) {
-        return dspf2d::VC_NONE;  // our neighbour's own output; never queued
-    }
-    const auto classes = forwarding_classes(ring_extent);
-    for (uint32_t v = 0; v < classes.size(); v++) {
-        if (classes[v].first == -1 && classes[v].second == static_cast<int32_t>(distance) - 1) {
-            return v;
-        }
-    }
-    TT_FATAL(false, "dispatch_fabric2d: own distance {} has no channel", distance);
-    return dspf2d::VC_NONE;
+    return pages + forward_descriptors_per_stream(ring_extent) * experts_per_chip;
 }
 
 std::vector<dspf2d::ChunkDescriptor> outgoing_descriptors(
