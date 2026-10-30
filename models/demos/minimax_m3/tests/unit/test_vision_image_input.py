@@ -9,7 +9,7 @@ tests check that:
   - num_tokens counts the vision tokens of one image's grid in each form it takes, and rejects the grids that
     check_image_input stops before it calls num_tokens.
 
-These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "vision_image_input").
+These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_image_input.py

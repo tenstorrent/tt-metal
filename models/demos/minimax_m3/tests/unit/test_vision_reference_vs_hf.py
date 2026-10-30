@@ -10,12 +10,13 @@ same ops, so the results must be bit-identical; with HF's default SDPA attention
 rounding. Two more tests check that the reference's default dimensions are HF's (and the checkpoint's, when
 HF_MODEL is set) and that load_hf_state_dict maps HF's names.
 
-No device and no checkpoint. Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1). The test does
+No device and no checkpoint. Needs transformers with minimax_m3_vl (tt-metal pins 5.12.1), which the hf_vision
+fixture imports: without it these tests fail, and the other tests in the directory still collect. The test does
 not import ttnn, but pytest also loads models/demos/minimax_m3/conftest.py, which does; add --noconftest
 where ttnn is not installed.
 
 Run:
-    pytest models/demos/minimax_m3/tests/test_vision_reference_vs_hf.py
+    pytest models/demos/minimax_m3/tests/unit/test_vision_reference_vs_hf.py
 """
 
 from __future__ import annotations
@@ -28,9 +29,6 @@ import pytest
 import torch
 
 from models.demos.minimax_m3.reference.vision import MiniMaxM3VisionConfig, MiniMaxM3VisionEncoder
-
-hf_vision = pytest.importorskip("transformers.models.minimax_m3_vl.modeling_minimax_m3_vl")
-MiniMaxM3VLConfig = hf_vision.MiniMaxM3VLConfig
 
 # Small configs with the checkpoint's patch geometry. head_dim 80 is the checkpoint's (78 dims rotated,
 # 2 pass through); head_dim 64 checks the general split of the rotary dims over T, H and W (60 and 4).
@@ -53,10 +51,18 @@ GRIDS = {
 }
 
 
-def _hf_config(dims: dict) -> MiniMaxM3VLConfig:
+@pytest.fixture(scope="module")
+def hf_vision():
+    """Hugging Face's minimax_m3_vl modeling module."""
+    import transformers.models.minimax_m3_vl.modeling_minimax_m3_vl as hf_vision
+
+    return hf_vision
+
+
+def _hf_config(hf_vision, dims: dict):
     dims = dict(dims)
     theta = dims.pop("rope_theta", 10000.0)
-    return MiniMaxM3VLConfig(
+    return hf_vision.MiniMaxM3VLConfig(
         vision_config=dict(
             num_hidden_layers=NUM_LAYERS, rope_parameters={"rope_type": "default", "rope_theta": theta}, **dims
         ),
@@ -69,9 +75,9 @@ def _strip(state_dict: dict, prefix: str) -> dict:
     return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
 
 
-def _build(config_id: str, seed: int = 0):
+def _build(hf_vision, config_id: str, seed: int = 0):
     """Reference with seeded random weights, and the HF tower and projector holding the same weights."""
-    hf_config = _hf_config(CONFIGS[config_id])
+    hf_config = _hf_config(hf_vision, CONFIGS[config_id])
     config = MiniMaxM3VisionConfig.from_hf_config(hf_config.to_dict())
     reference = MiniMaxM3VisionEncoder(config).init_random_weights(seed).eval()
 
@@ -111,9 +117,9 @@ def _check(name: str, ours: torch.Tensor, hf: torch.Tensor, exact: bool):
 @torch.no_grad()
 @pytest.mark.parametrize("grid_id", GRIDS)
 @pytest.mark.parametrize("config_id", CONFIGS)
-def test_vision_rope_vs_hf(config_id, grid_id):
+def test_vision_rope_vs_hf(hf_vision, config_id, grid_id):
     """reference rope_cos_sin == HF MiniMaxM3VL3DRotaryEmbedding, bit for bit."""
-    reference, tower, _ = _build(config_id)
+    reference, tower, _ = _build(hf_vision, config_id)
     grid_thw = torch.tensor(GRIDS[grid_id])
     cos, sin = reference.rope(grid_thw)
     hf_cos, hf_sin = tower.rotary_emb(grid_thw, device=torch.device("cpu"), dtype=torch.float32)
@@ -125,9 +131,9 @@ def test_vision_rope_vs_hf(config_id, grid_id):
 @pytest.mark.parametrize("attn_implementation", ["eager", "sdpa"])
 @pytest.mark.parametrize("grid_id", GRIDS)
 @pytest.mark.parametrize("config_id", CONFIGS)
-def test_vision_reference_vs_hf(config_id, grid_id, attn_implementation):
+def test_vision_reference_vs_hf(hf_vision, config_id, grid_id, attn_implementation):
     """Patch embed, every layer, tower output and vision tokens == HF (bit-identical against eager attention)."""
-    reference, tower, projector = _build(config_id)
+    reference, tower, projector = _build(hf_vision, config_id)
     tower.set_attn_implementation(attn_implementation)
     exact = attn_implementation == "eager"
     grid_thw = torch.tensor(GRIDS[grid_id])
@@ -156,9 +162,9 @@ def test_vision_reference_vs_hf(config_id, grid_id, attn_implementation):
     assert tokens.shape == (pixel_values.shape[0] // reference.config.spatial_merge_size**2, TEXT_HIDDEN)
 
 
-def test_vision_config_defaults_match_hf():
+def test_vision_config_defaults_match_hf(hf_vision):
     """The reference's default dimensions are HF's MiniMax-M3 defaults (and the checkpoint's, when HF_MODEL is set)."""
-    assert MiniMaxM3VisionConfig.from_hf_config(MiniMaxM3VLConfig().to_dict()) == MiniMaxM3VisionConfig()
+    assert MiniMaxM3VisionConfig.from_hf_config(hf_vision.MiniMaxM3VLConfig().to_dict()) == MiniMaxM3VisionConfig()
     checkpoint = os.getenv("HF_MODEL")
     if checkpoint and os.path.isfile(os.path.join(checkpoint, "config.json")):
         with open(os.path.join(checkpoint, "config.json")) as f:
@@ -166,10 +172,10 @@ def test_vision_config_defaults_match_hf():
 
 
 @torch.no_grad()
-def test_vision_load_hf_state_dict():
+def test_vision_load_hf_state_dict(hf_vision):
     """load_hf_state_dict takes HF's names, skips other keys and layers past num_hidden_layers, and accepts
     the patch embed weight flattened to (hidden, patch_dim)."""
-    reference, tower, projector = _build("hd80")
+    reference, tower, projector = _build(hf_vision, "hd80")
     weights = {f"vision_tower.{k}": v for k, v in tower.state_dict().items()}
     weights.update({f"multi_modal_projector.{k}": v for k, v in projector.state_dict().items()})
     weights["vision_tower.embeddings.proj.weight"] = weights["vision_tower.embeddings.proj.weight"].flatten(1)

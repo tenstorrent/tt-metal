@@ -8,7 +8,7 @@ No device: the configs are built with the real ttnn classes and checked on the h
 - At the smaller sizes of CONFIGS_MID on 12x10, a linear whose transposed split would have fewer than
   LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core gets the untransposed split or keeps ttnn's own config, and one
   with exactly that many gets the transposed split.
-- At 256 patches (the CI grid h16w16), on 11x10, 12x10 and 13x10, the tower's linears get a config and the merge
+- At 256 patches (h16w16, a CI grid), on 11x10, 12x10 and 13x10, the tower's linears get a config and the merge
   linears keep ttnn's own, so the 1-card device tests run both paths; linear_1 and linear_2 get a config on 13x10 only.
   At 16 patches, the smallest image, every linear keeps ttnn's own.
 - The helper takes its three limits as arguments: with other limits, linear_2 at 1024 patches gets the transposed split
@@ -18,7 +18,7 @@ No device: the configs are built with the real ttnn classes and checked on the h
   multicast factory make, the factory's circular buffers fit in LINEAR_L1_BYTES, and no config uses transpose_mcast
   with fewer than LINEAR_MIN_TRANSPOSED_PER_CORE_M tiles of M per core.
 
-The 1-card leg selects these tests by name (vision_linear_program_config), as they have no mesh id.
+The 1-card leg selects these tests by name (test_vision_), as they have no mesh id.
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_linear_program_config.py

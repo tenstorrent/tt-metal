@@ -5,7 +5,7 @@
 
 Plain PyTorch, no ttnn and no transformers. It follows Hugging Face transformers 5.12.1
 ``minimax_m3_vl`` (``MiniMaxM3VLVisionModel``, then ``MiniMaxM3VLMultiModalProjector``) op for op;
-``tests/test_vision_reference_vs_hf.py`` checks that on CPU. The vision unit tests
+``tests/unit/test_vision_reference_vs_hf.py`` checks that on CPU. The vision unit tests
 (``tests/unit/test_vision_*_vs_ref.py``) compare the TT modules against this reference.
 
 One forward takes all patches of a request as one sequence of L patches:

@@ -14,7 +14,7 @@ two-image grids:
     reference attention;
 and that M3VLVisionModel keeps the cos and sin of a grid on device for the next images of that grid.
 
-These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "vision_rope").
+These tests have no mesh id; the 1-card CI leg selects them by name (its -k includes "test_vision_").
 
 Run:
     pytest models/demos/minimax_m3/tests/unit/test_vision_rope_vs_ref.py
