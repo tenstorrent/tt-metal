@@ -69,7 +69,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@e4da165a2df9bbd8bf6ef8518a9aa111051fb972 # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@3e80f31be6ed17175cce7877a7c727045184d2e5 # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive

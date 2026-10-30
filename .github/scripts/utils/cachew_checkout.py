@@ -27,7 +27,7 @@ import sys
 
 ACTION_DIR = Path(".github/actions/cachew-checkout")
 ACTION_REPO = "tenstorrent/tt-metal/.github/actions/cachew-checkout"
-ACTION_SHA = "e4da165a2df9bbd8bf6ef8518a9aa111051fb972"
+ACTION_SHA = "3e80f31be6ed17175cce7877a7c727045184d2e5"
 ACTION = f"{ACTION_REPO}@{ACTION_SHA}"
 UPSTREAM_WRAPPER = ACTION_DIR / "action.yml"
 FORWARDED_CHECKOUT = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
