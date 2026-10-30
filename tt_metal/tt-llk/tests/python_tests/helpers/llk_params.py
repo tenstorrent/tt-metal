@@ -15,6 +15,9 @@ format_dict = {
     DataFormat.Float16_b: torch.bfloat16,
     DataFormat.Bfp8: torch.float16,  # BFP8 with an A exponent, represented as float16
     DataFormat.Bfp8_b: torch.bfloat16,  # BFP8 not native to PyTorch, is represented as bfloat16
+    DataFormat.Bfp4: torch.float16,  # BFP4 with an A exponent
+    DataFormat.Bfp2: torch.float16,  # BFP2 with an A exponent
+    DataFormat.Lf8: torch.float16,  # FP8 e5m2
     DataFormat.Bfp4_b: torch.bfloat16,  # BFP4 not native to PyTorch, is represented as bfloat16
     DataFormat.Bfp2_b: torch.bfloat16,  # BFP2 not native to PyTorch, is represented as bfloat16
     DataFormat.Int32: torch.int32,
@@ -743,11 +746,14 @@ format_tile_sizes = {
     DataFormat.Bfp8: 1088,
     DataFormat.Bfp4_b: 576,
     DataFormat.Bfp2_b: 320,
+    DataFormat.Bfp4: 576,
+    DataFormat.Bfp2: 320,
+    DataFormat.Lf8: 1024,  # 1 byte per element, no exponent section
     DataFormat.Float16: 2048,
     DataFormat.Float16_b: 2048,
     DataFormat.Float32: 4096,
     DataFormat.Int32: 4096,
-    DataFormat.Tf32: 3072,  # 3 bytes * 1024 elements
+    DataFormat.Tf32: 4096,  # a 32-bit word per datum in L1
     DataFormat.UInt32: 4096,
     DataFormat.Int16: 2048,
     DataFormat.UInt16: 2048,

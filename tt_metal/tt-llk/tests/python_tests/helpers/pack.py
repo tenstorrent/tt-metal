@@ -80,6 +80,12 @@ def pack_fp8_e4m3(torch_tensor):
     return fp32_array.astype(ml_dtypes.float8_e4m3fn).tobytes()
 
 
+def pack_lf8(torch_tensor):
+    # Lf8 is FP8 e5m2 (5-bit exponent)
+    fp32_array = torch_tensor.cpu().to(torch.float32).numpy()
+    return fp32_array.astype(ml_dtypes.float8_e5m2).tobytes()
+
+
 def pack_int8(torch_tensor, twos_complement=False):
     if twos_complement:
         return torch_tensor.cpu().numpy().astype(np.int8).tobytes()
@@ -284,6 +290,35 @@ def truncate_bfp8(bfp8_mantissas, magnitude_bits):
     return out
 
 
+def float_to_bfp8a_block(block):
+    """One 16-element block of a BFP with an A exponent: float16 elements, 5-bit shared exponent, 7-bit mantissas (round to nearest, ties away)."""
+    bits = [int(v) for v in np.asarray(block, dtype=np.float16).view(np.uint16)]
+    signs = [(b >> 15) & 1 for b in bits]
+    exponents = [(b >> 10) & 0x1F for b in bits]
+    explicit = [64 | ((b & 0x3FF) >> 4) for b in bits]
+    shared_exponent = max(exponents)
+    mantissas = []
+    for i in range(len(bits)):
+        delta = shared_exponent - exponents[i]
+        if delta > 0:
+            guard = (explicit[i] >> (delta - 1)) & 1
+            mantissa = ((explicit[i] >> delta) + guard) & 0x7F
+        else:
+            mantissa = explicit[i] & 0x7F
+        mantissas.append(((signs[i] << 7) | mantissa) if mantissa != 0 else 0)
+    return shared_exponent, mantissas
+
+
+def float_to_bfp4a_block(block):
+    shared_exponent, bfp8_mantissas = float_to_bfp8a_block(block)
+    return shared_exponent, truncate_bfp8(bfp8_mantissas, magnitude_bits=3)
+
+
+def float_to_bfp2a_block(block):
+    shared_exponent, bfp8_mantissas = float_to_bfp8a_block(block)
+    return shared_exponent, truncate_bfp8(bfp8_mantissas, magnitude_bits=1)
+
+
 def float_to_bfp4_block(block):
     """Pack a 16-element block to BFP4_b format.
 
@@ -372,6 +407,30 @@ def pack_bfp2_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
         packed_mantissas.append((e3 << 6) | (e2 << 4) | (e1 << 2) | e0)
 
     return exponents + packed_mantissas
+
+
+def pack_bfp8(tensor, block_size=16, num_faces=4, face_r_dim=16):
+    """BFP8 with an A exponent: exponents then 8-bit mantissas."""
+    flat = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
+    exponents, mantissas = _bfp_collect_blocks(flat, block_size, float_to_bfp8a_block)
+    return exponents + mantissas
+
+
+def pack_bfp4(tensor, block_size=16, num_faces=4, face_r_dim=16):
+    """BFP4 with an A exponent: two 4-bit mantissas per byte, even element in the low nibble."""
+    flat = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
+    exponents, m = _bfp_collect_blocks(flat, block_size, float_to_bfp4a_block)
+    return exponents + [(m[i + 1] << 4) | m[i] for i in range(0, len(m), 2)]
+
+
+def pack_bfp2(tensor, block_size=16, num_faces=4, face_r_dim=16):
+    """BFP2 with an A exponent: four 2-bit mantissas per byte, first element in the low bits."""
+    flat = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
+    exponents, m = _bfp_collect_blocks(flat, block_size, float_to_bfp2a_block)
+    return exponents + [
+        (m[i + 3] << 6) | (m[i + 2] << 4) | (m[i + 1] << 2) | m[i]
+        for i in range(0, len(m), 4)
+    ]
 
 
 # ============================================================================

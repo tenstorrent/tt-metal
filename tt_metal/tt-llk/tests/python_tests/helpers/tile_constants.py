@@ -221,12 +221,12 @@ def calculate_tile_size_bytes(
         total_exponents = max(actual_exponents, MIN_BFP_EXPONENTS)
         return total_exponents + tile_elements
 
-    if data_format == DataFormat.Bfp4_b:
+    if data_format in (DataFormat.Bfp4, DataFormat.Bfp4_b):
         actual_exponents = tile_elements // 16
         total_exponents = max(actual_exponents, MIN_BFP_EXPONENTS)
         return total_exponents + (tile_elements // 2)
 
-    if data_format == DataFormat.Bfp2_b:
+    if data_format in (DataFormat.Bfp2, DataFormat.Bfp2_b):
         actual_exponents = tile_elements // 16
         total_exponents = max(actual_exponents, MIN_BFP_EXPONENTS)
         return total_exponents + (tile_elements // 4)

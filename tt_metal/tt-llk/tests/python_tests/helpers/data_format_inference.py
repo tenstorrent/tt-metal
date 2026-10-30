@@ -226,7 +226,7 @@ def infer_unpack_out(
     # BFP2/BFP4/BFP8 inputs keep matching InDataFormat/OutDataFormat values;
     # the unpacker internally normalizes the datum into the BF16 source-register
     # representation before math consumes it.
-    if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
+    if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b, DataFormat.Bfp4, DataFormat.Bfp2]:
         return input_format
 
     if (
@@ -371,6 +371,13 @@ def infer_pack_in(
 
     # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
     # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
+    if output_format in [DataFormat.Bfp4, DataFormat.Bfp2]:
+        return (
+            DataFormat.Float32
+            if is_fp32_dest_acc_en == DestAccumulation.Yes
+            else DataFormat.Float16
+        )
+
     if output_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         # production (data_format.cpp) packs block float output from a 32-bit DEST through Bfp8_b unless bfp8_pack_precise is set
         if pack_src_from_output and is_fp32_dest_acc_en == DestAccumulation.Yes:
@@ -403,6 +410,8 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
     # inference historically models the unpacked payload as BFP8_b.
     if unpack_out in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return DataFormat.Bfp8_b
+    if unpack_out in [DataFormat.Bfp4, DataFormat.Bfp2]:
+        return DataFormat.Bfp8
 
     # Map a 2x-packed SrcA/SrcB-only register format back to its paired non-2x family member,
     # used to derive a math/pack format (those fields cannot hold the 2x format itself).

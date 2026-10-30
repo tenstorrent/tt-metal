@@ -13,16 +13,16 @@ from helpers.llk_params import DestAccumulation
 F = DataFormat
 IO = InputOutputFormat
 
-# early conversion stage: DEST register format -> intermediate format (Lf8 is not a python DataFormat; Fp8_e4m3 takes its row)
+# early conversion stage: DEST register format -> intermediate format (Fp8_e4m3 reads as Lf8 in the matrix: format & 0xF)
 _EARLY = {
     F.Float32: {F.Float32, F.Tf32, F.Float16_b, F.Bfp8_b, F.Int32, F.Int8, F.UInt8},
     F.Float16_b: {F.Tf32, F.Float16_b, F.Bfp8_b, F.Int8},
-    F.Float16: {F.Float16, F.Bfp8, F.Fp8_e4m3, F.Int8},
+    F.Float16: {F.Float16, F.Bfp8, F.Lf8, F.Fp8_e4m3, F.Int8},
     F.Int32: {F.Float32, F.Tf32, F.Float16_b, F.Int32, F.Int8, F.UInt8},
     F.UInt16: {F.UInt16},
 }
-_FP32_LATE = {F.Float32, F.Float16_b, F.Float16, F.Fp8_e4m3, F.Bfp8, F.Bfp8_b, F.Bfp4_b, F.Bfp2_b}
-_COMBINED_SRC = {F.Tf32, F.Float16_b, F.Bfp8_b, F.Bfp4_b, F.Bfp2_b, F.Float16, F.Bfp8}
+_FP32_LATE = {F.Float32, F.Float16_b, F.Float16, F.Lf8, F.Fp8_e4m3, F.Bfp8, F.Bfp4, F.Bfp2, F.Bfp8_b, F.Bfp4_b, F.Bfp2_b}
+_COMBINED_SRC = {F.Tf32, F.Float16_b, F.Bfp8_b, F.Bfp4_b, F.Bfp2_b, F.Float16, F.Bfp8, F.Bfp4, F.Bfp2, F.Lf8}
 
 
 def llk_accepts(pack_src: DataFormat, out: DataFormat) -> bool:
@@ -58,8 +58,8 @@ def pack_src_of(formats, dest_acc) -> DataFormat:
 
 # Bfp8 (A exponent) is an output only: the stimuli generator has no Bfp8 input
 # Tf32 is not an input either: the unpacker configuration rejects srcA Tf32 (helpers/test_config.py)
-LLKX_INPUTS = [F.Float32, F.Float16_b, F.Float16, F.Int32, F.UInt16, F.Int8, F.UInt8, F.UInt32, F.Bfp8_b]
-LLKX_OUTPUTS = [F.Float32, F.Tf32, F.Float16_b, F.Float16, F.Bfp8_b, F.Bfp8, F.Bfp4_b, F.Bfp2_b, F.Int32, F.Int8, F.UInt8, F.UInt16, F.UInt32, F.Fp8_e4m3]
+LLKX_INPUTS = [F.Float32, F.Float16_b, F.Float16, F.Int32, F.UInt16, F.Int8, F.UInt8, F.UInt32, F.Bfp8_b, F.Bfp8, F.Bfp4, F.Bfp2, F.Lf8]
+LLKX_OUTPUTS = [F.Float32, F.Tf32, F.Float16_b, F.Float16, F.Bfp8_b, F.Bfp8, F.Bfp4, F.Bfp4_b, F.Bfp2, F.Bfp2_b, F.Lf8, F.Int32, F.Int8, F.UInt8, F.UInt16, F.UInt32, F.Fp8_e4m3]
 
 # pairs the cov2, cov3 and grid modules already run (all the pairs of the six cov3 formats, the grid pairs)
 _SIX = [F.Float16_b, F.Float16, F.Float32, F.Int32, F.Bfp8_b, F.Bfp4_b]
@@ -92,3 +92,26 @@ def llkx_accs(formats):
         if llk_accepts(src, formats.output_format) and src == dest_format_of(formats.input_format, a):
             out.append(a)
     return out
+
+
+_A_BFP = {F.Bfp8, F.Bfp4, F.Bfp2}
+_A_SRC = {F.Float16, F.Bfp8, F.Bfp4, F.Bfp2, F.Lf8}
+
+
+def hw_undefined_reason(formats, dest_acc):
+    """Why a pair the LLK matrix accepts has no value-preserving result on the hardware, or None.
+
+    The matrix (cpack_common.h) is a software assertion and is wider than the packer: the RTL simulation assertions (blackhole_tensix_core_architecture.md, Formats) take a
+    5-bit exponent block float or FP8 e4m3 only from FP16A, and integer outputs only from integers. Measured on the card: the listed pairs return the same bytes on main and
+    on the pack head, and the bytes are no function of the datum, so no golden can hold them. test_pack_llkx runs them and records the mismatch as an expected failure."""
+    src = pack_src_of(formats, dest_acc)
+    out = formats.output_format
+    if out in _A_BFP and src not in _A_SRC:
+        return "A-exponent block float from a packer input with an 8-bit exponent: the packer does not rebias (reads back 0 or inf)"
+    if out == F.Lf8:
+        return "Lf8 (e5m2) output from the packer reads back as zeros and fixed patterns, not the datum"
+    if out == F.Int8 and src in (F.Float16, F.Float16_b):
+        return "float datum of a 16-bit DEST into Int8: the result is not a function of the datum (same bits give different bytes)"
+    if out in (F.Int8, F.UInt8) and formats.input_format in (F.Int8, F.UInt8) and out != formats.input_format:
+        return "Int8 and UInt8 into each other in a 16-bit DEST: the low 3 magnitude bits are lost and unsigned into signed reads back 0"
+    return None
