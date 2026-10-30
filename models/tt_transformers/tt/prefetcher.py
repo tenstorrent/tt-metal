@@ -260,7 +260,7 @@ class Prefetcher(LightweightModule):
         self.legal_receiver_cores: List[int] = self.pf_config["legal_receiver_cores"]
         self.mesh_device: ttnn.MeshDevice = mesh_device
         self.enable_performance_mode: bool = True
-        # The pipes' persistent L1 on the sender and receiver cores, and one pipe per sender, in DRAM bank order
+        # The pipes' L1 rings on the sender and receiver cores, and one pipe per sender, in DRAM bank order
         self.pipe_space: Optional[ttnn.experimental.PrefetcherPipeSpace] = None
         self.pipes: List[ttnn.experimental.PrefetcherPipe] = []
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
@@ -350,13 +350,11 @@ class Prefetcher(LightweightModule):
         """Reserve the PrefetcherPipes: one per active sender, whose receivers are that sender's ring cores.
 
         Each receiver keeps a whole tensor's blocks until its matmul is done with them, so a ring holds the largest
-        weight share. The rings are persistent L1 at the bottom of the sender and receiver cores, which a live
-        program's circular buffers there seal. Called on the first decode: clearing the program cache releases the
-        programs that model construction and prefill left on those cores, and decode compiles its own above the rings.
-        A prefill after that has to fit beside the rings.
+        weight share. The rings come from the L1 allocator, so they can be reserved after prefill has run, and the
+        programs it cached stay valid: a cached program checks its circular buffers against L1 buffers each time it
+        is enqueued. Called on the first decode, so prefill's first run does not have to fit beside the rings.
+        A prefill trace captured before then is not checked on replay.
         """
-        ttnn.synchronize_device(self.mesh_device)
-        self.mesh_device.clear_program_cache()
         senders = self.core_config.sender_cores(active=True)
         receivers = self.core_config.receiver_cores(sender_active=True, receiver_active=True)
         ring_size = max_bytes_per_receiver(self.model_name, self.mesh_device.get_num_devices(), self.ring_size)
@@ -367,6 +365,7 @@ class Prefetcher(LightweightModule):
             receiver_domain=self.to_core_range_set(receivers),
             ring_size=ring_size,
             max_receivers_per_pipe=self.num_receiver_cores,
+            l1_source=ttnn.experimental.PrefetcherPipeL1Source.Allocator,
         )
         self.pipes = self.pipe_space.create_pipes(list(zip(senders, receivers)))
 
