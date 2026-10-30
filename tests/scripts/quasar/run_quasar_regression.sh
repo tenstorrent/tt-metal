@@ -16,9 +16,12 @@ BUILD_DIR="$TT_METAL_HOME/build"
 LOG_DIR="$SCRIPT_DIR/logs"
 DRY_RUN=false
 BACK2BACK=true
-# Retry gtest when ZeBu reports a hostname reservation conflict in the local
-# emu_<date>_<time>_.log file (gtest hangs waiting for the device in this case).
-# Set QUASAR_EMU_HOSTNAME_MAX_RETRIES=0 to disable retries (still fails fast).
+# Retry when ZeBu reports a hostname reservation conflict in a local
+# emu_<date>_<time>_.log file (the test hangs waiting for the device).
+# One pytest process may close and reopen the device, which starts another
+# emulator and another emu log. Every log and simulator PID from the run is
+# monitored. Set QUASAR_EMU_HOSTNAME_MAX_RETRIES=0 to disable retries (still
+# fails fast).
 EMU_HOSTNAME_MAX_RETRIES="${QUASAR_EMU_HOSTNAME_MAX_RETRIES:-2}"
 if [[ ! "$EMU_HOSTNAME_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
     echo "ERROR: QUASAR_EMU_HOSTNAME_MAX_RETRIES must be a non-negative integer"
@@ -297,29 +300,16 @@ emu_log_is_new() {
     return 0
 }
 
-find_newest_emu_log_since_baseline() {
-    local newest="" f mtime newest_mtime=0
-    shopt -s nullglob
-    for f in $EMU_LOG_GLOB; do
-        if emu_log_is_new "$f"; then
-            mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-            if [[ $mtime -ge $newest_mtime ]]; then
-                newest_mtime=$mtime
-                newest="$f"
-            fi
-        fi
-    done
-    shopt -u nullglob
-    echo "$newest"
-}
-
-# Read new lines from an emu log; print matches and return 0 on hostname conflict.
+# Read new lines from an emu log. Updates the named offset in this shell.
+# Sets emu_poll_conflict_chunk and returns 0 when a hostname conflict is seen.
+# Must not be called from a command substitution; that would drop the offset.
 poll_emu_log_for_hostname_conflict() {
     local logfile="$1" offset_var="$2"
     local offset="${!offset_var}"
     local line new_size
     local -a matches=()
 
+    emu_poll_conflict_chunk=""
     [[ -n "$logfile" && -f "$logfile" ]] || return 1
 
     new_size=$(stat -c %s "$logfile" 2>/dev/null || echo 0)
@@ -336,16 +326,32 @@ poll_emu_log_for_hostname_conflict() {
     printf -v "$offset_var" '%s' "$new_size"
 
     if [[ ${#matches[@]} -gt 0 ]]; then
-        printf '%s\n' "${matches[@]}"
+        emu_poll_conflict_chunk="$(printf '%s\n' "${matches[@]}")"
         return 0
     fi
     return 1
 }
 
-# Read new lines from TT_METAL_LOGGER_FILE for the detached simulator PID.
-poll_metal_log_for_simulator_pid() {
-    local logfile="$1" offset_var="$2" pid_var="$3"
-    local offset="${!offset_var}" line new_size
+# Remember a simulator PID spawned by this test. Later device reopen cycles
+# append another PID instead of replacing the first.
+remember_simulator_pid() {
+    local pid="$1" known
+    [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]] && return 1
+    if [[ ${#tracked_sim_pids[@]} -gt 0 ]]; then
+        for known in "${tracked_sim_pids[@]}"; do
+            [[ "$known" == "$pid" ]] && return 1
+        done
+    fi
+    tracked_sim_pids+=("$pid")
+    active_tracked_sim_pids=("${tracked_sim_pids[@]}")
+    echo "  EMU SIMULATOR PID: $pid"
+    return 0
+}
+
+# Read new lines from TT_METAL_LOGGER_FILE for every detached simulator PID.
+poll_metal_log_for_simulator_pids() {
+    local logfile="$1" offset_var="$2"
+    local offset="${!offset_var}" line new_size found=0
 
     [[ -n "$logfile" && -f "$logfile" ]] || return 1
 
@@ -356,12 +362,12 @@ poll_metal_log_for_simulator_pid() {
 
     while IFS= read -r line || [[ -n "$line" ]]; do
         if [[ "$line" =~ $SIMULATOR_PID_REGEX ]]; then
-            printf -v "$pid_var" '%s' "${BASH_REMATCH[1]}"
+            remember_simulator_pid "${BASH_REMATCH[1]}" && found=1
         fi
     done < <(tail -c +$((offset + 1)) "$logfile" 2>/dev/null || true)
 
     printf -v "$offset_var" '%s' "$new_size"
-    [[ -n "${!pid_var}" ]]
+    [[ $found -eq 1 ]]
 }
 
 snapshot_simulator_pids() {
@@ -440,15 +446,19 @@ terminate_gtest_process() {
 # The simulator is spawned detached (UV_PROCESS_DETACHED), so killing gtest alone
 # leaves run.sh running and a retry would launch a second emulator.
 cleanup_emu_attempt() {
-    local gtest_pid="$1" tracked_sim_pid="${2:-}"
-    local -a sim_pids=() pid
+    local gtest_pid="$1"
+    shift
+    local -a sim_pids=() extra_pids=() pid
+    if [[ $# -gt 0 ]]; then
+        extra_pids=("$@")
+    fi
 
     terminate_gtest_process "$gtest_pid"
     wait "$gtest_pid" 2>/dev/null || true
 
-    if [[ -n "$tracked_sim_pid" ]]; then
-        sim_pids+=("$tracked_sim_pid")
-    fi
+    for pid in "${extra_pids[@]}"; do
+        [[ -n "$pid" ]] && sim_pids+=("$pid")
+    done
     while IFS= read -r pid; do
         [[ -z "$pid" ]] && continue
         local seen=0
@@ -474,19 +484,36 @@ cleanup_emu_attempt() {
     refresh_emu_logs_baseline
 }
 
-# Run a test command in the background and poll emu_<date>_<time>_.log for hostname
-# conflicts. Command argv is taken from emu_run_cmd; env from gtest_cmd_env.
-# Sets gtest_emu_hostname_conflict=1 when the emulator log reports a conflict.
+# Attach any emu_<date>_<time>_.log created after the baseline. A later device
+# open writes a new file; that log is monitored too, from its first byte.
+discover_emu_logs_since_baseline() {
+    local f
+    shopt -s nullglob
+    for f in $EMU_LOG_GLOB; do
+        if emu_log_is_new "$f" && [[ -z "${emu_log_offsets[$f]+x}" ]]; then
+            emu_log_offsets["$f"]=0
+            echo "  EMU LOG: $f"
+        fi
+    done
+    shopt -u nullglob
+}
+
+# Run a test command in the background and poll every emu_<date>_<time>_.log
+# started during the run for hostname conflicts. Command argv is taken from
+# emu_run_cmd; env from gtest_cmd_env.
+# Sets gtest_emu_hostname_conflict=1 when any emulator log reports a conflict.
 # Returns the command exit code (1 when terminated due to conflict).
-# Tracks active_gtest_pid / active_tracked_sim_pid for INT cleanup (setsid isolates
-# the process group from the terminal's Ctrl-C).
+# Tracks active_gtest_pid / active_tracked_sim_pids for INT cleanup (setsid
+# isolates the process group from the terminal's Ctrl-C).
 run_cmd_with_emu_monitor() {
     local cmd_pid rc=0
-    local emu_log="" emu_offset=0 metal_offset=0 conflict_lines=""
-    local tracked_sim_pid=""
+    local metal_offset=0 conflict_lines="" f offset_slot
+    local -A emu_log_offsets=()
 
     gtest_emu_hostname_conflict=0
     gtest_emu_conflict_lines=""
+    tracked_sim_pids=()
+    active_tracked_sim_pids=()
     refresh_emu_logs_baseline
     snapshot_simulator_pids
 
@@ -497,29 +524,32 @@ run_cmd_with_emu_monitor() {
     fi
     cmd_pid=$!
     active_gtest_pid=$cmd_pid
-    active_tracked_sim_pid=""
 
     while kill -0 "$cmd_pid" 2>/dev/null; do
         if [[ -n "$log_file" ]]; then
-            poll_metal_log_for_simulator_pid "$log_file" metal_offset tracked_sim_pid || true
-            active_tracked_sim_pid="$tracked_sim_pid"
+            poll_metal_log_for_simulator_pids "$log_file" metal_offset || true
         fi
 
-        if [[ -z "$emu_log" ]]; then
-            emu_log="$(find_newest_emu_log_since_baseline)"
-            emu_offset=0
+        discover_emu_logs_since_baseline
+        if [[ ${#emu_log_offsets[@]} -gt 0 ]]; then
+            for f in "${!emu_log_offsets[@]}"; do
+                offset_slot="${emu_log_offsets[$f]}"
+                if poll_emu_log_for_hostname_conflict "$f" offset_slot; then
+                    gtest_emu_hostname_conflict=1
+                    conflict_lines+="${emu_poll_conflict_chunk}"$'\n'
+                    echo "  EMU HOSTNAME CONFLICT in $f (terminating hung test)"
+                fi
+                emu_log_offsets["$f"]=$offset_slot
+            done
         fi
 
-        if [[ -n "$emu_log" ]]; then
-            if conflict_lines="$(poll_emu_log_for_hostname_conflict "$emu_log" emu_offset)"; then
-                gtest_emu_hostname_conflict=1
-                gtest_emu_conflict_lines="$conflict_lines"
-                echo "  EMU HOSTNAME CONFLICT in $emu_log (terminating hung test)"
-                cleanup_emu_attempt "$cmd_pid" "$tracked_sim_pid"
-                active_gtest_pid=""
-                active_tracked_sim_pid=""
-                break
-            fi
+        if [[ $gtest_emu_hostname_conflict -eq 1 ]]; then
+            gtest_emu_conflict_lines="$conflict_lines"
+            cleanup_emu_attempt "$cmd_pid" "${tracked_sim_pids[@]}"
+            active_gtest_pid=""
+            active_tracked_sim_pids=()
+            tracked_sim_pids=()
+            break
         fi
 
         sleep "$EMU_MONITOR_POLL_INTERVAL"
@@ -531,7 +561,8 @@ run_cmd_with_emu_monitor() {
         rc=1
     fi
     active_gtest_pid=""
-    active_tracked_sim_pid=""
+    active_tracked_sim_pids=()
+    tracked_sim_pids=()
     return $rc
 }
 
@@ -895,21 +926,37 @@ run_test_invocation() {
             results+=("SKIP  $label  (pytest not found)")
             return
         fi
-        local -a missing=()
+        local -a missing_files=() missing_dirs=()
         local -A seen_missing=()
         local g pyfile
         for g in "${groups[@]}"; do
             pyfile="$TT_METAL_HOME/$g"
-            if [[ ! -e "$pyfile" && -z "${seen_missing[$pyfile]:-}" ]]; then
-                seen_missing["$pyfile"]=1
-                missing+=("$pyfile")
+            [[ -e "$pyfile" || -n "${seen_missing[$pyfile]:-}" ]] && continue
+            seen_missing["$pyfile"]=1
+            # A group that is not a .py file is a directory collection.
+            if [[ "$g" == *.py ]]; then
+                missing_files+=("$pyfile")
+            else
+                missing_dirs+=("$pyfile")
             fi
         done
-        if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "  SKIP: pytest path not found:"
-            printf '    %s\n' "${missing[@]}"
-            skipped=$((skipped + 1))
-            results+=("SKIP  $label  (pytest path not found)")
+        if [[ ${#missing_dirs[@]} -gt 0 || ${#missing_files[@]} -gt 0 ]]; then
+            local reason=""
+            if [[ ${#missing_dirs[@]} -gt 0 ]]; then
+                echo "  FAIL: pytest directory not found:"
+                printf '    %s\n' "${missing_dirs[@]}"
+                reason="pytest directory not found"
+            fi
+            if [[ ${#missing_files[@]} -gt 0 ]]; then
+                echo "  FAIL: pytest file not found:"
+                printf '    %s\n' "${missing_files[@]}"
+                reason="pytest file not found"
+            fi
+            if [[ ${#missing_dirs[@]} -gt 0 && ${#missing_files[@]} -gt 0 ]]; then
+                reason="pytest path not found"
+            fi
+            failed=$((failed + 1))
+            results+=("FAIL  $label  ($reason)")
             return
         fi
     else
@@ -1201,9 +1248,10 @@ on_interrupt() {
 
     if [[ -n "${active_gtest_pid:-}" ]]; then
         echo "  cleaning up active test (pid $active_gtest_pid) and simulator..."
-        cleanup_emu_attempt "$active_gtest_pid" "${active_tracked_sim_pid:-}"
+        cleanup_emu_attempt "$active_gtest_pid" "${active_tracked_sim_pids[@]}"
         active_gtest_pid=""
-        active_tracked_sim_pid=""
+        active_tracked_sim_pids=()
+        tracked_sim_pids=()
     fi
 
     print_summary
@@ -1221,7 +1269,9 @@ declare -a emu_run_cmd=()
 gtest_emu_hostname_conflict=0
 gtest_emu_conflict_lines=""
 active_gtest_pid=""
-active_tracked_sim_pid=""
+declare -a active_tracked_sim_pids=()
+declare -a tracked_sim_pids=()
+emu_poll_conflict_chunk=""
 
 # Back-to-back batch state. batch_groups is parallel to batch_filters so pytest
 # can pass several files to one process. Gtest batches still share one group.
