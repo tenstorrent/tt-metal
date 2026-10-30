@@ -673,6 +673,97 @@ TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuBuildEbc16) {
         double(b.cycles) / kReps);
 }
 
+// ---- (e) scalar times tile without a resident DEST slot (pass 2's decay, four S tiles per acquire) -----------------
+TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuScalarMul) {
+    std::mt19937 gen(41);
+    SfpuOperand data{kT32};
+    std::vector<std::vector<float>> rm(4);
+    for (uint32_t i = 0; i < 4; i++) {
+        rm[i] = random_tile(kT32, gen, 0.05f);  // S-like magnitudes
+        data.add(rm[i]);
+    }
+    auto host_product = [&](float e) {
+        std::vector<std::vector<float>> out(4);
+        for (uint32_t i = 0; i < 4; i++) {
+            out[i].resize(kT32.elems());
+            for (uint32_t k = 0; k < kT32.elems(); k++) {
+                out[i][k] = rm[i][k] * e;  // one fp32 multiply
+            }
+        }
+        return out;
+    };
+    const float e_mid = std::exp(-2.37f);
+    for (const float e : {std::exp(-6.0f), e_mid, 1.0f}) {
+        std::vector<float> col(kT32.elems(), 1.0f);  // ecol32: column 0 = e, exp(0) = 1 elsewhere
+        for (uint32_t r = 0; r < 32; r++) {
+            col[r * 32] = e;
+        }
+        SfpuRunConfig cfg{
+            .variant = 7, .mode = 0, .inputs = {one_tile(col, kT32), data}, .out_spec = kT32, .out_tiles_per_rep = 4};
+        auto bcast = run(this->devices_.at(0), cfg);
+        cfg.mode = 1;
+        auto loaded = run(this->devices_.at(0), cfg);
+        cfg.mode = 2;
+        auto copies = run(this->devices_.at(0), cfg);
+        cfg.mode = 3;
+        auto single = run(this->devices_.at(0), cfg);
+        ASSERT_EQ(bcast.tiles.size(), 4u);
+        const bool loaded_eq = bits_equal(loaded.tiles, bcast.tiles), single_eq = bits_equal(single.tiles, bcast.tiles);
+        const bool host_eq = bits_equal(bcast.tiles, host_product(e));
+        const bool repeatable = bits_equal(loaded.first, loaded.tiles) && bits_equal(bcast.first, bcast.tiles);
+        EXPECT_TRUE(loaded_eq) << "load_scalar + mul_loaded_scalar<32> differs bitwise from mul_col_bcast<32>, e = "
+                               << e;
+        EXPECT_TRUE(single_eq) << "mul_scalar_dst<32> differs bitwise from mul_col_bcast<32>, e = " << e;
+        EXPECT_TRUE(host_eq) << "mul_col_bcast<32> is not the fp32 product, e = " << e;
+        EXPECT_TRUE(repeatable);
+        log_info(
+            tt::LogTest,
+            "scalar x tile, e = {:.6f}: load_scalar + mul_loaded_scalar bit-equal to mul_col_bcast<32> {}; "
+            "mul_scalar_dst bit-equal {}; equal to the host fp32 product {}; repeatable {}. Cycles per rep (4 tiles): "
+            "mul_col_bcast form (2 acquires, 2 scalar copies, 4 data copies, 4 bcasts incl. init, 4 packs) {:.0f}; "
+            "load_scalar form (1 acquire, 1 scalar copy + load, 4 copies, 4 multiplies, 4 packs) {:.0f}; copies + "
+            "packs alone {:.0f} -> scalar copy + load + 4 multiplies {:.0f}, i.e. {:.0f} per tile; mul_scalar_dst "
+            "form (load + multiply per tile, 2 acquires) {:.0f}",
+            e,
+            loaded_eq,
+            single_eq,
+            host_eq,
+            repeatable,
+            double(bcast.cycles) / kReps,
+            double(loaded.cycles) / kReps,
+            double(copies.cycles) / kReps,
+            double(loaded.cycles - copies.cycles) / kReps,
+            double(loaded.cycles - copies.cycles) / (kReps * 4),
+            double(single.cycles) / kReps);
+    }
+    // [0, 0] semantics: a scalar tile full of random values with e at [0, 0] alone; the result must be the fp32
+    // product with e (the column broadcast would use a different value per row here, so it is not compared).
+    {
+        auto garbage = random_tile(kT32, gen, 1.0f);
+        garbage[0] = e_mid;
+        SfpuRunConfig cfg{
+            .variant = 7,
+            .mode = 1,
+            .inputs = {one_tile(garbage, kT32), data},
+            .out_spec = kT32,
+            .out_tiles_per_rep = 4};
+        auto loaded = run(this->devices_.at(0), cfg);
+        const auto want = host_product(e_mid);
+        uint32_t mism = 0;
+        for (uint32_t i = 0; i < 4; i++) {
+            for (uint32_t k = 0; k < kT32.elems(); k++) {
+                mism += std::bit_cast<uint32_t>(loaded.tiles[i][k]) != std::bit_cast<uint32_t>(want[i][k]);
+            }
+        }
+        EXPECT_EQ(mism, 0u) << "load_scalar read something other than element [0, 0]";
+        log_info(
+            tt::LogTest,
+            "scalar x tile, scalar tile random everywhere but [0, 0]: elements differing from the fp32 product with "
+            "[0, 0]: {} / 4096",
+            mism);
+    }
+}
+
 // ---- (d) exact exp on a column tile ------------------------------------------------------------------------------
 TEST_F(LLKBlackholeSingleCardFixture, GdnDecodeSfpuExpExact) {
     std::mt19937 gen(23);
