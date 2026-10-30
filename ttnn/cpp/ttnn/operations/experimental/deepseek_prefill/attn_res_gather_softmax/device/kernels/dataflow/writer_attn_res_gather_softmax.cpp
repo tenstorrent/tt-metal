@@ -22,6 +22,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/dataflow/attn_res_stats_layout.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/attn_res_core_runs.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -41,27 +42,24 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<mass_args.next_compile_time_args_offset()>();
     constexpr auto total_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
-    // runtime args
-    const auto stats_addr = get_arg_val<uint32_t>(0);
-    const auto shift_addr = get_arg_val<uint32_t>(1);
-    const auto mass_addr = get_arg_val<uint32_t>(2);
-    const auto out_addr = get_arg_val<uint32_t>(3);
     // Statistics are split by token row and the fold by output tile, so a core's two
     // runs are unrelated. `num_stat_rows` is zero on a core that only folds.
-    const auto num_stat_rows = get_arg_val<uint32_t>(4);
-    const auto stat_start_row = get_arg_val<uint32_t>(5);
-    const auto num_fold_tiles = get_arg_val<uint32_t>(6);
-    const auto fold_start_tile = get_arg_val<uint32_t>(7);
-    const auto my_rank = get_arg_val<uint32_t>(8);
-    const auto gather_core_x = get_arg_val<uint32_t>(9);
-    const auto gather_core_y = get_arg_val<uint32_t>(10);
-    const auto total_addr = get_arg_val<uint32_t>(11);
+    const auto [num_stat_rows, stat_start_row, num_fold_tiles, fold_start_tile] =
+        attn_res_core_runs<total_args.next_compile_time_args_offset()>();
 
-    // Every core reads the same site out of shift and mass, so the two offsets are
-    // common rather than per-core; they are also what the host re-patches on a
-    // program-cache hit.
+    // Everything else is common: the site's offsets into
+    // shift and mass, the buffer addresses, and this chip's rank and gather core. A
+    // program-cache hit patches these once per program instead of once per core.
     const auto shift_page_offset = get_common_arg_val<uint32_t>(0);
     const auto mass_page_offset = get_common_arg_val<uint32_t>(1);
+    const auto stats_addr = get_common_arg_val<uint32_t>(2);
+    const auto shift_addr = get_common_arg_val<uint32_t>(3);
+    const auto mass_addr = get_common_arg_val<uint32_t>(4);
+    const auto out_addr = get_common_arg_val<uint32_t>(5);
+    const auto total_addr = get_common_arg_val<uint32_t>(6);
+    const auto my_rank = get_common_arg_val<uint32_t>(7);
+    const auto gather_core_x = get_common_arg_val<uint32_t>(8);
+    const auto gather_core_y = get_common_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_scalars = 5;
     constexpr uint32_t cb_id_local_stats = 7;

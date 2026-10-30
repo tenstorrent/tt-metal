@@ -45,9 +45,27 @@ constexpr uint32_t kMaxStageTiles = 64;
 // Fold cores per token row-tile. Two puts a core's share at half a row, which is
 // the widest split whose share still divides the row width.
 constexpr uint32_t kFoldCoresPerRow = 2;
-// Where the site-derived page offsets sit in each kernel's common runtime args.
-constexpr uint32_t kReaderSiteArgIdx = 0;
-constexpr uint32_t kWriterSiteArgIdx = 0;
+// The common runtime args. Everything a cache hit patches is here, so a hit costs a
+// handful of writes per program rather than a handful per core.
+enum ReaderCommonArg : uint32_t {
+    kReaderSite,
+    kReaderPrefixAddr,
+    kReaderPartialAddr,
+    kReaderQAddr,
+    kReaderPendingAddr
+};
+enum WriterCommonArg : uint32_t {
+    kWriterShiftSite,
+    kWriterMassSite,
+    kWriterStatsAddr,
+    kWriterShiftAddr,
+    kWriterMassAddr,
+    kWriterOutAddr,
+    kWriterTotalAddr,
+    kWriterRank,
+    kWriterGatherX,
+    kWriterGatherY,
+};
 // Where the gather kernel's statistics-tensor address and semaphore address sit.
 constexpr uint32_t kGatherStatsAddrIdx = 0;
 constexpr uint32_t kGatherSemAddrIdx = 2;
@@ -323,6 +341,19 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     ////////////////////////////////////////////////////////////////////////////
     //                              Kernels
     ////////////////////////////////////////////////////////////////////////////
+    // Each fold core derives its runs of both splits from its own position (see
+    // `kernels/attn_res_core_runs.hpp`), so the split rides in compile-time args and a
+    // launch ships no per-core runtime args at all.
+    const std::array<uint32_t, 8> core_runs_ct_args = {
+        grid.x,
+        num_stat_cores,
+        stat_group_1.num_cores(),
+        rows_per_core_1,
+        rows_per_core_2,
+        fold_group_1.num_cores(),
+        tiles_per_core_1,
+        tiles_per_core_2};
+
     // `pending` aliases running_sum where no write was handed in, so the accessor list is
     // the same length either way and the kernel's compile-time offsets do not move. The
     // kernel never reads through it there.
@@ -331,6 +362,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TensorAccessorArgs(*partial.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*q.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*pending.buffer()).append_to(reader_ct_args);
+    reader_ct_args.insert(reader_ct_args.end(), core_runs_ct_args.begin(), core_runs_ct_args.end());
 
     const auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -345,6 +377,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TensorAccessorArgs(*mass.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(*total.buffer()).append_to(writer_ct_args);
+    writer_ct_args.insert(writer_ct_args.end(), core_runs_ct_args.begin(), core_runs_ct_args.end());
 
     const auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -352,14 +385,15 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         all_fold_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    const std::vector<uint32_t> compute_ct_args = {
+    std::vector<uint32_t> compute_ct_args = {
         Wt,
         ring_size,
         std::bit_cast<uint32_t>(operation_attributes.inv_hidden_size),
         std::bit_cast<uint32_t>(operation_attributes.eps),
         static_cast<uint32_t>(fuse_add)};
+    compute_ct_args.insert(compute_ct_args.end(), core_runs_ct_args.begin(), core_runs_ct_args.end());
 
-    const auto compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         std::string(kKernelDir) + "compute/attn_res_gather_softmax.cpp",
         all_fold_cores,
@@ -383,11 +417,30 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     ////////////////////////////////////////////////////////////////////////////
     //                           Runtime Arguments
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::SetCommonRuntimeArgs(program, reader_kernel_id, std::vector<uint32_t>{site_offsets.partial});
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program, writer_kernel_id, std::vector<uint32_t>{site_offsets.shift, site_offsets.mass});
-
     const auto gather_physical = mesh_device->worker_core_from_logical_core(gather_core);
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program,
+        reader_kernel_id,
+        {site_offsets.partial,
+         running_sum.buffer()->address(),
+         partial.buffer()->address(),
+         q.buffer()->address(),
+         pending.buffer()->address()});
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program,
+        writer_kernel_id,
+        {site_offsets.shift,
+         site_offsets.mass,
+         stats.buffer()->address(),
+         shift.buffer()->address(),
+         mass.buffer()->address(),
+         output.buffer()->address(),
+         total.buffer()->address(),
+         my_rank,
+         gather_physical.x,
+         gather_physical.y});
+
+    // The closed form the kernels use, checked against the split it stands in for.
     uint32_t start_row = 0;
     uint32_t start_tile = 0;
     for (uint32_t i = 0; i < num_fold_cores; ++i) {
@@ -395,38 +448,21 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         const uint32_t rows =
             (i < num_stat_cores) ? (stat_group_1.contains(core) ? rows_per_core_1 : rows_per_core_2) : 0;
         const uint32_t tiles = fold_group_1.contains(core) ? tiles_per_core_1 : tiles_per_core_2;
-
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id,
+        const uint32_t linear = core.y * grid.x + core.x;
+        const bool stat_core = linear < num_stat_cores;
+        const uint32_t stat_1 = stat_group_1.num_cores();
+        const uint32_t fold_1 = fold_group_1.num_cores();
+        TT_FATAL(
+            linear == i && (stat_core ? (linear < stat_1 ? rows_per_core_1 : rows_per_core_2) : 0) == rows &&
+                (!stat_core ||
+                 (linear < stat_1 ? linear * rows_per_core_1
+                                  : stat_1 * rows_per_core_1 + (linear - stat_1) * rows_per_core_2) == start_row) &&
+                (linear < fold_1 ? tiles_per_core_1 : tiles_per_core_2) == tiles &&
+                (linear < fold_1 ? linear * tiles_per_core_1
+                                 : fold_1 * tiles_per_core_1 + (linear - fold_1) * tiles_per_core_2) == start_tile,
+            "fold core {} (#{}) does not take the run its position implies; the kernels would read the wrong tiles",
             core,
-            {running_sum.buffer()->address(),
-             partial.buffer()->address(),
-             q.buffer()->address(),
-             rows,
-             start_row,
-             tiles,
-             start_tile,
-             pending.buffer()->address()});
-
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {stats.buffer()->address(),
-             shift.buffer()->address(),
-             mass.buffer()->address(),
-             output.buffer()->address(),
-             rows,
-             start_row,
-             tiles,
-             start_tile,
-             my_rank,
-             gather_physical.x,
-             gather_physical.y,
-             total.buffer()->address()});
-
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {rows, tiles, start_tile});
+            i);
         start_row += rows;
         start_tile += tiles;
     }
@@ -520,7 +556,6 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         {.reader_kernel_id = reader_kernel_id,
          .writer_kernel_id = writer_kernel_id,
          .gather_kernel_id = gather_kernel_id,
-         .fold_cores = fold_cores,
          .gather_core = gather_core}};
 }
 
@@ -563,27 +598,20 @@ void AttnResGatherSoftmaxMeshWorkloadFactory::override_runtime_arguments(
         // The site is a page offset, so a new site is a common-arg patch rather than a
         // new program. That is what keeps one cached program serving every read site.
         auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
-        reader_common[kReaderSiteArgIdx] = site_offsets.partial;
+        reader_common[kReaderSite] = site_offsets.partial;
+        reader_common[kReaderPrefixAddr] = tensor_args.running_sum.buffer()->address();
+        reader_common[kReaderPartialAddr] = tensor_args.partial.buffer()->address();
+        reader_common[kReaderQAddr] = tensor_args.q.buffer()->address();
+        reader_common[kReaderPendingAddr] = pending_addr;
+
         auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
-        writer_common[kWriterSiteArgIdx] = site_offsets.shift;
-        writer_common[kWriterSiteArgIdx + 1] = site_offsets.mass;
-
-        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
-        for (const auto& core : shared_vars.fold_cores) {
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-            reader_args[0] = tensor_args.running_sum.buffer()->address();
-            reader_args[1] = tensor_args.partial.buffer()->address();
-            reader_args[2] = tensor_args.q.buffer()->address();
-            reader_args[7] = pending_addr;
-
-            auto& writer_args = writer_args_by_core[core.x][core.y];
-            writer_args[0] = tensor_args.stats.buffer()->address();
-            writer_args[1] = tensor_args.shift.buffer()->address();
-            writer_args[2] = tensor_args.mass.buffer()->address();
-            writer_args[3] = tensor_return_value.at(0).buffer()->address();
-            writer_args[11] = total_addr;
-        }
+        writer_common[kWriterShiftSite] = site_offsets.shift;
+        writer_common[kWriterMassSite] = site_offsets.mass;
+        writer_common[kWriterStatsAddr] = tensor_args.stats.buffer()->address();
+        writer_common[kWriterShiftAddr] = tensor_args.shift.buffer()->address();
+        writer_common[kWriterMassAddr] = tensor_args.mass.buffer()->address();
+        writer_common[kWriterOutAddr] = tensor_return_value.at(0).buffer()->address();
+        writer_common[kWriterTotalAddr] = total_addr;
 
         auto& gather_args_by_core = GetRuntimeArgs(program, shared_vars.gather_kernel_id);
         auto& gather_args = gather_args_by_core[shared_vars.gather_core.x][shared_vars.gather_core.y];
