@@ -1,7 +1,7 @@
 # Streaming profiler telemetry
 
 A kernel sends a telemetry metric to an external process, a separate process from the Metal process that runs the
-workload, with one `DevicePublish` call:
+workload, with one `TelemetryPublish` call, which wraps `DevicePublish` and always sends to the external process:
 
 ```cpp
 // hostdevcommon/telemetry_sample.hpp, which kernels and the external process share
@@ -10,10 +10,10 @@ struct TelemetryMetadata {
 };
 
 // the kernel
-#include "api/debug/device_publish.h"
-#include "hostdevcommon/telemetry_sample.hpp"
+#include "api/debug/telemetry_publish.h"
 
-using namespace tt::tt_metal::experimental::streaming_profiler;
+TelemetryPublish("tt_bytes_processed_total", bytes);
+// expands to
 DevicePublish<TelemetryMetadata{"tt_bytes_processed_total"_s}, kSendToExternalProcess>(bytes);
 ```
 
@@ -36,7 +36,8 @@ Callback callback = RegisterCallback(
 
 The host matches a call site by its metadata type and the type of its value, so a `TelemetrySample` callback receives
 only `TelemetryMetadata` records whose value is a `uint64_t` or a `double`. A call site that passes any other type, a
-`uint32_t` included, never reaches it: cast the value first.
+`uint32_t` included, never reaches it, so `TelemetryPublish` rejects one at compile time, along with a name that doesn't
+start with `tt_`: cast the value first.
 
 ## Running it
 

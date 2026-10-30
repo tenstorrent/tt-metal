@@ -9,12 +9,9 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/device_publish.h"
-#include "hostdevcommon/telemetry_sample.hpp"
+#include "api/debug/telemetry_publish.h"
 
 void kernel_main() {
-    using namespace tt::tt_metal::experimental::device_observability;
-    using tt::tt_metal::experimental::streaming_profiler::TelemetryMetadata;
     const uint32_t samples = get_arg_val<uint32_t>(0);
     const uint32_t interval_cycles = get_arg_val<uint32_t>(1);
     const uint32_t bytes_per_sample = get_arg_val<uint32_t>(2);
@@ -23,8 +20,8 @@ void kernel_main() {
         riscv_wait(interval_cycles);
         bytes += bytes_per_sample;
         const double progress = static_cast<double>(i + 1) / static_cast<double>(samples);
-        DevicePublish<TelemetryMetadata{"tt_loop_iteration"_s}, kSendToExternalProcess>(uint64_t{i});
-        DevicePublish<TelemetryMetadata{"tt_bytes_processed_total"_s}, kSendToExternalProcess>(bytes);
-        DevicePublish<TelemetryMetadata{"tt_progress"_s}, kSendToExternalProcess>(progress);
+        TelemetryPublish("tt_loop_iteration", uint64_t{i});
+        TelemetryPublish("tt_bytes_processed_total", bytes);
+        TelemetryPublish("tt_progress", progress);
     }
 }

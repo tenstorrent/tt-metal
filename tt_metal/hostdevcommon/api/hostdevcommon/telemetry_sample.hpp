@@ -9,13 +9,15 @@
 namespace tt::tt_metal::experimental::streaming_profiler {
 
 /**
- * @brief The metadata of a telemetry sample, a metric's value, which a kernel sends the external process:
+ * @brief The metadata of a telemetry sample, a metric's value, which a kernel sends the external process with
+ * TelemetryPublish (api/debug/telemetry_publish.h):
  *
- *     DevicePublish<TelemetryMetadata{"tt_bytes_processed_total"_s}, kSendToExternalProcess>(uint64_t{bytes});
+ *     TelemetryPublish("tt_bytes_processed_total", bytes);
  *
  * A telemetry metric's name starts with "tt_", and its value is a uint64_t or a double: the host reads it as a
  * TelemetrySample (tt-metalium/experimental/telemetry_sample.hpp), which matches only call sites that pass one of
- * those two, so a call site that passes any other type, a uint32_t included, never reaches it.
+ * those two, so a call site that passes any other type, a uint32_t included, never reaches it. TelemetryPublish
+ * checks both at compile time.
  */
 struct TelemetryMetadata {
     device_observability::String name;
