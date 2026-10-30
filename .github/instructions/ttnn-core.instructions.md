@@ -12,7 +12,6 @@ excludeAgent: "cloud-agent"
 - **Program cache hash correctness**: any change to op attributes, sub-device config, or runtime state that affects program behavior must be included in the program cache hash. Missing hash inputs cause cache collisions where the wrong cached program is reused silently.
 - **Align sharded tensor data cores with compute cores**: operations that work with sharded tensors must ensure the cores used for compute (obtained from `compute_with_storage_grid_size()`) are aligned with the cores over which the tensor data is sharded. Simply selecting a compute grid is not sufficient — for sharded specs the data cores and compute cores must match, otherwise an op reads/writes shards on cores it never computes on. Verify the shard spec's core ranges are covered by the compute grid.
 - **Buffer lifetime in descriptors**: objects holding buffer pointers or references (WorkloadDescriptor, ProgramDescriptor) must not outlive the buffers they reference. Verify lifetime semantics when storing buffers in cached/reusable structures.
-- **No new `cq_id` usage**: command queues are addressed via `distributed::MeshCommandQueue`, never a raw `cq_id`. Flag new APIs, overloads, or callers that take or forward one (see `metal-api.instructions.md`).
 
 ## 🟡 IMPORTANT
 
