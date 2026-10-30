@@ -133,6 +133,20 @@ FORCE_INLINE void process_row_heads(uint32_t global_row_idx, uint32_t num_heads)
     const uint32_t num_q_tiles_to_process = Ht;
 #endif
 
+#ifdef CHAIN
+    // Chain mode streams every query row of the head through this core: drop the ones above the diagonal.
+    for (uint32_t h = 0; h < q_start_tile; ++h) {
+        cb_wait_front(cb_query, qk_tiles);
+        cb_pop_front(cb_query, qk_tiles);
+        cb_wait_front(cb_grad_output, v_tiles);
+        cb_pop_front(cb_grad_output, v_tiles);
+        cb_wait_front(cb_intermediates, num_of_interm_tiles);
+        cb_pop_front(cb_intermediates, num_of_interm_tiles);
+        cb_wait_front(cb_u_scalar_row, onetile);
+        cb_pop_front(cb_u_scalar_row, onetile);
+    }
+#endif
+
     for (uint32_t head_idx = 0; head_idx < num_heads; ++head_idx) {
         const uint32_t matmul_accum_reg = 0;
 
@@ -276,6 +290,21 @@ void kernel_main() {
 #endif
     for (uint32_t i = 0; i < start_idx; ++i) {
         const uint32_t item = get_arg_val<uint32_t>(1U + i);
+#ifdef CHAIN
+        if (item == 0xFFFFFFFFU) {  // a round without an item: consume the stream
+            for (uint32_t h = 0; h < Ht; ++h) {
+                cb_wait_front(cb_query, qk_tiles);
+                cb_pop_front(cb_query, qk_tiles);
+                cb_wait_front(cb_grad_output, v_tiles);
+                cb_pop_front(cb_grad_output, v_tiles);
+                cb_wait_front(cb_intermediates, num_of_interm_tiles);
+                cb_pop_front(cb_intermediates, num_of_interm_tiles);
+                cb_wait_front(cb_u_scalar_row, onetile);
+                cb_pop_front(cb_u_scalar_row, onetile);
+            }
+            continue;
+        }
+#endif
         process_row_heads(item / items_per_row, heads_per_item);
     }
 #elif defined(BALANCED_PARALLELISM)

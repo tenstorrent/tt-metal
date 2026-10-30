@@ -80,6 +80,9 @@ void kernel_main() {
     const uint32_t list_base = runtime_args_counter - 1U;
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t r = get_arg_val<uint32_t>(list_base + i);
+        if (r == 0xFFFFFFFFU) {  // chain mode: a round without a row
+            continue;
+        }
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, r * qWt, qWt, tile_bytes, qWt);
         write_u_scaler_for_row(r);
 #ifdef HAS_GATE

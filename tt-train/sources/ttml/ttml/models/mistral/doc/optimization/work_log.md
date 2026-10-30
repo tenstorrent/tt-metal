@@ -138,6 +138,14 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Expected: compute-bound at ~40 units x ~3 us = ~120 us per call (from 229), i.e. -0.44 ms per 4 layers per chip for the forward alone; the same restructure then applies to the Q backward (K/V stream) and the KV backward (Q/dO stream). Standalone measurement: `O/iter11_sdpa_check.py` against the pre-iteration-11 outputs (the forward must stay bit-identical).
 - Landed: 140 us per call in the step (`O/iter15_tp_ranked_ops.txt`), 150 us standalone (`O/iter15_sdpa_check.log`), bit-identical; build + check `O/iter15_build_check.sh` -> `O/iter15_build_check.log` (two build attempts: a twice-applied patch block); chain `O/iter15.sh` -> `O/iter15.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 506.0 ms / 32.06 %.
 
+### Iteration 16: SDPA backward data flow (kernel boost checklist)
+
+- Roofline / bytes: the Q backward re-reads K/V per query row like the forward (67 MB per call, 216 us = 310 GB/s); the KV backward re-reads Q, dO, lse and u per (K/V row, head) item (~100 MB, 289 us = 350 GB/s). FLOP rooflines ~40 us each.
+- Fix: the forward's chain data flow (K/V stream per (batch, kv group) for the Q kernel; Q / dO / lse / u stream per (batch, query head) for the head-split KV kernel), chunks of 4 rows per handshake, CBs sized for two chunks.
+- Expected: -0.3 (Q) and -0.5 (KV) ms per 4 layers if bandwidth-bound like the forward.
+- Landed standalone (`O/iter16_build_check.log`): backward 571 -> 533 us at the TP shard (-7 %), 2181 -> 2006 at the single-chip shape, outputs unchanged. Below half the expected gain: both backward kernels are compute-bound at ~5 us per (row, tile) unit (12 / 16 matmul tiles plus the exp, the dS chain and two DEST transposes), so the removed re-reads were mostly hidden. Next structural fix: one backward pass per (K/V row, head) that also accumulates dQ partials (QK^T and the softmax are recomputed twice today, one per kernel), and `matmul_block` over the chunk instead of per-tile matmuls.
+- In the step (`O/iter16_tp_ranked_ops.txt`): bwd Q 0.862 -> 0.783, bwd KV 1.151 -> 1.097 ms per 4 layers; chain `O/iter16.sh` -> `O/iter16.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 508.4 ms / 31.91 % (wall within noise of iteration 15's 506.0).
+
 ### Stage review round 7 (iterations 11-12)
 
 - `review_round7.md`: more-work-needed (UMD pointer in the iteration-11 commit; ranked table and attribution cells); answered in the same day's commits (pointer restored `415ec0f1d3e`, docs regenerated, runtime-arg guards, router M check); loss match rerun scheduled in the iteration-14 chain.
@@ -196,6 +204,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | review 7 | `456f9cf7a8e` | round-7 items: ranked table regenerated, attribution cells, runtime-arg guards, router M check, review record |
 | 13 | `a1fc69ebed8` | `transpose_split` op, fused backward routing, harness cases, iteration-13 evidence |
 | 14 | `8b86016e718` | `vp_cross_entropy_bw` op, loss backward routing, harness cases, loss match, iteration-14 evidence |
-| 15 | (this commit) | SDPA forward chain mode (`metal/ops/sdpa_fw/`), iteration-15 evidence |
+| 15 | `7a21a21258a` | SDPA forward chain mode (`metal/ops/sdpa_fw/`), iteration-15 evidence |
+| 16 | (this commit) | SDPA backward chain mode (`metal/ops/sdpa_bw/`), iteration-16 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

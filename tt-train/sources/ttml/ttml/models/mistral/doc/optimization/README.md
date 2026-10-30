@@ -34,6 +34,7 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | 13 | layout | `transpose_split` op (fused backward's dX route in one pass) | 40 | 516.4 | 31.42 % | landed |
 | 14 | fixed | `vp_cross_entropy_bw` op (loss backward in one pass) | 42 | 512.5 | 31.66 % | landed |
 | 15 | math (kernel boost) | SDPA forward chain data flow (K/V once per chain of cores) | 42 | **506.0** | **32.06 %** | landed |
+| 16 | math (kernel boost) | SDPA backward chain data flow (Q, KV kernels) | 42 | 508.4 | 31.91 % | landed, -0.13 ms per 4 layers per chip (compute-bound kernels) |
 | 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.
@@ -55,6 +56,7 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - 13: two slices + two transposes (+ multiply) per fused layer -> one `transpose_split`, bit-exact, 117 -> 54 us; -0.57 ms per 4 layers per chip.
 - 14: the loss backward's four passes over the `[1024, 32768]` shard (3.09 ms, one on 32 cores) -> one 0.33 ms kernel; loss match rerun PASS. Lesson: a `[1, 1, 1, 1]` tensor is a zero-padded tile on device; an elementwise multiply by it is not a scalar broadcast.
 - 15: first kernel-boost iteration (user direction 2026-10-30 evening): SDPA forward 228 -> 140 us per call, bit-identical; chains of 14 cores forward the K/V chunks, DRAM traffic 67 -> ~12 MB per call.
+- 16: the same for the two backward kernels: -0.13 ms per 4 layers only; they are compute-bound (12-16 matmul tiles plus SFPU per unit), next fix is one merged backward pass with dQ partials.
 
 ## State (2026-10-30)
 

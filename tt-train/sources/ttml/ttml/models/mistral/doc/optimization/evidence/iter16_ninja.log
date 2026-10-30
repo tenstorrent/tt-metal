@@ -1,0 +1,25 @@
+[0/2] Re-checking globbed directories...
+[1/23] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/sgd.cpp.o
+[3/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/core/tt_profiler.cpp.o
+[4/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/layernorm_op.cpp.o
+[5/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/losses.cpp.o
+[6/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/mla_kv_assemble_op.cpp.o
+[7/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/qkv_causal_conv1d_silu_op.cpp.o
+[8/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/rmsnorm_op.cpp.o
+[9/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/softmax_backward_op.cpp.o
+[10/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw.cpp.o
+[11/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/optimizers/adamw_full_precision.cpp.o
+[12/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/scaled_dot_product_attention.cpp.o
+[13/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/swiglu_op.cpp.o
+[14/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/moe_ffn_swiglu_op.cpp.o
+[15/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/ops/unary_ops.cpp.o
+[16/23] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[17/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp.o
+[18/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp.o
+[19/23] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp.o
+[20/23] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_2_cxx.cxx.o
+[21/23] Linking CXX static library tt-train/sources/ttml/libttml.a
+[22/23] Linking CXX shared library ttnn/_ttnncpp.so
+[23/23] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so

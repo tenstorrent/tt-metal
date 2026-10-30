@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cmath>
+#include <hostdevcommon/common_values.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -68,6 +69,60 @@ const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 const std::string kWorkListDefKey = "WORK_LIST";
+const std::string kChainDefKey = "CHAIN";
+constexpr uint32_t kChainLength = 14U;    // cores per forwarding chain
+constexpr uint32_t kChainChunk = 4U;      // tile rows of the stream per handshake
+constexpr uint32_t kNoRow = 0xFFFFFFFFU;  // "no item this round" in a chain-mode list
+
+// Chain schedule: per stream a contiguous run of cores, the stream's items LPT-scheduled over them, chains of
+// kChainLength consecutive cores (first core injector, last core sink). Every core runs `rounds` rounds.
+struct ChainCore {
+    uint32_t stream = 0;
+    bool injector = false;
+    bool sink = false;
+    uint32_t prev = 0;
+    uint32_t next = 0;
+    std::vector<uint32_t> items;
+};
+
+struct ChainSchedule {
+    std::vector<ChainCore> cores;
+    uint32_t rounds = 0;
+};
+
+// `items_of_stream(s)` -> (item ids, weights) of stream s.
+template <typename ItemsFn>
+ChainSchedule chain_schedule(uint32_t num_cores, uint32_t num_streams, ItemsFn&& items_of_stream) {
+    ChainSchedule sched;
+    sched.cores.resize(num_cores);
+    const uint32_t base_cores = num_cores / num_streams;
+    const uint32_t extra_cores = num_cores % num_streams;
+    uint32_t first_core = 0;
+    for (uint32_t stream = 0; stream < num_streams; ++stream) {
+        const uint32_t stream_cores = base_cores + (stream < extra_cores ? 1U : 0U);
+        auto [items, weights] = items_of_stream(stream);
+        const auto lpt = lpt_schedule(weights, stream_cores);
+        sched.rounds = std::max(sched.rounds, lpt.max_items);
+        for (uint32_t c = 0; c < stream_cores; ++c) {
+            auto& cc = sched.cores[first_core + c];
+            cc.stream = stream;
+            const uint32_t pos = c % kChainLength;
+            cc.injector = (pos == 0U);
+            cc.sink = (pos == kChainLength - 1U) || (c + 1U == stream_cores);
+            cc.prev = cc.injector ? first_core + c : first_core + c - 1U;
+            cc.next = cc.sink ? first_core + c : first_core + c + 1U;
+            for (const uint32_t item : lpt.items_per_core[c]) {
+                cc.items.push_back(items[item]);
+            }
+        }
+        first_core += stream_cores;
+    }
+    TT_FATAL(
+        sched.rounds + 24U <= tt::tt_metal::max_runtime_args,
+        "SDPA chain: {} rounds exceed the runtime-arg limit",
+        sched.rounds);
+    return sched;
+}
 const std::string kHasGateDefKey = "HAS_GATE";
 
 /**
@@ -238,9 +293,14 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const uint32_t pairs_per_seq = St / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
     // Work-list mode (causal): host LPT schedule of the rows, per-core row lists as runtime args (see sdpa_fw).
-    const bool use_work_list = (args.mask_type == AttentionMaskType::Causal) && (St > 0);
-    const bool use_balanced_parallelism = !use_work_list && (args.mask_type == AttentionMaskType::Causal) &&
-                                          (St % 2 == 0) && (total_rows_to_process > num_available_cores) && (St > 0);
+    // Chain mode (causal): the K/V stream of a (batch, kv group) is read once per chain of cores and forwarded
+    // core to core (see sdpa_fw); the stream's rows are LPT-scheduled over the stream's cores.
+    const bool causal = (args.mask_type == AttentionMaskType::Causal) && (St > 0);
+    const uint32_t num_streams = qB * kv_heads;
+    const uint32_t chain_chunk = (St % kChainChunk == 0U) ? kChainChunk : ((St % 2U == 0U) ? 2U : 1U);
+    const bool use_chain = causal && (num_available_cores >= 2U * num_streams);
+    const bool use_work_list = causal && !use_chain;
+    const bool use_balanced_parallelism = false;
 
     uint32_t num_cores = 0;
     tt::tt_metal::CoreRangeSet all_cores{};
@@ -250,8 +310,27 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     uint32_t num_rows_per_core_group_2 = 0;
     std::vector<std::pair<uint32_t, uint32_t>> pair_distribution;
     LptSchedule work_list;
+    ChainSchedule chain;
 
-    if (use_work_list) {
+    if (use_chain) {
+        num_cores = std::min(num_available_cores, total_rows_to_process);
+        all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
+        core_group_1 = all_cores;
+        chain = chain_schedule(num_cores, num_streams, [&](uint32_t stream) {
+            const uint32_t b = stream / kv_heads;
+            const uint32_t kv = stream % kv_heads;
+            std::vector<uint32_t> items;
+            std::vector<uint32_t> weights;
+            for (uint32_t h = kv * heads_per_group; h < (kv + 1U) * heads_per_group; ++h) {
+                for (uint32_t q = 0; q < St; ++q) {
+                    items.push_back((b * qNH + h) * St + q);
+                    weights.push_back(q + 2U);
+                }
+            }
+            return std::make_pair(items, weights);
+        });
+        num_rows_per_core_group_1 = chain.rounds;
+    } else if (use_work_list) {
         num_cores = std::min(num_available_cores, total_rows_to_process);
         all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
         core_group_1 = all_cores;
@@ -316,12 +395,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         bfloat16_single_tile_size_bytes,
         2 * qWt);
 
+    // Chain mode forwards K/V in chunks of chain_chunk rows: two chunks resident.
+    const uint32_t kv_cb_rows = use_chain ? 2U * chain_chunk : 2U;
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
-        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+        create_circular_buffer(
+            program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, kv_cb_rows * kWt);
 
     [[maybe_unused]] auto cb_value =  // CBIndex::c_4
         create_circular_buffer(
-            program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+            program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kv_cb_rows * vWt);
 
     // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
     // Not needed for AttentionMaskType::None
@@ -470,11 +552,19 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         writer_defines[kBalancedParallelismDefKey] = "1";
         compute_defines[kBalancedParallelismDefKey] = "1";
     }
-    if (use_work_list) {
+    if (use_work_list || use_chain) {
         reader_defines[kWorkListDefKey] = "1";
         writer_defines[kWorkListDefKey] = "1";
         compute_defines[kWorkListDefKey] = "1";
     }
+    if (use_chain) {
+        reader_defines[kChainDefKey] = "1";
+        writer_defines[kChainDefKey] = "1";
+        compute_defines[kChainDefKey] = "1";
+    }
+    const uint32_t chain_sender_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    const uint32_t chain_receiver_sem = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    const uint32_t chain_valid_sem = tt::tt_metal::CreateSemaphore(program, all_cores, VALID);
 
     // Gate: reader streams G, compute produces grad_gate + gated dO, writer flushes both
     if (args.has_gate) {
@@ -492,11 +582,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,              // 0: Q/K width in tiles
-        vWt,              // 1: V/dO/O width in tiles
-        St,               // 2: sequence length in tiles
-        q_heads,          // 3: number of query heads
-        heads_per_group,  // 4: heads per group
+        qWt,                 // 0: Q/K width in tiles
+        vWt,                 // 1: V/dO/O width in tiles
+        St,                  // 2: sequence length in tiles
+        q_heads,             // 3: number of query heads
+        heads_per_group,     // 4: heads per group
+        chain_sender_sem,    // 5: chain mode semaphores
+        chain_receiver_sem,  // 6
+        chain_valid_sem,     // 7
+        chain_chunk,         // 8: chain mode K/V rows per handshake
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(attn_output_buffer).append_to(reader_compile_args);
@@ -546,7 +640,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             scaler,              // 4: sqrt(Et) - sdpa scaler factor
             minus_one,           // 5: used to transform mask from 1/0 to 0/-1
             custom_inf,          // 6: used to transform mask from 0/-1 to 0/-inf
-            block_size           // 7: block size
+            block_size,          // 7: block size
+            chain_chunk          // 8: chain mode K/V rows per handshake
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
@@ -570,7 +665,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             scaler,                     // 4: sqrt(Et) - sdpa scaler factor
             minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
             custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
-            block_size                  // 7: block size
+            block_size,                 // 7: block size
+            chain_chunk                 // 8: chain mode K/V rows per handshake
         };
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(
             program,
@@ -594,7 +690,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                 scaler,                     // 4: sqrt(Et) - sdpa scaler factor
                 minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
-                block_size                  // 7: block size
+                block_size,                 // 7: block size
+                chain_chunk                 // 8: chain mode K/V rows per handshake
             };
             kernels.compute_group_2 = tt::tt_metal::CreateKernel(
                 program,
@@ -613,7 +710,50 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    if (use_work_list) {
+    if (use_chain) {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            const auto& cc = chain.cores[i];
+            std::vector<uint32_t> rounds(cc.items);
+            rounds.resize(chain.rounds, kNoRow);
+            const auto prev = device->worker_core_from_logical_core(
+                tt::tt_metal::CoreCoord{cc.prev / num_cores_y, cc.prev % num_cores_y});
+            const auto next = device->worker_core_from_logical_core(
+                tt::tt_metal::CoreCoord{cc.next / num_cores_y, cc.next % num_cores_y});
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                work_list_runtime_args(
+                    {grad_output_buffer->address(),
+                     attn_output_buffer->address(),
+                     query_buffer->address(),
+                     key_buffer->address(),
+                     value_buffer->address(),
+                     0U,  // mask generated on chip
+                     intermediates_buffer->address(),
+                     gate_buffer != nullptr ? gate_buffer->address() : 0U,
+                     static_cast<uint32_t>(prev.x),
+                     static_cast<uint32_t>(prev.y),
+                     static_cast<uint32_t>(next.x),
+                     static_cast<uint32_t>(next.y),
+                     cc.injector ? 1U : 0U,
+                     cc.sink ? 1U : 0U,
+                     cc.stream},
+                    rounds));
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                work_list_runtime_args(
+                    {grad_query_buffer->address(),
+                     u_scaler_buffer->address(),
+                     grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,
+                     gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U},
+                    rounds));
+            SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, rounds));
+        }
+    } else if (use_work_list) {
         for (uint32_t i = 0; i < num_cores; i++) {
             const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
             const auto& rows = work_list.items_per_core[i];

@@ -39,6 +39,7 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 14 | fused vocab-parallel cross-entropy backward (`vp_cross_entropy_bw`) | 512.5 (503.3) | 31.66 % | `O/iter14_tp_mfu_tp4.log` |
 | 14 | real weights, warm | 526.1 (521.0) | - | `O/iter14_full_tp4_real.log` |
 | 15 | SDPA forward chain mode: K/V read once per chain of cores, forwarded core to core | **506.0 (502.4)** | **32.06 %** | `O/iter15_tp_mfu_tp4.log` |
+| 16 | SDPA backward chain mode (Q and KV kernels) | 508.4 (502.2) | 31.91 % | `O/iter16_tp_mfu_tp4.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -71,7 +72,7 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 | 40-85 | collectives | 17 reduce-scatter `[1024, 5120]` + 17 all-gather `[1024, 1280]` per 4 layers | chip 0 5.87 + 2.21 (waiting included), chip 3 4.0 | transfer at the library optimum (iteration 12 sweep); overlap not tried |
 | ~40 | math + glue | LoRA adapters (rank 16) | `dB` 0.58 + 0.39 + 0.19, `dA`-side matmuls 0.29 + 0.17 + 0.19, `skinny_matmul` 0.29 + 0.22 + 0.15, `lowrank_update` 0.52 + 0.38 + 0.13 | `dA` / `dB` products on 33-88 cores (K-split like `skinny_matmul`) |
 | ~32 | math | RMSNorm | bwd 1.10 + 0.74 (96 cores), fused fwd 0.59 + 0.58, first-layer plain fwd 0.15 | bandwidth-bound two-phase kernels; gamma re-read ~0.2 |
-| ~30 | math | SDPA, 8 heads per chip | bwd KV 1.16 + reduce 0.11, fwd 0.91, bwd Q 0.86; fwd 0.56 after iteration 15 | the forward's chain data flow (iteration 15) applied to the two backward kernels (iteration 16) |
+| ~30 | math | SDPA, 8 heads per chip | bwd KV 1.16 + reduce 0.11, fwd 0.91, bwd Q 0.86; fwd 0.56 after 15, bwd Q 0.78 and KV 1.10 after 16 (compute-bound) | one backward pass per (K/V row, head) with dQ partials (QK^T and the softmax are recomputed twice), `matmul_block` over chunks |
 | ~29 | layout | fused-route slices / transposes / concats, heads, LoRA-grad stacking | w2 route 0.33 + 0.33 + 0.32, gate_up route 0.26 + 0.21 + 0.20, RoPE 0.21, heads 0.15, stack 0.3; ~23 after iteration 13 (`TransposeSplit` 0.31 + 0.19 replace 1.07 of slices / transposes) | forward K-concat (0.52) needs wide producer buffers |
 | ~15 | math | SwiGLU | bwd 1.05 + fwd 0.45 | at ~75 % of bandwidth |
 | ~10 | fixed | LM head, cross-entropy chain, AdamW, embedding | LM head 3.04 + 2.76; CE chain 1.64 + 1.12 + 0.67 + 0.33 (four passes, 32-core target patch); AdamW 0.4; ~8 after iteration 14 (backward 3.09 -> 0.33) | forward stats (max, sub+exp, sum: 1.3 ms) in one pass |
@@ -220,6 +221,14 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Attribution**: chip 0, per 4 layers, cycle-time: `SDPAForward` 0.911 -> 0.559 (228 -> 140 us per call, -0.35 ms, ~-3.5 ms per 40 layers per chip); the other SDPA rows unchanged (bwd Q 0.862, bwd KV 1.151); standalone 238 -> 150 us wall at the TP shard, 882 -> 422 at the single-chip 32/8-head shape, 827 -> 445 at S=2048. Expected ~120 us (compute-bound estimate); landed at 140: the chain fill latency (14 hops) and the per-chunk handshakes are the rest.
 - **Verification**: standalone vs the pre-iteration-11 kernel outputs at six shapes: forward bit-identical (`max |diff| 0`), dQ bit-identical, dK / dV one bf16 ulp (as iteration 11); harness 42 passed; TP gradient check PASS.
 - **Evidence**: `O/iter15_build_check.{sh,log}`, `O/iter15_sdpa_check.log`, `O/iter15_attention_tests.log`, `O/iter15.{sh,log}`, `O/iter15_harness.log`, `O/iter15_tp_grad_check_tp4.log`, `O/iter15_tp_{mfu_tp4,analysis,ranked_ops}.*`.
+
+## Iteration 16 (2026-10-30): SDPA backward data flow
+
+- **Change**: math, the forward's chain data flow (iteration 15) in the Q backward (K/V stream per (batch, K/V group), chunks of 4 rows) and the head-split KV backward (Q / dO / lse / u stream per (batch, query head), chunks of 4 query rows); `metal/ops/sdpa_bw/`.
+- **Result**: TP=4 508.4 ms / 31.91 % vs 506.0 (+0.5 % wall, inside the run-to-run noise: best 502.2 vs 502.4) at 1.102-1.236 GHz effective; chips 50-74 C.
+- **Attribution**: chip 0, per 4 layers, cycle-time: `SDPABackwardQ` 0.862 -> 0.783, `SDPABackwardKV` 1.151 -> 1.097; -0.13 ms per 4 layers (~-1.3 ms per 40 layers per chip), far below the forward's gain: the backward kernels are compute-bound at ~5 us per (row, tile) unit (12 / 16 matmul tiles, the exp, the dS chain and two DEST transposes), the removed re-reads were mostly hidden (`optimization/work_log.md`, "Iteration 16").
+- **Verification**: standalone vs the pre-iteration-11 outputs at six shapes unchanged (dQ bit-identical, dK / dV one bf16 ulp); harness 42 passed; TP gradient check PASS.
+- **Evidence**: `O/iter16_build_check.{sh,log}`, `O/iter16_sdpa_check.log`, `O/iter16_attention_tests.log`, `O/iter16.{sh,log}`, `O/iter16_harness.log`, `O/iter16_tp_grad_check_tp4.log`, `O/iter16_tp_{mfu_tp4,analysis,ranked_ops}.*`.
 
 ## Loop exit (2026-10-29, after iteration 3) and resumed state
 

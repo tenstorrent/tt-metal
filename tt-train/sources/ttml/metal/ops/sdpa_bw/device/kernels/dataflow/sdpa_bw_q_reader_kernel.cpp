@@ -6,6 +6,15 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#ifdef CHAIN
+#include <hostdevcommon/common_values.hpp>
+
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#endif
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -43,7 +52,8 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // heads per group
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_output_args = TensorAccessorArgs<5>();
+    // compile-time args 5..8: chain-mode semaphores and chunk rows
+    constexpr auto grad_output_args = TensorAccessorArgs<9>();
     constexpr auto attn_output_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto query_args = TensorAccessorArgs<attn_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
@@ -112,7 +122,91 @@ void kernel_main() {
         }
     };
 
-#ifdef WORK_LIST
+#ifdef CHAIN
+    // Chain mode: per round the row's own operands (if any), then the stream's K/V rows in chunks of
+    // chain_chunk rows: the injector reads a chunk from DRAM, the other cores receive it from the previous
+    // core; every core but the sink forwards it to the next core (ready counter, data, valid flag).
+    constexpr uint32_t chain_chunk = get_compile_time_arg_val(8);
+    const uint32_t prev_noc_x = num_rows_to_process;
+    const uint32_t prev_noc_y = start_row;
+    const uint32_t next_noc_x = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t next_noc_y = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t is_injector = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t is_sink = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t kv_stream = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t num_rounds = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t rows_base = runtime_args_counter;
+
+    Semaphore sender_sem(get_compile_time_arg_val(5));
+    Semaphore receiver_sem(get_compile_time_arg_val(6));
+    Semaphore valid_sem(get_compile_time_arg_val(7));
+    const Noc noc;
+    valid_sem.set(VALID);
+
+    const uint32_t key_offset = kv_stream * Ht * qWt;
+    const uint32_t value_offset = kv_stream * Ht * vWt;
+    constexpr uint32_t k_chunk_tiles = chain_chunk * qWt;
+    constexpr uint32_t v_chunk_tiles = chain_chunk * vWt;
+    const uint32_t k_chunk_bytes = k_chunk_tiles * tile_bytes;
+    const uint32_t v_chunk_bytes = v_chunk_tiles * tile_bytes;
+
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        const uint32_t global_row_idx = get_arg_val<uint32_t>(rows_base + round);
+        if (global_row_idx != 0xFFFFFFFFU) {
+            const uint32_t vo_start_idx = global_row_idx * vWt;
+            read_tiles_by_row(cb_attn_output, attn_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+            read_tiles_by_row(cb_grad_output, grad_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+            read_tiles_by_row(cb_query, query_addr_generator, global_row_idx * qWt, qWt, tile_bytes, qWt);
+#ifdef HAS_GATE
+            read_tiles_by_row(cb_gate, gate_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
+#endif
+            read_tiles_by_row(
+                cb_intermediates,
+                intermediates_addr_generator,
+                global_row_idx * num_of_interm_tiles,
+                num_of_interm_tiles,
+                interm_tile_bytes,
+                num_of_interm_tiles);
+        }
+        for (uint32_t h0 = 0; h0 < Ht; h0 += chain_chunk) {
+            cb_reserve_back(cb_key, k_chunk_tiles);
+            cb_reserve_back(cb_value, v_chunk_tiles);
+            const uint32_t k_addr = get_write_ptr(cb_key);
+            const uint32_t v_addr = get_write_ptr(cb_value);
+            if (is_injector) {
+                for (uint32_t h = h0; h < h0 + chain_chunk; ++h) {
+                    read_tiles_by_row(cb_key, key_addr_generator, key_offset + h * qWt, qWt, tile_bytes, qWt);
+                    read_tiles_by_row(cb_value, value_addr_generator, value_offset + h * vWt, vWt, tile_bytes, vWt);
+                }
+            } else {
+                receiver_sem.set(INVALID);
+                sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);
+                receiver_sem.wait(VALID);
+                cb_push_back(cb_key, k_chunk_tiles);
+                cb_push_back(cb_value, v_chunk_tiles);
+            }
+            if (!is_sink) {
+                sender_sem.wait(1);
+                sender_sem.set(0);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(k_addr),
+                    UnicastEndpoint{},
+                    k_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = k_addr});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(v_addr),
+                    UnicastEndpoint{},
+                    v_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = v_addr});
+                noc.async_writes_flushed();
+                valid_sem.relay_unicast(noc, receiver_sem, next_noc_x, next_noc_y);
+            }
+        }
+    }
+    noc.async_atomic_barrier();
+#elif defined(WORK_LIST)
     // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
     const uint32_t list_base = runtime_args_counter - 1U;
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {

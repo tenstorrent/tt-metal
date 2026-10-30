@@ -6,6 +6,15 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#ifdef CHAIN
+#include <hostdevcommon/common_values.hpp>
+
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#endif
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -37,7 +46,8 @@ void kernel_main() {
     constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
 
-    constexpr auto grad_output_args = TensorAccessorArgs<6>();
+    // compile-time args 6..9: chain-mode semaphores and chunk rows
+    constexpr auto grad_output_args = TensorAccessorArgs<10>();
     constexpr auto query_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
@@ -66,7 +76,113 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-#ifdef WORK_LIST
+#ifdef CHAIN
+    // Chain mode (head split): an item is (K/V row, query head); its own K/V row is read here, the stream's
+    // Q / lse / dO / u rows (query head of the stream, all Ht query tiles) arrive in chunks of chain_chunk rows:
+    // read from DRAM by the injector, received from the previous core otherwise, forwarded to the next core
+    // by every core but the sink.
+    constexpr uint32_t chain_chunk = get_compile_time_arg_val(9);
+    const uint32_t prev_noc_x = num_rows_to_process;
+    const uint32_t prev_noc_y = start_row;
+    const uint32_t next_noc_x = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t next_noc_y = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t is_injector = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t is_sink = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t q_stream = get_arg_val<uint32_t>(runtime_args_counter++);  // batch * q_heads + query head
+    const uint32_t num_rounds = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t items_base = runtime_args_counter;
+
+    Semaphore sender_sem(get_compile_time_arg_val(6));
+    Semaphore receiver_sem(get_compile_time_arg_val(7));
+    Semaphore valid_sem(get_compile_time_arg_val(8));
+    const Noc noc;
+    valid_sem.set(VALID);
+
+    const uint32_t q_offset = q_stream * Ht * qWt;
+    const uint32_t vo_offset = q_stream * Ht * vWt;
+    const uint32_t interm_offset = q_stream * Ht * num_of_interm_tiles;
+    const uint32_t u_offset = q_stream * Ht;
+    constexpr uint32_t q_chunk_tiles = chain_chunk * qWt;
+    constexpr uint32_t vo_chunk_tiles = chain_chunk * vWt;
+    constexpr uint32_t one_chunk_tiles = chain_chunk;
+    const uint32_t q_chunk_bytes = q_chunk_tiles * tile_bytes;
+    const uint32_t vo_chunk_bytes = vo_chunk_tiles * tile_bytes;
+    const uint32_t interm_chunk_bytes = one_chunk_tiles * interm_tile_bytes;
+    const uint32_t u_chunk_bytes = one_chunk_tiles * get_tile_size(cb_u_scalar_row);
+
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        const uint32_t item = get_arg_val<uint32_t>(items_base + round);
+        if (item != 0xFFFFFFFFU) {
+            const uint32_t global_row_idx = item / heads_per_group;
+            read_tiles_by_row(cb_key, key_address_generator, global_row_idx * kWt, kWt, tile_bytes, kWt);
+            read_tiles_by_row(cb_value, value_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
+        }
+        for (uint32_t h0 = 0; h0 < Ht; h0 += chain_chunk) {
+            cb_reserve_back(cb_query, q_chunk_tiles);
+            cb_reserve_back(cb_intermediates, one_chunk_tiles);
+            cb_reserve_back(cb_grad_output, vo_chunk_tiles);
+            cb_reserve_back(cb_u_scalar_row, one_chunk_tiles);
+            const uint32_t q_addr = get_write_ptr(cb_query);
+            const uint32_t i_addr = get_write_ptr(cb_intermediates);
+            const uint32_t vo_addr = get_write_ptr(cb_grad_output);
+            const uint32_t u_addr = get_write_ptr(cb_u_scalar_row);
+            if (is_injector) {
+                for (uint32_t h = h0; h < h0 + chain_chunk; ++h) {
+                    read_tiles_by_row(cb_query, query_address_generator, q_offset + h * qWt, qWt, tile_bytes, qWt);
+                    read_tiles_by_row(
+                        cb_intermediates,
+                        intermediates_address_generator,
+                        interm_offset + h * num_of_interm_tiles,
+                        num_of_interm_tiles,
+                        interm_tile_bytes,
+                        num_of_interm_tiles);
+                    read_tiles_by_row(
+                        cb_grad_output, grad_output_address_generator, vo_offset + h * vWt, vWt, tile_bytes, vWt);
+                    read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_offset + h);
+                }
+            } else {
+                receiver_sem.set(INVALID);
+                sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);
+                receiver_sem.wait(VALID);
+                cb_push_back(cb_query, q_chunk_tiles);
+                cb_push_back(cb_intermediates, one_chunk_tiles);
+                cb_push_back(cb_grad_output, vo_chunk_tiles);
+                cb_push_back(cb_u_scalar_row, one_chunk_tiles);
+            }
+            if (!is_sink) {
+                sender_sem.wait(1);
+                sender_sem.set(0);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(q_addr),
+                    UnicastEndpoint{},
+                    q_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = q_addr});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(i_addr),
+                    UnicastEndpoint{},
+                    interm_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = i_addr});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(vo_addr),
+                    UnicastEndpoint{},
+                    vo_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = vo_addr});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(u_addr),
+                    UnicastEndpoint{},
+                    u_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = u_addr});
+                noc.async_writes_flushed();
+                valid_sem.relay_unicast(noc, receiver_sem, next_noc_x, next_noc_y);
+            }
+        }
+    }
+    noc.async_atomic_barrier();
+#elif defined(WORK_LIST)
     // Work-list mode: an item is (K/V row, first query head, head count); with HEAD_SPLIT one head per item.
 #ifdef HEAD_SPLIT
     constexpr uint32_t items_per_row = heads_per_group;

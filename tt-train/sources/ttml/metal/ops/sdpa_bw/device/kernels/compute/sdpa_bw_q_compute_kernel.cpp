@@ -220,6 +220,15 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         cb_pop_front(cb_attention_weights, onetile);
         cb_pop_front(cb_grad_attn_weights, onetile);
     }
+#ifdef CHAIN
+    // Chain mode streams every K/V row of the sequence through this core: drop the ones past the diagonal.
+    for (uint32_t h = num_kv_tiles_to_process; h < Ht; ++h) {
+        cb_wait_front(cb_key, qk_tiles);
+        cb_pop_front(cb_key, qk_tiles);
+        cb_wait_front(cb_value, v_tiles);
+        cb_pop_front(cb_value, v_tiles);
+    }
+#endif
 
     pack_tiles_to_output(cb_grad_query_accum, cb_grad_query, qk_tiles);
 
@@ -260,8 +269,21 @@ void kernel_main() {
 
 #ifdef WORK_LIST
     // Work-list mode: arg0 = number of rows of this core, args 1.. = their global row indices (heaviest first).
+    // Chain mode: the same list padded with 0xFFFFFFFF rounds in which this core only consumes the K/V stream.
     for (uint32_t i = 0; i < start_idx; ++i) {
-        process_single_row(get_arg_val<uint32_t>(1U + i));
+        const uint32_t row = get_arg_val<uint32_t>(1U + i);
+#ifdef CHAIN
+        if (row == 0xFFFFFFFFU) {
+            for (uint32_t h = 0; h < Ht; ++h) {
+                cb_wait_front(cb_key, qk_tiles);
+                cb_pop_front(cb_key, qk_tiles);
+                cb_wait_front(cb_value, v_tiles);
+                cb_pop_front(cb_value, v_tiles);
+            }
+            continue;
+        }
+#endif
+        process_single_row(row);
     }
 #elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;

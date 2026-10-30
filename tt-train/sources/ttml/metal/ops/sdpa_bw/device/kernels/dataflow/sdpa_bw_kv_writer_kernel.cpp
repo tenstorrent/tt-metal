@@ -53,6 +53,9 @@ void kernel_main() {
     const uint32_t list_base = runtime_args_counter - 1U;
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t item = get_arg_val<uint32_t>(list_base + i);
+        if (item == 0xFFFFFFFFU) {  // chain mode: a round without an item
+            continue;
+        }
         const uint32_t global_row_idx = item / items_per_row;
         const uint32_t batch_idx = global_row_idx / (num_of_groups * Ht);
         const uint32_t s_tile_idx = global_row_idx % Ht;

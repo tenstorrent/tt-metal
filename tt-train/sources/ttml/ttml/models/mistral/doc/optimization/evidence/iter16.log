@@ -1,0 +1,15 @@
+=== iter16 harness 2026-10-30T17:12:20Z
+harness rc=0
+================== 42 passed, 2 warnings in 227.53s (0:03:47) ==================
+=== iter16 TP=4 gradient check 2026-10-30T17:16:11Z
+tp4 rc=0
+tp 4: transposed 3, fused 2
+PASS
+=== iter16_tp TP=4 MFU after 600s cool-down 2026-10-30T17:16:55Z
+rc=0
+40 of 40 layers, tp 4: 508.4 ms/step over 6 steps (best 502.2), 189.6 TFLOP/s, MFU 31.91%
+=== iter16_tp TP=4 Tracy 4 layers 2026-10-30T17:30:13Z
+rc=0
+4 of 40 layers, tp 4: 57.4 ms/step over 2 steps (best 57.0), 210.8 TFLOP/s, MFU 35.49%
+=== done 2026-10-30T17:31:41Z
+=== iter16 chain finished 2026-10-30T17:31:42Z
