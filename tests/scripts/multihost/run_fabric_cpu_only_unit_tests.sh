@@ -84,8 +84,11 @@ fi
 # detection, and peers inherit it as the topology mapper's wait for rank 0's chip-info broadcast. On
 # these oversubscribed mock runs a healthy rank 0 of a 16-64 rank group can legitimately take longer
 # than that on a small runner, so peers falsely declare the controller dead. Floor it for CPU-only
-# runs; commands that need even longer still set their own value.
-if (( ${TT_METAL_OPERATION_TIMEOUT_SECONDS:-0} < 300 )); then
+# runs; commands that need even longer still set their own value. The value may be fractional
+# (verify-changed-tests exports 5.0), so compare its integer part.
+op_timeout=${TT_METAL_OPERATION_TIMEOUT_SECONDS:-0}
+op_timeout=${op_timeout%%.*}
+if (( ${op_timeout:-0} < 300 )); then
   export TT_METAL_OPERATION_TIMEOUT_SECONDS=300
 fi
 
@@ -448,10 +451,12 @@ run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_des
 # 2x4 mapping, different asic_ids/hostnames), so it has its own test + golden.
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual2x4T3kDualHostControlPlaneInit"
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual2x4Fabric2DSanity"
+run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_dual_host/t3k_dual_host_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual2x4RemoteTransferDispatchChannels"
 
 # Split 2x2 T3K Multi-host
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestSplit2x2ControlPlaneInit"
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestSplit2x2Fabric2DSanity"
+run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestSplit2x2RemoteTransferDispatchChannels"
 
 # T3K 2x2 Assign Z Direction Multi-host
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3K2x2AssignZDirectionControlPlaneInit"
@@ -469,6 +474,7 @@ run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-desc
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/test_physical_discovery --gtest_filter="PhysicalDiscovery.*"
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestBigMesh2x4ControlPlaneInit"
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestBigMesh2x4Fabric2DSanity"
+run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestBigMesh2x4RemoteTransferDispatchChannels"
 
 # BHQB4x4 Multi-host
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_qb_4x4/bh_qb_4x4_cluster_desc_mapping.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestBHQB4x4ControlPlaneInit"

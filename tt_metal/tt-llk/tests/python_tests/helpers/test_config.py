@@ -17,6 +17,7 @@ from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar, List
+from uuid import uuid4
 
 import numpy as np
 import pytest
@@ -378,8 +379,20 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
+        """Resolve the build root, isolating hardware-free sessions from device builds."""
         runner_temp = os.environ.get("RUNNER_TEMP")
+        if os.environ.get("LLK_HARDWARE_FREE") == "1":
+            # Inherit one private tree across xdist workers, outside the normal build tree.
+            run_id = os.environ.get("LLK_HARDWARE_FREE_RUN_ID")
+            if not run_id:
+                run_id = uuid4().hex
+                os.environ["LLK_HARDWARE_FREE_RUN_ID"] = run_id
+            base = (
+                Path(runner_temp)
+                if runner_temp
+                else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
+            )
+            return base / f"tt-llk-hardware-free-{run_id}"
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
         return TestConfig.DEFAULT_ARTEFACTS_PATH
@@ -519,8 +532,10 @@ class TestConfig:
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
                 # Some SFPU kernels include their neighbours unqualified
                 # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
-                # resolves with this on the path. Listed last so the tt-llk copy still
-                # wins the basenames that exist in both trees.
+                # resolves with this on the path. Its order against tt-llk's common/inc/sfpu
+                # no longer matters: tests/hardware_free/kernels/test_sfpu_header_location.py
+                # keeps each SFPU kernel in only one of the two, and the few basenames in both
+                # (its FORWARDED list) are plain forwards to the tt-llk copy.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
@@ -1923,6 +1938,21 @@ class TestConfig:
             else self.boot_mode
         )
 
+        VARIANT_ELF_DIR = (
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        )
+
+        self.temp_elfs = [
+            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
+            for trisc_name in TestConfig.KERNEL_COMPONENTS
+        ]
+
+        missing = [Path(elf).name for elf in self.temp_elfs if not Path(elf).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"{VARIANT_ELF_DIR} has no {', '.join(missing)}: the variant did not compile, so it is not run"
+            )
+
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
         if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
@@ -1998,17 +2028,9 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = (
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-        )
-
-        self.temp_elfs = [
-            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
-            for trisc_name in TestConfig.KERNEL_COMPONENTS
-        ]
-
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
+            # A failed load or start address update leaves the TRISCs on two variants
+            TestConfig.LAST_LOADED_ELFS = Path()
 
             for i, elf_file_path in enumerate(self.temp_elfs):
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
@@ -2046,7 +2068,10 @@ class TestConfig:
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                     timeout=brisc_cmd_timeout,
                 )
+                TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
                 return
+
+            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
 
         match boot_mode:
             case BootMode.BRISC:

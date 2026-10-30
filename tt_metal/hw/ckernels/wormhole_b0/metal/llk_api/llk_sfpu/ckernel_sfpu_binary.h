@@ -13,7 +13,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_log.h"
+#include "ckernel_sfpu_log.h"
 
 using namespace sfpi;
 
@@ -36,15 +36,16 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     // Normalize base to calculation range
     sfpi::vFloat x = setexp(base, 127);  // set exp to exp bias (put base in range of 1-2)
 
-    // 3rd order polynomial approx - determined using rminimax over [1,2]
-    sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
+    // 3rd order polynomial approx - determined using rminimax over [1,2], see LogPolyNoInit
+    sfpi::vFloat series_result =
+        x * (x * (x * LogPolyNoInit::A - LogPolyNoInit::B) + LogPolyNoInit::C) - LogPolyNoInit::D;
 
     // Convert exponent to float
     sfpi::vSMag exp = sfpi::convert<sfpi::vSMag>(exexp(base));
     sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
-    sfpi::vFloat vConstLn2 = 0.692871f;
+    sfpi::vFloat vConstLn2 = LogPolyNoInit::LN2;
     sfpi::vFloat log_result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Base case when input is 0. ln(0) = -inf
@@ -94,6 +95,59 @@ sfpi_inline sfpi::vFloat calculate_sfpu_binary_power(sfpi::vFloat base, sfpi::vF
     return result;
 }
 
+// True when calculate_sfpu_binary_two_row can serve the call: a single-instruction op with no
+// software rounding after it, over an even row count. An odd ITERATIONS takes the one-row body
+// instead; every caller passes 8 rows per face.
+template <BinaryOp BINOP, int ITERATIONS, bool software_rounding>
+inline constexpr bool use_two_row_binary =
+    (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::MUL) &&
+    !software_rounding && ITERATIONS % 2 == 0;
+
+// ADD/SUB/RSUB/MUL rows that take no software rounding are load, load, op, store. The op -> store
+// latency is two cycles, so a one-row body spends an SFPNOP on every row that nothing can fill
+// (SFPLOAD x2, op, SFPNOP, SFPSTORE, TTINCRWC: 6 instructions per row). Two rows per iteration,
+// the pattern ckernel_sfpu_addcmul.h uses, let the second row's op fill it: SFPLOAD x4, op x2,
+// SFPSTORE x2 and one TTINCRWC, 9 instructions per two rows. Identical instructions on identical
+// operands, only the issue order changes, so the results are bit-identical to the one-row body.
+template <BinaryOp BINOP, int ITERATIONS>
+inline void calculate_sfpu_binary_two_row(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(
+        use_two_row_binary<BINOP, ITERATIONS, false /*software_rounding*/>,
+        "two rows per iteration: ADD/SUB/RSUB/MUL over an even row count");
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    const std::uint32_t off_in0 = dst_index_in0 * dst_tile_size_sfpi;
+    const std::uint32_t off_in1 = dst_index_in1 * dst_tile_size_sfpi;
+    const std::uint32_t off_out = dst_index_out * dst_tile_size_sfpi;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
+        sfpi::vFloat a_in1 = sfpi::dst_reg[off_in1];
+        sfpi::vFloat b_in0 = sfpi::dst_reg[off_in0 + 1];
+        sfpi::vFloat b_in1 = sfpi::dst_reg[off_in1 + 1];
+        sfpi::vFloat a_res;
+        sfpi::vFloat b_res;
+        if constexpr (BINOP == BinaryOp::ADD) {
+            a_res = a_in0 + a_in1;
+            b_res = b_in0 + b_in1;
+        } else if constexpr (BINOP == BinaryOp::SUB) {
+            a_res = a_in0 - a_in1;
+            b_res = b_in0 - b_in1;
+        } else if constexpr (BINOP == BinaryOp::RSUB) {
+            a_res = a_in1 - a_in0;
+            b_res = b_in1 - b_in0;
+        } else {
+            a_res = a_in0 * a_in1;
+            b_res = b_in0 * b_in1;
+        }
+        sfpi::dst_reg[off_out] = a_res;
+        sfpi::dst_reg[off_out + 1] = b_res;
+        sfpi::dst_reg += 2;
+    }
+}
+
 template <
     bool APPROXIMATION_MODE,
     BinaryOp BINOP,
@@ -103,6 +157,22 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    constexpr bool round_to_bf16_rne = (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) &&
+                                       !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
+    if constexpr (use_two_row_binary<BINOP, ITERATIONS, round_to_bf16_rne>) {
+        calculate_sfpu_binary_two_row<BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        return;
+    }
+    // XLOGY: the log body's two polynomial constants are bound here and held in LREGs across the
+    // loop; as literals inside the loop they would be re-materialised on every row.
+    // Declared for every op but loaded only for XLOGY: sfpi does not drop an unused SFPLOADI.
+    // Unassigned for every other op, so do not read them outside the XLOGY branch.
+    sfpi::vFloat log_c;
+    sfpi::vFloat log_d;
+    if constexpr (BINOP == BinaryOp::XLOGY) {
+        log_c = LogPoly::C;
+        log_d = LogPoly::D;
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -127,7 +197,7 @@ inline void calculate_sfpu_binary(
             v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
             v_else {
                 sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
-                _calculate_log_body_<false>(0, dst_index_out);
+                _calculate_log_body_(log_c, log_d, dst_index_out);
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;
@@ -188,9 +258,7 @@ inline void calculate_sfpu_binary(
             v_endif;
         }
 
-        if constexpr (
-            (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && !is_fp32_dest_acc_en &&
-            dst_rounding_mode == DstRoundingMode::NearestEven) {
+        if constexpr (round_to_bf16_rne) {
             result = float32_to_bf16_rne(result);
         }
 
@@ -202,6 +270,12 @@ inline void calculate_sfpu_binary(
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_mul(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    // A 16-bit Dest rounds the product to bf16 in software and stores x * 0 as +0, so it keeps the
+    // one-row body.
+    if constexpr (use_two_row_binary<BinaryOp::MUL, ITERATIONS, !is_fp32_dest_acc_en>) {
+        calculate_sfpu_binary_two_row<BinaryOp::MUL, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
+        return;
+    }
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
     for (int d = 0; d < ITERATIONS; d++) {

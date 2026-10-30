@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Threshold decoding of the tt-llk scalar compares (tt-llk#1701 item 16).
+// Threshold decoding of the scalar compares (tt-llk#1701 item 16).
 //
 // Drives the uint32 entry point _calculate_comp_unary_<APPROX, unary_*>(value) over one tile. Like the other
-// float-scalar kernels (metal calculate_unary_*, tt-llk relu/threshold), `value` carries the fp32 bit pattern
+// float-scalar kernels (metal calculate_unary_*, relu/threshold), `value` carries the fp32 bit pattern
 // of the threshold (SFPU_UNARY_SCALAR), e.g. 0x3F000000 for 0.5f.
 
 #include <cstdint>
@@ -53,7 +53,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_comp.h"
 
 using namespace ckernel;
 

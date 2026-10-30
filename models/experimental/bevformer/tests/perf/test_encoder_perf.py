@@ -28,8 +28,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config.encoder_config import get_preset_config
-from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
+from models.experimental.bevformer.tests.common import PRESETS, img_metas_for_dataset
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
@@ -65,20 +64,15 @@ def test_bevformer_encoder_perf(
 ):
     logger.info(f"device-perf run of commit {_head_sha()}")
 
-    config = get_preset_config(config_name)
-    assert config is not None, f"Configuration '{config_name}' not found"
-
-    dataset_config = config.dataset_config
-    model_config = config.model_config
+    config = PRESETS[config_name]
 
     bev_h, bev_w = bev_size
     num_queries = bev_h * bev_w
-    embed_dims = model_config.embed_dims
-    num_cams = dataset_config.num_cams
-    num_levels = model_config.num_levels
+    embed_dims = config.embed_dims
+    num_cams = config.num_cams
+    num_levels = config.num_levels
 
-    spatial_shapes = torch.tensor(dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
-    level_start_index = config.get_level_start_index()[:num_levels]
+    spatial_shapes = torch.tensor(config.spatial_shapes[:num_levels], dtype=torch.long)
 
     bev_query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
     bev_pos = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
@@ -86,32 +80,43 @@ def test_bevformer_encoder_perf(
     key_length = sum(h * w for h, w in spatial_shapes.tolist())
     camera_features = torch.randn(num_cams, key_length, batch_size, embed_dims, dtype=torch.float32)
 
-    img_metas = img_metas_for_dataset(dataset_config, batch_size)
+    img_metas = img_metas_for_dataset(config, batch_size)
 
-    encoder_kwargs = config.get_encoder_kwargs()
-    encoder_kwargs.update({"num_layers": num_layers, "batch_first": True, "return_intermediate": False})
+    encoder_kwargs = dict(
+        num_layers=num_layers,
+        embed_dims=embed_dims,
+        num_heads=config.num_heads,
+        num_levels=num_levels,
+        num_points=config.num_points,
+        num_cams=num_cams,
+        pc_range=list(config.pc_range),
+    )
 
-    ref_model = BEVFormerEncoder(**encoder_kwargs)
+    ref_model = BEVFormerEncoder(**encoder_kwargs, tsa_num_points=config.tsa_num_points)
     ref_model.eval()
+    # The upstream reference takes the queries sequence-first and returns them batch-first.
     ref_output = ref_model(
-        bev_query=bev_query,
-        key=camera_features,
+        bev_query=bev_query.permute(1, 0, 2),
         value=camera_features,
         bev_h=bev_h,
         bev_w=bev_w,
-        bev_pos=bev_pos,
+        bev_pos=bev_pos.permute(1, 0, 2),
         spatial_shapes=spatial_shapes,
-        level_start_index=level_start_index,
         prev_bev=None,
         img_metas=img_metas,
     )
 
+    tt_parameters = create_bevformer_encoder_parameters(ref_model, device, dtype=ttnn.bfloat16)
     tt_model = TTBEVFormerEncoder(
         device=device,
-        params=create_bevformer_encoder_parameters(torch_model=ref_model, device=device, dtype=ttnn.bfloat16),
+        params=tt_parameters,
         bev_h=bev_h,
         bev_w=bev_w,
         spatial_shapes=spatial_shapes,
+        batch_first=True,
+        return_intermediate=False,
+        feedforward_channels=tt_parameters.config.feedforward_channels,
+        temporal_num_points=config.tsa_num_points,
         **encoder_kwargs,
     )
 

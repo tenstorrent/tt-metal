@@ -3,11 +3,24 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 set -euo pipefail
 
-MODEL="${1:?usage: run_multirank_pcc.sh <model-key> [config]}"
-# First entry is the default; membership is the validation. mistral4 is PP4-only, so sc1 only.
+USAGE="usage: run_multirank_pcc.sh <model-key> [config] [--variant <manifest-suffix>]"
+VARIANT=""
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --variant) VARIANT="_${2:?--variant needs a manifest suffix, e.g. mtp_kv_share or dflash}"; shift 2 ;;
+    -*) echo "unknown option '$1'; ${USAGE}" >&2; exit 2 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
+
+MODEL="${1:?${USAGE}}"
+RUN_NAME="${MODEL}${VARIANT}"
+# First entry is the default; membership is the validation. These models support sc1 only.
 case "${MODEL}" in
-  mistral4) MODEL_CONFIGS="sc1" ;;
-  *)        MODEL_CONFIGS="sc4 sc1" ;;
+  mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
 case " ${MODEL_CONFIGS} " in
@@ -45,29 +58,59 @@ TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
-EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${MODEL}"
+EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
+MTP_PCC_THRESHOLD=""
+DFLASH_PCC_THRESHOLD=""
+TABLE_WAIT_DEFAULT=3600
+VARIANT_MAX_SEQ_LEN=""
+MTP=0
+DFLASH=0
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
 SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
+REQUEST_LEN=""
+SC1_REQUEST_LEN=""
 
 case "${MODEL}" in
+  gptoss120b)
+    source "${TT_METAL_HOME}/models/demos/gpt_oss_d_p/scripts/ci/runner_config.sh"
+    ;;
   llama31)
     source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
     ;;
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+    PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+    REQUEST_LEN=256000
+    if [ "${VARIANT}" = _dflash ]; then
+      DFLASH=1
+      MANIFEST="${MANIFEST_DIR}/kimi27_dflash.json"
+      VARIANT_MAX_SEQ_LEN=286720
+      DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
+      PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
+      TABLE_WAIT_DEFAULT=7200
+    fi
     ;;
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm53.json"
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     PCC_THRESHOLD=0.83
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
+    PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
+    REQUEST_LEN=1044480
+    if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
+      MTP=1
+      MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
+      SC1_MAX_SEQ_LEN=81920
+      SC1_REQUEST_LEN=${GOLDEN_LEN}
+      MTP_PCC_THRESHOLD=0.80
+      MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
+      PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k; \
+          export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
+      [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+    fi
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -86,10 +129,18 @@ case "${MODEL}" in
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
     # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
     # the same symptom.
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
+    PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     # Deliberately only the first 55k: the K3 golden trace is currently unreliable.
     PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+    REQUEST_LEN=1049600
+    if [ "${VARIANT}" = _dspark ]; then
+      [ "${CONFIG}" = sc4 ] || { echo "${MODEL} runs sc4 only" >&2; exit 2; }
+      DFLASH=1
+      MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark.json"
+      DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
+      PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
+      TABLE_WAIT_DEFAULT=7200
+    fi
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -98,9 +149,7 @@ case "${MODEL}" in
     # PP_RANKS, so the next pipeline-parallel model sets only that.
     PP_RANKS=4
     # Validates the entire 36-layer golden, including positions >8192.
-    MAX_SEQ_LEN=${GOLDEN_LEN}
-    # sc1 is the only config, so the sc1 window below must not widen it to the 256k default.
-    SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
+    REQUEST_LEN=${GOLDEN_LEN}
     MISTRAL_MODEL="${PREFILL_HF_MODEL:-/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603}"
     MISTRAL_CACHE="${PREFILL_TTNN_CACHE:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI}"
     MISTRAL_GOLDEN="${PREFILL_TRACE_DIR:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L}"
@@ -110,8 +159,7 @@ case "${MODEL}" in
         export PREFILL_FABRIC_MODE=2d_torus_y; \
         export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1; \
         export TT_METAL_OPERATION_TIMEOUT_SECONDS=0;"
-    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR='${MISTRAL_GOLDEN}'; export PREFILL_SP=8; export PREFILL_TP=1;"
+    PRODUCER_ENV="export PREFILL_TRACE_DIR='${MISTRAL_GOLDEN}'; export PREFILL_SP=8; export PREFILL_TP=1;"
     ;;
   *)
     echo "unknown model key '${MODEL}'" >&2
@@ -119,15 +167,27 @@ case "${MODEL}" in
     ;;
 esac
 
+if [ -n "${VARIANT}" ]; then
+  [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
+  [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
+  export PIPELINE_DIR="${PIPELINE_DIR}${VARIANT}"
+  PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
+      export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
+  PERF_BASELINES=""
+  REQUIRE_TPS=0
+  EXPECTED_TPS=""
+fi
+PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
+
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
   [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
 fi
 
-MAX_SEQ_LEN=$(manifest_env PREFILL_MAX_SEQ_LEN)
+MAX_SEQ_LEN=${VARIANT_MAX_SEQ_LEN:-$(manifest_env PREFILL_MAX_SEQ_LEN)}
 NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
 
-RUNNER_OVERRIDES=""
+RUNNER_OVERRIDES="${VARIANT_MAX_SEQ_LEN:+export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN};}"
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 SC1_MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}
 NUM_LAYERS_ENV=""
@@ -147,12 +207,17 @@ fi
 if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
 fi
-echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
-REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+SC1_REQUEST_LEN=${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}
+SC4_REQUEST_LEN=${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}
+REQUEST_LEN=${SC4_REQUEST_LEN}
+[ "${CONFIG}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
+echo "resolved shape for ${RUN_NAME}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} request_len=${REQUEST_LEN} num_users=${NUM_USERS}"
 
-SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
-SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
+REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))
+
+SC1_CHUNKS=$((SC1_REQUEST_LEN / CHUNK_SIZE))
+SC4_CHUNKS=$((SC4_REQUEST_LEN / CHUNK_SIZE))
 # Start, ~50k, ~100k, ~255k, and the midpoint + tail of each config's window. Deduped: a model with
 # one config yields the same chunk twice, and the summary drops chunks past a short window.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
@@ -169,11 +234,13 @@ RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfil
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
-MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_prefill_ci_mr.XXXXXX")
+MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${RUN_NAME}_prefill_ci_mr.XXXXXX")
+GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 TIMING_DIR="${MR_DIR}/timing"
+PRODUCER_LOG="${MR_DIR}/producer.log"
 mkdir -p "${TIMING_DIR}"
 
 SUMMARY_DONE=0
@@ -184,7 +251,7 @@ emit_summary() {
     --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
     --chunk-size "${CHUNK_SIZE}" \
     --probe-chunks "${PROBE_CHUNKS}" \
-    --summary-name "${MODEL}_${CONFIG}" \
+    --summary-name "${RUN_NAME}_${CONFIG}" \
     || echo "summary generation failed (non-fatal)"
 }
 
@@ -199,8 +266,17 @@ cleanup() {
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
     echo "$(basename "$f"): $(cat "$f")"
   done
+  if [ "${MTP}" = 1 ]; then
+    echo "==================== MTP per-level KV PCC ===================="
+    find "${RANKLOGS}" -type f 2>/dev/null -exec grep -h -E "MTP level|MTP KV PCC|MTP: golden|MTP:.*level slots" {} + \
+      | tail -40 || echo "no MTP PCC lines in the rank logs"
+  elif [ "${DFLASH}" = 1 ]; then
+    echo "==================== drafter KV PCC ===================="
+    grep -h -E "drafter KV PCC|min over all|kv_cache_pcc_complete" "${PRODUCER_LOG}" 2>/dev/null | tail -20 \
+      || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
+  fi
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${BINDING:-}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
   if [ -d "${RANKLOGS}" ]; then
@@ -227,16 +303,26 @@ cleanup() {
       fi
       "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
         --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-        -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
+        -o "${GANTT_DIR}/${RUN_NAME}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
       if [ -n "${GANTT_TMP}" ]; then
         rm -rf "${GANTT_TMP}"
       fi
     fi
   fi
-  rm -rf "${MR_DIR}"
+  # Last in the log, after the rank-log tails, so a failed gate is what a tail reader sees.
+  echo "==================== gate verdicts ===================="
+  echo "producer rc=${PROD_RC:-<unset>} runner rc=${RUNNER_RC:-<unset>} perf gate rc=${PERF_GATE_RC:-<unset>} pcc gate rc=${PCC_GATE_RC:-<unset>}"
+  grep -h "GATE" "${GATE_LOG}" 2>/dev/null || true
+  if [ -n "${PREFILL_KEEP_RUN_DIR:-}" ]; then
+    echo "keeping run dir (PREFILL_KEEP_RUN_DIR set): ${MR_DIR}"
+  else
+    rm -rf "${MR_DIR}"
+  fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ "${PP_RANKS}" -ne 0 ]; then
   # The CI controller has no chips: probe the allocated worker, and never reuse the template's
@@ -300,11 +386,18 @@ cd "${TT_METAL_HOME}"
 # were still compiling. The loop breaks as soon as the table appears, so a larger bound costs the
 # shallower models nothing. Keep it below the leg's job timeout, or the container is killed first
 # and this diagnostic never prints.
-TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-3600}"
-for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
+TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
+WAITED=0
+while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
   [ -f "${TABLE_PATH}" ] && break
   kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
+  if [ -n "${VARIANT}" ] && [ $((WAITED % 60)) -eq 0 ] && [ "${WAITED}" -gt 0 ]; then
+    CRASHED=$(find "${RANKLOGS}" -type f -name '*.err' 2>/dev/null \
+      -exec grep -l -F "Traceback (most recent call last)" {} + 2>/dev/null || true)
+    [ -z "${CRASHED}" ] || { echo "a rank crashed ${WAITED}s in, before the KV table was published: ${CRASHED}"; exit 1; }
+  fi
   sleep 5
+  WAITED=$((WAITED + 5))
 done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
 
@@ -318,9 +411,33 @@ if [ "${PP_RANKS}" -eq 0 ]; then
   EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
 fi
 
+PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+if [ "${DFLASH}" = 1 ]; then
+  mkdir -p "${TT_METAL_HOME}/generated/ttrun"
+  cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
+  PRODUCER_PLACEMENT=(--map-by rankfile:file=generated/ttrun/producer_rankfile --wdir "${TT_METAL_HOME}")
+fi
+
+if [ "${DFLASH}" = 1 ]; then
+  CHECK_PY="${MR_DIR}/check_table_configs.py"
+  cat > "${CHECK_PY}" <<'PY'
+import sys, ttnn
+
+table = ttnn.experimental.disaggregation.import_from_protobuf_file(sys.argv[1])
+names = [table.config_name(i) for i in range(table.num_configs())]
+dflash = [x for x in names if x.startswith("dflash_")]
+print(f"[dflash-ci] table configs: {len(names)} total, {len(dflash)} drafter -> {dflash[:4]}...")
+if not dflash:
+    sys.exit("[dflash-ci] FATAL: merged table carries no dflash_* configs; the drafter half would be skipped")
+PY
+  "${MPIRUN}" -np 1 --host "${HOSTS%%,*}" --bind-to none --tag-output --allow-run-as-root \
+    -x PATH -x LD_LIBRARY_PATH \
+    bash -lc "cd '${TT_METAL_HOME}'; export PYTHONPATH='${TT_METAL_HOME}'; exec python3 '${CHECK_PY}' '${TABLE_PATH}'"
+fi
+
 set +e
 "${MPIRUN}" \
-  -np "${EXPECTED_RANKS}" --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+  --host "${HOSTS}" "${PRODUCER_PLACEMENT[@]}" --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
   --mca btl self,tcp --mca btl_tcp_if_include "${TCP_INTERFACE}" \
   -x PATH -x LD_LIBRARY_PATH \
@@ -342,9 +459,14 @@ set +e
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
-    exec python3 -m models.demos.common.prefill.runners.prefill_producer"
-PROD_RC=$?
+    exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
+PROD_RC=${PIPESTATUS[0]}
 set -e
+
+if [ "${DFLASH}" = 1 ] && [ "${PROD_RC}" -eq 0 ] && ! grep -q "min_dflash_pcc=" "${PRODUCER_LOG}"; then
+  echo "no rank reported a drafter KV PCC: the dflash caches were never checked" >&2
+  exit 1
+fi
 
 RUNNER_RC=0
 if [ "${PROD_RC}" -eq 0 ]; then
@@ -372,23 +494,31 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
     esac
   fi
   python3 "${PERF_GATE}" \
-    "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
+    "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
     --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
-    --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
+    --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi
 
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" "${MTP_PCC_THRESHOLD}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
 pcc_dir, expected, threshold = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
 expected_slots = int(sys.argv[4])
+mtp_threshold = float(sys.argv[5]) if sys.argv[5] else None
+
+
+def floor(cache):
+    return mtp_threshold if mtp_threshold is not None and cache.startswith("mtp") else threshold
+
+
 files = sorted(glob.glob(os.path.join(pcc_dir, "rank*.json")))
 if {os.path.basename(f) for f in files} != {f"rank{r}.json" for r in range(expected)}:
     print(f"PCC GATE FAIL: expected exactly ranks 0..{expected - 1}, found {files}", file=sys.stderr)
     sys.exit(1)
 bad = 0
+mtp_ranks = []
 for f in files:
     name = os.path.basename(f)
     try:
@@ -398,10 +528,12 @@ for f in files:
         bad += 1
         continue
     per_cache = v.get("per_cache") or {}
-    scores = [v.get("min_pcc"), *per_cache.values()]
+    if any(c.startswith("mtp") for c in per_cache):
+        mtp_ranks.append(name)
+    scores = [(v.get("min_pcc"), min([threshold, *map(floor, per_cache)])), *((s, floor(c)) for c, s in per_cache.items())]
 
-    def unusable(s):
-        return not isinstance(s, (int, float)) or isinstance(s, bool) or not math.isfinite(s) or not threshold <= s <= 1
+    def unusable(s, lo):
+        return not isinstance(s, (int, float)) or isinstance(s, bool) or not math.isfinite(s) or not lo <= s <= 1
 
     # A verdict is trusted only if it says so AND proves it did the work. Checked as a list so the
     # log names the clause that tripped -- "unvalidated" and "below threshold" need different fixes.
@@ -412,7 +544,7 @@ for f in files:
             (v.get("slots_checked") == expected_slots, f"slots_checked is not the {expected_slots} slots fed"),
             (bool(per_cache), "per_cache is empty, so no cache was compared"),
             (v.get("threshold") == threshold, f"threshold is not the {threshold} this gate demands"),
-            (not any(unusable(s) for s in scores), f"a score is missing, non-finite, or outside [{threshold}, 1]"),
+            (not any(unusable(s, lo) for s, lo in scores), "a score is missing, non-finite, or below its floor"),
         ) if not ok),
         None,
     )
@@ -423,6 +555,9 @@ for f in files:
     )
     if reason is not None:
         bad += 1
+if mtp_threshold is not None and len(mtp_ranks) != 1:
+    print(f"PCC GATE FAIL: expected exactly one rank with mtp caches, found {mtp_ranks}", file=sys.stderr)
+    bad += 1
 if bad:
     print(f"PCC GATE FAIL: {bad}/{len(files)} rank(s) below threshold or unvalidated", file=sys.stderr)
     sys.exit(1)

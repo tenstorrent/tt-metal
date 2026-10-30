@@ -393,8 +393,8 @@ class RunTimeOptions {
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
-    // Timeout duration for operations
-    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
+    // Timeout duration for operations in seconds (0 = off)
+    std::atomic<float> timeout_duration_for_operations = 0.0f;
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
     // Dispatch kernel progress update period in milliseconds (default 100ms)
@@ -422,13 +422,12 @@ class RunTimeOptions {
     // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
+    // Use the DRAM size the soc descriptor declares on the emulator models that back less
+    // (TT_METAL_SIMULATOR_DRAM_UNCAPPED=1).
+    bool simulator_dram_uncapped = false;
+
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
-
-    // Quasar IP variant from TT_METAL_QUASAR_VARIANT (horizon, trinity, saturn, ...). Selects the variant's
-    // register headers and, when tt_metal/tt-llk/tt_llk_quasar/arch/<variant> exists, the LLK headers that
-    // shadow the base Quasar ones. Empty means the base Quasar part.
-    std::string quasar_variant;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -691,7 +690,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -699,8 +698,7 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace(),
-            get_quasar_variant());
+            get_eth_ptp_trace());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -873,7 +871,6 @@ public:
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
     bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
@@ -1014,7 +1011,12 @@ public:
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
-    std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    std::chrono::duration<float> get_timeout_duration_for_operations() const {
+        return std::chrono::duration<float>(timeout_duration_for_operations.load(std::memory_order_relaxed));
+    }
+    void set_timeout_duration_for_operations(std::chrono::duration<float> timeout) {
+        timeout_duration_for_operations.store(timeout.count(), std::memory_order_relaxed);
+    }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
 
@@ -1037,8 +1039,9 @@ public:
     bool get_simulator_serve_over_sockets() const { return simulator_serve_over_sockets; }
     void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
 
+    bool get_simulator_dram_uncapped() const { return simulator_dram_uncapped; }
+
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
-    const std::string& get_quasar_variant() const { return quasar_variant; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

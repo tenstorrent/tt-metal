@@ -9,7 +9,6 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
-    format_dict,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
@@ -25,7 +24,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 max_tiles = 4
 tile_dim = 32
@@ -119,7 +118,7 @@ def test_pack_rows(
 
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     extracted_data = [
         res_tensor[

@@ -142,12 +142,13 @@ HalCoreInfoType create_tensix_mem_map() {
         // COMPUTE
         {
             // NEO0
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
@@ -167,12 +168,13 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // NEO1
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
@@ -192,12 +194,13 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // NEO2
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
@@ -217,12 +220,13 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // NEO3
-            // TRISC0
+            // TRISC0 (has the vector unit)
             {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = 0x0,
              .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
             // TRISC1
             {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,

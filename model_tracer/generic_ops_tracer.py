@@ -1246,7 +1246,7 @@ def run_test_with_tracing(
         metadata["software_versions"] = software_versions
 
     # Check for HF_MODEL and LLAMA_DIR environment variables
-    if "models/tt_transformers/demo/simple_text_demo.py" in test_path:
+    if "models/ttt_compat/demo/simple_text_demo.py" in test_path:
         hf_model = os.environ.get("HF_MODEL")
         llama_dir = os.environ.get("LLAMA_DIR")
         if hf_model:
@@ -1744,9 +1744,9 @@ Examples (Import existing traces):
                     test_source = os.path.relpath(test_source, BASE_DIR)
 
                 # Check for HF_MODEL and LLAMA_DIR environment variables and append if set
-                # Only capture for models/tt_transformers/demo/simple_text_demo.py
+                # Only capture for models/ttt_compat/demo/simple_text_demo.py
                 # This helps identify which specific HuggingFace model or Llama directory was used
-                if "models/tt_transformers/demo/simple_text_demo.py" in test_source:
+                if "models/ttt_compat/demo/simple_text_demo.py" in test_source:
                     hf_model = os.environ.get("HF_MODEL")
                     llama_dir = os.environ.get("LLAMA_DIR")
 

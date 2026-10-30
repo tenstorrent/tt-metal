@@ -36,7 +36,8 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "context/metal_context.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
@@ -170,7 +171,7 @@ std::vector<CoreCoord> sorted_yx(const std::unordered_set<CoreCoord>& cores) {
 }
 
 DevicePrograms::DeviceCtx::DeviceCtx(distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord) :
-    mesh(&mesh), coord(coord), device(mesh.get_device(coord)) {}
+    mesh(&mesh), coord(coord), device(internal::get_device(mesh, coord)) {}
 DevicePrograms::DeviceCtx::~DeviceCtx() = default;
 DevicePrograms::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
@@ -502,7 +503,7 @@ std::unique_ptr<Program> DevicePrograms::relay_program(const DeviceCtx& ctx, uin
         num_cores,
         tt::div_up(num_cores, kMaxRelayCores),
         ctx.relays.size());
-    auto program = std::make_unique<Program>(CreateProgram());
+    auto program = std::make_unique<Program>(CreateProgram(*ctx.mesh));
     const KernelHandle kernel = CreateKernel(
         *program,
         "tt_metal/impl/streaming_profiler/kernels/drisc_relay.cpp",
@@ -608,7 +609,7 @@ void DevicePrograms::enumerate_eth_cores(DeviceCtx& ctx) {
 
 std::unique_ptr<Program> DevicePrograms::wall_clock_program(const DeviceCtx& ctx) {
     const CoreCoord& core = ctx.wall_clock.core.logical;
-    auto program = std::make_unique<Program>(CreateProgram());
+    auto program = std::make_unique<Program>(CreateProgram(*ctx.mesh));
     create_idle_eth_kernel(
         *program,
         "tt_metal/impl/streaming_profiler/kernels/eth_clock_sampler.cpp",
@@ -625,7 +626,7 @@ std::unique_ptr<Program> DevicePrograms::wall_clock_program(const DeviceCtx& ctx
 }
 
 std::unique_ptr<Program> DevicePrograms::check_program(const DeviceCtx& ctx) {
-    auto program = std::make_unique<Program>(CreateProgram());
+    auto program = std::make_unique<Program>(CreateProgram(*ctx.mesh));
     create_idle_eth_kernel(
         *program,
         "tt_metal/impl/streaming_profiler/kernels/eth_clock_check.cpp",
@@ -636,7 +637,7 @@ std::unique_ptr<Program> DevicePrograms::check_program(const DeviceCtx& ctx) {
 }
 
 std::unique_ptr<Program> DevicePrograms::eth_relay_program(const DeviceCtx& ctx) {
-    auto program = std::make_unique<Program>(CreateProgram());
+    auto program = std::make_unique<Program>(CreateProgram(*ctx.mesh));
     const Producer& wall_clock = ctx.wall_clock_producer();
     const KernelHandle kernel = create_idle_eth_kernel(
         *program,
@@ -732,7 +733,7 @@ void DevicePrograms::launch_links() {
             // Both are compiled first, because the transmitter starts its handshake as soon as it runs.
             std::array<std::unique_ptr<Program>, 2> programs;
             for (size_t i = 0; i < ports.size(); i++) {
-                programs[i] = std::make_unique<Program>(CreateProgram());
+                programs[i] = std::make_unique<Program>(CreateProgram(*ports[i].ctx.mesh));
                 CreateKernel(
                     *programs[i],
                     "tt_metal/impl/streaming_profiler/kernels/link_sync.cpp",

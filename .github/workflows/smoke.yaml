@@ -80,13 +80,27 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
 
+      # Matrix script from upstream main, not this branch (#57555, #57579);
+      # keep after the checkout above, whose clean would delete this.
+      - name: Checkout CI actions from main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/tt-metal  # github.repository would be the fork
+          ref: main
+          path: ci-main
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+          sparse-checkout-cone-mode: true
+
       - name: Install dependencies
         run: pip3 install PyYAML
 
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./ci-main/.github/actions/prepare-test-matrix
         with:
           tests-yaml: "${{ env.TESTS_YAML_PATH }}"
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -134,6 +148,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions/download-artifact-with-retry
+            .github/actions/upload-artifact-with-job-uuid
             .github/scripts/ccache_log_filter.sh
           sparse-checkout-cone-mode: false
 
@@ -323,7 +338,8 @@ jobs:
           include_passed: false
           fail_on_failure: false
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      # Carries no script, so nothing here needs pinning to main.
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:

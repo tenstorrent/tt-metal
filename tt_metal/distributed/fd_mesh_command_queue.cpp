@@ -60,6 +60,7 @@
 #include "tt_metal/impl/device/dispatch.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/graph_tracking.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
@@ -93,7 +94,8 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 class SubDeviceRecorder {
 public:
     SubDeviceRecorder(MeshDevice* mesh_device, SubDeviceId sub_device_id) :
-        context_id_(extract_context_id(mesh_device)), manager_id_(*mesh_device->get_active_sub_device_manager_id()) {
+        context_id_(mesh_device->impl().get_context_id()),
+        manager_id_(*mesh_device->get_active_sub_device_manager_id()) {
         // Skip programs that didn't opt into a user-defined sub-device manager.
         enabled_ = manager_id_ != *mesh_device->get_default_sub_device_manager_id() &&
                    tt::IsProgramMetadataRecordingEnabled(context_id_);
@@ -738,7 +740,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive(extract_context_id(mesh_device_))) {
+    if (tt::IsProgramRealtimeProfilerActive(mesh_device_->impl().get_context_id())) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
             const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
             for (auto* device : mesh_device_->impl().get_devices()) {
@@ -1495,7 +1497,8 @@ void FDMeshCommandQueue::submit_replay_buffer(
         sub_device.take_ownership(sub_device_id, this->id_);
     }
 
-    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(extract_context_id(mesh_device_), num_sub_devices);
+    auto cmd_sequence_sizeB =
+        trace_dispatch::compute_trace_cmd_size(mesh_device_->impl().get_context_id(), num_sub_devices);
 
     trace_dispatch::TraceDispatchMetadata dispatch_md(
         cmd_sequence_sizeB,
@@ -1637,7 +1640,7 @@ void FDMeshCommandQueue::record_end() {
         // cache manager to give each range a clean slate.
         this->reset_prefetcher_cache_manager();
 
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(range.start_coord())->sysmem_manager();
+        auto& sysmem_manager_for_trace = internal::get_device(*mesh_device_, range.start_coord())->sysmem_manager();
         auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
             worker_launch_message_buffer_state[sub_device_id].reset();

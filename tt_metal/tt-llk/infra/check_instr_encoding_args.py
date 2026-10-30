@@ -28,7 +28,10 @@ plain integer:
    forwarded, and not checked. A cast (`static_cast<T>(c)`, `(T)c`, `T(c)`) is not a call: it
    keeps the value, so the constant is still the enclosing instruction's argument. Families
    that several instructions share by design (`p_setrwc`, `p_unpacr`, `p_movd2a`, `p_mova2d`,
-   ...) are deliberately not listed.
+   ...) are deliberately not listed. `InstrModLoadStore::*` (llk_defs.h) is the SFPLOAD /
+   SFPSTORE Mod0 format table, which SFPLOADMACRO shares and SFPCONFIG packs into its
+   immediate; any other instruction (SFPLOADI, whose Mod0 table differs) reads it as a
+   different field.
 
 The verdict depends on this file, on the lexer in check_mutex_balance.py and on the
 `TT_OP_*` definitions in `ckernel*_ops.h`; a commit touching any of those rescans every header.
@@ -118,7 +121,11 @@ def _instruction_names():
 
 
 INSTRUCTIONS = _instruction_names()
-_CONST = re.compile(r"\b(SFP[A-Z0-9]+)_MOD\d_\w+|\b(p_[a-z0-9_]+)::\w+")
+_CONST = re.compile(
+    r"\b(SFP[A-Z0-9]+)_MOD\d_\w+|\b(p_[a-z0-9_]+)::\w+|\b(InstrModLoadStore)::\w+"
+)
+# The instructions whose Mod0 field (or, for SFPCONFIG, immediate) is the SFPLOAD/SFPSTORE table.
+_LOAD_STORE_MODE_INSNS = {"SFPLOAD", "SFPSTORE", "SFPLOADMACRO", "SFPCONFIG"}
 
 
 def _line(code, pos):
@@ -287,6 +294,10 @@ def check_families(code):
         elif m.group(2) in INSTR_FAMILIES and inner not in INSTR_FAMILIES[m.group(2)]:
             msg = f"{m.group(0)} belongs to {m.group(2)}, passed to {inner}"
             yield _line(code, i), msg
+        elif m.group(3) and inner not in _LOAD_STORE_MODE_INSNS:
+            yield _line(code, i), (
+                f"{m.group(0)} is an SFPLOAD/SFPSTORE format, passed to {inner}"
+            )
 
 
 def scan(path):

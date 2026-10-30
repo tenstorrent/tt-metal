@@ -64,10 +64,6 @@ struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDeviceImpl;
 
-namespace multihost {
-class DistributedContext;
-}
-
 using DeviceIds = std::vector<int>;
 
 // Options for creating a MeshDevice from a MetalEnv.
@@ -242,14 +238,6 @@ public:
         "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates or use "
         "get_device_ids instead. This will be removed after 2026-11-19.")]]
     std::vector<IDevice*> get_devices() const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
-    IDevice* get_device(ChipId physical_device_id) const;
-    [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
-    IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;

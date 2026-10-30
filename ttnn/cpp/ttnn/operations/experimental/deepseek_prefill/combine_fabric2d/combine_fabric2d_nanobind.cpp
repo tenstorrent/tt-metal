@@ -32,6 +32,12 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
             expert_offsets        where each ORIGIN chip's run starts inside each expert's region.
                                   Must be REPLICATED along the dispatch-group axis, since every chip
                                   needs every origin chip's boundaries for the experts it hosts.
+            fwd_reduction         how much smaller than the dense forwarding region to make this op's,
+                                  as a divisor on what the dense region would have cost for this model.
+                                  No value can deadlock the ring -- the region is split by movement
+                                  class -- so this trades DRAM against throughput and nothing else.
+                                  Where that curve bends differs per model, so it comes from the model
+                                  config (COMBINE_FWD_REDUCTION) rather than being fixed here.
 
         dispatched_buffer and dispatched_metadata are 1 in every dim before the last two, as dispatch
         leaves them, so their second-to-last dim is dispatch's max_dispatch_buffer_token_size. A token
@@ -60,6 +66,7 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("seq_len_per_chip"),
         nb::arg("cluster_axis"),
         nb::arg("num_links"),
+        nb::arg("fwd_reduction"),
         nb::arg("topology"),
         nb::arg("memory_config"));
 }
