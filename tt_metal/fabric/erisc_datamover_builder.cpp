@@ -387,7 +387,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     Topology topology,
     FabricEriscDatamoverOptions options,
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) :
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc,
+    std::optional<RouterChannelLiveness> liveness) :
     FabricEriscDatamoverConfig(fabric_context, topology) {
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
 
@@ -477,7 +478,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->num_used_receiver_channels_per_vc,
         this->channel_buffer_size_bytes,
         available_channel_buffering_space,
-        this->available_buffer_memory_regions);
+        this->available_buffer_memory_regions,
+        liveness);
 
     this->channel_allocator = static_allocator;
 
@@ -1835,5 +1837,28 @@ void FabricEriscDatamoverBuilder::apply_channel_trimming_overrides(const Channel
         "Applied channel trimming overrides: sender_used=0x{:04X} rx_fwd=0x{:04X}",
         overrides.sender_channel_used_bitfield_by_vc,
         overrides.receiver_channel_data_forwarded_bitfield_by_vc);
+}
+
+void FabricEriscDatamoverBuilder::apply_sender_liveness(const RouterChannelLiveness& liveness) {
+    // Flattened sender index space: VC0 channels, then VC1, then VC2, each at the allocated width.
+    size_t flat_base = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        const size_t width = this->config.num_used_sender_channels_per_vc[vc];
+        for (size_t ch = 0; ch < width; ++ch) {
+            if (liveness.is_sender_live(vc, ch)) {
+                continue;
+            }
+            for (auto& risc_channels : this->is_sender_channel_serviced_) {
+                risc_channels[flat_base + ch] = false;
+            }
+        }
+        flat_base += width;
+    }
+    log_debug(
+        tt::LogFabric,
+        "Applied sender liveness: vc0=0x{:03X} vc1=0x{:03X} vc2=0x{:03X}",
+        liveness.sender_live_mask[0],
+        liveness.sender_live_mask[1],
+        liveness.sender_live_mask[2]);
 }
 }  // namespace tt::tt_fabric

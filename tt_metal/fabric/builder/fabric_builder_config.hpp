@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <cstddef>
 
@@ -131,6 +132,57 @@ uint32_t get_vc0_downstream_edm_count(bool is_2D_routing, bool express_routing_e
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing, bool express_routing_enabled = false);
 
 }  // namespace builder_config
+
+/**
+ * Which of a router's sender channel slots carry a producer, and how many live slots the channel
+ * allocator should size for.
+ *
+ * Slot positions are fixed by direction (see RouterProducerSlots), so a router whose facing leaves
+ * some producer slots unwired -- an N/S router's from-E/from-W slots under dimension-order routing,
+ * the from-Z slot on a chip with no Z port -- keeps those slots in its layout but gives them no
+ * packet buffering. `sender_live_mask[vc]` has bit `i` set when sender channel `i` of that VC is
+ * live. `link_live_sender_counts[vc]` is the live count the allocator fits option rows against: the
+ * larger of this router's and its link peer's live counts, so both ends of a link select the same
+ * row and therefore the same receiver depth (the sender writes straight into the peer's receiver).
+ */
+struct RouterChannelLiveness {
+    std::array<uint16_t, builder_config::MAX_NUM_VCS> sender_live_mask{};
+    std::array<size_t, builder_config::MAX_NUM_VCS> link_live_sender_counts{};
+
+    bool is_sender_live(size_t vc, size_t channel) const {
+        return vc < builder_config::MAX_NUM_VCS && ((sender_live_mask[vc] >> channel) & 1U) != 0;
+    }
+
+    size_t live_sender_count(size_t vc) const {
+        return vc < builder_config::MAX_NUM_VCS ? static_cast<size_t>(__builtin_popcount(sender_live_mask[vc])) : 0;
+    }
+
+    // Every slot live, fit against the allocated counts: the pre-liveness layout.
+    static RouterChannelLiveness all_live(const std::array<size_t, builder_config::MAX_NUM_VCS>& sender_counts) {
+        RouterChannelLiveness liveness;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            liveness.sender_live_mask[vc] = static_cast<uint16_t>((1U << sender_counts[vc]) - 1U);
+            liveness.link_live_sender_counts[vc] = sender_counts[vc];
+        }
+        return liveness;
+    }
+
+    // A total order so configs can be cached per distinct liveness.
+    uint64_t key() const {
+        uint64_t packed = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            packed = (packed << 16) | sender_live_mask[vc];
+        }
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            packed = (packed << 4) | (link_live_sender_counts[vc] & 0xFU);
+        }
+        return packed;
+    }
+
+    bool operator==(const RouterChannelLiveness& other) const {
+        return sender_live_mask == other.sender_live_mask && link_live_sender_counts == other.link_live_sender_counts;
+    }
+};
 
 /**
  * Structure to hold all parameters needed for allocator construction.

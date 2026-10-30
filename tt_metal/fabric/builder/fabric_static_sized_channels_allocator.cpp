@@ -79,15 +79,41 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
     size_t channel_buffer_size_bytes,
     size_t available_channel_buffering_space,
-    const std::vector<MemoryRegion>& memory_regions) :
+    const std::vector<MemoryRegion>& memory_regions,
+    std::optional<RouterChannelLiveness> liveness) :
     FabricChannelAllocator(topology, options, memory_regions),
     num_used_sender_channels_per_vc(num_used_sender_channels_per_vc),
     num_used_receiver_channels_per_vc(num_used_receiver_channels_per_vc),
     channel_buffer_size_bytes(channel_buffer_size_bytes),
-    available_channel_buffering_space(available_channel_buffering_space) {
+    available_channel_buffering_space(available_channel_buffering_space),
+    liveness_(liveness.value_or(RouterChannelLiveness::all_live(num_used_sender_channels_per_vc))) {
     // Compute buffer region start from memory regions
     TT_FATAL(!memory_regions.empty(), "Memory regions must not be empty");
     this->buffer_region_start = memory_regions[0].start_address;
+
+    // Liveness is bounded by the allocated width, and the link fit never asks for more live
+    // channels than are allocated (the peer's live count is bounded by the same family width).
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        const uint16_t allocated_mask = static_cast<uint16_t>((1U << num_used_sender_channels_per_vc[vc]) - 1U);
+        TT_FATAL(
+            (liveness_.sender_live_mask[vc] & ~allocated_mask) == 0,
+            "VC{} liveness mask 0x{:x} names sender slots beyond the {} allocated",
+            vc,
+            liveness_.sender_live_mask[vc],
+            num_used_sender_channels_per_vc[vc]);
+        TT_FATAL(
+            liveness_.link_live_sender_counts[vc] <= num_used_sender_channels_per_vc[vc],
+            "VC{} link live sender count {} exceeds the {} allocated",
+            vc,
+            liveness_.link_live_sender_counts[vc],
+            num_used_sender_channels_per_vc[vc]);
+        TT_FATAL(
+            liveness_.link_live_sender_counts[vc] >= liveness_.live_sender_count(vc),
+            "VC{} link live sender count {} is below this router's own live count {}",
+            vc,
+            liveness_.link_live_sender_counts[vc],
+            liveness_.live_sender_count(vc));
+    }
 
     // Set max_l1_loading_size from memory regions
     this->max_l1_loading_size = memory_regions[0].get_end_address();
@@ -115,13 +141,30 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         num_receiver_buffer_slots_per_vc,
         num_remote_receiver_buffer_slots_per_vc);
 
-    // Calculate total slots across all VCs
-    size_t total_slot_count = 0;
+    // A dead sender slot owns no buffering. It aliases one shared parking slot so its kernel-side
+    // buffer count stays non-zero (the channel pointer arithmetic static_asserts on that) while
+    // the channel is never serviced and no producer ever connects to it.
+    bool any_dead_sender = false;
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        size_t vc_sender_slots = std::accumulate(
-            num_sender_buffer_slots_per_vc[vc].begin(),
-            num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc],
-            size_t{0});
+        for (size_t i = 0; i < num_used_sender_channels_per_vc[vc]; ++i) {
+            if (!liveness_.is_sender_live(vc, i)) {
+                num_sender_buffer_slots_per_vc[vc][i] = 1;
+                num_remote_sender_buffer_slots_per_vc[vc][i] = 1;
+                any_dead_sender = true;
+            }
+        }
+    }
+    const size_t parking_slots = any_dead_sender ? 1 : 0;
+
+    // Calculate total slots across all VCs (dead senders contribute only the shared parking slot)
+    size_t total_slot_count = parking_slots;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        size_t vc_sender_slots = 0;
+        for (size_t i = 0; i < num_used_sender_channels_per_vc[vc]; ++i) {
+            if (liveness_.is_sender_live(vc, i)) {
+                vc_sender_slots += num_sender_buffer_slots_per_vc[vc][i];
+            }
+        }
         size_t vc_receiver_slots = std::accumulate(
             num_receiver_buffer_slots_per_vc[vc].begin(),
             num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc],
@@ -148,15 +191,18 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     // Set channel sizes and num buffers per VC
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        // set the sender channel sizes and num buffers
+        // set the sender channel sizes and num buffers (a dead slot has a count but no size of its own)
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
-            this->sender_channels_size_bytes[vc][i] = channel_buffer_size_bytes * num_sender_buffer_slots_per_vc[vc][i];
+            const bool live = liveness_.is_sender_live(vc, i);
+            this->sender_channels_size_bytes[vc][i] =
+                live ? channel_buffer_size_bytes * num_sender_buffer_slots_per_vc[vc][i] : 0;
             this->sender_channels_num_buffers[vc][i] = num_sender_buffer_slots_per_vc[vc][i];
         }
         // set the remote sender channel sizes and num buffers
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
+            const bool live = liveness_.is_sender_live(vc, i);
             this->remote_sender_channels_size_bytes[vc][i] =
-                channel_buffer_size_bytes * num_remote_sender_buffer_slots_per_vc[vc][i];
+                live ? channel_buffer_size_bytes * num_remote_sender_buffer_slots_per_vc[vc][i] : 0;
             this->remote_sender_channels_num_buffers[vc][i] = num_remote_sender_buffer_slots_per_vc[vc][i];
         }
         // set the local receiver channel sizes and num buffers
@@ -173,18 +219,12 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         }
     }
 
-    // set the base addresses for the local channels (allocate sequentially: VC0 channels, then VC1 channels)
-    uint32_t sender_buffer_addr = buffer_region_start;
-    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
-            this->sender_channels_base_address[vc][i] = sender_buffer_addr;
-            sender_buffer_addr += this->sender_channels_size_bytes[vc][i];
-            log_trace(
-                tt::LogFabric, "VC{} Sender {} channel_start: {}", vc, i, this->sender_channels_base_address[vc][i]);
-        }
-    }
-
-    uint32_t receiver_buffer_addr = sender_buffer_addr;
+    // Layout, receivers first: a sender writes straight into its link peer's receiver at the
+    // address this layout predicts, so the receiver region must sit at the same place on both
+    // ends of a link. Placing it at the pool base makes that independent of how many sender slots
+    // each end has live, which is what lets two peers differ in sender width. Receiver depths
+    // agree by construction: both ends fit the same option row against the link's live counts.
+    uint32_t receiver_buffer_addr = buffer_region_start;
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
             this->receiver_channels_base_address[vc][i] = receiver_buffer_addr;
@@ -197,34 +237,46 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
                 this->receiver_channels_base_address[vc][i]);
         }
     }
-    uint32_t buffer_addr_end = receiver_buffer_addr;
 
-    // set the base addresses for the remote channels
-    uint32_t remote_sender_buffer_addr = buffer_region_start;
+    // Then the parking slot shared by every dead sender channel, then the live senders.
+    uint32_t sender_buffer_addr = receiver_buffer_addr;
+    this->parking_slot_base_address = sender_buffer_addr;
+    sender_buffer_addr += parking_slots * channel_buffer_size_bytes;
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
-            this->remote_sender_channels_base_address[vc][i] = remote_sender_buffer_addr;
-            remote_sender_buffer_addr += this->remote_sender_channels_size_bytes[vc][i];
+            if (liveness_.is_sender_live(vc, i)) {
+                this->sender_channels_base_address[vc][i] = sender_buffer_addr;
+                sender_buffer_addr += this->sender_channels_size_bytes[vc][i];
+            } else {
+                this->sender_channels_base_address[vc][i] = this->parking_slot_base_address;
+            }
             log_trace(
-                tt::LogFabric,
-                "VC{} Remote Sender {} channel_start: {}",
-                vc,
-                i,
-                this->remote_sender_channels_base_address[vc][i]);
+                tt::LogFabric, "VC{} Sender {} channel_start: {}", vc, i, this->sender_channels_base_address[vc][i]);
         }
     }
+    uint32_t buffer_addr_end = sender_buffer_addr;
 
-    uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
+    // Remote channels mirror the local layout. Only the receiver entries are ever consumed on the
+    // far side (FabricRemoteChannelsAllocator copies receivers alone), and those are identical by
+    // the receivers-first rule; the sender mirror is kept for the CT-arg layout.
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
-            this->remote_receiver_channels_base_address[vc][i] = remote_receiver_buffer_addr;
-            remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[vc][i];
+            this->remote_receiver_channels_base_address[vc][i] = this->receiver_channels_base_address[vc][i];
             log_trace(
                 tt::LogFabric,
                 "VC{} Remote Receiver {} channel_start: {}",
                 vc,
                 i,
                 this->remote_receiver_channels_base_address[vc][i]);
+        }
+        for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
+            this->remote_sender_channels_base_address[vc][i] = this->sender_channels_base_address[vc][i];
+            log_trace(
+                tt::LogFabric,
+                "VC{} Remote Sender {} channel_start: {}",
+                vc,
+                i,
+                this->remote_sender_channels_base_address[vc][i]);
         }
     }
 
@@ -236,10 +288,10 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         return !((vc_id == 0 && idx == target_channel) || !has_tensix_extension);
     };
 
-    // Validate sender channels per VC
+    // Validate sender channels per VC (a dead slot has no size of its own by design)
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
-            if (!skip_current_sender_channel(vc, i)) {
+            if (!skip_current_sender_channel(vc, i) && liveness_.is_sender_live(vc, i)) {
                 TT_FATAL(
                     this->sender_channels_size_bytes[vc][i] > 0,
                     "Internal error when computing `sender_channels_size_bytes[VC{}][{}]` which was computed to be "
@@ -262,8 +314,8 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         }
     }
 
-    // Validate total size across all VCs
-    size_t total_size = 0;
+    // Validate total size across all VCs (dead senders contribute only the shared parking slot)
+    size_t total_size = parking_slots * channel_buffer_size_bytes;
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         total_size += std::accumulate(
             this->sender_channels_size_bytes[vc].begin(),
@@ -499,6 +551,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
     auto get_optimal_num_slots_per_vc = [this](
                                             auto& buffer_slot_options,
+                                            size_t fit_space_bytes,
                                             size_t num_vc0_sender_channels,
                                             size_t num_vc0_receiver_channels,
                                             size_t num_vc1_sender_channels,
@@ -554,7 +607,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                                     vc1_total_receiver_slots + vc2_total_sender_slots + vc2_total_receiver_slots) *
                                    this->channel_buffer_size_bytes;
 
-            if (total_num_bytes <= this->available_channel_buffering_space) {
+            if (total_num_bytes <= fit_space_bytes) {
                 found_valid_option = true;
                 break;  // Found a configuration that fits
             }
@@ -585,7 +638,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                     opt.vc2_sender_slots,
                     opt.vc2_receiver_slots,
                     total,
-                    this->available_channel_buffering_space,
+                    fit_space_bytes,
                     this->channel_buffer_size_bytes);
             }
             TT_THROW(
@@ -629,11 +682,12 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             // get the optimal buffer slots for MUX mode (per-VC)
             get_optimal_num_slots_per_vc(
                 default_with_tensix_buffer_slot_options[arch_index],
-                num_used_sender_channels_per_vc[0],
+                this->available_channel_buffering_space,
+                liveness_.link_live_sender_counts[0],
                 num_used_receiver_channels_per_vc[0],
-                num_used_sender_channels_per_vc[1],
+                liveness_.link_live_sender_counts[1],
                 num_used_receiver_channels_per_vc[1],
-                num_used_sender_channels_per_vc[2],
+                liveness_.link_live_sender_counts[2],
                 num_used_receiver_channels_per_vc[2],
                 vc0_sender_buffer_slots,
                 vc0_receiver_buffer_slots,
@@ -667,14 +721,26 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     bool vc1_present = (num_used_sender_channels_per_vc[1] > 0 || num_used_receiver_channels_per_vc[1] > 0);
     bool vc2_present = (num_used_sender_channels_per_vc[2] > 0 || num_used_receiver_channels_per_vc[2] > 0);
 
-    // Get optimal buffer slots considering active VCs
+    // Get optimal buffer slots considering active VCs. Rows are fitted against the link's live
+    // sender counts, not the allocated width: dead slots take no buffering, and both ends of a
+    // link fit the same counts so they land on the same row (hence the same receiver depth).
+    //
+    // The fit on a plain 2D mesh router always holds one slot back for the parking slot its dead
+    // senders alias. The reserve is unconditional, not "if this router has a dead slot", so that
+    // the two ends of a link -- which may differ in whether they have one -- still fit identical
+    // rows; a router with no dead slot gets the slot back through the spare rule below.
+    const bool reserve_parking_slot = (topology == Topology::Mesh || topology == Topology::Torus) &&
+                                      options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED;
+    const size_t fit_space_bytes =
+        this->available_channel_buffering_space - (reserve_parking_slot ? this->channel_buffer_size_bytes : 0);
     get_optimal_num_slots_per_vc(
         get_num_buffer_slots(topology, arch_index, vc1_present, vc2_present),
-        num_used_sender_channels_per_vc[0],
+        fit_space_bytes,
+        liveness_.link_live_sender_counts[0],
         num_used_receiver_channels_per_vc[0],
-        num_used_sender_channels_per_vc[1],
+        liveness_.link_live_sender_counts[1],
         num_used_receiver_channels_per_vc[1],
-        num_used_sender_channels_per_vc[2],
+        liveness_.link_live_sender_counts[2],
         num_used_receiver_channels_per_vc[2],
         vc0_sender_buffer_slots,
         vc0_receiver_buffer_slots,
@@ -705,17 +771,23 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     // unchanged.
     if ((topology == Topology::Mesh || topology == Topology::Torus) &&
         options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Dead sender slots own no buffering; together they take the one parking slot.
+        bool any_dead_sender = false;
         size_t allocated_slots = 0;
         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            allocated_slots += std::accumulate(
-                num_sender_buffer_slots_per_vc[vc].begin(),
-                num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc],
-                size_t{0});
+            for (size_t i = 0; i < num_used_sender_channels_per_vc[vc]; ++i) {
+                if (liveness_.is_sender_live(vc, i)) {
+                    allocated_slots += num_sender_buffer_slots_per_vc[vc][i];
+                } else {
+                    any_dead_sender = true;
+                }
+            }
             allocated_slots += std::accumulate(
                 num_receiver_buffer_slots_per_vc[vc].begin(),
                 num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc],
                 size_t{0});
         }
+        allocated_slots += any_dead_sender ? 1 : 0;
         const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
         TT_FATAL(allocated_slots <= slot_capacity, "Fabric channel allocation exceeds its slot capacity");
         const size_t spare_slots = slot_capacity - allocated_slots;

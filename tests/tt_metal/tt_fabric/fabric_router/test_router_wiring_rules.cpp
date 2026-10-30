@@ -43,6 +43,102 @@ TEST_F(RouterWiringRulesTest, NonExpress2D_VC0OnlyLayout) {
     EXPECT_EQ(shape.flat_sender_id(0, 3), 3);
 }
 
+// ============ Sender-slot liveness ============
+//
+// Slots are placed by the direction<->slot bijection (E, W, N, S, Z minus the facing, after the
+// VC0 worker). The mask names the slots a producer on this chip actually feeds.
+
+TEST_F(RouterWiringRulesTest, NonExpress_NSRoutersLeaveFromEWSlotsDead) {
+    // Y-then-X: a same-mesh E/W producer never turns into N/S. N facing: slots E=1, W=2, S=3.
+    const auto north =
+        router_vc_shape(Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
+    EXPECT_EQ(north.sender_live_mask[0], 0b1001);
+    EXPECT_EQ(north.live_sender_count(0), 2u);
+    // E facing: slots W=1, N=2, S=3, all live.
+    const auto east =
+        router_vc_shape(Topology::Mesh, RoutingDirection::E, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
+    EXPECT_EQ(east.sender_live_mask[0], 0b1111);
+    EXPECT_EQ(east.live_sender_count(0), 4u);
+}
+
+TEST_F(RouterWiringRulesTest, NonExpress_BoundaryChipFromZSlotLivesOnVC1Only) {
+    const auto config = IntermeshVCConfig::full_mesh();
+    const auto north = router_vc_shape(
+        Topology::Mesh, RoutingDirection::N, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &config);
+    // VC0 is the frozen 4-wide family: no from-Z slot exists to be live.
+    EXPECT_EQ(north.sender_counts[0], 4u);
+    EXPECT_EQ(north.sender_live_mask[0], 0b1001);
+    // VC1 (no worker): E=0, W=1, S=2, Z=3. The boundary producer feeds VC1 only.
+    EXPECT_EQ(north.sender_counts[1], 4u);
+    EXPECT_EQ(north.sender_live_mask[1], 0b1100);
+
+    const auto east = router_vc_shape(
+        Topology::Mesh, RoutingDirection::E, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &config);
+    EXPECT_EQ(east.sender_live_mask[0], 0b1111);
+    EXPECT_EQ(east.sender_live_mask[1], 0b1111);
+
+    // A non-boundary chip in the same fabric has no from-Z producer at all.
+    const auto interior =
+        router_vc_shape(Topology::Mesh, RoutingDirection::E, chip_with_z(std::nullopt), ExpressAxis::NONE, &config);
+    EXPECT_EQ(interior.sender_counts[1], 3u);
+    EXPECT_EQ(interior.sender_live_mask[1], 0b111);
+}
+
+TEST_F(RouterWiringRulesTest, Express_LivenessFollowsTheWiringPrimitive) {
+    // Chords along Y: the chord is a Y resource, so N/S routers keep from-Z (slot 4) and lose
+    // from-E/from-W; the chord router keeps from-N/from-S (slots 3, 4) and loses from-E/from-W.
+    const auto north = router_vc_shape(
+        Topology::Mesh, RoutingDirection::N, chip_with_z(EdgeCapability::INTRAMESH_EXPRESS), ExpressAxis::Y, nullptr);
+    EXPECT_EQ(north.sender_counts[0], 5u);
+    EXPECT_EQ(north.sender_live_mask[0], 0b11001);
+    const auto east = router_vc_shape(
+        Topology::Mesh, RoutingDirection::E, chip_with_z(EdgeCapability::INTRAMESH_EXPRESS), ExpressAxis::Y, nullptr);
+    EXPECT_EQ(east.sender_live_mask[0], 0b11111);
+    const auto chord = router_vc_shape(
+        Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTRAMESH_EXPRESS), ExpressAxis::Y, nullptr);
+    EXPECT_EQ(chord.sender_live_mask[0], 0b11001);
+
+    // A chip with no chord in the same express mesh: the from-Z slot is allocated but dead.
+    const auto leaf =
+        router_vc_shape(Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::Y, nullptr);
+    EXPECT_EQ(leaf.sender_counts[0], 5u);
+    EXPECT_EQ(leaf.sender_live_mask[0], 0b01001);
+
+    // Chords along X: the chord is an X resource, so N/S routers also lose from-Z and the chord
+    // router takes every cardinal.
+    const auto north_x = router_vc_shape(
+        Topology::Mesh, RoutingDirection::N, chip_with_z(EdgeCapability::INTRAMESH_EXPRESS), ExpressAxis::X, nullptr);
+    EXPECT_EQ(north_x.sender_live_mask[0], 0b01001);
+    const auto chord_x = router_vc_shape(
+        Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTRAMESH_EXPRESS), ExpressAxis::X, nullptr);
+    EXPECT_EQ(chord_x.sender_live_mask[0], 0b11111);
+}
+
+TEST_F(RouterWiringRulesTest, BoundaryVC1SlotsLiveOnlyWithPassThrough) {
+    // Without pass-through the mesh routers target the boundary on VC0 only and the boundary's
+    // VC1 sender step is compiled out, so its four VC1 slots are allocated but never fed.
+    for (const auto& config : {IntermeshVCConfig::edge_only(), IntermeshVCConfig::full_mesh()}) {
+        const auto boundary = router_vc_shape(
+            Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &config);
+        EXPECT_EQ(boundary.sender_counts[1], 4) << enchantum::to_string(config.mode);
+        EXPECT_EQ(boundary.sender_live_mask[0], 0b11111) << enchantum::to_string(config.mode);
+        EXPECT_EQ(boundary.sender_live_mask[1], 0) << enchantum::to_string(config.mode);
+        EXPECT_EQ(boundary.live_sender_count(1), 0u) << enchantum::to_string(config.mode);
+    }
+
+    const auto pass_through = IntermeshVCConfig::full_mesh_with_pass_through();
+    const auto boundary = router_vc_shape(
+        Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &pass_through);
+    EXPECT_EQ(boundary.sender_live_mask[0], 0b11111);
+    EXPECT_EQ(boundary.sender_live_mask[1], 0b1111);
+}
+
+TEST_F(RouterWiringRulesTest, OneDimensionalRoutersAreFullyLive) {
+    const auto linear =
+        router_vc_shape(Topology::Linear, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
+    EXPECT_EQ(linear.sender_live_mask[0], 0b11);
+}
+
 TEST_F(RouterWiringRulesTest, Linear_VC0OnlyLayout) {
     const auto shape =
         router_vc_shape(Topology::Linear, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);

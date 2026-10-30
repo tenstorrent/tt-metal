@@ -304,9 +304,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         "Express routing with the tensix MUX extension is not supported: the tensix path is not "
         "widened for the express VC0");
 
-    // Get the appropriate EDM config from builder context
+    // The EDM config is selected below, once the archetype says which sender slots are live.
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
-    const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // The facts behind this router's mappings are resolved once, each at its own scope: topology
     // and the intermesh VC config (fabric), the express axis (mesh), the chip's edge
@@ -341,6 +340,49 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto archetype = router_archetype(
         topology, location.direction, chip_facts.per_direction_capabilities, express_axis, &intermesh_config);
     const auto& vc_shape = archetype.shape;
+
+    // Sender-slot liveness. The shape keeps the family width so the direction<->slot bijection
+    // holds; the mask says which of those slots a producer on this chip feeds. Dead slots get no
+    // packet buffering, and the freed slots let the allocator fit a deeper option row.
+    //
+    // Option rows are fitted against the LINK's live counts, the larger of this router's and its
+    // peer's, so both ends select the same row and therefore the same receiver depth (a sender
+    // writes straight into the peer's receiver). The peer's shape is an archetype query on the
+    // peer chip's capabilities through the same derivation, so the answer is the same from either
+    // end. The peer's facing is structural, not a routing-table answer: the far end of a cardinal
+    // link faces the opposite cardinal, and the far end of a Z link (intermesh boundary or express
+    // chord) faces Z. A table lookup could name a different exit for a multi-exit mesh and the two
+    // ends would then fit different rows.
+    RouterChannelLiveness liveness;
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        liveness.sender_live_mask[vc] = vc_shape.sender_live_mask[vc];
+        liveness.link_live_sender_counts[vc] = vc_shape.live_sender_count(vc);
+    }
+    {
+        const auto peer_direction = (location.direction == RoutingDirection::Z)
+                                        ? RoutingDirection::Z
+                                        : get_opposite_direction(location.direction);
+        auto peer_capabilities = chip_capabilities_of(control_plane, location.remote_node);
+        if (!peer_capabilities.at(peer_direction).has_value()) {
+            peer_capabilities.at(peer_direction) = EdgeCapability::INTRAMESH_CARDINAL;
+        }
+        const auto peer_shape = router_vc_shape(
+            topology,
+            peer_direction,
+            peer_capabilities,
+            express_axis_of(control_plane, location.remote_node.mesh_id),
+            &intermesh_config);
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            liveness.link_live_sender_counts[vc] =
+                std::max<size_t>(liveness.link_live_sender_counts[vc], peer_shape.live_sender_count(vc));
+        }
+    }
+
+    // Get the appropriate EDM config from builder context. The liveness-narrowed layout exists
+    // for the plain erisc router only; the tensix extensions keep the shared family-max config.
+    const auto& edm_config = (tensix_config_for_lookup == FabricTensixConfig::DISABLED)
+                                 ? builder_context.get_fabric_router_config_for_liveness(liveness)
+                                 : builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // Compute injection channel flags at router level BEFORE creating builders
     // Injection semantics are per-VC, so compute for each VC and flatten into router-level vector
@@ -566,6 +608,12 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_receiver_channels_per_vc,
         channel_trimming_overrides_for_router,
         local_vc0_fast_path_info));
+
+    // Dead sender slots own no buffering (see the liveness derivation above), so they must not be
+    // serviced. Applied after the capture-driven trim so neither can re-enable the other's cuts.
+    if (tensix_config_for_lookup == FabricTensixConfig::DISABLED) {
+        edm_builder->apply_sender_liveness(liveness);
+    }
 
     if (cluster.arch() == tt::ARCH::BLACKHOLE && fabric_context.get_rtoptions().get_enable_2_erisc_mode()) {
         // Enable updates at a fixed interval for link stability and link status updates
