@@ -56,7 +56,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/assert.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -191,10 +191,10 @@ FORCE_INLINE void matmul_phase(
     PACK((llk_pack_reconfig_l1_acc(0)));  // block 0 must overwrite, not accumulate
 #endif
 
-    CircularBuffer in0_cb(in0_cb_id);
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer partials_cb(partials_cb_id);
-    CircularBuffer final_cb(final_cb_id);
+    DataflowBuffer in0_cb(in0_cb_id);
+    DataflowBuffer in1_cb(in1_cb_id);
+    DataflowBuffer partials_cb(partials_cb_id);
+    DataflowBuffer final_cb(final_cb_id);
 
     // Reserve the partials block ONCE. pack_tile with an absolute output_tile_index
     // writes fixed slots and WrPtr does not advance until the push_back after the
@@ -315,7 +315,7 @@ FORCE_INLINE void matmul_phase(
     // holds this core's per_core_N_d columns (read once by the reader). d out
     // subblock height is 1, so the flat tile index gives col = flat % d_per_core_N.
     (void)in1_cb_id;
-    CircularBuffer down_bias_cb(down_bias_cb_id);
+    DataflowBuffer down_bias_cb(down_bias_cb_id);
     down_bias_cb.wait_front(d_per_core_N);
     // Down matmul left SrcA on down weights (bf4), SrcB on activated (bf8).
     // Reconfig SrcA=partials (Float16_b), SrcB=down_bias before the bcast init.
@@ -465,11 +465,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
-    CircularBuffer x_cb(x_cb_id);
-    CircularBuffer gate_cb(gate_cb_id);
-    CircularBuffer up_cb(up_cb_id);
-    CircularBuffer partials_gu_cb(partials_gu_cb_id);
-    CircularBuffer partials_up_cb(partials_up_cb_id);
+    DataflowBuffer x_cb(x_cb_id);
+    DataflowBuffer gate_cb(gate_cb_id);
+    DataflowBuffer up_cb(up_cb_id);
+    DataflowBuffer partials_gu_cb(partials_gu_cb_id);
+    DataflowBuffer partials_up_cb(partials_up_cb_id);
 
     // Reserve both partials CBs once for the FULL max block. pack_tile with
     // output_tile_index writes to absolute slots; WrPtr doesn't advance until
@@ -497,7 +497,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // it), then the partials packer + the L1_ACC state the next matmul block needs.
     auto stage_x_block = [&](uint32_t b, uint32_t l1_acc_after) {
         if constexpr (tilize_x) {
-            CircularBuffer x_tiled_cb(x_tiled_cb_id);
+            DataflowBuffer x_tiled_cb(x_tiled_cb_id);
             if ((b % grid_x) != x_phase) {
                 x_tiled_cb.reserve_back(X_BLOCK_TILES_MAX);
                 x_tiled_cb.push_back(X_BLOCK_TILES_MAX);
@@ -519,7 +519,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             // pointer-only bumps (no tilize work on the stale rows).
             const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
             if (x_pad > 0) {
-                CircularBuffer x_rm_cb(x_rm_cb_id);
+                DataflowBuffer x_rm_cb(x_rm_cb_id);
                 x_rm_cb.wait_front(x_pad);
                 x_rm_cb.pop_front(x_pad);
                 x_tiled_cb.reserve_back(x_pad);
@@ -725,9 +725,9 @@ FORCE_INLINE void binary_activation_phase(
     constexpr uint32_t kDstCapacity = kFp32DestAccEn ? 4u : 8u;
     constexpr uint32_t kActChunk = kDstCapacity / 2;
 
-    CircularBuffer gate_partials_cb(gate_partials_cb_id);
-    CircularBuffer up_partials_cb(up_partials_cb_id);
-    CircularBuffer activated_cb(activated_cb_id);
+    DataflowBuffer gate_partials_cb(gate_partials_cb_id);
+    DataflowBuffer up_partials_cb(up_partials_cb_id);
+    DataflowBuffer activated_cb(activated_cb_id);
 
     gate_partials_cb.wait_front(EFF_OUT_MAX);
     up_partials_cb.wait_front(EFF_OUT_MAX);
@@ -744,8 +744,8 @@ FORCE_INLINE void binary_activation_phase(
     // NOT popped here (reused across chunks). add_bcast_rows sets SrcA=partials,
     // SrcB=bias — same format for gate and up, so one init covers both.
     (void)prev_srcA_cb_id;
-    CircularBuffer gate_bias_cb(gate_bias_cb_id);
-    CircularBuffer up_bias_cb(up_bias_cb_id);
+    DataflowBuffer gate_bias_cb(gate_bias_cb_id);
+    DataflowBuffer up_bias_cb(up_bias_cb_id);
     gate_bias_cb.wait_front(per_core_N_gu);
     up_bias_cb.wait_front(per_core_N_gu);
     // The gate/up matmul left SrcA on the up weights (bf4) and SrcB on x (bf8).
@@ -916,8 +916,8 @@ void kernel_main() {
     // the vConstFloatPrgm registers the activation reads back on every tile).
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
-    CircularBuffer counts_scratch_cb(cb_counts_scratch);
-    CircularBuffer idx_scratch_cb(cb_idx_scratch);
+    DataflowBuffer counts_scratch_cb(cb_counts_scratch);
+    DataflowBuffer idx_scratch_cb(cb_idx_scratch);
 
     // Wait for the reader (NCRISC) to push the counts/idx into shared L1. They
     // are pushed ONCE and stay resident, so UNPACK can re-index them per expert.
@@ -1105,9 +1105,9 @@ void kernel_main() {
         // Pop this expert's biases so the reader can refill for the next expert. The reader
         // pushes them only for an expert this core runs (effective_chunks > 0), same test here.
         if (effective_chunks > 0) {
-            CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
-            CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
-            CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
+            DataflowBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
+            DataflowBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
+            DataflowBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
         }
 #endif
     }  // end per-local-expert loop

@@ -25,7 +25,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -238,9 +238,9 @@ void kernel_main() {
     constexpr auto up_bias_args = TensorAccessorArgs<up_bias_accessor_offset>();
     constexpr uint32_t down_bias_accessor_offset = up_bias_args.next_compile_time_args_offset();
     constexpr auto down_bias_args = TensorAccessorArgs<down_bias_accessor_offset>();
-    CircularBuffer cb_gate_bias_obj(cb_gate_bias);
-    CircularBuffer cb_up_bias_obj(cb_up_bias);
-    CircularBuffer cb_down_bias_obj(cb_down_bias);
+    DataflowBuffer cb_gate_bias_obj(cb_gate_bias);
+    DataflowBuffer cb_up_bias_obj(cb_up_bias);
+    DataflowBuffer cb_down_bias_obj(cb_down_bias);
 #endif
 
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
@@ -250,23 +250,23 @@ void kernel_main() {
     Noc noc;
     Noc noc_read(0);
 
-    // D2.0 CircularBuffer wrappers for method-form access. Compile-time CB
+    // D2.0 DataflowBuffer wrappers for method-form access. Compile-time CB
     // indices are unchanged.
-    CircularBuffer cb_in0_x_obj(cb_in0_x);
-    CircularBuffer cb_in1_gate_obj(cb_in1_gate);
-    CircularBuffer cb_in1_up_obj(cb_in1_up);
-    CircularBuffer cb_in1_down_obj(cb_in1_down);
-    CircularBuffer cb_in0_down_full_obj(cb_in0_down_full);
-    CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
-    CircularBuffer cb_idx_scratch_obj(cb_idx_scratch);
-    CircularBuffer cb_start_scratch_obj(cb_start_scratch);
-    CircularBuffer cb_x_rm_obj(cb_x_rm);
-    CircularBuffer cb_activated_obj(cb_activated);
+    DataflowBuffer cb_in0_x_obj(cb_in0_x);
+    DataflowBuffer cb_in1_gate_obj(cb_in1_gate);
+    DataflowBuffer cb_in1_up_obj(cb_in1_up);
+    DataflowBuffer cb_in1_down_obj(cb_in1_down);
+    DataflowBuffer cb_in0_down_full_obj(cb_in0_down_full);
+    DataflowBuffer cb_counts_scratch_obj(cb_counts_scratch);
+    DataflowBuffer cb_idx_scratch_obj(cb_idx_scratch);
+    DataflowBuffer cb_start_scratch_obj(cb_start_scratch);
+    DataflowBuffer cb_x_rm_obj(cb_x_rm);
+    DataflowBuffer cb_activated_obj(cb_activated);
 
     // x staging CB for the in0 path. The reader is cb_in0_x's only producer on both
     // paths: TILE x is read + multicast straight into it; row-major x is tilized ONCE
     // per grid row (see ROW_SHARED_TILIZE below) and the owner multicasts the tiles.
-    CircularBuffer x_stage_obj(cb_in0_x);
+    DataflowBuffer x_stage_obj(cb_in0_x);
 
     // ROW_SHARED_TILIZE (row-major x only). K-block kb of grid row my_mt is OWNED by the
     // core at gx = (kb + my_mt + 1) % GRID_X: its reader reads the block's real sticks
@@ -276,7 +276,7 @@ void kernel_main() {
     // valid rows into the same slot of the other GRID_X - 1 cores. compute pushes a
     // pointer-only cb_x_tiled block for every block it does not own, so the reader
     // pops one cb_x_tiled block per K-block and the two rings stay in step.
-    CircularBuffer cb_x_tiled_obj(CB_X_TILED);
+    DataflowBuffer cb_x_tiled_obj(CB_X_TILED);
 
     // D2.0 Semaphore wrappers.
     Semaphore<> in0_ready_sem(in0_ready_sem_id);

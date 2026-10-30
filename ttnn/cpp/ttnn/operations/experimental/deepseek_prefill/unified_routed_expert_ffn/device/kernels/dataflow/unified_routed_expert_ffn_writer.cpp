@@ -35,7 +35,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
@@ -116,10 +116,10 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
 
-    CircularBuffer cb_out_buf(cb_out);
-    CircularBuffer cb_counts_scratch_buf(cb_counts_scratch);
-    CircularBuffer cb_idx_scratch_buf(cb_idx_scratch);
-    CircularBuffer cb_start_scratch_buf(cb_start_scratch);
+    DataflowBuffer cb_out_buf(cb_out);
+    DataflowBuffer cb_counts_scratch_buf(cb_counts_scratch);
+    DataflowBuffer cb_idx_scratch_buf(cb_idx_scratch);
+    DataflowBuffer cb_start_scratch_buf(cb_start_scratch);
 
     // Accessor compile-arg stream order (host appends in this exact order):
     // out, then start, then up (UP_SPLIT). The accessors are constructed
@@ -337,7 +337,7 @@ void kernel_main() {
                     // reader's cadence: cb_in1_up is double-buffered, one push per
                     // K-block, so the live slot is base + (up_seq-1)%2 * slot.
                     constexpr uint32_t kUpNumSlots = 2;
-                    CircularBuffer cb_in1_up_buf(cb_in1_up);
+                    DataflowBuffer cb_in1_up_buf(cb_in1_up);
                     const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
@@ -379,7 +379,7 @@ void kernel_main() {
                             }
                             in1_ready_sem.wait(in1_num_receivers);
                             in1_ready_sem.set(0);
-                            CircularBuffer cb_in1_gate_buf(cb_in1_gate);
+                            DataflowBuffer cb_in1_gate_buf(cb_in1_gate);
                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
                             const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
                             const uint32_t gate_block_start =
@@ -456,7 +456,7 @@ void kernel_main() {
                     // RISC never pushes, so its write pointer is static: index the live slot
                     // off the block counter, exactly as the UP_SPLIT block does.
                     constexpr uint32_t kDownNumSlots = 2;
-                    CircularBuffer cb_in1_down_buf(cb_in1_down);
+                    DataflowBuffer cb_in1_down_buf(cb_in1_down);
                     const uint32_t down_cb_base = cb_in1_down_buf.get_write_ptr();
                     const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
