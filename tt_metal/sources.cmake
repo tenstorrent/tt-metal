@@ -106,6 +106,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/prefetcher_pipe.hpp
     api/tt-metalium/experimental/sender_core_type.hpp
+    api/tt-metalium/experimental/kernel_cores.hpp
     api/tt-metalium/experimental/op_profiler_support.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/program_preparation.hpp
