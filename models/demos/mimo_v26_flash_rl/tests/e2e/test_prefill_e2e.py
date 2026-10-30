@@ -139,6 +139,7 @@ THRESHOLDS = {
 # those rows carry 6.5% of layer 6's squared error, 90% is one unflipped row (51426) whose sliding window holds two
 # layer 5 rows (token id 715, 51403 and 52258) at rel 0.67 / 0.45. Running the router in fp32 is a possible later
 # experiment, not done here.
+# With the stock SDPA (SDPA_EXACT_EXP off, run 20261030-132711-mimo-e2e-noexactexp) layer 47 is 0.98166 / 0.1944.
 LAYER_OVERRIDES = {47: {"layer": 0.96, "layer_rel": 0.30}}
 STORED_TOP1 = 1.0  # the device's next token at a stored-logits row is the golden's top 1 (ties count)
 HOST_HEAD_SANITY = 0.999  # the host LM head (the device head's golden) on the golden's own last row vs its logits
