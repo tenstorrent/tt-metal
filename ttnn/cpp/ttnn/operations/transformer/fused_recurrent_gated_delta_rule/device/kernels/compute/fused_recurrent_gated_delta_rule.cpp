@@ -19,6 +19,7 @@
 // ../fused_recurrent_gdn_cb.hpp.
 
 #include <cstdint>
+#include <type_traits>
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
@@ -27,6 +28,20 @@
 #include "fused_recurrent_gdn_math.hpp"
 
 namespace cb = gdn_decode_cb;
+
+namespace {
+// TEMPORARY: the vector pass's constants tile ebc16 (c_19, contract section 8) is being added to K2's TokenCbs; set it
+// when the field exists so a header without it still compiles and one with it never sees the zero default (= qk16).
+// Once the field is in the header, replace this by `.ebc16 = cb::ebc16` in the initializer below.
+template <typename T, typename = void>
+struct has_ebc16 : std::false_type {};
+template <typename T>
+struct has_ebc16<T, std::void_t<decltype(T::ebc16)>> : std::true_type {};
+template <typename C>
+void set_ebc16(C& c, uint32_t id) {
+    c.ebc16 = id;
+}
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
@@ -38,7 +53,7 @@ void kernel_main() {
     // passes re-initialise the unpacker / packer per CB tile shape as they go.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb::qk16, cb::S, cb::out16);
 
-    constexpr gdn_decode::TokenCbs tcb{
+    gdn_decode::TokenCbs tcb{
         .qk16 = cb::qk16,
         .kT16 = cb::kT16,
         .qcol32 = cb::qcol32,
@@ -54,6 +69,9 @@ void kernel_main() {
         .out16 = cb::out16,
         .state_out = cb::state_out,
     };
+    if constexpr (has_ebc16<gdn_decode::TokenCbs>::value) {
+        set_ebc16(tcb, cb::ebc16);
+    }
     // Each state lives under two ids over one allocation (utd for the exact copies, mm for the matmul in1).
     constexpr gdn_decode::StateCbs S0{.utd = cb::S, .mm = cb::S_mm};
     constexpr gdn_decode::StateCbs S2{.utd = cb::s2, .mm = cb::s2_mm};
