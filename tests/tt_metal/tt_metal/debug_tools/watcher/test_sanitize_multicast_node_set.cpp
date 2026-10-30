@@ -178,6 +178,9 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinShardedTensor
 }
 
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastWithinShardedTensorNoc1) {
+    if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar has only NoC 0";
+    }
     RunMulticastNodeSetTest(
         *this->devices_[0], kSenderOutside, /*start_x=*/1, /*end_x=*/0, NOC::NOC_1, /*expect_error=*/false);
 }
