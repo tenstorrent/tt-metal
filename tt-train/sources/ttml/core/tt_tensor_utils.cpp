@@ -87,8 +87,11 @@ ttnn::Tensor empty(
 }
 
 ttnn::Tensor full(const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
-    const auto host = ttnn::full(shape, value, dtype, ttnn::Layout::TILE);
-    return ttnn::distributed::distribute_tensor(host, *replicate_to_mesh_mapper(*device), std::ref(*device));
+    // Allocated on the device, which labels it one Replicate per mesh axis, and filled there. bfloat16 is rounded on
+    // the host first (ties to even, as ttnn::full does), so the device stores what a host fill would.
+    auto output = ttnn::empty(shape, dtype, ttnn::Layout::TILE, device, ttnn::DRAM_MEMORY_CONFIG);
+    const float fill_value = dtype == ttnn::DataType::BFLOAT16 ? static_cast<float>(bfloat16(value)) : value;
+    return ttnn::fill(output, fill_value, ttnn::DRAM_MEMORY_CONFIG, output);
 }
 
 ttnn::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {

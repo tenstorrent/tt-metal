@@ -499,12 +499,14 @@ TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsRepli
 }
 
 TEST_F(Mesh1x2CommOpsTest, FullOnesZerosReplicatePerMeshAxis) {
-    // RMSNorm / LayerNorm weights and init::constant_init are built by core::full / ones / zeros: one Replicate per
-    // mesh axis, like from_vector without a mapper, rather than a host tensor's collapsed `{2}, [Replicate]`.
+    // RMSNorm / LayerNorm weights and init::constant_init are built by core::full / ones / zeros, filled on the device:
+    // one Replicate per mesh axis, and the value a host fill stores (bfloat16 rounded to nearest even).
     auto* device = &ttml::autograd::ctx().get_device();
     const ttnn::Shape shape({1U, 1U, 1U, 64U});
-    const std::array<std::pair<ttnn::Tensor, float>, 3> cases{
+    const std::array<std::pair<ttnn::Tensor, float>, 5> cases{
         std::pair{ttml::core::full(shape, 0.5F, device), 0.5F},
+        std::pair{ttml::core::full(shape, 0.1F, device), static_cast<float>(bfloat16(0.1F))},
+        std::pair{ttml::core::full(shape, 0.1F, device, ttnn::DataType::FLOAT32), 0.1F},
         std::pair{ttml::core::ones(shape, device), 1.F},
         std::pair{ttml::core::zeros(shape, device), 0.F}};
     for (const auto& [tensor, value] : cases) {
