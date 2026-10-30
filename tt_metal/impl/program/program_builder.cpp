@@ -24,6 +24,9 @@
 #include <enchantum/enchantum.hpp>
 #include <experimental/fabric/control_plane.hpp>
 #include <global_circular_buffer.hpp>
+#include <global_semaphore.hpp>
+#include "impl/buffers/global_semaphore_impl.hpp"
+#include "device/device_manager.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -671,6 +674,17 @@ uint32_t Metal1ProgramBuilder::create_semaphore(
         },
         core_spec);
     return create_semaphore(crs, initial_value, core_type);
+}
+
+GlobalSemaphore Metal1ProgramBuilder::create_global_semaphore(
+    distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, /*cq_id=*/0));
+}
+
+void Metal1ProgramBuilder::assign_global_buffer(const std::shared_ptr<Buffer>& buffer) {
+    MetalContext& metal_ctx = MetalContext::instance(owner_.get_context_id());
+    metal_ctx.device_manager()->check_dispatch_mode(metal_ctx.rtoptions().get_fast_dispatch());
+    owner_.add_buffer(buffer);
 }
 
 }  // namespace tt::tt_metal::detail

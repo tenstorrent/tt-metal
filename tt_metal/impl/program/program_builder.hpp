@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "impl/buffers/semaphore.hpp"
+#include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/core_coord.hpp"
@@ -24,12 +25,17 @@
 namespace tt::tt_metal {
 
 class Buffer;
+class GlobalSemaphore;
 class CircularBufferImpl;
 class Kernel;
 class MeshTensor;
 struct KernelSource;
 struct EthernetConfig;
 struct DramConfig;
+
+namespace distributed {
+class MeshDevice;
+}
 
 namespace experimental {
 class GlobalCircularBuffer;
@@ -113,6 +119,11 @@ public:
     //   - create_semaphore above
     // The ProgramDescriptor path is something of a hack; it will eventually be deprecated in favor of Metal 2.0.
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
+    // Gives the program ownership of the buffer: it stays on device at least until the program is enqueued.
+    void assign_global_buffer(const std::shared_ptr<Buffer>& buffer);
+    // Global semaphores belong to a mesh device rather than a program, so this does not use any program state.
+    static GlobalSemaphore create_global_semaphore(
+        distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type);
     const std::vector<Semaphore>& semaphores() const { return semaphores_; }
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
