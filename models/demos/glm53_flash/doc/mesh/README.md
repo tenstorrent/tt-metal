@@ -1581,6 +1581,20 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 22:55: the paged op cleared the copy walls; the wave path's real leak was the unreleased transient constants
+
+`needle1m_8_direct_r4` (8 x 1 M through waves of 8, `GLM53_PAGED_SPARSE=1`): the paged sparse attention passed every
+earlier wall (378 K, 477 K) at 8.26 s per 2048-row wave step (the copy path's 7.55 s plus the in-place gather) and
+died at 555 K per row (wave 271 of 512): the MoE reduce-scatter's 32 MiB-per-bank output found 88 MiB free per bank
+but no 32 MiB block. The allocator had grown 0.342 MiB per bank per wave (92 MiB over 269 waves; programs flat; the
+same slope with the prefix cache off, `memlog_noapc`). Root cause by code read: `GLM53MeshModel.prefill_wave` never
+called `GLMMesh.release_transients`, so every geometry constant `GLMMesh.lazy` built in a wave after the trace
+captures (the indexer's `topk_bounds` and `tail` ids per 256-row sub-block, the DSA row offsets and masks: ~16 keys
+per wave, the 4352 "first built after a trace capture" lines of the served log, times the 11 DSA layers) stayed
+allocated for the model's life; the chunk (`prefill_streams`) and decode steps release theirs. Fix 5f17700c0c4: the
+release after the wave's layer loop; `test_alloc_policy_host` checks the three eager steps structurally. The same
+run is queued first as `direct_r5`; the capstone (32 resident at 1 M) follows a green direct run.
+
 ### 2026-10-30 20:25: eight decode steps per prefill step; the whole-prefix scratch; the 128-row trace is layout-sensitive
 
 `ab_interleave_d8_32` (the plugin's `decode_interleave_decode_steps` 8, confirmed in its log): 128 x 128 x 32 TTFT
