@@ -680,8 +680,17 @@ void override_agmm_fusion_program_parameters(
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddress(program, override_variables.cbs[0], *src_buffer_a);
     }
-    if (src1_sharded) {
-        if (!global_cb.has_value() && !src_buffer_b->is_dram()) {
+    // in1 is always sharded: its shard grid is the worker grid. With a global CB it arrives through the
+    // CB and carries no address. L1-sharded, it backs cb_src1. DRAM-sharded, each worker reads its bank
+    // straight from DRAM at the address in its in1 writer arg 1, which must be refreshed on every hit or a
+    // new weight allocation is read from the first call's address.
+    if (src1_sharded && !global_cb.has_value()) {
+        if (src_buffer_b->is_dram()) {
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
+            for (const auto& core : corerange_to_cores(input_tensors[1].shard_spec()->grid)) {
+                writer_runtime_args_by_core[core.x][core.y][1] = src_buffer_b->address();
+            }
+        } else {
             UpdateDynamicCircularBufferAddress(program, override_variables.cbs[1], *src_buffer_b);
         }
     }
@@ -692,16 +701,6 @@ void override_agmm_fusion_program_parameters(
             const auto& cb_output = override_variables.cbs[i + 2];
             const auto& out_buffer = output_tensors[i].buffer();
             UpdateDynamicCircularBufferAddress(program, cb_output, *out_buffer);
-        }
-    }
-
-    if (not src1_sharded) {
-        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, override_variables.kernels.at(0));
-        for (const auto& core : override_variables.cores) {
-            auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-
-            /* in1 */
-            writer_runtime_args[1] = src_buffer_b->address();
         }
     }
 }
