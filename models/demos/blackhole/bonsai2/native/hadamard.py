@@ -127,8 +127,14 @@ class BlockHadamard:
 
     # -- device layout -----------------------------------------------------
 
-    def h_tiles_bfp2(self, scale_log2: int = 5) -> np.ndarray:
+    def h_tiles_bfp2(self, scale_log2: int = 0) -> np.ndarray:
         """``H / 2**scale_log2`` as BFP2 bytes, ready to sit resident in L1.
+
+        The normalized Sylvester matrix is already ``+-1/32`` at block 1024, so
+        the default (``scale_log2=0``) is the exact device matrix the plan
+        describes: every entry is a power of two, hence exact in BFP2 with no
+        mantissa.  A larger ``scale_log2`` divides further, which callers can
+        use to keep a 1024-term accumulate in range.
 
         Returns ``[block // 32, block // 32, 320]`` uint8: row-tile, col-tile,
         one packed BFP2 tile (64 exponent bytes then 256 code bytes).  The
@@ -139,10 +145,10 @@ class BlockHadamard:
 
         t = self.block // TILE
         h = self._h() / float(1 << scale_log2)
-        tgt = 1.0 / (1 << scale_log2)
+        tgt = 1.0 / (1 << scale_log2) / np.sqrt(self.block)
         if not np.all(np.isin(h, (-tgt, tgt))):
-            raise ValueError("H scaled by a power of two is exactly +-2**-k, so this cannot happen")
-        tiles = np.sign(h).reshape(t, TILE, t, TILE).transpose(0, 2, 1, 3)
+            raise ValueError("a Hadamard entry scaled by a power of two must be exactly +-2**-k")
+        tiles = np.sign(h).astype(np.int8).reshape(t, TILE, t, TILE).transpose(0, 2, 1, 3)
         return pack_tiles(np.ascontiguousarray(tiles).reshape(t * t, TILE, TILE)).reshape(t, t, BFP2_TILE_BYTES)
 
     def _h(self) -> np.ndarray:

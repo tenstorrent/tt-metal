@@ -52,9 +52,19 @@ TRIT_TO_CODE = np.array([0b11, 0b00, 0b01], dtype=np.uint8)
 def trits_to_codes(trits: np.ndarray) -> np.ndarray:
     """Map int8 trits in {-1, 0, +1} to 2-bit BFP2 data.  Shape preserved."""
     t = np.asarray(trits)
-    if t.min(initial=0) < -1 or t.max(initial=0) > 1:
+    if t.size and (t.min() < -1 or t.max() > 1):
         raise ValueError("trits must be in {-1, 0, +1}")
     return TRIT_TO_CODE[t.astype(np.int32) + 1]
+
+
+def as_codes(x: np.ndarray) -> np.ndarray:
+    """Coerce either trits or 2-bit codes to a uint8 code array."""
+    c = np.asarray(x)
+    if c.dtype == np.int8 and c.size and (c < 0).any():
+        return trits_to_codes(c)
+    if c.size and (c.min() < 0 or c.max() > 3):
+        raise ValueError(f"expected trits or 0..3 codes, got [{c.min()}, {c.max()}]")
+    return c.astype(np.uint8)
 
 
 def pack_face_codes(codes: np.ndarray) -> np.ndarray:
@@ -74,7 +84,7 @@ def pack_tile_codes_only(codes: np.ndarray) -> np.ndarray:
     Face order is ttnn's: (0,0), (0,1), (1,0), (1,1) -- top-left, top-right,
     bottom-left, bottom-right of the 32x32 tile.
     """
-    c = np.asarray(codes).reshape(TILE, TILE)
+    c = as_codes(codes).reshape(TILE, TILE)
     parts = [
         pack_face_codes(c[0:FACE, 0:FACE]),
         pack_face_codes(c[0:FACE, FACE:TILE]),
@@ -90,7 +100,7 @@ def pack_tile_exponents(codes: np.ndarray) -> np.ndarray:
     Every face row is one exponent byte: 127 (|1.0|) if that row holds any
     nonzero weight, else 0.
     """
-    c = np.asarray(codes).reshape(TILE, TILE)
+    c = as_codes(codes).reshape(TILE, TILE)
     parts = []
     for r0, r1 in ((0, FACE), (FACE, TILE)):
         for c0, c1 in ((0, FACE), (FACE, TILE)):
@@ -112,21 +122,29 @@ def pack_tile(codes: np.ndarray, shared_exp: bool = False) -> np.ndarray:
 
 
 def pack_tiles(codes: np.ndarray, shared_exp: bool = False) -> np.ndarray:
-    """Pack ``[num_tiles, 32, 32]`` code tiles -> ``[num_tiles, bytes]`` uint8."""
-    c = np.asarray(codes)
+    """Pack ``[num_tiles, 32, 32]`` code tiles -> ``[num_tiles, bytes]`` uint8.
+
+    ``codes`` are 2-bit data values (0..3).  A signed int8 array of *trits* is
+    also accepted and mapped through :func:`trits_to_codes`, since callers
+    naturally have +-1 in hand and the two representations differ only by the
+    index shift.
+    """
+    c = as_codes(codes)
     if c.ndim != 3 or c.shape[1:] != (TILE, TILE):
         raise ValueError(f"expected [n, 32, 32] code tiles, got {c.shape}")
     n = c.shape[0]
     # Data: [n, 4 faces, 16 rows, 4 bytes]
     f = c.reshape(n, 2, FACE, 2, FACE)  # n, tr, r, tc, col
     f = f.transpose(0, 1, 3, 2, 4)  # n, tr, tc, row, col  -> face order (0,0),(0,1),(1,0),(1,1)
-    fb = (f.reshape(n, 4, FACE, 4, 4) << np.array([0, 2, 4, 6], dtype=np.uint8)).sum(axis=4, dtype=np.uint16)
+    fb = (f.reshape(n, 4, FACE, 4, 4).astype(np.uint16) << np.array([0, 2, 4, 6], dtype=np.uint16)).sum(axis=4)
     data = fb.astype(np.uint8).reshape(n, BFP2_SHARED_EXP_TILE_BYTES)
     if shared_exp:
         return data
-    exps = np.where(np.any(c != 0, axis=2), EXP_ONE, 0).astype(np.uint8)  # [n, 32] per row
-    # Reorder rows to face order: rows 0-15 then 16-31, per face column block.
-    e = exps.reshape(n, 2, FACE, 2).transpose(0, 1, 3, 2).reshape(n, EXP_BYTES)
+    # One exponent byte per face row: a 32x32 tile is 2x2 faces of 16x16, so 64
+    # face rows.  Order is face-major (tr, tc) then row, matching the data section.
+    face_rows = c.reshape(n, 2, FACE, 2, FACE)  # n, tr, row, tc, col
+    exps = np.where(np.any(face_rows != 0, axis=4), EXP_ONE, 0).astype(np.uint8)  # n, tr, row, tc
+    e = exps.transpose(0, 1, 3, 2).reshape(n, EXP_BYTES)
     return np.concatenate([e, data], axis=1)
 
 
@@ -136,10 +154,11 @@ def unpack_tile_codes(packed: np.ndarray, shared_exp: bool = False) -> np.ndarra
     data = p if shared_exp else p[EXP_BYTES:]
     if data.size != BFP2_SHARED_EXP_TILE_BYTES:
         raise ValueError(f"expected {BFP2_SHARED_EXP_TILE_BYTES} data bytes, got {data.size}")
-    faces = data.reshape(4, FACE, 4)  # face, row, byte
+    faces = data.reshape(4, FACE, 4)  # face, row, byte-group
     out = np.empty((4, FACE, FACE), dtype=np.uint8)
-    for j in range(4):
-        out[:, :, j::4] = (faces[:, :, j : j + 1] >> np.array([0, 2, 4, 6], dtype=np.uint8)) & 0x3
+    shifts = np.array([0, 2, 4, 6], dtype=np.uint8)
+    for k in range(4):  # byte k of a row holds columns 4k .. 4k+3
+        out[:, :, 4 * k : 4 * k + 4] = (faces[:, :, k][:, :, None] >> shifts) & 0x3
     c = out.reshape(2, 2, FACE, FACE)  # tr, tc, row, col
     return c.transpose(0, 2, 1, 3).reshape(TILE, TILE)
 

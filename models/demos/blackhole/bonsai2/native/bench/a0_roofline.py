@@ -165,7 +165,7 @@ def main() -> int:
     cpb_list = [int(x) for x in args.cores_per_bank.split(",")]
     sbk_list = [int(x) for x in args.subblock_k.split(",")]
 
-    device = ttnn.open_device(device_id=0, l1_small_size=24576)
+    device = ttnn.open_device(device_id=int(os.environ.get("BONSAI_DEVICE", 0)), l1_small_size=24576)
     best_per_shape = {}
     try:
         for name, k, n in shapes:

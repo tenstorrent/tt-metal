@@ -48,10 +48,12 @@ def padded_n(n: int, num_banks: int, cores_per_bank: int = 1) -> int:
 def tile_column_major(codes: np.ndarray, n_padded: int, num_banks: int) -> np.ndarray:
     """``codes [N, K]`` -> DRAM tile image ``[num_banks, per_core_n*Kt, 32, 32]``.
 
-    Column-major in tiles within whichever bank owns the column, which is what
-    the streaming reader walks linearly.  ``codes`` is `[N, K]` in matmul order
-    (``y = x @ W.T``), and the kernel reads B as ``[K, N]``, so this transposes
-    while it works.
+    The streaming reader walks one bank's columns in order, and within a column
+    all ``Kt`` K-tiles consecutively, so the tile order per bank is
+    ``(column, k_tile)``.  ``codes`` is ``[N, K]`` in matmul order
+    (``y = x @ W.T``) while the kernel's B is ``[K, N]``, so each tile here is
+    the 32x32 block ``codes[n0:n0+32, k0:k0+32]`` read as ``B[k0:k0+32, n0:n0+32].T``
+    -- a real transpose, which is why the tile contents are transposed below.
     """
     n, k = codes.shape
     if k % TILE or n_padded % TILE:
@@ -62,16 +64,20 @@ def tile_column_major(codes: np.ndarray, n_padded: int, num_banks: int) -> np.nd
     if per_bank * num_banks != n_padded:
         raise ValueError(f"N_padded={n_padded} does not split across {num_banks} banks")
 
-    # Pad rows (output columns) with zeros up to n_padded.
+    # Pad output columns (rows of codes) with zeros up to n_padded.
     if n_padded != n:
         pad = np.zeros((n_padded - n, k), dtype=codes.dtype)
         codes = np.concatenate([codes, pad], axis=0)
 
     kt = k // TILE
-    # [N, Kt, 32, 32] -> bank-major -> column-major tile order.
-    t = codes.reshape(n_padded, kt, TILE, TILE)
-    t = t.reshape(num_banks, per_bank, kt, TILE, TILE)
-    return np.ascontiguousarray(t.transpose(0, 2, 1, 3, 4)).reshape(num_banks, per_bank * kt, TILE, TILE)
+    tiles_n = n_padded // TILE
+    per_bank_tiles = per_bank // TILE
+    # [tile_n, n_in_tile, k_tile, k_in_tile] -> [tile_n, k_tile, k_in_tile, n_in_tile],
+    # i.e. the [K, N] orientation the kernel unpacks, tile by tile.
+    t = codes.reshape(tiles_n, TILE, kt, TILE).transpose(0, 2, 3, 1)
+    # Group output tile-columns by bank, then column-major (column, k_tile).
+    t = t.reshape(num_banks, per_bank_tiles, kt, TILE, TILE)
+    return np.ascontiguousarray(t.reshape(num_banks, per_bank_tiles * kt, TILE, TILE))
 
 
 def pack_for_streaming(codes: np.ndarray, num_banks: int, cores_per_bank: int = 1) -> tuple[np.ndarray, int]:
