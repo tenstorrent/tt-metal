@@ -320,6 +320,8 @@ class CheckoutTests(unittest.TestCase):
             "fetch-tags": self.env["CACHEW_FETCH_TAGS"],
             "submodules": self.env["CACHEW_SUBMODULES"],
             "filter": self.env.get("CACHEW_FILTER", ""),
+            "sparse-checkout": self.env.get("CACHEW_SPARSE_CHECKOUT", ""),
+            "sparse-checkout-cone-mode": self.env.get("CACHEW_SPARSE_CHECKOUT_CONE_MODE", ""),
             "clean": "true",
             "persist-credentials": self.env["CACHEW_PERSIST_CREDENTIALS"],
             "set-safe-directory": self.env["CACHEW_SET_SAFE_DIRECTORY"],
@@ -389,6 +391,15 @@ class CheckoutTests(unittest.TestCase):
                     "shallow": run("-C", path, "rev-parse", "--is-shallow-repository"),
                     "head": run("-C", path, "rev-parse", "HEAD"),
                 }
+        sparse = {}
+        for name in ("info/sparse-checkout", "config.worktree"):
+            if (target / ".git" / name).exists():
+                sparse[name] = (target / ".git" / name).read_text()
+        files = sorted(
+            path.relative_to(target).as_posix()
+            for path in target.rglob("*")
+            if path.is_file() and ".git" not in path.relative_to(target).parts
+        )
         return {
             "head": run("rev-parse", "HEAD"),
             "symbolic": symbolic,
@@ -398,6 +409,9 @@ class CheckoutTests(unittest.TestCase):
             else [],
             "config": config(),
             "index": run("ls-files", "-s"),
+            "skip-worktree": run("ls-files", "-t"),
+            "sparse": sparse,
+            "files": files,
             "status": run("status", "--porcelain", "--ignore-submodules=none"),
             "submodules": run("submodule", "status", "--recursive") if modules else "",
             "modules": modules,
@@ -441,6 +455,7 @@ class CheckoutTests(unittest.TestCase):
         git(source, "update-ref", "refs/pull/7/merge", self.sha)
         old = self.sha
         self.update_main()
+        self.add_layout()
         git(source, "tag", "-a", "-m", "annotated", "v2.0.0", env=self.env)
         cases = {
             "push event SHA": dict(CACHEW_REF=""),
@@ -455,6 +470,22 @@ class CheckoutTests(unittest.TestCase):
             "pull request merge ref": dict(CACHEW_REF="", GITHUB_REF="refs/pull/7/merge", GITHUB_SHA=old),
             "filtered history": dict(CACHEW_REF="", CACHEW_FILTER="tree:0"),
             "filtered full history": dict(CACHEW_REF="main", CACHEW_FILTER="blob:none", CACHEW_FETCH_DEPTH="0"),
+            "sparse cone": dict(
+                CACHEW_REF="", CACHEW_SUBMODULES="false", CACHEW_SPARSE_CHECKOUT=" .github\n\n  src/deep  \n"
+            ),
+            "sparse non-cone by branch name": dict(
+                CACHEW_REF="main",
+                CACHEW_SUBMODULES="false",
+                CACHEW_SPARSE_CHECKOUT="src/b.txt\n/content.txt",
+                CACHEW_SPARSE_CHECKOUT_CONE_MODE="false",
+            ),
+            "sparse, explicit filter, full history": dict(
+                CACHEW_REF="",
+                CACHEW_SUBMODULES="false",
+                CACHEW_SPARSE_CHECKOUT=".github",
+                CACHEW_FILTER="tree:0",
+                CACHEW_FETCH_DEPTH="0",
+            ),
         }
         names = ("main", "v1.0.0", "refs/heads/main", "refs/tags/v1.0.0")
         base = dict(self.env)
@@ -643,6 +674,7 @@ class CheckoutTests(unittest.TestCase):
             ("SSH_KEY", "private key"),
             ("LFS", "true"),
             ("FILTER", "blob:none --upload-pack=touch"),
+            # Sparse with submodules (the fixture default is recursive).
             ("SPARSE_CHECKOUT", ".github"),
         ]:
             with self.subTest(name=name):
@@ -683,6 +715,19 @@ class CheckoutTests(unittest.TestCase):
         self.sha = git(source, "rev-parse", "HEAD")
         self.env.update(GITHUB_SHA=self.sha, CACHEW_REF=self.sha, CACHEW_FETCH_DEPTH="500")
 
+    def add_layout(self):
+        """Files in several directories, for sparse checkouts to include and exclude."""
+        source = self.project_root / "org/main"
+        names = (".github/workflows/ci.yml", "src/b.txt", "src/deep/c.txt", "docs/d.md")
+        for name in names:
+            (source / name).parent.mkdir(parents=True, exist_ok=True)
+            (source / name).write_text(name)
+        # By name: the fixture's gitlinks have no worktree, so `add .` would delete them.
+        git(source, "add", *names, env=self.env)
+        git(source, "commit", "-m", "layout", env=self.env)
+        self.sha = git(source, "rev-parse", "HEAD")
+        self.env.update(GITHUB_SHA=self.sha, CACHEW_REF=self.sha)
+
     def missing(self, *revisions, gitdir=".git"):
         listed = git(self.target, f"--git-dir={gitdir}", "rev-list", "--objects", "--missing=print", *revisions)
         return [line[1:] for line in listed.splitlines() if line.startswith("?")]
@@ -706,6 +751,47 @@ class CheckoutTests(unittest.TestCase):
                 self.assertEqual(self.upstream.requests, [])
                 shutil.rmtree(self.target)
                 self.cache.requests.clear()
+
+    def test_sparse_checkout_fetches_only_its_blobs_from_the_cache(self):
+        self.add_layout()
+        source = self.project_root / "org/main"
+        excluded = git(source, "rev-parse", "HEAD:src/b.txt")
+        included = git(source, "rev-parse", "HEAD:.github/workflows/ci.yml")
+        self.env.update(CACHEW_SUBMODULES="false", CACHEW_SPARSE_CHECKOUT=".github")
+        self.upstream.fail_repo = "main"
+        self.assertTrue(self.attempt())
+        self.assertEqual(self.upstream.requests, [])
+        self.assertEqual((self.target / ".github/workflows/ci.yml").read_text(), ".github/workflows/ci.yml")
+        self.assertFalse((self.target / "src").exists())
+        missing = self.missing("-n1", "HEAD")
+        self.assertIn(excluded, missing)
+        self.assertNotIn(included, missing)
+        self.assertEqual(git(self.target, "config", "remote.origin.url"), f"{self.upstream.url}/org/main")
+        self.assertEqual(git(self.target, "config", "remote.origin.partialclonefilter"), "blob:none")
+        self.assert_no_cache_credentials()
+
+    def test_sparse_lazy_fetch_failure_discards_and_falls_back(self):
+        self.add_layout()
+        self.env.update(CACHEW_SUBMODULES="false", CACHEW_SPARSE_CHECKOUT=".github")
+        seed_main = cachew_checkout.Checkout.seed_main
+
+        def then_fail(attempt, gitdir):
+            commit = seed_main(attempt, gitdir)
+            self.cache.fail_repo = "main"
+            return commit
+
+        with patch.object(cachew_checkout.Checkout, "seed_main", then_fail):
+            self.assertFalse(self.attempt())
+        self.assertEqual(self.upstream.requests, [])
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual([p for p in self.runtime.iterdir() if p.name.startswith("git-credentials-")], [])
+
+    def test_sparse_checkout_with_submodules_uses_upstream(self):
+        for submodules in ("true", "recursive"):
+            with self.subTest(submodules=submodules):
+                self.env.update(CACHEW_SUBMODULES=submodules, CACHEW_SPARSE_CHECKOUT=".github")
+                self.assertFalse(self.attempt())
+                self.assertEqual(self.cache.requests, [])
 
     def test_filtered_full_history_is_not_shallow(self):
         self.update_main()

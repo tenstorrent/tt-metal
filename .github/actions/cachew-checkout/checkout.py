@@ -130,11 +130,18 @@ def remove_stale_stages(target):
 class Checkout:
     def __init__(self, environ):
         self.git_executable = environ.get("CACHEW_REAL_GIT", "git")
-        for key in ("SSH_KEY", "SSH_KEY_SET", "LFS", "SPARSE_CHECKOUT"):
+        for key in ("SSH_KEY", "SSH_KEY_SET", "LFS"):
             value = environ.get(f"CACHEW_{key}", "")
             if value and value.lower() != "false":
                 raise Bypass("checkout mode uses upstream directly")
+        # actions/checkout's getMultilineInput: trim the input, drop empty lines, trim each.
+        sparse = environ.get("CACHEW_SPARSE_CHECKOUT", "").strip()
+        self.sparse = [line.strip() for line in sparse.split("\n") if line] if sparse else []
+        self.sparse_cone = (environ.get("CACHEW_SPARSE_CHECKOUT_CONE_MODE", "").strip() or "true").upper() == "TRUE"
         self.filter = environ.get("CACHEW_FILTER", "").strip()
+        if not self.filter and self.sparse:
+            # Standard checkout's implied filter for sparse checkouts.
+            self.filter = "blob:none"
         if self.filter and not re.fullmatch(r"[\w:=+.%-]+", self.filter, re.ASCII):
             raise Bypass("unsupported partial-clone filter")
         # GIT_CONFIG_COUNT (2.31) carries the transport settings below; older Git
@@ -174,6 +181,8 @@ class Checkout:
             raise Bypass("unsupported fetch depth")
         self.tags = environ.get("CACHEW_FETCH_TAGS", "false").lower() == "true"
         self.submodules = environ.get("CACHEW_SUBMODULES", "false").lower()
+        if self.sparse and self.submodules in ("true", "recursive"):
+            raise Bypass("sparse checkout with submodules uses upstream directly")
         self.persist = environ.get("CACHEW_PERSIST_CREDENTIALS", "true").lower() == "true"
         self.safe_directory = environ.get("CACHEW_SET_SAFE_DIRECTORY", "true").lower() == "true"
         self.runner_temp = environ.get("RUNNER_TEMP", "")
@@ -255,6 +264,7 @@ class Checkout:
         if self.token:
             auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
             config.append((f"http.{self.cache}/.extraHeader", f"AUTHORIZATION: basic {auth}"))
+        self.cache_config = config
         self.env["GIT_CONFIG_COUNT"] = str(len(config))
         for index, (key, value) in enumerate(config):
             self.env[f"GIT_CONFIG_KEY_{index}"] = key
@@ -283,6 +293,31 @@ class Checkout:
     def local(self, *arguments, cwd=None):
         command = [self.git_executable, "-c", "protocol.allow=never", "-C", str(cwd or self.target), *arguments]
         return self.run_git(command, self.local_env, "local checkout")
+
+    def lazy(self, *arguments):
+        """A worktree command that may fetch missing blobs, as a sparse standard
+        checkout does from upstream, but only from the selected cache. The
+        persisted origin stays upstream."""
+        env = dict(self.local_env)
+        base = int(env.get("GIT_CONFIG_COUNT") or 0)
+        for index, (key, value) in enumerate(self.cache_config, base):
+            env[f"GIT_CONFIG_KEY_{index}"] = key
+            env[f"GIT_CONFIG_VALUE_{index}"] = value
+        env["GIT_CONFIG_COUNT"] = str(base + len(self.cache_config))
+        scheme = urllib.parse.urlsplit(self.cache).scheme
+        command = [
+            self.git_executable,
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            f"protocol.{scheme}.allow=always",
+            "-c",
+            f"url.{self.cache_url(self.url)}.insteadOf={self.url}",
+            "-C",
+            str(self.target),
+            *arguments,
+        ]
+        return self.run_git(command, env, "sparse checkout")
 
     def ls_remote(self, *arguments):
         """The only upstream contact: names resolve there, objects come from the cache."""
@@ -366,26 +401,28 @@ class Checkout:
             options.append(f"--depth={self.depth}")
         # Explicit URL, never a persisted rewrite.
         if self.filter:
-            # Standard checkout passes the filter to the main repository only. The
-            # worktree checkout cannot fetch lazily, so seed the complete tip first;
-            # the filtered fetch then adds only history.
-            self.git(
-                gitdir,
-                "fetch",
-                "--force",
-                "--no-recurse-submodules",
-                "--no-tags",
-                "--depth=1",
-                "--",
-                cache_url,
-                self.want,
-            )
-            # Lazy fetches belong to upstream, exactly as standard checkout configures them.
+            if not self.sparse:
+                # Standard checkout passes the filter to the main repository only. The
+                # worktree checkout cannot fetch lazily, so seed the complete tip first;
+                # the filtered fetch then adds only history. A sparse checkout instead
+                # fetches just its own blobs from the cache (see lazy).
+                self.git(
+                    gitdir,
+                    "fetch",
+                    "--force",
+                    "--no-recurse-submodules",
+                    "--no-tags",
+                    "--depth=1",
+                    "--",
+                    cache_url,
+                    self.want,
+                )
+                if not self.depth:
+                    options.append("--unshallow")
+            # Later lazy fetches belong to upstream, exactly as standard checkout configures them.
             self.git(gitdir, "config", "remote.origin.promisor", "true")
             self.git(gitdir, "config", "remote.origin.partialclonefilter", self.filter)
             options.append(f"--filter={self.filter}")
-            if not self.depth:
-                options.append("--unshallow")
         wants = sorted({self.want, *self.refs.values()})
         self.git(gitdir, "fetch", *options, "--", cache_url, *refspecs, *wants)
         if self.filter:
@@ -550,12 +587,23 @@ class Checkout:
         self.local("config", "--local", "gc.auto", "0")
         if self.persist:
             self.persist_credentials()
-        self.local("sparse-checkout", "disable")
-        # Disabling leaves this behind even in a pristine repository; checkout removes it too.
-        if self.local("config", "--local", "--get", "--default=", "extensions.worktreeConfig").strip():
-            self.local("config", "--local", "--unset-all", "extensions.worktreeConfig")
         branch, start = self.checkout_target
-        self.local("checkout", "--force", *(("-B", branch, start) if start else (branch,)))
+        checkout = ("checkout", "--force", *(("-B", branch, start) if start else (branch,)))
+        if self.sparse:
+            if self.sparse_cone:
+                self.lazy("sparse-checkout", "set", *self.sparse)
+            else:
+                self.local("config", "core.sparseCheckout", "true")
+                relative = self.local("rev-parse", "--git-path", "info/sparse-checkout").decode().rstrip()
+                with open(os.path.join(self.target, relative), "a") as stream:
+                    stream.write("\n" + "\n".join(self.sparse) + "\n")
+            self.lazy(*checkout)
+        else:
+            self.local("sparse-checkout", "disable")
+            # Disabling leaves this behind even in a pristine repository; checkout removes it too.
+            if self.local("config", "--local", "--get", "--default=", "extensions.worktreeConfig").strip():
+                self.local("config", "--local", "--unset-all", "extensions.worktreeConfig")
+            self.local(*checkout)
         if self.submodules in ("true", "recursive"):
             recursive = ["--recursive"] if self.submodules == "recursive" else []
             depth = [f"--depth={self.depth}"] if self.depth else []

@@ -35,7 +35,7 @@ inputs:
   filter:
     description: Partial-clone filter for the main repository, as in standard checkout. Cachew fetches the complete tip and the filtered history.
   sparse-checkout:
-    description: Newline-separated sparse checkout patterns. A nonempty value bypasses cachew.
+    description: Newline-separated sparse checkout patterns. Implies filter blob:none; with submodules, bypasses cachew.
   sparse-checkout-cone-mode:
     description: Use cone mode for sparse checkout.
     default: 'true'

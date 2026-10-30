@@ -93,10 +93,18 @@ the same filter, as standard checkout does, so objects missing later are
 fetched lazily from upstream. Submodules are fetched unfiltered, as standard
 checkout fetches them.
 
+`sparse-checkout` works like standard checkout: it implies `filter: blob:none`,
+applies the patterns (`sparse-checkout set`, or `info/sparse-checkout` without
+cone mode), and lets the checkout fetch only the blobs it needs. The main
+repository is fetched once, filtered, and only `sparse-checkout set` and
+`checkout` may fetch, from the selected cache only (a per-command `insteadOf`
+plus the cache transport); `origin` stays upstream in the persisted
+configuration. Sparse checkouts with submodules use the standard checkout.
+
 The pinned official checkout runs only when cachew did not produce the checkout:
 cachew skipped (hosted runner, `cachew: false`, no session), an unsupported mode
-(sparse, LFS, SSH), a non-empty target, or any failure of the cache or of the
-local steps. A failed attempt first removes everything it created, so checkout
+(LFS, SSH, sparse with submodules), a non-empty target, or any failure of the
+cache or of the local steps. A failed attempt first removes everything it created, so checkout
 starts from the same empty directory, with its own throwaway global file.
 Afterward the action adds:
 

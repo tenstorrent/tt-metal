@@ -356,9 +356,9 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.fixture.cache.requests, cache_before)
         self.finish()
 
-    def test_sparse_or_existing_target_still_configures_later_dependencies(self):
+    def test_unsupported_mode_still_configures_later_dependencies(self):
         self.prepare()
-        self.env["CACHEW_SPARSE_CHECKOUT"] = ".github"
+        self.env["CACHEW_LFS"] = "true"
         self.assertFalse(self.fixture.attempt())
         self.assertTrue(self.activate())
         self.fixture.assert_single_cache_attempts([])
