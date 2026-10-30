@@ -192,18 +192,18 @@ autograd::TensorPtr rope(
     return out;
 }
 
-uint64_t RotaryEmbeddingPositionIds::s_version_counter = 0;
+uint64_t RotaryEmbeddingPositions::s_version_counter = 0;
 
-RotaryEmbeddingPositionIds::RotaryEmbeddingPositionIds(autograd::TensorPtr ids) :
+RotaryEmbeddingPositions::RotaryEmbeddingPositions(autograd::TensorPtr ids) :
     m_ids(std::move(ids)), m_version(++s_version_counter) {
 }
 
-void RotaryEmbeddingPositionIds::update(autograd::TensorPtr ids) {
+void RotaryEmbeddingPositions::update(autograd::TensorPtr ids) {
     m_ids = std::move(ids);
     m_version = ++s_version_counter;
 }
 
-const autograd::TensorPtr& RotaryEmbeddingPositionIds::get_ids() const {
+const autograd::TensorPtr& RotaryEmbeddingPositions::get_ids() const {
     return m_ids;
 }
 
@@ -213,11 +213,11 @@ struct RopeRows {
     ttnn::Tensor neg_sin;
 };
 
-// cos/sin rows gathered for one position_ids version, one entry per head count.
-// Every layer of a forward passes the same position_ids, so only the first call per head count gathers;
-// a new position_ids version (the next step, or update()) clears the entries.
+// cos/sin rows gathered for one rope_positions version, one entry per head count.
+// Every layer of a forward passes the same rope_positions, so only the first call per head count gathers;
+// a new rope_positions version (the next step, or update()) clears the entries.
 struct RopeRowsCache {
-    uint64_t position_ids_version = 0;
+    uint64_t rope_positions_version = 0;
     // Q and K need the same cos/sin values, but in tensors of different shapes. The kernel needs one cos/sin row
     // for each flattened (batch, head) row of its input, and Q and K have different head counts. The head count is
     // the only thing that changes the shape, and the positions are the only thing that changes the values. So
@@ -259,11 +259,11 @@ RopeRows gather_rows(const RotaryEmbeddingParams& params, const ttnn::Tensor& id
 }  // namespace
 
 const RopeRows& get_rope_rows(
-    const RotaryEmbeddingParams& params, const RotaryEmbeddingPositionIds& position_ids, uint32_t num_heads) {
-    const auto& ids = position_ids.m_ids->get_value();
+    const RotaryEmbeddingParams& params, const RotaryEmbeddingPositions& rope_positions, uint32_t num_heads) {
+    const auto& ids = rope_positions.m_ids->get_value();
     auto& cache = *params.rows_cache;
-    if (cache.position_ids_version != position_ids.m_version) {
-        cache.position_ids_version = position_ids.m_version;
+    if (cache.rope_positions_version != rope_positions.m_version) {
+        cache.rope_positions_version = rope_positions.m_version;
         cache.rows_by_head_count.clear();
     }
     auto it = cache.rows_by_head_count.find(num_heads);
@@ -276,30 +276,30 @@ const RopeRows& get_rope_rows(
 autograd::TensorPtr rope(
     const autograd::TensorPtr& input,
     const RotaryEmbeddingParams& params,
-    const RotaryEmbeddingPositionIds& position_ids) {
+    const RotaryEmbeddingPositions& rope_positions) {
     validate_rope_input_and_params(input, params);
 
     const auto input_shape = input->get_value().logical_shape();
-    const auto& ids = position_ids.get_ids()->get_value();
+    const auto& ids = rope_positions.get_ids()->get_value();
     const auto ids_shape = ids.logical_shape();
     TT_FATAL(
         ids_shape.rank() == 2U && ids_shape[0] == input_shape[0] && ids_shape[1] == input_shape[2],
-        "RoPE position_ids must have shape [{}, {}], but got {}",
+        "RoPE positions must have shape [{}, {}], but got {}",
         input_shape[0],
         input_shape[2],
         ids_shape);
     TT_FATAL(
         ids.dtype() == ttnn::DataType::UINT32 && ids.layout() == ttnn::Layout::ROW_MAJOR,
-        "RoPE position_ids must be UINT32 ROW_MAJOR, but got {} {}",
+        "RoPE positions must be UINT32 ROW_MAJOR, but got {} {}",
         ids.dtype(),
         ids.layout());
     TT_FATAL(
         !autograd::ctx().is_parallelism_context_initialized() ||
             autograd::ctx().get_parallelism_context().get_cp_size() <= 1,
-        "RoPE position_ids are not supported with context parallelism");
-    TT_FATAL(params.rows_cache, "RoPE position_ids require rope_params from build_rope_params");
+        "RoPE positions are not supported with context parallelism");
+    TT_FATAL(params.rows_cache, "RoPE positions require rope_params from build_rope_params");
 
-    const auto& rows = get_rope_rows(params, position_ids, input_shape[1]);
+    const auto& rows = get_rope_rows(params, rope_positions, input_shape[1]);
 
     auto out = autograd::create_tensor(rotate_per_head(input->get_value(), rows.cos, rows.sin, params.trans_mat));
 

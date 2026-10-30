@@ -34,7 +34,7 @@ struct RotaryEmbeddingParams {
     ttnn::Tensor cos_table{};
     ttnn::Tensor sin_table{};
     ttnn::Tensor trans_mat{};
-    // Per-row cos/sin of the last position_ids passed to rope; shared by copies of these params.
+    // Per-row cos/sin of the last rope_positions passed to rope; shared by copies of these params.
     std::shared_ptr<RopeRowsCache> rows_cache;
 
     uint32_t sequence_length = 0U;
@@ -44,15 +44,15 @@ struct RotaryEmbeddingParams {
     RopeScalingParams rope_scaling_params;
 };
 
-class RotaryEmbeddingPositionIds {
+class RotaryEmbeddingPositions {
 public:
-    explicit RotaryEmbeddingPositionIds(autograd::TensorPtr ids);
+    explicit RotaryEmbeddingPositions(autograd::TensorPtr ids);
     void update(autograd::TensorPtr ids);
     [[nodiscard]] const autograd::TensorPtr& get_ids() const;
 
 private:
     friend const RopeRows& get_rope_rows(
-        const RotaryEmbeddingParams& params, const RotaryEmbeddingPositionIds& position_ids, uint32_t num_heads);
+        const RotaryEmbeddingParams& params, const RotaryEmbeddingPositions& rope_positions, uint32_t num_heads);
 
     static uint64_t s_version_counter;
     autograd::TensorPtr m_ids;
@@ -62,13 +62,13 @@ private:
 autograd::TensorPtr rope(
     const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params, const uint32_t token_position);
 
-// position_ids: [B, S] UINT32 ROW_MAJOR, the absolute position of every query row.
+// rope_positions: [B, S] UINT32 ROW_MAJOR, the absolute position of every query row.
 // Every id must be < rope_params.sequence_length; this is not checked on device.
-// cos/sin are reused until position_ids gets a new version; call update() after changing the ids.
+// cos/sin are reused until rope_positions gets a new version; call update() after changing the ids.
 autograd::TensorPtr rope(
     const autograd::TensorPtr& input,
     const RotaryEmbeddingParams& rope_params,
-    const RotaryEmbeddingPositionIds& position_ids);
+    const RotaryEmbeddingPositions& rope_positions);
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     uint32_t head_dim,
