@@ -66,7 +66,7 @@
   DEST, Float16_b under 16-bit DEST; `UnpackToDestFp32` on `cb_stats_gather`
 - **Golden baseline** (final verifier run): 10,908 supported_pass / 133 supported_fail (tracked by Refinements 1, 2, 4) / 0 xpass_drift / 1 xfail_wrong_mode (harness) / 2,160 xfail_expected (the native `{float32, 16-bit DEST}` EXCLUSION) / 33,696 invalid_skipped / 40 infeasible_skipped
 
-### [ ] Refinement 1 — Port the base op's streaming-γ fallback (L1 fit for wide-row sharded shapes)
+### [x] Refinement 1 — Port the base op's streaming-γ fallback (L1 fit for wide-row sharded shapes)
 
 **Goal**: move the remaining **120** L1-fit `supported_fail` cells to passing. They are refused today with
 `NotImplementedError: the shard does not fit one resident tile-row in L1`. All are `HEIGHT_SHARDED` (one core holds
@@ -98,6 +98,10 @@ capacity limit; record it in the changelog with its byte arithmetic rather than 
 **Done when**: every golden `supported_fail` cell carrying the "does not fit one resident tile-row" message passes (or
 is documented with its byte arithmetic as a structural L1 limit), and the acceptance suite plus Phase 0 golden cells
 stay green.
+
+**Outcome**: all 120 target cells pass. Streaming γ (`STREAM_DEPTH·C` ring) is chosen only when the resident window
+does not fit, so Phase 0 plans are unchanged. It also fixed an order-dependent CB clash: `l1_budget` is now bounded
+by the lowest known L1 buffer, including the persistent semaphores. No structural L1 limits remain in this set.
 
 ### [ ] Refinement 2 — Output placement independent of the input placement
 

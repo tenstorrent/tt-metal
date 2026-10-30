@@ -21,7 +21,7 @@ The base op's buffers keep its sizing (`base_ops/rms_norm/op_design.md` → Circ
 | `cb_sumsq_partial` | `Rw` (implemented; was `R`) | `Rw` (one wave's raw Σx² tiles between the two helpers) | `{batch: folded, tile_rows: streams → Rw per wave, wave: spans → Rw, width: none (collapsed in DEST), device_slot: none, link: none}` | interm | compute | compute | square → collapse | Sized to the live set `Rw`: square pushes one page per tile-row and collapse pops the wave, so `Rw` never blocks. Kept separate from `cb_partial_col`: concurrent within a wave (collapse reads one while it writes the other). |
 | `cb_inv_rms` | `R` | `R` (every wave's rows stay until `release_block`, read by every chunk) | `{tile_rows: spans → R, wave: spans → all, width: none (Col-broadcast operand), device_slot: none, link: none, batch: folded}` | interm | reader | compute | distribute → release | none: live across every chunk of the block |
 | ~~`cb_gamma_row`~~ (RM γ) | **deleted** (implemented) | — | — | — | — | — | — | Not a helper input: the writer reads stick `j` (`32·es_g` B, DRAM-aligned) straight into `cb_gamma_tiles` page `j` (values 0..15 land in face-0 row 0) and moves values 16..31 to face-1 row 0 with 16 RISC-V word copies. No staging buffer. |
-| `cb_gamma_tiles` (γ) | resident `Wp` (implemented: resident only; the streaming fallback is not built, the L1 solve accounts for the window and refuses otherwise) | same as capacity | `{width: spans → Wp (resident), tile_rows: none, wave: none, device_slot: none, link: none, batch: none}` | γ dtype | writer | compute | kernel | none: Row-broadcast operand of every scale_by_gamma call |
+| `cb_gamma_tiles` (γ) | resident `Wp` when the blocking fits with it; else streaming `STREAM_DEPTH·C` (Refinement 1: base op's L1 fallback, `gamma_tiles_pages()`) | resident: same as capacity; streaming: `C` per (block, chunk) step | `{width: spans → Wp (resident) / C-chunk ring (streaming), tile_rows: none, wave: none, device_slot: none, link: none, batch: none}` | γ dtype | writer | compute | kernel (resident) / per chunk (streaming) | none: Row-broadcast operand of every scale_by_gamma call. Streaming re-reads the window from DRAM once per block (`num_blocks·V` γ tiles instead of `V`); chosen only when resident fails to fit (wide-row shards). |
 | `cb_x_gamma` (γ) | `R · C` | `R · C` (chunk 0 hoisted for the whole block, then per chunk) | `{tile_rows: spans → R, wave: spans → all (hoisted), width: streams → C, device_slot: none, link: none, batch: folded}` | interm | compute | compute | per (block, chunk) | none: chunk 0's x·γ is held across the exchange wait by design (stall shadow). Packing x·γ back into `cb_x_tiles` in place would round it to the input dtype before the inv_rms multiply. |
 | `cb_partial_col` (R3) | `R` | `Rw` | `{tile_rows: streams → Rw, capacity R, wave: spans → Rw, width: none, device_slot: none, link: none, batch: folded}` | interm | compute | reader | collapse → combine | Capacity `R`: compute may collapse every wave of the block before the reader sends (the reader is busy with publish/collect). Concurrent with `cb_sumsq_partial` within a wave. |
 | `cb_gather` (R3 root) | `nwpb · G_w · Rw` (= `G_w · R`) | `G_w · Rw` per wave; slots are block-indexed (base slot safety) | `{tile_rows: spans → R, wave: spans → all, width: none (one partial per slice core: G_w), device_slot: none, link: none, batch: folded}` | interm | reader | compute | per block | none. Contributors write wave slots remotely at fixed offsets `index·R + r`, so the whole block's slot range must exist (base Refinement 4 contract). |
@@ -64,7 +64,7 @@ Compute core (worst case: an R3 root with γ):
 F(R, d) = d·R·WS·T_in                                      # cb_x_tiles (interleaved only) — scales with R, S, x_depth
         + R·T_i·(1 + C·has_gamma)                          # cb_inv_rms, cb_x_gamma — scale with R (and C)
         + R·T_i·(2 + G_w)·combine                          # cb_partial_col, cb_rms_root, cb_gather (R3) — scale with R, G_w
-        + Wp·T_g·has_gamma                                 # cb_gamma_tiles (resident window) — scales with S
+        + (Wp | STREAM_DEPTH·C)·T_g·has_gamma              # cb_gamma_tiles (resident window | streaming ring) — scales with S | C
         + STREAM_DEPTH·C·T_out·(1 − sharded)               # cb_output — fixed in C
         + scaler_pages·2048                                # cb_reduce_scaler
         + Rw·T_i·(1 + 2·masked)                            # cb_sumsq_partial (+ cb_sumsq_last / _acc) — scales with Rw
@@ -76,6 +76,12 @@ F(R, d) = d·R·WS·T_in                                      # cb_x_tiles (inte
 every page count independently).
 
 The new terms are bounded by `R·T_i + G·Rw·T_i + (G+1)·Rw·128`: at the focus shape (`Rw = 1, G = 4, fp32 DEST`) that is 24.6 KiB, and ≤ 41 KiB at `G = 8`. They enter `choose_blocking`'s fixed term, scaled by `Rw ≤ R`. No buffer is unconditionally op-sized: every capacity is a block extent (`R`, `Rw`, `S`, `C`) times a bounded constant (`G`, `G_w`, depths), or the caller's shard.
+
+**Budget (Refinement 1).** `l1_budget()` is the largest free block, bounded by the lowest address of every L1 buffer
+the call knows (input / output / γ / landing tensors and the persistent exchange semaphores) minus the allocator base:
+the static CB region must end below the lowest L1 buffer, and a freed hole above a live buffer made the largest free
+block over-state it (measured: the global semaphores, created on a mesh's first call just below that call's 512 KiB
+shard at 524160 B, clashed with a later call's CB region ending at 527744 B).
 
 Port core: `num_waves · G · seg_stride` ≤ 128 KiB for every INPUTS shape. Above `PORT_LANDING_MAX_BYTES` (512 KiB, bucketed to a power of two of words) the call is refused before allocation (verifier fix: it used to crash). The landing's L1 is reserved in every core's bank, so the compute plan is solved against `l1_budget − landing bytes` (re-solved when the landing exceeds `LANDING_L1_RESERVE`). One grow-only landing per (mesh, port set): a bigger call replaces it and smaller calls reuse it.
 

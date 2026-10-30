@@ -20,7 +20,10 @@ One program per chip, one ttnn.generic_op for the mesh. Per chip:
 
 Knobs (single source of truth; every CB page count, trip count and the grid derive from these):
     W_CHUNK_TILES  cap on the streaming chunk C (halved until the blocking fits L1)
-    STREAM_DEPTH   depth of cb_output in C-tile quanta
+    STREAM_DEPTH   depth of cb_output and of the streaming cb_gamma_tiles, in C-tile quanta
+    GAMMA_RESIDENT prefer the resident γ window (Wp pages, read once per call); when the blocking does not fit with it
+                   (wide-row shards: e.g. a 512 KiB input + 512 KiB output shard on one core), γ streams per (block,
+                   chunk) at STREAM_DEPTH * C pages (base op's L1 fallback). False forces streaming everywhere.
     SCALE_BLOCK_TILES  tiles per DEST window of the scaling chains (clamped by the chain to DEST capacity)
     MIN_BLOCKS_PER_CORE  cap R at ceil(rows_max / MIN_BLOCKS_PER_CORE). The base op uses 2 (prefetch of block k+1);
                    here 1: a block's waves already overlap its reads / exchange / scale, while splitting a core's rows
@@ -55,6 +58,7 @@ W_CHUNK_TILES = 32
 STREAM_DEPTH = 2
 SCALE_BLOCK_TILES = 8
 MIN_BLOCKS_PER_CORE = 1
+GAMMA_RESIDENT = True
 NUM_WAVES = 2
 R3_ROWS_PER_GROUP = 2
 R3_MAX_GROUP_CORES = 24
@@ -285,9 +289,12 @@ class Geometry:
     G_w: int
     masked: bool
     G: int  # devices per group
+    gamma_resident: bool  # cb_gamma_tiles holds the whole window (Wp) vs streams STREAM_DEPTH * C pages
 
 
-def compute_geometry(input_tensor, gamma, chunk_cap, fp32_acc, S, sharded, combine, G_w, masked, G) -> Geometry:
+def compute_geometry(
+    input_tensor, gamma, chunk_cap, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident=True
+) -> Geometry:
     W = list(input_tensor.shape)[-1]
     Wt = math.ceil(W / TILE_DIM)
     if sharded:
@@ -324,6 +331,7 @@ def compute_geometry(input_tensor, gamma, chunk_cap, fp32_acc, S, sharded, combi
         G_w=G_w,
         masked=masked,
         G=G,
+        gamma_resident=has_gamma and gamma_resident,
     )
 
 
@@ -332,6 +340,11 @@ def wave_split(block_rows: int):
     cap = max(1, min(block_rows, NUM_WAVES, MAX_WAVES_PER_BLOCK))
     nwpb = max(d for d in range(1, cap + 1) if block_rows % d == 0)
     return block_rows // nwpb, nwpb
+
+
+def gamma_tiles_pages(g: Geometry) -> int:
+    """cb_gamma_tiles capacity: the whole padded window (resident) or STREAM_DEPTH C-tile chunks (streaming)."""
+    return g.Wp if g.gamma_resident else STREAM_DEPTH * g.C
 
 
 def scaler_pages(g: Geometry) -> int:
@@ -358,7 +371,7 @@ def cb_inventory(g: Geometry, R: int, x_depth: int, input_dtype, output_dtype, g
         inv.append((CB_X_TILES, input_dtype, g.T_in, x_depth * R * g.WS))
         inv.append((CB_OUTPUT, output_dtype, g.T_out, STREAM_DEPTH * g.C))
     if g.has_gamma:
-        inv.append((CB_GAMMA_TILES, gamma_dtype, g.T_g, g.Wp))  # resident γ window
+        inv.append((CB_GAMMA_TILES, gamma_dtype, g.T_g, gamma_tiles_pages(g)))  # resident window or stream ring
         inv.append((CB_X_GAMMA, fi, T_i, R * g.C))
     if g.combine:
         inv.append((CB_PARTIAL_COL, fi, T_i, R))
@@ -402,10 +415,25 @@ def choose_block_rows(g: Geometry, rows_per_core_max: int, budget: int):
 
 
 def choose_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G):
+    """Resident γ first (the γ window read once per call); when no blocking fits with it, the same search with γ
+    streamed per (block, chunk) — the base op's L1 fallback for wide-row shards."""
+    choice = None
+    if GAMMA_RESIDENT or gamma is None:
+        choice = _search_blocking(input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G)
+    if choice is None and gamma is not None:
+        choice = _search_blocking(
+            input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, False
+        )
+    return choice
+
+
+def _search_blocking(
+    input_tensor, gamma, rows_max, budget, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident=True
+):
     fallback = None
     cap = W_CHUNK_TILES
     while cap >= 1:
-        g = compute_geometry(input_tensor, gamma, cap, fp32_acc, S, sharded, combine, G_w, masked, G)
+        g = compute_geometry(input_tensor, gamma, cap, fp32_acc, S, sharded, combine, G_w, masked, G, gamma_resident)
         choice = choose_block_rows(g, rows_max, budget)
         if choice is not None:
             if choice[1] == 2 or sharded or choice[0] >= rows_max:
@@ -643,8 +671,21 @@ def _cb(index, data_format, page_size, num_pages, core_ranges):
     )
 
 
-def l1_budget(device) -> int:
-    return ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+def l1_budget(device, tensors=(), addrs=()) -> int:
+    """Bytes the static CB region may span: it starts at the allocator base and must end below the LOWEST L1 buffer.
+    The largest free block alone over-states it when a freed hole sits above a live buffer (measured: a wide-row shard
+    planned against a hole clashed with its own output shard at 524160 B after an earlier call freed its shards), so it
+    is also bounded by the lowest address of every L1 tensor this call knows (input / output / γ / landing) and of the
+    persistent exchange semaphores (`addrs`: created on a mesh's first call, they sit just below that call's shards
+    and pin every later call's CB region under them — measured: 524160 B below a 512 KiB shard)."""
+    budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+    base = ttnn._ttnn.device.GetAllocatorBaseAddress(device, ttnn.BufferType.L1)
+    for t in tensors:
+        if t is not None and t.memory_config().buffer_type == ttnn.BufferType.L1:
+            budget = min(budget, t.buffer_address() - base)
+    for a in addrs:
+        budget = min(budget, a - base)
+    return budget
 
 
 def _pack(v):
@@ -716,10 +757,18 @@ def create_mesh_program_descriptor(
         seg_stride = _align_up(max(max(seg_l), 4), SEG_ALIGN)
         return Rw, nwpb, num_waves, n_roots_l, seg_l, seg_stride, num_waves * G * seg_stride // 4
 
+    l1_tensors = (input_tensor, output_tensor, gamma)
+    # Persistent semaphores first: their L1 words bound the CB region of this call too (l1_budget).
+    ready_sem, arrival_sems = get_semaphores(mesh, G)
+    ready_addr = int(ttnn.get_global_semaphore_address(ready_sem))
+    arrival_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in arrival_sems]
+    sem_addrs = [ready_addr] + arrival_addrs
     reserve = LANDING_L1_RESERVE
     for _ in range(4):
         try:
-            plan = select_plan(input_tensor, gamma, fp32_acc, available, G, l1_budget(mesh) - reserve)
+            plan = select_plan(
+                input_tensor, gamma, fp32_acc, available, G, l1_budget(mesh, l1_tensors, sem_addrs) - reserve
+            )
         except NotImplementedError as exc:
             if reserve == LANDING_L1_RESERVE:
                 raise
@@ -745,12 +794,9 @@ def create_mesh_program_descriptor(
     roots = plan.roots
     root_link = {(w.core.x, w.core.y): (gi % L, gi // L) for gi, w in enumerate(roots)}
 
-    ready_sem, arrival_sems = get_semaphores(mesh, G)
-    ready_addr = int(ttnn.get_global_semaphore_address(ready_sem))
-    arrival_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in arrival_sems]
     landing = allocate_landing(mesh, landing_words)
     landing_addr = int(landing.buffer_address())
-    if footprint(g, R, x_depth) > l1_budget(mesh):
+    if footprint(g, R, x_depth) > l1_budget(mesh, l1_tensors + (landing,), sem_addrs):
         ttnn.deallocate(landing)
         raise NotImplementedError("distributed_rms_norm: the CBs do not fit next to the exchange landing in L1")
 
@@ -815,6 +861,7 @@ def create_mesh_program_descriptor(
         Rw,
         nwpb,
         G,
+        int(g.gamma_resident),
     ]
     writer_ct = [
         int(g.has_gamma),
@@ -829,6 +876,7 @@ def create_mesh_program_descriptor(
         g.T_g,
         g.es_g,
         g.Wp,
+        int(g.gamma_resident),
     ]
     writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     writer_ct += (
@@ -860,6 +908,7 @@ def create_mesh_program_descriptor(
             output_tensor.memory_config(),
             gamma.dtype if gamma is not None else None,
             gamma.layout if gamma is not None else None,
+            g.gamma_resident,
             plan.regime,
             [(w.core.x, w.core.y, w.start_tile_row, w.rows, w.w0, w.V, w.index) for w in plan.work],
             R,

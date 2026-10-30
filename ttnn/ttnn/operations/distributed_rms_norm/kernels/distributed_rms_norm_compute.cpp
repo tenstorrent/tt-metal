@@ -105,7 +105,8 @@ template <
     uint32_t G_W,
     uint32_t SCALE_BLOCK,
     uint32_t RW,
-    uint32_t G>
+    uint32_t G,
+    bool GAMMA_RESIDENT>
 FORCE_INLINE void run(
     uint32_t rows_this_core,
     uint32_t inv_w_bits,
@@ -181,8 +182,11 @@ FORCE_INLINE void run(
     // scale_by_gamma of chunk c for the block's R_b rows (x * gamma, gamma row 0 broadcast) -> cb_x_gamma.
     auto scale_by_gamma = [&](uint32_t c, uint32_t rows_in_block) {
         if constexpr (HAS_GAMMA) {
-            // Resident gamma window: the writer pushes it chunk by chunk; after block 0 the wait is a no-op.
-            cb_wait_front(cb_gamma_tiles, (c + 1) * C);
+            // Resident window: the writer pushes it chunk by chunk, chunk c is pages [c*C, +C) (cumulative wait; a
+            // no-op after block 0). Streaming (L1 fallback): the writer pushes chunk c per (block, chunk) step as
+            // the front C pages, popped right after this chain.
+            const uint32_t gamma_off = GAMMA_RESIDENT ? c * C : 0;
+            cb_wait_front(cb_gamma_tiles, GAMMA_RESIDENT ? (c + 1) * C : C);
             ckl::eltwise_chain(
                 ckl::IterationShape::grid(rows_in_block, C).block_size(SCALE_BLOCK),
                 ckl::BinaryFpu<
@@ -195,8 +199,11 @@ FORCE_INLINE void run(
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Row,
                         ckl::DataFormatReconfig::Enabled,
-                        ckl::TileAddressing::Offset)>{ckl::StridedTileRange{c * C, WS}, c * C},
+                        ckl::TileAddressing::Offset)>{ckl::StridedTileRange{c * C, WS}, gamma_off},
                 ckl::PackTile<scaled_row_output(cb_x_gamma)>{});
+            if constexpr (!GAMMA_RESIDENT) {
+                cb_pop_front(cb_gamma_tiles, C);
+            }
         }
     };
 
@@ -356,7 +363,7 @@ FORCE_INLINE void run(
 
     // reduce() waits the scaler but never pops it; the caller owns that page (or pair).
     cb_pop_front(cb_reduce_scaler, MASKED_CFG ? 2 : 1);
-    if constexpr (HAS_GAMMA) {
+    if constexpr (HAS_GAMMA && GAMMA_RESIDENT) {
         if (num_blocks > 0) {
             cb_pop_front(cb_gamma_tiles, Wp);
         }
@@ -378,6 +385,7 @@ void kernel_main() {
     constexpr uint32_t scale_block_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t wave_rows = get_compile_time_arg_val(10);      // Rw
     constexpr uint32_t group_devices = get_compile_time_arg_val(12);  // G
+    constexpr bool gamma_resident = get_compile_time_arg_val(13) != 0;
 
     const uint32_t rows_this_core = get_arg_val<uint32_t>(0);
     const uint32_t inv_w_bits = get_arg_val<uint32_t>(1);
@@ -399,5 +407,6 @@ void kernel_main() {
         group_cores,
         scale_block_tiles,
         wave_rows,
-        group_devices>(rows_this_core, inv_w_bits, eps_bits, slice_valid, is_root, masked_core);
+        group_devices,
+        gamma_resident>(rows_this_core, inv_w_bits, eps_bits, slice_valid, is_root, masked_core);
 }

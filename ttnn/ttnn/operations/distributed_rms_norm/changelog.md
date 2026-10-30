@@ -64,3 +64,34 @@
   - `test_distributed_rms_norm_debug.py::test_ragged_block_chunked_gamma`;
   - existing: `test_distributed_rms_norm.py` (acceptance), `test_distributed_rms_norm_knobs.py`,
     `test_distributed_rms_norm_debug.py::test_repeat_rows`, `perf_ablate.py`.
+
+## Refinement 1 — Port the base op's streaming-γ fallback (L1 fit for wide-row sharded shapes)
+- Date: 2026-10-30
+- What was done:
+  - **Streaming γ (base op's L1 fallback), knob `GAMMA_RESIDENT`.** `Geometry.gamma_resident` sizes `cb_gamma_tiles`
+    through `gamma_tiles_pages()` (`Wp` resident / `STREAM_DEPTH·C` streaming) inside `cb_inventory()`, so the L1
+    solve and the CB descriptors still read one list. `choose_blocking` runs the existing search with resident γ
+    first (every Phase 0 plan is unchanged) and, when nothing fits, the same search with streaming γ.
+  - Writer: the γ chunk read is one lambda shared by both paths. Resident pushes the window chunk by chunk as before.
+    Streaming pushes chunk 0, then per (block, chunk) step pushes step s+1's chunk before draining output step s
+    (sharded: a pure γ push loop). Compute: `scale_by_gamma` waits `C` pages at offset 0 and pops them after the
+    chain (resident: cumulative wait at offset `c·C`, as before). `gamma_resident` is a writer / compute CT arg and
+    in the program hash.
+  - **L1 budget bug (found while landing this).** `l1_budget()` used the largest free block, but static CBs must end
+    below the lowest L1 buffer. The persistent exchange semaphores are created on a mesh's first call, so they sit
+    just below that call's shards (524160 B under a 512 KiB shard). A later wide-row call planned against a hole
+    above them and clashed: "CB region ends at 527744". The fix: the budget is also bounded by the lowest address of
+    the call's L1 tensors (input / output / γ / landing) and of the semaphores, and the semaphores are created
+    before planning. The bf8b + fp32 γ cells failed only in sequence because of this.
+- Accuracy achieved: the golden tolerances (unchanged) on all 120 target cells: (1,1,32,8192) / (128,8192)
+  × {bf16 + bf16/fp32 γ, bf8b + fp32 γ}, and fp32 (1,1,32,4096) / (1,32,4096) / (1,1,128,4096) + fp32 γ, all
+  HEIGHT_SHARDED, TILE and ROW_MAJOR γ, both axes, 1 and 2 links, Linear and Ring.
+- Golden test progress: 120/120 target cells pass (previously `supported_fail` with "does not fit one resident
+  tile-row"). A 66-cell slice of prior-passing γ cells passes (INTERLEAVED / WIDTH_SHARDED variants of the same
+  shapes, bf16 4096 HS). Expected total: 11,028 supported_pass / 13 supported_fail. The 13 are the 12 placement cells
+  for Refinement 2 and DeepSeek prefill 131072 for Refinement 4. No sharded fp32 residue was left to fold in.
+- Issues encountered: the order-dependent CB / L1-buffer clash above. No cell needed a structural-limit note: every
+  target fits with streaming γ. For example, (1,1,32,8192) bf8b + fp32 γ is 416,128 B of CBs at R=1, C=32.
+- Tests added: none. The 120 golden cells pin the path. Unit regression net: acceptance 103/103, debug 6/6,
+  knobs 12/12, precision baseline 20 passed / 4 skipped (each file run on its own: running the whole directory in
+  one process fails 42 setups on a fixture fabric-config reopen, which is unrelated to the op).
