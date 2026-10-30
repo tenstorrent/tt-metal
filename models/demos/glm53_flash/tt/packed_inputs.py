@@ -78,6 +78,21 @@ def slot_mask_enabled(env=None) -> bool:
     return str(env.get(SLOT_MASK_ENV, "0")).strip().lower() in ("1", "true", "yes", "on")
 
 
+def gate_page(live: Sequence[bool], rows: int, users_per_row: int, words: int = 32) -> torch.Tensor:
+    """The ``custom_ops.kda_decode`` write-gate pages of every mesh row from the flat live mask (physical slot
+    ``r * users_per_row + u``): ``[rows * Bt, words]`` int32, mesh row ``r`` owning pages ``r Bt .. (r + 1) Bt - 1``
+    (word ``u`` of page ``tb`` = user ``32 tb + u`` of the row, 1 = written, the padding words 0). Split over the
+    mesh rows and replicated over the TP columns: the KDA state per chip holds every user of its row with the heads
+    sharded, whatever the DSA cache's user partition."""
+    R, B = int(rows), int(users_per_row)
+    if len(live) != R * B:
+        raise ValueError(f"{len(live)} live flags for {R} rows x {B} users per row")
+    Bt = -(-B // words)
+    page = torch.zeros(R, Bt * words, dtype=torch.int32)
+    page[:, :B] = torch.tensor([1 if v else 0 for v in live], dtype=torch.int32).reshape(R, B)
+    return page.reshape(R * Bt, words)
+
+
 def position_fields(positions: Sequence[int], kpool: int, dense_max_pos: int) -> dict[str, list[int]]:
     """The per-user position-derived host values of the direct path: ``positions``, ``pool_ids`` (position //
     kpool), ``ring_slots`` (position % kpool) and ``dense_positions`` (min(position, dense_max_pos))."""
