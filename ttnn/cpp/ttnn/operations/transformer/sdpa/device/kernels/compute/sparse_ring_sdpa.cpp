@@ -100,6 +100,8 @@ void kernel_main() {
     constexpr bool pair_steps = get_named_compile_time_arg_val("pair_steps") == 1;
     constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
 
+    SPARSE_TOTALS_INIT()  // DEBUG (dev branch): whole-op totals (sparse_prof_window.hpp)
+    SPARSE_TOTAL(t_kernel, "KERNEL")
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
 
@@ -152,6 +154,7 @@ void kernel_main() {
             const bool local_n_needs_masking = local_n_has_padding;
             const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
 
+            SPARSE_TOTAL(t_iter, "C_ITER")  // DEBUG (dev branch): whole-op totals
             sdpa_ring_resident<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -208,4 +211,6 @@ void kernel_main() {
                 is_first_active_iter);
         }
     }
+    SPARSE_TOTAL_END(t_kernel)  // DEBUG (dev branch)
+    SPARSE_TOTALS_FLUSH()
 }

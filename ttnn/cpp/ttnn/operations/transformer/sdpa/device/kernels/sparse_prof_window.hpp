@@ -51,7 +51,126 @@ inline bool take_step() {
 
 }  // namespace sparse_prof
 
-#if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE) && !defined(PROFILE_STREAMING)
+// Whole-op totals (SPARSE_PROF_TOTALS, from TT_SPARSE_PROF_TOTALS=1): every zone above instead adds its cycles to a
+// per-RISC total for the whole op (no window, no zone records). SPARSE_TOTAL times any other block, SPARSE_COUNT adds
+// a count, SPARSE_TOTALS_INIT zeroes the totals at kernel start, and SPARSE_TOTALS_FLUSH writes every nonzero total
+// once at kernel end as a TS_DATA record named after it (dev/profile_summary.py reports them). The names are the
+// table below; a name not in it fails the build.
+namespace sparse_prof {
+constexpr const char* kTotalNames[] = {
+    "KERNEL",      "RING_STEP_SUM", "RING_STEP",     "ST_S1_QK",      "ST_WAIT_QK",    "ST_S2_MAX",     "ST_S2B_TEST",
+    "ST_S3_ALPHA", "ST_S4_RESCALE", "ST_S56_EXP_PV", "ST_S6B_ROWSUM", "ST_END_SYNC",   "C_K_WAIT",      "C_POP_KV",
+    "C_PLAN_WAIT", "C_V_WAIT",      "C_ITER",        "RES_NORM",      "N_STEPS",       "N_SCORE_TILES", "N_RESCALE",
+    "N_MEMBERS",   "RD_SYNC",       "RD_RES_Q",      "RD_RES_BITS",   "RD_RES_PLAN",   "RD_RES_PIECES", "RD_GROUP_RX",
+    "RD_GROUP_TX", "RD_FETCH_K",    "RD_CHAIN_RX",   "RD_CHAIN_TX",   "RD_RES_POOLED", "WR_RES_OUT",
+};
+constexpr uint32_t kTotals = sizeof(kTotalNames) / sizeof(kTotalNames[0]);
+constexpr bool total_name_eq(const char* a, const char* b) {
+    while (*a != 0 && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+constexpr uint32_t total_index(const char* name) {
+    for (uint32_t i = 0; i < kTotals; ++i) {
+        if (total_name_eq(kTotalNames[i], name)) {
+            return i;
+        }
+    }
+    return kTotals;
+}
+}  // namespace sparse_prof
+
+#if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE) && defined(SPARSE_PROF_TOTALS) && \
+    !defined(PROFILE_STREAMING)
+
+namespace sparse_prof {
+
+inline uint32_t totals[kTotals];
+
+inline __attribute__((always_inline)) uint32_t now() {
+    return reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L)[WALL_CLOCK_LOW_INDEX];
+}
+
+template <uint32_t idx>
+struct Total {
+    static_assert(idx < kTotals, "add the name to sparse_prof::kTotalNames");
+    uint32_t t0;
+    bool open = true;
+    inline __attribute__((always_inline)) Total() : t0(now()) {}
+    inline __attribute__((always_inline)) void end() {
+        if (open) {
+            totals[idx] += now() - t0;
+            open = false;
+        }
+    }
+    inline __attribute__((always_inline)) ~Total() { end(); }
+};
+
+}  // namespace sparse_prof
+
+#define SPARSE_PROF_ZONE(name, on) \
+    (void)(on);                    \
+    sparse_prof::Total<sparse_prof::total_index(name)> sparse_prof_zone;
+#define SPARSE_PROF_SUM(name) sparse_prof::Total<sparse_prof::total_index(name)> sparse_sum_zone;
+#define SPARSE_STAGE(var, name) sparse_prof::Total<sparse_prof::total_index(name)> var;
+#define SPARSE_STAGE_END(var) var.end();
+#define SPARSE_TOTAL(var, name) sparse_prof::Total<sparse_prof::total_index(name)> var;
+#define SPARSE_TOTAL_END(var) var.end();
+#define SPARSE_COUNT(name, n)                                                                            \
+    static_assert(sparse_prof::total_index(name) < sparse_prof::kTotals, "add the name to kTotalNames"); \
+    sparse_prof::totals[sparse_prof::total_index(name)] += (n);
+#define SPARSE_TOTALS_INIT()                                                \
+    for (uint32_t total_i = 0; total_i < sparse_prof::kTotals; ++total_i) { \
+        sparse_prof::totals[total_i] = 0;                                   \
+    }
+#define SPARSE_TOTAL_EMIT(name)                                                             \
+    {                                                                                       \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                        \
+        auto constexpr emit_hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));     \
+        const uint32_t emit_value = sparse_prof::totals[sparse_prof::total_index(name)];    \
+        if (emit_value != 0) {                                                              \
+            kernel_profiler::timeStampedData<emit_hash>(static_cast<uint64_t>(emit_value)); \
+        }                                                                                   \
+    }
+#define SPARSE_TOTALS_FLUSH()          \
+    SPARSE_TOTAL_EMIT("KERNEL")        \
+    SPARSE_TOTAL_EMIT("RING_STEP_SUM") \
+    SPARSE_TOTAL_EMIT("RING_STEP")     \
+    SPARSE_TOTAL_EMIT("ST_S1_QK")      \
+    SPARSE_TOTAL_EMIT("ST_WAIT_QK")    \
+    SPARSE_TOTAL_EMIT("ST_S2_MAX")     \
+    SPARSE_TOTAL_EMIT("ST_S2B_TEST")   \
+    SPARSE_TOTAL_EMIT("ST_S3_ALPHA")   \
+    SPARSE_TOTAL_EMIT("ST_S4_RESCALE") \
+    SPARSE_TOTAL_EMIT("ST_S56_EXP_PV") \
+    SPARSE_TOTAL_EMIT("ST_S6B_ROWSUM") \
+    SPARSE_TOTAL_EMIT("ST_END_SYNC")   \
+    SPARSE_TOTAL_EMIT("C_K_WAIT")      \
+    SPARSE_TOTAL_EMIT("C_POP_KV")      \
+    SPARSE_TOTAL_EMIT("C_PLAN_WAIT")   \
+    SPARSE_TOTAL_EMIT("C_V_WAIT")      \
+    SPARSE_TOTAL_EMIT("C_ITER")        \
+    SPARSE_TOTAL_EMIT("RES_NORM")      \
+    SPARSE_TOTAL_EMIT("N_STEPS")       \
+    SPARSE_TOTAL_EMIT("N_SCORE_TILES") \
+    SPARSE_TOTAL_EMIT("N_RESCALE")     \
+    SPARSE_TOTAL_EMIT("N_MEMBERS")     \
+    SPARSE_TOTAL_EMIT("RD_SYNC")       \
+    SPARSE_TOTAL_EMIT("RD_RES_Q")      \
+    SPARSE_TOTAL_EMIT("RD_RES_BITS")   \
+    SPARSE_TOTAL_EMIT("RD_RES_PLAN")   \
+    SPARSE_TOTAL_EMIT("RD_RES_PIECES") \
+    SPARSE_TOTAL_EMIT("RD_GROUP_RX")   \
+    SPARSE_TOTAL_EMIT("RD_GROUP_TX")   \
+    SPARSE_TOTAL_EMIT("RD_FETCH_K")    \
+    SPARSE_TOTAL_EMIT("RD_CHAIN_RX")   \
+    SPARSE_TOTAL_EMIT("RD_CHAIN_TX")   \
+    SPARSE_TOTAL_EMIT("RD_RES_POOLED") \
+    SPARSE_TOTAL_EMIT("WR_RES_OUT")
+
+#elif defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE) && !defined(PROFILE_STREAMING)
 
 namespace sparse_prof {
 
@@ -99,6 +218,11 @@ struct Scope {
     auto constexpr var##_hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     sparse_prof::Scope<var##_hash> var(sparse_prof::step_on);
 #define SPARSE_STAGE_END(var) var.end();
+#define SPARSE_TOTAL(var, name)
+#define SPARSE_TOTAL_END(var)
+#define SPARSE_COUNT(name, n)
+#define SPARSE_TOTALS_INIT()
+#define SPARSE_TOTALS_FLUSH()
 
 #else
 
@@ -106,5 +230,10 @@ struct Scope {
 #define SPARSE_PROF_SUM(name)
 #define SPARSE_STAGE(var, name)
 #define SPARSE_STAGE_END(var)
+#define SPARSE_TOTAL(var, name)
+#define SPARSE_TOTAL_END(var)
+#define SPARSE_COUNT(name, n)
+#define SPARSE_TOTALS_INIT()
+#define SPARSE_TOTALS_FLUSH()
 
 #endif

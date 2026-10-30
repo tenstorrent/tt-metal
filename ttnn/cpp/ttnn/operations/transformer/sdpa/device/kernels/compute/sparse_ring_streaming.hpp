@@ -414,6 +414,7 @@ static __attribute__((noinline, noclone)) void res_s5_flush(
     while (st.s6_next < st.n_done && (final || static_cast<uint32_t>(st.cbatch[st.s6_next]) + 1u < st.batch_idx)) {
         const uint32_t g = st.s6_next;
         if (!st.v_waited) {
+            SPARSE_TOTAL(t_vw, "C_V_WAIT")  // DEBUG (dev branch): whole-op totals
             CircularBuffer(cb_v_in).wait_front(st.v_wait_tiles);
             st.v_waited = true;
         }
@@ -551,6 +552,9 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         q_wait_tiles = t > q_wait_tiles ? t : q_wait_tiles;
     }
     ASSERT(total <= qk_cap);
+    SPARSE_COUNT("N_STEPS", 1)  // DEBUG (dev branch): whole-op totals
+    SPARSE_COUNT("N_SCORE_TILES", total)
+    SPARSE_COUNT("N_MEMBERS", n_slots)
     const auto sidx = [&](uint32_t g, uint32_t r, uint32_t c) -> uint32_t { return off[g] + r * W[g] + c; };
 
     // ---- S1: Q@K^T into the compact scratch. Units: (member, run, column batch of cw <= qk_cw_cap). ----
@@ -785,6 +789,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             const uint32_t growth = ckernel::read_tile_value(cb_exp_max_diff, 0, 0);
             rescale = (growth & 0xFFFFu) > kLazyThrBits;
         }
+        SPARSE_COUNT("N_RESCALE", rescale ? 1u : 0u)  // DEBUG (dev branch): whole-op totals
 
         SPARSE_STAGE_END(st_s2b)
         SPARSE_STAGE(st_s3, "ST_S3_ALPHA")
@@ -1190,7 +1195,10 @@ void sdpa_ring_resident(
         // rec_base + i * (kBW + 3). Popped once, early, so the reader can push the next iteration's plan while this
         // iteration's pieces are still being computed.
         constexpr uint32_t kRec = kBW + 3;
-        CircularBuffer(cb_sparse_plan).wait_front(1);
+        {
+            SPARSE_TOTAL(t_plan, "C_PLAN_WAIT")  // DEBUG (dev branch): whole-op totals
+            CircularBuffer(cb_sparse_plan).wait_front(1);
+        }
         for (uint32_t i = 0; i < n_res; ++i) {
             const uint32_t flat = global_q_start + i;
             res_head[i] = (flat / num_q_chunks) % NH;
@@ -1254,7 +1262,10 @@ void sdpa_ring_resident(
                               const bool apply_col_bias) {
         // The step's first wait, taken before the zone opens (it returns at once inside): RING_STEP then measures
         // compute only, and a late K/V entry shows as a gap between steps instead of as step time.
-        CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles * step_entries);
+        {
+            SPARSE_TOTAL(t_kw, "C_K_WAIT")  // DEBUG (dev branch): whole-op totals
+            CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles * step_entries);
+        }
         SPARSE_PROF_SUM("RING_STEP_SUM");                     // DEBUG: whole-op total (TT_METAL_PROFILER_SUM=1)
         SPARSE_PROF_ZONE("RING_STEP", sparse_prof::take_step());  // DEBUG: windowed (sparse_prof_window.hpp)
         sdpa_resident_piece_step_compact<
@@ -1301,6 +1312,7 @@ void sdpa_ring_resident(
     // CBs' read position in entries, carried across ring iterations and passes: a pair must not wrap the CB end,
     // since the step addresses its second entry right after the first.
     const auto pop_kv = [&]() {
+        SPARSE_TOTAL(t_pop, "C_POP_KV")  // DEBUG (dev branch): whole-op totals
         CircularBuffer(cb_kt_in).wait_front(kt_entry_tiles);
         sdpa_cb_pop_front_out_of_line(cb_kt_in, kt_entry_tiles);
         CircularBuffer(cb_v_in).wait_front(v_entry_tiles);

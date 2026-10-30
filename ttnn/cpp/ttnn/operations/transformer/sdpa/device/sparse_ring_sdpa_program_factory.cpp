@@ -1705,10 +1705,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
     reader_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
     writer_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
-    // DEBUG: the profile window (sparse_prof_window.hpp) from TT_SPARSE_PROF_PASS / _ITER / _SKIP / _STEPS. Defines are
+    // DEBUG: the profile window (sparse_prof_window.hpp) from TT_SPARSE_PROF_PASS / _ITER / _SKIP / _STEPS, and
+    // TT_SPARSE_PROF_TOTALS=1 for whole-op totals per zone instead of windowed zones. Defines are
     // part of the kernel build hash, so the JIT cache keys on them; the op program cache does not, so set them once
     // per process.
-    for (const char* knob : {"PASS", "ITER", "SKIP", "STEPS"}) {
+    for (const char* knob : {"PASS", "ITER", "SKIP", "STEPS", "TOTALS"}) {
         const std::string env_name = std::string("TT_SPARSE_PROF_") + knob;
         if (const char* value = std::getenv(env_name.c_str()); value != nullptr && *value != 0) {
             const std::string define = std::string("SPARSE_PROF_") + knob;

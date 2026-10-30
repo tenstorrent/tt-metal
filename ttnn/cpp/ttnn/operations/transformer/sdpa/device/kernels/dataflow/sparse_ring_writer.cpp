@@ -38,6 +38,8 @@ inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint3
 // reduce scaler), follows the ring sequence to stay aligned with the reader and the all-gather, and on the
 // last active ring iteration of each pass writes that pass's normalized outputs, in Q-chunk order.
 void kernel_main() {
+    SPARSE_TOTALS_INIT()  // DEBUG (dev branch): whole-op totals (sparse_prof_window.hpp)
+    SPARSE_TOTAL(t_kernel, "KERNEL")
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(3);
@@ -165,4 +167,6 @@ void kernel_main() {
             noc.async_write_barrier();
         }
     }
+    SPARSE_TOTAL_END(t_kernel)  // DEBUG (dev branch)
+    SPARSE_TOTALS_FLUSH()
 }

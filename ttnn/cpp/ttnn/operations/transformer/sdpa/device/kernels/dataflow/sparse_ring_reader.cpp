@@ -33,6 +33,8 @@ namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 // union), streams the pieces (own DRAM read, chain, or the head group's multicast), and on the first active iteration
 // the pooled K/V entries with their generated column bias.
 void kernel_main() {
+    SPARSE_TOTALS_INIT()  // DEBUG (dev branch): whole-op totals (sparse_prof_window.hpp)
+    SPARSE_TOTAL(t_kernel, "KERNEL")
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t NHK = get_compile_time_arg_val(2);
@@ -1063,4 +1065,6 @@ void kernel_main() {
             }
         }
     }
+    SPARSE_TOTAL_END(t_kernel)  // DEBUG (dev branch)
+    SPARSE_TOTALS_FLUSH()
 }
