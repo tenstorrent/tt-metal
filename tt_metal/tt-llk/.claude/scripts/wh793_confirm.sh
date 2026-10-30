@@ -46,20 +46,46 @@ venv() {
 # --- the trees ---------------------------------------------------------------
 # One clone, two worktrees of the same commit. The only edit is the toolchain pin,
 # so the generated code is the toolchain's doing and nothing else.
+#
+# The clone is blobless, shallow and single-branch, and it checks out only the paths
+# the tests build from. github over HTTP/2 drops the connection on this container
+# ("RPC failed ... CANCEL"), so it pins HTTP/1.1 and retries.
+SPARSE=(/tt_metal/tt-llk/ /tt_metal/hw/ /tt_metal/hostdevcommon/
+        /ttnn/cpp/ttnn/operations/experimental/ /tt_metal/sfpi-info.sh /tt_metal/sfpi-version)
+GIT=(git -c http.version=HTTP/1.1 -c http.postBuffer=524288000)
+
+clone() {
+    [ -d "$REPO/.git" ] && return 0
+    local try
+    for try in 1 2 3; do
+        rm -rf "$REPO"
+        say "cloning (attempt $try)"
+        "${GIT[@]}" clone -q --filter=blob:none --no-checkout --depth=1 \
+            --single-branch --branch "$BRANCH" "$REPO_URL" "$REPO" && return 0
+        say "  clone failed; retrying in 15 s"
+        sleep 15
+    done
+    echo "[ERROR] could not clone $REPO_URL" >&2
+    return 1
+}
+
 trees() {
-    [ -d "$REPO/.git" ] || run git clone -q --filter=blob:none --no-checkout "$REPO_URL" "$REPO"
-    run git -C "$REPO" fetch -q --depth=1 origin "$BRANCH"
-    local head; head=$(git -C "$REPO" rev-parse FETCH_HEAD)
+    clone || return 1
+    local head; head=$("${GIT[@]}" -C "$REPO" rev-parse HEAD) || return 1
     say "source commit: $head"
     for pair in "a $SFPI_A" "b $SFPI_B"; do
         set -- $pair
         local tag=$1 sha=$2 t=$W/t_$1
         if [ ! -f "$t/.ready" ]; then
             rm -rf "$t"
-            git -C "$REPO" worktree prune
-            run git -C "$REPO" worktree add -q --detach "$t" "$head" || return 1
-            run git -C "$REPO" fetch -q --depth=1 origin "$sha" || return 1
-            git -C "$REPO" show "$sha:tt_metal/sfpi-version" > "$t/tt_metal/sfpi-version" || return 1
+            "${GIT[@]}" -C "$REPO" worktree prune
+            run "${GIT[@]}" -C "$REPO" worktree add -q --no-checkout --detach "$t" "$head" || return 1
+            run "${GIT[@]}" -C "$t" sparse-checkout set --no-cone "${SPARSE[@]}" || return 1
+            run "${GIT[@]}" -C "$t" checkout -q || return 1
+            # Only the toolchain pin is replaced. tests/sfpi-version is a symlink to it.
+            run "${GIT[@]}" -C "$REPO" fetch -q --depth=1 origin "$sha" || return 1
+            "${GIT[@]}" -C "$REPO" show "$sha:tt_metal/sfpi-version" > "$t/tt_metal/sfpi-version" || return 1
+            [ -s "$t/tt_metal/sfpi-version" ] || { echo "[ERROR] empty sfpi-version for $tag" >&2; return 1; }
             touch "$t/.ready"
         fi
         say "  tree $tag: $(grep -m1 '^sfpi_version=' "$t/tt_metal/sfpi-version")"
