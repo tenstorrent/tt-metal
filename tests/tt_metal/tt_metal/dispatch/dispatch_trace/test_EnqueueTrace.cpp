@@ -36,20 +36,21 @@
 #include "random_program_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "distributed/mesh_trace.hpp"
 
 // Access to internal API: ProgramImpl::get_id
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
 
-Program create_simple_unary_program(Buffer& input, Buffer& output) {
-    Program program = CreateProgram();
+Program create_simple_unary_program(distributed::MeshDevice& mesh_device, Buffer& input, Buffer& output) {
+    Program program = CreateProgram(mesh_device);
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -112,8 +113,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    Program simple_program = create_simple_unary_program(
+        *this->device_, *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
     workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
@@ -163,8 +164,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    Program simple_program = create_simple_unary_program(
+        *this->device_, *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
     workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
@@ -227,8 +228,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    Program simple_program = create_simple_unary_program(
+        *this->device_, *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
     workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
@@ -313,8 +314,8 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    Program simple_program = create_simple_unary_program(
+        *mesh_device, *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
     workload.add_program(device_range_, std::move(simple_program));
 
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
@@ -351,8 +352,8 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
-    Program simple_program =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    Program simple_program = create_simple_unary_program(
+        *mesh_device, *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
     workload.add_program(device_range_, std::move(simple_program));
 
     vector<uint32_t> input_data(input->get_device_buffer(zero_coord_)->size() / sizeof(uint32_t), 0);
@@ -380,7 +381,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
     auto output_temp = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
     distributed::MeshWorkload temp_workload;
     Program simple_program_temp = create_simple_unary_program(
-        *input_temp->get_device_buffer(zero_coord_), *output_temp->get_device_buffer(zero_coord_));
+        *mesh_device, *input_temp->get_device_buffer(zero_coord_), *output_temp->get_device_buffer(zero_coord_));
     temp_workload.add_program(device_range_, std::move(simple_program_temp));
     distributed::EnqueueMeshWorkload(mesh_command_queue, temp_workload, true);
 
@@ -421,7 +422,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
     // EAGER MODE EXECUTION
     if (has_eager) {
         Program simple_program = create_simple_unary_program(
-            *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+            *mesh_device, *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
         workload.add_program(device_range_, std::move(simple_program));
 
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, true);
@@ -470,10 +471,10 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     // Create two programs and add to workload
     distributed::MeshWorkload workload0;
     distributed::MeshWorkload workload1;
-    Program op0 =
-        create_simple_unary_program(*input->get_device_buffer(zero_coord_), *interm->get_device_buffer(zero_coord_));
-    Program op1 =
-        create_simple_unary_program(*interm->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+    Program op0 = create_simple_unary_program(
+        *mesh_device, *input->get_device_buffer(zero_coord_), *interm->get_device_buffer(zero_coord_));
+    Program op1 = create_simple_unary_program(
+        *mesh_device, *interm->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
 
     workload0.add_program(device_range_, std::move(op0));
     workload1.add_program(device_range_, std::move(op1));
@@ -570,15 +571,20 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     for (int i = 0; i < num_programs; i++) {
         interm_buffers.push_back(distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get()));
         distributed::MeshWorkload workload;
-        Program program;
+        Program program = CreateProgram(*mesh_device);
         if (i == 0) {
             program = create_simple_unary_program(
-                *input->get_device_buffer(zero_coord_), *interm_buffers[i]->get_device_buffer(zero_coord_));
+                *mesh_device,
+                *input->get_device_buffer(zero_coord_),
+                *interm_buffers[i]->get_device_buffer(zero_coord_));
         } else if (i == (num_programs - 1)) {
             program = create_simple_unary_program(
-                *interm_buffers[i - 1]->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
+                *mesh_device,
+                *interm_buffers[i - 1]->get_device_buffer(zero_coord_),
+                *output->get_device_buffer(zero_coord_));
         } else {
             program = create_simple_unary_program(
+                *mesh_device,
                 *interm_buffers[i - 1]->get_device_buffer(zero_coord_),
                 *interm_buffers[i]->get_device_buffer(zero_coord_));
         }
@@ -644,7 +650,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
         this->create_kernel(program, CoreType::WORKER, true);
         this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
@@ -660,7 +666,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
@@ -670,7 +676,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
         this->create_kernel(program, CoreType::ETH, true);
         this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
@@ -686,7 +692,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
@@ -696,7 +702,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
@@ -724,7 +730,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestProgramsTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
         this->create_kernel(program, CoreType::WORKER);
         this->workloads[i].add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(mesh_command_queue, this->workloads[i], false);
@@ -740,7 +746,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
@@ -750,7 +756,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
         // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
         KernelProperties kernel_properties;
@@ -771,7 +777,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
@@ -781,7 +787,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
@@ -818,7 +824,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestAlternatingLargeAndS
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
 
         KernelProperties kernel_properties;
         if (i % 2 == 0) {
@@ -845,7 +851,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, NIGHTLY_TensixTestLargeProgramFollowed
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
 
         KernelProperties kernel_properties;
         if (i == 0) {
@@ -872,7 +878,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
 
         KernelProperties kernel_properties;
         if (i % 6 == 0) {
@@ -902,7 +908,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
         this->create_kernel(program, CoreType::WORKER);
         this->workloads[i].add_program(device_range_, std::move(program));
         tt::tt_metal::distributed::MeshWorkload& workload = this->workloads[i];
@@ -938,7 +944,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
@@ -951,7 +957,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
         // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
         KernelProperties kernel_properties;
@@ -994,7 +1000,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    if (!does_device_have_active_eth_cores(this->device_->get_devices()[0])) {
+    if (!does_device_have_active_eth_cores(this->device_->impl().get_devices()[0])) {
         GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
     }
 
@@ -1007,7 +1013,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
         }
-        Program program = CreateProgram();
+        Program program = CreateProgram(*this->device_);
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
@@ -1070,8 +1076,9 @@ struct DFBConfigReaderProgram {
     uint32_t dfb_id;
 };
 
-DFBConfigReaderProgram create_dfb_config_reader_program(uint32_t entry_size, uint32_t num_entries) {
-    Program program = CreateProgram();
+DFBConfigReaderProgram create_dfb_config_reader_program(
+    distributed::MeshDevice& mesh_device, uint32_t entry_size, uint32_t num_entries) {
+    Program program = CreateProgram(mesh_device);
     CoreCoord worker = {0, 0};
     CoreRange core_range({0, 0});
 
@@ -1127,7 +1134,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
 
     // Create the program with config A.
     auto [program, producer_kernel, consumer_kernel, dfb_id] =
-        create_dfb_config_reader_program(entry_size_a, num_entries_a);
+        create_dfb_config_reader_program(*this->device_, entry_size_a, num_entries_a);
     auto dfb = program.impl().get_dataflow_buffer(dfb_id);
 
     // Set RTAs so the first execution writes to output_addr_a.

@@ -25,6 +25,7 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include "llk_device_fixture.hpp"
+#include "single_node_dfb_program.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
 #include "tt_metal/test_utils/mx_utils.hpp"
@@ -52,140 +53,14 @@ static vector<uint32_t> run_mxfp4_typecast(
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    const experimental::NodeCoord node{0, 0};
-
-    uint32_t input_tile_size = tt::tile_size(input_fmt);
-    uint32_t output_tile_size = tt::tile_size(output_fmt);
-
-    auto src_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = num_tiles * input_tile_size},
-        {.page_size = num_tiles * input_tile_size, .buffer_type = BufferType::DRAM},
-        &mesh_device);
-    auto dst_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = num_tiles * output_tile_size},
-        {.page_size = num_tiles * output_tile_size, .buffer_type = BufferType::DRAM},
-        &mesh_device);
-
-    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
-    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-
-    experimental::DataflowBufferSpec input_dfb_spec{
-        .unique_id = INPUT_DFB,
-        .entry_size = input_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = input_fmt,
-    };
-    experimental::DataflowBufferSpec output_dfb_spec{
-        .unique_id = OUTPUT_DFB,
-        .entry_size = output_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = output_fmt,
-    };
-
-    experimental::KernelSpec reader_spec{
-        .unique_id = READER,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
-        .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
-        .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
-    };
-
-    experimental::KernelSpec writer_spec{
-        .unique_id = WRITER,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
-        .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
-        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
-    };
-
-    experimental::KernelSpec compute_spec{
-        .unique_id = COMPUTE,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
-        .num_threads = 1,
-        .dfb_bindings =
-            {{
-                 .dfb_spec_name = INPUT_DFB,
-                 .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = OUTPUT_DFB,
-                 .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
-        .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .enable_32_bit_dest = fp32_dest_acc_en,
-            },
-    };
-
-    experimental::WorkUnitSpec wu{
-        .name = "main",
-        .kernels = {READER, WRITER, COMPUTE},
-        .target_nodes = node,
-    };
-
-    experimental::ProgramSpec spec{
-        .name = "mxfp4_typecast",
-        .kernels = {reader_spec, writer_spec, compute_spec},
-        .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
-        .work_units = {wu},
-    };
-
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
-
-    auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
-    // The direct reader/writer kernels address a single DRAM bank
-    // (bank_id 0). Use page_size = whole buffer so the allocator places the
-    // buffer in one bank, and advance the DRAM pointer by the native tile
-    // size, matching the host-side vector layout.
-    uint32_t src_dram_stride = input_tile_size;
-    uint32_t dst_dram_stride = output_tile_size;
-
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node,
-                {{"src_addr", src_buffer->address()},
-                 {"src_bank_id", 0u},
-                 {"num_tiles", num_tiles},
-                 {"dram_page_stride", src_dram_stride}}),
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node,
-                {{"dst_addr", dst_buffer->address()},
-                 {"dst_bank_id", 0u},
-                 {"num_tiles", num_tiles},
-                 {"dram_page_stride", dst_dram_stride}}),
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
-    };
-    experimental::SetProgramRunArgs(program, params);
-
-    LaunchProgram(mesh_device, std::move(program));
-
-    vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
-    return result_vec;
+    return single_node_dfb::run(
+        mesh_device,
+        {.name = "mxfp4_typecast",
+         .inputs = {{.data = src_vec, .format = input_fmt, .num_tiles = num_tiles, .accessor = "in", .num_entries = 2}},
+         .output = {.format = output_fmt, .num_tiles = num_tiles, .accessor = "out", .num_entries = 2},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_2_0.cpp",
+         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
+         .hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = fp32_dest_acc_en}});
 }
 
 // Data generators follow the fp8_typecast tests' convention: generate

@@ -92,6 +92,27 @@ params += [
     )
 ]
 
+# Column padding wider than one sub-block of the block-interleaved factory: every sub-block after
+# the one holding the source's last column starts inside the padding region, so the reader must
+# fill it without reading past the source row (the reader used to underflow the remaining width
+# and read `width_size` bytes from a 64-byte row). The 100-wide input also exercises the
+# misaligned (staging) path.
+params += [
+    pytest.param(
+        [[1, 1, 32, in_w]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "output_tensor_shape": [1, 1, 32, out_w],
+            "pad_value": 7.0,
+        },
+        id=f"wide_col_pad-{in_w}-{out_w}",
+    )
+    for in_w, out_w in [(32, 5120), (2048, 5120), (100, 8448)]
+]
+
 
 @pytest.mark.parametrize("input_shapes, tilize_with_val_padding_args", params)
 def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_args, device, function_level_defaults):
@@ -1037,6 +1058,10 @@ def test_tilize_with_val_padding_width_sharded_dram_and_wide(device, in_buffer, 
     height_in, height_out = 50, 64
     input_shape = [1, height_in, width]
     output_padded_shape = [1, height_out, width]
+    if DRAM in (in_buffer, out_buffer):
+        num_cores = min(num_cores, device.dram_grid_size().x)
+    while width % (num_cores * ttnn.TILE_SIZE) != 0:
+        num_cores -= 1
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
 
     def width_sharded(buffer_type, height):

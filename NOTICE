@@ -27,6 +27,21 @@ License available at: https://llvm.org/LICENSE.txt
 
 ================================================================================
 
+This project includes portions of llvm::unique_function (llvm/ADT/FunctionExtras.h)
+from the LLVM Project (https://llvm.org) and of zoo::VTableFunction from zoo
+(https://github.com/thecppzoo/zoo), with new code by Tenstorrent, in the
+following file:
+
+  tt_stl/tt_stl/move_only_function.hpp
+
+The LLVM Project portions are licensed under the Apache License v2.0 with LLVM
+Exceptions. License available at: https://llvm.org/LICENSE.txt
+
+The zoo portions are Copyright (c) 2017 thecppzoo, licensed under the MIT
+License. License available at: https://github.com/thecppzoo/zoo/blob/master/LICENSE
+
+================================================================================
+
 Third-Party Dependencies:
 
 The following separate and independent dependencies are utilized by this

@@ -42,10 +42,8 @@
 #include "impl/buffers/semaphore.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tracy/Tracy.hpp"
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -391,6 +389,15 @@ void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue*
 
 MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
+namespace {
+// Emulated devices launch each program through the slow-dispatch path (tt-emule's queue), as slow dispatch does,
+// so their workloads carry per-program configs rather than the FD workload finalization.
+bool uses_fd_program_configs(MetalEnvImpl& env) {
+    return env.get_rtoptions().get_fast_dispatch() &&
+           env.get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
+}
+}  // namespace
+
 ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {
     TT_FATAL(!programs_.empty(), "Program Configs can only be queried if a MeshWorkload is populated.");
     const bool requires_finalized_config = using_fast_dispatch && !is_service_workload_.value_or(false);
@@ -406,10 +413,10 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     auto& env = mesh_device->impl().metal_env();
-    return base_addr + get_program_config(
-                           env.get_hal().get_programmable_core_type_index(programmable_core_type),
-                           env.get_rtoptions().get_fast_dispatch())
-                           .sem_offset;
+    return base_addr +
+           get_program_config(
+               env.get_hal().get_programmable_core_type_index(programmable_core_type), uses_fd_program_configs(env))
+               .sem_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_sem_size(
@@ -433,10 +440,10 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
     auto& env = mesh_device->impl().metal_env();
-    return base_addr + get_program_config(
-                           env.get_hal().get_programmable_core_type_index(programmable_core_type),
-                           env.get_rtoptions().get_fast_dispatch())
-                           .cb_offset;
+    return base_addr +
+           get_program_config(
+               env.get_hal().get_programmable_core_type_index(programmable_core_type), uses_fd_program_configs(env))
+               .cb_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_cb_size(
@@ -485,7 +492,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     const uint32_t max_program_kernels_sizeB = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
-        extract_context_id(mesh_device),
+        mesh_device->impl().get_context_id(),
         mesh_device,
         kernels_getter,
         kernel_groups_getter,
@@ -545,7 +552,7 @@ namespace tt::tt_metal::experimental::program_preparation {
 
 void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& workload) {
     // EnqueueMeshWorkload is a no-op on a MeshDevice without local devices, so there is nothing to prepare.
-    TT_FATAL(!mesh_device.get_view().get_devices().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
+    TT_FATAL(!mesh_device.get_device_ids().empty(), "Cannot prepare a MeshWorkload for an inactive MeshDevice");
     // Checked before compile(), which finalizes the workload; a finalized workload rejects add_program(), so a later
     // check would leave the caller unable to fix the workload and retry.
     TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");

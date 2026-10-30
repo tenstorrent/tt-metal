@@ -102,11 +102,18 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
+    DataflowBuffer dfb_out_obj(dfb_out);
+#ifdef WRITER_PRODUCES_MASK
+    DataflowBuffer dfb_mask(dfb_mask_in);
+#else
+    auto& dfb_mask = dfb_out_obj;  // placeholder; see dfb_mask_in
+#endif
+    DataflowBuffer dfb_identity_scale(dfb_identity_scale_in);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_identity_scale);
     DataflowBuffer dfb_col(dfb_col_identity);
     generate_bcast_col_scalar(dfb_col, identity_scalar_packed);
 
@@ -121,7 +128,7 @@ void kernel_main() {
             /*joint_l*/ 0u,
             dfb_mask_in,
             is_causal,
-            sliding_window_size>(noc);
+            sliding_window_size>(noc, dfb_mask);
     }
 
     // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
@@ -194,6 +201,7 @@ void kernel_main() {
                 (is_causal || sliding_window_size > 0 || use_padded_mask)) {
                 generate_mask<is_chunked, sliding_window_size, use_padded_mask, dfb_mask_in>(
                     noc,
+                    dfb_mask,
                     Sq_chunk_t,
                     Sk_chunk_t,
                     q_chunk,
@@ -213,6 +221,7 @@ void kernel_main() {
                 (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
             windowed_generate_if_enabled<use_windowed_mask, dfb_mask_in>(
                 noc,
+                dfb_mask,
                 cu_window,
                 q_chunk,
                 Sq_chunk_t,
@@ -236,7 +245,7 @@ void kernel_main() {
                 write_block_row_grouped(
                     noc,
                     out_writer,
-                    dfb_out,
+                    dfb_out_obj,
                     Sq_chunk_t,
                     out_row_tile_count,
                     vDHt,
@@ -248,7 +257,7 @@ void kernel_main() {
                 write_block(
                     noc,
                     out_writer,
-                    dfb_out,
+                    dfb_out_obj,
                     out_chunk_tiles,
                     out_row_tile_count,
                     vDHt,

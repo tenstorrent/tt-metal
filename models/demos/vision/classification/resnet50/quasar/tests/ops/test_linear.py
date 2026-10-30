@@ -21,6 +21,8 @@ What is reproduced (verbatim from ttnn_functional_resnet50.py: ResnetLinear + fi
     the input sharding to match the matmul grid). Grid / per_core_N / in0_block_w are derived from the
     device via fit_fc_grid (stock 8x4=32 grid, per_core_N=1, in0_block_w=2 on a full Quasar part; a
     smaller rectangle on the 2x3 emulator / craq-sim grid).
+  * no_program_config runs the same fc with no program config: the unified matmul on Quasar (what the model now
+    runs there), the auto-chosen config elsewhere.
 
 IMPORTANT PATH NOTE:
   The 2D-mcast matmul path (MatmulMultiCoreReuseMultiCastProgramConfig) currently HANGS on Quasar
@@ -40,7 +42,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
 
 
 def _fit_fc_grid(device, n_tiles, k_tiles):
@@ -62,7 +64,8 @@ def _fit_fc_grid(device, n_tiles, k_tiles):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_resnet50_fc_linear(mesh_device):
+@pytest.mark.parametrize("use_program_config", [True, False], ids=["mcast_1d", "no_program_config"])
+def test_resnet50_fc_linear(mesh_device, use_program_config):
     device = mesh_device
     torch.manual_seed(0)
 
@@ -136,7 +139,7 @@ def test_resnet50_fc_linear(mesh_device):
         act,
         weight,
         bias=bias,
-        program_config=matmul_config,
+        program_config=matmul_config if use_program_config else None,
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
@@ -146,3 +149,6 @@ def test_resnet50_fc_linear(mesh_device):
     assert tuple(got.shape) == (1, 1, M, N_padded), got.shape
     # bf16 + LoFi over a K=2048 reduction is noisy -> 0.98 (raise toward 0.99 once LLK is happy).
     assert_with_pcc(golden, got, pcc=0.98)
+    if not use_program_config:
+        # bf16 partial sums over K: WH reaches a few % of the largest output.
+        assert_allclose(golden, got, rtol=0.1, atol=0.1 * golden.abs().max().item())

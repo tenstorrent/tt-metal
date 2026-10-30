@@ -11,6 +11,8 @@ void kernel_main() {
     constexpr uint32_t third_dim = get_arg(args::third_dim);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
+    DataflowBuffer in(dfb::in);
+    DataflowBuffer out(dfb::out);
     compute_kernel_lib::untilize<
         block_size_row,
         dfb::in,
@@ -18,5 +20,5 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-        block_size_col * third_dim);
+        in, out, block_size_col * third_dim);
 }

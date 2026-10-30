@@ -62,10 +62,10 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <umd/device/coordinates/coordinate_manager.hpp>
-#include <umd/device/tt_device/tt_device.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/coordinates/coordinate_manager.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_telemetry.hpp>
@@ -423,9 +423,16 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
-        uint32_t zero = 0;
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
+        // Every go message in every row, so no slot holds a stale go.
+        const std::vector<uint32_t> go_messages_done(
+            hal.get_dev_size(programmable_core_type, HalL1MemAddrType::GO_MSG) / sizeof(uint32_t), 0);
+        cluster.write_core(
+            go_messages_done.data(),
+            go_messages_done.size() * sizeof(uint32_t),
+            tt_cxy_pair(id_, virtual_core),
+            go_message_addr);
         cluster.l1_barrier(id_);
+        uint32_t zero = 0;
         uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };

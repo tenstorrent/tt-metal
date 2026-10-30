@@ -21,7 +21,6 @@
 # collection has a hard time limit.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 source "$SCRIPT_DIR/utils/log_utils.sh"
 
@@ -88,7 +87,8 @@ Output:
                                             Merge later, anywhere: $TOOL_NAME merge --dumps <files>.
 
 MPI:
-    --mpi-if <interface>                    Network interface for MPI TCP transport (auto-detected)
+    --mpi-if <interface>                    Network interface for MPI TCP transport. If not specified,
+                                            none is pinned and Open MPI picks one.
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
 
     --help                                  Display this help message and exit
@@ -225,7 +225,7 @@ fi
 # MPI interface and output directory
 # ---------------------------------------------------------------------------
 
-FIRST_HOST="${HOST_LIST[0]}"
+# Without --mpi-if, pin nothing and let Open MPI pick the interface.
 if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
     # Pinned with btl_tcp_if_include, which Open MPI refuses alongside an inherited one.
     unset OMPI_MCA_btl_tcp_if_include OMPI_MCA_btl_tcp_if_exclude
@@ -234,14 +234,6 @@ if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
     # pre-flight below handles reachability host by host.
     if ! ip link show "$MPI_IF" >/dev/null 2>&1; then
         echo "Error: MPI interface '$MPI_IF' does not exist on this host" >&2
-        exit 1
-    fi
-elif mpi_if_set_by_env; then
-    MPI_IF=""
-else
-    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
-    if [[ -z "$MPI_IF" ]]; then
-        echo "Error: MPI interface auto-detection failed" >&2
         exit 1
     fi
 fi
@@ -322,7 +314,7 @@ else
     echo "QSFP cage sweep: over the BMC API at ${TT_BMC_API_URL:-<unset: set TT_BMC_API_URL, or pass --use-ipmi>}"
 fi
 echo "Collection timeout: $COLLECT_TIMEOUT"
-echo "MPI interface: ${MPI_IF:-set by the MPI environment}"
+echo "MPI interface: ${MPI_IF:-not pinned (Open MPI picks)}"
 if [[ ${#MPI_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
 fi

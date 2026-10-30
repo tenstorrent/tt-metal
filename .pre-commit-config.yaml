@@ -160,6 +160,15 @@ repos:
       files: ^(tests/pipeline_reorg/.*\.yaml|\.github/pipeline_cmd_lint_baseline\.yaml|\.github/scripts/utils/lint_pipeline_cmds\.py)$
 - repo: local
   hooks:
+    # The sweep workflows refuse to start when the generated trace allocation entries are stale.
+    - id: sync-trace-sweeps
+      name: Trace allocation sweeps match the e2e registry
+      entry: python3 .github/scripts/utils/model_trace_tests.py sync-sweeps
+      language: system
+      pass_filenames: false
+      files: ^(tests/pipeline_reorg/models_(e2e_tests|trace_config|sweep_tests)\.yaml|\.github/scripts/utils/model_trace_tests\.py)$
+- repo: local
+  hooks:
     - id: triage-type-check
       name: tt-triage type checks
       entry: tools/triage/run_type_checks.sh
@@ -234,6 +243,22 @@ repos:
           tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
           tt_metal/tt-llk/infra/check_sticky_cfg_restore\.py|
           tt_metal/tt-llk/infra/sticky_cfg_fields\.yaml
+        )$
+    - id: llk-format-field-mask
+      name: "llk: DataFormat masked before a shift into a 4-bit config field"
+      entry: python3 tt_metal/tt-llk/infra/check_format_field_mask.py
+      language: system
+      # Blocking. Fails only when a format value is shifted unmasked into a 4-bit field AND the
+      # write's mask covers the bit the spill (bit 4 of UInt8 = 30 / UInt32 = 24) lands on; a
+      # single-field RMW drops that bit at the register and is never a finding. A commit touching
+      # the checker is checked against the whole tree. Quasar's format fields are 5 bits wide and
+      # written through bitfields, so that tree is out of scope.
+      require_serial: true
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_(wormhole_b0|blackhole)/.*\.(h|hpp)|
+          tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
+          tt_metal/tt-llk/infra/check_format_field_mask\.py
         )$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"

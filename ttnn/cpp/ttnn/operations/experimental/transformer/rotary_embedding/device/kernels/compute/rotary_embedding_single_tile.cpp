@@ -101,7 +101,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
         cb_in.wait_front(onetile);
-        reconfig_data_format(in_cb, trans_mat_cb);
+        reconfig_data_format<SrcOrder::Reverse>(in_cb, trans_mat_cb);
         pack_reconfig_data_format(rotated_in_interm_cb);
         matmul_init(in_cb, trans_mat_cb);
 

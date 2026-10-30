@@ -13,7 +13,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 REDUCE_OPS = {
     "sum": (ttnn.sum, lambda t, dim, keepdim: torch.sum(t, dim=dim, keepdim=keepdim)),
@@ -464,3 +464,149 @@ def test_reduce_dram_nd_sharded_requires_explicit_output_nd_shard_spec(device, e
 
     with expect_error(RuntimeError, "requires an explicit nd_shard_spec"):
         ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_config_no_spec)
+
+
+def _row_grid(x_start, x_end):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x_start, 0), ttnn.CoreCoord(x_end, 0))})
+
+
+def test_reduce_h_legacy_width_sharded_output_outside_sub_core_grids_is_rejected(device, expect_error):
+    """A legacy WIDTH_SHARDED output shard grid must be inside sub_core_grids, otherwise the call is rejected."""
+    input_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_row_grid(0, 3), (128, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_row_grid(4, 7), (32, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    assert output_config.nd_shard_spec is None
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 128, 256), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_config,
+    )
+
+    with expect_error(RuntimeError, "must be contained in program core grid"):
+        ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_config, sub_core_grids=_row_grid(0, 3))
+
+
+@pytest.mark.parametrize(
+    "input_config, output_config, sub_core_grids",
+    [
+        # Height-sharded input and output. The W reduce takes the sharded fast path.
+        (
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_row_grid(0, 1), (32, 64), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_row_grid(0, 1), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            None,
+        ),
+        # DRAM input, L1 output, on a sub-device grid that does not start at (0, 0).
+        (
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 3))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize("op_name", ["sum", "max", "min"])
+def test_reduce_uint32_sharded_and_sub_core_grids(device, op_name, input_config, output_config, sub_core_grids):
+    """UINT32 sum/max/min must be exact on sharded tensors and sub-device grids and keep the output config."""
+    torch.manual_seed(0)
+    ttnn_op, torch_op = REDUCE_OPS[op_name]
+    torch_input_tensor = torch.randint(0, 2**32, (1, 1, 64, 64), dtype=torch.int64)
+    torch_input_tensor.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+    # UINT32 sum wraps mod 2^32. Max and min are already below 2^32.
+    torch_output_tensor = torch_op(torch_input_tensor, -1, True) % 2**32
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor.to(torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_config,
+    )
+
+    output_tensor = ttnn_op(
+        input_tensor, dim=-1, keepdim=True, memory_config=output_config, sub_core_grids=sub_core_grids
+    )
+
+    assert output_tensor.dtype == ttnn.uint32
+    assert output_tensor.memory_config().memory_layout == output_config.memory_layout
+    assert output_tensor.memory_config().buffer_type == output_config.buffer_type
+    assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor).to(torch.int64))
+
+
+@pytest.mark.parametrize("output_grid", [_row_grid(4, 7), _row_grid(2, 5)])
+def test_reduce_h_width_sharded_output_on_other_grid(device, output_grid):
+    """The H reduce must give the right result when the output shard grid differs from the input shard grid."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((1, 1, 128, 256), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=-2, keepdim=True)
+    input_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_row_grid(0, 3), (128, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(output_grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
+    )
+
+    output_tensor = ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_config)
+
+    assert output_tensor.memory_config().shard_spec.grid == output_grid
+    assert_numeric_metrics(
+        torch_output_tensor,
+        ttnn.to_torch(output_tensor),
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.01,
+    )
+
+
+def test_reduce_h_min_width_sharded_output_without_shard_spec(device):
+    """An H min with a WIDTH_SHARDED output config that has no shard spec must fall back to external negate."""
+    torch.manual_seed(0)
+    # One shard of 512 bfloat8_b tiles. The fused negate kernel needs two more buffers of that size.
+    # They do not fit in L1 next to the shard. The external negate copy does.
+    torch_input_tensor = torch.randn((1, 1, 512, 1024), dtype=torch.bfloat16)
+    torch_output_tensor = torch.amin(torch_input_tensor, dim=-2, keepdim=True)
+    input_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_row_grid(0, 0), (512, 1024), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_config,
+    )
+
+    output_tensor = ttnn.min(input_tensor, dim=-2, keepdim=True, memory_config=output_config)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        ttnn.to_torch(output_tensor),
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.01,
+    )

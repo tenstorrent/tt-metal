@@ -13,6 +13,7 @@ the dest-offset registers shows up as a hang or a wrong tile.
 
 import torch
 from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -21,7 +22,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
     format_dict,
 )
@@ -75,9 +75,7 @@ def test_pack_dest_reinit(formats, dest_acc, input_dimensions):
         input_format=formats.input_format,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DEST_SYNC_MODE,

@@ -57,7 +57,7 @@ ProgramDescriptor BinaryBackwardProgramFactory::create_descriptor(
                                   dest_dtype_is_wide(input_df) || dest_dtype_is_wide(other_df) ||
                                   dest_dtype_is_wide(input_grad_df) || dest_dtype_is_wide(other_grad_df);
 
-    IDevice* device = input.device();
+    auto* device = input.device();
     const uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = grid.y;

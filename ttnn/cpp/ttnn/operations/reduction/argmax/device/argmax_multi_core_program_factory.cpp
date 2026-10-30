@@ -11,7 +11,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -267,17 +266,17 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
         {});
 
     // Page sizes for input and output tensors based on the ROW_MAJOR layout
-    const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
-    const auto dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
+    const auto src_page_size = tt::round_up(red_dim_units * input_unit_size, 32u);
+    const auto dst_page_size = tt::round_up(output_last_dim * output_unit_size, 32u);
 
     // DFBs are declared in the order the pre-Metal-2.0 factory declared its circular buffers. The
     // allocator walks this list in order and gives each DFB one L1 address across every node it
     // spans, so preserving the order preserves the resulting addresses.
     const auto inner_dim_units = output_last_dim;
-    const auto out_idxs_page_size = round_up_to_mul32(output_last_dim * output_unit_size) * num_total_cores;
-    const auto out_vals_page_size = round_up_to_mul32(output_last_dim * input_unit_size) * num_total_cores;
-    const auto src_dfb_entry_size0 = round_up_to_mul32(red_dim_units0 * input_unit_size);
-    const auto src_dfb_entry_size1 = num_cores1 > 0 ? round_up_to_mul32(red_dim_units1 * input_unit_size) : 0u;
+    const auto out_idxs_page_size = tt::round_up(output_last_dim * output_unit_size, 32u) * num_total_cores;
+    const auto out_vals_page_size = tt::round_up(output_last_dim * input_unit_size, 32u) * num_total_cores;
+    const auto src_dfb_entry_size0 = tt::round_up(red_dim_units0 * input_unit_size, 32u);
+    const auto src_dfb_entry_size1 = num_cores1 > 0 ? tt::round_up(red_dim_units1 * input_unit_size, 32u) : 0u;
 
     // Only src is duplicated. Charge it against the region the DFBs actually get, with each one
     // rounded to the DRAM alignment.

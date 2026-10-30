@@ -77,7 +77,7 @@ void kernel_main() {
     constexpr uint32_t dfb_var = dfb::var;                      // Var[x]
 #endif
 
-    DataflowBuffer dfb_in0_obj(dfb_in0);
+    const DataflowBuffer dfb_in0_obj(dfb_in0);
     DataflowBuffer dfb_eps_obj(dfb_eps);
     DataflowBuffer dfb_scaler_global_obj(dfb_scaler_global);
 #ifdef FUSE_GAMMA
@@ -91,7 +91,7 @@ void kernel_main() {
     DataflowBuffer dfb_out_obj(dfb_out);
     DataflowBuffer dfb_ex_sqr_obj(dfb_ex_sqr);
 #ifdef IS_ALLGATHER_WORKER
-    DataflowBuffer dfb_stats_obj(dfb_stats);
+    const DataflowBuffer dfb_stats_obj(dfb_stats);
     DataflowBuffer dfb_stats_reduced_obj(dfb_stats_reduced);
     DataflowBuffer dfb_var_obj(dfb_var);
 #endif
@@ -366,7 +366,7 @@ void kernel_main() {
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
-                dfb_outgamma_obj.push_back(subblock_w);
+                dfb_outgamma_obj.push_back(static_cast<uint16_t>(subblock_w));
             }
             index_h_offset += block_w;
         }
@@ -415,7 +415,31 @@ void kernel_main() {
         // above without being popped. Pop it under the same guard that gated the wait, so the buffer
         // is left balanced on every core.
         dfb_scaler_global_obj.pop_front(1);
+    } else {
+        // The writer pushes the global scaler on every all-to-all worker, but only the ones that
+        // finish the reduction (enable_sqrt) use it. dummy_unpack orders the pop after the wait on
+        // Quasar (nothing unpacked it here).
+        dfb_scaler_global_obj.wait_front(1);
+        dummy_unpack(dfb_scaler_global);
+        dfb_scaler_global_obj.pop_front(1);
     }
+    const bool eps_consumed = enable_sqrt;
+#else
+    const bool eps_consumed = false;
+#endif
+    if (!eps_consumed) {
+        // The writer pushes one eps tile on every core, but only the cores that finish the variance
+        // (above) consume it. Release it here on the others.
+        dfb_eps_obj.wait_front(1);
+        dummy_unpack(dfb_eps);
+        dfb_eps_obj.pop_front(1);
+    }
+#ifdef OUT_SELF_LOOP
+    // Without a write-back the output buffer has no reader: this kernel is its only producer and consumer.
+    // Every path above pushes num_tiles_per_block into it once; pop them so the buffer is left balanced.
+    dfb_out_obj.wait_front(num_tiles_per_block);
+    dummy_unpack(dfb_out);
+    dfb_out_obj.pop_front(num_tiles_per_block);
 #endif
 #ifdef FUSE_GAMMA
     // Gamma is read by tile index across every row of the block, so it is waited once rather
