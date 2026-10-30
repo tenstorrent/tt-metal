@@ -4055,7 +4055,8 @@ class Qwen36Model:
                 chunk_start_idx=0,  # host int only sizes the page table; the device csi tensor positions the SDPA
                 chunk_start_idx_tensor=tr.csi,
             )
-            ttnn.deallocate(mtp_out)
+            if mtp_out is not None:  # None: QWEN36_PREFILL_MTP_LEAN (the drafter stopped after its K/V fill)
+                ttnn.deallocate(mtp_out)
             if feed is not hidden:
                 ttnn.deallocate(feed)
         # Last-position select + norm + LM head: the same ops as _masked_bucket_logits_tp, minus the logits

@@ -206,10 +206,14 @@ class Qwen36DecoderLayer:
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
         # kv_only (QWEN36_MTP_KV_ONLY; the MTP drafter's KV-maintenance forwards): run the attention only as far as its
-        # paged KV write and return None. Only the TP full-attention decode supports it.
+        # paged KV write and return None. Only the TP full-attention decode supports it, and the paged TP prefill
+        # (QWEN36_PREFILL_MTP_LEAN: the drafter's prompt warm-up).
         assert not kv_only or (
-            mode == "decode" and self.is_full_attention and self.num_devices > 1 and not spec_verify_mode
-        ), "kv_only needs a TP full-attention decode"
+            self.is_full_attention
+            and self.num_devices > 1
+            and not spec_verify_mode
+            and (mode == "decode" or page_table is not None)
+        ), "kv_only needs a TP full-attention decode or paged prefill"
         # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
         # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
         # until capture_verify_trace allocates them.
@@ -279,6 +283,7 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
+                            **({"kv_only": True} if kv_only else {}),
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)

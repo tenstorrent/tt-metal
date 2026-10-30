@@ -82,6 +82,7 @@ from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
 from models.demos.blackhole.qwen36.tt.tp_common import (
     engine_spec_buckets,
     pack_u32_rows,
+    prefill_mtp_lean_enabled,
     rope_row_index,
     spec_bucket_hold,
     spec_buckets_flag,
@@ -2823,6 +2824,14 @@ class MTPSpecEngine:
                 not final
             ):  # on_chunk already saw the last chunk in the replay loop; a mid-prompt segment has no logits use
                 return torch.zeros(0)
+            if prefill_mtp_lean_enabled():
+                # QWEN36_PREFILL_MTP_LEAN: the replay loop above already ran on_chunk on the last chunk (drafter K/V warm +
+                # the slot b-1 feed-row capture), so it is not run again; a non-final vLLM chunk reads no logits.
+                if getattr(self, "_skip_logits_read", False):
+                    return torch.zeros(0)
+                last = getattr(model, "_last_chunk", None)
+                out, rows = last if last is not None else (model._chunked_trace_output, chunk)
+                return self._read_replicated_logits(model._masked_bucket_logits_tp(out, rows, rows))
             # Exact multiple: the last chunk's output gives the logits and the slot b-1 feed row.
             last = getattr(model, "_last_chunk", None)  # (output, rows); fakes leave it unset
             out, rows = last if last is not None else (model._chunked_trace_output, chunk)

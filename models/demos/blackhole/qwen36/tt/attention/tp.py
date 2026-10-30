@@ -627,6 +627,7 @@ class TPAttention:
             num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(partial.shape[-2]),
         )
 
     def _kv_shard_cfg(self, B):
@@ -1677,12 +1678,15 @@ class TPAttention:
         chunk_start_idx=0,
         chunk_start_idx_tensor=None,
         user_id=0,
+        kv_only=False,
     ):
         """Paged-KV prefill for one chunk: fill cache + chunked SDPA over prior chunks.
 
         x is K-sharded when the fused in-proj path is active (same contract as ``forward_prefill``).
         chunk_start_idx_tensor: optional device offset for FLEXIBLE chunked SDPA (one program
         per trace/bucket). chunk_start_idx (int) still sizes the page table host-side.
+        kv_only (QWEN36_PREFILL_MTP_LEAN, the drafter's prompt warm-up): K and V are produced and written exactly as
+        below, then None is returned; Q and the gate are freed unread (no Q norm / RoPE, SDPA, gate, wo or all-reduce).
         """
         assert self.use_paged and self.paged_k is not None, "forward_prefill_paged requires a bound paged KV cache"
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
@@ -1694,17 +1698,25 @@ class TPAttention:
 
         q, gate_flat, k, v = self._make_heads(qg, kp, vp, S)
 
-        q = ttnn.multiply(
-            ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
-            tw["q_norm"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        if kv_only:
+            # q, gate_flat and k / v are separate buffers (nlp_create_qkv_heads outputs, the gate slice): freeing
+            # q and the gate leaves k / v untouched.
+            ttnn.deallocate(q)
+            ttnn.deallocate(gate_flat)
+            q = gate_flat = None
+        else:
+            q = ttnn.multiply(
+                ttnn.rms_norm(q, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
+                tw["q_norm"],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         k = ttnn.multiply(
             ttnn.rms_norm(k, epsilon=1e-6, memory_config=ttnn.L1_MEMORY_CONFIG),
             tw["k_norm"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
+        if not kv_only:
+            q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
         k_paged, v_paged = self.paged_k, self.paged_v
@@ -1733,6 +1745,8 @@ class TPAttention:
             ttnn.deallocate(v_fill)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
+        if kv_only:
+            return None
 
         # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
         # makes the KV cache bf8 -> full bf8 matmul
@@ -1823,4 +1837,5 @@ class TPAttention:
             num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(partial.shape[-2]),
         )

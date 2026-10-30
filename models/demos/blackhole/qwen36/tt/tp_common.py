@@ -146,6 +146,60 @@ def prefill_rs_links(rows=None):
     return _PREFILL_RS_LINKS or None
 
 
+_PREFILL_RS_WORKERS = None
+
+
+def prefill_rs_workers(rows=None):
+    """QWEN36_PREFILL_RS_WORKERS (default unset = None = tt_all_reduce's num_workers_per_link=2, today's behaviour):
+    when set to an int N > 0, the prefill MLP-down and attention-wo reduce-scatters (tt_all_reduce ->
+    reduce_scatter_minimal_async) run N workers per link and direction. These reduce-scatters are worker-bound, and the
+    op's own Blackhole default for more than 1 MB per link is 8 workers; tt_all_reduce pins 2. Device time on the 8-chip
+    ring (16 calls in one trace), [rows, 5120] bf16 partial per device, 1 link x 2 workers -> 2 links x 8: 8192 rows
+    1.78 -> 0.90 ms (2 links x 2: 1.25), 2048 (L1) 0.445 -> 0.229, 1024 0.223 -> 0.121, 512 0.123 -> 0.069, 128 0.045 ->
+    0.034. The output is bit-identical to today's in every combination tried (the ring reduction order of a tile does
+    not depend on the worker split). Meant for use with QWEN36_PREFILL_RS_LINKS=2.
+    rows <= TILE_SIZE (decode / verify widths that share the MLP code path) always get None, so decode and its traces
+    are unchanged. Read once."""
+    global _PREFILL_RS_WORKERS
+    if _PREFILL_RS_WORKERS is None:
+        raw = os.environ.get("QWEN36_PREFILL_RS_WORKERS", "").strip()
+        n = int(raw) if raw else 0
+        _PREFILL_RS_WORKERS = n if n > 0 else 0
+    if rows is not None and rows <= TILE_SIZE:
+        return None
+    return _PREFILL_RS_WORKERS or None
+
+
+def prefill_rs_kwargs(rows):
+    """Extra tt_all_reduce kwargs of a prefill MLP-down / attention-wo reduce-scatter of `rows` rows: {} (today's call,
+    byte for byte) unless QWEN36_PREFILL_RS_WORKERS is set. The link count stays with prefill_rs_links."""
+    w = prefill_rs_workers(rows)
+    return {} if w is None else {"num_workers_per_link": w}
+
+
+_PREFILL_MTP_LEAN = None
+
+
+def prefill_mtp_lean_enabled():
+    """QWEN36_PREFILL_MTP_LEAN (default "0"; "0" = today's prompt warm-up, byte for byte). Two cuts to the drafter's
+    PROMPT warm-up, the eager per-chunk forward that runs after every big-chunk replay and the warm inside the spec
+    short traces (Qwen36MTP.forward_prefill):
+
+    * the drafter layer stops right after its paged K/V fill (the prefill twin of QWEN36_MTP_KV_ONLY): no Q norm /
+      RoPE, paged SDPA, gate, wo + reduce-scatter, residual add, ffn_norm or MLP + reduce-scatter. Every caller freed
+      that block output unread; the K/V bytes come from the same ops as before.
+    * a fast-prefill segment whose rows are an exact multiple of the chunk size no longer warms its last chunk twice
+      (the replay loop already ran on_chunk for it; the second call wrote the same K/V and captured the same feed row),
+      and a non-final vLLM chunk, whose logits are never read, skips the last-row LM head.
+
+    Drafter K/V, the captured feed row and every returned logit are unchanged. TP only; read once (the short traces
+    capture whichever body is active at warm-up)."""
+    global _PREFILL_MTP_LEAN
+    if _PREFILL_MTP_LEAN is None:
+        _PREFILL_MTP_LEAN = os.environ.get("QWEN36_PREFILL_MTP_LEAN", "0") == "1"
+    return _PREFILL_MTP_LEAN
+
+
 def mtp_kv_only_enabled():
     """QWEN36_MTP_KV_ONLY (default "0"; "0" = today's drafter, byte for byte): an MTP KV-maintenance forward
     (Qwen36MTP.forward_decode with need_logits=False: the batched reseed inside the drafter trace, the eager reseeds and
@@ -1156,6 +1210,80 @@ def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     return pair[idx]
 
 
+_PREFILL_AGMM_TUNED = None
+
+
+def prefill_agmm_tuned_enabled():
+    """QWEN36_PREFILL_AGMM_TUNED (default "0" = today's AGMM grid and blocks, byte for byte; read once): "1" runs the
+    prefill fused all-gather + matmul ops (MLP gate|up SwiGLU, GDN qkvzab, attention QKV, GDN-out column-parallel) with
+    the per-shape, per-row-count configs of _AGMM_TUNED: a 12- (or 11-) wide compute grid where today's is 8 wide, and
+    for short buckets (128 - 1024 rows; MLP gate|up, and at 128 rows the GDN / attention in-projections) the
+    non-transposed core grid, which streams the weight through a 12-wide row of readers instead of a 9-high column. K_block_size stays agmm_k_block_size(K/tp), so every output tile accumulates the
+    same K blocks in the same order: the outputs are bit-identical to today's (checked per config on the 8-chip ring,
+    tests/test_prefill_r5_ops.py). Shapes / row counts without an entry keep today's config."""
+    global _PREFILL_AGMM_TUNED
+    if _PREFILL_AGMM_TUNED is None:
+        _PREFILL_AGMM_TUNED = os.environ.get("QWEN36_PREFILL_AGMM_TUNED", "0") == "1"
+    return _PREFILL_AGMM_TUNED
+
+
+# (swiglu, K, N/tp) with K and N rounded up to a tile (the GDN in-proj weight is 2060 wide -> 2080) -> {rows: (grid_x,
+# grid_y, M_block, N_block, transpose)} for the row counts the prefill traces run (short buckets 128 / 512 / 1024 /
+# 2048, chunk traces 2048 / 8192); any other shape or row count keeps today's config. num_links 2, workers per link =
+# ceil(in0 sender axis / 2) (grid_x transposed, grid_y not), subblock (1, 4), K_block = agmm_k_block_size(K/tp).
+# Device ms per op (16 calls captured in one trace) on the 8-chip ring (P150x8 Galaxy row, bf16 x, bfp8 weight),
+# today -> tuned, all bit-identical:
+#   gate|up   8192: 3.03 -> 2.21  2048: 0.714 -> 0.586  1024: 0.414 -> 0.369  512: 0.297 -> 0.265  128: 0.286 -> 0.236
+#   qkvzab    8192: 1.64 -> 1.49  128: 0.109 -> 0.099  (512 - 2048: every wider or non-transposed grid was slower)
+#   attn qkv  8192: 1.63 -> 1.49  128: 0.107 -> 0.100  (512 - 2048 slower)
+#   gdn_out   8192: 1.65 -> 1.56  2048: 0.428 -> 0.409  1024: 0.226 -> 0.214  (128 / 512 slower)
+_AGMM_TUNED = {
+    (True, 5120, 4352): {
+        128: (12, 9, 8, 16, False),
+        512: (12, 9, 8, 16, False),
+        1024: (12, 9, 8, 16, False),
+        2048: (11, 9, 8, 16, True),
+        8192: (12, 9, 8, 16, True),
+    },
+    (False, 5120, 2080): {128: (12, 9, 4, 8, False), 8192: (12, 9, 8, 8, True)},
+    (False, 5120, 2048): {128: (12, 9, 4, 8, False), 8192: (12, 9, 8, 16, True)},
+    (False, 6144, 640): {1024: (12, 9, 4, 8, True), 2048: (11, 9, 4, 8, True), 8192: (11, 9, 4, 8, True)},
+}
+_AGMM_TUNED_LOGGED = set()
+
+
+def agmm_tuned_config(rows, weight, k_local, swiglu, mesh_device):
+    """(MinimalMatmulConfig, num_links, workers_per_link, force_transpose) of the tuned AGMM for this shape and row count,
+    or None to keep today's config (flag off, no entry, a device grid too small for the entry, or a non-transposed entry
+    that the op would transpose anyway because rows > N)."""
+    if rows <= TILE_SIZE or not prefill_agmm_tuned_enabled():
+        return None
+    key = (bool(swiglu), _roundup(int(weight.shape[-2]), TILE_SIZE), _roundup(int(weight.shape[-1]), TILE_SIZE))
+    entry = _AGMM_TUNED.get(key, {}).get(int(rows))
+    if entry is None:
+        return None
+    gx, gy, mb, nb, transpose = entry
+    full = mesh_device.compute_with_storage_grid_size()
+    if gx > full.x or gy >= full.y:  # the fabric muxes take the row below the compute grid
+        return None
+    if not transpose and rows > (key[2] // 2 if swiglu else key[2]):
+        return None  # force_transpose=False only means "do not force": the op transposes M > N itself
+    num_links = 2
+    workers = -(-(gx if transpose else gy) // num_links)
+    if key not in _AGMM_TUNED_LOGGED:
+        _AGMM_TUNED_LOGGED.add(key)
+        logger.info(f"AGMM tuned configs (QWEN36_PREFILL_AGMM_TUNED) for swiglu={key[0]} K={key[1]} N={key[2]}")
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=mb,
+        K_block_size=agmm_k_block_size(k_local),
+        N_block_size=nb,
+        subblock_h=1,
+        subblock_w=4,
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+    )
+    return cfg, num_links, workers, transpose
+
+
 def all_gather_matmul_prefill(
     x,
     weight,
@@ -1177,19 +1305,24 @@ def all_gather_matmul_prefill(
     (agmm_gather_buffer); None lets the op allocate one per call."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
-    # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
-    cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=4,
-        K_block_size=agmm_k_block_size(K_local),
-        N_block_size=8,
-        subblock_h=1,
-        subblock_w=4,
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
-    )
+    tuned = agmm_tuned_config(S, weight, K_local, False, tt_ccl.mesh_device)  # QWEN36_PREFILL_AGMM_TUNED
+    if tuned is not None:
+        cfg, num_links, workers, transpose = tuned
+    else:
+        # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
+        # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
+        num_links = 2
+        grid = (8, grid[1])
+        workers = grid[0] // num_links
+        transpose = True
+        cfg = ttnn.MinimalMatmulConfig(
+            M_block_size=4,
+            K_block_size=agmm_k_block_size(K_local),
+            N_block_size=8,
+            subblock_h=1,
+            subblock_w=4,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+        )
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
@@ -1202,7 +1335,7 @@ def all_gather_matmul_prefill(
         cluster_axis=cluster_axis,
         memory_config=out_memory_config,
         dtype=ttnn.bfloat16,
-        force_transpose=True,
+        force_transpose=transpose,
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
         persistent_output_buffer=persistent_output_buffer,
@@ -1224,17 +1357,22 @@ def all_gather_swiglu_prefill(
     x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
-    cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=8,
-        K_block_size=agmm_k_block_size(K_local),
-        N_block_size=16,
-        subblock_h=1,
-        subblock_w=4,
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
-    )
+    tuned = agmm_tuned_config(S, weight, K_local, True, tt_ccl.mesh_device)  # QWEN36_PREFILL_AGMM_TUNED
+    if tuned is not None:
+        cfg, num_links, workers, transpose = tuned
+    else:
+        num_links = 2
+        grid = (8, grid[1])
+        workers = grid[0] // num_links
+        transpose = True
+        cfg = ttnn.MinimalMatmulConfig(
+            M_block_size=8,
+            K_block_size=agmm_k_block_size(K_local),
+            N_block_size=16,
+            subblock_h=1,
+            subblock_w=4,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+        )
     return ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
@@ -1246,7 +1384,7 @@ def all_gather_swiglu_prefill(
         cluster_axis=cluster_axis,
         memory_config=out_memory_config,
         dtype=ttnn.bfloat16,
-        force_transpose=True,
+        force_transpose=transpose,
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
         fuse_swiglu=True,

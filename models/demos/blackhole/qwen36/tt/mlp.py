@@ -432,5 +432,6 @@ class Qwen36MLP:
             num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
             topology=args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(partial.shape[-2]),
         )
         return out

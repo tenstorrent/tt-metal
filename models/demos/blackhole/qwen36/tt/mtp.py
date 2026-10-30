@@ -177,6 +177,13 @@ class Qwen36MTP:
         self.kv_only_maint = self.num_devices > 1 and mtp_kv_only_enabled()
         if self.kv_only_maint:
             logger.info("MTP drafter: KV-only maintenance forwards (QWEN36_MTP_KV_ONLY=1)")
+        # QWEN36_PREFILL_MTP_LEAN=1 (TP only; default off): forward_prefill (the prompt warm-up) stops after the
+        # drafter layer's paged K/V fill and returns None. See tp_common.prefill_mtp_lean_enabled.
+        from models.demos.blackhole.qwen36.tt.tp_common import prefill_mtp_lean_enabled
+
+        self.kv_only_prefill = self.num_devices > 1 and prefill_mtp_lean_enabled()
+        if self.kv_only_prefill:
+            logger.info("MTP drafter: KV-only prompt warm-up (QWEN36_PREFILL_MTP_LEAN=1)")
 
         # QWEN36_DRAFT_SHARDED_ARGMAX=1: the DRAFTER stops all-gathering its full-vocab fp32 logit
         # row. Each device argmaxes its own [1,1,B,vocab/tp] shard and the global winner is picked
@@ -584,7 +591,8 @@ class Qwen36MTP:
         token_ids     : [1,S] uint32 device — MTP input tokens for the prompt.
         page_table / chunk_page_table : the MTP layer's own paged KV page table.
         Returns the fractured decoder-block output [1,1,S,dim/tp] (raw, before mtp.norm — only the
-        KV write matters here; callers free it).
+        KV write matters here; callers free it). With ``kv_only_prefill`` (QWEN36_PREFILL_MTP_LEAN=1) the layer stops
+        after its paged K/V fill (same K/V bytes) and None is returned; callers free the output only when it is not None.
         """
         S = token_ids.shape[-1]
         tok_emb = self.embd(token_ids)  # [1,S,dim/tp]
@@ -592,6 +600,8 @@ class Qwen36MTP:
         tok_emb = ttnn.to_memory_config(tok_emb, ttnn.DRAM_MEMORY_CONFIG)
         fused = self._fuse(tok_emb, hidden_states, Mode.PREFILL)
         ttnn.deallocate(tok_emb)
+        # Paged warm-ups only (the serving paths); a page_table=None forward (tests reading the block output) runs whole.
+        kv_only = getattr(self, "kv_only_prefill", False) and page_table is not None  # a __new__-built head has none
         out = self.decoder.forward(
             fused,
             cos=cos,
@@ -601,6 +611,7 @@ class Qwen36MTP:
             chunk_page_table=chunk_page_table if chunk_page_table is not None else page_table,
             chunk_start_idx=chunk_start_idx,
             chunk_start_idx_tensor=chunk_start_idx_tensor,
+            **({"kv_only": True} if kv_only else {}),
         )
         ttnn.deallocate(fused)
         return out
