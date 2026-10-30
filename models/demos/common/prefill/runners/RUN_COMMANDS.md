@@ -122,10 +122,7 @@ rank 0 first, each next host one cable further along the ring.
 
 The manifest plus the runner defaults are the configuration. The runner applies
 the manifest with `setdefault`, so any `PREFILL_*` variable already set in the
-environment silently wins over both. Leave them unset. In particular,
-`PREFILL_FABRIC_MODE` and `PREFILL_OVERLAP_SHARED_EXPERT` default to
-`2d_torus_xy` and `1`, which is what CI runs; the `2d` fabric, and the torus
-with overlap off, are not.
+environment silently wins over both. Leave them unset.
 
 Set only what is specific to the deployment:
 
