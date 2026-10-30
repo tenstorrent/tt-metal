@@ -13,6 +13,7 @@
 
 #include <tt-metalium/mesh_device.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <string>
@@ -24,9 +25,32 @@ using namespace std::chrono_literals;
 
 constexpr uint64_t kRunValue = 1;
 
+void show_chip_state(const ChipOpenResult& chip_result) {
+    std::cout << "Chip: " << chip_result.chip_id;
+    switch (chip_result.outcome) {
+        case RuntimeOpenOutcome::Ready: std::cout << " is ready, you can load your active firmware.\n"; break;
+
+        case RuntimeOpenOutcome::PreparationRequired: std::cout << " must be primed.\n"; break;
+
+        case RuntimeOpenOutcome::ResetRequired:
+           std::cout << " reset via tt-smi -r " << chip_result.chip_id << "\n";
+        break;
+
+        case RuntimeOpenOutcome::Failed:
+            std::cout << " is in a faileedd state.\n";
+            std::cout << " prime failed: " << to_string(chip_result.outcome) << ", " << chip_result.diagnostic
+                      << "\n";
+            break;
+
+        default: std::cout << " is in an unknown state.\n"; break;
+    }
+}
+
 int prime(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh) {
     // AutoPrime (the default) primes an unprimed chip and reports ResetRequired.
     auto result = X280Runtime::open(mesh);
+
+    std::cout << "There are " << result.chips.size() << " chips in this system.\n";
 
     if (result.ready()) {
         std::cout << "All chips are primed.\n";
@@ -34,32 +58,99 @@ int prime(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh) {
     }
 
     for (const auto& curr_outcome : result.chips) {
-        std::cout << "Chip: " << curr_outcome.chip_id;
-        switch (curr_outcome.outcome) {
-            case RuntimeOpenOutcome::Ready: std::cout << " is ready, you can load your active firmware.\n"; break;
-
-            case RuntimeOpenOutcome::PreparationRequired: std::cout << " must be primed.\n"; break;
-
-            case RuntimeOpenOutcome::ResetRequired:
-                std::cout << " reset via tt-smi -r " << curr_outcome.chip_id << "\n";
-                break;
-
-            case RuntimeOpenOutcome::Failed:
-                std::cout << " is in a faileedd state.\n";
-                std::cout << " prime failed: " << to_string(curr_outcome.outcome) << ", " << curr_outcome.diagnostic
-                          << "\n";
-                break;
-
-            default: std::cout << " is in an unknown state.\n"; break;
-        }
+	    show_chip_state(curr_outcome);
     }
 
     return 1;
 }
 
 int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, const std::string& image) {
+
     auto result = X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
-    if (!opened.ready()) {:
+    if (!result.ready()) {
+        std::cout << "Not all chips are ready.\n";
+
+        for (const auto& curr_outcome : result.chips) {
+	        show_chip_state(curr_outcome);
+        }   
+
+	    return 1;
+    }
+    auto& runtime = *result.runtime;
+
+    auto tile_ids = runtime.tile_ids();
+
+    // We only load on one tile per chip, so remove all dup chips.
+    auto last = std::unique(std::begin(tile_ids), std::end(tile_ids), [](const auto& t1, const auto& t2) {
+        if (t1.chip_id == t2.chip_id) {
+            return true;
+        }
+
+        return false;
+    });
+
+    tile_ids.erase(last, tile_ids.end()); 
+
+    for(const auto& curr_tile_id: tile_ids) {
+        std::cout << "Loading firmware on chip id: " << curr_tile_id.chip_id << "\n";
+        auto& tile = runtime.tile(curr_tile_id);
+        auto tile_state = tile.inspect();
+        if (!tile_state.observation_valid) {
+            std::cout << "Inspect: " << tile_state.invalid_reason << "\n";
+            return 1;
+        }
+
+        if (!tile_state.resident_idle_live) {
+            MultiTileBootRequest boot;
+            boot.tiles = {curr_tile_id};
+            boot.idle_image_path = std::string(X280_IMAGE_DIR) + "/firmware-lim-idle.bin";
+            boot.allow_reset_release = true;
+            auto booted = runtime.boot_tiles(boot);
+            if (!booted.ready()) {
+                std::cout << "boot idle failed: " << booted.diagnostic << "\n";
+                for (const auto& report : booted.tiles) {
+                    std::cout << "\t" << report.result.diagnostic << "\n";
+                }
+                return 1;
+            }
+
+            std::cout << "booted resident idle\n";
+        } 
+
+        ActiveRunRequest request;
+        request.image_path = image;
+        request.run_value = kRunValue;
+        auto enqueued = runtime.enqueue(tile, request);
+        if (!enqueued.enqueued()) {
+            std::cout << "enqueued error: " << to_string(enqueued.outcome) << ", " << enqueued.error << "\n";
+            if (enqueued.session) {
+                runtime.cleanup(enqueued.session, request.cleanup_timeout);
+            }
+            return 1;
+        }
+        std::cout << "Running: " << image << "\n"; 
+
+
+        // Fires up all the harts and waits for them to start running.
+        auto waited = runtime.session(enqueued.session).wait_until_running(3000ms);
+        if (waited.succeeded()) {
+            std::cout << "Firmware running\n";
+        } else {
+            std::cout << "wait failed: " << describe(waited) << "\n";
+            return 1;
+        }   
+
+        auto cleaned = runtime.cleanup(enqueued.session, request.cleanup_timeout);
+        if (!cleaned.cleaned_up()) {
+            std::cout << "cleanup failed: " << describe(cleaned) << "\n";
+            return 1; 
+        }
+    } // for()
+
+    return 0;
+}
+//    auto result = X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
+//    if (!opened.ready()) 
 
 //    auto opened = X280Runtime::open(mesh, RuntimeOpenConfig{.priming_policy = LimEccPrimingPolicy::RequirePrepared});
 //    if (!opened.ready()) {
@@ -133,14 +224,13 @@ int run(const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh, cons
     //        rc = 1;
     //    }
 
-    const auto cleaned = runtime.cleanup(enqueued.session, request.cleanup_timeout);
-    }
-    if (!cleaned.cleaned_up()) {
-        std::fprintf(stderr, "cleanup: %s\n", describe(cleaned).c_str());
-        rc = 1;
-    }
-    return rc;
-}
+//    const auto cleaned = runtime.cleanup(enqueued.session, request.cleanup_timeout);
+//    }
+//    if (!cleaned.cleaned_up()) {
+//        std::fprintf(stderr, "cleanup: %s\n", describe(cleaned).c_str());
+//        rc = 1;
+//    }
+//    return rc;
 
 }  // namespace
 
