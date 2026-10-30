@@ -1,0 +1,102 @@
+[
+  {
+    "artifact": "full_attention_batch16_final.json",
+    "layer_type": "full_attention",
+    "batch": 16,
+    "prefill_pcc": 0.99998621066286,
+    "decode_pcc": 0.999994172086046,
+    "updated_inputs_pcc": 0.9999943670119011,
+    "resume_pcc": null,
+    "min_boundary_pcc": null
+  },
+  {
+    "artifact": "full_attention_batch32_final.json",
+    "layer_type": "full_attention",
+    "batch": 32,
+    "prefill_pcc": 0.9999856565140254,
+    "decode_pcc": 0.9999933857091345,
+    "updated_inputs_pcc": 0.9999933370735716,
+    "resume_pcc": null,
+    "min_boundary_pcc": null
+  },
+  {
+    "artifact": "full_attention_batch8_final.json",
+    "layer_type": "full_attention",
+    "batch": 8,
+    "prefill_pcc": 0.9999863311900605,
+    "decode_pcc": 0.9999942843212201,
+    "updated_inputs_pcc": 0.9999942964146022,
+    "resume_pcc": null,
+    "min_boundary_pcc": null
+  },
+  {
+    "artifact": "full_attention_boundaries_final.json",
+    "layer_type": "full_attention",
+    "batch": 1,
+    "prefill_pcc": 0.9999865321672521,
+    "decode_pcc": 0.9999954108941953,
+    "updated_inputs_pcc": 0.9999923925171409,
+    "resume_pcc": 1.0,
+    "min_boundary_pcc": 0.9999874939405311
+  },
+  {
+    "artifact": "full_attention_watcher_final.json",
+    "layer_type": "full_attention",
+    "batch": 1,
+    "prefill_pcc": 0.9999865321672521,
+    "decode_pcc": 0.9999954108941953,
+    "updated_inputs_pcc": 0.9999923925171409,
+    "resume_pcc": 1.0,
+    "min_boundary_pcc": 0.9999874939405311
+  },
+  {
+    "artifact": "sliding_attention_batch16_final.json",
+    "layer_type": "sliding_attention",
+    "batch": 16,
+    "prefill_pcc": 0.9999193437873517,
+    "decode_pcc": 0.9999366325010521,
+    "updated_inputs_pcc": 0.9999043868099874,
+    "resume_pcc": null,
+    "min_boundary_pcc": null
+  },
+  {
+    "artifact": "sliding_attention_batch32_final.json",
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "prefill_pcc": 0.999898773376193,
+    "decode_pcc": 0.99991067570906,
+    "updated_inputs_pcc": 0.999904157954019,
+    "resume_pcc": null,
+    "min_boundary_pcc": null
+  },
+  {
+    "artifact": "sliding_attention_batch8_final.json",
+    "layer_type": "sliding_attention",
+    "batch": 8,
+    "prefill_pcc": 0.9999185396725107,
+    "decode_pcc": 0.9999470783344426,
+    "updated_inputs_pcc": 0.9999146622681773,
+    "resume_pcc": null,
+    "min_boundary_pcc": null
+  },
+  {
+    "artifact": "sliding_attention_boundaries_final.json",
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "prefill_pcc": 0.9998981819313671,
+    "decode_pcc": 0.9999672411078698,
+    "updated_inputs_pcc": 0.9999258363533948,
+    "resume_pcc": 1.0,
+    "min_boundary_pcc": 0.999913636885736
+  },
+  {
+    "artifact": "sliding_attention_watcher_final.json",
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "prefill_pcc": 0.9998981819313671,
+    "decode_pcc": 0.9999672411078698,
+    "updated_inputs_pcc": 0.9999258363533948,
+    "resume_pcc": 1.0,
+    "min_boundary_pcc": 0.999913636885736
+  }
+]

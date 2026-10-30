@@ -1,0 +1,13 @@
+{
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "prefill_tokens": 262143,
+  "decode_position": 262143,
+  "prefill_pcc": 0.9999270439147949,
+  "decode_pcc": 0.9999141693115234,
+  "real_weights": true,
+  "reference_scope": "last_32_prefill_rows_and_decode_with_all_prefix_KV",
+  "trace_replays": 4,
+  "updated_inputs_pcc": 0.9999462962150574,
+  "deterministic": true
+}

@@ -1,0 +1,254 @@
+[
+  {
+    "name": "sliding_context_post_view",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "262143",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/sliding_context_post_view.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "full_context_post_view",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "5",
+      "--seq",
+      "262143",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/full_context_post_view.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "sliding_attention_boundaries_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "2049",
+      "--extended",
+      "--new-bucket-case",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/sliding_attention_boundaries_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "sliding_attention_batch32_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "1025",
+      "--batch",
+      "32",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/sliding_attention_batch32_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "sliding_attention_batch16_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--batch",
+      "16",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/sliding_attention_batch16_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "sliding_attention_batch8_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--batch",
+      "8",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/sliding_attention_batch8_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "sliding_attention_watcher_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "2049",
+      "--extended",
+      "--new-bucket-case",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/sliding_attention_watcher_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0",
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_LOGS_PATH": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/watcher/sliding_attention_final"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "full_attention_boundaries_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "5",
+      "--seq",
+      "2049",
+      "--extended",
+      "--new-bucket-case",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/full_attention_boundaries_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "full_attention_batch32_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "5",
+      "--seq",
+      "1025",
+      "--batch",
+      "32",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/full_attention_batch32_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "full_attention_batch16_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "5",
+      "--seq",
+      "33",
+      "--batch",
+      "16",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/full_attention_batch16_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "full_attention_batch8_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "5",
+      "--seq",
+      "33",
+      "--batch",
+      "8",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/full_attention_batch8_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+    },
+    "exit_code": 0
+  },
+  {
+    "name": "full_attention_watcher_final",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_decoder",
+      "--layer",
+      "5",
+      "--seq",
+      "2049",
+      "--extended",
+      "--new-bucket-case",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/full_attention_watcher_final.json"
+    ],
+    "environment": {
+      "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+      "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0",
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_LOGS_PATH": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/watcher/full_attention_final"
+    },
+    "exit_code": 0
+  }
+]

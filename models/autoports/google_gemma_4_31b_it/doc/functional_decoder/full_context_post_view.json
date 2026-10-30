@@ -1,0 +1,19 @@
+{
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_tokens": 262143,
+  "decode_position": 262143,
+  "prefill_pcc": 0.9986205133536888,
+  "decode_pcc": 0.9999798988465691,
+  "real_weights": true,
+  "reference_scope": "last_32_prefill_rows_and_decode_with_all_prefix_KV",
+  "trace_replays": 4,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9999932008167288,
+  "deterministic": true,
+  "resume_pcc": null,
+  "boundaries": [],
+  "maximum_prefill_pcc": 0.9981801950140479
+}

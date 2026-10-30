@@ -1,0 +1,35 @@
+{
+  "layer_type": "full_attention",
+  "batch": 16,
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "concurrency": 16
+  },
+  "prefill_device_us": 2176647.231851852,
+  "decode_device_us": 4869.854192643933,
+  "prefill_useful_flops": 78789027561472,
+  "decode_dram_bytes": 1642893696.0,
+  "peak_flops_per_s": 165888000000000.0,
+  "peak_dram_bytes_per_s": 512000000000.0,
+  "prefill_flops_pct": 21.820400638143568,
+  "decode_dram_pct": 65.8906123893187,
+  "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, HiFi4 /4; 512GB/s. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+  "source": "warmed_layer_tracy",
+  "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/functional_decoder/tracy/full_attention/batch16/ops.csv",
+  "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+  "ns_per_cycle": 0.7407407407407407,
+  "prefill_device_ops": 429,
+  "decode_replay_count": 128,
+  "decode_ops_per_replay": 40,
+  "decode_min_device_us": 4858.408367184777,
+  "decode_max_device_us": 4877.908873817897,
+  "assumptions": "BF16 weights/activations/cache, HiFi4; dense active work. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: each weight once, active KV once, logical intermediate I/O and tile cache updates; excludes tile-padding and redundant core reads. Percentages are estimates, not counters.",
+  "dram_components": {
+    "weights": 1068019712,
+    "active_kv": 545325056.0,
+    "logical_intermediates": 21151744,
+    "cache_tile_update": 8388608,
+    "page_table": 8576
+  }
+}

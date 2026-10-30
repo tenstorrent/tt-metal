@@ -1,0 +1,8 @@
+{
+  "context": 262144,
+  "layer_type": "full_attention",
+  "attention_sdpa_vs_eager_pcc": 0.9999968409538269,
+  "attention_sdpa_vs_fp32_pcc": 0.9999997615814209,
+  "layer_sdpa_vs_eager_pcc": 0.9999986886978149,
+  "layer_sdpa_vs_fp32_pcc": 0.9999997019767761
+}

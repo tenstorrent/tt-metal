@@ -1,0 +1,268 @@
+{
+  "sliding_attention": {
+    "layer_idx": 0,
+    "tensors": [
+      {
+        "name": "input_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 4.878805160522461,
+        "std": 6.523875713348389
+      },
+      {
+        "name": "layer_scalar",
+        "shape": [
+          1
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.08935546875,
+        "std": 0.0
+      },
+      {
+        "name": "mlp.down_proj.weight",
+        "shape": [
+          5376,
+          21504
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -6.833200814071461e-07,
+        "std": 0.011520374566316605
+      },
+      {
+        "name": "mlp.gate_proj.weight",
+        "shape": [
+          21504,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.9859246094711125e-05,
+        "std": 0.015095244161784649
+      },
+      {
+        "name": "mlp.up_proj.weight",
+        "shape": [
+          21504,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 8.563434334973863e-07,
+        "std": 0.015327483415603638
+      },
+      {
+        "name": "post_attention_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.8215328454971313,
+        "std": 5.659039497375488
+      },
+      {
+        "name": "post_feedforward_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.3896645307540894,
+        "std": 1.7256526947021484
+      },
+      {
+        "name": "pre_feedforward_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 2.8370792865753174,
+        "std": 1.030983567237854
+      },
+      {
+        "name": "self_attn.k_norm.weight",
+        "shape": [
+          256
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.1220703125,
+        "std": 0.0
+      },
+      {
+        "name": "self_attn.k_proj.weight",
+        "shape": [
+          4096,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 5.326109203451779e-06,
+        "std": 0.01679954305291176
+      },
+      {
+        "name": "self_attn.o_proj.weight",
+        "shape": [
+          5376,
+          8192
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -2.220304395450512e-06,
+        "std": 0.012082370929419994
+      },
+      {
+        "name": "self_attn.q_norm.weight",
+        "shape": [
+          256
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.0234375,
+        "std": 0.0
+      },
+      {
+        "name": "self_attn.q_proj.weight",
+        "shape": [
+          8192,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -1.0844390772035695e-06,
+        "std": 0.0161502156406641
+      },
+      {
+        "name": "self_attn.v_proj.weight",
+        "shape": [
+          4096,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 7.789030291860399e-07,
+        "std": 0.016932018101215363
+      }
+    ]
+  },
+  "full_attention": {
+    "layer_idx": 5,
+    "tensors": [
+      {
+        "name": "input_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 25.693801879882812,
+        "std": 23.676538467407227
+      },
+      {
+        "name": "layer_scalar",
+        "shape": [
+          1
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.87890625,
+        "std": 0.0
+      },
+      {
+        "name": "mlp.down_proj.weight",
+        "shape": [
+          5376,
+          21504
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -1.641620997361315e-06,
+        "std": 0.01167596410959959
+      },
+      {
+        "name": "mlp.gate_proj.weight",
+        "shape": [
+          21504,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -4.6983328502392396e-05,
+        "std": 0.016978366300463676
+      },
+      {
+        "name": "mlp.up_proj.weight",
+        "shape": [
+          21504,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -2.077704039038508e-06,
+        "std": 0.016419120132923126
+      },
+      {
+        "name": "post_attention_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.12102285772562027,
+        "std": 0.26964715123176575
+      },
+      {
+        "name": "post_feedforward_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.07204359024763107,
+        "std": 0.106012724339962
+      },
+      {
+        "name": "pre_feedforward_layernorm.weight",
+        "shape": [
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 67.98417663574219,
+        "std": 45.212589263916016
+      },
+      {
+        "name": "self_attn.k_norm.weight",
+        "shape": [
+          512
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 0.0615234375,
+        "std": 0.0
+      },
+      {
+        "name": "self_attn.k_proj.weight",
+        "shape": [
+          2048,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 6.805796147091314e-06,
+        "std": 0.016532300040125847
+      },
+      {
+        "name": "self_attn.o_proj.weight",
+        "shape": [
+          5376,
+          16384
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.0372610859121778e-06,
+        "std": 0.009786032140254974
+      },
+      {
+        "name": "self_attn.q_norm.weight",
+        "shape": [
+          512
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": 1.015625,
+        "std": 0.0
+      },
+      {
+        "name": "self_attn.q_proj.weight",
+        "shape": [
+          16384,
+          5376
+        ],
+        "dtype": "torch.bfloat16",
+        "mean": -2.3094917196431197e-06,
+        "std": 0.015160365030169487
+      }
+    ]
+  }
+}

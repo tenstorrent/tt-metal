@@ -1,0 +1,19 @@
+{
+  "layer_type": "full_attention",
+  "batch": 16,
+  "prefill_tokens": 33,
+  "decode_position": 33,
+  "prefill_pcc": 0.9999896883964539,
+  "decode_pcc": 0.9999945759773254,
+  "real_weights": true,
+  "reference_scope": "all_rows",
+  "trace_replays": 4,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.999994695186615,
+  "deterministic": true,
+  "resume_pcc": null,
+  "boundaries": [],
+  "maximum_prefill_pcc": null
+}

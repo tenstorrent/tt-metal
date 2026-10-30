@@ -1,0 +1,98 @@
+[
+  {
+    "query": "tt",
+    "mode": "default",
+    "attention_pcc": 0.896202564239502,
+    "layer_pcc": 0.9902750849723816
+  },
+  {
+    "query": "tt",
+    "mode": "k32_cores1_approxTrue",
+    "attention_pcc": 0.896202564239502,
+    "layer_pcc": 0.9902750849723816
+  },
+  {
+    "query": "tt",
+    "mode": "k32_cores1_approxFalse",
+    "attention_pcc": 0.8964728116989136,
+    "layer_pcc": 0.9905152916908264
+  },
+  {
+    "query": "tt",
+    "mode": "k32_cores16_approxTrue",
+    "attention_pcc": 0.9987812042236328,
+    "layer_pcc": 0.9998655915260315
+  },
+  {
+    "query": "tt",
+    "mode": "k32_cores16_approxFalse",
+    "attention_pcc": 0.9987013936042786,
+    "layer_pcc": 0.9998579621315002
+  },
+  {
+    "query": "tt",
+    "mode": "k64_cores1_approxFalse",
+    "attention_pcc": 0.9194108247756958,
+    "layer_pcc": 0.9919058084487915
+  },
+  {
+    "query": "tt",
+    "mode": "k64_cores16_approxFalse",
+    "attention_pcc": 0.9998932480812073,
+    "layer_pcc": 0.9999803900718689
+  },
+  {
+    "query": "tt",
+    "mode": "k128_cores16_approxFalse",
+    "attention_pcc": 0.9999725818634033,
+    "layer_pcc": 0.9999925494194031
+  },
+  {
+    "query": "hf",
+    "mode": "default",
+    "attention_pcc": 0.8967321515083313,
+    "layer_pcc": 0.9904818534851074
+  },
+  {
+    "query": "hf",
+    "mode": "k32_cores1_approxTrue",
+    "attention_pcc": 0.8967321515083313,
+    "layer_pcc": 0.9904818534851074
+  },
+  {
+    "query": "hf",
+    "mode": "k32_cores1_approxFalse",
+    "attention_pcc": 0.8971879482269287,
+    "layer_pcc": 0.9907161593437195
+  },
+  {
+    "query": "hf",
+    "mode": "k32_cores16_approxTrue",
+    "attention_pcc": 0.9985315799713135,
+    "layer_pcc": 0.9998362064361572
+  },
+  {
+    "query": "hf",
+    "mode": "k32_cores16_approxFalse",
+    "attention_pcc": 0.9987183213233948,
+    "layer_pcc": 0.9998564720153809
+  },
+  {
+    "query": "hf",
+    "mode": "k64_cores1_approxFalse",
+    "attention_pcc": 0.9197605848312378,
+    "layer_pcc": 0.992032527923584
+  },
+  {
+    "query": "hf",
+    "mode": "k64_cores16_approxFalse",
+    "attention_pcc": 0.9999446868896484,
+    "layer_pcc": 0.9999884963035583
+  },
+  {
+    "query": "hf",
+    "mode": "k128_cores16_approxFalse",
+    "attention_pcc": 0.9999720454216003,
+    "layer_pcc": 0.9999921321868896
+  }
+]

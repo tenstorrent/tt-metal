@@ -1,0 +1,10 @@
+{
+  "source": "models/autoports/google_gemma_4_31b_it/tt/functional_decoder.py",
+  "runtime_forbidden_calls": [],
+  "imports": [
+    "ttnn",
+    "models.common.lightweightmodule.LightweightModule"
+  ],
+  "device_ops": "TTNN C++ operations; golden functions disabled by default fast runtime",
+  "dynamic_guard": "run_decoder.py patches ttnn.from_torch/to_torch/as_tensor during forward only"
+}

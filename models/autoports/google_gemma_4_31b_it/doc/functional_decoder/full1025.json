@@ -1,0 +1,11 @@
+{
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_tokens": 1025,
+  "decode_position": 1025,
+  "prefill_pcc": 0.9999918937683105,
+  "decode_pcc": 0.9999897480010986,
+  "real_weights": true,
+  "reference_scope": "all_rows",
+  "trace_replays": 3
+}

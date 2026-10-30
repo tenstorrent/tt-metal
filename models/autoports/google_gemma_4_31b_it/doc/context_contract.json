@@ -1,0 +1,47 @@
+{
+  "hf_model": "google/gemma-4-31B-it",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "hf_advertised_context": 262144,
+  "current_supported_context": 262144,
+  "largest_tested_prefill": 262144,
+  "largest_tested_decode": 262144,
+  "capability_reduction": null,
+  "acceptance_pcc": 0.995,
+  "layer_types": {
+    "sliding_attention": {
+      "prefill_tokens": 262144,
+      "prefill_pcc": 0.9999331201826811,
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_prefill_pcc": 0.9999272740321555,
+      "decode_context_tokens": 262144,
+      "decode_position": 262143,
+      "decode_pcc": 0.9999138671789228,
+      "evidence": [
+        "functional_decoder/sliding_context_post_view.json",
+        "functional_decoder/sliding_context_post_view.log"
+      ]
+    },
+    "full_attention": {
+      "prefill_tokens": 262144,
+      "prefill_pcc": 0.9981801950140479,
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_prefill_pcc": 0.9986205133536888,
+      "decode_context_tokens": 262144,
+      "decode_position": 262143,
+      "decode_pcc": 0.9999798988465691,
+      "evidence": [
+        "functional_decoder/full_context_post_view.json",
+        "functional_decoder/full_context_post_view.log"
+      ]
+    }
+  },
+  "reference_scope": "TTNN executes all prompt rows; long HF comparison uses last32 prefill rows, one exact-maximum row and final decode row, with all required prefix KV. Independent long eager/FP32 control: functional_decoder/long_reference_control.json.",
+  "cache_bytes_per_token": {
+    "sliding_attention": 16384,
+    "full_attention": 8192
+  },
+  "batch1_cache_bytes_at_full_context": {
+    "sliding_attention": 4294967296,
+    "full_attention": 2147483648
+  }
+}

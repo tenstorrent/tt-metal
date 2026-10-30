@@ -1,0 +1,56 @@
+{
+  "layer_type": "full_attention",
+  "batch": 1,
+  "prefill_tokens": 2049,
+  "decode_position": 2049,
+  "prefill_pcc": 0.9999832510948181,
+  "decode_pcc": 0.9999955892562866,
+  "real_weights": true,
+  "reference_scope": "all_rows",
+  "trace_replays": 9,
+  "interleaved_prefill_cases": 5,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9999922513961792,
+  "deterministic": true,
+  "resume_pcc": 1.0,
+  "boundaries": [
+    {
+      "length": 1,
+      "pcc": 0.9999966621398926
+    },
+    {
+      "length": 31,
+      "pcc": 0.999987006187439
+    },
+    {
+      "length": 32,
+      "pcc": 0.9999902248382568
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999874234199524
+    },
+    {
+      "length": 1023,
+      "pcc": 0.9999865889549255
+    },
+    {
+      "length": 1024,
+      "pcc": 0.999987006187439
+    },
+    {
+      "length": 1025,
+      "pcc": 0.9999868869781494
+    },
+    {
+      "length": 2049,
+      "pcc": 0.9999911785125732
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999874234199524
+    }
+  ],
+  "maximum_prefill_pcc": null
+}

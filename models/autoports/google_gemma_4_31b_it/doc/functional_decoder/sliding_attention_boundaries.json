@@ -1,0 +1,56 @@
+{
+  "layer_type": "sliding_attention",
+  "batch": 1,
+  "prefill_tokens": 2049,
+  "decode_position": 2049,
+  "prefill_pcc": 0.9999085664749146,
+  "decode_pcc": 0.9999672174453735,
+  "real_weights": true,
+  "reference_scope": "all_rows",
+  "trace_replays": 9,
+  "interleaved_prefill_cases": 5,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9999256134033203,
+  "deterministic": true,
+  "resume_pcc": 1.0,
+  "boundaries": [
+    {
+      "length": 1,
+      "pcc": 0.9999927878379822
+    },
+    {
+      "length": 31,
+      "pcc": 0.9999234080314636
+    },
+    {
+      "length": 32,
+      "pcc": 0.9999298453330994
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999259114265442
+    },
+    {
+      "length": 1023,
+      "pcc": 0.9999102354049683
+    },
+    {
+      "length": 1024,
+      "pcc": 0.9999051690101624
+    },
+    {
+      "length": 1025,
+      "pcc": 0.9999014735221863
+    },
+    {
+      "length": 2049,
+      "pcc": 0.9999234676361084
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999259114265442
+    }
+  ],
+  "maximum_prefill_pcc": null
+}

@@ -1,0 +1,35 @@
+{
+  "source_base": "db97382f276a5aecc1cd98a7eb5ba5def783f832",
+  "upstream_base": "d80d9482a418cf04ddcbeecf6adb67010d3091e6",
+  "transformers": "5.12.1",
+  "libraries": [
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/ttnn/ttnn/_ttnn.so",
+      "sha256": "c14e522ae14cee1bac5a7820421452e2f05cece5afabf39d34f8cc71484822ae",
+      "bytes": 21012216
+    },
+    {
+      "path": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/build_Release/lib/libtt_metal.so",
+      "sha256": "a999a5f73db5d9d8ae9012bad811b76a5128d2165ff88c515d319de2f03978cd",
+      "bytes": 31119368
+    }
+  ],
+  "full_decode_override": {
+    "grid": [
+      8,
+      8
+    ],
+    "k_chunk_size": 128,
+    "q_chunk_size": 32,
+    "max_cores_per_head_batch": 16,
+    "exp_approx_mode": false
+  },
+  "compute": {
+    "fidelity": "HiFi4",
+    "fp32_dest_acc_en": true,
+    "packer_l1_acc": true,
+    "weights": "BF16",
+    "activations": "BF16",
+    "kv_cache": "BF16"
+  }
+}

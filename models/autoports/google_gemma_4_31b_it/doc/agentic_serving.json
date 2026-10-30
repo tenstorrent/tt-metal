@@ -1,0 +1,92 @@
+{
+  "workload": {
+    "target_concurrency": 32,
+    "working_set_tokens": 32768,
+    "typical_context_tokens": 4096,
+    "source": "Initial estimate for long multi-turn agent workloads; concurrency from configured maximum batch; token counts are estimates pending goal 12."
+  },
+  "batch_sizes": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "stage": "01-functional-decoder",
+  "status": "functional_decoder_validated",
+  "measurements": [
+    {
+      "layer_type": "sliding_attention",
+      "batch": 1,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 97224.35684920107,
+      "decode_device_us": 3039.4615654584472,
+      "evidence": "functional_decoder/performance_sliding_attention_batch1.json"
+    },
+    {
+      "layer_type": "sliding_attention",
+      "batch": 32,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 3060012.662222222,
+      "decode_device_us": 4518.439798107886,
+      "evidence": "functional_decoder/performance_sliding_attention_batch32.json"
+    },
+    {
+      "layer_type": "sliding_attention",
+      "batch": 16,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 1537798.5254153304,
+      "decode_device_us": 3664.534178058286,
+      "evidence": "functional_decoder/performance_sliding_attention_batch16.json"
+    },
+    {
+      "layer_type": "sliding_attention",
+      "batch": 8,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 768889.8422222222,
+      "decode_device_us": 3248.8096463500706,
+      "evidence": "functional_decoder/performance_sliding_attention_batch8.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 1,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 136683.89957387192,
+      "decode_device_us": 3343.519078722279,
+      "evidence": "functional_decoder/performance_full_attention_batch1.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 32,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 4338213.557037037,
+      "decode_device_us": 6602.3563719437225,
+      "evidence": "functional_decoder/performance_full_attention_batch32.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 16,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 2176647.231851852,
+      "decode_device_us": 4869.854192643933,
+      "evidence": "functional_decoder/performance_full_attention_batch16.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "batch": 8,
+      "input_tokens": 4096,
+      "decode_steps": 128,
+      "prefill_device_us": 1089629.103043345,
+      "decode_device_us": 4029.4361916340094,
+      "evidence": "functional_decoder/performance_full_attention_batch8.json"
+    }
+  ],
+  "context_evidence": "context_contract.json",
+  "prefix_state_contract": "functional_decoder/README.md"
+}

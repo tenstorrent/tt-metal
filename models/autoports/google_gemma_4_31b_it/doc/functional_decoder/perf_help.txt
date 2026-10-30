@@ -1,0 +1,67 @@
+usage: tt-perf-report [-h] [--start-signpost START_SIGNPOST]
+                      [--end-signpost END_SIGNPOST] [--ignore-signposts]
+                      [--print-signposts] [--min-percentage MIN_PERCENTAGE]
+                      [--id-range ID_RANGE] [--arch ARCH] [--color]
+                      [--no-color] [--csv OUTPUT_FILE] [--no-advice]
+                      [--tracing-mode] [--raw-op-codes] [--no-host-ops]
+                      [--no-summary] [--group-by {op,memory,category}]
+                      [--classic-colors] [--summary-file FILE]
+                      [--no-stacked-report] [--no-stack-by-in0]
+                      [--stacked-csv STACKED_FILE] [--no-merge-devices]
+                      [--active-experts ACTIVE_EXPERTS]
+                      csv_files [csv_files ...]
+
+User-friendly Performance Report Analysis Tool
+
+positional arguments:
+  csv_files             Paths to one or more performance report CSV files
+
+options:
+  -h, --help            show this help message and exit
+  --start-signpost START_SIGNPOST
+                        Specify a signpost to delimit the starting range of
+                        the data. The first instance of the matching signpost
+                        will be used as the start of the data range.
+  --end-signpost END_SIGNPOST
+                        Specify a signpost to delimit the ending range of the
+                        data. The first instance of the matching signpost will
+                        be used as the end of the data range. If the same
+                        value is provided for both start and end, the end
+                        range will be the second instance of the signpost.
+  --ignore-signposts    Ignore all signposts and use the entire file for
+                        analysis
+  --print-signposts     Print signposts between any defined start/end
+                        signposts
+  --min-percentage MIN_PERCENTAGE
+                        Minimum percentage for coloring (default: 0.5)
+  --id-range ID_RANGE   Show only rows with IDs in the specified range (e.g.,
+                        '5-10', '31-', or '-12')
+  --arch ARCH           Specify or override architecture (wormhole,
+                        blackhole/p150, p100, bh20, N1). New op perf reports
+                        auto-detect the chip architecture, but not the
+                        Blackhole card SKU.
+  --color               Force colored output even when output is redirected
+  --no-color            Force output without color
+  --csv OUTPUT_FILE     Output filename for CSV format
+  --no-advice           Only show the table section of the report
+  --tracing-mode        Do not sort when in tracing mode
+  --raw-op-codes        Include raw op codes in output
+  --no-host-ops         Do not include host ops in output
+  --no-summary          Skip generating the operation summary report
+  --group-by {op,memory,category}
+                        Group summary by: 'op' (operation name), 'memory'
+                        (input0 layout), 'category' (compute/data/tensor)
+  --classic-colors      Use classic tab20 colors instead of category-themed
+                        colors
+  --summary-file FILE   Output file for summary report (CSV and PNG)
+  --no-stacked-report   Do not generate a stacked report (deprecated, use
+                        --no-summary)
+  --no-stack-by-in0     Do not group the stacked report by the layout of Input
+                        0 (deprecated, use --group-by=op)
+  --stacked-csv STACKED_FILE
+                        Output filename for the stacked report CSV
+                        (deprecated, use --summary-file)
+  --no-merge-devices    Don't merge rows from multiple devices
+  --active-experts ACTIVE_EXPERTS
+                        Active experts per input batch group for SparseMatmul
+                        rows whose CSV attributes do not include numeric nnz
