@@ -43,6 +43,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.lane_prefill import lane_frame_rows, lane_of_row, lane_row_groups
 
 # Device argmax tile rule: the multicore argmax is exact for one 32-row tile,
 # so a serving shape packs ``rows * (drafts + 1) <= 32`` verify rows.
@@ -825,6 +826,16 @@ class SpeculativeDecoder:
         )
         self._srv_seeded = {}  # row id -> reseed-pool row
         self._srv_projection = None  # ServingTraceProjection of the prepared plan
+        # The lane engine (GEMMA4_GALAXY_LANES): the records run per mesh column over that column's rows, and the
+        # host side of every record input is the lane frame [lanes * B_v, ...] sharded over the lane axis (the
+        # decode frame's layout, lane_prefill.lane_decode_frame_shapes). Rows are the engine's GLOBAL slots (lane =
+        # slot // lane_slots); per column the record keeps the plain decoder's shapes and graph (_srv_body).
+        mesh_cfg = getattr(target_model, "mesh_config", None)
+        self._srv_lanes = int(getattr(mesh_cfg, "lanes", 1) or 1) if getattr(mesh_cfg, "lane_sharded", False) else 1
+        self._srv_lane_slots = int(getattr(target_model, "lane_slots", 0) or 32) if self._srv_lanes > 1 else 0
+        self._srv_lane_devices = (
+            [int(d) for d in target_model.lane_device_indices()] if self._srv_lanes > 1 else [0]
+        )  # each lane's first chip: where its column's outputs are read back from
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -2550,6 +2561,16 @@ class SpeculativeDecoder:
         )
         self._srv_blocks = int(self.page_table_torch.shape[-1])
         self._srv_check_steps = int(os.environ.get(SPEC_VERIFY_CHECK_ENV, "0") or 0)
+        if self._srv_check_steps > 0 and self._srv_lanes > 1:
+            raise ValueError(
+                f"{SPEC_VERIFY_CHECK_ENV}={self._srv_check_steps} is not available on the lane engine (its plain "
+                "forward would run one lane's rows on every column); unset it"
+            )
+        if self._srv_lanes > 1:
+            _lg.info(
+                f"[spec-serving] lane engine: {self._srv_lanes} columns x {self._srv_lane_slots} slots; every record "
+                f"runs per column over its lane's rows (rows per shape are per lane; max_rows={max_rows})"
+            )
         self._srv_checked = {}
         self._srv_max_rows = max_rows
         self._srv_shapes = shapes
@@ -2756,7 +2777,8 @@ class SpeculativeDecoder:
             # experts and the batched record times far under what diverse rows cost in serving (the 26B QB2 (8,3)
             # measured 40 ms here and 53 ms served, 2026-10-29); a dense target is indifferent.
             anchors = [int(MEASURE_TOKEN_BASE + MEASURE_TOKEN_STRIDE * r) for r in rows]
-            table = torch.zeros((B, self._srv_blocks), dtype=torch.int32)
+            # the lane engine's record table is the lane frame: rows 0..B-1 are lane 0's (B <= lane_slots)
+            table = torch.zeros((self._srv_lanes * B, self._srv_blocks), dtype=torch.int32)
             at_zero, _ = timed(lambda: self.serving_reseed(shape, rows, anchors, [0] * B, table))
             at_top = at_zero
             if top_position > 0:
@@ -2867,6 +2889,8 @@ class SpeculativeDecoder:
         """
         self._srv_require()
         shape = self._srv_shape(shape)
+        if self._srv_lanes > 1:
+            return self._srv_lane_reseed(shape, rows, anchors, positions, page_tables)
         B, _K = shape
         live = self._srv_check_rows(shape, rows, anchors, positions)
         self._srv_upload_tables(shape, rows, live, page_tables, None)
@@ -2899,6 +2923,8 @@ class SpeculativeDecoder:
         """
         self._srv_require(captured=True)
         shape = self._srv_shape(shape)
+        if self._srv_lanes > 1:
+            return self._srv_lane_step(shape, rows, anchors, positions, page_tables, seed_cols)
         B, K = shape
         P = K + 1
         live = self._srv_check_rows(shape, rows, anchors, positions)
@@ -3008,11 +3034,11 @@ class SpeculativeDecoder:
         """Width-independent persistent inputs of one shape (shared by its width records)."""
         B, K = shape
         P = K + 1
-        pu, pi = self._pos_tensors([0] * B)
-        seed_pu, seed_pi = self._pos_tensors([0] * B)
+        pu, pi = self._srv_pos_tensors(B)
+        seed_pu, seed_pi = self._srv_pos_tensors(B)
         slots = self._srv_slots
         d_ptl_slots = [
-            self._pv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32)
+            self._srv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32, lane_dim=0)
             for _ in range(self._srv_n_slots)
         ]
         # The assistant reads each type's shared-KV layer: its table is that layer's slot.
@@ -3022,30 +3048,36 @@ class SpeculativeDecoder:
         if ring:
             # per-row ring geometry for the in-trace sliding mask (serving_mask_plan)
             for key in ("ring_base", "ring_tm"):
-                ring_scalars[key] = self._pv_from_torch(
-                    torch.zeros(B, 1, 1, 1, dtype=torch.float32), ttnn.float32, layout=ttnn.TILE_LAYOUT
+                ring_scalars[key] = self._srv_from_torch(
+                    torch.zeros(B, 1, 1, 1, dtype=torch.float32), ttnn.float32, layout=ttnn.TILE_LAYOUT, lane_dim=0
                 )
         return {
             "B": B,
             "K": K,
             "P": P,
             **ring_scalars,
-            "anchor_tok": self._tokens_tensor([0] * B),  # [1, B] uint32
-            "seed_idx": self._tokens_tensor([0] * B),  # [1, B] uint32 rows of the hidden pool
+            "anchor_tok": self._srv_tokens_tensor(B),  # [1, B] uint32
+            "seed_idx": self._srv_tokens_tensor(B),  # [1, B] uint32 rows of the hidden pool
             "d_pu": pu,  # [1, 32] uint32 drafter positions (B filled)
             "d_pi": pi,  # [B] int32
             # The reseed forward's own inputs (_srv_seed_rows): uploaded per reseed, never re-allocated.
-            "seed_tok": self._tokens_tensor([0] * B),  # [1, B] uint32 anchor tokens
+            "seed_tok": self._srv_tokens_tensor(B),  # [1, B] uint32 anchor tokens
             "seed_pu": seed_pu,  # [1, 32] uint32 positions (B filled)
             "seed_pi": seed_pi,  # [B] int32
             "d_ptl": d_ptl,  # {layer_type: [B, blocks] int32} the shared-KV layer's slot table per type
             "d_ptl_slots": d_ptl_slots,  # one [B, blocks] int32 table per KV group slot
             "d_ptl_list": [d_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
-            "v_pos": self._from_b(torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32),  # row b*P+p = c_b + p
+            "v_pos": self._srv_from_torch(
+                torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32, lane_dim=1
+            ),  # row b*P+p = c_b + p
             # the same positions per PACKED query row (b*H*P + h*P + p = c_b + p): the in-trace masks come out at
             # the packed height from these, with no row repeat of a key-wide tensor (_srv_masks_device)
-            "v_pos_rows": self._from_b(torch.zeros(1, B * self._packed_H() * P, dtype=torch.int64), ttnn.uint32),
-            "write_idxs": [self._from_b(torch.zeros(B, dtype=torch.int32), ttnn.int32) for _ in range(P)],
+            "v_pos_rows": self._srv_from_torch(
+                torch.zeros(1, B * self._packed_H() * P, dtype=torch.int64), ttnn.uint32, lane_dim=1
+            ),
+            "write_idxs": [
+                self._srv_from_torch(torch.zeros(B, dtype=torch.int32), ttnn.int32, lane_dim=0) for _ in range(P)
+            ],
         }
 
     def _srv_alloc_width(self, shape, S, s_k):
@@ -3061,7 +3093,7 @@ class SpeculativeDecoder:
         for i, slot in enumerate(slots):
             slot_type.setdefault(slot, layer_types[i])
         v_ptl_slots = [
-            self._pv_from_torch(torch.zeros(B, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32)
+            self._srv_from_torch(torch.zeros(B, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32, lane_dim=0)
             for slot in range(self._srv_n_slots)
         ]
         # The flat-table fallback reads each type's representative pool layer.
@@ -3080,8 +3112,12 @@ class SpeculativeDecoder:
             # Taken from the body's own op outputs inside the capture they were the one allocation after the
             # decode-trace captures of the base warmup, and the guard's first armed check in serving released
             # every decode trace (12B Galaxy: 20 records x 2 = 30 x 128 B + 10 x 64 B = 4480 B per bank).
-            "verify_x": self._from_b(torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32),  # [1, B*P] uint32
-            "vidx": self._from_b(torch.zeros(1, 1, B * P, dtype=torch.int64), ttnn.uint32),  # [1, 1, B*P] uint32
+            "verify_x": self._srv_from_torch(
+                torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32, lane_dim=1
+            ),  # [1, B*P] uint32
+            "vidx": self._srv_from_torch(
+                torch.zeros(1, 1, B * P, dtype=torch.int64), ttnn.uint32, lane_dim=2
+            ),  # [1, 1, B*P] uint32
             "id": None,
         }
 
@@ -3106,9 +3142,7 @@ class SpeculativeDecoder:
         """Eager (plain, one row per batch row) target forward of ``tokens`` at ``positions`` (B entries) through
         the shape's drafter tables, on the shape's persistent seed inputs; returns ``(logits, hidden)``."""
         S = self._srv_shape_bufs[shape]
-        B = S["B"]
-        if len(tokens) != B or len(positions) != B:
-            raise ValueError(f"shape {shape}: seed needs {B} tokens/positions, got {len(tokens)}/{len(positions)}")
+        self._srv_seed_lists(shape, tokens, positions)  # per column B entries (the lane frame under lanes)
         # The forward's inputs are the shape's persistent buffers, refreshed from host staging tensors: a
         # reseed allocates nothing on the device itself (serving_prepare), only the eager forward's own
         # transients come and go.
@@ -3118,10 +3152,15 @@ class SpeculativeDecoder:
     def _srv_seed_upload(self, shape, tokens, positions):
         """Refresh the shape's persistent seed inputs (tokens, positions) from host."""
         S = self._srv_shape_bufs[shape]
-        host_tok = self._host_tokens([int(t) for t in tokens])
+        toks, poss = self._srv_seed_lists(shape, tokens, positions)
+        if self._srv_lanes > 1:
+            host_tok = self._srv_host_tokens_frame(toks)
+            hpu, hpi = self._srv_host_pos_frame(poss)
+        else:
+            host_tok = self._host_tokens(toks[0])
+            hpu, hpi = self._host_pos(poss[0])
         ttnn.copy_host_to_device_tensor(host_tok, S["seed_tok"])
         host_tok.deallocate(True)
-        hpu, hpi = self._host_pos([int(p) for p in positions])
         ttnn.copy_host_to_device_tensor(hpu, S["seed_pu"])
         ttnn.copy_host_to_device_tensor(hpi, S["seed_pi"])
         hpu.deallocate(True)
@@ -3559,13 +3598,17 @@ class SpeculativeDecoder:
             outs.append(mask)
         return outs[0], outs[1]
 
-    def _srv_copy_if_changed(self, key, host, dev, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+    def _srv_copy_if_changed(self, key, host, dev, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, lane_dim=None):
         """Upload the small ``host`` tensor into the persistent ``dev`` buffer unless the last upload under
-        ``key`` was equal (tables, positions and ring scalars repeat across steps)."""
+        ``key`` was equal (tables, positions and ring scalars repeat across steps). ``lane_dim`` names the
+        lane-frame dim of a host tensor laid out per lane (``_srv_lane_upload``); None replicates."""
         prev = self._srv_uploaded.get(key)
         if prev is not None and prev.shape == host.shape and torch.equal(prev, host):
             return
-        h = self._pv_from_torch(host, dtype, layout=layout, device=False)
+        if lane_dim is not None:
+            h = self._srv_frame_from_torch(host, dtype, layout=layout, lane_dim=lane_dim)
+        else:
+            h = self._pv_from_torch(host, dtype, layout=layout, device=False)
         ttnn.copy_host_to_device_tensor(h, dev)
         h.deallocate(True)
         self._srv_uploaded[key] = host.clone()
@@ -3666,6 +3709,299 @@ class SpeculativeDecoder:
                 f"the shared logits buffer holds {rows} rows, expected {SPEC_ROW_TILE} (shape {tuple(t.shape)})"
             )
         return t.reshape(rows, V)[: B * P].reshape(B, P, V)[:live].to(torch.bfloat16)
+
+    # ── serving on the lane engine (GEMMA4_GALAXY_LANES) ─────────────────────
+    # One record per column: each column runs the record's graph over ITS lane's rows (its own KV, its own lane-local
+    # block ids), and the host side of every record input is the lane frame [lanes * B_v, ...] sharded over the lane
+    # axis (``lane_prefill.lane_record_table`` is the adapter's table layout). A call's rows are global slots, lane-major;
+    # a lane's unused rows mirror its row 0 (``serving_pad_rows``) and an idle lane runs the null-block warmup inputs.
+
+    def _srv_lane_mapper(self, dim):
+        """Shard ``dim`` of a host lane frame over the lane axis, replicating over TP (the decode frame's mapper)."""
+        return self.target.mesh_config.lane_shard_mapper(self.mesh_device, int(dim))
+
+    def _srv_frame_from_torch(self, frame, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, lane_dim=0, device=False):
+        """A host tensor laid out as the lane frame along ``lane_dim``: lane-sharded under lanes, replicated
+        otherwise (where the frame IS the per-column tensor)."""
+        if self._srv_lanes > 1:
+            return ttnn.from_torch(
+                frame,
+                device=self.mesh_device if device else None,
+                layout=layout,
+                dtype=dtype,
+                mesh_mapper=self._srv_lane_mapper(lane_dim),
+            )
+        return self._pv_from_torch(frame, dtype, layout=layout, device=device)
+
+    def _srv_from_torch(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, lane_dim=None, device=True):
+        """``_pv_from_torch`` (replicated) with one lane branch: under lanes the per-column host tensor ``t`` is
+        stacked ``lanes`` times along ``lane_dim`` and sharded over the lane axis, so every column holds ``t`` and
+        the buffer takes the lane-frame uploads of ``_srv_lane_upload`` (same per-column shape either way)."""
+        if self._srv_lanes > 1 and lane_dim is not None:
+            frame = torch.cat([t] * self._srv_lanes, dim=int(lane_dim))
+            return self._srv_frame_from_torch(frame, dtype, layout=layout, lane_dim=lane_dim, device=device)
+        return self._pv_from_torch(t, dtype, layout=layout, device=device)
+
+    def _srv_pos_tensors(self, B):
+        """The persistent ``([1, 32] uint32, [B] int32)`` position inputs of a shape (``_pos_tensors`` per column)."""
+        if self._srv_lanes > 1:
+            pu = self._srv_from_torch(torch.zeros((1, 32), dtype=torch.int64), ttnn.uint32, lane_dim=1)
+            pi = self._srv_from_torch(torch.zeros(B, dtype=torch.int32), ttnn.int32, lane_dim=0)
+            return pu, pi
+        return self._pos_tensors([0] * B)
+
+    def _srv_tokens_tensor(self, B):
+        """The persistent ``[1, B]`` uint32 token input of a shape (``_tokens_tensor`` per column)."""
+        if self._srv_lanes > 1:
+            return self._srv_from_torch(torch.zeros((1, B), dtype=torch.int64), ttnn.uint32, lane_dim=1)
+        return self._tokens_tensor([0] * B)
+
+    def _srv_seed_lists(self, shape, tokens, positions):
+        """The seed inputs as per-column lists ``([lanes][B] tokens, [lanes][B] positions)``: a flat ``B``-list is
+        every column's (the prepare pass's zero seed; the plain decoder's one column), a list of ``lanes`` lists is
+        the lane frame (``_srv_lane_reseed``)."""
+        B = self._srv_shape_bufs[shape]["B"]
+        lanes = self._srv_lanes
+        out = []
+        for what, values in (("tokens", tokens), ("positions", positions)):
+            values = list(values)
+            if values and isinstance(values[0], (list, tuple)):
+                cols = [[int(v) for v in col] for col in values]
+            else:
+                cols = [[int(v) for v in values]] * lanes
+            if len(cols) != lanes or any(len(col) != B for col in cols):
+                raise ValueError(f"shape {shape}: seed needs {lanes} x {B} {what}, got {[len(c) for c in cols]}")
+            out.append(cols)
+        return out[0], out[1]
+
+    def _srv_host_tokens_frame(self, per_lane):
+        """Host ``[1, lanes * B]`` uint32 lane frame of per-column token lists (``_host_tokens`` per column)."""
+        t = torch.tensor([int(v) for col in per_lane for v in col], dtype=torch.int64).reshape(1, -1)
+        return self._srv_frame_from_torch(t, ttnn.uint32, lane_dim=1)
+
+    def _srv_host_pos_frame(self, per_lane):
+        """Host ``([1, lanes * 32] uint32, [lanes * B] int32)`` lane frames of per-column position lists
+        (``_host_pos`` per column: the RoPE lookup's 32-wide row and the cache positions)."""
+        pu = torch.zeros((len(per_lane), 32), dtype=torch.int64)
+        for lane, col in enumerate(per_lane):
+            pu[lane, : len(col)] = torch.tensor([int(p) for p in col], dtype=torch.int64)
+        pos_uint32 = self._srv_frame_from_torch(pu.reshape(1, -1), ttnn.uint32, lane_dim=1)
+        pi = torch.tensor([int(p) for col in per_lane for p in col], dtype=torch.int32)
+        pos_int32 = self._srv_frame_from_torch(pi, ttnn.int32, lane_dim=0)
+        return pos_uint32, pos_int32
+
+    @staticmethod
+    def _srv_lane_columns(frame, lanes):
+        """``[lanes][B]`` columns of a lane-frame list."""
+        per = len(frame) // int(lanes)
+        return [frame[lane * per : (lane + 1) * per] for lane in range(int(lanes))]
+
+    def _srv_lane_groups(self, shape, rows, anchors, positions):
+        """``(groups, live)`` of one lane-engine call: ``lane_row_groups`` of the global rows (lane-major, at most
+        ``B_v`` per lane) after the value checks of ``_srv_check_rows``."""
+        B, _K = shape
+        live = len(rows)
+        if live < 1:
+            raise ValueError(f"shape {shape}: a lane call needs at least one live row")
+        if len(anchors) != live or len(positions) != live:
+            raise ValueError(
+                f"shape {shape}: rows/anchors/positions lengths differ: {live}/{len(anchors)}/{len(positions)}"
+            )
+        if min(int(p) for p in positions) < 0 or min(int(a) for a in anchors) < 0:
+            raise ValueError(f"shape {shape}: negative anchor/position in {list(anchors)}/{list(positions)}")
+        groups = lane_row_groups(rows, self._srv_lanes, self._srv_lane_slots)
+        for lane, g in enumerate(groups):
+            if len(g) > B:
+                raise ValueError(f"shape {shape}: lane {lane} has {len(g)} live rows, the record holds {B}")
+        return groups, live
+
+    def _srv_lane_reseed(self, shape, rows, anchors, positions, page_tables):
+        """``serving_reseed`` on the lane engine: one seed forward, each column over its lane's rows (the lane's
+        padding rows mirror its row 0; an idle lane seeds token 0 at position 0 through its null block)."""
+        B, _K = shape
+        groups, _live = self._srv_lane_groups(shape, rows, anchors, positions)
+        self._srv_lane_upload_tables(shape, groups, rows, page_tables, None)
+        lanes = self._srv_lanes
+        toks = self._srv_lane_columns(lane_frame_rows([int(a) for a in anchors], groups, B, 0), lanes)
+        poss = self._srv_lane_columns(lane_frame_rows([int(p) for p in positions], groups, B, 0), lanes)
+        self._srv_seed_rows(shape, toks, poss)
+        # row id -> its row in its lane's reseed (the reseed pool is per column)
+        self._srv_seeded = {int(rows[i]): j for g in groups for j, i in enumerate(g)}
+
+    def _srv_lane_step(self, shape, rows, anchors, positions, page_tables, seed_cols):
+        """``serving_step`` on the lane engine: one replay of the record on every column, each column's seed gather,
+        drafter chain and packed verify over its own lane's rows; the drafts and argmax ids come back lane by lane
+        in the call's (lane-major) order, so result row i is ``rows[i]``."""
+        B, K = shape
+        P = K + 1
+        groups, live = self._srv_lane_groups(shape, rows, anchors, positions)
+        if len(seed_cols) != live:
+            raise ValueError(f"shape {shape}: {len(seed_cols)} seed_cols for {live} live rows")
+        top = max(int(p) for p in positions)
+        width = serving_width_for(self._srv_widths[shape], top, K)
+        if width is None:
+            raise ValueError(
+                f"shape {shape}: position {top} needs S_k >= {top + P + 1}, past the widest prepared rung "
+                f"{max(self._srv_widths[shape])}; the adapter must decline proposals there"
+            )
+        rec = self._srv_records[(shape, width)]
+        previous = None if self._srv_last is None else (self._srv_last["K"], self._srv_last["rows"])
+        seed_idx = []
+        for lane, g in enumerate(groups):
+            if not g:
+                seed_idx.extend([0] * B)  # an idle lane gathers pool row 0; nothing reads what it drafts
+                continue
+            prev = None
+            if previous is not None:  # the lane's rows of the last replay, in their frame order
+                prev = (previous[0], [r for r in previous[1] if lane_of_row(r, self._srv_lane_slots) == lane])
+            seed_idx.extend(
+                serving_seed_index(shape, [int(rows[i]) for i in g], [seed_cols[i] for i in g], prev, self._srv_seeded)
+            )
+        t0 = time.perf_counter()
+        self._srv_lane_upload(rec, groups, rows, anchors, positions, page_tables, seed_idx)
+        t1 = time.perf_counter()
+        ttnn.execute_trace(self.mesh_device, rec["id"], cq_id=0, blocking=self._srv_replay_blocking)
+        t2 = time.perf_counter()
+        lanes = self._srv_lanes
+        vx = self._srv_lane_read_u32(rec["verify_x"], B * P).reshape(lanes, B, P)
+        gids = self._srv_lane_read_u32(rec["vidx"], B * P).reshape(lanes, B, P)
+        t3 = time.perf_counter()
+        self._srv_phase_ms = {
+            "replay_upload": (t1 - t0) * 1e3,
+            "replay_exec": (t2 - t1) * 1e3,
+            "replay_read": (t3 - t2) * 1e3,
+        }
+        drafts = torch.cat([vx[lane, : len(g), 1:] for lane, g in enumerate(groups) if g], dim=0)
+        argmax = torch.cat([gids[lane, : len(g)] for lane, g in enumerate(groups) if g], dim=0)
+        self._srv_last = {"shape": shape, "rows": [int(r) for r in rows], "K": K}
+        return ServingStepResult(
+            shape=shape,
+            width=int(width),
+            live=live,
+            drafts=drafts.clone(),
+            argmax_ids=argmax.clone(),
+            logits=self._srv_logits,
+            _reader=lambda rec=rec, groups=groups: self._srv_lane_logits_to_host(rec, groups),
+        )
+
+    def _srv_lane_upload(self, rec, groups, rows, anchors, positions, page_tables, seed_idx):
+        """``_srv_upload`` over the lane frame: every per-row input is laid out per lane (``lane_frame_rows``) and
+        sharded over the lane axis; the frame is lane-major, so ``v_pos`` / ``v_pos_rows`` keep each column's
+        packed-row order."""
+        shape = rec["shape"]
+        S = self._srv_shape_bufs[shape]
+        B, P = S["B"], S["P"]
+        lanes = self._srv_lanes
+        toks = lane_frame_rows([int(t) for t in anchors], groups, B, 0)
+        pos = lane_frame_rows([int(p) for p in positions], groups, B, 0)
+        for host, dev in (
+            (self._srv_host_tokens_frame(self._srv_lane_columns(toks, lanes)), S["anchor_tok"]),
+            (self._srv_host_tokens_frame(self._srv_lane_columns([int(i) for i in seed_idx], lanes)), S["seed_idx"]),
+        ):
+            ttnn.copy_host_to_device_tensor(host, dev)
+            host.deallocate(True)
+        hpu, hpi = self._srv_host_pos_frame(self._srv_lane_columns(pos, lanes))
+        ttnn.copy_host_to_device_tensor(hpu, S["d_pu"])
+        ttnn.copy_host_to_device_tensor(hpi, S["d_pi"])
+        hpu.deallocate(True)
+        hpi.deallocate(True)
+        vpos = torch.tensor([[c + p for c in pos for p in range(P)]], dtype=torch.int64)
+        self._srv_copy_if_changed(("vpos", shape), vpos, S["v_pos"], ttnn.uint32, lane_dim=1)
+        vrows = serving_mask_rows(pos, P, self._packed_H())
+        self._srv_copy_if_changed(("vrows", shape), vrows, S["v_pos_rows"], ttnn.uint32, lane_dim=1)
+        for p in range(P):
+            wi = torch.tensor([c + p for c in pos], dtype=torch.int32)
+            self._srv_copy_if_changed(("widx", shape, p), wi, S["write_idxs"][p], ttnn.int32, lane_dim=0)
+        ring = self._pv_ring.get("sliding_attention")
+        if ring:
+            plan = serving_mask_plan(pos, P, ring=ring)
+            for key in ("ring_base", "ring_tm"):
+                host = plan[key.split("_")[1]].to(torch.float32).reshape(lanes * B, 1, 1, 1)
+                self._srv_copy_if_changed((key, shape), host, S[key], ttnn.float32, layout=ttnn.TILE_LAYOUT, lane_dim=0)
+        self._srv_lane_upload_tables(shape, groups, rows, page_tables, rec)
+
+    def _srv_lane_upload_tables(self, shape, groups, rows, page_tables, rec):
+        """``_srv_upload_tables`` over the lane frame: ``page_tables`` is the ``[lanes * B_v, blocks]`` record table
+        (lane ``l``'s rows at ``l * B_v``, every other row zero; ``lane_prefill.lane_record_table``). Per lane the
+        rows are selected from the installed per-layer tables by their GLOBAL ids (the engine's host tables span
+        every lane's slots), the lane's padding rows mirror its row 0 and an idle lane stays on block 0, its own
+        null block."""
+        S = self._srv_shape_bufs[shape]
+        B = S["B"]
+        lanes = self._srv_lanes
+        if not hasattr(page_tables, "dim") or page_tables.dim() != 2 or int(page_tables.shape[0]) != lanes * B:
+            got = tuple(page_tables.shape) if hasattr(page_tables, "shape") else type(page_tables).__name__
+            raise ValueError(f"shape {shape}: page_tables must be the lane frame [{lanes} x {B}, blocks], got {got}")
+        pt = page_tables.to(torch.int64)
+        for lane, g in enumerate(groups):
+            block = pt[lane * B : (lane + 1) * B]
+            if len(g) < B and bool(block[len(g) :].any()):
+                raise ValueError(
+                    f"shape {shape}: lane {lane}'s padding rows {len(g)}..{B - 1} of page_tables must be zero (block 0)"
+                )
+        if self._srv_per_layer is None and any(self._pv_ring.values()):
+            raise ValueError(
+                "bounded sliding target: serving_refresh_page_tables(per-layer tables) must run before the first "
+                "reseed/replay, or the sliding layers would read the flat table instead of their ring pool"
+            )
+        for slot in range(self._srv_n_slots):
+            d_parts, v_parts = [], []
+            for lane, g in enumerate(groups):
+                rows_l = [int(rows[i]) for i in g]
+                src = self._srv_slot_table(slot, rows_l, pt[lane * B : (lane + 1) * B])
+                d_host = serving_select_rows(src, list(range(B)), B, self._srv_blocks, allow_clip=False)
+                if g and len(g) < B:
+                    d_host[len(g) :] = d_host[0]
+                d_parts.append(d_host)
+                if rec is None:
+                    continue
+                width = int(rec["v_ptl_slots"][slot].shape[-1])
+                v_host = serving_select_rows(src, list(range(B)), B, width, allow_clip=True)
+                if g and len(g) < B:
+                    v_host[len(g) :] = v_host[0]
+                v_parts.append(v_host)
+            self._srv_copy_if_changed(
+                ("d", shape, slot),
+                torch.cat(d_parts, 0).to(torch.int32),
+                S["d_ptl_slots"][slot],
+                ttnn.int32,
+                lane_dim=0,
+            )
+            if rec is not None:
+                self._srv_copy_if_changed(
+                    ("v", shape, rec["S_k"], slot),
+                    torch.cat(v_parts, 0).to(torch.int32),
+                    rec["v_ptl_slots"][slot],
+                    ttnn.int32,
+                    lane_dim=0,
+                )
+
+    def _srv_lane_read_u32(self, t, n):
+        """``[lanes, n]`` int64: the first ``n`` entries of each lane's shard of a per-column uint32 output, read from
+        the lane's first chip (``Gemma4Model.lane_device_indices``)."""
+        shards = ttnn.get_device_tensors(t)
+        return torch.stack(
+            [ttnn.to_torch(shards[d]).to(torch.int64).reshape(-1)[:n] for d in self._srv_lane_devices], dim=0
+        )
+
+    def _srv_lane_logits_to_host(self, rec, groups):
+        """``[live, P, V]`` bf16 host readback of the shared verify-logits buffer on the lane engine: each lane's live
+        rows from that lane's column, lane by lane in the call's order (``_srv_logits_to_host`` per column)."""
+        B, P = rec["B"], rec["P"]
+        V = int(self.target.vocab_size)
+        shards = ttnn.get_device_tensors(self._srv_logits)
+        parts = []
+        for lane, g in enumerate(groups):
+            if not g:
+                continue
+            t = ttnn.to_torch(shards[self._srv_lane_devices[lane]])[..., :V]
+            rows = int(t.numel() // V)
+            if rows != SPEC_ROW_TILE:
+                raise ValueError(
+                    f"the shared logits buffer holds {rows} rows, expected {SPEC_ROW_TILE} (shape {tuple(t.shape)})"
+                )
+            parts.append(t.reshape(rows, V)[: B * P].reshape(B, P, V)[: len(g)])
+        return torch.cat(parts, dim=0).to(torch.bfloat16)
 
     # ── batched (B>1) speculative decode ─────────────────────────────────────
     def _seed_batched(self, tokens, positions):

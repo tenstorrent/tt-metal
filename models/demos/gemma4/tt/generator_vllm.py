@@ -59,6 +59,8 @@ from models.demos.gemma4.tt.lane_prefill import (
     lane_prefill_table_upload_enabled,
     lane_prefill_trace_buckets,
     lane_prefill_trace_plan,
+    lane_record_table,
+    lane_rows_per_lane,
     lane_trace_rounds_for_call,
     lane_unique_block_rows,
 )
@@ -6711,6 +6713,19 @@ def spec_plan_k_by_rows(table, max_num_seqs):
     return k_by_rows
 
 
+def spec_plan_k_by_rows_lanes(table, max_num_seqs):
+    """The plan's ``k_by_rows`` on the lane engine: ``((max_num_seqs, k_max),)``, the table's largest cap at every
+    folded live-row count.
+
+    ``spec_plan`` is called with the folded ``max_num_seqs`` (every lane's slots) and the plugin reads
+    ``k_by_rows`` against the live rows of the WHOLE lane batch, while a record's rows are per lane (per mesh
+    column): a lane can hold one row, the table's longest draft, whatever the other lanes hold, so no folded
+    count below ``max_num_seqs`` bounds a lane's K below ``k_max``. The per-lane table caps each step in
+    ``_mtp_propose`` (the busiest lane's band); the plugin's ``draft_cap`` stays the upper bound it is.
+    """
+    return ((int(max_num_seqs), max(int(k) for _, k in table)),)
+
+
 def spec_extra_shapes(text, k_max):
     """Parse ``GEMMA4_SPEC_EXTRA_SHAPES`` (``"5:3,1:2"``) into ``((5, 3), (1, 2))``: records captured beside the
     table's so a row band can compare a second draft length (the adaptive policy ranks every captured record
@@ -6903,6 +6918,18 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
     Sessions are per state slot: opened at the first proposal for a slot,
     moved with ``note_state_slots_moved``, dropped by ``release_request`` and
     by a prefill into the slot (which also closes the slot's generation).
+
+    On the lane engine (GEMMA4_GALAXY_LANES: the runner's slot batch is
+    ``lanes x lane_slots`` rows, slot ``s`` on lane ``s // lane_slots``, the
+    live rows at their slots and padding rows between them) every record
+    runs per mesh column over that column's rows, so a record's ``rows``
+    are PER LANE: the row cap is the lane's slots, the step's record is the
+    smallest covering the BUSIEST lane's drafting rows (one captured graph
+    serves every column, so one K per step for all lanes; a lighter lane
+    takes the busiest lane's draft length), and the decoder is handed the
+    lane frame ``[lanes * B_v, blocks]`` table (``lane_record_table``) with
+    the global slot ids. Sessions, release and prefill bookkeeping key on
+    the global slot as they do on one column.
     """
 
     _SPEC_DRAFT_LEN = _spec_draft_len_env()
@@ -7011,7 +7038,14 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             table = spec_k_by_rows_table(os.environ.get(SPEC_K_BY_ROWS_ENV, SPEC_K_BY_ROWS_DEFAULT), k)
         except ValueError as exc:
             return SpecReject(reason=f"Gemma4MTP speculative contract: {exc}", supported_k=(k,))
-        k_by_rows = spec_plan_k_by_rows(table, max_num_seqs)
+        # Under the lane fold (GEMMA4_GALAXY_LANES) the table is PER LANE and the plugin's cap is by the folded
+        # live rows of every lane, which bounds nothing one lane can hold: the plan publishes the flat cap and
+        # the model applies the per-lane table at each proposal (``spec_plan_k_by_rows_lanes``).
+        k_by_rows = (
+            spec_plan_k_by_rows_lanes(table, max_num_seqs)
+            if galaxy_lanes_fold()
+            else spec_plan_k_by_rows(table, max_num_seqs)
+        )
         return SpecPlan(
             effective_k=max(cap for _, cap in table),
             lanes_per_request=1,
@@ -7080,6 +7114,45 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         # submitted before the proposal was published drops it rather than verifying it).
         self._mtp_dropped_proposals = 0
 
+    def _mtp_lane_geometry(self):
+        """``(lanes, lane_slots)`` of the lane engine, ``(1, 0)`` on one column (``Gemma4Model.lane_slots`` and the
+        mesh config's ``lane_sharded`` / ``lanes``, as the plain lane decode reads them)."""
+        model = self.model[0]
+        mesh_cfg = getattr(model, "mesh_config", None)
+        if not getattr(mesh_cfg, "lane_sharded", False):
+            return 1, 0
+        return int(getattr(mesh_cfg, "lanes", 1) or 1), int(getattr(model, "lane_slots", 0) or 32)
+
+    def _mtp_rows_per_lane(self, rows):
+        """The rows a record must hold for the global ``rows``: the busiest lane's count on the lane engine, else
+        ``len(rows)``."""
+        lanes, lane_slots = self._mtp_lane_geometry()
+        return lane_rows_per_lane(rows, lanes, lane_slots)
+
+    def _mtp_live_fit(self, live_mask, live_n):
+        """``_mtp_rows_per_lane`` of the live rows of a wire block from its live mask, without listing them on the
+        all-declined path: the mask reshaped to ``[lanes, lane_slots]`` (the slot batch) when it is one."""
+        lanes, lane_slots = self._mtp_lane_geometry()
+        if lanes <= 1:
+            return int(live_n)
+        if int(live_mask.numel()) == lanes * lane_slots:
+            return int(live_mask.reshape(lanes, lane_slots).sum(dim=1).max())
+        return lane_rows_per_lane(torch.nonzero(live_mask).reshape(-1).tolist(), lanes, lane_slots)
+
+    def _mtp_rows_text(self, n):
+        """``n`` proposing rows, named per lane on the lane engine (the decline messages)."""
+        lanes, _slots = self._mtp_lane_geometry()
+        return f"{n} proposing rows on one lane" if lanes > 1 else f"{n} proposing rows"
+
+    def _mtp_record_table(self, full, b_v, row_ids):
+        """The decoder call's flat table for ``row_ids``: ``_mtp_record_rows`` on one column; on the lane engine the
+        lane frame ``[lanes * b_v, blocks]`` (``lane_record_table``: lane l's rows at ``l * b_v`` in call order,
+        every other row block 0, the lane's null block), which the decoder shards over the lane axis."""
+        lanes, lane_slots = self._mtp_lane_geometry()
+        if lanes > 1:
+            return lane_record_table(full, b_v, row_ids, lanes, lane_slots)
+        return self._mtp_record_rows(full, b_v, row_ids)
+
     def _mtp_resolve_shapes(self, max_batch_size):
         """The records to capture and the row cap, from the env table and the engine's batch."""
         k_max = self._SPEC_DRAFT_LEN
@@ -7088,7 +7161,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         max_rows = int(raw) if raw else table[-1][0]
         if max_rows < 1:
             raise ValueError(f"{SPEC_MAX_ROWS_ENV} must be at least 1, got {max_rows}")
-        max_rows = min(max_rows, int(max_batch_size))
+        lanes, lane_slots = self._mtp_lane_geometry()
+        # On the lane engine a record's rows are per lane (per mesh column): the busiest lane's live rows pick
+        # the record, so the cap is the lane's slots, not the folded batch.
+        max_rows = min(max_rows, lane_slots if lanes > 1 else int(max_batch_size))
         extra = spec_extra_shapes(os.environ.get(SPEC_EXTRA_SHAPES_ENV, ""), k_max)
         # the table's own records are a band's default and cap (``_mtp_shape_for``); the extra ones are candidates
         self._mtp_table_shapes = spec_capture_shapes(table, k_max, max_rows)
@@ -7181,9 +7257,11 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_shapes = shapes
         self._mtp_widths = decoder.serving_widths()
         self._mtp_max_rows = max_rows
+        lanes, lane_slots = self._mtp_lane_geometry()
+        where = f" per lane ({lanes} lanes x {lane_slots} slots)" if lanes > 1 else ""
         logger.info(
             f"Gemma4MTP speculative contract: prepared {len(shapes)} records in {time.time() - t0:.1f}s "
-            f"(max_rows={max_rows}, records={list(shapes)}, widths={self._mtp_widths})"
+            f"(max_rows={max_rows}{where}, records={list(shapes)}, widths={self._mtp_widths})"
         )
 
     def _mtp_capture(self):
@@ -7823,7 +7901,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 session.retained = None
         return self._spec_decline(rows, k)
 
-    def _mtp_fast_decline_reason(self, first, live_n, top):
+    def _mtp_fast_decline_reason(self, first, live_n, top, fit_n=None):
         """Why every row of the step declines before any row is walked, or None when the walk must run.
 
         The walk is needed by a trailing row (a released slot still listed
@@ -7841,12 +7919,15 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             return None
         if self._mtp_decoder is None or not self._mtp_captured:
             return "the verify records are not captured (warmup incomplete)"
-        if self._mtp_shape_for(live_n) is not None:
+        fit = int(live_n if fit_n is None else fit_n)  # the rows a record must hold: the busiest lane's on lanes
+        if self._mtp_shape_for(fit) is not None:
             return None
         largest = self._mtp_shapes[-1]
         if self._spec_decline_reason(top, int(largest[1]) + 1, lambda pos, s=largest: self._mtp_width_for(s, pos)):
             return None
-        return f"{live_n} proposing rows exceed the largest record {largest} ({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})"
+        return (
+            f"{self._mtp_rows_text(fit)} exceed the largest record {largest} ({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})"
+        )
 
     def _mtp_fast_decline(self, rows, k, live_n, top, reason):
         """The all-declined proposal without a per-row walk: O(1) host work beside the plain decode.
@@ -7923,6 +8004,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if overtaken:
             policy.note_overtaken()
         n = len(drafting)
+        fit = self._mtp_rows_per_lane([target[0] for target in drafting])  # rows a record must hold (per lane)
         cap = min(int(default[1]), int(k))
         top = max(int(target[3]) for target in drafting)
         plain_ms, _bucket = self._spec_plain_ms_for(live_rows, top)
@@ -7930,6 +8012,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             i for i, (r, session, _a, _p, _n) in enumerate(drafting) if self._mtp_seed_continues(session, r, last)
         )
         joining = len(continuing) < n
+        continuing_fit = self._mtp_rows_per_lane([drafting[i][0] for i in continuing])
         # The entry horizon is capped by the steps the joining rows are expected to live: the measured request
         # length less the steps a row has had.
         remaining = None
@@ -7938,7 +8021,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             remaining = max(1, int(round(policy.request_steps)) - max(lived))
         candidates = []
         for shape in self._mtp_shapes:
-            if int(shape[1]) > cap or int(shape[0]) < max(1, len(continuing)):
+            if int(shape[1]) > cap or int(shape[0]) < max(1, continuing_fit):
                 continue
             width = self._mtp_width_for(shape, top)
             if width is None:
@@ -7947,7 +8030,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             if step is None:
                 continue
             measured = policy.calibration.tokens_per_row(("step", tuple(shape), int(width)))
-            if int(shape[0]) >= n:
+            if int(shape[0]) >= fit:
                 entry = self._spec_reseed_ms(shape, top) if joining else 0.0
                 if entry is not None:
                     candidates.append(RecordCandidate(shape, int(width), step, entry, tokens_per_row=measured))
@@ -8034,7 +8117,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 if not live_n:
                     return self._spec_decline(rows, k)
                 top = int(first.max())  # padding rows sit at -1
-                reason = self._mtp_fast_decline_reason(first, live_n, top)
+                reason = self._mtp_fast_decline_reason(first, live_n, top, self._mtp_live_fit(live_mask, live_n))
                 if reason is not None:
                     return self._mtp_fast_decline(rows, k, live_n, top, reason)
                 live = torch.nonzero(live_mask).reshape(-1).tolist()
@@ -8151,7 +8234,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         drafting, declined = list(targets), {}
         largest = self._mtp_shapes[-1]
         while True:
-            shape = self._mtp_shape_for(len(drafting))
+            # the record holds the busiest lane's rows on the lane engine (every column runs it), the batch's on one
+            shape = self._mtp_shape_for(self._mtp_rows_per_lane([target[0] for target in drafting]))
             check = shape if shape is not None else largest
             p_v = int(check[1]) + 1
             width_for = lambda pos, s=check: self._mtp_width_for(s, pos)  # noqa: E731
@@ -8184,8 +8268,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 rows,
                 k,
                 live,
-                f"{len(drafting)} proposing rows exceed the largest record {largest} "
-                f"({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})",
+                f"{self._mtp_rows_text(self._mtp_rows_per_lane([target[0] for target in drafting]))} exceed the "
+                f"largest record {largest} ({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})",
                 sessions=sessions,
             )
         last = self._mtp_last_replay
@@ -8254,10 +8338,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 reseed,
                 [by_row[r][0] for r in reseed],
                 [by_row[r][1] for r in reseed],
-                self._mtp_record_rows(full, shape[0], reseed),
+                self._mtp_record_table(full, shape[0], reseed),
             )
             self._spec_note_entry(shape, self._spec_last_phase_ms, self._spec_reseed_table_ms(shape, max(posits)))
-        flat = self._mtp_record_rows(full, shape[0], row_ids)
+        flat = self._mtp_record_table(full, shape[0], row_ids)
         result = self._spec_timed("replay", decoder.serving_step, shape, row_ids, anchors, posits, flat, seed_cols)
         for name, ms in decoder.serving_step_phases().items():  # the replay's own sub-phases (inside "replay")
             self._spec_policy.calibration.note_phase(name, ms)

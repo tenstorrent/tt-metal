@@ -1111,3 +1111,71 @@ def test_guard_interval_zero_keeps_the_hard_limit(monkeypatch):
     monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_MIN_INTERVAL_S", "0")
     g = _guard(monkeypatch, recaptures=8, last_recapture_age_s=1e6)
     assert g._g4_trace_guard_should_recapture("k") is False
+
+
+# ===== the speculative records on the lane engine: the lane frame of a record call (tt/lane_prefill.py, host-only)
+from models.demos.gemma4.tt.lane_prefill import (  # noqa: E402
+    lane_frame_rows,
+    lane_of_row,
+    lane_record_table,
+    lane_row_groups,
+    lane_rows_per_lane,
+)
+
+REC_LANES, REC_SLOTS = 4, 8  # a 4-lane engine of 8 slots: slot s sits on lane s // 8
+
+
+def test_record_rows_group_by_lane_in_call_order_and_count_the_busiest_lane():
+    rows = [0, 3, 16, 17, 18, 31]  # lanes 0, 0, 2, 2, 2, 3
+    assert [lane_of_row(r, REC_SLOTS) for r in rows] == [0, 0, 2, 2, 2, 3]
+    assert lane_row_groups(rows, REC_LANES, REC_SLOTS) == [[0, 1], [], [2, 3, 4], [5]]
+    assert lane_rows_per_lane(rows, REC_LANES, REC_SLOTS) == 3
+    assert lane_rows_per_lane([], REC_LANES, REC_SLOTS) == 0
+    # one column: every row is lane 0 and the count is the batch
+    assert lane_row_groups([5, 2, 9], 1, 0) == [[0, 1, 2]] and lane_rows_per_lane([5, 2, 9], 1, 0) == 3
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        ([16, 0], "lane-major"),  # lane 2 before lane 0
+        ([0, 0], "duplicate row 0"),
+        ([32], "outside the 4 x 8 lane slot space"),
+        ([-1], "outside the 4 x 8 lane slot space"),
+    ],
+)
+def test_record_rows_out_of_lane_order_or_space_are_refused(expect_error, rows, message):
+    with expect_error(ValueError, message):
+        lane_row_groups(rows, REC_LANES, REC_SLOTS)
+
+
+def test_the_lane_frame_mirrors_each_lanes_first_row_and_idles_empty_lanes():
+    groups = lane_row_groups([0, 3, 16, 17, 18, 31], REC_LANES, REC_SLOTS)
+    anchors = [100, 101, 102, 103, 104, 105]
+    frame = lane_frame_rows(anchors, groups, 5, idle=0)
+    assert frame == [100, 101, 100, 100, 100] + [0] * 5 + [102, 103, 104, 102, 102] + [105] * 5
+    with expect_error_value("lane 2 has 3 rows for a 2-row record"):
+        lane_frame_rows(anchors, groups, 2, idle=0)
+
+
+def expect_error_value(message):
+    return pytest.raises(ValueError, match=message)  # allow-pytest.raises (a module-level helper, no fixture)
+
+
+def test_the_record_table_is_the_lane_frame_of_the_global_rows():
+    full = torch.arange(REC_LANES * REC_SLOTS * 3, dtype=torch.int32).reshape(REC_LANES * REC_SLOTS, 3) + 1
+    rows = [0, 3, 16, 17, 18, 31]
+    table = lane_record_table(full, 5, rows, REC_LANES, REC_SLOTS)
+    assert tuple(table.shape) == (REC_LANES * 5, 3) and table.dtype == torch.int32
+    # lane 0's rows at 0..1, lane 2's at 10..12, lane 3's at 15; every other frame row is block 0
+    assert table[0].tolist() == full[0].tolist() and table[1].tolist() == full[3].tolist()
+    assert table[10:13].tolist() == full[[16, 17, 18]].tolist() and table[15].tolist() == full[31].tolist()
+    live = {0, 1, 10, 11, 12, 15}
+    assert all(not table[r].any() for r in range(REC_LANES * 5) if r not in live)
+    # one column: the plain record's [b_v, blocks] table in call order
+    one = lane_record_table(full, 3, [9, 2], 1, 0)
+    assert one.tolist() == [full[9].tolist(), full[2].tolist(), [0, 0, 0]]
+    with expect_error_value("lane 2 has 3 rows for a 2-row record"):
+        lane_record_table(full, 2, rows, REC_LANES, REC_SLOTS)
+    with expect_error_value("row 31 is outside the 20-row page table"):
+        lane_record_table(full[:20], 5, [0, 31], REC_LANES, REC_SLOTS)

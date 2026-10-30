@@ -446,3 +446,100 @@ def check_lane_decode_frame(lanes, rows_per_lane, **host_shapes):
     if len(set(rows.values())) > 1:
         raise ValueError(f"the frame's tensors disagree on rows per column: {rows}")
     return out
+
+
+# -- the speculative records on the lane engine: the lane frame of a record call ---------------------------------
+#
+# A speculative record (``spec_decode.SpeculativeDecoder.serving_*``) runs per mesh column over that column's rows:
+# the device graph is ``(B_v, K)`` per column (``B_v * (K + 1) <= 32`` packed verify rows), and the host side of
+# every record input is the lane frame ``[lanes * B_v, ...]`` sharded over the lane axis the way the decode frame
+# is (``lane_decode_frame_shapes``). Lane ``l``'s rows sit at frame rows ``l * B_v ..`` in call order; the rows of
+# a call are the engine's GLOBAL slots (``slot // lane_slots`` is the lane), lane-major, so a record's drafts and
+# argmax ids come back in the call's order lane by lane. Block ids are lane-local, which is why a row's page table
+# may only ever reach its own column: a replicated record would write lane 0's block ids into every lane's KV.
+
+
+def lane_of_row(row, lane_slots):
+    """The lane of a global slot ``row`` (``row // lane_slots``)."""
+    return int(row) // int(lane_slots)
+
+
+def lane_row_groups(rows, lanes, lane_slots):
+    """``[[indices into rows] per lane]`` of a record call's global row ids.
+
+    The rows must be lane-major (every row of lane ``l`` before any row of lane ``l + 1``), so that the record's
+    frame rows and the drafts / argmax ids it returns line up with the call order; a row outside the slot space,
+    a repeated row or a lane order violation raises. With one lane every row is lane 0.
+    """
+    lanes, lane_slots = int(lanes), int(lane_slots)
+    if lanes < 1:
+        raise ValueError(f"lane_row_groups needs lanes >= 1, got {lanes}")
+    if lanes == 1:
+        return [list(range(len(rows)))]
+    if lane_slots < 1:
+        raise ValueError(f"lane_row_groups needs lane_slots >= 1 with {lanes} lanes, got {lane_slots}")
+    groups = [[] for _ in range(lanes)]
+    seen = set()
+    last = -1
+    for i, r in enumerate(rows):
+        r = int(r)
+        if not 0 <= r < lanes * lane_slots:
+            raise ValueError(f"row {r} outside the {lanes} x {lane_slots} lane slot space ({list(rows)})")
+        if r in seen:
+            raise ValueError(f"duplicate row {r} in {list(rows)}")
+        seen.add(r)
+        lane = r // lane_slots
+        if lane < last:
+            raise ValueError(
+                f"rows must be lane-major (every row of a lane before the next lane's), got {list(rows)} "
+                f"with lane_slots={lane_slots}"
+            )
+        last = lane
+        groups[lane].append(i)
+    return groups
+
+
+def lane_rows_per_lane(rows, lanes, lane_slots):
+    """The busiest lane's row count among the global rows ``rows`` (``len(rows)`` with one lane): what a record
+    must hold per column."""
+    if int(lanes) <= 1:
+        return len(rows)
+    counts = [0] * int(lanes)
+    for r in rows:
+        counts[lane_of_row(r, lane_slots)] += 1
+    return max(counts) if counts else 0
+
+
+def lane_frame_rows(values, groups, b_v, idle):
+    """The lane frame of per-row ``values`` (in call order): lane ``l``'s values at frame rows ``l * b_v ..``, its
+    unused rows mirroring its first value (``spec_decode.serving_pad_rows``: a padding row computes what row 0
+    computes and writes where row 0 writes) and an idle lane's rows ``idle`` (the records' null-block warmup
+    input: token 0 at position 0 through block 0, which is every lane's own null block)."""
+    b_v = int(b_v)
+    out = []
+    for lane, g in enumerate(groups):
+        vals = [values[i] for i in g]
+        if len(vals) > b_v:
+            raise ValueError(f"lane {lane} has {len(vals)} rows for a {b_v}-row record")
+        out.extend(vals + [vals[0] if vals else idle] * (b_v - len(vals)))
+    return out
+
+
+def lane_record_table(full, b_v, rows, lanes, lane_slots):
+    """The record's ``[lanes * b_v, blocks]`` int32 flat table for one decoder call on the lane engine: lane
+    ``l``'s rows at ``l * b_v + i`` (``full[rows]`` in call order), every other frame row zero (block 0, the lane's
+    null block). One lane: the ``[b_v, blocks]`` table of the plain record."""
+    import torch
+
+    groups = lane_row_groups(rows, lanes, lane_slots)
+    b_v = int(b_v)
+    flat = torch.zeros((len(groups) * b_v, int(full.shape[1])), dtype=torch.int32)
+    for lane, g in enumerate(groups):
+        if len(g) > b_v:
+            raise ValueError(f"lane {lane} has {len(g)} rows for a {b_v}-row record ({list(rows)})")
+        for i, idx in enumerate(g):
+            r = int(rows[idx])
+            if r >= int(full.shape[0]):
+                raise ValueError(f"row {r} is outside the {int(full.shape[0])}-row page table")
+            flat[lane * b_v + i] = full[r].to(torch.int32)
+    return flat

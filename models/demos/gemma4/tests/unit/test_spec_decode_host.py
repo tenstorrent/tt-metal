@@ -793,6 +793,26 @@ _SERVING_METHODS = [
     "_srv_slot_table",
     "_srv_logits_to_host",
     "refresh_page_tables",
+    # the lane engine's record path (one record per mesh column over the lane frame)
+    "_srv_lane_mapper",
+    "_srv_frame_from_torch",
+    "_srv_from_torch",
+    "_srv_pos_tensors",
+    "_srv_tokens_tensor",
+    "_srv_seed_lists",
+    "_srv_seed_upload",
+    "_srv_eager_forward",
+    "_srv_host_tokens_frame",
+    "_srv_host_pos_frame",
+    "_srv_lane_columns",
+    "_srv_lane_groups",
+    "_srv_lane_reseed",
+    "_srv_lane_step",
+    "_srv_lane_upload",
+    "_srv_lane_upload_tables",
+    "_srv_lane_read_u32",
+    "_srv_lane_logits_to_host",
+    "_srv_copy_if_changed",
 ]
 
 

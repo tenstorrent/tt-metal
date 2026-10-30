@@ -964,6 +964,185 @@ def test_a_batched_proposal_declines_every_row_and_ends_the_session(model, mtp):
     assert len(_names(mtp, "reseed")) == 1
 
 
+# -- 3.2b the MTP rail on the lane engine (GEMMA4_GALAXY_LANES): records per lane over the slot batch ------------
+#
+# The runner's lane step is the slot batch ``lanes x lane_slots`` widened to ``[B, 1+K]``: a scheduled request's row
+# is its slot and every other slot a padding row between the live ones (plugin docs/SPEC_DECODE_CONTRACT.md s.4,
+# tests/spec/test_spec_lane.py). The model's records run per mesh column, so a record's rows are PER LANE.
+
+LANES, LANE_SLOTS = 4, 8  # a 4-lane engine of 8 slots: the slot batch is 32 rows, lane l owns slots 8l..8l+7
+
+
+def _lane_model(adapter, monkeypatch, **kwargs):
+    return mh.build_mtp_model(adapter, monkeypatch, lanes=LANES, lane_slots=LANE_SLOTS, **kwargs)
+
+
+def _lane_prefill(mtp, slots, keys, prompt_len=2):
+    tokens = torch.full((len(slots), prompt_len), 7, dtype=torch.int32)
+    return mtp.prefill_forward(
+        tokens=tokens,
+        prompt_lens=[prompt_len] * len(slots),
+        empty_slots=list(slots),
+        page_table=_table(keys),
+        kv_cache=mtp.kv_cache,
+        warmup_prefill=False,
+    )
+
+
+def _lane_batch(mtp, slots, keys, anchor=3, position=2, first=30):
+    """Prefill ``slots`` and take their first ordinary step over the slot batch (the plain lane decode): returns
+    the per-slot committed token, the slot batch's block-table keys and the wire size."""
+    total = LANES * LANE_SLOTS
+    _lane_prefill(mtp, slots, keys)
+    ks = [0] * total
+    for slot, key in zip(slots, keys):
+        ks[slot] = key
+    firsts = [first + i for i in range(len(slots))]
+    plain = [0] * total
+    for slot, token in zip(slots, firsts):
+        plain[slot] = token
+    out = mh._wire(mtp, slots, [anchor] * len(slots), [position] * len(slots), keys, total, result=_tensor(plain))
+    assert [int(out[slot]) for slot in slots] == firsts
+    return firsts, ks, total
+
+
+def _lane_propose(mtp, slots, firsts, total, position=3):
+    committed, posits = mh._committed(total, slots, firsts, [position] * len(slots))
+    return mh._propose(mtp, committed, posits)
+
+
+def test_lane_records_are_sized_per_lane_and_the_plan_publishes_the_flat_cap(adapter, monkeypatch, assistant_dir):
+    env = {"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_K_BY_ROWS": "5:5,8:3,16:1"}
+    mtp = _lane_model(adapter, monkeypatch, warm=False, env=env)
+    assert mtp._mtp_lane_geometry() == (LANES, LANE_SLOTS)
+    # the row cap is the lane's slots, not the folded batch: the 16-row band clamps to 8 rows (its larger K wins)
+    shapes, max_rows = mtp._mtp_resolve_shapes(LANES * LANE_SLOTS)
+    assert max_rows == LANE_SLOTS and shapes == ((1, 5), (5, 5), (8, 3))
+    one = mh.build_mtp_model(adapter, monkeypatch, warm=False, env=env)
+    assert one._mtp_lane_geometry() == (1, 0) and one._mtp_resolve_shapes(32) == (((1, 5), (5, 5), (8, 3), (16, 1)), 16)
+    # the warm decoder is built for the lane engine: the records that fit a lane, the table as the lane frame
+    warm = _lane_model(adapter, monkeypatch)
+    assert warm._mtp_decoder.lanes == LANES and warm._mtp_shapes == ((1, 5), (5, 5), (8, 3))
+    # the plan: under the lane fold the per-lane table is published as the flat cap at the folded max_num_seqs
+    # (the plugin's draft_cap reads the whole lane batch's live rows, which bounds nothing one lane can hold);
+    # off the fold the table itself, with the tail admission requires
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, {**env, "GEMMA4_GALAXY_LANES": "1"})
+        plan = module.Gemma4MTPContractForCausalLM.spec_plan(None, 128, 5)
+        assert plan.k_by_rows == ((128, 5),) and plan.effective_k == 5
+        assert module.spec_plan_k_by_rows_lanes(((5, 5), (8, 3), (16, 1)), 128) == ((128, 5),)
+        assert module.spec_plan_k_by_rows_lanes(((4, 3), (8, 1)), 64) == ((64, 3),)
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, env)
+        plan = module.Gemma4MTPContractForCausalLM.spec_plan(None, 128, 5)
+        assert plan.k_by_rows == ((5, 5), (8, 3), (16, 1), (128, 1)) and plan.effective_k == 5
+
+
+def test_lane_proposal_picks_the_busiest_lanes_record_and_hands_the_decoder_the_lane_frame(adapter, monkeypatch):
+    mtp = _lane_model(adapter, monkeypatch)
+    # lane 0: slots 0 and 1; lane 2: slots 16, 17, 18 (three rows: the busiest lane -> the (5, 5) record)
+    slots = [0, 1, 16, 17, 18]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, ks, total = _lane_batch(mtp, slots, keys)
+    assert len(_names(mtp, "decode")) == 1 and _names(mtp, "decode")[0][2][:2] == [2, 2]  # the plain lane decode
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert [int(proposal.num_valid[s]) for s in slots] == [5] * 5
+    assert int(proposal.num_valid.sum()) == 25, "only the live slots are offered drafts"
+    step = mh._steps(mtp)[0]
+    assert step[1] == (5, 5) and step[2] == slots and step[3] == firsts
+    table = step[7]
+    assert len(table) == LANES * 5, "the record table is the lane frame [lanes x B_v, blocks]"
+    assert table[0] == [10, 11, 0, 0] and table[1] == [12, 13, 0, 0], "lane 0's rows at frame rows 0.."
+    assert table[10:13] == [[14, 15, 0, 0], [16, 17, 0, 0], [18, 19, 0, 0]], "lane 2's rows at frame rows 10.."
+    assert all(row == [0, 0, 0, 0] for r, row in enumerate(table) if r not in (0, 1, 10, 11, 12)), "block 0 elsewhere"
+    assert len(_names(mtp, "reseed")) == 1 and _names(mtp, "reseed")[0][2] == slots, "every row reseeds once"
+    assert set(mtp._mtp_sessions) == set(slots)
+    # the verify over the slot batch: live rows at their slots, padding rows between them, every live row answered
+    # from the replay (no plain decode beside it)
+    drafts = proposal.draft_token_ids.tolist()
+    blocks = [[0] + [-1] * 5] * total
+    positions = [[-1] * 6] * total
+    valid = [0] * total
+    for slot, first in zip(slots, firsts):
+        blocks[slot] = mh._block(first, drafts[slot])
+        positions[slot] = mh._positions(3, 6)
+        valid[slot] = 5
+    out = mh._verify(mtp, blocks, positions, valid, ks)
+    assert len(_names(mtp, "decode")) == 1, "the verify answered every live row from the shared replay"
+    for i, slot in enumerate(slots):
+        assert out.argmax_ids[slot].tolist() == [150 + 10 * i + j for j in range(6)], slot
+    assert out.argmax_ids[2].tolist() == [-1] * 6 and out.argmax_ids[31].tolist() == [-1] * 6, "padding rows"
+    # the next proposal continues every row from its own verified column (one replay for both lanes, no reseed)
+    counts = [6, 2, 1, 4, 2]
+    committed = [[-1] * 6 for _ in range(total)]
+    posits = [[-1] * 6 for _ in range(total)]
+    for i, slot in enumerate(slots):
+        ids = out.argmax_ids[slot].tolist()
+        committed[slot] = [ids[j] if j < counts[i] else -1 for j in range(6)]
+        posits[slot] = mh._positions(4, counts[i])
+    counts_wire = [1] * total
+    for i, slot in enumerate(slots):
+        counts_wire[slot] = counts[i]
+    proposal = mtp.propose_draft_tokens(5, _tensor(committed), _tensor(posits), _tensor(counts_wire))
+    assert [int(proposal.num_valid[s]) for s in slots] == [5] * 5
+    step = mh._steps(mtp)[-1]
+    assert step[2] == slots and step[5] == [c - 1 for c in counts] and len(_names(mtp, "reseed")) == 1
+    # release of one lane's slot drops that session alone; the slot's generation closes
+    mtp.release_request(17)
+    assert 17 not in mtp._mtp_sessions and set(mtp._mtp_sessions) == {0, 1, 16, 18}
+
+
+def test_lane_proposal_takes_one_draft_length_for_every_lane_from_the_busiest(adapter, monkeypatch):
+    """One captured graph serves every column, so the step's K is the busiest lane's: a lone row on lane 0 beside
+    six rows on lane 1 is drafted at the (8, 3) record's K=3 (its solo band would be K=5)."""
+    mtp = _lane_model(adapter, monkeypatch)
+    slots = [0] + [8 + r for r in range(6)]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, _ks, total = _lane_batch(mtp, slots, keys)
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert [int(proposal.num_valid[s]) for s in slots] == [3] * 7
+    step = mh._steps(mtp)[0]
+    assert step[1] == (8, 3) and len(step[7]) == LANES * 8
+    assert step[7][0] == [10, 11, 0, 0] and step[7][8:14] == [[12 + 2 * r, 13 + 2 * r, 0, 0] for r in range(6)]
+    assert proposal.draft_token_ids[0, 3:].eq(0).all()
+
+
+def test_lane_rows_spread_over_lanes_fit_a_record_the_folded_batch_would_not(adapter, monkeypatch):
+    """Fifteen rows over three lanes (five each) run the (5, 5) record at K=5: on one column fifteen rows would
+    need the (16, 1) record. The record is sized by the busiest lane, not by the folded batch."""
+    mtp = _lane_model(adapter, monkeypatch)
+    slots = [lane * LANE_SLOTS + r for lane in (0, 1, 3) for r in range(5)]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, _ks, total = _lane_batch(mtp, slots, keys)
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert [int(proposal.num_valid[s]) for s in slots] == [5] * 15
+    step = mh._steps(mtp)[0]
+    assert step[1] == (5, 5) and step[2] == slots and len(step[7]) == LANES * 5
+    for lane, frame in ((0, 0), (1, 5), (3, 15)):
+        assert step[7][frame : frame + 5] == [[k, k + 1, 0, 0] for k in keys[5 * (0, 1, 3).index(lane) :][:5]], lane
+    assert all(row == [0, 0, 0, 0] for row in step[7][10:15]), "the idle lane's rows are block 0"
+
+
+def test_lane_rows_past_the_largest_record_on_one_lane_decline_the_step(adapter, monkeypatch):
+    """Six rows on lane 1 exceed the (5, 5) record (the largest here) while a lone row sits on lane 0: the step is
+    the plain lane decode (the O(1) all-declined proposal, no session opened) until that lane shrinks."""
+    mtp = _lane_model(adapter, monkeypatch, warm=False)
+    mh.install_decoder(mtp, shapes=((1, 5), (5, 5)), max_rows=5)
+    slots = [0] + [LANE_SLOTS + r for r in range(6)]
+    keys = [10 + 2 * i for i in range(len(slots))]
+    firsts, _ks, total = _lane_batch(mtp, slots, keys)
+    proposal = _lane_propose(mtp, slots, firsts, total)
+    assert int(proposal.num_valid.sum()) == 0 and not mh._steps(mtp)
+    assert "6 proposing rows on one lane exceed the largest record (5, 5)" in mtp._mtp_decline_logged
+    assert not mtp._mtp_sessions, "the fast decline opens no session"
+    # the lane shrinks to the record: the next proposal drafts for every live row of both lanes
+    mtp.release_request(LANE_SLOTS + 5)
+    live = slots[:-1]
+    committed, posits = mh._committed(total, live, firsts[:-1], [3] * len(live))
+    proposal = mh._propose(mtp, committed, posits)
+    assert [int(proposal.num_valid[s]) for s in live] == [5] * 6 and mh._steps(mtp)[0][1] == (5, 5)
+
+
 # -- 3.3 verify -------------------------------------------------------------------
 
 

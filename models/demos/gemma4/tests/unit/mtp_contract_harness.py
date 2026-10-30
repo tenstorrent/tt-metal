@@ -59,10 +59,20 @@ def scripted_costs(shapes, widths, step_ms, reseed_ms=None):
     return costs
 
 
-class Target:
-    """``model[0]``: layers with attention configs, the output converter and the vocabulary."""
+def lane_geometry(target):
+    """``(lanes, lane_slots)`` of a target stub: ``(1, 0)`` on one column, the lane engine's geometry when its
+    mesh config is lane-sharded (what ``SpeculativeDecoder`` and the adapter read)."""
+    cfg = getattr(target, "mesh_config", None)
+    if not getattr(cfg, "lane_sharded", False):
+        return 1, 0
+    return int(cfg.lanes), int(getattr(target, "lane_slots", 0) or 32)
 
-    def __init__(self, events, ring=None, window=1024):
+
+class Target:
+    """``model[0]``: layers with attention configs, the output converter and the vocabulary; ``lanes > 1`` makes it
+    the lane engine's model (a lane-sharded mesh config of ``lanes`` columns, ``lane_slots`` slots each)."""
+
+    def __init__(self, events, ring=None, window=1024, lanes=0, lane_slots=0):
         self.events = events
         self.layers = [
             SimpleNamespace(
@@ -75,7 +85,9 @@ class Target:
             for kind in ("sliding", "full")
         ]
         self.vocab_size = VOCAB
-        self.mesh_config = SimpleNamespace(tp=8)
+        self.mesh_config = SimpleNamespace(tp=8, lane_sharded=int(lanes) > 1, lanes=int(lanes) if int(lanes) > 1 else 1)
+        if int(lanes) > 1:
+            self.lane_slots = int(lane_slots)
         self.ccl_manager = SimpleNamespace(name="ccl")
         self.convert_calls = []
 
@@ -137,8 +149,10 @@ class Decoder:
     argmax id at +1.0 and everything else at -1.0.
     """
 
-    def __init__(self, events):
+    def __init__(self, events, lanes=1, lane_slots=0):
         self.events = events
+        self.lanes = int(lanes)  # the lane engine: the record table is the lane frame [lanes * B_v, blocks]
+        self.lane_slots = int(lane_slots)
         self.shapes = None
         self.widths = None
         self.max_rows = None
@@ -211,6 +225,26 @@ class Decoder:
         """spec_decode's ``_srv_upload_tables`` / ``_srv_check_rows`` contract on one call's rows and table."""
         rows = [int(r) for r in rows]
         b_v = int(shape[0])
+        if self.lanes > 1:
+            # spec_decode's ``_srv_lane_groups`` / ``_srv_lane_upload_tables``: lane-major global rows, at most
+            # B_v per lane, the table the lane frame with zero padding rows per lane
+            from models.demos.gemma4.tt.lane_prefill import lane_row_groups
+
+            if not rows:
+                raise ValueError(f"shape {shape}: a lane call needs at least one live row")
+            groups = lane_row_groups(rows, self.lanes, self.lane_slots)
+            if any(len(g) > b_v for g in groups):
+                raise ValueError(f"shape {shape}: a lane has more than {b_v} live rows ({rows})")
+            if tuple(page_tables.shape[:1]) != (self.lanes * b_v,):
+                raise ValueError(
+                    f"shape {shape}: page_tables must be the lane frame [{self.lanes} x {b_v}, blocks], "
+                    f"got {tuple(page_tables.shape)}"
+                )
+            for lane, g in enumerate(groups):
+                block = page_tables[lane * b_v : (lane + 1) * b_v]
+                if len(g) < b_v and bool(block[len(g) :].any()):
+                    raise ValueError(f"shape {shape}: lane {lane}'s padding rows must be zero (block 0)")
+            return
         if not 1 <= len(rows) <= b_v:
             raise ValueError(f"shape {shape}: {len(rows)} live rows, expected 1..{b_v}")
         if len(set(rows)) != len(rows) or min(rows) < 0:
@@ -265,7 +299,7 @@ class Decoder:
                 row_argmax = [base + 50 + j for j in range(p_v)]
             drafts[i] = torch.tensor(row_drafts[:k_v], dtype=torch.int64)
             argmax[i] = torch.tensor(row_argmax[:p_v], dtype=torch.int64)
-        self.buffer = torch.full((b_v, p_v, VOCAB), -1.0)
+        self.buffer = torch.full((self.lanes * b_v, p_v, VOCAB), -1.0)  # the lane frame's rows on the lane engine
         for i in range(live):
             for j in range(p_v):
                 self.buffer[i, j, int(argmax[i, j]) % VOCAB] = 1.0
@@ -286,7 +320,7 @@ def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None, st
     shapes = tuple(tuple(s) for s in shapes)
     max_seq_len = int(model.model_args[0].max_seq_len)
     widths = widths or {s: _ladder(max_seq_len, s[1]) for s in shapes}
-    decoder = Decoder(model.events)
+    decoder = Decoder(model.events, *lane_geometry(model.model[0]))
     decoder.serving_prepare(list(shapes), widths, max_rows or max(s[0] for s in shapes))
     decoder.serving_capture()
     model._mtp_decoder = decoder
@@ -305,13 +339,25 @@ def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None, st
 
 
 def build_mtp_model(
-    adapter, monkeypatch, *, ring=None, max_batch_size=32, max_seq_len=1024, env=None, warm=True, resident=None
+    adapter,
+    monkeypatch,
+    *,
+    ring=None,
+    max_batch_size=32,
+    max_seq_len=1024,
+    env=None,
+    warm=True,
+    resident=None,
+    lanes=0,
+    lane_slots=0,
 ):
     """A contract-rail model over recording stubs; ``warm`` installs a captured decoder.
 
     ``resident`` narrows the instance's ``supports_async_decode`` (the runner's resident-decode
     mode, which ``plan_decode_reload`` reads off the instance) the way the base narrows it for
     PLI models; None keeps the class declaration (GEMMA4_SUPPORTS_ASYNC_DECODE, default on).
+    ``lanes`` > 1 builds the lane engine's model (``lanes`` columns of ``lane_slots`` slots: the engine batch is
+    their product and a warm decoder holds the records that fit one lane's slots).
     """
     for name in SPEC_ENV:
         monkeypatch.delenv(name, raising=False)
@@ -322,7 +368,9 @@ def build_mtp_model(
     if resident is not None:
         model.model_capabilities = {**cls.model_capabilities, "supports_async_decode": bool(resident)}
     model.events = []
-    model.model = [Target(model.events, ring=ring)]
+    if int(lanes) > 1:
+        max_batch_size = int(lanes) * int(lane_slots)
+    model.model = [Target(model.events, ring=ring, lanes=lanes, lane_slots=lane_slots)]
     attach_sampling_state(model)
     model.model_args = [SimpleNamespace(max_seq_len=max_seq_len, max_batch_size=max_batch_size)]
     model.tt_supported_decode_batch_sizes = (int(max_batch_size),)  # the warmed decode buckets
@@ -398,7 +446,8 @@ def build_mtp_model(
     model._harness_read_decode_output = read
     model._harness_warmup_model_decode = base_warmup
     if warm:
-        install_decoder(model)
+        shapes = DEFAULT_SHAPES if int(lanes) <= 1 else tuple(s for s in DEFAULT_SHAPES if s[0] <= int(lane_slots))
+        install_decoder(model, shapes=shapes)
     return model
 
 
@@ -418,7 +467,7 @@ def stub_drafter_modules(monkeypatch, events, costs=None, plain_ms=PLAIN_MS):
 
     class SpeculativeDecoder(Decoder):
         def __init__(self, **kwargs):
-            super().__init__(events)
+            super().__init__(events, *lane_geometry(kwargs.get("target_model")))
             self.costs = dict(costs or {})
             built.append(("decoder", kwargs))
 
@@ -639,6 +688,7 @@ __all__ = [
     "_wire",
     "build_mtp_model",
     "install_decoder",
+    "lane_geometry",
     "logits_result",
     "scripted_costs",
     "stub_drafter_modules",
