@@ -263,6 +263,7 @@ class Worker:
         # wrapper from a purged plugin module never outlives its session.
         self.open_devices = 0
         self._device_call_depth = 0
+        self.cleanup_failed = False
         self.patch_points = {}
         counted = {}
         for module_name in _DEVICE_MODULES:
@@ -329,7 +330,10 @@ class Worker:
     def _under_repo(self, module) -> str | None:
         path = getattr(module, "__file__", None)
         if not path:
-            paths = list(getattr(module, "__path__", []) or [])
+            try:
+                paths = list(getattr(module, "__path__", []) or [])
+            except Exception:  # noqa: BLE001 - a namespace package whose parent is gone
+                return None
             path = paths[0] if paths else None
         if not path:
             return None
@@ -395,7 +399,12 @@ class Worker:
     def _is_library(self, module) -> bool:
         path = getattr(module, "__file__", None)
         if not path:
-            paths = list(getattr(module, "__path__", []) or [])
+            try:
+                paths = list(getattr(module, "__path__", []) or [])
+            except Exception:  # noqa: BLE001
+                # A namespace package (e.g. models.*) whose parent _purge already dropped: reading
+                # its __path__ looks the parent up in sys.modules and raises KeyError.
+                return False
             path = paths[0] if paths else None
         if not path:
             return True  # builtins and frozen modules
@@ -475,10 +484,17 @@ class Worker:
             os.close(saved[0])
             os.close(saved[1])
         t2 = time.time()
-        self._purge()
         import gc
 
-        gc.collect()
+        # The session's result stands; a worker whose cleanup failed reports it and then exits.
+        try:
+            self._purge()
+            gc.collect()
+        except Exception:  # noqa: BLE001
+            import traceback
+
+            traceback.print_exc()
+            self.cleanup_failed = True
         print(
             f"warm worker: session {self.runs + 1} exit {code}: prepare {t1 - t0:.2f}s, "
             f"pytest {t2 - t1:.2f}s, cleanup {time.time() - t2:.2f}s",
@@ -624,7 +640,7 @@ class Worker:
         # create_submeshes are closed with close_mesh_device); nothing is left open by that.
         left_open = max(self.open_devices, 0)
         self.open_devices = 0
-        keep = code == 0 and not left_open and self._rss_gb() < MAX_RSS_GB
+        keep = code == 0 and not left_open and not self.cleanup_failed and self._rss_gb() < MAX_RSS_GB
         _send(conn, {"status": "done", "exit": code, "exiting": not keep})
         if left_open:
             print(f"warm worker: session left {left_open} device(s) open, exiting", flush=True)
