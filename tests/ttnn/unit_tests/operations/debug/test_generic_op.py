@@ -436,3 +436,88 @@ def test_point_to_point(mesh_device):
     logger.info(f"Output at receiver: {output_tensor_cpu}")
 
     assert torch.allclose(output_tensor_cpu, sender_data), "Receiver should have sender's data after transfer"
+
+
+def _exp_program(input_tensor, output_tensor, num_tiles):
+    """Single-core exp over `num_tiles` tiles, addressing the given io tensors."""
+    core = ttnn.CoreCoord(0, 0)
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    page_size = 2 * 1024
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=2 * page_size,
+            core_ranges=core_grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=page_size)
+            ],
+        )
+        for index in (0, 16)
+    ]
+    reader_rt_args = ttnn.RuntimeArgs()
+    writer_rt_args = ttnn.RuntimeArgs()
+    reader_rt_args[0][0] = [input_tensor.buffer_address(), num_tiles, 0]
+    writer_rt_args[0][0] = [output_tensor.buffer_address(), num_tiles, 0]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+            core_ranges=core_grid,
+            compile_time_args=ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args(),
+            runtime_args=reader_rt_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+            core_ranges=core_grid,
+            compile_time_args=[16] + ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args(),
+            runtime_args=writer_rt_args,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
+            core_ranges=core_grid,
+            compile_time_args=[num_tiles, 1],
+            defines=[("SFPU_OP_EXP_INCLUDE", "1"), ("SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);")],
+            runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(),
+        ),
+    ]
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+
+
+@skip_for_blackhole("Not tested / built for Blackhole")
+def test_generic_op_cache_keys_io_tensor_layouts(device):
+    """generic_op keys each io tensor's TensorLayout (Alignment included) but not its shape (#59915): a
+    differently shaped io tensor with the same layout reuses the cached program, while one whose padded
+    shape matches but whose Alignment differs builds a new one."""
+    torch.manual_seed(0)
+    device.enable_program_cache()
+
+    def run(input_tensor, padded_shape):
+        output_tensor = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(padded_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        num_tiles = prod(padded_shape) // (32 * 32)
+        entries = device.num_program_cache_entries()
+        output = ttnn.generic_op([input_tensor, output_tensor], _exp_program(input_tensor, output_tensor, num_tiles))
+        new_entries = device.num_program_cache_entries() - entries
+        golden = ttnn.to_torch(ttnn.exp(input_tensor))
+        assert torch.allclose(golden, ttnn.to_torch(output)[..., : golden.shape[-2], :])
+        return new_entries
+
+    def tiled(shape):
+        return ttnn.from_torch(
+            torch.rand(shape).to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+    assert run(tiled([1, 2, 32, 32]), [1, 2, 32, 32]) == 1
+    # Same layout (default tile Alignment), different shape: reuses the program.
+    assert run(tiled([1, 1, 64, 32]), [1, 1, 64, 32]) == 0
+    # Same padded shape [1, 1, 64, 32], but padded explicitly from 30 rows (which would round to 32 by
+    # default): a different Alignment.
+    explicit = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch.rand([1, 1, 30, 32]).to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        [1, 1, 64, 32],
+        0.0,
+    )
+    assert list(explicit.padded_shape) == [1, 1, 64, 32]
+    assert run(explicit, [1, 1, 64, 32]) == 1

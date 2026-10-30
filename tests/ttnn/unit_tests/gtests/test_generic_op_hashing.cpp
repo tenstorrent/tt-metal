@@ -28,12 +28,14 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -118,4 +120,30 @@ TEST(GenericOpNamedArgsHash, ValueOnlyDifferenceKeepsHash) {
     };
     EXPECT_EQ(program_hash(a), program_hash(b))
         << "Named-arg values (and per-core core count) must not change the generic-op program hash";
+}
+
+// A CB's face geometry sets the tile face layout its kernels compile against, so two descriptors that
+// differ only there must not share a cached program (#59915).
+TEST(GenericOpCbHash, FaceGeometryChangesHash) {
+    using namespace tt::tt_metal;
+    auto cb_hash = [](std::optional<FaceGeometry> face_geometry) {
+        ProgramDescriptor descriptor{
+            .cbs = {CBDescriptor{
+                .total_size = 2048,
+                .core_ranges = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
+                .format_descriptors = {CBFormatDescriptor{
+                    .buffer_index = 0,
+                    .data_format = tt::DataFormat::Float16_b,
+                    .page_size = 2048,
+                    .face_geometry = face_geometry,
+                }},
+            }}};
+        return ttnn::operations::generic::compute_program_descriptor_hash(descriptor);
+    };
+    EXPECT_NE(cb_hash(std::nullopt), cb_hash(FaceGeometry{.face_r_dim = 8, .num_faces = 2}));
+    EXPECT_NE(
+        cb_hash(FaceGeometry{.face_r_dim = 16, .num_faces = 4}),
+        cb_hash(FaceGeometry{.face_r_dim = 8, .num_faces = 2}));
+    EXPECT_EQ(
+        cb_hash(FaceGeometry{.face_r_dim = 8, .num_faces = 2}), cb_hash(FaceGeometry{.face_r_dim = 8, .num_faces = 2}));
 }
