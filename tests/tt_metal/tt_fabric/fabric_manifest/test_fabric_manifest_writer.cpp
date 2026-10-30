@@ -8,21 +8,20 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_registry.hpp"
 
 namespace tt::tt_fabric::manifest {
 namespace {
 
 using json = nlohmann::ordered_json;
 
-content::L1 word_at(uint32_t address) { return {.address = address, .type = layout::type_of<uint32_t>()}; }
+content::L1 word_at(uint32_t address) { return describe_l1_region<uint32_t>(address); }
 
 // One mesh, M0, of two chips. C0 is this rank's, with one router, E0, whose link reaches W0 on C1, another rank's chip.
 ManifestFacts make_facts() {
@@ -47,7 +46,20 @@ ManifestFacts make_facts() {
                 Field{
                     .key = "edm_status",
                     .category = FieldCategory::LIFECYCLE,
-                    .content = content::L1{.address = 0x200, .type = layout::type_of<EDMStatus>()}},
+                    .content = describe_l1_region<EDMStatus>(0x200)},
+                Field{
+                    .key = "retrain_sync",
+                    .category = FieldCategory::LIFECYCLE,
+                    .content =
+                        content::StreamReg{
+                            .stream_id = 30,
+                            .address = 0xffb5e000,
+                            .value_bits = 24,
+                            .type = get_manifest_type_name<CoordinatedEriscContextSwitchState>()}},
+                Field{
+                    .key = "my_direction",
+                    .category = FieldCategory::KERNEL_PARAMS,
+                    .content = content::Enum{.type = "eth_chan_directions", .value = 0, .value_name = "EAST"}},
                 Field{.key = "perf_telemetry", .category = FieldCategory::DIAGNOSTICS, .content = std::nullopt},
             },
         .eriscs = {Erisc{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .physical_erisc = 0}},
@@ -73,19 +85,14 @@ ManifestFacts make_facts() {
         .run = {},
         .fabric =
             {.config = {.fabric_config = FabricConfig::FABRIC_1D},
-             .packet_header = layout::type_of<LowLatencyPacketHeaderT<0>>(),
+             .packet_header = get_manifest_type_name<LowLatencyPacketHeaderT<0>>(),
              .routing_1d_extension_words = 0},
         .arch =
             {.arch = tt::ARCH::WORMHOLE_B0,
              .areas =
                  {.heartbeat = {.word = word_at(0x1f80)},
-                  .fabric_telemetry = {.address = 0x3000, .type = layout::type_of<FabricTelemetry>()},
+                  .fabric_telemetry = describe_l1_region<FabricTelemetry>(0x3000),
                   .routing_table = word_at(0x4000)},
-             .stream_registers =
-                 {.base = 0x10000,
-                  .stride = 0x1000,
-                  .count = 32,
-                  .registers = {{StreamRegister::BUF_SPACE_AVAILABLE, {.offset = 0x100, .bits = 17}}}},
              .core_registers =
                  {.soft_reset = 0x1, .reset_masks = {0x800}, .wall_clock_low = 0x2, .wall_clock_high = 0x3}},
         .meshes = {Mesh{
@@ -101,23 +108,6 @@ ManifestFacts make_facts() {
 
 const json& router_e0(const json& manifest) {
     return manifest.at("meshes").at("M0").at("chips").at("C0").at("routers").at("E0");
-}
-
-// Every schema string under `node`.
-void collect_schemas(const json& node, std::vector<std::string>& schemas) {
-    if (node.is_array()) {
-        for (const auto& element : node) {
-            collect_schemas(element, schemas);
-        }
-    } else if (node.is_object()) {
-        for (const auto& [key, value] : node.items()) {
-            if (key == "schema" && value.is_string()) {
-                schemas.push_back(value.get<std::string>());
-            } else {
-                collect_schemas(value, schemas);
-            }
-        }
-    }
 }
 
 // A remote chip says only where it is in its mesh: the ids this rank can't read are null, and it has no routers.
@@ -154,37 +144,39 @@ TEST(ManifestWriter, ReferencesAndIds) {
     EXPECT_EQ(chip.at("asic_id"), "0x0000000000001234");
 }
 
-// types holds every type a schema names, and the types those name, sorted by name, and nothing a schema doesn't reach.
-TEST(ManifestWriter, TypesHoldExactlyWhatSchemasReach) {
+// A region and a stream register name the registered type their bytes hold, and a configuration enum names its
+// enumerator. The manifest describes no type's members: decode gets the type back from its name.
+TEST(ManifestWriter, ContentsNameTheirType) {
     const auto manifest = make_manifest_json(make_facts());
-    const auto& structs = manifest.at("types").at("structs");
-    const auto& enums = manifest.at("types").at("enums");
-    const auto& tagged_unions = manifest.at("types").at("tagged_unions");
-
-    std::vector<std::string> schemas;
-    collect_schemas(manifest, schemas);
-    for (const auto& schema : schemas) {
-        if (schema.starts_with("struct:")) {
-            EXPECT_TRUE(structs.contains(schema.substr(7))) << schema;
-        } else if (schema.starts_with("enum:")) {
-            EXPECT_TRUE(enums.contains(schema.substr(5))) << schema;
-        } else if (schema.starts_with("union:")) {
-            EXPECT_TRUE(tagged_unions.contains(schema.substr(6))) << schema;
-        }
-    }
-    EXPECT_TRUE(structs.contains("FabricTelemetry"));
-    EXPECT_TRUE(enums.contains("EDMStatus"));
-    // The run's packet header, named outside the meshes, with its template argument.
-    EXPECT_EQ(manifest.at("fabric").at("packet_header").at("schema"), "struct:LowLatencyPacketHeaderT<0>");
-    EXPECT_TRUE(structs.contains("LowLatencyPacketHeaderT<0>"));
-    // A described struct no schema reaches.
-    EXPECT_FALSE(structs.contains("WorkerXY"));
-
-    std::vector<std::string> names;
-    for (const auto& [name, _] : structs.items()) {
-        names.push_back(name);
-    }
-    EXPECT_TRUE(std::ranges::is_sorted(names));
+    const auto& fields = router_e0(manifest).at("fields");
+    EXPECT_EQ(
+        fields.at("edm_status"),
+        json({{"category", "lifecycle"},
+              {"kind", "l1"},
+              {"address", 0x200},
+              {"num_elements", 1},
+              {"element_size", sizeof(EDMStatus)},
+              {"type", "EDMStatus"},
+              {"cleared_by_host", false}}));
+    EXPECT_EQ(
+        fields.at("retrain_sync"),
+        json({{"category", "lifecycle"},
+              {"kind", "stream_reg"},
+              {"stream_id", 30},
+              {"address", 0xffb5e000},
+              {"value_bits", 24},
+              {"type", "CoordinatedEriscContextSwitchState"}}));
+    // The enum's own name isn't written: it stays in the model, for FIELDS.md and errors.
+    EXPECT_EQ(
+        fields.at("my_direction"),
+        json({{"category", "kernel_params"}, {"kind", "enum"}, {"value", 0}, {"value_name", "east"}}));
+    // A counter array is its elements' type and count.
+    const auto& counters = router_e0(manifest).at("credit_counters").at("to_sender_ack");
+    EXPECT_EQ(counters.at("type"), get_manifest_type_name<uint32_t>());
+    EXPECT_EQ(counters.at("element_size"), sizeof(uint32_t));
+    // The run's packet header, with its template argument even though it equals the default.
+    EXPECT_EQ(manifest.at("fabric").at("packet_header"), "LowLatencyPacketHeaderT<0>");
+    EXPECT_FALSE(manifest.contains("types"));
 }
 
 // Two fields with one key would leave readers one of them, so the writer refuses.
@@ -193,27 +185,6 @@ TEST(ManifestWriter, FailsOnTwoFieldsWithOneKey) {
     auto& fields = facts.meshes.at(0).chips.at(0).routers.at(0).fields;
     fields.push_back(fields.front());
     EXPECT_ANY_THROW(make_manifest_json(facts));
-}
-
-// A struct member holding a tagged union names the member that holds its tag, and the union lists the enum its tag
-// holds and its cases, each picked by one of that enum's values.
-TEST(ManifestWriter, TaggedUnionNamesItsTag) {
-    const auto manifest = make_manifest_json(make_facts());
-    const auto& types = manifest.at("types");
-    const auto& members = types.at("structs").at("LowLatencyPacketHeaderT<0>").at("members");
-    const auto command =
-        std::find_if(members.begin(), members.end(), [](const json& m) { return m.at("name") == "command_fields"; });
-    ASSERT_NE(command, members.end());
-    EXPECT_EQ(command->at("schema"), "union:NocCommandFields");
-    EXPECT_EQ(command->at("tag_member"), "noc_send_type");
-
-    const auto& command_fields = types.at("tagged_unions").at("NocCommandFields");
-    EXPECT_EQ(command_fields.at("tag").at("schema"), "enum:NocSendType");
-    const auto& tag_values = types.at("enums").at("NocSendType").at("values");
-    ASSERT_FALSE(command_fields.at("cases").empty());
-    for (const auto& union_case : command_fields.at("cases")) {
-        EXPECT_TRUE(tag_values.contains(union_case.at("tag_value").get<std::string>())) << union_case.at("name");
-    }
 }
 
 }  // namespace
