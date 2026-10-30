@@ -388,7 +388,7 @@ def _retag_tensor(tensor, *, reference, shard_dim: int | None) -> None:
 
 
 def _canonicalize_flat_replicated_topology(tensor, mesh_contract: Qwen38MeshContract) -> None:
-    """Retag the legacy flat mesh returned by device-side zero allocation.
+    """Retag the legacy flat mesh returned by device-side zero allocation; accept the canonical two-axis form as is.
 
     ``ttnn.zeros`` creates the requested full local value on every worker but
     currently reports the four workers as one distribution axis while retaining
@@ -403,6 +403,13 @@ def _canonicalize_flat_replicated_topology(tensor, mesh_contract: Qwen38MeshCont
     coordinates = tuple(tuple(int(value) for value in coordinate) for coordinate in raw_coordinates)
     placements = tuple(type(value).__name__ for value in topology.placements())
     expected_coordinates = tuple((0, column) for column in range(TP_SIZE))
+    if (
+        distribution == tuple(mesh_contract.mesh_shape)
+        and coordinates == expected_coordinates
+        and placements == ("PlacementReplicate", "PlacementReplicate")
+    ):
+        mesh_contract.validate_tensor(tensor, placement=TensorPlacement.REPLICATED)
+        return
     if distribution != (TP_SIZE,) or coordinates != expected_coordinates or placements != ("PlacementReplicate",):
         raise RuntimeError(
             f"device zero allocation topology is not the exact flat replicated TP{TP_SIZE} form: "
