@@ -66,6 +66,58 @@ FORCE_INLINE void post_kv_forward(CircularBuffer& cb_kv_fwd, uint32_t address, u
     cb_kv_fwd.push_back(1);
 }
 
+#ifdef SDPA_CHUNKED_CHAINS
+// Chunked prefix chains: a paged K/V chunk read into the reserved (not yet pushed) CB slot at dst_addr, like
+// read_paged_chunk_with_padding, so the slot can be forwarded before the push. Caller manages reserve/push.
+template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
+FORCE_INLINE void read_paged_chunk_for_forwarding(
+    const ReaderType& reader,
+    const uint32_t cb_id,
+    const uint32_t dst_addr,
+    const uint32_t cur_head,
+    const uint32_t chunk_start_row,
+    const uint32_t src_rows,
+    const uint32_t src_cols,
+    const uint32_t dst_rows,
+    const uint32_t dst_cols,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold,
+    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
+    const bool transpose = false,
+    const uint32_t skip_src_cols = 0) {
+    Noc noc;
+    const uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
+    const uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
+    uint32_t barrier_count = 0;
+    for (uint32_t row = 0; row < src_rows; ++row) {
+        uint32_t write_ptr = dst_addr + row * outer_ptr_stride;
+        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
+            chunk_start_row + row, cur_head, page_table_ptr);
+        for (uint32_t col = 0; col < src_cols; ++col) {
+            noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = physical_tile_id}, {});
+            physical_tile_id += 1;
+            write_ptr += inner_ptr_stride;
+            if (++barrier_count == barrier_threshold) {
+                noc.async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+        physical_tile_id += skip_src_cols;
+    }
+    for (uint32_t row = 0; row < dst_rows; ++row) {
+        for (uint32_t col = 0; col < dst_cols; ++col) {
+            if (row < src_rows && col < src_cols) {
+                continue;
+            }
+            const uint32_t tile_idx = transpose ? col * dst_rows + row : row * dst_cols + col;
+            fill_zeros_async(noc, cb_id, tile_bytes, tile_idx * tile_bytes);
+        }
+    }
+    noc.async_read_barrier();
+    noc.write_zeros_l1_barrier();
+}
+#endif
+
 void kernel_main() {
     Noc noc;
 
@@ -270,6 +322,12 @@ void kernel_main() {
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
+#ifdef SDPA_KV_BARRIER_TILES
+    // prefix_reuse bit 0: K/V read batches sized by the cores that read K/V from DRAM.
+    constexpr uint32_t kv_barrier_threshold = SDPA_KV_BARRIER_TILES;
+#else
+    constexpr uint32_t kv_barrier_threshold = barrier_threshold;
+#endif
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto k_reader = TensorAccessor(k_args, k_addr);
@@ -615,6 +673,24 @@ void kernel_main() {
                 const auto needed = [&](uint32_t qc) {
                     return (std::min((qc + 1) * Sq_chunk_t, Skt) + Sk_chunk_t - 1) / Sk_chunk_t;
                 };
+#ifdef SDPA_CHUNKED_CHAINS
+                // Chunked prefix chains: every Q chunk (q_chunk already includes the chunk start) reads the K/V prefix
+                // from chunk 0, light or heavy, so a hop carries the K chunks both neighbours need.
+                if (in_chain_head && !is_sink && q_iter < next_core_q_chunks) {
+                    const uint32_t q_next = chunked_q_chunk_offset +
+                                            decompose_global_q_index(
+                                                next_seg_global_start + q_iter, q_num_chunks, NQH, use_zigzag_balancing)
+                                                .q_chunk;
+                    fwd_chunks = std::min(needed(q_chunk), needed(q_next));
+                }
+                if (in_chain_head && !is_injector && q_iter < prev_seg_count) {
+                    const uint32_t q_prev = chunked_q_chunk_offset +
+                                            decompose_global_q_index(
+                                                prev_seg_global_start + q_iter, q_num_chunks, NQH, use_zigzag_balancing)
+                                                .q_chunk;
+                    recv_chunks = std::min(needed(q_chunk), needed(q_prev));
+                }
+#else
                 if (in_chain_head && !is_sink && q_iter < next_core_q_chunks) {
                     const uint32_t q_next = decompose_global_q_index(
                                                 next_seg_global_start + q_iter, q_num_chunks, NQH, use_zigzag_balancing)
@@ -629,6 +705,7 @@ void kernel_main() {
                                                 .q_chunk;
                     recv_chunks = std::min(needed(q_chunk), needed(q_prev));
                 }
+#endif
             }
 
             if constexpr (writer_forwards) {
@@ -675,22 +752,45 @@ void kernel_main() {
                 } else {
                     // Read K chunk from DRAM
                     if constexpr (is_chunked) {
-                        // Use page table to read K chunk (forwarding not supported for paged mode)
+                        // Use page table to read K chunk (forwarding only with chunked prefix chains)
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                        read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
-                            k_reader,
-                            cb_k_in,
-                            k_head,
-                            k_chunk_start_row_num,
-                            kv_row_tile_count,
-                            DHt,
-                            Sk_chunk_t,
-                            DHt,
-                            k_tile_bytes,
-                            barrier_threshold,
-                            page_table_ptr,
-                            true  // transpose=true for K reads
-                        );
+#ifdef SDPA_CHUNKED_CHAINS
+                        if (should_forward) {
+                            cb_k.reserve_back(k_chunk_tiles);
+                            cb_k_start_address = cb_k.get_write_ptr();
+                            read_paged_chunk_for_forwarding<NKH, block_size_t, DHt>(
+                                k_reader,
+                                cb_k_in,
+                                cb_k_start_address,
+                                k_head,
+                                k_chunk_start_row_num,
+                                kv_row_tile_count,
+                                DHt,
+                                Sk_chunk_t,
+                                DHt,
+                                k_tile_bytes,
+                                kv_barrier_threshold,
+                                page_table_ptr,
+                                true  // transpose=true for K reads
+                            );
+                        } else
+#endif
+                        {
+                            read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
+                                k_reader,
+                                cb_k_in,
+                                k_head,
+                                k_chunk_start_row_num,
+                                kv_row_tile_count,
+                                DHt,
+                                Sk_chunk_t,
+                                DHt,
+                                k_tile_bytes,
+                                kv_barrier_threshold,
+                                page_table_ptr,
+                                true  // transpose=true for K reads
+                            );
+                        }
                     } else {
                         if (should_forward) {
                             cb_k.reserve_back(k_chunk_tiles);
@@ -893,23 +993,46 @@ void kernel_main() {
                 } else {
                     // Read V chunk from DRAM
                     if constexpr (is_chunked) {
-                        // Use page table to read V chunk (forwarding not supported for paged mode)
+                        // Use page table to read V chunk (forwarding only with chunked prefix chains)
                         const uint32_t kv_chunk_start_row_num = k_chunk * Sk_chunk_t;
                         constexpr uint32_t head_dim = (use_mla && !mla_kv_overlap) ? vDHt : DHt;
-                        read_paged_chunk_with_padding<NVH, block_size_t, head_dim>(
-                            v_reader,
-                            cb_v_in,
-                            v_head,
-                            kv_chunk_start_row_num,
-                            kv_row_tile_count,
-                            vDHt,
-                            Sk_chunk_t,
-                            vDHt,
-                            v_tile_bytes,
-                            barrier_threshold,
-                            page_table_ptr,
-                            false,
-                            skip_src_cols);
+#ifdef SDPA_CHUNKED_CHAINS
+                        if (should_forward) {
+                            cb_v.reserve_back(v_chunk_tiles);
+                            cb_v_start_address = cb_v.get_write_ptr();
+                            read_paged_chunk_for_forwarding<NVH, block_size_t, head_dim>(
+                                v_reader,
+                                cb_v_in,
+                                cb_v_start_address,
+                                v_head,
+                                kv_chunk_start_row_num,
+                                kv_row_tile_count,
+                                vDHt,
+                                Sk_chunk_t,
+                                vDHt,
+                                v_tile_bytes,
+                                kv_barrier_threshold,
+                                page_table_ptr,
+                                false,
+                                skip_src_cols);
+                        } else
+#endif
+                        {
+                            read_paged_chunk_with_padding<NVH, block_size_t, head_dim>(
+                                v_reader,
+                                cb_v_in,
+                                v_head,
+                                kv_chunk_start_row_num,
+                                kv_row_tile_count,
+                                vDHt,
+                                Sk_chunk_t,
+                                vDHt,
+                                v_tile_bytes,
+                                kv_barrier_threshold,
+                                page_table_ptr,
+                                false,
+                                skip_src_cols);
+                        }
                     } else {
                         if (should_forward) {
                             cb_v.reserve_back(v_chunk_tiles);

@@ -1770,11 +1770,19 @@ class TPAttention:
         qk_chunk = min(qk_chunk, S)
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
         # Approximate exponential for prefill rows only (S >= 128); the 32-row verify bucket keeps the accurate one.
+        _grid = self.mesh.compute_with_storage_grid_size()
+        # QWEN36_SDPA_PREFILL_QSPLIT / QWEN36_SDPA_PREFIX_REUSE (default off: q = k = qk_chunk and no prefix_reuse,
+        # today's call): smaller Q chunks for short calls (same K chunks, bit-identical) and K/V prefix reuse.
+        q_chunk = tpc.sdpa_prefill_q_chunk(
+            qk_chunk, S, NH, _grid.x * _grid.y, chunk_start=0 if chunk_start_idx_tensor is not None else chunk_start_idx
+        )
+        _reuse = tpc.sdpa_prefill_reuse_bits(S, q_chunk, NH, _grid.x * _grid.y, k_chunk=qk_chunk)
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=_grid,
             exp_approx_mode=tpc.sdpa_prefill_exp_approx() and S >= 128,
-            q_chunk_size=qk_chunk,
+            q_chunk_size=q_chunk,
             k_chunk_size=qk_chunk,
+            **({"prefix_reuse": _reuse} if _reuse else {}),
         )
 
         # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)
