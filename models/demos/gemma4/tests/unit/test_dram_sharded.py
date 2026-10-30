@@ -315,6 +315,49 @@ def test_pipeline_outliers_accuracy_time(mesh_device, device_params, case, monke
 # with the bf16 Dest default overflows L1. Each prompt length takes a different path through __call__: 2016 rows (the
 # 31B gate_up TP=4 case of PR #60786's review: per_core_M 7 at one shot = 2.6 MB of CBs) and 2560 (the bf16 slab) are
 # single matmuls under the old rule and slab + remainder chunks under the fp32 slab; 4096 is the bf16-slab chunk path.
+# The gate_up cases at 4096 rows also print the K-block / slab trade of prefill_slab_plan (a smaller in0_block_w
+# halves the in0 / in1 CBs and buys a larger slab at twice the K iterations): wall per call at 2048 and 4096 rows
+# for every (in0_block_w, slab) candidate at the 64 KB headroom and at headroom 0, each checked for L1 fit and pcc.
+def _fp32_slab_timing(mesh_device, lin, x, ckc, golden, monkeypatch, n_calls=5):
+    import time
+
+    from models.demos.gemma4.tt import dram_sharded as ds
+
+    K, N, dt, cols = lin.k, lin.n, lin._dtype, lin._prefill_max_cols
+    plans = []  # (in0_block_w, slab rows): the plan of each candidate block at the two headrooms
+    for w in ds.prefill_block_w_candidates(K, N, max_cols=cols, fp32_acc=True):
+        for headroom in (None, 0):
+            plan = ds.prefill_slab_plan(K, N, dt, max_cols=cols, fp32_acc=True, headroom=headroom, candidates=(w,))
+            if (w, plan[0]) not in plans:
+                plans.append((w, plan[0]))
+    default = lin._slab_plan_by_acc[True]
+    print(f"[K{K} N{N}] fp32 K-block / slab candidates {plans}; the rule's plan (rows, in0_block_w) {default}")
+    print(f"{'in0_block_w':>11s} {'slab':>5s} {'rows':>5s} {'launches':>8s} {'ms/call':>8s} {'pcc':>9s}")
+    for w, slab in plans:
+        monkeypatch.setitem(lin._slab_rows_by_acc, True, slab)
+        monkeypatch.setattr(ds, "prefill_in0_block_w", lambda *a, _w=w, **kw: _w)
+        for m in (2048, 4096):
+            launches = len(ds.prefill_row_chunks(m, slab=slab, remainder=min(ds._PREFILL_REMAINDER_CHUNK, slab)))
+            tx = ttnn.from_torch(x[:, :, :m], device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            out = lin(tx, compute_kernel_config=ckc, prefill=True)  # compile
+            ttnn.synchronize_device(mesh_device)
+            out.deallocate(True)
+            t0 = time.perf_counter()
+            for i in range(n_calls):
+                out = lin(tx, compute_kernel_config=ckc, prefill=True)
+                if i < n_calls - 1:
+                    out.deallocate(True)
+            ttnn.synchronize_device(mesh_device)
+            ms = (time.perf_counter() - t0) / n_calls * 1e3
+            pcc = _pcc(ttnn.to_torch(out).float(), golden[:, :, :m])
+            out.deallocate(True)
+            tx.deallocate(True)
+            tag = " <- rule" if (slab, w) == default else ""
+            print(f"{w:>11d} {slab:>5d} {m:>5d} {launches:>8d} {ms:>8.2f} {pcc:>9.6f}{tag}")
+            assert pcc > 0.9995, (w, slab, m, pcc)
+    monkeypatch.undo()
+
+
 @pytest.mark.parametrize(
     "K, N",
     [(5376, 10752), (5376, 5376), (5376, 4096), (2048, 5376), (3840, 7680)],
@@ -322,7 +365,7 @@ def test_pipeline_outliers_accuracy_time(mesh_device, device_params, case, monke
 )
 @pytest.mark.parametrize("M", [32, 2016, 2560, 4096], ids=["m32", "m2016", "m2560", "m4096"])
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_prefill_fp32_acc_fits_l1(mesh_device, device_params, K, N, M):
+def test_prefill_fp32_acc_fits_l1(mesh_device, device_params, K, N, M, monkeypatch):
     from models.demos.gemma4.tt.compute_config import prefill_linear_compute_kernel_config
 
     if not can_dram_shard(K, N, dtype=ttnn.bfloat8_b):
@@ -338,7 +381,12 @@ def test_prefill_fp32_acc_fits_l1(mesh_device, device_params, K, N, M):
     assert list(out.shape) == [1, 1, M, N], out.shape
     golden = (x.float() @ w.float().reshape(K, N)).reshape(1, 1, M, N)
     pcc = _pcc(got, golden)
-    slab = getattr(lin, "_slab_rows_by_acc", {}).get(True)
-    print(f"[K{K} N{N} M{M}] fp32-acc prefill slab {slab} rows, pcc vs torch {pcc:.6f}")
+    slab, block_w = lin._slab_plan_by_acc[True]
+    assert slab == lin._slab_rows_by_acc[True]
+    print(f"[K{K} N{N} M{M}] fp32-acc prefill slab {slab} rows in0_block_w {block_w}, pcc vs torch {pcc:.6f}")
     assert torch.isfinite(got).all()
     assert pcc > 0.9995, f"pcc vs torch {pcc}"
+    if M == 4096 and N == 2 * K:  # the gate_up shapes: the K-block / slab trade, timed (printed, not asserted)
+        out.deallocate(True)
+        tx.deallocate(True)
+        _fp32_slab_timing(mesh_device, lin, x, ckc, golden, monkeypatch)
