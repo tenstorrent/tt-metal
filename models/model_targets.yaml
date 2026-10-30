@@ -1516,6 +1516,19 @@ targets:
             accuracy:
               top1: 89
               top5: 99
+  phi-3.5-mini:
+    aliases: ["Phi-3.5-mini", "Phi-3.5-mini-instruct", "microsoft/Phi-3.5-mini-instruct"]
+    skus:
+      bh_p150:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              # Phi-3-mini family thresholds; measured top-1 93.0 / top-5 99 (performance mode) on one Blackhole chip (2026-10-21).
+              top1: 89
+              top5: 99
   qwen2.5-32b:
     aliases: ["Qwen2.5-32B", "Qwen/Qwen2.5-32B-Instruct"]
     skus:
