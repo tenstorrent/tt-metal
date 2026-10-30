@@ -232,6 +232,7 @@ json make_router_shape_json(const manifest::RouterShape& shape) {
     out["num_active_eriscs"] = shape.num_active_eriscs;
     out["channel_trimming_overrides_applied"] = shape.channel_trimming_overrides_applied;
     out["vc0_bubble_flow_control"] = shape.vc0_bubble_flow_control;
+    out["has_tensix_extension"] = shape.has_tensix_extension;
     return out;
 }
 

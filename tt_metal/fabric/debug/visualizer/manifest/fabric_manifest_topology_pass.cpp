@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_describe.hpp"
@@ -75,21 +76,35 @@ bool is_wrap_link(
     return delta == mesh_shape[axis] - 1;
 }
 
-// The channel of the router facing `direction` on the same chip and routing plane as the router on `chan`.
-chan_id_t get_sibling_chan(
-    const ControlPlane& control_plane, FabricNodeId node, chan_id_t chan, eth_chan_directions direction) {
-    const auto plane = control_plane.get_routing_plane_id(node, chan);
-    for (const auto& [sibling, sibling_direction] : control_plane.get_active_fabric_eth_channels(node)) {
-        if (sibling_direction == direction && control_plane.get_routing_plane_id(node, sibling) == plane) {
-            return sibling;
+// The router the builder, to the router on `chan`, that faces `direction`: the other end of the chip's
+// connected pair that holds both.
+const manifest::Router& get_connected_sibling(
+    const std::vector<manifest::ConnectedRouters>& connected_routers,
+    const std::map<chan_id_t, const manifest::Router*>& routers_by_chan,
+    FabricNodeId node,
+    chan_id_t chan,
+    eth_chan_directions direction) {
+    for (const auto& pair : connected_routers) {
+        if (pair.eth_chan1 != chan && pair.eth_chan2 != chan) {
+            continue;
+        }
+        const auto other = static_cast<chan_id_t>(pair.eth_chan1 == chan ? pair.eth_chan2 : pair.eth_chan1);
+        const auto it = routers_by_chan.find(other);
+        TT_FATAL(
+            it != routers_by_chan.end(),
+            "Fabric manifest: {} channel {} is connected to channel {}, which published no router",
+            node,
+            chan,
+            other);
+        if (it->second->identity.direction == direction) {
+            return *it->second;
         }
     }
     TT_THROW(
-        "Fabric manifest: {} channel {} has a sibling facing {} on routing plane {}, but no router is there",
+        "Fabric manifest: {} channel {} has an edge to the router facing {}, but the builder connected it to none",
         node,
         chan,
-        direction_letter(direction),
-        plane);
+        direction_letter(direction));
 }
 
 tt::tt_metal::CoreCoord get_router_logical_core(const tt::Cluster& cluster, ChipId physical_chip_id, chan_id_t chan) {
@@ -197,9 +212,13 @@ void resolve_link_peer(
     router.link.wrap = is_wrap_link(fabric_type, control_plane.get_mesh_graph(), node, router.identity.direction, peer);
 }
 
-// Resolves each downstream edge to the sibling router it lands on.
+// Resolves each downstream edge to the sibling router it lands on: the router the builder connected this one to, facing
+// the edge's direction.
 void resolve_edge_siblings(
-    std::vector<manifest::Router>& routers, const ControlPlane& control_plane, FabricNodeId node) {
+    std::vector<manifest::Router>& routers,
+    const std::vector<manifest::ConnectedRouters>& connected_routers,
+    FabricNodeId node) {
+    // Create (eth channel, router) mapping
     std::map<chan_id_t, const manifest::Router*> by_chan;
     for (const auto& router : routers) {
         by_chan.emplace(router.identity.eth_chan, &router);
@@ -215,15 +234,9 @@ void resolve_edge_siblings(
         const chan_id_t chan = router.identity.eth_chan;
         for (uint32_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
             for (auto& edge : router.intra_chip_downstream_edges[vc]) {
-                const auto target = get_sibling_chan(control_plane, node, chan, edge.target.direction);
-                const auto it = by_chan.find(target);
-                TT_FATAL(
-                    it != by_chan.end(),
-                    "Fabric manifest: {} channel {} has an edge to channel {}, which was not collected",
-                    node,
-                    chan,
-                    target);
-                const auto& sibling = *it->second;
+                const auto& sibling =
+                    get_connected_sibling(connected_routers, by_chan, node, chan, edge.target.direction);
+                const auto target = static_cast<chan_id_t>(sibling.identity.eth_chan);
                 const auto num_senders = sibling.shape.senders_per_vc.at(vc);
                 TT_FATAL(
                     edge.landing_channel < num_senders,
@@ -235,7 +248,8 @@ void resolve_edge_siblings(
                     edge.landing_channel,
                     target,
                     num_senders);
-                edge.through_tensix_mux = edge.core != sibling.identity.virtual_core;
+                edge.through_tensix_mux =
+                    builder_type_for_vc(vc, sibling.shape.has_tensix_extension) == BuilderType::TENSIX;
                 const auto [landed, inserted] = landed_by.emplace(
                     std::tuple{target, vc, edge.landing_channel},
                     Landing{.router = &router, .through_tensix_mux = edge.through_tensix_mux});
@@ -303,7 +317,7 @@ manifest::Chip resolve_chip_routers(
     for (auto& router : chip.routers) {
         resolve_link_peer(router, control_plane, fabric_type, node, physical_chip_id);
     }
-    resolve_edge_siblings(chip.routers, control_plane, node);
+    resolve_edge_siblings(chip.routers, chip.connected_routers, node);
     return chip;
 }
 
