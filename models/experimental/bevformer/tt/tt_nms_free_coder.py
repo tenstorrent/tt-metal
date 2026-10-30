@@ -50,6 +50,34 @@ def denormalize_bbox(normalized_bboxes):
     )
 
 
+def _gather_rows(table, rows):
+    """Each sample's rows ``rows`` ``(bs, 1, 1, k)`` uint32 of ``table`` ``(bs, n, width)``, width at
+    most 16, as ``(bs, k, width)`` in the table's dtype, exactly.
+
+    ttnn.embedding gathers whole rows in one pass, far faster here than ttnn.gather, but only from a
+    bfloat16 table. So a float32 table goes as three bfloat16 parts, each the next 8 significant
+    bits of its values, whose float32 sum is the table again. Rows are padded to 16 values, the
+    narrowest whose reads land aligned."""
+    bs, n, width = table.shape
+    k = rows.shape[-1]
+    padded = ttnn.pad(ttnn.reshape(table, (bs, 1, n, width)), [(0, 0), (0, 0), (0, 0), (0, 16 - width)], 0.0)
+    rows = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
+    samples = []
+    for b in range(bs):
+        rest = padded if bs == 1 else padded[b : b + 1]
+        sample_rows = rows if bs == 1 else rows[b : b + 1]
+        out = None
+        for _ in range(3):
+            part = ttnn.typecast(rest, ttnn.bfloat16)
+            rest = ttnn.subtract(rest, ttnn.typecast(part, ttnn.float32))
+            gathered = ttnn.embedding(sample_rows, ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT))
+            gathered = ttnn.typecast(ttnn.to_layout(gathered, ttnn.TILE_LAYOUT), ttnn.float32)
+            out = gathered if out is None else ttnn.add(out, gathered)
+        samples.append(ttnn.reshape(out[..., :width], (1, k, width)))
+    out = samples[0] if bs == 1 else ttnn.concat(samples, dim=0)
+    return out if table.dtype == ttnn.float32 else ttnn.typecast(out, table.dtype)
+
+
 class TTNMSFreeCoder:
     """BEVFormer's NMS-free box coder with top-k and decoding on device; the arguments after
     ``device`` are the ones of ``reference.nms_free_coder.NMSFreeCoder`` that decoding reads."""
@@ -152,16 +180,16 @@ class TTNMSFreeCoder:
         _, selected = ttnn.topk(shifted, k=self.max_num, dim=-1)
         # A float32 top-k takes uint32 indexes.
         selected = ttnn.typecast(selected, ttnn.uint32)
+        selected_logits = _gather_rows(ttnn.reshape(logits, (bs, num_query * num_classes, 1)), selected)
         top_logits, indexes = ttnn.topk(
-            ttnn.gather(logits, -1, selected), k=self.max_num, dim=-1, indices_tensor=selected
+            ttnn.reshape(selected_logits, (bs, 1, 1, self.max_num)), k=self.max_num, dim=-1, indices_tensor=selected
         )
         scores = ttnn.sigmoid(top_logits)
         labels = ttnn.remainder(indexes, num_classes)
-        # Integer division, exact for any index; gather takes uint32 indexes.
+        # Integer division, exact for any index; the row gather takes uint32 indexes.
         query_index = ttnn.div(ttnn.typecast(indexes, ttnn.int32), num_classes, rounding_mode="floor")
-        query_index = ttnn.reshape(ttnn.typecast(query_index, ttnn.uint32), (bs, self.max_num, 1))
-        code_index = ttnn.repeat(query_index, (1, 1, bbox_preds.shape[-1]))
-        boxes = denormalize_bbox(ttnn.gather(bbox_preds, 1, code_index))
+        query_index = ttnn.typecast(query_index, ttnn.uint32)
+        boxes = denormalize_bbox(_gather_rows(bbox_preds, query_index))
         return tuple(ttnn.reshape(t, (bs, self.max_num)) for t in (scores, labels, query_index)) + (boxes,)
 
     def valid(self, scores, boxes):
