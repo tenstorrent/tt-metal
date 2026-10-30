@@ -25,14 +25,13 @@ inline constexpr uint32_t kMaxParticipants = 8;
 // MM42 args (from kArgResultOffset). kArgResultOffset (64 B aligned, own TL1) receives per-participant results the
 // status line has no room for; kArgTableOffset (64 B aligned, own TL1) is a host-written table of kArgNumPoints
 // entries. kArgOperation is a kOp* code, kArgStrideBytes the distance between participants' words, kArgLeg selects a
-// leg of a mode, kArgSeed seeds kModeStorm and kModeSoak, kArgPeerCce names the other CCE of kModeItnWriter, and
-// kArgExpectedFirst / kArgExpectedSecond are the values kModeMim560Detector waits for. Modes from kModeOpMatrix share
-// one budget, started at kernel entry, across every wait and loop of the launch.
+// leg of a mode, kArgSeed seeds kModeStorm and kModeSoak, kArgPeerCce names the other CCE of kModeItnWriter.
+// Modes from kModeOpMatrix share one budget, started at kernel entry, across every wait and loop of the launch.
 inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo = 2, kArgPollBudgetHi = 3,
                           kArgTargetOffset = 4, kArgCount = 5, kArgValue = 6, kArgFlagOffset = 7,
                           kArgNumParticipants = 8, kArgParticipant = 9, kArgResultOffset = 10, kArgTableOffset = 11,
                           kArgNumPoints = 12, kArgOperation = 13, kArgStrideBytes = 14, kArgLeg = 15, kArgSeed = 16,
-                          kArgPeerCce = 17, kArgExpectedFirst = 18, kArgExpectedSecond = 19, kNumArgs = 20;
+                          kArgPeerCce = 17, kNumArgs = 18;
 
 // kModeTwoHartIncrement (MM42 TwoHartAmo probe): every participant discards both lines from its L1 D$ (participant 0
 // also from L2), sets its ready flag and waits for all ready flags, then does kArgCount amoadd.w of kArgValue on the
@@ -77,25 +76,13 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgPollBudgetLo =
 // D$ and L2, reads it through the cache (kStatusObservedFirst), sets its ready flag, waits for the writer's flag with
 // uncached loads, reads word 0 through the cache again (kStatusObservedSecond), then L2 INVALIDATE64 and cdiscard on
 // the line, then amoadd.w of kArgValue; kStatusReturnedLo is what it returned. Then it flushes the line from L1 D$ and
-// L2. kModeMim560Detector (MM42Detector): on the line at kArgTargetOffset, each round does amoadd.w of kArgValue on
-// word 0 (also written by the ITN source) and word 2 (no other writer), stores the round number through the uncached
-// alias to byte 16 (sb, the low byte of word 4) and bytes 18-19 (sh, the high half of word 4) as uncached partial
-// stores, and samples words 1 and 6 through the uncached alias. It runs at least kArgCount rounds, then until word 1
-// reads kArgExpectedFirst and word 6 kArgExpectedSecond, or the budget runs out (kCodeTrafficNotSeen). Then it reads
-// words 0 and 2 through the cache (amoadd.w of 0) and the uncached alias, and discards the line from L1 D$ and L2 so a
-// writeback cannot overwrite the words the host checks. The kDetector* words at kArgResultOffset hold what it saw;
-// kDetectorStarted is stored (1) before the first round, so the host can release the ITN source after the AMOs began.
-// kModeItnStream (MM42Detector ITN source, on the writer CCE): waits with uncached loads for 1 in its own flag line at
-// kArgFlagOffset (the host stores it), then for i < kArgCount stores itn_stream_word(kArgSeed, i, 0) and
-// itn_stream_word(kArgSeed, i, 1) to words 0 and 1 at kArgTargetOffset of CCE kArgPeerCce as plain SPA stores (ITN
-// writes), pausing kArgValue rdcycle cycles after each pair. kStatusObservedFirst is the pairs written.
+// L2.
 inline constexpr uint32_t kModeTwoHartIncrement = 0, kModeOpMatrix = 1, kModeSweep = 2, kModeLineState = 3,
                           kModeOrdering = 4, kModeNeighbourWrite = 5, kModeStorm = 6, kModeSoak = 7, kModeItnWriter = 8,
-                          kModeItnReceiver = 9, kModeMim560Detector = 10, kModeItnStream = 11, kNumModes = 12;
+                          kModeItnReceiver = 9, kNumModes = 10;
 inline constexpr uint32_t kMaxCount = 1024;
 inline constexpr uint32_t kMaxScRetries = 1024;
 inline constexpr uint32_t kMaxCasTries = 1u << 20;
-inline constexpr uint32_t kMaxDetectorRounds = 1u << 16;
 
 // Operations (kArgOperation, kOpEntryOperation). .W returns are the low 32 bits. kOpLrScCas*: lr, compare, sc. The Add
 // codes from kOpLrScAddW are increments built from LR/SC (lr, add, sc; bounded by kMaxScRetries attempts) and from CAS
@@ -223,20 +210,6 @@ inline constexpr uint32_t kStormResultProgress = 0, kStormResultAddViolations = 
                           kStormResultInterleaved = 12, kStormResultMaxCasTries = 13, kStormResultWords = 14;
 static_assert(kStormResultWords * 4 <= kLineBytes);
 
-// kModeMim560Detector result words. Rounds counts every round; the ITN and accumulate counts are the rounds in which
-// word 1 (word 6) read a value different from the round before, with the first and last such round.
-inline constexpr uint32_t kDetectorRounds = 0, kDetectorItnChanges = 1, kDetectorFirstItnChangeRound = 2,
-                          kDetectorLastItnChangeRound = 3, kDetectorAccumulateChanges = 4,
-                          kDetectorFirstAccumulateChangeRound = 5, kDetectorLastAccumulateChangeRound = 6,
-                          kDetectorCachedWord0 = 7, kDetectorCachedWord2 = 8, kDetectorUncachedWord0 = 9,
-                          kDetectorUncachedWord2 = 10, kDetectorStarted = 11, kDetectorWords = 12;
-inline constexpr uint32_t kDetectorNoChange = 0xFFFFFFFFu;
-
-// Word `word` (0 or 1) of kModeItnStream's pair `index`; distinct for every index.
-constexpr uint32_t itn_stream_word(uint32_t seed, uint32_t index, uint32_t word) {
-    return word == 0 ? seed + index * 0x01000193u : (seed ^ 0xA5A5A5A5u) + index * 0x9E3779B1u;
-}
-
 // Status line, written once at exit: every field, `fence w, w`, then the magic. kStatusScFailures counts failed sc.w
 // attempts, kStatusMaxRetries is the most attempts one LR/SC increment took. kStatusPeersSeen counts the flags the
 // last wait saw set. kStatusCycles is the rdcycle count of the operations. kStatusReturned* to kStatusFirstMismatch
@@ -250,11 +223,10 @@ static_assert(kStatusWords * sizeof(uint32_t) <= kLineBytes);
 inline constexpr uint32_t kDoneMagic = 0xA70D0DE0u, kStatusPoison = 0xBADD0E00u;
 
 // kCodeDone: every wait succeeded and every LR/SC increment stored. Otherwise the code names the first failure.
-// kCodeTrafficNotSeen: kModeMim560Detector's budget ran out before it saw both expected values.
 // kCodeReadBackTimeout: kModeItnWriter's data word never read back as written. kCodeBudgetExpired: the launch's
-// budget ran out during the operations of kModeOpMatrix, kModeSweep, kModeNeighbourWrite, kModeStorm, kModeSoak or
-// kModeItnStream (a participant stops at the operation it was on and still stores its results and status).
+// budget ran out during the operations of kModeOpMatrix, kModeSweep, kModeNeighbourWrite, kModeStorm or kModeSoak
+// (a participant stops at the operation it was on and still stores its results and status).
 inline constexpr uint32_t kCodeDone = 1, kCodeBadArgs = 2, kCodePeerTimeout = 3, kCodeScRetriesExhausted = 4,
-                          kCodeTrafficNotSeen = 5, kCodeReadBackTimeout = 6, kCodeBudgetExpired = 7;
+                          kCodeReadBackTimeout = 6, kCodeBudgetExpired = 7;
 
 }  // namespace cce_amo_ops_abi
