@@ -4807,6 +4807,71 @@ inline void _topk_large_indices_mark_neginf_indices_()
     }
 }
 
+// An unfused merge compares values only, so equal values land wherever the bitonic network leaves them, and a
+// row split across cores returns ties in a different order than the same row reduced on one core. These two
+// routines give the unfused survivor at dst the fused tie-break for the length of one merge: stamp writes the
+// low 16 index bits into each value's low 16 bits (zero for a bf16-sourced value), so the FP32 compare ranks
+// equal values by index exactly as the fused [bf16 value | u16 index] word does; clear restores the plain
+// values afterwards. -inf is left unstamped: a stamped -inf would be a NaN, and mark_neginf_indices needs
+// the exact -inf.
+inline void _topk_large_indices_tiebreak_init_()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_0);
+}
+
+template <std::uint32_t K>
+inline void _topk_large_indices_stamp_tiebreak_()
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
+    constexpr std::uint32_t indices_offset     = tiles_per_sequence * 64;
+    constexpr std::uint32_t iterations         = (K == 512 ? 1 : K == 1024 ? 2 : 4) * 16;
+
+    // LREG2 = fp32 -inf, LREG3 = value mask, LREG4 = index mask.
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, 0xFF80);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, 0x0000);
+
+    for (std::uint32_t i = 0; i < iterations; ++i)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, indices_offset);
+        TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+        TTI_SFPAND(0, p_sfpu::LREG4, p_sfpu::LREG1, 0);
+        // Stamp only lanes whose value is not -inf.
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG5, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG5, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_NE0);
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+    }
+}
+
+template <std::uint32_t K>
+inline void _topk_large_indices_clear_tiebreak_()
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr std::uint32_t iterations = (K == 512 ? 1 : K == 1024 ? 2 : 4) * 16;
+
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, 0xFFFF);
+    for (std::uint32_t i = 0; i < iterations; ++i)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPAND(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+    }
+}
+
 // A K = 2048 segment's unfused result from tiles 0 to 3 to tiles 4 to 7, raw words; ADDR_MOD_0 steps two rows.
 inline void _topk_large_indices_move_segment_result_()
 {

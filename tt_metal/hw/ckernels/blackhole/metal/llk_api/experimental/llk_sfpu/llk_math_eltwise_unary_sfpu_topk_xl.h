@@ -267,6 +267,27 @@ inline void llk_math_eltwise_unary_sfpu_topk_large_indices_mark_neginf_indices(
         ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>, dst_index, vector_mode);
 }
 
+inline void llk_math_eltwise_unary_sfpu_topk_large_indices_tiebreak_init() {
+    SAN_HOOK(unsupported());
+    ckernel::sfpu::_topk_large_indices_tiebreak_init_();
+}
+
+template <std::uint32_t K>
+inline void llk_math_eltwise_unary_sfpu_topk_large_indices_stamp_tiebreak(
+    std::uint32_t dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_large_indices_stamp_tiebreak_<K>, dst_index, vector_mode);
+}
+
+template <std::uint32_t K>
+inline void llk_math_eltwise_unary_sfpu_topk_large_indices_clear_tiebreak(
+    std::uint32_t dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_large_indices_clear_tiebreak_<K>, dst_index, vector_mode);
+}
+
 // For a caller that has already opened the split and owns its own Dst addressing, so the dst-indexed
 // params wrapper above would re-point it.
 template <std::uint32_t K>

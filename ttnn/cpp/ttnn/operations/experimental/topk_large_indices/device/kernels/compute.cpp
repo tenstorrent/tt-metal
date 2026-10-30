@@ -364,9 +364,17 @@ FORCE_INLINE void merge_landed_survivor(CircularBuffer& landing, uint32_t input_
     // The integer landing format leaves the FPU in int math; the rebuild transposes need the float path.
     reconfig_data_format_srca(input_cb);
 
+    // The unfused merge compares values only. Stamp both operands with their index bits so tied values order
+    // by index, exactly as the fused merge on a whole row orders them; otherwise a split row returns ties in a
+    // different order than the same row reduced on one core.
+    topk_large_indices_tiebreak_init();
+    topk_large_indices_stamp_tiebreak<K>(survivor_slot);
+    topk_large_indices_stamp_tiebreak<K>(incoming_slot);
     topk_xl_init<K, false>();
     topk_xl_merge<K, false>(survivor_slot);
     topk_xl_rebuild<K, false>(survivor_slot, false);
+    topk_large_indices_tiebreak_init();
+    topk_large_indices_clear_tiebreak<K>(survivor_slot);
 }
 
 template <uint32_t K>

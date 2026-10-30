@@ -602,6 +602,20 @@ ALWI void topk_large_indices_mark_neginf_indices(std::uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_topk_large_indices_mark_neginf_indices<K>(idst)));
 }
 
+// An unfused survivor's values carry its low 16 index bits for the length of one unfused merge, so equal values
+// order by index as the fused compare orders them; clear restores the plain values before anything reads them.
+ALWI void topk_large_indices_tiebreak_init() { MATH((llk_math_eltwise_unary_sfpu_topk_large_indices_tiebreak_init())); }
+
+template <std::uint32_t K>
+ALWI void topk_large_indices_stamp_tiebreak(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_large_indices_stamp_tiebreak<K>(idst)));
+}
+
+template <std::uint32_t K>
+ALWI void topk_large_indices_clear_tiebreak(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_large_indices_clear_tiebreak<K>(idst)));
+}
+
 // Thread-agnostic prefetch eligibility query; callable from code compiled for all three threads.
 template <std::uint32_t K>
 ALWI bool topk_xl_split_can_prefetch(std::uint32_t num_chunks) {
