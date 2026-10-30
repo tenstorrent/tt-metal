@@ -88,7 +88,8 @@ void kernel_main() {
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt_compile = get_compile_time_arg_val(41);
     // Slots 42-45: transport-to-tensor rank mapping.
-    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(42) == 1;
+    constexpr uint32_t full_mesh_rank_mapping =
+        get_compile_time_arg_val(42);  // k{Axis,RowMajor,ColumnMajor}RankMapping
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(43));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(44);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(45);
