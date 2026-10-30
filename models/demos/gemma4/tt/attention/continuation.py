@@ -45,6 +45,18 @@ CONTINUATION_CHUNKED_SDPA_ENV = "GEMMA4_CONTINUATION_CHUNKED_SDPA"
 #: SDPA's chunk sizes are capped at it so every hit offset keys the same program.
 CONTINUATION_SDPA_ALIGN = 128
 
+#: The chunked SDPA's flexible (tensor-start) path reads the user's page-table row as one stick of ``cols * 4``
+#: bytes and requires that to be a multiple of 32 (sdpa_program_factory.cpp ``compute_chunked_params``: "page table
+#: stick size must be a multiple of 32"), so every page-table row built here has a multiple of 8 int32 columns; the
+#: padding columns are the null block 0 and lie past what the K walk reads.
+PAGE_TABLE_STICK_COLS = 8
+
+
+def pad_page_table_cols(cols: int) -> int:
+    """``cols`` rounded up to the chunked SDPA's stick multiple (8 int32 columns = 32 bytes)."""
+    return -(-int(cols) // PAGE_TABLE_STICK_COLS) * PAGE_TABLE_STICK_COLS
+
+
 TILE = 32
 
 
@@ -64,7 +76,9 @@ def continuation_window_plan(chunk_start, seq_len, sliding_window, block_size, a
     of the user's row, and the chunk starts ``rel_start`` tokens into it. The frame origin is aligned down to
     ``lcm(block_size, align)`` so ``rel_start`` keeps the chunk's own alignment (``align`` = the SDPA's q / k chunk
     size, which the chunk start must be a multiple of). ``cols`` depends on the window, the alignment and the chunk
-    length only, never on the position, so the frame's shape (hence the SDPA program) is the same for every hit.
+    length only, never on the position, so the frame's shape (hence the SDPA program) is the same for every hit;
+    it is padded to the op's stick multiple (``PAGE_TABLE_STICK_COLS``) with null-block columns past the covered
+    range, which the K walk (bounded by ``rel_start + seq_len``) never reads.
     The frame covers ``[chunk_start - window, chunk_start + seq_len)`` (the window's first key is one past its
     start: a query at ``p`` attends ``(p - window, p]``); a hit inside the first window starts at position 0.
     """
@@ -80,18 +94,21 @@ def continuation_window_plan(chunk_start, seq_len, sliding_window, block_size, a
     start = max(0, chunk_start - sliding_window)
     origin = (start // origin_align) * origin_align
     rel_start = chunk_start - origin
-    cols = -(-(sliding_window + origin_align + seq_len) // block_size)
+    cols = pad_page_table_cols(-(-(sliding_window + origin_align + seq_len) // block_size))
     assert rel_start + seq_len <= cols * block_size, (rel_start, seq_len, cols, block_size)
     return origin // block_size, cols, rel_start
 
 
-def continuation_window_table(table, first_block, cols):
-    """Columns ``[first_block, first_block + cols)`` of every row of the host page table ``table`` (``[rows, w]``),
-    zero-padded (the null block) past the table's width."""
+def continuation_window_table(table, first_block, cols, valid_cols=None):
+    """Columns ``[first_block, first_block + cols)`` of every row of the host page table ``table`` (``[rows, w]``):
+    the first ``valid_cols`` (default all) copied, the rest the null block 0 (also past the table's width), so the
+    stick-padding columns can only ever address the null block."""
     t = table if table.dim() > 1 else table.unsqueeze(0)
     rows, width = int(t.shape[0]), int(t.shape[-1])
-    out = torch.zeros((rows, int(cols)), dtype=torch.int32)
-    lo, hi = int(first_block), min(int(first_block) + int(cols), width)
+    cols = int(cols)
+    valid = cols if valid_cols is None else max(0, min(int(valid_cols), cols))
+    out = torch.zeros((rows, cols), dtype=torch.int32)
+    lo, hi = int(first_block), min(int(first_block) + valid, width)
     if hi > lo:
         out[:, : hi - lo] = t[:, lo:hi].to(torch.int32)
     return out
@@ -288,10 +305,28 @@ class PrefillContinuation:
         if group is None:
             return None
         key, table, layout, mapper = group
-        cache_key = (key, "fill", int(block_size), int(first_col), int(cols))
+        valid, cols = int(cols), pad_page_table_cols(cols)  # null columns past the chunk's blocks (never written)
+        cache_key = (key, "fill", int(block_size), int(first_col), cols)
         dev = self._cache.get(cache_key)
         if dev is None:
-            dev = self._upload_table(continuation_window_table(table, first_col, cols), layout, mapper, layer_idx)
+            host = continuation_window_table(table, first_col, cols, valid_cols=valid)
+            dev = self._upload_table(host, layout, mapper, layer_idx)
+            self._cache[cache_key] = dev
+        return dev
+
+    def padded_table(self, layer_idx, width):
+        """The group's whole table (``width`` columns, zero-padded) at the stick multiple, for the global layers'
+        chunked SDPA when the device table's own width is not one (the generator sizes it to the prompt's blocks);
+        None without a host table."""
+        group = self._group(layer_idx)
+        if group is None:
+            return None
+        key, table, layout, mapper = group
+        cols = pad_page_table_cols(max(int(width), int(table.shape[-1])))
+        cache_key = (key, "full", int(cols))
+        dev = self._cache.get(cache_key)
+        if dev is None:
+            dev = self._upload_table(continuation_window_table(table, 0, cols), layout, mapper, layer_idx)
             self._cache[cache_key] = dev
         return dev
 
@@ -308,7 +343,10 @@ class PrefillContinuation:
         cache_key = (key, "window", int(block_size), int(sliding_window), int(align))
         entry = self._cache.get(cache_key)
         if entry is None:
-            window = self._upload_table(continuation_window_table(table, first_block, cols), layout, mapper, layer_idx)
+            # The K walk reads blocks [first_block, first_block + covered); every later column is the null block.
+            covered = -(-(rel_start + self.seq_len) // int(block_size))
+            host = continuation_window_table(table, first_block, cols, valid_cols=covered)
+            window = self._upload_table(host, layout, mapper, layer_idx)
             start = self._upload(torch.tensor([int(rel_start)], dtype=torch.int32), ttnn.int32, self._mapper)
             entry = (window, start)
             self._cache[cache_key] = entry
@@ -371,3 +409,6 @@ class LayerContinuation:
 
     def sliding_inputs(self, block_size, sliding_window, align):
         return self._parent.sliding_inputs(self.layer_idx, block_size, sliding_window, align)
+
+    def padded_table(self, width):
+        return self._parent.padded_table(self.layer_idx, width)

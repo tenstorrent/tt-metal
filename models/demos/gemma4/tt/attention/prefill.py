@@ -16,7 +16,12 @@ import ttnn
 from models.demos.gemma4.custom_ops.qkv_norm_rope_prefill import QkvNormRopePrefill
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
-from .continuation import align_sdpa_chunks, continuation_chunked_sdpa_enabled, sliding_continuation_sdpa
+from .continuation import (
+    align_sdpa_chunks,
+    continuation_chunked_sdpa_enabled,
+    pad_page_table_cols,
+    sliding_continuation_sdpa,
+)
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
     _paged_fill_cache,
@@ -1610,22 +1615,29 @@ def _prefill_forward_single(
         nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         recompute = mm_attn_mask is not None and os.environ.get("GEMMA4_MM_PAGED_RECOMPUTE", "1") != "0"
         q_tiles, q_device = _vision_q_tiles(tt_q, mm_attn_mask) if recompute else ([], None)
+        # The continuation's device-tensor start (read at run time) keeps the SDPA program off the position. That
+        # (flexible) path reads the user's row as one stick of ``cols * 4`` bytes, a multiple of 32 (the generator
+        # sizes the table to the prompt's blocks: 66 columns for 4096 + 128 tokens at 64-token blocks), so a table
+        # off the stick multiple is replaced by the group's host table padded to it; without a host table the
+        # Python-int start keeps the legacy path, keyed on the position.
+        sdpa_table, base_offset = page_table, chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset
+        if eager_continuation:
+            width = int(page_table.shape[-1])
+            if width == pad_page_table_cols(width):
+                base_offset = continuation.start_tensor
+            else:
+                padded = continuation.padded_table(width)
+                if padded is not None:
+                    sdpa_table, base_offset = padded, continuation.start_tensor
         tt_sdpa = chunked_prefill_sdpa(
             tt_q,
             k_cache,
             v_cache,
-            page_table,
+            sdpa_table,
             user_id,
             config.head_dim,
             scale=1.0,
-            # The continuation's device-tensor start (read at run time) keeps the SDPA program off the position.
-            base_offset=(
-                continuation.start_tensor
-                if eager_continuation
-                else chunk_offset_tensor
-                if chunk_offset_tensor is not None
-                else chunk_offset
-            ),
+            base_offset=base_offset,
             num_kv_heads=nkv_local,
             mesh_config=mesh_config,
         )

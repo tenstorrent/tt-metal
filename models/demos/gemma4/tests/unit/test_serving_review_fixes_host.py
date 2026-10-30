@@ -836,49 +836,67 @@ def _run_continuation(ops, chunk_start, blocks):
 
 def test_continuation_records_the_same_programs_at_two_positions_over_two_block_sets(monkeypatch):
     ops = _continuation_recorder(monkeypatch)
-    # Blocks 1.. of a 64-block pool at 2176 (an admission chunk inside a 256-token block) and at 8448 (a block
-    # boundary): the window frames differ in content and relative start, the programs must not.
+    # Blocks 1.. of a 64-block pool at 2432 (an admission chunk inside a 256-token block) and at 8448 (a block
+    # boundary): the window frames differ in content and relative start, the programs must not. (Neither hit's
+    # block column is 8, the stick width the recorder legitimately sees as a shape.)
     runs = {}
-    for chunk_start, blocks in ((2176, list(range(61, 61 + 10))), (8448, [50, 52, 54, 56, 58] + list(range(30, 60)))):
+    for chunk_start, blocks in ((2432, list(range(61, 61 + 12))), (8448, [50, 52, 54, 56, 58] + list(range(30, 60)))):
         del ops[:]
         runs[chunk_start] = (_run_continuation(ops, chunk_start, blocks), list(ops), blocks)
-    (a, ops_a, blocks_a), (b, ops_b, blocks_b) = runs[2176], runs[8448]
+    (a, ops_a, blocks_a), (b, ops_b, blocks_b) = runs[2432], runs[8448]
     assert ops_a and sorted(ops_a) == sorted(ops_b), "one program set for every hit position / block set"
     assert [op for op, _ in ops_a].count("chunked_sdpa") == 1 and "concat" not in {op for op, _ in ops_a}
-    for ints, blocks, chunk_start in ((ops_a, blocks_a, 2176), (ops_b, blocks_b, 8448)):
+    for ints, blocks, chunk_start in ((ops_a, blocks_a, 2432), (ops_b, blocks_b, 8448)):
         forbidden = set(blocks) | {chunk_start, chunk_start // _BLOCK, chunk_start - _WINDOW}
         recorded = {v for _, values in ints for v in values}
         assert not (recorded & forbidden), f"a program keyed on a block id or the position: {recorded & forbidden}"
         assert ("from_torch", (1,)) in ints, "the starts travel as uploaded [1] tensors, never as program arguments"
     # the values live in the uploaded tensors: the absolute start, the positions, the window frame and the fill cut
-    assert a["start"] == 2176 and b["start"] == 8448
-    assert a["positions"] == list(range(2176, 2176 + _SEQ)) and b["positions"] == list(range(8448, 8448 + _SEQ))
-    assert a["fill"] == [blocks_a[8]] and b["fill"] == [blocks_b[33]]
+    assert a["start"] == 2432 and b["start"] == 8448
+    assert a["positions"] == list(range(2432, 2432 + _SEQ)) and b["positions"] == list(range(8448, 8448 + _SEQ))
+    # every host-built row is a whole number of 32-byte sticks (8 int32 columns): the chunk's one fill block plus
+    # 7 null columns the fill never writes (it writes seq_len rows), the 6 covered frame columns plus 2 null ones
+    # the K walk never reads (it stops at rel_start + seq_len)
+    assert a["fill"] == [blocks_a[9]] + [0] * 7 and b["fill"] == [blocks_b[33]] + [0] * 7
     assert a["chunks"] == b["chunks"] == (128, 128), "the SDPA chunks are capped at the hit alignment"
-    # frame A: origin 1024 (window start 1152 aligned down to the 256-block / 128-chunk lcm), 6 columns, start 1152
-    assert a["window"] == blocks_a[4:10] and a["rel_start"] == 1152
-    # frame B: origin 7424 = block 29, columns 29..34 (the table has 35), start 1024
-    assert b["window"] == blocks_b[29:35] and b["rel_start"] == 1024
-    for run, chunk_start in ((a, 2176), (b, 8448)):
+    # frame A: origin 1280 = block 5 (window start 1408 aligned down to the 256-block / 128-chunk lcm), start 1152;
+    # frame B: origin 7424 = block 29 (a block boundary), start 1024
+    assert a["rel_start"] == 1152 and b["rel_start"] == 1024
+    for run, chunk_start, blocks in ((a, 2432, blocks_a), (b, 8448, blocks_b)):
         origin = chunk_start - run["rel_start"]
+        assert len(run["window"]) == 8 and len(run["fill"]) == 8, "32-byte page-table sticks"
         assert origin % _BLOCK == 0 and run["rel_start"] % 128 == 0
         assert origin <= chunk_start - _WINDOW < origin + _BLOCK * 2  # the frame starts at most one slack block early
-        assert origin + len(run["window"]) * _BLOCK >= chunk_start + _SEQ  # and covers the chunk
+        first, covered = origin // _BLOCK, -(-(run["rel_start"] + _SEQ) // _BLOCK)  # the columns the K walk reads
+        assert covered == 5 and run["window"][:covered] == blocks[first : first + covered]
+        assert all(v == 0 for v in run["window"][covered:]), "every column past the walk is the null block"
 
 
-def test_continuation_window_plan_is_fixed_width_and_covers_the_window(monkeypatch):
+def test_continuation_window_plan_is_a_fixed_number_of_sticks_and_covers_the_window(monkeypatch):
+    """The frame's column count is a multiple of 8 (the chunked SDPA reads the row as 32-byte sticks:
+    sdpa_program_factory.cpp "page table stick size must be a multiple of 32"), the same for every position at a
+    given block size, and the covered columns hold the window, the alignment slack and the chunk."""
     _continuation_recorder(monkeypatch)  # the chunk fit builds an SDPAProgramConfig
     plan = continuation_mod.continuation_window_plan
-    for block_size in (64, 128, 256):
+    expected_widths = {64: 24, 128: 16, 256: 8}  # ceil((1024 + lcm(block, 128) + 128) / block) padded to 8
+    for block_size, seq_len in ((64, 128), (128, 128), (256, 128), (256, 4096)):
         widths = set()
         for chunk_start in range(0, 16384, 128):
-            first_block, cols, rel_start = plan(chunk_start, 128, _WINDOW, block_size, 128)
+            first_block, cols, rel_start = plan(chunk_start, seq_len, _WINDOW, block_size, 128)
             widths.add(cols)
             origin = first_block * block_size
+            assert cols % 8 == 0, "a whole number of 32-byte sticks"
             assert rel_start == chunk_start - origin and rel_start % 128 == 0
-            assert origin <= max(0, chunk_start - _WINDOW) and origin + cols * block_size >= chunk_start + 128
+            assert origin <= max(0, chunk_start - _WINDOW), "the frame holds the window"
+            assert origin + cols * block_size >= chunk_start + seq_len, "and the chunk"
         assert len(widths) == 1, f"one frame width per block size, got {widths} at block {block_size}"
+        if seq_len == 128:
+            assert widths == {expected_widths[block_size]}
     assert plan(128, 128, _WINDOW, 256, 128)[:1] == (0,), "a hit inside the first window starts at position 0"
+    assert continuation_mod.pad_page_table_cols(66) == 72 and continuation_mod.pad_page_table_cols(8) == 8
+    cut = continuation_mod.continuation_window_table
+    assert cut(torch.tensor([[7, 8, 9]]), 0, 8).tolist() == [[7, 8, 9, 0, 0, 0, 0, 0]]
+    assert cut(torch.tensor([[7, 8, 9]]), 0, 8, valid_cols=2).tolist() == [[7, 8, 0, 0, 0, 0, 0, 0]]
     # the SDPA chunk fit: capped at the hit alignment, shrunk to a 32-multiple divisor of an off-grid start
     cfg = SimpleNamespace(
         compute_with_storage_grid_size="grid", q_chunk_size=256, k_chunk_size=128, exp_approx_mode=False
