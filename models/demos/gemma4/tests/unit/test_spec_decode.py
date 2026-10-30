@@ -3828,8 +3828,21 @@ def test_serving_body_stages_at_batch(mesh_device, device_params, reset_seeds, s
     h = spec._srv_seed_gather(S)
     logits_b, h_next = spec.assistant.step(S["anchor_tok"], h, spec._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"])
     lb = spec._logits_to_host(logits_b).float().reshape(-1, V)[:B]
-    for t in (logits_b, h_next, h):
+    for t in (logits_b, h_next):
         t.deallocate(True)
+    # the record body's form: the RoPE rows gathered once per layer type for the K steps (prepare_rope) are the
+    # gathers the attention makes per layer, so the step's logits are bit-identical to the per-layer form above
+    rope = spec.assistant.prepare_rope(S["d_pu"])
+    logits_r, h_next = spec.assistant.step(
+        S["anchor_tok"], h, spec._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"], rope_prepared=rope
+    )
+    spec.assistant.release_rope(rope)
+    lr = spec._logits_to_host(logits_r).float().reshape(-1, V)[:B]
+    for t in (logits_r, h_next, h):
+        t.deallocate(True)
+    assert torch.equal(
+        lr, lb
+    ), f"[stages {shape}] the drafter step with the hoisted RoPE rows differs from the per-layer form"
     for r in range(B):
         tok1 = spec._tokens_tensor([anchors[r]])
         pu1, pi1 = spec._pos_tensors([positions[r]])

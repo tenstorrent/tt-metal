@@ -3227,13 +3227,23 @@ class SpeculativeDecoder:
         B, K, P = rec["B"], rec["K"], rec["P"]
         # 1. seed gather from the hidden pools through the uploaded row index
         h = self._srv_seed_gather(S)  # [1, 1, B, bb]
-        # 2. K batched drafter steps, argmax + re-embed on device
+        # 2. K batched drafter steps, argmax + re-embed on device. The drafter's positions (d_pu) are fixed
+        # across the K steps, so its RoPE rows are gathered once per layer type for the replay (the same gathers
+        # the attention makes per layer: identical values, 8K - 4 programs fewer, 36 at K=5) and freed after the loop.
         tok = S["anchor_tok"]
         draft_cols = []
+        rope = self.assistant.prepare_rope(S["d_pu"])
         for _ in range(K):
             sharded = self._srv_sharded_draft_argmax and self._tp > 1
             logits, h_next = self.assistant.step(
-                tok, h, self._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"], gather_logits=not sharded
+                tok,
+                h,
+                self._shared_kv,
+                S["d_ptl"],
+                S["d_pu"],
+                S["d_pi"],
+                gather_logits=not sharded,
+                rope_prepared=rope,
             )
             h.deallocate(True)
             h = h_next
@@ -3243,6 +3253,7 @@ class SpeculativeDecoder:
             tok = ttnn.reshape(idx, (1, B))
             draft_cols.append(tok)
         h.deallocate(True)
+        self.assistant.release_rope(rope)
         # 3. user-major verify input [1, B*P] (row b*P+p) from the P columns [1, B]
         verify_x = self._srv_assemble_verify_x(S, draft_cols)
         # 4. masks built in-trace at the packed height [B, 1, H*P, S] (row h*P+p

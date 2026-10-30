@@ -200,6 +200,39 @@ class Gemma4AssistantModel:
             emb = ttnn.unsqueeze_to_4D(emb)
         return ttnn.to_layout(emb, ttnn.TILE_LAYOUT)
 
+    def prepare_rope(self, pos_uint32):
+        """The RoPE rows of ``pos_uint32`` ([1, 32] uint32, one position per row) per layer type, gathered once
+        for every ``step`` run at these positions: ``{layer_type: (cos, sin, scratch)}``.
+
+        ``cos`` / ``sin`` are the ``[1, 1, 32, head_dim]`` TILE gathers the attention makes per layer otherwise
+        (``decode_forward`` under ``rope_presliced``, the target model's own per-type hoist) and ``scratch`` the
+        type's batch>1 RoPE workspace (``rope_prepared``: the transposed and head-repeated forms, built by the
+        type's first layer and reused by the rest). Same values, fewer programs: a serving record drafts K tokens
+        at one position per row, so one gather per type serves its K x 4 layer calls instead of two per layer per
+        step. Freed by ``release_rope``.
+        """
+        prepared = {}
+        for lt in self.layer_types:
+            if lt in prepared:
+                continue
+            cos_2d, sin_2d = self.rope_caches_2d[lt]
+            cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(pos_uint32, cos_2d, layout=ttnn.TILE_LAYOUT))
+            sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(pos_uint32, sin_2d, layout=ttnn.TILE_LAYOUT))
+            prepared[lt] = (cos_pos, sin_pos, {})
+        return prepared
+
+    @staticmethod
+    def release_rope(prepared):
+        """Free what ``prepare_rope`` gathered and what the steps built in its scratch (the target's order)."""
+        for cos_pos, sin_pos, _scratch in prepared.values():
+            cos_pos.deallocate(True)
+            sin_pos.deallocate(True)
+        for _cos, _sin, scratch in prepared.values():
+            for pair in scratch.values():
+                for t in pair:
+                    t.deallocate(True)
+            scratch.clear()
+
     def step(
         self,
         token_tt,
@@ -210,6 +243,7 @@ class Gemma4AssistantModel:
         pos_int32,
         return_logits=True,
         gather_logits=True,
+        rope_prepared=None,
     ):
         """One drafter step.
 
@@ -228,6 +262,10 @@ class Gemma4AssistantModel:
             return_logits: when False, skip the lm_head + its TP all-gather and
                 return ``(None, next_hidden)`` (used to isolate the lm_head/CCL
                 cost in timing harnesses).
+            rope_prepared: the RoPE rows of ``pos_uint32`` gathered once per
+                layer type by ``prepare_rope`` (the serving records run K steps
+                at one position per row); None gathers them per layer, as the
+                attention does on its own.
 
         Returns:
             (logits [1,1,1,vocab], next_hidden [1,1,1,backbone]).
@@ -242,9 +280,13 @@ class Gemma4AssistantModel:
         for i, layer in enumerate(self.layers):
             lt = self.layer_types[i]
             pt = page_tables[lt] if isinstance(page_tables, dict) else page_tables
+            if rope_prepared is None:
+                rope_kwargs = {"rope_mats": self.rope_caches_2d[lt]}
+            else:
+                cos_pos, sin_pos, scratch = rope_prepared[lt]
+                rope_kwargs = {"rope_mats": (cos_pos, sin_pos), "rope_presliced": True, "rope_prepared": scratch}
             h = layer(
                 h,
-                rope_mats=self.rope_caches_2d[lt],
                 position_idx=pos_uint32,
                 page_table=pt,
                 kv_cache=shared_kv[lt],
@@ -252,6 +294,7 @@ class Gemma4AssistantModel:
                 token_index=None,
                 is_kv_shared=True,
                 position_idx_cache=pos_int32,
+                **rope_kwargs,
             )
 
         normed = self.norm.forward(h)
