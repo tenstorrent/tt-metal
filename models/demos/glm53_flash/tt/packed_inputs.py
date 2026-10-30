@@ -72,6 +72,8 @@ def slot_mask_enabled(env=None) -> bool:
     write gate, so a parked slot (a prompt between two of its chunks, an idle slot) keeps its KDA state and history
     byte for byte through the step; the mesh model then declares ``supports_slot_mask`` and the served adapter runs
     decode steps while slots are mid-prefill (the prefill / decode interleave, doc/mesh/resident_decode.md step 4)."""
+    import os
+
     env = os.environ if env is None else env
     return str(env.get(SLOT_MASK_ENV, "0")).strip().lower() in ("1", "true", "yes", "on")
 
