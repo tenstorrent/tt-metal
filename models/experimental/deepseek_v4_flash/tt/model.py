@@ -2720,14 +2720,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
         a quarter-megabyte page for the sender kernel to stage in L1. The staging reshape
         to 2020 columns needs that width to divide the output's element count (true for the
         129280-wide logits: ``64 * 2020``); the row width the socket actually uses is
-        re-derived below by :func:`_d2h_page_plan`.
+        re-derived below by :func:`_d2h_page_plan`. A ROW_MAJOR ``out`` (a device-sampled
+        token page) goes out as it is.
 
         The socket's page size is fixed on the first call, when the output's real shape and
         dtype are finally known; the op re-checks it against the tensor on every
         program-cache miss.
         """
-        out = ttnn.reshape(out, [1, 1, -1, 2020])
-        out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        out_rm = out
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+            out_rm = ttnn.to_layout(ttnn.reshape(out, [1, 1, -1, 2020]), ttnn.ROW_MAJOR_LAYOUT)
         if self._out_plan is None:
             numel = math.prod(tuple(out_rm.shape))
             self._out_plan = _d2h_page_plan(
@@ -2737,7 +2739,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 page_cap_bytes=self.system_config.pipeline.d2h_fifo_bytes,
                 pcie_alignment=self.system_config.pipeline.pcie_alignment,
             )
-            self._out_torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[out_rm.dtype]
+            self._out_torch_dtype = {
+                ttnn.bfloat16: torch.bfloat16,
+                ttnn.float32: torch.float32,
+                ttnn.int32: torch.int32,
+                ttnn.uint32: torch.int32,
+            }[out_rm.dtype]
             self._out_socket.set_page_size(self._out_plan[1] * out_rm.element_size())
         ttnn.experimental.send_async_d2h(ttnn.reshape(out_rm, list(self._out_plan)), self._out_socket)
 
