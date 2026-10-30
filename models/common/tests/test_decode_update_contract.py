@@ -18,8 +18,8 @@ from models.common.sampling.generator import (
 )
 from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.common.warmup.warmup_utils import WarmupForwardMixin
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.common import Mode
+from models.ttt_compat.tt.generator import Generator
 
 
 def _fake_sampling_generator():
@@ -307,7 +307,7 @@ def test_qwen_vl_generator_forwards_slot_remap_to_shared_sampling_owner():
 
 
 def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     def run(*, sampling_params=None, defer_device_sampling=False, fail_readback=False):
         events = []
@@ -356,7 +356,7 @@ def test_shared_generator_routes_slot_remap_to_exactly_one_sampling_owner():
 
 
 def test_shared_generator_rebases_and_pads_lane_sampling_remaps():
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     calls = [[], []]
     models = []
@@ -374,7 +374,7 @@ def test_shared_generator_rebases_and_pads_lane_sampling_remaps():
 
 
 def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
-    from models.tt_transformers.tt.generator import Generator
+    from models.ttt_compat.tt.generator import Generator
 
     sampling = SimpleNamespace(seed_manager=SimpleNamespace(max_batch_size=2), apply_slot_remap=lambda remap: None)
     fake = SimpleNamespace(
@@ -392,10 +392,10 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
 @pytest.mark.parametrize(
     "adapter_path, forwarded_width",
     [
-        ("models.tt_transformers.tt.generator_vllm:LlamaForCausalLM", 8),
-        ("models.tt_transformers.tt.generator_vllm:QwenForCausalLM", 8),
-        ("models.tt_transformers.tt.generator_vllm:MistralForCausalLM", 8),
-        ("models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration", 8),
+        ("models.ttt_compat.tt.generator_vllm:LlamaForCausalLM", 8),
+        ("models.ttt_compat.tt.generator_vllm:QwenForCausalLM", 8),
+        ("models.ttt_compat.tt.generator_vllm:MistralForCausalLM", 8),
+        ("models.ttt_compat.tt.generator_vllm:Gemma3ForConditionalGeneration", 8),
         # Decode bucketing runs 3 active rows in the width-4 bucket.
         ("models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM", 4),
     ],
@@ -453,10 +453,10 @@ def test_adapter_forwards_deferred_decode(adapter_path, forwarded_width, monkeyp
 @pytest.mark.parametrize(
     "adapter_path",
     [
-        "models.tt_transformers.tt.generator_vllm:LlamaForCausalLM",
-        "models.tt_transformers.tt.generator_vllm:QwenForCausalLM",
-        "models.tt_transformers.tt.generator_vllm:MistralForCausalLM",
-        "models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration",
+        "models.ttt_compat.tt.generator_vllm:LlamaForCausalLM",
+        "models.ttt_compat.tt.generator_vllm:QwenForCausalLM",
+        "models.ttt_compat.tt.generator_vllm:MistralForCausalLM",
+        "models.ttt_compat.tt.generator_vllm:Gemma3ForConditionalGeneration",
         "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM",
         "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM",
     ],
@@ -476,8 +476,8 @@ def test_device_grammar_requires_device_sampling(adapter_path, monkeypatch):
 
 
 def test_sglang_bridge_explicitly_requests_host_authoritative_decode(monkeypatch):
-    from models.tt_transformers.tt.generator import Generator
-    from models.tt_transformers.tt.generator_sglang import LlamaForCausalLM
+    from models.ttt_compat.tt.generator import Generator
+    from models.ttt_compat.tt.generator_sglang import LlamaForCausalLM
 
     calls = []
     monkeypatch.setattr(
@@ -554,7 +554,7 @@ def test_all_known_shared_generator_callers_supply_every_decode_update_command()
 
 
 def test_shared_generator_preserves_explicit_commands_after_mainline_seed_fix():
-    source_path = Path("models/tt_transformers/tt/generator.py")
+    source_path = Path("models/ttt_compat/tt/generator.py")
     source_text = source_path.read_text()
     tree = ast.parse(source_text)
     generator = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Generator")
@@ -623,8 +623,8 @@ def test_gemma4_pli_explicitly_disables_decode_token_feedback():
 
 def test_explicit_trace_reloads_select_mode_and_gemma4_bucket_buffers(monkeypatch):
     from models.demos.gemma4.tt import generator as gemma4_generator
-    from models.tt_transformers.tt import common
-    from models.tt_transformers.tt import generator as shared_generator
+    from models.ttt_compat.tt import common
+    from models.ttt_compat.tt import generator as shared_generator
 
     copies = []
 
