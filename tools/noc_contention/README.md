@@ -6,6 +6,7 @@ tt-metal and tt-npe already provide: the device profiler's NoC-event tracing, an
 
 ```
 tools/noc_contention/
+  TT_NPE_FINDINGS.md        what this analysis found in tt-npe and in the profiler's trace: gaps and improvements
   noc_trace_summary.py      what the trace contains: event types, bytes, destinations, per-core GB/s per window
   npe_replay.sh             replay every trace of a .logs dir in tt-npe, write the timelines and the link reports
   noc_link_demand.py        per-link demand over time from a tt-npe timeline: the oversubscribed links, rows, windows
