@@ -219,7 +219,7 @@ jobs:
           echo "dockerfile-dir=$(dirname "$DOCKERFILE")" | tee -a "$GITHUB_OUTPUT"
 
       - name: Checkout the Dockerfile
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@e43974843296a93e133a88a543ee2e466081ce3d # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@e4da165a2df9bbd8bf6ef8518a9aa111051fb972 # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 1
@@ -228,7 +228,7 @@ jobs:
 
       - name: Checkout the source that goes into the image
         if: ${{ inputs.checkout-source }}
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@e43974843296a93e133a88a543ee2e466081ce3d # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@e4da165a2df9bbd8bf6ef8518a9aa111051fb972 # cachew checkout
         timeout-minutes: 20
         with:
           # Must match the commit the artifact was built from, or src/ and
