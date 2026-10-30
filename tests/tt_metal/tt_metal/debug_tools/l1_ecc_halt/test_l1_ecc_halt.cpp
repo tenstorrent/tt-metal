@@ -78,9 +78,9 @@ protected:
 
     uint64_t halt_record_addr() {
         const auto& hal = MetalContext::instance().hal();
-        return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) +
+        return hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::L1_ECC_HALT) +
                hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
-                   .offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::l1_ecc_halt);
+                   .offset_of<dev_msgs::l1_ecc_halt_slot_t>(dev_msgs::l1_ecc_halt_slot_t::Field::record);
     }
 
     // A halt record stays on the shared device, so every test that reports one reopens it before the next test.

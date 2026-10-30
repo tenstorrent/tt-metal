@@ -468,7 +468,7 @@ void wait_until_cores_done(
     tt::tt_metal::internal::L1EccHaltWatch ecc_watch(context, device_id);
     while (!not_done_phys_cores.empty()) {
         throw_if_watcher_tripped_in_test_mode(context, device_id);
-        ecc_watch.stalled();
+        ecc_watch.poll();
 
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-// Values of mailboxes_t::l1_ecc_halt.reason and the Blackhole Tensix ECC register fields. Shared by host and
+// Values of l1_ecc_halt_msg_t::reason and the Blackhole Tensix ECC register fields. Shared by host and
 // firmware.
 constexpr uint32_t L1_ECC_HALT_REASON_DBE = 0xECC00001;
 constexpr uint32_t L1_ECC_HALT_REASON_UNEXPECTED = 0xECC00003;

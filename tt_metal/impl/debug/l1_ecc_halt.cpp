@@ -45,9 +45,11 @@ bool is_halt_reason(uint32_t reason) {
     return reason == L1_ECC_HALT_REASON_DBE || reason == L1_ECC_HALT_REASON_UNEXPECTED;
 }
 
-uint64_t mailbox_field_addr(const MetalContext& ctx, dev_msgs::mailboxes_t::Field field) {
-    return ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) +
-           ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).offset_of<dev_msgs::mailboxes_t>(field);
+uint64_t halt_slot_field_addr(const MetalContext& ctx, dev_msgs::l1_ecc_halt_slot_t::Field field) {
+    return ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::L1_ECC_HALT) +
+           ctx.hal()
+               .get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
+               .offset_of<dev_msgs::l1_ecc_halt_slot_t>(field);
 }
 
 // "bank B row R (L1 0x...)" from ECC_STATUS views 3 (banks 0-15) and 6 (banks 16-31). Assumes the default L1 bank
@@ -78,7 +80,7 @@ void check_chips(MetalContext& ctx, const std::vector<ChipId>& device_ids) {
     }
     const auto& factory = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
     auto record = factory.create<dev_msgs::l1_ecc_halt_msg_t>();
-    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
+    const uint64_t record_addr = halt_slot_field_addr(ctx, dev_msgs::l1_ecc_halt_slot_t::Field::record);
     for (ChipId device_id : device_ids) {
         for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
             ctx.get_cluster().read_core(record.data(), record.size(), tt_cxy_pair(device_id, core), record_addr);
@@ -110,7 +112,7 @@ std::vector<LatchedBrisc> find_latched_briscs(MetalContext& ctx, ChipId device_i
     }
     const uint32_t brisc_int_no_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO);
     auto record = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).create<dev_msgs::l1_ecc_halt_msg_t>();
-    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
+    const uint64_t record_addr = halt_slot_field_addr(ctx, dev_msgs::l1_ecc_halt_slot_t::Field::record);
     for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
         const tt_cxy_pair target(device_id, core);
         uint32_t int_no = 0;
@@ -144,7 +146,7 @@ void release_latched_briscs(MetalContext& ctx, ChipId device_id, const std::vect
     const uint32_t wdt_cntl_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::WDT_CNTL);
     constexpr uint32_t wdt_off = 0;
     const auto release_addr =
-        static_cast<uint32_t>(mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::brisc_int_release));
+        static_cast<uint32_t>(halt_slot_field_addr(ctx, dev_msgs::l1_ecc_halt_slot_t::Field::brisc_int_release));
     for (const auto& [core, int_no] : latched) {
         const tt_cxy_pair target(device_id, core);
         ctx.get_cluster().write_core(brisc_int_release_code, sizeof(brisc_int_release_code), target, release_addr);
@@ -181,7 +183,7 @@ void clear_l1_ecc_halt_records(MetalContext& ctx, ChipId device_id) {
         return;
     }
     auto zeros = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).create<dev_msgs::l1_ecc_halt_msg_t>();
-    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
+    const uint64_t record_addr = halt_slot_field_addr(ctx, dev_msgs::l1_ecc_halt_slot_t::Field::record);
     for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
         ctx.get_cluster().write_core(zeros.data(), zeros.size(), tt_cxy_pair(device_id, core), record_addr);
     }
@@ -193,7 +195,7 @@ void report_l1_ecc_at_close(MetalContext& ctx, ChipId device_id) {
     }
     const auto& factory = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
     auto record = factory.create<dev_msgs::l1_ecc_halt_msg_t>();
-    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
+    const uint64_t record_addr = halt_slot_field_addr(ctx, dev_msgs::l1_ecc_halt_slot_t::Field::record);
     for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
         ctx.get_cluster().read_core(record.data(), record.size(), tt_cxy_pair(device_id, core), record_addr);
         if (is_halt_reason(record.view().reason())) {
@@ -232,7 +234,7 @@ void L1EccHaltWatch::check_now() {
     check_chips(*ctx_, {device_id_});
 }
 
-void L1EccHaltWatch::stalled() {
+void L1EccHaltWatch::poll() {
     // The wait loops poll back to back, so the clock is read only every few polls.
     if (ctx_ == nullptr || (++polls_ & (l1_ecc_polls_per_clock_read - 1)) != 0) {
         return;

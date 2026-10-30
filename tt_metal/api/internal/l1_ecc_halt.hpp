@@ -21,7 +21,7 @@ namespace tt::tt_metal::internal {
 
 // Guards one host wait loop against a Blackhole Tensix BRISC halted on an L1 ECC error. Once the wait has been
 // stalled for about 10 s, and every 10 s after that, it reads the watched chips' halt records
-// (mailboxes_t::l1_ecc_halt) and throws std::runtime_error naming the chip, core and cause if one has halted. After
+// (l1_ecc_halt_slot_t::record) and throws std::runtime_error naming the chip, core and cause if one has halted. After
 // any wait has reported a halt, every other wait throws at once. A no-op off Blackhole silicon, or with
 // TT_METAL_DISABLE_L1_ECC_HALT=1.
 class L1EccHaltWatch {
@@ -33,7 +33,7 @@ public:
 
     // Call on every iteration of the wait that has not finished yet. Reads the device only once the wait has been
     // stalled for a while (see above). Throws if a halt is found.
-    void stalled();
+    void poll();
     // Reads the halt records now and throws if one is found. Call before a loop's own timeout throws.
     void check_now();
 

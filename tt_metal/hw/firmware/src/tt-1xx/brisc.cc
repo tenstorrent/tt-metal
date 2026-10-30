@@ -223,15 +223,16 @@ inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
 
 // Records the ECC state for the host and halts the core until the next device open releases it.
 inline __attribute__((always_inline, noreturn)) void halt_on_ecc_error(uint32_t last_l1_error_banks_0_15) {
-    mailboxes->l1_ecc_halt.ecc_ctrl = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
-    mailboxes->l1_ecc_halt.l1_counts = read_ecc_view(EccView::L1_COUNTS);
-    mailboxes->l1_ecc_halt.last_l1_error_banks_0_15 = last_l1_error_banks_0_15;
-    mailboxes->l1_ecc_halt.last_l1_error_banks_16_31 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_16_31);
-    mailboxes->l1_ecc_halt.program_id = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.host_assigned_id;
+    tt_l1_ptr l1_ecc_halt_slot_t* const slot = reinterpret_cast<tt_l1_ptr l1_ecc_halt_slot_t*>(MEM_L1_ECC_HALT_BASE);
+    slot->record.ecc_ctrl = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
+    slot->record.l1_counts = read_ecc_view(EccView::L1_COUNTS);
+    slot->record.last_l1_error_banks_0_15 = last_l1_error_banks_0_15;
+    slot->record.last_l1_error_banks_16_31 = read_ecc_view(EccView::LAST_L1_ERROR_BANKS_16_31);
+    slot->record.program_id = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.host_assigned_id;
     asm volatile("fence" ::: "memory");
     // A valid last error here is in a populated row; without one, IRQ 3 came from another source (the watchdog).
     bool l1_dbe = last_l1_error_banks_0_15 & ECC_LAST_ERR_VALID_MASK;
-    mailboxes->l1_ecc_halt.reason = l1_dbe ? L1_ECC_HALT_REASON_DBE : L1_ECC_HALT_REASON_UNEXPECTED;
+    slot->record.reason = l1_dbe ? L1_ECC_HALT_REASON_DBE : L1_ECC_HALT_REASON_UNEXPECTED;
     WAYPOINT("ECCH");
     while (true) {
     }

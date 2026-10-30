@@ -105,7 +105,7 @@ void loop_and_wait_with_timeout(
                 on_timeout();
                 break;
             }
-            ecc_watch.stalled();
+            ecc_watch.poll();
 
             // Sleep briefly to avoid busy-waiting
             std::this_thread::yield();
@@ -115,7 +115,7 @@ void loop_and_wait_with_timeout(
             if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
                 break;
             }
-            ecc_watch.stalled();
+            ecc_watch.poll();
             func_body();
         } while (wait_condition());
     }

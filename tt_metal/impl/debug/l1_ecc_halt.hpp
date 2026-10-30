@@ -10,7 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-// Blackhole silicon: BRISC halts on an L1 DBE and writes mailboxes_t::l1_ecc_halt. Waits detect halts through
+// Blackhole silicon: BRISC halts on an L1 DBE and writes l1_ecc_halt_slot_t::record. Waits detect halts through
 // L1EccHaltWatch.
 namespace tt::tt_metal::internal {
 
@@ -24,8 +24,9 @@ struct LatchedBrisc {
 // records are cleared at init. Runs even when the feature is off.
 std::vector<LatchedBrisc> find_latched_briscs(MetalContext& ctx, ChipId device_id);
 
-// Points each latched BRISC's interrupt at code in its mailbox that returns from the handler, so it leaves the handler
-// once released from reset. Call while the chip's cores are held in reset, so none can run before both are in place.
+// Points each latched BRISC's interrupt at code in its L1 ECC halt slot that returns from the handler, so it leaves the
+// handler once released from reset. Call while the chip's cores are held in reset, so none can run before both are in
+// place.
 void release_latched_briscs(MetalContext& ctx, ChipId device_id, const std::vector<LatchedBrisc>& latched);
 
 // Throws if a released BRISC is still inside an interrupt handler. Call when firmware init fails.

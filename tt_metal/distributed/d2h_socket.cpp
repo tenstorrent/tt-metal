@@ -591,7 +591,7 @@ void D2HSocket::set_page_size(uint32_t page_size) {
 
         tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
         while (bytes_recv < bytes_adjustment) {
-            ecc_watch.stalled();
+            ecc_watch.poll();
             // On mock, synthesize the wrap padding that bytes_acked_ consumes below.
             if (mock_flow_control_enabled_) {
                 simulate_device_sent(bytes_adjustment);
@@ -635,7 +635,7 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_recv < num_bytes) {
-        ecc_watch.stalled();
+        ecc_watch.poll();
         // On mock, synthesize exactly the wrap-adjusted bytes this read needs.
         if (mock_flow_control_enabled_) {
             simulate_device_sent(num_bytes);
@@ -749,7 +749,7 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
     auto start_time = std::chrono::high_resolution_clock::now();
     tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_acked_ - bytes_sent_value != 0) {
-        ecc_watch.stalled();
+        ecc_watch.poll();
         refresh_connector_read_state();
         bytes_sent_value = read_bytes_sent();
         if (timeout_ms.has_value()) {

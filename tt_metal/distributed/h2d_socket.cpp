@@ -762,7 +762,7 @@ void H2DSocketImpl::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
     tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_free < num_bytes) {
-        ecc_watch.stalled();
+        ecc_watch.poll();
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
         volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
@@ -880,7 +880,7 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
     auto start_time = std::chrono::high_resolution_clock::now();
     tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
     while (bytes_sent_ - bytes_acked_value != 0) {
-        ecc_watch.stalled();
+        ecc_watch.poll();
         refresh_connector_write_state();
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();

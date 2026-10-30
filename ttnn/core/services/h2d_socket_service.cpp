@@ -1092,7 +1092,7 @@ void H2DStreamService::barrier() {
             if (static_cast<uint32_t>(target - *counter) == 0) {
                 break;
             }
-            ecc_watch.stalled();
+            ecc_watch.poll();
         }
     }
 }

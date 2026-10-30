@@ -396,6 +396,14 @@ struct l1_ecc_halt_msg_t {
     volatile uint32_t program_id;
 };
 
+// Blackhole Tensix only, at MEM_L1_ECC_HALT_BASE.
+struct l1_ecc_halt_slot_t {
+    struct l1_ecc_halt_msg_t record;
+    // Written by the host at init: code that returns from an interrupt handler without using the stack
+    // (brisc_int_release_code in hostdev/l1_ecc_halt_constants.h).
+    volatile uint32_t brisc_int_release[2];
+};
+
 // NOC alignment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
@@ -485,10 +493,6 @@ struct mailboxes_t {
     struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
-    struct l1_ecc_halt_msg_t l1_ecc_halt;
-    // Written by the host at init: code that returns from an interrupt handler without using the stack
-    // (brisc_int_release_code in hostdev/l1_ecc_halt_constants.h).
-    volatile uint32_t brisc_int_release[2];
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip
         profiler_msg_t profiler;
 };
