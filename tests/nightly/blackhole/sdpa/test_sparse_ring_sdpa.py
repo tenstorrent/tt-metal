@@ -102,6 +102,50 @@ def make_mask(geo, S, H, *, density, band=1, seed=0):
     return mask
 
 
+MASK_STRUCTURES = ["random", "band", "clustered", "uneven"]
+CLUSTER = 8  # blocks per side of a clustered tile: two 256-token pieces
+
+
+def make_structured_mask(geo, S, H, *, structure, density, seed=0):
+    """make_mask with kept blocks laid out by `structure`, at about `density` before the forced blocks:
+
+      random     each block independently with probability `density`
+      band       the diagonal band of global half-width density * N / 2 (N blocks in the sequence), every head
+      clustered  CLUSTER x CLUSTER tiles of (Q, K) blocks kept whole, each with probability `density`, per head
+      uneven     each Q block its own probability, exponential with mean `density` (some near empty, some dense)
+
+    Block 0 of every shard and the diagonal are always kept; only full blocks may be kept.
+    """
+    g = torch.Generator().manual_seed(seed)
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    full = (_block_lengths(geo, S) == BLOCK).reshape(-1)  # [S * nb_pad]
+    k_global = torch.arange(S * nb_pad)
+    k_index = (k_global // nb_pad) * nb + (k_global % nb_pad)  # [S * nb_pad] global block number in sequence order
+    q_index = torch.arange(S)[:, None] * nb + torch.arange(nb_pad)[None, :]  # [S, nb_pad]
+    dist = q_index[:, :, None] - k_index[None, None, :]  # [S, nb_pad, S * nb_pad]
+    if structure == "random":
+        keep = torch.rand(S, H, nb_pad, S * nb_pad, generator=g) < density
+    elif structure == "band":
+        half = round(density * S * nb / 2)
+        keep = (dist.abs() <= half)[:, None].expand(S, H, nb_pad, S * nb_pad).clone()
+    elif structure == "clustered":
+        n_tiles = -(-S * nb_pad // CLUSTER)
+        tiles = torch.rand(H, n_tiles, n_tiles, generator=g) < density
+        qt = (q_index // CLUSTER).clamp(max=n_tiles - 1)  # [S, nb_pad]
+        kt = (k_index // CLUSTER).clamp(max=n_tiles - 1)  # [S * nb_pad]
+        keep = tiles[:, qt][..., kt].permute(1, 0, 2, 3).contiguous()  # [H, S, nb_pad, K] -> [S, H, nb_pad, K]
+    elif structure == "uneven":
+        p = -density * torch.rand(S, H, nb_pad, 1, generator=g).clamp(min=1e-6).log()
+        keep = torch.rand(S, H, nb_pad, S * nb_pad, generator=g) < p.clamp(max=1.0)
+    else:
+        raise ValueError(f"unknown mask structure {structure}")
+    keep |= (dist == 0)[:, None]  # the diagonal
+    keep[..., torch.arange(S) * nb_pad] = True  # block 0 of every shard
+    mask = keep.to(torch.int64) * full.to(torch.int64)  # full blocks only
+    mask[:, :, nb:] = 0  # padding Q rows
+    return mask
+
+
 def pool(x, geo, S):
     """[1, H, S * rows, D] -> [1, H, S * nb_pad, D] per-block mean over the valid tokens (zero for padding)."""
     lens = _block_lengths(geo, S)
@@ -358,6 +402,17 @@ def test_ragged_shards(runtime, geom, density):
     # With every full block kept, only the partial blocks are pooled: close to dense (measured 0.990-0.991).
     dense_min = 0.98 if density == KEEP_ALL else None
     _check(f"ragged d{density} {geom}", r, _density(mask, case.geo, case.S), dense_min=dense_min, ref_min=0.999)
+
+
+@pytest.mark.parametrize("density", [0.1, 0.35])
+@pytest.mark.parametrize("structure", MASK_STRUCTURES)
+def test_mask_structures(runtime, structure, density):
+    """Kept blocks laid out as independent blocks, a band, whole tiles, or rows of very different density: the plan
+    and the step grouping see contiguous runs, scattered blocks, empty and nearly full Q blocks."""
+    case = Case(runtime, ALIGNED["r1024k256"])
+    mask = make_structured_mask(case.geo, case.S, case.H, structure=structure, density=density, seed=15)
+    r = case.run(*case.inputs(15), mask, want_dense=False)
+    _check(f"{structure} d{density}", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
 
 
 def test_minimal_mask(runtime):

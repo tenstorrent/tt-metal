@@ -14,7 +14,9 @@ Each case times one op as a captured trace: a compile call, one capture, then RE
 
 Shapes are the MiniMax-H3 per-device rows at 5 / 10 / 15 s, 14 heads per device, D = 128, on the 4x8 Galaxy
 (TP=4 heads x SP=8 ring) or a single ring. Masks are synthetic (`make_mask`) at block densities 0.20 / 0.07 / 0.05,
-the measured 5 s densities at tau 1 / 2 / 3. Every case logs one line and appends one JSON record to
+the measured 5 s densities at tau 1 / 2 / 3. The mask family (`test_mask_family_perf`) times the production k_chunk
+over mask structures (`make_structured_mask`: random, band, clustered, uneven) at densities 0.05 to 0.35, so a change
+is judged across mask shapes rather than on one model's masks. Every case logs one line and appends one JSON record to
 `<basetemp>/sparse_ring_sdpa_perf*/results.jsonl` (pass `--basetemp` to choose the directory). Skipped on CI.
 """
 
@@ -34,7 +36,17 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
     close_ring_joint_sdpa_runtime,
     open_ring_joint_sdpa_runtime,
 )
-from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import BLOCK, D, Case, Geometry, _density, make_mask, pool
+from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import (
+    BLOCK,
+    D,
+    MASK_STRUCTURES,
+    Case,
+    Geometry,
+    _density,
+    make_mask,
+    make_structured_mask,
+    pool,
+)
 
 pytestmark = pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 
@@ -43,7 +55,9 @@ TRACE_REGION_SIZE = 200_000_000
 WORKING_POINTS = {4736: "5s", 9184: "10s", 13664: "15s"}
 DENSE_CHUNKS = {4736: (320, 384), 9184: (256, 512), 13664: (256, 512)}  # measured (q_chunk, k_chunk)
 DENSITIES = [0.20, 0.07, 0.05]  # 5 s block densities at tau 1 / 2 / 3
-K_CHUNKS = [256, 384, 512]  # production: 256 at 5 s, 512 at 10 / 15 s
+K_CHUNKS = [256, 384, 512]
+FAMILY_DENSITIES = [0.05, 0.1, 0.2, 0.35]
+FAMILY_K_CHUNK = 256  # production at 5 / 10 / 15 s
 
 
 @pytest.fixture(scope="module")
@@ -207,13 +221,14 @@ def bench(runtime):
     b._free()
 
 
-def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense=None, gather=None):
+def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense=None, gather=None, structure="random"):
     op_ms = statistics.median(times)
     rec = {
         "shape": WORKING_POINTS[rows],
         "rows": rows,
         "mesh": f"{MESH_CONFIG.tp_size}x{MESH_CONFIG.sp_size}",
         "mode": mode,
+        "structure": structure,
         "k_chunk": k_chunk,
         "density": density,
         "op_ms": op_ms,
@@ -227,7 +242,7 @@ def record(results_file, rows, mode, times, *, k_chunk=None, density=None, dense
     if rec["gap_to_gather_ms"] is not None:
         extra += f", {rec['gap_to_gather_ms']:+.3f} ms vs gather"
     logger.info(
-        f"[{rec['shape']} rows={rows} {rec['mesh']}] {mode:<6} k={k_chunk} d={density}: {op_ms:.3f} ms "
+        f"[{rec['shape']} rows={rows} {rec['mesh']}] {mode:<6} {structure} k={k_chunk} d={density}: {op_ms:.3f} ms "
         f"(all {' '.join(f'{t:.3f}' for t in times)}){extra}"
     )
     with open(results_file, "a") as f:
@@ -268,4 +283,32 @@ def test_sparse_ring_sdpa_perf(bench, results_file, rows, k_chunk, density, pool
         density=round(block_density, 4),
         dense=dense,
         gather=gather,
+    )
+
+
+@pytest.mark.parametrize("density", FAMILY_DENSITIES, ids=[f"d{d}" for d in FAMILY_DENSITIES])
+@pytest.mark.parametrize("structure", MASK_STRUCTURES)
+@pytest.mark.parametrize("rows", list(WORKING_POINTS), ids=list(WORKING_POINTS.values()))
+def test_mask_family_perf(bench, results_file, rows, structure, density):
+    """The sparse op at the production k_chunk over the mask family: how its time depends on mask structure."""
+    dense, gather = bench.baseline(rows)
+    case = bench.shape(rows)
+    mask = make_structured_mask(case.geo, case.S, case.H, structure=structure, density=density, seed=rows)
+    block_density = _density(mask, case.geo, case.S)
+    t_mask = case._upload(mask, case.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    del mask
+    try:
+        times = traced_ms(case.rt.mesh_device, bench.sparse(t_mask, FAMILY_K_CHUNK, True))
+    finally:
+        ttnn.deallocate(t_mask)
+    record(
+        results_file,
+        rows,
+        "sparse",
+        times,
+        k_chunk=FAMILY_K_CHUNK,
+        density=round(block_density, 4),
+        dense=dense,
+        gather=gather,
+        structure=structure,
     )
