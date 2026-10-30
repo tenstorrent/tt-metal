@@ -1581,6 +1581,17 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 18:30: the served straggle shape is one arrival, then seven; the lone 1 M needle keeps its TTFT
+
+`needle1m_1_adaptive`: the lone 1 038 673-token prompt took the SP path (burst 1), TTFT 494.8 s, needle found: the
+adaptive rule keeps the lone-prompt TTFT. `needle64k_8_adaptive_r2` (the fold-in) still ran waves of 5 + 3 SP chunks
+(332 s): the runner's per-step chunk log shows the first engine step held ONE arrival (SP on index 0) and the second its
+continuation plus seven fresh prompts. The young prompt sat on the wave's index, so nothing restarted, and the burst
+counted only the fresh seven (7 < 8): three took SP indices 1-3 before the wave-affine order applied. Every young prompt
+joining the wave now counts in the burst (0bda73a6a71; host case = that shape: one arrival, then its continuation with
+seven fresh -> one wave of eight, no SP chunk, no restart). `needle64k_8_adaptive_r3` re-runs after the 8 x 1 M wave
+run, which is on its way (one SP chunk for the first arrival, then waves of 8 at ~7.5 s per 2048 rows).
+
 ### 2026-10-30 17:30: the adaptive placement changed nothing (arrivals straggle); young SP prompts fold into the wave
 
 `served_8x4_needle64k_8_adaptive`: 8/8 needles (key 7398 found here) in 332 s = the SP-first run's TTFT. The first
