@@ -9,6 +9,7 @@ Usage: galaxy_workload_deployment_test.py [--co] [--skip KEY[,KEY] | --only KEY[
 """
 
 import argparse
+import contextlib
 import json
 import os
 import socket
@@ -23,9 +24,12 @@ from gwdt_steps import MODEL_ENV, MODEL_LABEL, MODEL_LAYERS, Ctx, Step, build_st
 
 try:
     from colorama import Fore, Style
-except ImportError:
+    from rich.live import Live
+    from rich.text import Text
+except ImportError as e:
+    package = e.name.split(".")[0]
     print(
-        f"colorama is missing: uv pip install --python {Path(__file__).resolve().parents[4]}/python_env/bin/python colorama"
+        f"{package} is missing: uv pip install --python {Path(__file__).resolve().parents[4]}/python_env/bin/python {package}"
     )
     sys.exit(1)
 
@@ -48,6 +52,7 @@ class Screen:
         self.tty = sys.stdout.isatty()
         self.last_draw = 0.0
         self.done = False
+        self.live: Live | None = None
 
     def paint(self, status: Status, text: str, width: int = 0) -> str:
         text = f"{text:<{width}}"
@@ -117,7 +122,7 @@ class Screen:
         self.write_status()
         if self.tty:
             if step is not None or time.time() - self.last_draw >= REDRAW_SECS:
-                print("\033[2J\033[H" + "\n".join(self.lines()), flush=True)
+                self.live.update(Text.from_ansi("\n".join(self.lines())), refresh=True)
                 self.last_draw = time.time()
         elif step is not None:
             r = step.state.result
@@ -186,16 +191,20 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = log_root(os.environ.get("USER", ""), Path.home()) / run
     run_dir.mkdir(parents=True, exist_ok=True)
     header = [f"{TOOL_NAME}  {host}  run {run}  mode={'co' if args.co else 'real'}", f"logs  {run_dir}/"]
-    print("\n".join(header), flush=True)
     meta = {"host": host, "run": run, "mode": "co" if args.co else "real", "commit": commit, "run_dir": str(run_dir)}
     screen = Screen(steps, header, run_dir / "status.json", meta)
     ctx = Ctx(repo, run_dir, args.co, tick=screen.update)
-    run_all(steps, ctx, skip, screen.update)
-    screen.done = True
-    if screen.tty:
-        screen.update(steps[-1])
-    else:
-        print("\n".join(screen.lines()), flush=True)
+    # Live redraws in place, so scrollback keeps only the command and the final table.
+    with (Live(Text("\n".join(header)), auto_refresh=False) if screen.tty else contextlib.nullcontext()) as live:
+        screen.live = live
+        if not screen.tty:
+            print("\n".join(header), flush=True)
+        run_all(steps, ctx, skip, screen.update)
+        screen.done = True
+        if screen.tty:
+            screen.update(steps[-1])
+        else:
+            print("\n".join(screen.lines()), flush=True)
     return 1 if any(s.state.result.status in (Status.FAIL, Status.HANG) for s in steps) else 0
 
 
