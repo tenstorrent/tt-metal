@@ -2273,6 +2273,33 @@ def test_chunk_groups_below_the_context_window_are_freed(model):
     assert [tap.tag for tap in taps] == [(2, 0), (2, 1), (3, 0), (3, 1)]
 
 
+def test_a_cache_hit_prefill_on_the_mtp_rail_is_the_base_continuation(mtp):
+    """The MTP rail takes no prefill taps: a prefix-cache hit reaches ``Gemma4ForCausalLM.prefill_forward`` once
+    with the runner's ``start_pos`` intact (the base continues the cached KV from the SDPA-aligned restart, so the
+    target runs over the uncached tail only, never the whole prompt), drops the slot's session and does no drafter
+    work; the seed is the next proposal's reseed forward at the row's anchor. The 12B QB2 first hit of 2026-10-30
+    (2.97 s against 0.58 s for the same-position repeat) ran exactly this path: its cost was the continuation
+    programs' first-process compile at a new position (tt-metal-spec @8c78e6d4c71), not a target re-run."""
+    mh._start_solo(mtp)  # slot 0 holds a session from the cold request
+    generation = mtp._spec_slot_gen[0]
+    base, seen = mtp._harness_prefill_forward, []
+
+    def recording(self, *args, page_tables_per_layer=None, **kwargs):
+        seen.append((tuple(kwargs["tokens"].shape), list(kwargs["prompt_lens"]), list(kwargs.get("start_pos") or [])))
+        return base(self, *args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+
+    mtp._harness_prefill_forward = recording
+    before = len(mtp.events)
+    _prefill(mtp, prompt_len=300, key=20, start=256)  # the hit: 256 cached tokens of a 300-token prompt
+    assert seen == [((1, 300), [300], [256])]  # one base call, the cached prefix left to the base continuation
+    assert [event[0] for event in mtp.events[before:]] == ["prefill"]  # no reseed, step or readback at prefill
+    assert mtp._mtp_sessions == {} and mtp._spec_slot_gen[0] == generation + 1
+    mh._ordinary(mtp, [3], [300], [20], result=_tensor([160]))
+    proposal = mh._propose(mtp, [[160] + [-1] * 5], [[301] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5]
+    assert mh._names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [301])
+
+
 def test_a_solo_prefill_of_another_request_drops_the_pending_taps_and_takes_none(model, monkeypatch):
     """Two rows prefilled before a proposal share their first step, so neither can bootstrap: the first's taps
     are dropped and the second captures none (the hook stays disarmed); the base prefill still runs, eager."""
