@@ -14,10 +14,18 @@ churn: N requests of mixed prompt lengths (an instruction plus the start of a te
     would whole (one PP chunk per sequence); the run script counts the split prompts. --long-tokens N adds one request
     of about N prompt tokens (the text file repeated): the memory check at the card's pool size and max_model_len.
     CHURN NUMBERS / CHURN LONG lines: the concurrent phase's aggregate tok/s, per-user decode tok/s and TTFT.
+history: a prompt's tokens must not depend on what the server ran before it. On a fresh server (run it first)
+    HISTORY prompts (instruction + text file, about 2K to 8K tokens, over the PP chunk unit) one at a time, then
+    --predecessors requests at once (9: launch 0's 8 rows and one row of launch 1; each a prompt over the chunk unit
+    and --pred-tokens >= 1024 decoded tokens, ignore_eos), then every prompt again alone (launch 0's first row, where
+    a predecessor decoded) and alone in launch 1 (8 holders keep launch 0's rows; the row the 9th predecessor
+    decoded in). Both must equal the fresh run token for token: the shared PP prefill and a resident slot start from
+    the same state whatever ran before (stale state after a long predecessor is the suspect, 2026-10-30).
 A request the server failed (an error event, a stream without a finish reason) is an error, never an empty match.
 
 usage: python -m qwen36_resident.serve.mu_checks identity --port 8000 --out identity.json
        python -m qwen36_resident.serve.mu_checks churn --port 8000 --out churn.json --doc FILE [--n 16] [--aborts 2]
+       python -m qwen36_resident.serve.mu_checks history --port 8000 --out history.json --doc FILE
 """
 import argparse
 import json
@@ -33,11 +41,15 @@ from qwen36_resident.serve.prompts import PROMPTS, messages
 
 # churn: prompt lengths over the PP chunk unit (1024) in every mix, none a multiple of it
 LONG = [1100, 2100, 3333, 5000, 6000, 8000]
+# history: the prompts compared before and after the predecessors
+HISTORY = [2100, 3333, 8000]
+FILLER = dict(content="Write a long, detailed essay about the history of lighthouses.", thinking=False)
 
 
-def stream(port, model, msgs, max_tokens, thinking=True, abort_after=None, timeout=1800):
+def stream(port, model, msgs, max_tokens, thinking=True, abort_after=None, timeout=1800, ignore_eos=False, stop=None):
     """one greedy streamed request: generated token ids, finish reason, seconds, ttft_s (first token); abort_after:
-    close the connection after that many tokens (the server aborts the request). A request the server failed raises:
+    close the connection after that many tokens (the server aborts the request), or once `stop` (an Event) is set;
+    ignore_eos: decode all max_tokens. A request the server failed raises:
     an error event in the stream, or a stream that ends without a finish reason (a dead engine ends it that way;
     its empty token list would otherwise equal another empty one)"""
     body = dict(
@@ -49,6 +61,8 @@ def stream(port, model, msgs, max_tokens, thinking=True, abort_after=None, timeo
         return_token_ids=True,
         chat_template_kwargs=dict(enable_thinking=thinking),
     )
+    if ignore_eos:
+        body["ignore_eos"] = True
     req = urllib.request.Request(
         f"http://localhost:{port}/v1/chat/completions",
         data=json.dumps(body).encode(),
@@ -68,7 +82,7 @@ def stream(port, model, msgs, max_tokens, thinking=True, abort_after=None, timeo
                 finish = c.get("finish_reason") or finish
             if ttft is None and ids:
                 ttft = time.time() - t0
-            if abort_after is not None and len(ids) >= abort_after:
+            if (abort_after is not None and len(ids) >= abort_after) or (stop is not None and stop.is_set()):
                 finish = "aborted"
                 break
     if finish in (None, "error"):
@@ -208,6 +222,74 @@ def run_churn(a):
     print("CHURN " + ("PASS" if ok else "FAIL"), flush=True)
 
 
+def run_history(a):
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(os.environ["HF_MODEL"])
+    model = model_name(a.port)
+    rng = random.Random(a.seed)
+    text = tok(open(a.doc).read(), add_special_tokens=False)["input_ids"]
+
+    def doc(n):
+        start = rng.randrange(0, max(1, len(text) - n))
+        body = "Summarize the following text in a few sentences.\n\n" + tok.decode(text[start : start + n])
+        return [{"role": "user", "content": body}]
+
+    probes = {f"h{i}": dict(isl=n, msgs=doc(n)) for i, n in enumerate(HISTORY)}
+
+    def alone():
+        return {k: stream(a.port, model, p["msgs"], a.max_tokens, False, timeout=a.timeout) for k, p in probes.items()}
+
+    # (a) the fresh server: each prompt alone
+    fresh = alone()
+    print("fresh", {k: len(r["token_ids"]) for k, r in fresh.items()}, flush=True)
+    # the predecessors, at once: the lowest launch fills first, so 9 reach a row of launch 1
+    preds = []
+    for i in range(a.predecessors):
+
+        def pred(m=doc(a.pred_isl)):
+            return stream(a.port, model, m, a.pred_tokens, False, timeout=a.timeout, ignore_eos=True)
+
+        preds.append((f"pred{i}", pred))
+    done = concurrent(preds)
+    bad = {k: r["error"] for k, r in done.items() if "error" in r}
+    if bad:
+        raise RuntimeError(f"predecessors failed: {bad}")
+    print(f"predecessors (isl {a.pred_isl})", {k: len(r["token_ids"]) for k, r in done.items()}, flush=True)
+    # (b) each prompt alone again: launch 0's first row
+    again = alone()
+    # (c) each prompt alone in launch 1: 8 holders take launch 0's rows first and stop once the prompts are done
+    stop, held = threading.Event(), {}
+    hold = [
+        (f"hold{i}", lambda: stream(a.port, model, messages(FILLER), 4096, False, timeout=a.timeout, stop=stop))
+        for i in range(8)
+    ]
+    holder = threading.Thread(target=lambda: held.update(concurrent(hold)))
+    holder.start()
+    time.sleep(a.filler_head_start)
+    try:
+        other = alone()
+    finally:
+        stop.set()
+        holder.join()
+    bad = {k: r["error"] for k, r in held.items() if "error" in r}
+    if bad:
+        raise RuntimeError(f"launch-0 holders failed: {bad}")
+    rows, ok = [], True
+    for k, p in probes.items():
+        s = fresh[k]["token_ids"]
+        db, dc = first_diff(s, again[k]["token_ids"]), first_diff(s, other[k]["token_ids"])
+        ok &= db is None and dc is None
+        rows.append(dict(key=k, isl=p["isl"], fresh=len(s), after_launch0_first_diff=db, after_launch1_first_diff=dc))
+        print(
+            f"{k} (isl {p['isl']}): fresh {len(s)} tokens; after the predecessors first diff {db} (launch 0), "
+            f"{dc} (launch 1)",
+            flush=True,
+        )
+    json.dump(dict(ok=ok, rows=rows, fresh=fresh, again=again, other_launch=other), open(a.out, "w"), indent=1)
+    print("HISTORY " + ("PASS" if ok else "FAIL"), flush=True)
+
+
 def num(v, digits=2):
     return "-" if v is None else f"{v:.{digits}f}"
 
@@ -248,7 +330,7 @@ def churn_numbers(together, rows, phase):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["identity", "churn"])
+    ap.add_argument("mode", choices=["identity", "churn", "history"])
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--out", required=True)
     ap.add_argument("--max-tokens", type=int, default=128)
@@ -261,8 +343,11 @@ def main():
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--timeout", type=float, default=1800)
     ap.add_argument("--long-tokens", type=int, default=0, help="churn: one more request of about this many tokens")
+    ap.add_argument("--predecessors", type=int, default=9, help="history: predecessors at once (9 reach launch 1)")
+    ap.add_argument("--pred-isl", type=int, default=3000, help="history: a predecessor's prompt tokens")
+    ap.add_argument("--pred-tokens", type=int, default=1100, help="history: a predecessor's decoded tokens")
     a = ap.parse_args()
-    run_identity(a) if a.mode == "identity" else run_churn(a)
+    dict(identity=run_identity, churn=run_churn, history=run_history)[a.mode](a)
 
 
 if __name__ == "__main__":
