@@ -190,6 +190,110 @@ inline void build_ebc16_body(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c, 
     }
 }
 
+inline sfpi::vFloat or_bits(sfpi::vFloat a, sfpi::vFloat b) {
+    return sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(a) | sfpi::as<sfpi::vUInt>(b));
+}
+
+// Element [0, 0] of DEST[scalar_slot] (lane 0 of vector 0) broadcast to all 32 lanes and parked in the programmable
+// constant vConstFloatPrgm2 (LREG14): keep lane 0 (mask), spread it over its 8-lane subvector by rotate-by-1, 2, 4 +
+// bitwise OR (the other lanes are zero, so the bits are copied exactly, -0.0 and NaN included), then over the four
+// subvectors by SFPTRANSP of four copies (output 0's subvector j is input j's subvector 0).
+inline void load_scalar_body(uint32_t scalar_slot) {
+    sfpi::vFloat s = sfpi::dst_reg[scalar_slot * kSlotVecs];
+    v_if(sfpi::vConstTileId != 0) { s = 0.0f; }  // tile id = 2 * lane: lane 0 only
+    v_endif;
+    sfpi::vFloat t = sfpi::subvec_shflror1(s);
+    s = or_bits(s, t);
+    t = sfpi::subvec_shflror1(s);
+    t = sfpi::subvec_shflror1(t);
+    s = or_bits(s, t);
+    t = sfpi::subvec_shflror1(s);
+    t = sfpi::subvec_shflror1(t);
+    t = sfpi::subvec_shflror1(t);
+    t = sfpi::subvec_shflror1(t);
+    s = or_bits(s, t);
+    sfpi::vFloat a = s, b = s, c = s, d = s, e = 0.0f, f = 0.0f, g = 0.0f, h = 0.0f;
+    sfpi::subvec_transp(a, b, c, d, e, f, g, h);
+    sfpi::vConstFloatPrgm2 = a;
+}
+
+// DEST[DST] <- DEST[DST] * vConstFloatPrgm2 (LREG14) on the whole slot (ROWS 32), faces 0 and 1 (16) or rows 0..3
+// (4), hand-scheduled the way the LLK band kernel is: per group of four vectors, 4 SFPLOADs into LREG0..3, 4 SFPMULs
+// by LREG14 (the instruction the column broadcast ends in, so the bits match it when its column is uniform), 4
+// SFPSTOREs, all with immediate DEST addresses (the slot is a template parameter), so the SFPU issues about one
+// instruction per cycle; the generic sfpi loop below runs at about half that rate. No sfpi value is live here, so
+// LREG0..3 are free. DEST addresses: 64 units per slot, 2 per sfpi vector, vector v of the slot at 2 * v.
+template <uint32_t DST, uint32_t ROWS>
+inline void mul_loaded_scalar_tti_body() {
+    using namespace ckernel;
+    using namespace ckernel::sfpu;
+    constexpr uint32_t base = DST * DEST_TILE_SIZE_RAW;
+    constexpr InstrModLoadStore IM = InstrModLoadStore::DEFAULT;
+    constexpr uint32_t groups = (ROWS == 4) ? 1 : ROWS / 4;
+#pragma GCC unroll 8
+    for (uint32_t g = 0; g < groups; g++) {
+        // vectors 4g .. 4g+3 of the slot (ROWS 16 / 32); for ROWS 4 the band-0 vectors 0, 1, 8, 9
+        const uint32_t a0 = base + ((ROWS == 4) ? 0 : 8 * g);
+        const uint32_t a1 = a0 + 2;
+        const uint32_t a2 = (ROWS == 4) ? (base + 16) : (a0 + 4);
+        const uint32_t a3 = a2 + 2;
+        TT_SFPLOAD(p_sfpu::LREG0, IM, ADDR_MOD_7, a0);
+        TT_SFPLOAD(p_sfpu::LREG1, IM, ADDR_MOD_7, a1);
+        TT_SFPLOAD(p_sfpu::LREG2, IM, ADDR_MOD_7, a2);
+        TT_SFPLOAD(p_sfpu::LREG3, IM, ADDR_MOD_7, a3);
+        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG2, 0);
+        TTI_SFPMUL(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, IM, ADDR_MOD_7, a0);
+        TT_SFPSTORE(p_sfpu::LREG1, IM, ADDR_MOD_7, a1);
+        TT_SFPSTORE(p_sfpu::LREG2, IM, ADDR_MOD_7, a2);
+        TT_SFPSTORE(p_sfpu::LREG3, IM, ADDR_MOD_7, a3);
+    }
+}
+
+// The generic sfpi form of the same multiply (any slot index); the fallback of the dispatcher below.
+template <uint32_t ROWS>
+inline void mul_loaded_scalar_body(uint32_t dst);
+
+// A half-sync fp32 DEST has slots 0..3: those get the immediate-address form, anything else the sfpi loop.
+template <uint32_t ROWS>
+inline void mul_loaded_scalar_dispatch(uint32_t dst) {
+    switch (dst) {
+        case 0: mul_loaded_scalar_tti_body<0, ROWS>(); break;
+        case 1: mul_loaded_scalar_tti_body<1, ROWS>(); break;
+        case 2: mul_loaded_scalar_tti_body<2, ROWS>(); break;
+        case 3: mul_loaded_scalar_tti_body<3, ROWS>(); break;
+        default: mul_loaded_scalar_body<ROWS>(dst); break;
+    }
+}
+
+// Zero-increment ADDR_MOD_7, the address mode every SFPU load / store here uses (sfpi's NOINC mode on Blackhole and
+// the LLK SFPU inits' choice); the matmul and datacopy LLKs never write it, this just removes the assumption.
+inline void pin_sfpu_addr_mod() {
+    using namespace ckernel;
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+}
+
+template <uint32_t ROWS>
+inline void mul_loaded_scalar_body(uint32_t dst) {
+    const uint32_t base = dst * kSlotVecs;
+    const sfpi::vFloat s = sfpi::vConstFloatPrgm2;
+    if constexpr (ROWS == 4) {
+#pragma GCC unroll 4
+        for (uint32_t i = 0; i < 4; i++) {
+            const sfpi::vFloat x = sfpi::dst_reg[base + kBand0Vecs[i]];
+            sfpi::dst_reg[base + kBand0Vecs[i]] = x * s;
+        }
+    } else {
+#pragma GCC unroll 8
+        for (uint32_t v = 0; v < ROWS; v++) {
+            const sfpi::vFloat x = sfpi::dst_reg[base + v];
+            sfpi::dst_reg[base + v] = x * s;
+        }
+    }
+}
+
 // exp (the fp32-accurate body exp_tile<false> runs on an fp32 DEST, _sfpu_exp_fp32_accurate_) on the eight vectors
 // that hold column 0 of a 32x32 tile; the other columns are left as they are.
 inline void exp_col0_body(uint32_t dst) {
@@ -238,6 +342,34 @@ inline void build_ebc16(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c, uint3
 }
 inline void build_ebc16(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c) {
     build_ebc16(slot_e, slot_b, slot_c, slot_e);
+}
+
+// Scalar-times-tile without a resident DEST slot (pass 2's decay, four S tiles per acquire). Two calls:
+//   load_scalar(scalar_slot): element [0, 0] of DEST[scalar_slot] (e.g. an ecol32 copy) is broadcast to all lanes and
+//     parked in the programmable constant register vConstFloatPrgm2 (LREG14). ~25 SFPU instructions. The register
+//     is not allocated by the sfpi compiler, so it survives every helper of this file except exp_tile_exact /
+//     exp_tile_init (and any other op's init that programs LREG12-14, e.g. sfpu_normalize_bcast_scalar): call
+//     load_scalar after those, within the acquire that uses it. The slot may be overwritten right after the call.
+//   mul_loaded_scalar<ROWS>(dst): DEST[dst] <- DEST[dst] * that scalar; ROWS 32 = the whole 32x32 slot (32 x
+//     {SFPLOAD, SFPMUL, SFPSTORE}), 16 = faces 0 and 1, 4 = rows 0..3. Bit-identical to mul_col_bcast<ROWS>(dst, col)
+//     when column 0 of col is uniform and equal to the scalar (the same SFPMUL on the same operands).
+//   mul_scalar_dst<ROWS>(dst, scalar_slot) = load_scalar + mul_loaded_scalar, for a single tile.
+// Neither needs an init: sfpi addresses DEST through ADDR_MOD_7 with no increment, which the matmul / datacopy LLKs
+// never write.
+inline void load_scalar(uint32_t scalar_slot) {
+    MATH((detail::pin_sfpu_addr_mod(), detail::run([&] { detail::load_scalar_body(scalar_slot); })));
+}
+
+template <uint32_t ROWS = 32>
+inline void mul_loaded_scalar(uint32_t dst) {
+    static_assert(ROWS == 4 || ROWS == 16 || ROWS == 32, "mul_loaded_scalar: rows 0..3, a 16x32 or a 32x32 tile");
+    MATH((detail::run([&] { detail::mul_loaded_scalar_dispatch<ROWS>(dst); })));
+}
+
+template <uint32_t ROWS = 32>
+inline void mul_scalar_dst(uint32_t dst, uint32_t scalar_slot) {
+    load_scalar(scalar_slot);
+    mul_loaded_scalar<ROWS>(dst);
 }
 
 // Rows 0..3 of DEST[dst] <- DEST[dst][r][c] * DEST[dst_col][4 * col_band + r][0] (r = 0..3): the LLK band kernel
