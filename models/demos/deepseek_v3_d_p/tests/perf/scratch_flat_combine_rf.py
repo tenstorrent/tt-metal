@@ -173,6 +173,12 @@ def closeout_cfg(model, chunk, mesh="2x4", routings=("uniform",), load=GALAXY, *
     the cells and the arena); real weights (one random expert set shared by all chips), correctness only."""
     md, pc = MODELS[model], per_chip(model, load, chunk)
     (R, C), _, torus = MESHES[mesh]
+    # (A/B: FC_CLOSE_PAYLOAD / FC_CLOSE_PIECE - the fabric payload and the combine's row bytes a packet; pieces need
+    # FC_CLOSE_L1=0 - no L1 hand-off, so host-planned tables and the ports-apart mode)
+    if os.environ.get("FC_CLOSE_L1") == "0":
+        kw.setdefault("l1", False)
+        kw.setdefault("devplan", False)
+        kw.setdefault("combine_mode", "ports apart")
     return FC(
         R=R,
         C=C,
@@ -184,8 +190,8 @@ def closeout_cfg(model, chunk, mesh="2x4", routings=("uniform",), load=GALAXY, *
         I=md["I"],
         CAP=R * C * pc["S"],  # (every token at most once per expert)
         ACT=md["act"],
-        payload=fabric_payload(md["H"]),
-        piece_max=max(7168, 2 * md["H"]),  # (the L1 hand-off: one piece a row)
+        payload=int(os.environ.get("FC_CLOSE_PAYLOAD", fabric_payload(md["H"]))),
+        piece_max=int(os.environ.get("FC_CLOSE_PIECE", max(7168, 2 * md["H"]))),  # (the L1 hand-off: one piece a row)
         weights="real",
         timing=kw.pop("timing", False),
         routings=routings,
@@ -209,6 +215,7 @@ _PARAMS = [
 
 def _mesh_params(mesh, payload):
     shape, fabric, _ = MESHES[mesh]
+    payload = int(os.environ.get("FC_CLOSE_PAYLOAD", payload))  # (the closeout payload A/B: the fabric opened at it)
     return shape, fabric2d_device_params(fabric_payload_size=payload, l1_small_size=0, fabric_config=fabric)
 
 
@@ -580,7 +587,9 @@ _TRACED = [
 def test_flat_combine_closeout_traced(mesh_device, device_params, model, chunk, mesh):
     """The close-out case (defaults, uniform) traced: fused, flat alone and combine alone each captured once and replayed
     back to back (wall a replay; with TT_METAL_DEVICE_PROFILER=1 also each replay's device time, slowest chip)."""
-    c = closeout_cfg(model, chunk, mesh, timing=True, trace=True)
+    c = closeout_cfg(  # (FC_ROUTINGS: every routing on the one flat expert, its weights packed once)
+        model, chunk, mesh, routings=tuple(os.environ.get("FC_ROUTINGS", "uniform").split(",")), timing=True, trace=True
+    )
     logger.info(f"closeout traced {model} chunk {chunk} on {mesh}: {c}")
     _run(mesh_device, c)
 
