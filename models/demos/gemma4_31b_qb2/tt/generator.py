@@ -6,7 +6,10 @@ The optimized loop replays two traces. Only the sampling trace writes the next
 token; position advances in the model trace. Host sampling is opt-in compatibility.
 """
 
+import gemma_history_reservation as _history_reservation
+import json
 import math
+import os
 import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -14,12 +17,13 @@ from types import SimpleNamespace
 import torch
 from loguru import logger
 from transformers import AutoTokenizer, GenerationConfig
-from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.model import Gemma4Model
+from models.demos.gemma4_31b_qb2.tt.history_bank import HistoryBank
+from models.demos.gemma4_31b_qb2.tt.prefill_batch import DeferredPrefillHistory, padded_span, plan_prefill_batches
 
 
 @dataclass
@@ -36,6 +40,17 @@ class CacheState:
     # Standalone mode retains the stricter private cyclic-cache contract.
     vllm_owned: bool = False
     prefill_history: dict = field(default_factory=dict)
+    history_bank: object = None
+
+    def release_history(self, key):
+        self.prefill_history.pop(key, None)
+        if self.history_bank is not None:
+            self.history_bank.release(key)
+
+    def clear_histories(self):
+        self.prefill_history.clear()
+        if self.history_bank is not None:
+            self.history_bank.clear()
 
 
 class Gemma4Generator:
@@ -49,7 +64,18 @@ class Gemma4Generator:
         self.initial_capacity = max_seq_len
         self.states = {}
         self.traces = {}
+        # Keep explicit decode/sampler IO across conservative trace retirement.
+        # The next capture gets a new entry object, so old handles stay invalid.
+        self._entry_storage = None
         self.prefill_shapes = set()
+        # Experimental bounded closure gate; never enabled by serving defaults.
+        self._prepared_prefill_state = None
+        self._serving_prefill_prepared_state = None
+        self._serving_prefill_has_real_work = False
+        self.runtime_page_selector = None
+        if os.environ.get("GEMMA_PREFILL_RUNTIME_PAGES", "0") == "1":
+            from .runtime_page_selector import RuntimePageSelector
+            self.runtime_page_selector = RuntimePageSelector(self.mesh)
         self.counters = {
             k: 0
             for k in (
@@ -84,6 +110,7 @@ class Gemma4Generator:
         if not 1 <= batch <= 32 or not 1 <= capacity <= self.max_seq_len:
             raise ValueError("Expected batch1..32 and context1..262144")
         self._retire_traces()
+        self._entry_storage = None
         # All accepted decode SDPA chunks are64/128: one128-token page covers
         # the rounded read window. No power-of-two capacity restriction.
         pages = (capacity + 127) // 128
@@ -105,7 +132,41 @@ class Gemma4Generator:
             kind: list(range(batch * pools[kind] + max(2, batch) - batch, batch * pools[kind] + max(2, batch)))
             for kind in pools
         }
-        return CacheState(kv, tables, batch, pages * 128, scratch_pages=scratch)
+        state = CacheState(kv, tables, batch, pages * 128, scratch_pages=scratch)
+        self.setup_history_bank(state)
+        return state
+
+    def setup_history_bank(self, state, *, capacity=None):
+        """Explicit setup before first capture; experiment remains default off."""
+        if os.environ.get("GEMMA_PREFILL_HISTORY_BANK", "0") != "1":
+            return
+        capacity = state.batch if capacity is None else capacity
+        if type(capacity) is not int or not 1 <= capacity <= state.batch:
+            raise ValueError("History capacity must be an integer in 1..physical width")
+        if state.history_bank is not None:
+            if len(state.history_bank.roots) != capacity:
+                raise RuntimeError("History capacity cannot change after allocation")
+            return
+        if self.traces or state.prefill_history:
+            raise RuntimeError("History bank setup must precede capture and requests")
+        state.history_bank = HistoryBank(self.model, capacity)
+
+    def _bank_history(self, state, key, start, aligned_start, tables, slot, retain):
+        previous = state.prefill_history.pop(key, None)
+        if start == 0:
+            state.history_bank.release(key)
+            previous = None
+        elif previous is not None and previous["end"] != start:
+            raise ValueError("Bank history does not match scheduler continuation")
+        restore = None
+        if start and previous is None:
+            if not state.vllm_owned or start != aligned_start:
+                raise ValueError("Cached prefill must start at a whole page in the serving cache")
+            restore = lambda i: self._restore_prefill_history(state, tables, slot, start, layer_index=i)[0]
+        return state.history_bank.session(
+            key, previous=previous["layers"] if previous else None,
+            rewind=start-aligned_start, restore=restore, retain=retain,
+        )
 
     def _owned(self, batch, capacity):
         for (b, c), state in self.states.items():
@@ -182,11 +243,11 @@ class Gemma4Generator:
         for layer, pair in zip(self.model.layers, state.kv):
             if len(pair) != 2:
                 raise ValueError("Each layer requires exactly two K/V tensors")
-            for tensor in pair:
+            for tensor, expected_dtype in zip(pair, layer.kv_dtypes):
                 if (
                     len(tensor.shape) != 4
                     or tuple(tensor.shape)[1:] != (layer.kv_heads, 128, layer.head_dim)
-                    or tensor.dtype != ttnn.bfloat8_b
+                    or tensor.dtype != expected_dtype
                     or tensor.layout != ttnn.TILE_LAYOUT
                     or tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG
                     or tensor.device() != self.mesh
@@ -228,10 +289,10 @@ class Gemma4Generator:
                 raise ValueError("Invalid serving table geometry")
             if len(pair) != 2 or pair[0].buffer_unique_id() == pair[1].buffer_unique_id():
                 raise ValueError("Serving K and V must have separate storage")
-            for tensor in pair:
+            for tensor, expected_dtype in zip(pair, layer.kv_dtypes):
                 if (
                     tuple(tensor.shape)[1:] != (layer.kv_heads, 128, layer.head_dim)
-                    or tensor.dtype != ttnn.bfloat8_b
+                    or tensor.dtype != expected_dtype
                     or tensor.layout != ttnn.TILE_LAYOUT
                     or tensor.device() != self.mesh
                     or tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG
@@ -327,7 +388,201 @@ class Gemma4Generator:
         self.counters["token_readbacks"] += 1
         return ttnn.to_torch(ttnn.get_device_tensors(token)[0]).reshape(-1)[:batch].long()
 
-    def prefill_forward(
+    def _restore_prefill_history(self, state, page_tables, slot, start, *, layer_index=None):
+        """Gather the preceding sliding window from vLLM's retained KV pages.
+
+        The scheduler owns cache identity and eviction. Only pages in this
+        request's current table are read; null pages are never valid history.
+        Decode and cached continuation consume the same stored BF8 values.
+        """
+        histories = []
+        indices = range(len(self.model.layers)) if layer_index is None else [layer_index]
+        for i in indices:
+            layer = self.model.layers[i]
+            if not layer.sliding:
+                histories.append(None)
+                continue
+            first = max(0, start - layer.window) // Decoder.PAGE_SIZE
+            pages = page_tables[i][slot, first : start // Decoder.PAGE_SIZE].tolist()
+            if not pages or any(p <= 0 or p >= state.kv[i][0].shape[0] for p in pages):
+                raise ValueError(f"Missing sliding prefix pages for layer {i} at position {start}: {pages}")
+            pair = []
+            for cache in state.kv[i]:
+                parts = [self.runtime_page_selector.select(cache, p) if self.runtime_page_selector is not None
+                         else cache[p : p + 1, :, :, :] for p in pages]
+                tail = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+                pair.append(ttnn.typecast(tail, ttnn.bfloat16))
+            histories.append(tuple(pair))
+        return histories
+
+    def prepare_serving_prefill(self, state):
+        """Opt-in fresh-cache preparation; capture remains at its normal boundary."""
+        if os.environ.get("GEMMA_SERIAL_PREPARED_RETENTION", "0") != "1":
+            return
+        required = ("GEMMA_PREFILL_HISTORY_BANK", "GEMMA_PREFILL_RUNTIME_POSITION",
+                    "GEMMA_PREFILL_RUNTIME_FINAL_TILE", "GEMMA_PREFILL_RUNTIME_PAGES",
+                    "GEMMA_PREFILL_HOST_FILL_TABLES", "TT_METAL_TRACE_ALLOC_TRACKING")
+        if any(os.environ.get(key, "0") != "1" for key in required):
+            raise RuntimeError("Serial prepared retention requires all fixed-owner controls and tracking")
+        if os.environ.get("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE", "0") != "0":
+            raise RuntimeError("Program-cache allocations must remain tracked")
+        pool_profile = os.environ.get("GEMMA_SERIAL_PREPARED_POOL_PROFILE", "f606208")
+        c32_profiles = {"c32a24_f262144": (24, "262144"), "c32a20_f327680": (20, "327680"), "c32a24_f458752": (24, "458752"), "c32a32_p2_f412672": (32, "412672"), "c32a32_p2_f443392": (32, "443392"), "c32a32_p2_f458752": (32, "458752"), "c32a32_p2_f626688": (32, "626688")}
+        c32_profile = pool_profile in c32_profiles
+        expected_batch = 32 if c32_profile else 16
+        expected_admission = c32_profiles[pool_profile][0] if c32_profile else 16
+        expected_history = _history_reservation.serving_history_capacity(
+            batch=state.batch, admitted=expected_admission,
+            capacity=state.capacity)
+        if _history_reservation.bank_mode() is not None and (
+                not getattr(state, "vllm_owned", False) or not hasattr(state, "serving_admission_limit")):
+            raise RuntimeError("Reduced prepared history requires explicit serving state")
+        if c32_profile and (
+                getattr(state, "serving_admission_limit", None) != expected_admission
+                or os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS") != c32_profiles[pool_profile][1]
+                or os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_SLIDING_QKV") != "1"
+                or os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_DOWN") != "1"
+                or os.environ.get("GEMMA_REPETITION_PRECISION_POLICY") != "bf8"
+                or os.environ.get("GEMMA_EXPERIMENT_KV_DTYPE") != "bf8kv"):
+            raise RuntimeError("C32 declared preparation requires explicit admission and joint BF8/BF8KV profile")
+        if (os.environ.get("GEMMA_BATCH_PREFILL_MAX_BATCH", "1") != "1"
+                or state.batch != expected_batch or state.capacity != 262144
+                or len(self.model.layers) != 60 or state.history_bank is None
+                or self.traces or state.prefill_history or state.history_bank.leases
+                or len(state.history_bank.roots) != expected_history
+                or self._serving_prefill_prepared_state is not None):
+            raise RuntimeError("Experimental preparation requires fresh full60 declared-width serial state")
+        pool_profile = os.environ.get("GEMMA_SERIAL_PREPARED_POOL_PROFILE", "f606208")
+        pool_rows = {"f606208": 6128, "f262144": 3440, "f311296": 3824, "f393216": 4464, "c32a24_f262144": 3832, "c32a20_f327680": 4164, "c32a24_f458752": 5368, "c32a32_p2_f412672": 5368, "c32a32_p2_f443392": 5608, "c32a32_p2_f458752": 5728, "c32a32_p2_f626688": 7040}
+        if pool_profile not in pool_rows:
+            raise RuntimeError("Unsupported serial prepared alias pool profile")
+        if pool_profile == "f311296" and (
+                os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS") != "311296"
+                or os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_SLIDING_QKV") != "1"
+                or os.environ.get("GEMMA_REPETITION_PRECISION_POLICY") != "bf8"
+                or os.environ.get("GEMMA_EXPERIMENT_KV_DTYPE") != "bf8kv"):
+            raise RuntimeError("F311296 preparation requires declared shared BF8/BF8KV source")
+        if pool_profile == "f393216" and (
+                os.environ.get("GEMMA_EXPERIMENT_KV_POOL_TOKENS") != "393216"
+                or os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_SLIDING_QKV") != "1"
+                or os.environ.get("GEMMA_EXPERIMENT_SHARE_BF8_DOWN") != "1"
+                or os.environ.get("GEMMA_REPETITION_PRECISION_POLICY") != "bf8"
+                or os.environ.get("GEMMA_EXPERIMENT_KV_DTYPE") != "bf8kv"):
+            raise RuntimeError("F393216 requires joint shared BF8/BF8KV source")
+        wide_rows = pool_rows[pool_profile]
+        if any(int(pair[0].shape[0]) != (wide_rows if layer.sliding else 2 * wide_rows)
+               for layer, pair in zip(self.model.layers, state.kv)):
+            raise RuntimeError("Experimental preparation requires the declared alias pool")
+        from models.demos.gemma4_31b_qb2.tt.serial_staging_preparation import prepare as staging
+        from models.demos.gemma4_31b_qb2.tt.serial_compute_preparation import prepare as compute
+        from models.demos.gemma4_31b_qb2.tt.serial_terminal_preparation import prepare as terminal
+        started = time.perf_counter()
+        def record(row):
+            logger.info("SERIAL_PREFILL_PREPARATION " + json.dumps(row))
+        staging(self.model, self.mesh, 8319, record)
+        compute(self, state, record)
+        terminal(self, state, record)
+        # Do not capture against the adapter's initially all-null page tables.
+        # The first normal sampling/decode entry arms retention after capture.
+        self._serving_prefill_prepared_state = state
+        record({"phase": "ready_for_first_real_capture", "seconds": time.perf_counter() - started})
+
+    def _check_serving_prefill_family(self, tokens, kwargs):
+        state = self._serving_prefill_prepared_state
+        if state is None:
+            return
+        lengths = kwargs.get("prompt_lens", ())
+        starts = kwargs.get("start_positions")
+        starts = [0] * len(lengths) if starts is None else list(starts)
+        supported = (kwargs.get("kv_cache") is state
+                     and os.environ.get("GEMMA_BATCH_PREFILL_MAX_BATCH", "1") == "1"
+                     and not kwargs.get("return_all_logits", False)
+                     and 0 < len(lengths) <= state.batch and len(starts) == len(lengths)
+                     and all(type(n) is int and type(s) is int
+                             and 0 <= s < n <= state.capacity and n - s <= 8192
+                             and n - (s // 128 * 128) <= 8319
+                             for n, s in zip(lengths, starts)))
+        if supported:
+            return
+        # Retire before any unsupported computation, never after a partial write.
+        self._serving_prefill_prepared_state = None
+        self._serving_prefill_has_real_work = False
+        self._prepared_prefill_state = None
+        self.mesh.set_program_cache_misses_allowed(True)
+        self._retire_traces()
+        logger.info("SERIAL_PREFILL_RETENTION_FALLBACK unsupported_family; conservative retirement restored")
+
+    def enable_prepared_prefill_trace_retention(self, state):
+        """Arm a strict diagnostic only after native eager preparation.
+
+        This does not assert preparation is complete. Every subsequent prefill
+        forbids native program misses and the allocator tracker still checks
+        surviving captures. Unsupported signatures fail instead of recapturing.
+        The opt-in serving hook calls this only after successful real prefill.
+        """
+        if self._prepared_prefill_state is not None:
+            raise RuntimeError("Prepared prefill retention is already enabled")
+        if state.history_bank is None or any(os.environ.get(key, "0") != "1" for key in (
+            "GEMMA_PREFILL_HISTORY_BANK", "GEMMA_PREFILL_RUNTIME_POSITION",
+            "GEMMA_PREFILL_RUNTIME_FINAL_TILE",
+        )):
+            raise RuntimeError("Prepared retention requires fixed histories and runtime coordinates")
+        if os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") != "1" or os.environ.get(
+            "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE", "0"
+        ) != "0":
+            raise RuntimeError("Diagnostic requires complete trace allocation tracking")
+        if id(state) not in self.traces:
+            raise RuntimeError("Prepare the decode and sampling traces before enabling retention")
+        # Existing _entry checks the captured cache/table owners on every use.
+        self._entry(state)
+        self.mesh.set_program_cache_misses_allowed(False)
+        self._prepared_prefill_state = state
+
+    def prefill_forward(self, tokens, **kwargs):
+        self._check_serving_prefill_family(tokens, kwargs)
+        if self._prepared_prefill_state is None:
+            result = self._prefill_forward_impl(tokens, **kwargs)
+            if (self._serving_prefill_prepared_state is not None
+                    and self._serving_prefill_prepared_state is kwargs.get("kv_cache")):
+                self._serving_prefill_has_real_work = True
+            return result
+        if kwargs.get("kv_cache") is not self._prepared_prefill_state:
+            raise RuntimeError("Prepared retention cannot change the cache state")
+        if id(self._prepared_prefill_state) not in self.traces:
+            raise RuntimeError("Prepared traces were retired; no implicit recapture is permitted")
+        self._entry(self._prepared_prefill_state)
+        before = self.mesh.num_program_cache_entries()
+        result = self._prefill_forward_impl(tokens, **kwargs)
+        if self.mesh.num_program_cache_entries() != before:
+            raise RuntimeError("Native program cache grew in prepared prefill")
+        return result
+
+    def _prefill_forward_impl(self, tokens, **kwargs):
+        state = kwargs.get("kv_cache")
+        bank = getattr(state, "history_bank", None)
+        if os.environ.get("GEMMA_PREFILL_HISTORY_BANK", "0") == "1" and bank is None:
+            raise RuntimeError("Call setup_history_bank explicitly before capture or prefill")
+        keys = kwargs.get("history_keys")
+        if bank is not None and keys is not None and (len(keys) != len(kwargs.get("prompt_lens", ())) or len(set(keys)) != len(keys)):
+            raise ValueError("Expected distinct stable history keys, one per prefill row")
+        if bank is not None and keys is not None:
+            reservation = _history_reservation.context()
+            if reservation is not None and reservation.scheduler is not None:
+                _history_reservation.sequential_model_preflight(state, keys, kwargs.get("start_positions"), kwargs.get("prompt_lens"), kwargs.get("retain_prefill_history"))
+            elif len(set(bank.leases) | set(keys)) > len(bank.roots):
+                raise RuntimeError("Live plus incoming history owners exceed configured capacity")
+        try:
+            maximum = int(os.environ.get("GEMMA_BATCH_PREFILL_MAX_BATCH", "1"))
+            if maximum > 1 and len(kwargs.get("prompt_lens", ())) > 1 and not kwargs.get("return_all_logits", False):
+                return self._prefill_jobs_forward(tokens, **kwargs)
+            return self._prefill_serial_forward(tokens, **kwargs)
+        except Exception:
+            if bank is not None:
+                for key in keys or ():
+                    state.release_history(key)
+            raise
+
+    def _prefill_jobs_forward(
         self,
         tokens,
         *,
@@ -339,6 +594,7 @@ class Gemma4Generator:
         return_device=False,
         start_positions=None,
         history_keys=None,
+        retain_prefill_history=None,
         **kwargs,
     ):
         state = kv_cache
@@ -357,13 +613,255 @@ class Gemma4Generator:
         self._validate_tokens(tokens)
         if any(not isinstance(n, int) or not 0 < n <= min(state.capacity, tokens.shape[1]) for n in prompt_lens):
             raise ValueError("Invalid logical prompt length")
+        if retain_prefill_history is not None:
+            if (
+                history_keys is None
+                or len(retain_prefill_history) != len(prompt_lens)
+                or any(type(flag) is not bool for flag in retain_prefill_history)
+            ):
+                raise ValueError("Expected one explicit history retention bool per prefill row")
         starts = [0] * len(prompt_lens) if start_positions is None else list(start_positions)
         if len(starts) != len(prompt_lens) or any(s < 0 or s >= n for s, n in zip(starts, prompt_lens)):
             raise ValueError("Prefill must advance each request from its current position")
         shape_key = (state.batch, state.capacity, tuple(prompt_lens), tuple(starts), bool(return_all_logits))
-        if shape_key not in self.prefill_shapes:
-            # A new prefill signature may create cached protocol semaphores or
-            # norm buffers. Retire old traces before those persistent allocations.
+        if self._prepared_prefill_state is None and (history_keys is not None or shape_key not in self.prefill_shapes):
+            # Request histories allocate persistent K/V tails even for a seen
+            # signature. Unseen signatures can also allocate native cached state.
+            # Both must be created before the next trace capture.
+            self._retire_traces()
+        self._tables(state, page_table)
+        jobs = []
+        for row, (slot, length) in enumerate(zip(slots, prompt_lens)):
+            if not 0 < length <= state.capacity or length > tokens.shape[1]:
+                raise ValueError("Invalid logical prompt length")
+            start = starts[row]
+            aligned_start = start // Decoder.PAGE_SIZE * Decoder.PAGE_SIZE
+            chunk_length = length - aligned_start
+            histories = None
+            if history_keys is not None and state.history_bank is not None:
+                histories = self._bank_history(
+                    state, history_keys[row], start, aligned_start, page_table, slot,
+                    retain_prefill_history is None or retain_prefill_history[row],
+                )
+            elif history_keys is not None:
+                key = history_keys[row]
+                if start == 0:
+                    histories = [None] * len(self.model.layers)
+                else:
+                    previous = state.prefill_history.get(key)
+                    if previous is None:
+                        if not state.vllm_owned or start != aligned_start:
+                            raise ValueError("Cached prefill must start at a whole page in the serving cache")
+                        previous = {
+                            "end": start,
+                            "layers": DeferredPrefillHistory(
+                                len(self.model.layers),
+                                lambda i, slot=slot, start=start: self._restore_prefill_history(
+                                    state, page_table, slot, start, layer_index=i
+                                )[0],
+                            ),
+                        }
+                    if previous["end"] != start:
+                        raise ValueError(
+                            "Prefill history does not match the scheduler continuation: "
+                            f"key={key}, saved_end={previous['end']}, start={start}"
+                        )
+                    rewind = start - aligned_start
+                    # Never leave a partially consumed list under its old end
+                    # position if a later device operation raises. Successful
+                    # prefill publishes the completed history below.
+                    state.prefill_history.pop(key, None)
+                    # This request owns the list; other requests never borrow it.
+                    # Replace each consumed tail as soon as its CQ0 slice has
+                    # been enqueued. Bank tensors may have another root owner,
+                    # so use normal reference release, never forced deallocation.
+                    histories = previous["layers"]
+                    for index, tail in enumerate(histories):
+                        if tail is None:
+                            continue
+                        valid = tail[0].shape[2] - rewind
+                        if valid == 0:
+                            histories[index] = None
+                        else:
+                            begin = max(0, valid - 1024)
+                            histories[index] = tuple(t[:, :, begin:valid, :] for t in tail)
+                        del tail
+                    del previous
+            ids = torch.zeros(1, (chunk_length + 31) // 32 * 32, dtype=torch.int32)
+            ids[0, :chunk_length] = tokens[row, aligned_start:length]
+            tables, host_rows = {}, {}
+            for kind, table in page_table.items():
+                sentinel = state.vllm_owned and self.model.layers[kind].kind == "sliding_attention"
+                table_key = (id(table), sentinel)
+                if table_key not in host_rows:
+                    row_table = table[slot : slot + 1]
+                    if sentinel:
+                        row_table = row_table.masked_fill(row_table == 0, -1)
+                    host_rows[table_key] = row_table
+                tables[kind] = host_rows[table_key]
+            jobs.append(
+                dict(
+                    row=row,
+                    slot=slot,
+                    length=length,
+                    span=chunk_length,
+                    start=aligned_start,
+                    ids=ids,
+                    tables=tables,
+                    histories=histories,
+                )
+            )
+        outputs = [None] * len(jobs)
+        maximum = int(os.environ.get("GEMMA_BATCH_PREFILL_MAX_BATCH", "1"))
+        for indices in plan_prefill_batches(
+            [job["span"] for job in jobs],
+            maximum,
+            long_spans=os.environ.get("GEMMA_BATCH_PREFILL_LONG", "0") == "1",
+            packed_rows=self.model.layers[0].PREFILL_BATCH_ROWS,
+        ):
+            group = [jobs[index] for index in indices]
+            padded = max(padded_span(job["span"]) for job in group)
+            if os.environ.get("GEMMA_BATCH_PREFILL_REPORT", "0") == "1":
+                logger.info(
+                    "PREFILL_REQUEST_BATCH "
+                    + json.dumps(
+                        {
+                            "requests": len(group),
+                            "slots": [job["slot"] for job in group],
+                            "spans": [job["span"] for job in group],
+                            "padded_span": padded,
+                            "starts": [job["start"] for job in group],
+                            "time": time.time(),
+                        }
+                    )
+                )
+            if len(group) == 1:
+                job = group[0]
+                tt_ids = self._upload(job["ids"], ttnn.uint32)
+                tables, uploaded = {}, {}
+                for kind, table in job["tables"].items():
+                    if id(table) not in uploaded:
+                        uploaded[id(table)] = self._upload(table)
+                        self.counters["prefill_table_uploads"] += 1
+                    tables[kind] = uploaded[id(table)]
+                device_outputs = [
+                    self.model.prefill_device(
+                        tt_ids,
+                        sequence_length=job["span"],
+                        page_tables=tables,
+                        kv_cache=state.kv,
+                        start_pos=job["start"],
+                        histories=job["histories"],
+                    )
+                ]
+            else:
+                packed = torch.zeros(len(group), padded, dtype=torch.int32)
+                for index, job in enumerate(group):
+                    packed[index, : job["span"]] = job["ids"][0, : job["span"]]
+                tt_ids = self._upload(packed, ttnn.uint32)
+                tables, fill_tables, uploaded = {}, {}, {}
+                for kind in group[0]["tables"]:
+                    # Layers sharing immutable host rows also share device tables
+                    # within this prefill group. A later scheduler update gets
+                    # new uploads; mutable decode tables are never reused here.
+                    table_key = tuple(id(job["tables"][kind]) for job in group)
+                    if table_key not in uploaded:
+                        table = self._upload(torch.cat([job["tables"][kind] for job in group], dim=0))
+                        fill = torch.full((len(group), padded // 128), -1, dtype=torch.int32)
+                        for index, job in enumerate(group):
+                            pages = (job["span"] + 127) // 128
+                            begin = job["start"] // 128
+                            fill[index, :pages] = job["tables"][kind][0, begin : begin + pages]
+                        uploaded[table_key] = (table, self._upload(fill))
+                        del table, fill
+                        self.counters["prefill_table_uploads"] += 2
+                    tables[kind], fill_tables[kind] = uploaded[table_key]
+                batch_indices = self._upload(torch.arange(len(group), dtype=torch.int32))
+                merged = self.model.prefill_batched_device(
+                    tt_ids,
+                    batch=len(group),
+                    sequence_length=padded,
+                    page_tables=tables,
+                    kv_cache=state.kv,
+                    logical_lengths=[job["span"] for job in group],
+                    start_positions=[job["start"] for job in group],
+                    histories=[job["histories"] for job in group] if history_keys is not None else None,
+                    retain_histories=[retain_prefill_history[job["row"]] for job in group]
+                    if retain_prefill_history is not None
+                    else None,
+                    fill_page_tables=fill_tables,
+                    batch_indices=batch_indices,
+                )
+                del fill_tables, batch_indices
+                device_outputs = [merged[:, :, index : index + 1, :] for index in range(len(group))]
+                del merged
+            for job, out in zip(group, device_outputs):
+                row = job["row"]
+                if history_keys is not None:
+                    if retain_prefill_history is None or retain_prefill_history[row]:
+                        state.prefill_history[history_keys[row]] = {"end": job["length"], "layers": job["histories"].publish() if state.history_bank is not None else job["histories"]}
+                    else:
+                        state.release_history(history_keys[row])
+                outputs[row] = (
+                    out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
+                )
+                job["histories"] = None
+            del out, device_outputs, tt_ids, tables, uploaded, group
+        self.prefill_shapes.add(shape_key)
+        if return_device:
+            return outputs
+        width = max(prompt_lens) if return_all_logits else 1
+        result = torch.zeros(len(outputs), width, self.model.config.vocab_size)
+        for i, out in enumerate(outputs):
+            result[i, : out.shape[1]] = out[0]
+        return result
+
+    def _prefill_serial_forward(
+        self,
+        tokens,
+        *,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        return_all_logits=False,
+        slots=None,
+        return_device=False,
+        start_positions=None,
+        history_keys=None,
+        retain_prefill_history=None,
+        **kwargs,
+    ):
+        state = kv_cache
+        self._check_options(kwargs)
+        if not isinstance(state, CacheState):
+            raise TypeError("kv_cache must be a CacheState; caller may supply its kv tensors and tables")
+        slots = list(range(len(prompt_lens))) if slots is None else list(slots)
+        if (
+            len(slots) != len(prompt_lens)
+            or len(set(slots)) != len(slots)
+            or any(s < 0 or s >= state.batch for s in slots)
+        ):
+            raise ValueError("Expected distinct valid fixed slots, one per prompt")
+        if tokens.ndim != 2 or tokens.shape[0] != len(prompt_lens) or not prompt_lens:
+            raise ValueError("Expected one token row per nonempty prompt")
+        self._validate_tokens(tokens)
+        if any(not isinstance(n, int) or not 0 < n <= min(state.capacity, tokens.shape[1]) for n in prompt_lens):
+            raise ValueError("Invalid logical prompt length")
+        if retain_prefill_history is not None:
+            if (
+                history_keys is None
+                or len(retain_prefill_history) != len(prompt_lens)
+                or any(type(flag) is not bool for flag in retain_prefill_history)
+            ):
+                raise ValueError("Expected one explicit history retention bool per prefill row")
+        starts = [0] * len(prompt_lens) if start_positions is None else list(start_positions)
+        if len(starts) != len(prompt_lens) or any(s < 0 or s >= n for s, n in zip(starts, prompt_lens)):
+            raise ValueError("Prefill must advance each request from its current position")
+        shape_key = (state.batch, state.capacity, tuple(prompt_lens), tuple(starts), bool(return_all_logits))
+        if self._prepared_prefill_state is None and (history_keys is not None or shape_key not in self.prefill_shapes):
+            # Request histories allocate persistent K/V tails even for a seen
+            # signature. Unseen signatures can also allocate native cached state.
+            # Both must be created before the next trace capture.
             self._retire_traces()
         self._tables(state, page_table)
         outputs = []
@@ -374,30 +872,55 @@ class Gemma4Generator:
             aligned_start = start // Decoder.PAGE_SIZE * Decoder.PAGE_SIZE
             chunk_length = length - aligned_start
             histories = None
-            if history_keys is not None:
+            if history_keys is not None and state.history_bank is not None:
+                histories = self._bank_history(
+                    state, history_keys[row], start, aligned_start, page_table, slot,
+                    retain_prefill_history is None or retain_prefill_history[row],
+                )
+            elif history_keys is not None:
                 key = history_keys[row]
                 if start == 0:
                     histories = [None] * len(self.model.layers)
                 else:
-                    previous = state.prefill_history[key]
+                    previous = state.prefill_history.get(key)
+                    if previous is None:
+                        if not state.vllm_owned or start != aligned_start:
+                            raise ValueError("Cached prefill must start at a whole page in the serving cache")
+                        previous = {
+                            "end": start,
+                            "layers": self._restore_prefill_history(state, page_table, slot, start),
+                        }
                     if previous["end"] != start:
-                        raise ValueError("Prefill history does not match the scheduler continuation")
+                        raise ValueError(
+                            "Prefill history does not match the scheduler continuation: "
+                            f"key={key}, saved_end={previous['end']}, start={start}"
+                        )
                     rewind = start - aligned_start
-                    histories = []
-                    for tail in previous["layers"]:
+                    # Never leave a partially consumed list under its old end
+                    # position if a later device operation raises. Successful
+                    # prefill publishes the completed history below.
+                    state.prefill_history.pop(key, None)
+                    # This request owns the list; other requests never borrow it.
+                    # Replace each consumed tail as soon as its CQ0 slice has
+                    # been enqueued. Bank tensors may have another root owner,
+                    # so use normal reference release, never forced deallocation.
+                    histories = previous["layers"]
+                    for index, tail in enumerate(histories):
                         if tail is None:
-                            histories.append(None)
                             continue
                         valid = tail[0].shape[2] - rewind
                         if valid == 0:
-                            histories.append(None)
-                            continue
-                        begin = max(0, valid - 1024)
-                        histories.append(tuple(t[:, :, begin:valid, :] for t in tail))
+                            histories[index] = None
+                        else:
+                            begin = max(0, valid - 1024)
+                            histories[index] = tuple(t[:, :, begin:valid, :] for t in tail)
+                        del tail
+                    del previous
             ids = torch.zeros(1, (chunk_length + 31) // 32 * 32, dtype=torch.int32)
             ids[0, :chunk_length] = tokens[row, aligned_start:length]
             tt_ids = self._upload(ids, ttnn.uint32)
             tables, uploaded_rows = {}, {}
+            serial_tables, serial_shared = {}, {}
             for kind, table in page_table.items():
                 sentinel = state.vllm_owned and self.model.layers[kind].kind == "sliding_attention"
                 key = (id(table), sentinel)
@@ -411,6 +934,22 @@ class Gemma4Generator:
                     uploaded_rows[key] = self._upload(row_table)
                     self.counters["prefill_table_uploads"] += 1
                 tables[kind] = uploaded_rows[key]
+                if os.environ.get("GEMMA_PREFILL_HOST_FILL_TABLES", "0") == "1":
+                    layer = (self.model.layers[kind] if isinstance(kind, int) else
+                             next(layer for layer in self.model.layers if layer.kind == kind))
+                    selected = {}
+                    for begin in range(0, chunk_length, layer.PREFILL_CHUNK):
+                        end = min(begin + layer.PREFILL_CHUNK, chunk_length)
+                        first = (aligned_start + begin) // 128
+                        count = (end - begin + 127) // 128
+                        fill_key = (key, first, count)
+                        if fill_key not in serial_shared:
+                            host_table = table[slot:slot+1, first:first+count]
+                            if sentinel:
+                                host_table = host_table.masked_fill(host_table == 0, -1)
+                            serial_shared[fill_key] = self._upload(host_table.contiguous())
+                        selected[begin] = serial_shared[fill_key]
+                    serial_tables[kind] = selected
             out = self.model.prefill_device(
                 tt_ids,
                 sequence_length=chunk_length,
@@ -419,15 +958,23 @@ class Gemma4Generator:
                 all_logits=return_all_logits,
                 start_pos=aligned_start,
                 histories=histories,
+                serial_fill_tables=serial_tables or None,
             )
             if history_keys is not None:
-                state.prefill_history[history_keys[row]] = {"end": length, "layers": histories}
+                if retain_prefill_history is None or retain_prefill_history[row]:
+                    state.prefill_history[history_keys[row]] = {"end": length, "layers": histories.publish() if state.history_bank is not None else histories}
+                else:
+                    state.release_history(history_keys[row])
+                # Final prefill rows cannot consume BF16 chunk tails again.
+                # Native KV owners persist; CQ0 orders all preceding consumers
+                # before later allocations may reuse these tail addresses.
+                del histories
             outputs.append(
                 out if return_device else self._host_logits(out).reshape(1, -1, self.model.config.vocab_size)
             )
             # Device-return outputs retain their own owners in outputs. Host
             # mode has consumed out; do not carry it into the next prefill.
-            del out, tt_ids, tables, uploaded_rows
+            del out, tt_ids, tables, uploaded_rows, serial_tables, serial_shared
         self.prefill_shapes.add(shape_key)
         if return_device:
             return outputs
@@ -466,6 +1013,16 @@ class Gemma4Generator:
         del merged
         ttnn.execute_trace(self.mesh, entry["sampling_trace"], cq_id=0, blocking=False)
         self.counters["sampling_replays"] += 1
+        observer_dir = os.environ.get("GEMMA_REPETITION_OBSERVER_DIR")
+        if observer_dir:
+            from pathlib import Path
+            root = Path(observer_dir)
+            self._repetition_prefill_count = getattr(self, "_repetition_prefill_count", 0) + 1
+            index = self._repetition_prefill_count
+            logits = self._host_logits(entry["logits"])[0, 0, 0].clone()
+            sampled = ttnn.to_torch(ttnn.get_device_tensors(entry["tokens"])[0]).reshape(-1).tolist()
+            torch.save(logits, root / f"prefill-logits-{index}.pt")
+            (root / f"prefill-{index}.json").write_text(json.dumps({"index": index, "sampled_tokens": sampled, "shape": list(logits.shape), "batch": batch}) + "\n")
         return self._read_tokens(entry["tokens"], batch).reshape(-1, 1)
 
     def _sample_step(self, entry):
@@ -484,61 +1041,110 @@ class Gemma4Generator:
                     "Captured cache/table tensors were replaced; retire traces before replacing backing storage"
                 )
             return self.traces[key]
+        trace_entry_start = time.perf_counter()
         self._retire_traces()
+        cache_ids = tuple(id(t) for pair in state.kv for t in pair)
+        table_ids = {k: id(v) for k, v in state.device_tables.items()}
+        cache_buffer_ids = tuple(t.buffer_unique_id() for pair in state.kv for t in pair)
+        table_buffer_ids = {k: v.buffer_unique_id() for k, v in state.device_tables.items()}
+        storage = self._entry_storage
+        if (
+            storage is None
+            or storage["state"] is not state
+            or storage["cache_ids"] != cache_ids
+            or storage["table_ids"] != table_ids
+            or storage["cache_buffer_ids"] != cache_buffer_ids
+            or storage["table_buffer_ids"] != table_buffer_ids
+        ):
+            storage = {
+                "state": state,
+                "cache_ids": cache_ids,
+                "table_ids": table_ids,
+                "cache_buffer_ids": cache_buffer_ids,
+                "table_buffer_ids": table_buffer_ids,
+                "tokens": self._upload(torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32),
+                "positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
+                "rope_positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
+                "logits": self.model.tensor(
+                    torch.zeros(1, 1, 32, self.model.config.vocab_size),
+                    dim=3,
+                    dtype=ttnn.bfloat16,
+                ),
+            }
+            self._entry_storage = storage
+            prepared = False
+        else:
+            prepared = True
         entry = {
-            "tokens": self._upload(
-                torch.zeros(1, 1, 1, 32, dtype=torch.int32),
-                ttnn.uint32,
-            ),
-            "positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
-            "rope_positions": self._upload(torch.zeros(state.batch, dtype=torch.int32)),
-            "logits": self.model.tensor(
-                torch.zeros(1, 1, 32, self.model.config.vocab_size),
-                dim=3,
-                dtype=ttnn.bfloat16,
-            ),
+            **storage,
             "state": state,
             "cache_owners": tuple(t for pair in state.kv for t in pair),
             "table_owners": tuple(state.device_tables.values()),
-            "cache_ids": tuple(id(t) for pair in state.kv for t in pair),
-            "table_ids": {k: id(v) for k, v in state.device_tables.items()},
             "remaining_steps": 0,
         }
-        for kind, table in state.device_tables.items():
-            scratch_table = (
-                torch.tensor(state.scratch_pages[kind])[:, None]
-                .expand(state.batch, state.capacity // 128)
-                .int()
-                .contiguous()
-            )
-            self._refresh(scratch_table, table, "page_table_refreshes")
-        logger.info("Warming model trace")
-        self._model_step(entry, state)
-        logger.info("Warming sampling trace")
-        # Setup must not consume a caller's random stream. Preserve the actual
-        # on-device seed state even if a previous request already advanced it.
-        saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
-        self._sample_step(entry)
-        ttnn.copy(saved_seeds, self.sampler.seeds_tt_tensor)
-        ttnn.synchronize_device(self.mesh)
-        ttnn.deallocate(saved_seeds)
-        self.counters["synchronizations"] += 1
+        if not prepared:
+            for kind, table in state.device_tables.items():
+                scratch_table = (
+                    torch.tensor(state.scratch_pages[kind])[:, None]
+                    .expand(state.batch, state.capacity // 128)
+                    .int()
+                    .contiguous()
+                )
+                self._refresh(scratch_table, table, "page_table_refreshes")
+            logger.info("Warming model trace")
+            self._model_step(entry, state)
+            logger.info("Warming sampling trace")
+            # Setup must not consume a caller's random stream. Preserve the actual
+            # on-device seed state even if a previous request already advanced it.
+            saved_seeds = ttnn.clone(self.sampler.seeds_tt_tensor)
+            self._sample_step(entry)
+            ttnn.copy(saved_seeds, self.sampler.seeds_tt_tensor)
+            ttnn.synchronize_device(self.mesh)
+            ttnn.deallocate(saved_seeds)
+            self.counters["synchronizations"] += 1
+        else:
+            # Prefill can still be queued after conservative retirement.
+            ttnn.synchronize_device(self.mesh)
+            self.counters["synchronizations"] += 1
         for kind, table in state.device_tables.items():
             self._refresh(state.uploaded_tables[kind], table, "page_table_refreshes")
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["positions"], "position_refreshes")
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["rope_positions"], "rope_refreshes")
         self._refresh(torch.zeros(1, 1, 1, 32, dtype=torch.int32), entry["tokens"], "token_refreshes")
-        logger.info("Capturing model trace")
-        with corruptible_allocation_scope(self.mesh):
+        programs_before = self.mesh.num_program_cache_entries()
+        self.mesh.set_program_cache_misses_allowed(False)
+        try:
+            logger.info("Capturing model trace")
             entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             self._model_step(entry, state)
             ttnn.end_trace_capture(self.mesh, entry["model_trace"], cq_id=0)
-        logger.info("Capturing sampling trace")
-        with corruptible_allocation_scope(self.mesh):
+            logger.info("Capturing sampling trace")
             entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             self._sample_step(entry)
             ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
+        finally:
+            # Unseen eager prefill shapes still need to compile before the
+            # existing conservative prefill retirement and next capture.
+            self.mesh.set_program_cache_misses_allowed(True)
+        programs_after = self.mesh.num_program_cache_entries()
+        if programs_before != programs_after:
+            raise RuntimeError("Native program cache grew during trace capture")
         self.traces[key] = entry
+        if (self._serving_prefill_prepared_state is state and self._serving_prefill_has_real_work
+                and self._prepared_prefill_state is None):
+            self.enable_prepared_prefill_trace_retention(state)
+            logger.info("SERIAL_PREFILL_RETENTION_ARMED first_real_capture")
+        logger.info(
+            "TRACE_ENTRY_COST "
+            + json.dumps(
+                {
+                    "seconds": time.perf_counter() - trace_entry_start,
+                    "prepared": prepared,
+                    "programs_before": programs_before,
+                    "programs_after": programs_after,
+                }
+            )
+        )
         return entry
 
     def replay(self, entry, *, sample=True):
@@ -724,6 +1330,8 @@ class Gemma4Generator:
         self.configure_sampling()
 
     def _retire_traces(self):
+        if self._prepared_prefill_state is not None:
+            raise RuntimeError("Prepared trace retention forbids implicit retirement; close explicitly")
         if self.traces:
             ttnn.synchronize_device(self.mesh)
             self.counters["synchronizations"] += 1
@@ -733,7 +1341,14 @@ class Gemma4Generator:
         self.traces.clear()
 
     def close(self):
+        self._serving_prefill_prepared_state = None
+        self._serving_prefill_has_real_work = False
+        prepared = self._prepared_prefill_state is not None
+        self._prepared_prefill_state = None
         self._retire_traces()
+        if prepared:
+            self.mesh.set_program_cache_misses_allowed(True)
+        self._entry_storage = None
 
 
 def build_generator(mesh_device, *, checkpoint=None, layer_indices=None, max_seq_len=2048):
