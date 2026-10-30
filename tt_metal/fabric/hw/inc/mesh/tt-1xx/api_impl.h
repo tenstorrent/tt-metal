@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-<<<<<<< HEAD
-// Note: This file was moved from tt_metal/fabric/hw/inc/mesh/api.h. For full commit history, run `git log --follow api_impl.h`.
-=======
 // Note: This file was moved from tt_metal/fabric/hw/inc/mesh/api.h. For full commit history, run `git log --follow
 // api_impl.h`.
->>>>>>> 550850a1341 (Adding Routing Support for Horizon)
 
 #pragma once
 
