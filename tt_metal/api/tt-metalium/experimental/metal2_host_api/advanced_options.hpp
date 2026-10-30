@@ -62,6 +62,7 @@ struct KernelAdvancedOptions {
     // by index. They are intended for arguments that the kernel reads only as elements of an
     // indexed collection, e.g. N runtime arguments holding the shape of an N-dimensional tensor.
     //
+    // (Array arguments serve the same purpose, and are named; prefer them. See KernelSpec.)
     // (For a variable number of tensor bindings, use a TensorBindingSequence instead; see below.)
 
     //--------------------------------
