@@ -43,10 +43,13 @@ def _checkpoint_biases(checkpoint: Path) -> dict[int, tuple[str, str]]:
 
 
 def _as_tensor(bias: torch.Tensor, cache_stem: Path) -> ttnn.Tensor:
-    # Same call as TtMoEGatePrefill._convert_and_cache_gate_weights: host, bf16, TILE, unbroadcasted.
-    return ttnn.as_tensor(
-        bias, device=None, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, cache_file_name=str(cache_stem)
-    )
+    # Same call as TtMoEGatePrefill._convert_and_cache_gate_weights: host, bf16, TILE, unbroadcasted. Cache repair is
+    # off: an existing file that fails to load must raise, not be rewritten from `bias` and then pass the checks below
+    # (that would overwrite an uncentred file, and write even under --dry-run). A missing file is still created.
+    with ttnn.as_tensor_cache_repair(False):
+        return ttnn.as_tensor(
+            bias, device=None, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, cache_file_name=str(cache_stem)
+        )
 
 
 def main():
@@ -67,7 +70,8 @@ def main():
         key, shard = biases[i]
         with safe_open(str(args.checkpoint / shard), "pt") as f:
             raw = f.get_tensor(key)
-        assert raw.dtype == torch.float32, f"layer {i}: checkpoint bias is {raw.dtype}, centring needs the fp32 one"
+        if raw.dtype != torch.float32:
+            raise SystemExit(f"layer {i}: checkpoint bias is {raw.dtype}, centring needs the fp32 one")
 
         legacy = ttnn.to_torch(_as_tensor(raw, args.cache_dir / f"layer_{i}.gate.{GATE_BIAS_CACHE_NAME}"))
         if not torch.equal(legacy.reshape(-1).to(torch.bfloat16), raw.to(torch.bfloat16)):
@@ -86,8 +90,9 @@ def main():
         if existed:
             verified += 1
         else:
-            # The CI user is outside the cache's group: a fresh file must be world-readable.
-            os.chmod(f"{stem}{_SUFFIX}", 0o664)
+            # The CI user is outside the cache's group, so a fresh file must be world-READABLE (the shell's umask
+            # here is 007). Nobody but the owner needs to write it.
+            os.chmod(f"{stem}{_SUFFIX}", 0o644)
             written += 1
         logger.info(
             f"layer {i}: mean {raw.mean().item():.4f}, bf16 distinct {raw.to(torch.bfloat16).unique().numel()} -> "
