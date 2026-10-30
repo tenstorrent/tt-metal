@@ -19,7 +19,8 @@ namespace ckernel {
  * dest register and copies it into the provided buffer.
  *
  * Supported data formats: Float32, Float16, Float16_b, Int32, UInt32, UInt16,
- * Int8, UInt8.
+ * Int8, UInt8. Int32 and UInt32 are moved as raw 32-bit DEST patterns with no
+ * sign conversion, so a sign-magnitude FPU accumulator reads back as its raw bits.
  *
  * Return value: None
  *
@@ -46,7 +47,9 @@ ALWI void dbg_read_dest_tile(uint32_t tile_id, void* dst_buffer, bool enable_swi
  * dest register.
  *
  * Supported data formats: Float32, Float16, Float16_b, Int32, UInt32, UInt16,
- * Int8, UInt8.
+ * Int8, UInt8. Int32 and UInt32 words are stored in DEST unchanged (no two's
+ * complement -> sign-magnitude conversion); supply the encoding the consumer
+ * expects (FPU integer math reads sign-magnitude).
  *
  * Return value: None
  *

@@ -35,7 +35,12 @@ inline std::uint8_t fmt_to_dest_type(DataFormat fmt)
             return RISC_DEST_FMT_FP16B;
         case DataFormat::Int32:
         case DataFormat::UInt32:
-            return RISC_DEST_FMT_INT32;
+            // Layout-only 32-bit view. RISC_DEST_FMT_INT32 converts every swizzled access (the
+            // default) between two's complement and sign-magnitude (clamping INT32_MIN), so any
+            // datum with bit 31 set is moved wrong; the unpacker and packer move Int32/UInt32 bits
+            // through DEST unchanged.
+            // The converting view (RISC_DEST_FMT_INT32) is intentionally left unmapped.
+            return RISC_DEST_FMT_FP32;
         case DataFormat::UInt16:
             return RISC_DEST_FMT_INT16;
         case DataFormat::Int8:
