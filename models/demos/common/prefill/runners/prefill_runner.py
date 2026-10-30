@@ -203,6 +203,7 @@ assert not (DFLASH_ENABLED and not USE_TRACE and not ADAPTER.dflash_allows_eager
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
+os.environ.setdefault("TT_METAL_SHM_TRACKING_DISABLED", "1")
 
 _shutdown = False
 
