@@ -48,18 +48,15 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
 bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis);
 
 // Where to allocate a GlobalSemaphore whose value is CARRIED across invocations (a barrier or arrival
-// counter, written once and thereafter only incremented). A fabric mux carves raw L1 upward from the
-// unreserved base, outside the allocator, and one clobber of a carried counter is unrecoverable
-// (#56769). L1_SMALL sits above the mux's ceiling, so prefer it; with no L1_SMALL region configured
-// there is nowhere safer than general L1, and an op that cannot tolerate that is expected to say so
-// itself (see selective_reduce_combine, whose mux is by far the greediest).
+// counter, written once and thereafter only incremented). Prefers L1_SMALL, which keeps these long-lived
+// buffers out of general L1, and falls back to general L1 on a device opened without an L1_SMALL region.
 tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // Companion to prefer_l1_small_buffer_type: when it fell back to L1, name the device-open parameter
 // that would have kept the semaphores in L1_SMALL.
 void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type);
 
-// Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
+// Floor of the L1_SMALL region, the ceiling a fabric mux's map is sized against. Derived
 // from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank
 // size IS reduced by a sub-device manager's bottom-up reservation
 // (sub_device_manager_tracker.cpp), which would drag a floor computed as base + L1 bank size below the

@@ -354,7 +354,8 @@
 # on these single-/dual-chip SKUs (the real coverage needs galaxy/box topologies),
 # and point_to_point is 12 tests.
 - name: ttnn nightly data_movement tests (post-commit suite)
-  # Measured: bh_p100 ~28 min, bh_p150b ~57 min, wh_n300 ~66 min, wh_n150 ~89 min.
+  # Measured 2026-10-27: bh_p100 ~52 min, bh_p150b 72-84 min, wh_n300 ~76 min, wh_n150 ~82 min
+  # (2026-08-05: bh_p100 ~28, bh_p150b ~57, wh_n300 ~66, wh_n150 ~89).
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=300'
   ai_summary:
     authoritative_job_status: true
@@ -364,9 +365,9 @@
     wh_n300_civ2:
       timeout: 95
     bh_p100:
-      timeout: 45
+      timeout: 70
     bh_p150b_civ2:
-      timeout: 80
+      timeout: 100
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   budget_type: unit
@@ -377,6 +378,7 @@
     pytest \
       tests/ttnn/unit_tests/operations/ccl/test_ccl_l1_small_semaphores.py \
       tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_rms_fuse_n300 \
+      tests/ttnn/unit_tests/operations/ccl/test_ccl_mux_l1.py \
       -xv -m "not disable_fast_runtime_mode" --timeout=300
   skus:
     wh_n300_civ2:
@@ -480,10 +482,86 @@
       timeout: 20
     bh_p150b_civ2_viommu:
       timeout: 20
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: unit
   category: docs_examples
+
+# --- Wormhole legs moved from the Sanity pipeline (ttnn_sanity_tests.yaml) ---
+# These used to run on wh_n300_civ2 on every push to main. Sanity still runs the same
+# commands on Blackhole and ttsim; Wormhole hardware now runs them here, nightly.
+# ttnn indexer_score group dropped its WH leg without an entry here: the op is
+# Blackhole-only and test_indexer_score.py skips the whole module on Wormhole.
+
+- name: ttnn conv group
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: unit
+  category: conv
+
+- name: ttnn pool group
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: unit
+  category: pool
+
+- name: ttnn sdpa group
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: unit
+  category: sdpa
+
+- name: ttnn matmul group
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: matmul
+
+- name: ttnn fused group 1
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: fused
+
+- name: ttnn fused group 2
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: fused
+
+- name: ttnn reduce group
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  budget_type: unit
+  category: reduction
 
 # --- C++ ttnn unit tests ---
 
@@ -514,7 +592,7 @@
       timeout: 45
     bh_p150b_civ2_viommu:
       timeout: 45
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: unit
   category: cpp_lab_examples
@@ -523,12 +601,18 @@
   cmd: |
     exit_code=0
     # Cheap host-side coverage for the mixed-format cache contract, producer decoding and packed-forward metadata.
-    pytest models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py models/demos/common/prefill/tests/test_layer_split.py models/demos/common/prefill/tests/test_prefill_chunk.py models/demos/common/prefill/tests/test_prefill_runner_forwards.py models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py -vvv --tb=short || exit_code=$?
+    pytest models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py models/demos/common/prefill/tests/test_prefill_producer_dflash_pcc.py models/demos/common/prefill/tests/test_layer_split.py models/demos/common/prefill/tests/test_prefill_chunk.py models/demos/common/prefill/tests/test_prefill_runner_forwards.py models/demos/common/prefill/tests/test_prefill_producer_forwards.py models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not moe_padding_config or fabric2d-2x4) and (not zero_padded or torus-y-8x1 or fabric2d-2x4) and not single-1 and (not test_hybrid_routed_expert_combine or 8x1) and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
+    # The stage-to-stage D2D stream between prefill pipeline stages. One process carves the box into 1x1
+    # submeshes and chains them, so a middle chip runs a D2D receiver and a D2D sender at once, as every
+    # chip of a middle stage does when a host is split into several stages (e.g. two 4x4 stages per
+    # Galaxy). The folded chains put both of that chip's routes in one direction, where the two services
+    # must still get different fabric routers.
+    ./build/test/ttnn/unit_tests_ttnn_tensor --gtest_filter='D2DStreamServiceTest.*:StreamPipelineTest.*' || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 25
+      timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
   budget_type: e2e

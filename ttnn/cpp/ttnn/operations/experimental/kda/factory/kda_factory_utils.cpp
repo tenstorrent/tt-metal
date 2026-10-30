@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim::kda_factory_detail {
 void check_allocated_device_tensor(
     const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name) {
     TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
+        tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
         "{}: {} must be an allocated device tensor",
         operation_name,
         tensor_name);
@@ -95,13 +95,18 @@ void check_interleaved(const Tensor& tensor, std::string_view operation_name, st
     TT_FATAL(!tensor.is_sharded(), "{}: {} must use interleaved memory", operation_name, tensor_name);
 }
 
+void check_device_scalar(
+    const Tensor& reference, const Tensor& scalar, std::string_view operation_name, std::string_view scalar_name) {
+    check_allocated_device_tensor(scalar, operation_name, scalar_name);
+    check_layout(scalar, tt::tt_metal::Layout::ROW_MAJOR, operation_name, scalar_name);
+    check_dtype(scalar, tt::tt_metal::DataType::UINT32, operation_name, scalar_name);
+    check_interleaved(scalar, operation_name, scalar_name);
+    check_same_device(reference, scalar, operation_name, scalar_name);
+    TT_FATAL(scalar.logical_shape().volume() == 1, "{}: {} must be a scalar", operation_name, scalar_name);
+}
+
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name) {
-    check_allocated_device_tensor(actual_start, operation_name, "actual_start");
-    check_layout(actual_start, tt::tt_metal::Layout::ROW_MAJOR, operation_name, "actual_start");
-    check_dtype(actual_start, tt::tt_metal::DataType::UINT32, operation_name, "actual_start");
-    check_interleaved(actual_start, operation_name, "actual_start");
-    check_same_device(reference, actual_start, operation_name, "actual_start");
-    TT_FATAL(actual_start.logical_shape().volume() == 1, "{}: actual_start must be a scalar", operation_name);
+    check_device_scalar(reference, actual_start, operation_name, "actual_start");
 }
 
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name) {

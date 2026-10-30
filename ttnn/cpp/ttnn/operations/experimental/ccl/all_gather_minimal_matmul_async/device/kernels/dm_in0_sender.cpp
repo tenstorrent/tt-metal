@@ -56,8 +56,10 @@ constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(26);
 #ifdef USE_MUX
 constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(27);
 constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(28);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(30);
+// The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map
+// address it publishes in semaphore fabric_mux_l1_base_semaphore_id.
+constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(29);
+constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(30);
 constexpr uint32_t num_mux_clients = get_compile_time_arg_val(31);
 
 constexpr uint32_t mux_arg_count = 32;
@@ -172,12 +174,12 @@ void kernel_main() {
         mux_backward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in0_core_order_index, backward_in0_core_order_index);
-        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
+        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
     } else if (in0_core_order_index == forward_in0_core_order_index) {
         mux_forward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in0_core_order_index, forward_in0_core_order_index);
-        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
+        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
     }
 #endif
 
@@ -744,7 +746,7 @@ void kernel_main() {
             mux_backward.num_mux_clients,
             mux_backward.fabric_mux_x,
             mux_backward.fabric_mux_y,
-            fabric_mux_termination_signal_address,
+            mux_backward.fabric_mux_l1_base + fabric_mux_termination_signal_offset,
             mux_backward.termination_master_noc_x,
             mux_backward.termination_master_noc_y);
     }
@@ -757,7 +759,7 @@ void kernel_main() {
             mux_forward.num_mux_clients,
             mux_forward.fabric_mux_x,
             mux_forward.fabric_mux_y,
-            fabric_mux_termination_signal_address,
+            mux_forward.fabric_mux_l1_base + fabric_mux_termination_signal_offset,
             mux_forward.termination_master_noc_x,
             mux_forward.termination_master_noc_y);
     }

@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Camera images through the ResNet101-DCN backbone and the FPN neck, end to end.
+"""Camera images through the backbone and the FPN neck, end to end.
 
-Checks the backbone's C3-C5 and the FPN's outputs against the reference. The TT backbone's
+Checks the backbone's outputs (``RESNET_KWARGS["out_indices"]``) and the FPN's outputs against the reference. The TT backbone's
 outputs feed the TT FPN as they are, so this also checks the hand-off between the two
 (layout, dtype, memory).
 """
@@ -13,7 +13,9 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import (
+from models.experimental.bevformer.model_config import RESNET_KWARGS
+from models.experimental.bevformer.tests.common import (
+    BACKBONE_FPN_PCC,
     BACKBONE_OUTPUT_DTYPES,
     assert_pcc,
     build_reference_backbone,
@@ -21,15 +23,13 @@ from models.experimental.bevformer.tests.backbone_common import (
     from_conv_layout,
     random_image_batch,
     to_conv_layout,
-    tt_fpn_kwargs,
-    tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.model_preprocessing_backbone import (
+from models.experimental.bevformer.tt.model_preprocessing import (
     create_fpn_parameters,
     create_resnet_parameters,
 )
-from models.experimental.bevformer.tt.tt_fpn import TtFPN
-from models.experimental.bevformer.tt.tt_resnet import TtResNet
+from models.experimental.bevformer.tt.tt_fpn import TTFPN
+from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 
 @torch.no_grad()
@@ -45,25 +45,17 @@ def test_backbone_fpn(device, reset_seeds):
     backbone_parameters = create_resnet_parameters(torch_backbone, torch_input)
     fpn_parameters = create_fpn_parameters(torch_fpn, torch_features)
 
-    tt_backbone = TtResNet(
-        backbone_parameters.conv_args, backbone_parameters["res_model"], device, **tt_resnet_kwargs()
-    )
+    tt_backbone = TTResNet(backbone_parameters, device, out_indices=RESNET_KWARGS["out_indices"])
     # test_fpn feeds the FPN these dtypes on their own.
     assert tt_backbone.output_dtypes == BACKBONE_OUTPUT_DTYPES
-    tt_fpn = TtFPN(
-        conv_args=fpn_parameters.conv_args,
-        conv_pth=fpn_parameters,
-        device=device,
-        input_dtypes=tt_backbone.output_dtypes,
-        **tt_fpn_kwargs(),
-    )
+    tt_fpn = TTFPN(fpn_parameters, device, input_dtypes=tt_backbone.output_dtypes)
 
     tt_input = to_conv_layout(torch_input, device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_features = tt_backbone(tt_input)
     # Read before the FPN runs: it deallocates its inputs.
     for torch_feature, tt_feature in zip(torch_features, tt_features, strict=True):
-        assert_pcc(torch_feature, from_conv_layout(tt_feature, torch_feature.shape), 0.99)
+        assert_pcc(torch_feature, from_conv_layout(tt_feature, torch_feature.shape), BACKBONE_FPN_PCC)
     tt_outputs = tt_fpn(list(tt_features))
 
     for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):
-        assert_pcc(torch_output, from_conv_layout(tt_output, torch_output.shape), 0.99)
+        assert_pcc(torch_output, from_conv_layout(tt_output, torch_output.shape), BACKBONE_FPN_PCC)
