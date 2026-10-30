@@ -159,44 +159,6 @@ static void run_write_path(uint32_t mode, uint32_t data_offset, uint32_t num_wor
     }
 }
 
-// Returns the bitmap of passes whose target line was already in TL1 (see kModeL2Evict) and stores the lowest such pass
-// in first_evicting_count (num_passes if none).
-static uint32_t run_l2_evict(
-    uint32_t target_offset,
-    uint32_t aux_offset,
-    uint32_t stride_bytes,
-    uint32_t num_passes,
-    uint32_t value,
-    uint32_t& first_evicting_count) {
-    uint32_t evicted_mask = 0;
-    first_evicting_count = num_passes;
-    volatile uint32_t* target_cached = cached<uint32_t>(target_offset);
-    volatile uint32_t* target_uncached = uncached<uint32_t>(target_offset);
-    for (uint32_t pass = 0; pass < num_passes; ++pass) {
-        for (uint32_t line = 1; line <= pass; ++line) {
-            const uint32_t conflict = aux_offset + line * stride_bytes;
-            invalidate_l1_dcache(conflict);
-            invalidate_l2_cache_line(conflict);
-        }
-        store_words(target_cached, abi::kLineBytes / sizeof(uint32_t), value + pass);
-        flush_l1_dcache(0);
-        for (uint32_t line = 1; line <= pass; ++line) {
-            (void)*cached<uint32_t>(aux_offset + line * stride_bytes);
-        }
-        asm volatile("fence rw, rw" ::: "memory");
-        if (check_words(target_uncached, abi::kLineBytes / sizeof(uint32_t), value + pass).matches ==
-            abi::kLineBytes / sizeof(uint32_t)) {
-            evicted_mask |= 1u << pass;
-            if (first_evicting_count == num_passes) {
-                first_evicting_count = pass;
-            }
-        }
-        flush_l2_cache_line(target_offset);
-        invalidate_l2_cache_line(target_offset);
-    }
-    return evicted_mask;
-}
-
 static bool wait_for_flag(uint32_t flag_offset, uint32_t flag_value, uint64_t budget_cycles) {
     uint32_t wait_cycles = 0;
     return cce_test::poll_bounded(
@@ -1156,22 +1118,9 @@ static __attribute__((noinline)) void run_mm41_kernel() {
     status[abi::kStatusMagic] = abi::kDoneMagic;
 }
 
-static bool args_valid(
-    uint32_t mode,
-    uint32_t data_offset,
-    uint32_t num_words,
-    uint32_t flag_offset,
-    uint64_t budget,
-    uint32_t stride_bytes,
-    uint32_t count,
-    uint32_t aux_offset) {
+static bool args_valid(uint32_t mode, uint32_t data_offset, uint32_t num_words, uint32_t flag_offset, uint64_t budget) {
     if (mode == abi::kModeNull || mode == abi::kModeReadConfig) {
         return true;
-    }
-    if (mode == abi::kModeL2Evict) {
-        return lines_in_test_area(data_offset, 1) && stride_bytes % abi::kLineBytes == 0 && stride_bytes != 0 &&
-               count != 0 && count <= abi::kMaxEvictCount &&
-               strided_lines_in_test_area(aux_offset, count, stride_bytes);
     }
     if (mode >= abi::kNumModes || num_words == 0 || num_words > abi::kMaxWords) {
         return false;
@@ -1202,9 +1151,6 @@ void kernel_main() {
     const uint32_t old_value = get_arg_val<uint32_t>(abi::kArgOldValue);
     const uint32_t flag_offset = get_arg_val<uint32_t>(abi::kArgFlagOffset);
     const uint64_t budget_cycles = arg_u64(abi::kArgPollBudgetLo, abi::kArgPollBudgetHi);
-    const uint32_t stride_bytes = get_arg_val<uint32_t>(abi::kArgStrideBytes);
-    const uint32_t count = get_arg_val<uint32_t>(abi::kArgCount);
-    const uint32_t aux_offset = get_arg_val<uint32_t>(abi::kArgAuxOffset);
     const uint32_t num_bytes = num_words * sizeof(uint32_t);
 
     uint32_t code = abi::kCodeDone;
@@ -1218,7 +1164,7 @@ void kernel_main() {
     uint32_t register_b = 0;
     uint32_t register_c = 0;
     Check check;
-    if (!args_valid(mode, data_offset, num_words, flag_offset, budget_cycles, stride_bytes, count, aux_offset)) {
+    if (!args_valid(mode, data_offset, num_words, flag_offset, budget_cycles)) {
         code = abi::kCodeBadArgs;
     } else {
         const uint64_t start = read_cycle_counter();
@@ -1231,8 +1177,6 @@ void kernel_main() {
         } else if (mode == abi::kModeReadConfig) {
             register_a = *reinterpret_cast<volatile uint32_t*>(TT_CLUSTER_CTRL_NOC_SNOOP_TL_MASTER_CFG_REG_ADDR);
             register_b = *reinterpret_cast<volatile uint32_t*>(TT_CACHE_CONTROLLER_CONFIGURATION_REG_ADDR);
-        } else if (mode == abi::kModeL2Evict) {
-            register_a = run_l2_evict(data_offset, aux_offset, stride_bytes, count, value, register_b);
         } else if (is_store_mode(mode)) {
             if (mode == abi::kModeL1InvalidateFull) {
                 flush_l1_dcache(0);

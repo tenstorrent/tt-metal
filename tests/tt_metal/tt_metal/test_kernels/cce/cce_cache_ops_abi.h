@@ -17,9 +17,9 @@ inline constexpr uint32_t kLineBytes = 64;
 // modes need 64 B aligned data and whole lines; the write-path modes need 8 B aligned data and an even word count.
 // kArgFlagOffset (64 B aligned, own line) and kArgPollBudget* (rdcycle cycles, nonzero) are read by the hart-to-hart
 // modes only.
-// kArgStrideBytes, kArgCount and kArgAuxOffset (a hart-local TL1 offset, 64 B aligned) are read by kModeL2Evict.
-// MM41 args (from kArgSeed) are described with the modes that read them. kArgTraceOffset is a 64 B aligned offset in
-// the kernel's own TL1 that receives per-pass records after the mode's work, through the uncached alias.
+// kArgStrideBytes, kArgCount and kArgAuxOffset (a hart-local TL1 offset, 64 B aligned) are read by the MM41 modes that
+// name them. MM41 args (from kArgSeed) are described with the modes that read them. kArgTraceOffset is a 64 B aligned
+// offset in the kernel's own TL1 that receives per-pass records after the mode's work, through the uncached alias.
 // kArgTargetCce is the CCE whose TL1 an SPA mode reads or writes at the package SPA (experimental::cce_sram_address).
 // kArgDataWindowCycles bounds a mode's second, shorter data poll (rdcycle cycles, nonzero). kArgPeerStatusOffset (own
 // TL1, 64 B aligned, 0 for none) and kArgPeerMagic name another kernel's status line and done magic that
@@ -27,7 +27,7 @@ inline constexpr uint32_t kLineBytes = 64;
 // Every region a mode touches (status line, data, flag lines, trace, aux lines up to aux + (count - 1) * stride, other
 // words) must lie inside the test TL1 area, from the end of the harts' kernel text to the end of the hart-cacheable
 // port (4 MiB), computed in 64 bits; flag and trace offsets a mode uses must be nonzero. Otherwise the code is
-// kCodeBadArgs (MM41 modes and kModeL2Evict). A status offset that is not a 64 B aligned line in that area gets no
+// kCodeBadArgs (MM41 modes). A status offset that is not a 64 B aligned line in that area gets no
 // status line at all, so the host deadline reports it.
 inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2, kArgNumWords = 3, kArgValue = 4,
                           kArgOldValue = 5, kArgFlagOffset = 6, kArgPollBudgetLo = 7, kArgPollBudgetHi = 8,
@@ -67,12 +67,6 @@ inline constexpr uint32_t kArgMode = 0, kArgStatusOffset = 1, kArgDataOffset = 2
 // kModeNull: writes only its status line (MM41 EightHartLaunch); the data args are not read.
 // kModeReadConfig: reads the CCE snoop-master config (NOC_SNOOP_TL_MASTER_CFG) into kStatusRegisterA and the L2
 // CONFIGURATION register into kStatusRegisterB; the data args are not read.
-// kModeL2Evict (MM41 L2Geometry): for k = 0 .. kArgCount - 1, the target line (kArgDataOffset, one line) is stored
-// cached with kArgValue + k, cflush.d.l1 x0 moves it to L2, then k other lines at kArgAuxOffset + i * kArgStrideBytes
-// (i = 1 .. k) are read cached after an L1 D$ and L2 invalidate of each, then the target is read through the uncached
-// alias. Bit k of kStatusRegisterA is set when the target already holds the new value in TL1, i.e. L2 evicted it dirty
-// (bit 0: cflush.d.l1 itself reached TL1). Each pass ends with FLUSH64 and INVALIDATE64 of the target.
-// kStatusRegisterB holds the lowest k whose bit is set, or kArgCount if none.
 //
 // MM41 modes. "Old" word i is kArgOldValue + i and "new" word i is kArgValue + i unless a mode says otherwise.
 // kModeDiscardFull: one inline-asm block cleans both caches (cflush.d.l1 x0, then FLUSH64 of every cacheable TL1 line
@@ -155,12 +149,12 @@ inline constexpr uint32_t kModeNoFlush = 0, kModeL1FlushLine = 1, kModeL1FlushFu
                           kModeInvalidateFreshRead = 8, kModeProducer = 9, kModeConsumer = 10,
                           kModeWriteUncached1B = 11, kModeWriteUncached8B = 12, kModeWriteCachedRangeFlush = 13,
                           kModeWriteCachedFastFlush = 14, kModeL1InvalidateFull = 15, kModeL2InvalidateFreshRead = 16,
-                          kModeNull = 17, kModeReadConfig = 18, kModeL2Evict = 19, kModeDiscardFull = 20,
-                          kModeWipeFull = 21, kModeOrderingProducer = 22, kModeOrderingConsumer = 23,
-                          kModePartialLineEvict = 24, kModeL1FlushLineTarget = 25, kModeL1FlushFullTarget = 26,
-                          kModeSharedWriter = 27, kModeSharedReader = 28, kModeSharedConcurrentWriter = 29,
-                          kModeExternalReader = 30, kModeSpaWriter = 31, kModeSpaReader = 32, kModeDirtyRace = 33,
-                          kModeThrash = 34, kModeChurnConsumer = 35, kNumModes = 36;
+                          kModeNull = 17, kModeReadConfig = 18, kModeDiscardFull = 20, kModeWipeFull = 21,
+                          kModeOrderingProducer = 22, kModeOrderingConsumer = 23, kModePartialLineEvict = 24,
+                          kModeL1FlushLineTarget = 25, kModeL1FlushFullTarget = 26, kModeSharedWriter = 27,
+                          kModeSharedReader = 28, kModeSharedConcurrentWriter = 29, kModeExternalReader = 30,
+                          kModeSpaWriter = 31, kModeSpaReader = 32, kModeDirtyRace = 33, kModeThrash = 34,
+                          kModeChurnConsumer = 35, kNumModes = 36;
 inline constexpr uint32_t kMaxEvictCount = 32;
 // kModePartialLineEvict's eviction reads (1 MiB of lines) and kModeDirtyRace's actions.
 inline constexpr uint32_t kMaxSweepLines = 16 * 1024;

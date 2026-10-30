@@ -395,13 +395,9 @@ INSTANTIATE_TEST_SUITE_P(
 
 // MM41 probes (plan increment 1). Each runs on every CCE of the descriptor.
 
-// Null kernels on all eight harts, then the L2 eviction sweep: well under one poll budget each.
+// Null kernels on all eight harts: well under one poll budget.
 inline constexpr std::chrono::seconds kProbeHostDeadline{300};
 inline constexpr uint32_t kSnoopMasterDefault = 0x6;
-// L2Geometry: the target line and the conflict lines target + i * stride (i = 1 .. kEvictPasses - 1) stay inside the
-// hart windows: 24 * 64 KiB from tl1_data(0) ends below the remote landing area.
-inline constexpr uint32_t kEvictPasses = 25;
-inline constexpr uint32_t kEvictStridesBytes[] = {64, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
 
 std::string cce_skip_reason(uint32_t cce_index) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
@@ -491,15 +487,18 @@ TEST_P(MimirCacheProbe, EightHartLaunch) {
     RecordProperty("harts_with_status", static_cast<int>(cce_hart_count()));
 }
 
-// Records the snoop-master config (default 0x6) and the L2 CONFIGURATION fields. Records only.
+// The hart's read of the snoop-master config matches the host's read of the same register and the 0x6 reset default,
+// and the L2 CONFIGURATION fields give 64 B lines and a 128 KiB L2. Both registers are recorded.
 TEST_P(MimirCacheProbe, SnoopConfig) {
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
+    const Cluster& cluster = MetalContext::instance().get_cluster();
 
     const std::string label = fmt::format("SnoopConfig on CCE{} hart {}", cce_index, kProducerHart);
+    const uint32_t host_snoop_master = read_snoop_master_config(cluster, device->id(), cce_index);
     const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_on_cce(
         device, cce_index, {{kProducerHart, probe_args(abi::kModeReadConfig, kProducerHart)}}, kProbeHostDeadline);
     ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kProbeHostDeadline.count() << " s"
@@ -508,6 +507,10 @@ TEST_P(MimirCacheProbe, SnoopConfig) {
     ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone) << label << ": " << status_detail(status);
     const uint32_t snoop_master = status[abi::kStatusRegisterA];
     const uint32_t l2_configuration = status[abi::kStatusRegisterB];
+    const uint32_t l2_banks = l2_configuration & 0xFF;
+    const uint32_t l2_ways = (l2_configuration >> 8) & 0xFF;
+    const uint32_t l2_sets = 1u << ((l2_configuration >> 16) & 0xFF);
+    const uint32_t l2_line_bytes = 1u << ((l2_configuration >> 24) & 0xFF);
     const std::string snoop_detail = fmt::format(
         "0x{:08x}: disable_inline_writes {} invalidate_flush_dirty_en {} clean_putdata_en {}{}",
         snoop_master,
@@ -516,62 +519,15 @@ TEST_P(MimirCacheProbe, SnoopConfig) {
         (snoop_master >> 2) & 0x1,
         snoop_master == kSnoopMasterDefault ? " (default)" : " (not the default 0x6)");
     const std::string l2_detail = fmt::format(
-        "0x{:08x}: banks {} ways {} sets {} line {} B",
-        l2_configuration,
-        l2_configuration & 0xFF,
-        (l2_configuration >> 8) & 0xFF,
-        1u << ((l2_configuration >> 16) & 0xFF),
-        1u << ((l2_configuration >> 24) & 0xFF));
+        "0x{:08x}: banks {} ways {} sets {} line {} B", l2_configuration, l2_banks, l2_ways, l2_sets, l2_line_bytes);
     log_info(tt::LogTest, "MM41 {}: snoop master {}; L2 CONFIGURATION {}", label, snoop_detail, l2_detail);
     RecordProperty("snoop_master_cfg", snoop_detail);
     RecordProperty("l2_configuration", l2_detail);
-}
-
-// Evictions against stride and count: for each stride, the lowest number of conflicting reads after which a dirty
-// target line reaches TL1. Records only; the ways and the conflict stride feed the MM41 stress sizes.
-TEST_P(MimirCacheProbe, L2Geometry) {
-    const uint32_t cce_index = GetParam();
-    ScopedDevice device_closer;
-    IDevice* device = device_closer.device();
-    check_tl1_layout();
-    record_descriptor_properties(soc_desc_of(device));
-
-    const uint64_t target_offset = tl1_data(kProducerHart);
-    TT_FATAL(
-        target_offset +
-                (kEvictPasses - 1) * static_cast<uint64_t>(kEvictStridesBytes[std::size(kEvictStridesBytes) - 1]) +
-                abi::kLineBytes <=
-            tl1_test_base() + kTl1RemoteLandingOffset,
-        "L2Geometry conflict lines run into the remote landing area");
-    std::string summary;
-    for (uint32_t stride_index = 0; stride_index < std::size(kEvictStridesBytes); ++stride_index) {
-        const uint32_t stride = kEvictStridesBytes[stride_index];
-        write_cce_tl1(device, cce_index, target_offset, pattern_words(kOldValue, abi::kLineBytes / sizeof(uint32_t)));
-        std::vector<uint32_t> args = probe_args(abi::kModeL2Evict, kProducerHart);
-        args[abi::kArgDataOffset] = static_cast<uint32_t>(target_offset);
-        args[abi::kArgValue] = 0xE7000000u | (stride_index << 16);
-        args[abi::kArgStrideBytes] = stride;
-        args[abi::kArgCount] = kEvictPasses;
-        args[abi::kArgAuxOffset] = static_cast<uint32_t>(target_offset);
-        const std::string label = fmt::format(
-            "L2Geometry on CCE{} hart {}, stride {} B, {} passes", cce_index, kProducerHart, stride, kEvictPasses);
-        const std::optional<std::vector<std::vector<uint32_t>>> statuses =
-            run_on_cce(device, cce_index, {{kProducerHart, args}}, kProbeHostDeadline);
-        ASSERT_TRUE(statuses.has_value())
-            << label << ": no status after " << kProbeHostDeadline.count() << " s" << kFreshSessionNote;
-        const std::vector<uint32_t>& status = statuses->front();
-        ASSERT_EQ(status[abi::kStatusCode], abi::kCodeDone) << label << ": " << status_detail(status);
-        const uint32_t evicted_mask = status[abi::kStatusRegisterA];
-        const uint32_t first_evicting = status[abi::kStatusRegisterB];
-        const std::string result = fmt::format(
-            "evicted mask 0x{:08x}, first evicting count {}",
-            evicted_mask,
-            first_evicting == kEvictPasses ? std::string("none") : std::to_string(first_evicting));
-        log_info(tt::LogTest, "MM41 {}: {}", label, result);
-        RecordProperty(fmt::format("stride_{}", stride), result);
-        summary += fmt::format("{}{}:{}", summary.empty() ? "" : " ", stride, first_evicting);
-    }
-    RecordProperty("first_evicting_count_by_stride", summary);
+    EXPECT_EQ(snoop_master, host_snoop_master) << label << ": hart and host reads of NOC_SNOOP_TL_MASTER_CFG differ";
+    EXPECT_EQ(snoop_master, kSnoopMasterDefault) << label << ": snoop master " << snoop_detail;
+    EXPECT_EQ(l2_line_bytes, abi::kLineBytes) << label << ": L2 CONFIGURATION " << l2_detail;
+    EXPECT_EQ(static_cast<uint64_t>(l2_banks) * l2_ways * l2_sets * l2_line_bytes, 128 * kKiB)
+        << label << ": L2 size from L2 CONFIGURATION " << l2_detail;
 }
 
 INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
@@ -1104,7 +1060,8 @@ std::vector<uint32_t> partial_line_image(uint32_t value, uint32_t num_lines) {
 }
 
 inline constexpr uint32_t kPartialLines = 64;
-// Three times the 128 KiB L2, so each of its sets sees 24 reads (L2Geometry), from hart 1's window onward (loads only).
+// Three times the 128 KiB L2, so each of its sets sees 24 reads (kL2EvictingReads), from hart 1's window onward (loads
+// only).
 inline constexpr uint32_t kPartialEvictLines = 6144;
 
 // Byte, halfword, word and doubleword cached stores into every line of 4 KiB, evicted by cached reads of twice the L2
