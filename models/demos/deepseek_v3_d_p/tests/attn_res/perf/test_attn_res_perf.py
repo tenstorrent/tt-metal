@@ -75,15 +75,16 @@ _SAMPLES = 5
 _WALL_SAMPLES = 30
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power), from run 41112791430,
-# 2026-10-30. Within a box the spread is under 2%. Across boxes it is larger: bh-glx-120-b07u02 measures traced
-# boundary 1822 / ordinary 142 and untraced 4774 / 344, the boundary layer's device time 5% and the untraced
-# ordinary layer 9% above CI, so a run off the CI pool may need ATTN_RES_PERF_REPORT_ONLY=1. Untraced is
-# host-dispatch bound here, with the device idle between AttnRes programs, so it follows the host CPU and gets
-# the wider band.
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power): the median of runs
+# 41112791430, 41117934062 and 41130107396 (2026-10-30), on bh-glx-120-d08u08, -d06u02 and -d09u02. Traced held
+# within 0.4% across the three boxes (boundary 1716-1722, ordinary 140.4-141.2); untraced within 1.5% on the
+# boundary layer (4596-4664) and 4% on the ordinary one (313-326). Untraced is host-dispatch bound here, with
+# the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Off the pool,
+# bh-glx-120-b07u02 measures the traced boundary layer 6% high, so a run there may need
+# ATTN_RES_PERF_REPORT_ONLY=1.
 _REFERENCE_E2E_US = {
     "traced": {"boundary": 1720.0, "ordinary": 141.0},
-    "untraced": {"boundary": 4620.0, "ordinary": 313.0},
+    "untraced": {"boundary": 4620.0, "ordinary": 323.0},
 }
 _MARGIN = {"traced": 0.05, "untraced": 0.10}
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
