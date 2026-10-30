@@ -20,7 +20,8 @@ _WORKERS: dict = {}
 
 
 def enabled() -> bool:
-    return os.environ.get(FLAG, "0") == "1"
+    # default on: bitwise to the stock DRAM-sharded program; e2e A/B on the 1x8 line 16.28/16.54 -> 15.76/15.75 ms/token
+    return os.environ.get(FLAG, "1") == "1"
 
 
 def bank_workers(mesh) -> list:
