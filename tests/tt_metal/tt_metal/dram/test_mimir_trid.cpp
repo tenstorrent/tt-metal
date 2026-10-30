@@ -91,63 +91,8 @@ inline constexpr uint32_t kRegionLeadingGuardTag = 0x800;
 // The hart of every single-hart case.
 inline constexpr uint32_t kTridHart = kCceKernelHart;
 
-std::string code_name(uint32_t code) {
-    switch (code) {
-        case abi::kCodeLanded: return "landed";
-        case abi::kCodeAcked: return "acked";
-        case abi::kCodeVcSpaceTimeout: return "vc_space_timeout";
-        case abi::kCodeAckTimeout: return "ack_timeout";
-        case abi::kCodeDataTimeout: return "data_timeout";
-        case abi::kCodeBadArgs: return "bad_args";
-        case abi::kCodePeerTimeout: return "peer_timeout";
-        case abi::kCodeStreamBudget: return "stream_budget";
-        case abi::kCodeNotLandedAtAck: return "not_landed_at_ack";
-    }
-    return fmt::format("unknown_code_0x{:x}", code);
-}
-
-std::string poll_name(uint32_t poll) {
-    switch (poll) {
-        case abi::kPollNone: return "none";
-        case abi::kPollVcSpace: return "vc_space";
-        case abi::kPollAck: return "ack";
-        case abi::kPollData: return "data";
-        case abi::kPollPeer: return "peer";
-    }
-    return fmt::format("unknown_poll_{}", poll);
-}
-
-std::string status_detail(const std::vector<uint32_t>& status) {
-    const uint32_t flags = status[abi::kStatusFlags];
-    return fmt::format(
-        "kernel code {} flags [vc_space {} acked {} landed {}], {} commands issued, last poll {} {}, cycles vc_space "
-        "{} ack {} data {}, pending high water {}, probe {} / {}, kernel mismatches {} (first word {} observed "
-        "0x{:08x} expected 0x{:08x})",
-        code_name(status[abi::kStatusCode]),
-        (flags & abi::kFlagVcSpace) != 0,
-        (flags & abi::kFlagAcked) != 0,
-        (flags & abi::kFlagLanded) != 0,
-        status[abi::kStatusElementsIssued],
-        poll_name(status[abi::kStatusLastPoll]),
-        status[abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
-        status[abi::kStatusVcSpaceCycles],
-        status[abi::kStatusAckCycles],
-        status[abi::kStatusDataCycles],
-        status[abi::kStatusPendingHighWater],
-        status[abi::kStatusProbeFirst],
-        status[abi::kStatusProbeSecond],
-        status[abi::kStatusMismatchedWords],
-        status[abi::kStatusFirstMismatchWord],
-        status[abi::kStatusObserved],
-        status[abi::kStatusExpected]);
-}
-
 // A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
-std::string code_note(uint32_t code) {
-    return code == abi::kCodeVcSpaceTimeout || code == abi::kCodeAckTimeout || code == abi::kCodeDataTimeout
-               ? kFreshSessionNote
-               : "";
-}
+std::string code_note(uint32_t code) { return idma_code_leaves_command_in_flight(code) ? kFreshSessionNote : ""; }
 
 uint64_t gddr_view_offset() { return dram_unreserved_base() + kGddrTargetOffset; }
 
@@ -723,7 +668,7 @@ void expect_status(
     uint32_t expected_commands,
     uint32_t used_trids,
     const std::string& label) {
-    const std::string detail = status_detail(status);
+    const std::string detail = idma_status_detail(status);
     log_info(tt::LogTest, "MM43 {}: {}", label, detail);
     record_leg(scenario.name(), "status", detail);
     EXPECT_EQ(status[abi::kStatusCode], success_code)
@@ -960,7 +905,7 @@ TEST_P(MimirTridIdma, DuplicateId) {
         return;
     }
     EXPECT_GT((*gddr_status)[abi::kStatusPendingHighWater], 1u)
-        << label << ": trid 9 never counted more than one outstanding command; " << status_detail(*gddr_status);
+        << label << ": trid 9 never counted more than one outstanding command; " << idma_status_detail(*gddr_status);
     TridScenario sibling_scenario(soc, "DuplicateId_sibling", GetParam(), kTridHart, 0x59);
     const size_t sibling_batch = sibling_scenario.add(
         Target::OwnSource, Target::SiblingTl1, kUniqueIdsCommandBytes, kUniqueIdsCommands, /*first_trid=*/15);
@@ -969,7 +914,8 @@ TEST_P(MimirTridIdma, DuplicateId) {
         run_scenario_batch(device_closer_->mesh(), device, sibling_scenario, sibling_batch, label);
     if (sibling_status.has_value()) {
         EXPECT_GT((*sibling_status)[abi::kStatusPendingHighWater], 1u)
-            << label << ": trid 15 never counted more than one outstanding command; " << status_detail(*sibling_status);
+            << label << ": trid 15 never counted more than one outstanding command; "
+            << idma_status_detail(*sibling_status);
     }
 }
 
@@ -1134,7 +1080,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentReadAfterWrite) {
         return;
     }
     const uint32_t read_code = (*read_status)[abi::kStatusCode];
-    const std::string read_detail = status_detail(*read_status);
+    const std::string read_detail = idma_status_detail(*read_status);
     log_info(tt::LogTest, "MM43 {} dependent read: {}{}", label, read_detail, code_note(read_code));
     record_leg("dependent_read", "status", read_detail);
     EXPECT_EQ(read_code, abi::kCodeAcked) << label << ": " << read_detail;
@@ -1485,7 +1431,7 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
             run_on_cce(device, cce_index, {{kTridHart, observer_args(kTridHart, trid, peer_flag_offset)}});
         ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
         const std::vector<uint32_t>& status = statuses->front();
-        EXPECT_EQ(status[abi::kStatusCode], abi::kCodeAcked) << label << ": " << status_detail(status);
+        EXPECT_EQ(status[abi::kStatusCode], abi::kCodeAcked) << label << ": " << idma_status_detail(status);
         EXPECT_EQ(status[abi::kStatusProbeFirst], 0u) << label << ": stale pending count after the reopen";
     }
 

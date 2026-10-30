@@ -670,38 +670,7 @@ std::string fresh_session_skip_reason() {
                : "";
 }
 
-std::string idma_code_name(uint32_t code) {
-    switch (code) {
-        case idma_abi::kCodeLanded: return "landed";
-        case idma_abi::kCodeAcked: return "acked";
-        case idma_abi::kCodeVcSpaceTimeout: return "vc_space_timeout";
-        case idma_abi::kCodeAckTimeout: return "ack_timeout";
-        case idma_abi::kCodeDataTimeout: return "data_timeout";
-        case idma_abi::kCodeBadArgs: return "bad_args";
-        case idma_abi::kCodePeerTimeout: return "peer_timeout";
-    }
-    return fmt::format("unknown_code_0x{:x}", code);
-}
-
-std::string idma_code_note(uint32_t code) {
-    return code == idma_abi::kCodeVcSpaceTimeout || code == idma_abi::kCodeAckTimeout ||
-                   code == idma_abi::kCodeDataTimeout
-               ? kFreshSessionNote
-               : "";
-}
-
-std::string idma_detail(const std::vector<uint32_t>& status) {
-    return fmt::format(
-        "iDMA code {} flags 0x{:x}, {} commands issued, last poll {} {}, cycles vc_space {} ack {} data {}",
-        idma_code_name(status[idma_abi::kStatusCode]),
-        status[idma_abi::kStatusFlags],
-        status[idma_abi::kStatusElementsIssued],
-        status[idma_abi::kStatusLastPoll],
-        status[idma_abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
-        status[idma_abi::kStatusVcSpaceCycles],
-        status[idma_abi::kStatusAckCycles],
-        status[idma_abi::kStatusDataCycles]);
-}
+std::string idma_code_note(uint32_t code) { return idma_code_leaves_command_in_flight(code) ? kFreshSessionNote : ""; }
 
 IdmaOperand own_tl1_operand(uint32_t cce_index, uint64_t offset) { return {idma_abi::kKindOwnTl1, cce_index, offset}; }
 
@@ -1587,10 +1556,10 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
     if (run.statuses->size() > 1) {
         const std::vector<uint32_t>& writer_status = (*run.statuses)[1];
         if (idma_writer.has_value()) {
-            log_info(tt::LogTest, "MM41 {}: writer {}", label, idma_detail(writer_status));
-            record_leg("writer", "status", idma_detail(writer_status));
+            log_info(tt::LogTest, "MM41 {}: writer {}", label, idma_status_detail(writer_status));
+            record_leg("writer", "status", idma_status_detail(writer_status));
             EXPECT_EQ(writer_status[idma_abi::kStatusCode], idma_success_code(*idma_writer))
-                << label << ": writer " << idma_detail(writer_status)
+                << label << ": writer " << idma_status_detail(writer_status)
                 << idma_code_note(writer_status[idma_abi::kStatusCode]);
         } else {
             log_info(tt::LogTest, "MM41 {}: writer {}", label, mm41_detail(writer_status));
@@ -1795,12 +1764,13 @@ TEST_P(MimirCacheCoherence, CrossCceSnoopOn) {
         "MM41 {}: reader {}; writer {}; {}",
         label,
         mm41_detail(reader),
-        idma_detail(writer_status),
+        idma_status_detail(writer_status),
         verdict);
     RecordProperty("snoop_verdict", verdict);
     RecordProperty("stale_words_before_drop", static_cast<int>(reader[abi::kStatusCachedBefore]));
     ASSERT_EQ(writer_status[idma_abi::kStatusCode], idma_success_code(writer))
-        << label << ": writer " << idma_detail(writer_status) << idma_code_note(writer_status[idma_abi::kStatusCode]);
+        << label << ": writer " << idma_status_detail(writer_status)
+        << idma_code_note(writer_status[idma_abi::kStatusCode]);
     ASSERT_EQ(reader[abi::kStatusCode], abi::kCodeDone)
         << label << ": reader " << mm41_detail(reader) << cache_code_note(reader[abi::kStatusCode]);
     EXPECT_EQ(reader[abi::kStatusWarmOld], kCacheWords) << label << ": warm read; " << verdict;
@@ -2013,15 +1983,15 @@ TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
                     writer_acked ? "the writer's command was acked, so its words were accepted but are not "
                                    "visible in TL1"
                                  : "the writer was not acked, so its iDMA is stuck";
-                record_leg(leg, "writer", idma_detail(writer_status));
+                record_leg(leg, "writer", idma_status_detail(writer_status));
                 fresh_session_required() = true;
                 FAIL() << label << ": the hart's budget ran out before it read the external words, so the iDMA "
-                       << "may still be in flight; " << writer_state << " (" << idma_detail(writer_status) << "); "
-                       << result << (config == kSnoopMasterDefault ? std::string("; ") + kIdmaSnoopNote : "")
+                       << "may still be in flight; " << writer_state << " (" << idma_status_detail(writer_status)
+                       << "); " << result << (config == kSnoopMasterDefault ? std::string("; ") + kIdmaSnoopNote : "")
                        << kFreshSessionNote;
             }
             ASSERT_EQ(writer_status[idma_abi::kStatusCode], idma_success_code(writer))
-                << label << ": writer " << idma_detail(writer_status)
+                << label << ": writer " << idma_status_detail(writer_status)
                 << idma_code_note(writer_status[idma_abi::kStatusCode]);
             EXPECT_EQ(hart_status[abi::kStatusCode], abi::kCodeDone)
                 << label << ": " << result << ": " << kIdmaSnoopNote;
@@ -2213,7 +2183,7 @@ void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t
             << label << ": round " << round << " writer has " << writer_statuses.no_status();
         const std::vector<uint32_t>& writer_status = writer_statuses->front();
         ASSERT_EQ(writer_status[idma_abi::kStatusCode], idma_success_code(writer))
-            << label << ": round " << round << " writer " << idma_detail(writer_status)
+            << label << ": round " << round << " writer " << idma_status_detail(writer_status)
             << idma_code_note(writer_status[idma_abi::kStatusCode]);
     }
     ASSERT_TRUE(wait_for_status_magics(device, consumer_launch, kMm41HostDeadline))

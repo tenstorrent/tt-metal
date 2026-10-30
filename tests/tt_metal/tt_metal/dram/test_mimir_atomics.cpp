@@ -97,49 +97,8 @@ std::string status_detail(const std::vector<uint32_t>& status) {
         status[abi::kStatusFirstMismatch]);
 }
 
-std::string idma_code_name(uint32_t code) {
-    switch (code) {
-        case idma_abi::kCodeLanded: return "landed";
-        case idma_abi::kCodeAcked: return "acked";
-        case idma_abi::kCodeVcSpaceTimeout: return "vc_space_timeout";
-        case idma_abi::kCodeAckTimeout: return "ack_timeout";
-        case idma_abi::kCodeDataTimeout: return "data_timeout";
-        case idma_abi::kCodeBadArgs: return "bad_args";
-    }
-    return fmt::format("unknown_code_0x{:x}", code);
-}
-
-std::string idma_status_detail(const std::vector<uint32_t>& status) {
-    const uint32_t flags = status[idma_abi::kStatusFlags];
-    return fmt::format(
-        "kernel code {} flags [vc_space {} acked {} landed {}], {} commands issued, last poll {} {}, cycles vc_space "
-        "{} ack {} data {}, pending high water {}, probe {} / {}, kernel mismatches {} (observed 0x{:08x} expected "
-        "0x{:08x})",
-        idma_code_name(status[idma_abi::kStatusCode]),
-        (flags & idma_abi::kFlagVcSpace) != 0,
-        (flags & idma_abi::kFlagAcked) != 0,
-        (flags & idma_abi::kFlagLanded) != 0,
-        status[idma_abi::kStatusElementsIssued],
-        status[idma_abi::kStatusLastPoll],
-        status[idma_abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
-        status[idma_abi::kStatusVcSpaceCycles],
-        status[idma_abi::kStatusAckCycles],
-        status[idma_abi::kStatusDataCycles],
-        status[idma_abi::kStatusPendingHighWater],
-        status[idma_abi::kStatusProbeFirst],
-        status[idma_abi::kStatusProbeSecond],
-        status[idma_abi::kStatusMismatchedWords],
-        status[idma_abi::kStatusObserved],
-        status[idma_abi::kStatusExpected]);
-}
-
 // A timeout code may leave a command in flight, so the next run needs a fresh session (MIM-601).
-std::string idma_code_note(uint32_t code) {
-    return code == idma_abi::kCodeVcSpaceTimeout || code == idma_abi::kCodeAckTimeout ||
-                   code == idma_abi::kCodeDataTimeout
-               ? kFreshSessionNote
-               : "";
-}
+std::string idma_code_note(uint32_t code) { return idma_code_leaves_command_in_flight(code) ? kFreshSessionNote : ""; }
 
 uint32_t leg_seed(uint32_t tag) { return mimir_test_seed() ^ (tag * 0x9E3779B9u); }
 

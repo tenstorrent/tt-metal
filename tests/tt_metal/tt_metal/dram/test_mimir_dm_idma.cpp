@@ -348,28 +348,6 @@ std::vector<uint32_t> kernel_args(
          .source_stride_bytes = leg.source_stride_bytes});
 }
 
-std::string code_name(uint32_t code) {
-    switch (code) {
-        case abi::kCodeLanded: return "landed";
-        case abi::kCodeAcked: return "acked";
-        case abi::kCodeVcSpaceTimeout: return "vc_space_timeout";
-        case abi::kCodeAckTimeout: return "ack_timeout";
-        case abi::kCodeDataTimeout: return "data_timeout";
-        case abi::kCodeBadArgs: return "bad_args";
-    }
-    return fmt::format("unknown_code_0x{:x}", code);
-}
-
-std::string poll_name(uint32_t poll) {
-    switch (poll) {
-        case abi::kPollNone: return "none";
-        case abi::kPollVcSpace: return "vc_space";
-        case abi::kPollAck: return "ack";
-        case abi::kPollData: return "data";
-    }
-    return fmt::format("unknown_poll_{}", poll);
-}
-
 std::string mode_name(uint32_t mode) {
     switch (mode) {
         case abi::kModeIdmaCopy: return "IdmaCopy";
@@ -377,28 +355,6 @@ std::string mode_name(uint32_t mode) {
         case abi::kModeIdmaStrided: return "IdmaStrided";
     }
     return fmt::format("unknown_mode_{}", mode);
-}
-
-std::string status_detail(const std::vector<uint32_t>& status) {
-    const uint32_t flags = status[abi::kStatusFlags];
-    return fmt::format(
-        "kernel code {} flags [vc_space {} acked {} landed {}], {} commands issued, last poll {} {}, cycles vc_space "
-        "{} "
-        "ack {} data {}, kernel mismatches {} (first word {} observed 0x{:08x} expected 0x{:08x})",
-        code_name(status[abi::kStatusCode]),
-        (flags & abi::kFlagVcSpace) != 0,
-        (flags & abi::kFlagAcked) != 0,
-        (flags & abi::kFlagLanded) != 0,
-        status[abi::kStatusElementsIssued],
-        poll_name(status[abi::kStatusLastPoll]),
-        status[abi::kStatusLastPollReady] != 0 ? "done" : "timed out",
-        status[abi::kStatusVcSpaceCycles],
-        status[abi::kStatusAckCycles],
-        status[abi::kStatusDataCycles],
-        status[abi::kStatusMismatchedWords],
-        status[abi::kStatusFirstMismatchWord],
-        status[abi::kStatusObserved],
-        status[abi::kStatusExpected]);
 }
 
 // Runs one leg and checks it: the kernel reports success, the host reads the expected data (re-reading the first
@@ -478,7 +434,7 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
     }
 
     const std::vector<uint32_t>& status = statuses->front();
-    const std::string detail = status_detail(status);
+    const std::string detail = idma_status_detail(status);
     record_leg(leg.name, "status", detail);
     log_info(tt::LogTest, "MM8 iDMA {}: {}", label, detail);
     const uint32_t success_code = leg.mode == abi::kModeIdmaCopyHostVerified ? abi::kCodeAcked : abi::kCodeLanded;
