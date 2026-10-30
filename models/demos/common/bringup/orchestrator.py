@@ -100,6 +100,7 @@ from models.demos.common.bringup.core.gate import (
     run_name,
     stage_paths,
     unit_base,
+    with_clean_wall,
 )
 from models.demos.common.bringup.core.ledger import Ledger, satisfied
 from models.demos.common.bringup.core.runs import FreezeError, agent_hashes, freeze_task
@@ -498,6 +499,15 @@ class CommitPending(Exception):
     def __init__(self, tid: str, text: str):
         super().__init__(text)
         self.tid, self.text = tid, text
+
+
+AB_POSITION_KEY = re.compile(r"(device_ms_\D\w*|chunk_wall_ms|chunk_wall_ms_spread|host_\w+|profiled_programs)_p\d+$")
+
+
+def ab_before(task: dict) -> bool:
+    """F230 (owner 2026-10-30: "if it is a branch merge, run 'before' before merging, then 'after'"): a pick without a
+    switch (``ab: {before: true}``): 'off' is the tree before the agent's change, measured before the agent starts."""
+    return bool((task.get("ab") or {}).get("before"))
 
 
 def ab_finished(result: dict) -> bool:
@@ -1439,7 +1449,7 @@ class Orchestrator:
         a frozen test) keeps them; a new brief is a new change."""
         import hashlib
 
-        keep = {k: task.get(k) for k in ("brief", "ab", "ab_rungs")}
+        keep = {k: task.get(k) for k in ("brief", "ab", "ab_rungs", "ab_positions")}
         return hashlib.sha256(json.dumps(keep, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
     def ab_code_key(self, task: dict) -> str:
@@ -1472,6 +1482,10 @@ class Orchestrator:
             return self._human(task, rec["why"])
         if rec:
             return self._human(task, rec["why"])
+        if ab_before(task):  # F230: a change without a switch (a branch merge): 'before' runs on the tree as it is now
+            why = self.ab_measure_before(task)
+            if why:
+                return self._human(task, why)
         changed = self.perf_agent(task)
         if changed is None:
             return STOPPED
@@ -1540,7 +1554,9 @@ class Orchestrator:
         d = self.run_dir / "ab" / tid
         old, plain_old = model_precision.switch_env(self.spec, ab.get("env") or {})  # F103: setting -> its variable
         on, plain_on = model_precision.switch_env(self.spec, ab.get("change") or {})
-        if old and old == on:
+        if ab_before(task):  # F230: ab.env is what both sides run with (e.g. a table mode); the tree is the switch
+            on = old
+        elif old and old == on:
             raise ValueError(f"{tid}: ab.env and ab.change are the same configuration")
         rec = {
             "key": self.ab_key(task),
@@ -1550,20 +1566,29 @@ class Orchestrator:
             "on": on,
             "table": str(d / "table.md"),
         }
-        rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, quick={}, note="")
+        rec.update(rungs=self.ab_rungs(task), tests={}, ladder={}, profile={}, quick={}, positions={}, note="")
         owned = [p for p in changed if allowed(p, list(task.get("paths") or []))]
         base = self.ab_base(old, on, tid)
-        sides = ([("old", old)] if old else []) + [("new", on)]
+        before = ab_before(task)
+        sides = ([("old", old)] if old or before else []) + [("new", on)]
+        if before:
+            rec["before"] = True
         if not owned:
             rec["note"] = "the agent changed nothing under the task's paths (its summary and BREADCRUMBS say why)"
             sides = []
+        elif before:
+            pass  # F230: off = the tree before the change, measured before the agent; no switch to check
         elif not old:
             rec["note"] = "no `ab` switch in tasks.yaml: the change is measured on only"
         elif not on:
             rec[
                 "note"
             ] = "no `ab.change` in tasks.yaml: 'on' is the tree's default, which the agent may have left on the old path"
-        missing = ab_switch_missing(task, self.spec.repo, owned, set(plain_old) | set(plain_on)) if sides else []
+        missing = (
+            ab_switch_missing(task, self.spec.repo, owned, set(plain_old) | set(plain_on))
+            if sides and not before
+            else []
+        )
         if missing:
             rec[
                 "note"
@@ -1573,8 +1598,16 @@ class Orchestrator:
         kinds = {n: k for n, k, _, _ in self.ab_items(task)}
         try:
             for side, env in sides:  # F137: every run at the shipped settings, the switch as each side sets it
-                for n, r in self.ab_measure(task, side, env, base, code).items():
-                    if kinds[n] == "quick":
+                kept_before = before and side == "old"  # F230: measured before the agent; never on the changed tree
+                got = self.ab_measure(task, side, env, base, None if kept_before else code, run=not kept_before)
+                if kept_before and len(got) < len(kinds):
+                    rec["note"] = "the 'before' side is missing runs (measured before the change only): " + ", ".join(
+                        n for n in kinds if n not in got
+                    )
+                for n, r in got.items():
+                    if kinds[n] == "position":
+                        rec["positions"].setdefault(n, {})[side] = r
+                    elif kinds[n] == "quick":
                         rec["quick"][side] = r
                     elif kinds[n] == "profile":
                         rec["profile"][side] = r
@@ -1626,7 +1659,7 @@ class Orchestrator:
         runs it, gate_command), the ladder at every A/B rung, and the plain profile (with F114's clean wall run)."""
         if self.ab_quick(task):  # F122: one process a side
             quick = f"BRINGUP_QUICK=1 BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
-            return [("quick", "quick", quick, {})]
+            return [("quick", "quick", quick, {})] + self.ab_position_items(task)
         segs = [x.strip() for x in gate_command(task).split("&&") if x.strip()]
         tests = [x for x in segs if "test_profile.py" not in x and "test_ladder.py" not in x]
         items = [
@@ -1636,9 +1669,41 @@ class Orchestrator:
         ladder = f"scripts/run_safe_pytest.sh --no-precompile --run-all {LADDER_TEST}"
         items += [(r, "ladder", ladder, {"BRINGUP_RUNG": r}) for r in self.ab_rungs(task)]
         prof = " && ".join(re.sub(r"\bBRINGUP_PROFILE_OPS=\S+\s*", "", x) for x in segs if "test_profile.py" in x)
-        return items + ([("profile", "profile", prof, {})] if prof else [])
+        return items + ([("profile", "profile", prof, {})] if prof else []) + self.ab_position_items(task)
 
-    def ab_measure(self, task: dict, side: str, env: dict, base: dict, code: str, only=None) -> dict:
+    @staticmethod
+    def ab_position_items(task: dict) -> list[tuple[str, str, str, dict]]:
+        """F230: tasks.yaml ``ab_positions`` (token starts): per position one chunk's warm wall with the host cProfile,
+        then its device time per section (test_profile.py at BRINGUP_POS, timing only)."""
+        out = []
+        for p in task.get("ab_positions") or []:
+            one = f"BRINGUP_POS={int(p)} BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --no-precompile --run-all {PROFILE_TEST}"
+            out.append((f"p{int(p)}", "position", with_clean_wall(one), {}))
+        return out
+
+    def ab_measure_before(self, task: dict) -> str | None:
+        """F230: the 'before' side of a pick without a switch, measured on the tree before the agent changes it. A
+        finished 'before' run is kept whatever the tree holds later; a missing one needs a tree clean under the task's
+        paths (an interrupted attempt's edits would be measured as 'before'). A reason to wait for a person, or None."""
+        names = [n for n, _, _, _ in self.ab_items(task)]
+        env, _ = model_precision.switch_env(self.spec, (task.get("ab") or {}).get("env") or {})
+        base = self.ab_base(env, env, task["id"])
+        kept = self.ab_measure(task, "old", env, base, None, run=False)
+        if all(n in kept for n in names):
+            return None
+        dirty_paths = self.changed_under(task)
+        if dirty_paths:
+            return (
+                f"the 'before' side of {task['id']} (ab.before) is not measured and the tree already holds changes under"
+                f" its paths ({', '.join(dirty_paths[:5])}): revert them or measure 'before' on a clean tree first"
+            )
+        self.echo(f"  [{task['id']}] A/B before: measuring the tree before the change (F230)")
+        self.ab_measure(task, "old", env, base, self.ab_code_key(task))
+        return None
+
+    def ab_measure(
+        self, task: dict, side: str, env: dict, base: dict, code: str | None, only=None, run: bool = True
+    ) -> dict:
         """F116: one side's runs (all, or the names / kinds in ``only``). Each run is kept in side.json with its own
         stamp (code key, switch, command); a run whose stamp matches is reused, not run again: the agent's `measure`
         runs of the 'on' side are the report's. {name: result}; raises InfraStop on a board problem."""
@@ -1653,10 +1718,17 @@ class Orchestrator:
                 continue
             stamp = {"code": code, "env": env, "cmd": cmd, "extra": extra}
             label = f"  [{tid}] A/B {'on' if side == 'new' else 'off'}: {name}"
-            if (items.get(name) or {}).get("stamp") == stamp and ab_finished(items[name]["result"]):
+            kept_stamp = dict((items.get(name) or {}).get("stamp") or {})
+            if code is None:  # F230: the 'before' side of ab.before, measured on the tree before the change
+                kept_stamp.pop("code", None)
+                stamp.pop("code")
+            if kept_stamp == stamp and ab_finished(items[name]["result"]):
                 out[name] = items[name]["result"]
-                self.echo(f"{label} reused (same code and switch)")
+                self.echo(f"{label} reused (same code and switch)" if code else f"{label} (before the change) kept")
                 continue
+            if not run:
+                continue
+            stamp["code"] = stamp.get("code") or self.ab_code_key(task)
             res = d / name
             M.reset(tid, res)
             self.echo(label)
@@ -1679,6 +1751,10 @@ class Orchestrator:
                 result = {"rc": rc, "checks": [m.strip() for m in FAILED_CHECK.findall(text)][:12]}
             elif kind == "ladder":
                 result = dict(self.ab_summary(got), rc=rc, limits=ab_limits(got))
+            elif kind == "position":  # F230: timing at one position; metric names carry _p<pos>, dropped here
+                sfx = "_" + name
+                result = {k[: -len(sfx)]: v for k, v in got.items() if k.endswith(sfx) and AB_POSITION_KEY.match(k)}
+                result["rc"] = rc
             elif kind == "quick":
                 lay = {k: v for k, v in got.items() if k.startswith("pcc_layer_L")}
                 worst = min(lay, key=lay.get) if lay else None
@@ -1751,10 +1827,15 @@ class Orchestrator:
         fmt = lambda v: "-" if v is None else f"{v:.4f}" if isinstance(v, float) else str(v)  # noqa: E731
         sides = [("new", "on"), ("old", "off")]
         old = " ".join(f"{k}={v}" for k, v in rec["env"].items()) or "(no ab switch)"
+        off = (
+            f"off = the tree before the change, measured before the agent started (ab.before, F230); both with `{old}`"
+            if rec.get("before")
+            else f"off = `{old}` (the old path)"
+        )
         out = [
             f"# {task['id']}: {task['title']} -- apply or not?",
             "",
-            f"on = the tree as the agent left it; off = `{old}` (the old path). {rec['at']}.",
+            f"on = the tree as the agent left it; {off}. {rec['at']}.",
         ]
         if rec["note"]:
             out += ["", f"Note: {rec['note']}"]
@@ -1815,6 +1896,21 @@ class Orchestrator:
                 out.append(
                     f"| {lbl} | " + " | ".join(f"{v:.1f}" if ms and v is not None else fmt(v) for v in vals) + " |"
                 )
+        for name, by in (rec.get("positions") or {}).items():  # F230
+            pos = int(name[1:])
+            out += ["", f"## One chunk at position {pos:,} ({name}): device and host time (ms per chunk)", ""]
+            out += ["| | on | off | on - off |", "|---|---|---|---|"]
+            new, old = by.get("new") or {}, by.get("old") or {}
+            first = ["device_ms_total", "chunk_wall_ms", "chunk_wall_ms_spread", "host_overhead_ms", "host_cprofile_ms"]
+            first += ["host_launch_ms", "host_launch_calls", "profiled_programs"]
+            secs = sorted(
+                (k for k in set(new) | set(old) if k.startswith("device_ms_") and k not in first and "chip" not in k),
+                key=lambda k: -max(new.get(k) or 0, old.get(k) or 0),
+            )
+            for k in [k for k in first if k in new or k in old] + secs + ["rc"]:
+                a, b = new.get(k), old.get(k)
+                d = f"{a - b:+.1f}" if isinstance(a, (int, float)) and isinstance(b, (int, float)) and k != "rc" else ""
+                out.append(f"| {'exit code' if k == 'rc' else k} | {fmt(a)} | {fmt(b)} | {d} |")
         g = rec["gate_on"]
         part = " (the thresholds the quick run measured)" if g.get("partial") else ""
         out += ["", f"## Gate with the change on{part}: {'PASS' if g['ok'] else 'FAIL'}", ""]

@@ -22,6 +22,7 @@ TASK_ENV = "BRINGUP_TASK"
 # reruns C.swa.attention's gate as FIX.2: the test sees BRINGUP_TASK=C.swa.attention, its metrics go to FIX.2)
 RECORD_ENV = "BRINGUP_RECORD_TASK"
 RESULTS_ENV = "BRINGUP_RESULTS_DIR"
+SUFFIX_ENV = "BRINGUP_METRIC_SUFFIX"  # F230: appended to every metric name (a profile at a position: _p<start>)
 _REPO = Path(__file__).resolve().parents[5]
 
 
@@ -57,11 +58,17 @@ def in_precompile_collect_pass() -> bool:
     return False
 
 
+def suffixed(name: str) -> str:
+    """F230: the name a metric is recorded under: with BRINGUP_METRIC_SUFFIX, so one gate can hold several positions."""
+    return name + os.environ.get(SUFFIX_ENV, "")
+
+
 def record(name: str, value, task: str | None = None, **extra) -> None:
     """Record one metric for the active task. The last write of a name wins. Ignored in the precompile collect pass."""
     if in_precompile_collect_pass():
         return
     task = task or record_task()
+    name = suffixed(name)
     p = _path(task)
     p.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(p.read_text()) if p.exists() else {"task": task, "metrics": {}}
