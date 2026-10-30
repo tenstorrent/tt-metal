@@ -107,20 +107,22 @@ number of rows a request needs, which the MIRACL table there shows.
 
 | batch x tokens | after bring-up | now, average | now, p95 | speed of light (kernel cycles) |
 |---|---|---|---|---|
-| 1 x 128 | 12.8 ms | 6.44 ms | 6.46 ms | |
-| 1 x 256 | | 6.73 ms | 6.74 ms | |
-| 1 x 512 | 15.6 ms | 8.12 ms | 8.27 ms | 32.7 % |
-| 1 x 1024 | | 18.8 ms | 19.9 ms | |
-| 8 x 512 | 76.2 ms | 52.8 ms | 53.0 ms | 56.2 % |
-| 10 x 512 | | 80.3 ms | 80.9 ms | |
-| 32 x 512 | 329 ms | 191 ms | 194 ms | **69.5 %** (160.5 M cycles) |
-| 1 x 2048 | 46.5 ms | 36.1 ms | 36.4 ms | 47.1 % |
-| 1 x 4096 | | 79.9 ms | 80.9 ms | |
-| 1 x 8192 | 362 ms | 225 ms | 227 ms | 50.4 % |
+| 1 x 128 | 12.8 ms | 6.42 ms | 6.43 ms | |
+| 1 x 256 | | 6.75 ms | 6.76 ms | |
+| 1 x 512 | 15.6 ms | 8.22 ms | 8.40 ms | 32.4 % |
+| 1 x 1024 | | 19.1 ms | 20.2 ms | |
+| 8 x 512 | 76.2 ms | 53.4 ms | 53.9 ms | 56.1 % |
+| 10 x 512 \* | | 66.9 ms | 67.3 ms | 60.4 % |
+| 32 x 512 | 329 ms | 194 ms | 196 ms | **69.3 %** (160.9 M cycles) |
+| 1 x 2048 | 46.5 ms | 36.1 ms | 36.5 ms | 47.1 % |
+| 1 x 4096 | | 79.8 ms | 80.1 ms | |
+| 1 x 8192 | 362 ms | 225 ms | 227 ms | 50.3 % |
 
-10 x 512 runs stock ttnn SDPA (`sdpa_mask_cache` covers batch 8 and 32) and the matmul block configs tuned for
-4096 rows, so it costs more per row than 8 or 32. One of three 32 x 512 runs hit the board's harder limiter
-("Clock under load"): average 296 ms, p95 405 ms; the other two settled at 186-193 ms per replay.
+\* 10 x 512 measured 80.3 ms average (80.9 ms p95) before its fix: with 160 tile rows over 13 cores (13 each, prime) the fused WO / FF2
+ops ran with M block 1; `_mm_grid.m_tiles_per_core` now pads such a core to 16 rows (M block 8), and
+`sdpa_mask_cache` covers batch 2-32 (86.4 -> 57.7 M cycles; 63.9 ms average in a run of its own). Two of four
+32 x 512 runs, both the last shape of a ten-shape sequence on a hot board, hit the board's harder limiter
+("Clock under load"): average 252 / 296 ms, p95 396 / 405 ms; run alone it settles at 194 ms.
 
 A batch where every row is exactly one pair of S tokens skips the mask (`demo/bench.py --no-mask`; 32 x 512
 190 ms, 71.3 %); real traffic rarely has such a batch. FF1 + FF3 accumulates in fp32: with bf16 accumulation
@@ -206,7 +208,8 @@ Data movement, in the order they landed (32x512 unless noted):
 | padding mask built on device from a [B, 1, 32, S] valid row, stored as bfp4 | the mask holds only 0 and -1e9, exact in bfp4 at a quarter of bf16's bytes; the host sends no S x S tensor | SDPA 32x512 1780 -> 1113 us |
 | SDPA block map (`attn_mask_block_map`) | blocks with no real query or key are skipped | 1x2048 802 -> 389 us |
 | SDPA without the mask when no pair is padded: `forward(masked=False)`, and `TracedReranker` keeps a second trace per bucket for such batches | an all-zero padding mask is still read from DRAM and added on every K chunk | 32x512 SDPA 1101 -> 623 us per layer; 1x8192 220 -> 188 ms sustained |
-| masked SDPA through `tt/custom_ops/sdpa_mask_cache` (batch 8 / 32, 128-512 tokens): ttnn's SDPA program built in Python (`op.py`, a port of `sdpa_program_factory.cpp` for this configuration) with a copy of its reader that keeps the batch's [S, S] mask tiles in an extra L1 CB; ttnn's writer and compute kernels unchanged; bit-identical output (`perf_tools/probe_sdpa_mask_cache.py`, `tests/pcc`) | the [B, 1, S, S] mask is the same for all 32 Q heads, but ttnn's reader reads it from DRAM again per head: 151 MB per 32 x 512 call against 34 MB of K / V (one call 657 us unmasked, 1251 us masked, 693 us with the mask not read). A core runs several heads of one batch in a row, so each block now comes from DRAM once | one 32x512 call 1253 -> 835 us; 32x512 SDPA 26.8 -> 17.9 M cycles, forward 169.4 -> 160.5 M cycles (65.8 -> 69.5 % of SoL); sustained 193 -> 191 ms (the clock limit takes most of it back) |
+| masked SDPA through `tt/custom_ops/sdpa_mask_cache` (batch 2-32, 128-512 tokens): ttnn's SDPA program built in Python (`op.py`, a port of `sdpa_program_factory.cpp` for this configuration) with a copy of its reader that keeps the batch's [S, S] mask tiles in an extra L1 CB; ttnn's writer and compute kernels unchanged; bit-identical output (`perf_tools/probe_sdpa_mask_cache.py`, `tests/pcc`) | the [B, 1, S, S] mask is the same for all 32 Q heads, but ttnn's reader reads it from DRAM again per head: 151 MB per 32 x 512 call against 34 MB of K / V (one call 657 us unmasked, 1251 us masked, 693 us with the mask not read). A core runs several heads of one batch in a row, so each block now comes from DRAM once | one 32x512 call 1253 -> 835 us; 32x512 SDPA 26.8 -> 17.9 M cycles, forward 169.4 -> 160.5 M cycles (65.8 -> 69.5 % of SoL); sustained 193 -> 191 ms (the clock limit takes most of it back) |
+| per-core rows padded when they cannot split into M blocks of 4-8 (`_mm_grid.m_tiles_per_core`): the resident residual and its fused ops to 16 rows per core, other matmuls to 14 | the fused ops' M block must divide a core's tile rows; 10 x 512 gives 13 (prime), so WO / FF2 ran with M block 1 and re-read their weight blocks for every tile row. Padding only splits rows (scores bit-identical) | 10 x 512: FF2 + add + norm 34.6 -> 9.8 M cycles, WO 9.5 -> 5.3 M, forward 86.4 -> 57.7 M cycles; 80.3 -> 63.9 ms |
 | softmax scale 1/8 folded into Wq (exact: power of two), SDPA at scale 1 | ttnn's SDPA wrapper otherwise multiplies the mask by 1/scale on every call | one [B, 1, S, S] pass per layer removed |
 | activations up to 8.5 MB in L1 | bs1 intermediates never touch DRAM | 1x512 10.1 -> 8.9 ms |
 | block-sharded RMSNorm up to 512 rows | stock rms_norm gives each core whole tile rows (16 cores at 512 rows) | 1x128 7.03 -> 6.27 ms |
@@ -225,7 +228,7 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items
 
-* 32 x 512 is at 69.5 % of speed of light with the mask (75.9 % unmasked before FF1 + FF3 moved to fp32
+* 32 x 512 is at 69.3 % of speed of light with the mask (75.9 % unmasked before FF1 + FF3 moved to fp32
   accumulation). Masked SDPA still costs 17.9 vs 14.1 M cycles unmasked: the cached mask is still copied into
   the mask CB and added per head. The rest
   is spread over the ops: FF1 + FF3 is at 76 % (85 % with bf16 accumulation, which fails the accuracy gate
