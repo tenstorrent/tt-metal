@@ -116,6 +116,8 @@ struct DestBinary : SfpuDestBinaryOp<DestBinary<MATH, LAYOUT, OUT, ITERATIONS, T
         const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
         using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, typename MATH::value_type>>;
         using Output = SfpuOperand<SfpuReg::Dest, OUT>;
+        // sfpi dst_reg indexes in SFP_ROWS (2) units, so the tile stride is dest-rows / 2
+        // (32 for Tile32x32; same as BH/WH 64/SFP_DESTREG_STRIDE).
         constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
@@ -133,7 +135,10 @@ template <sfpi::DataLayout L>
 using layout_c = std::integral_constant<sfpi::DataLayout, L>;
 
 /**
- * @brief Call fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest; once per tile loop.
+ * @brief Call fn(layout_c<L>{}) with the explicit SFPLOAD/SFPSTORE layout of a float Dest.
+ *
+ * Callers invoke this per tile; with a runtime family the switch is not folded, so a 16-bit Dest instantiates fn
+ * for F16a, F16b and Default.
  *
  * The harness' Dest family (sfpu_src / math format) stays Float16_b under dest_acc, so EN_32BIT_DEST decides
  * first. Only a 16-bit Dest looks at the family: F16a, F16b, else HW-implied.

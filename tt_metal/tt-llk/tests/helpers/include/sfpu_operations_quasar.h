@@ -269,7 +269,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        ckernel::sfpu::SquareDest<>::init();
+        ckernel::sfpu::SquareDest<>::init_op();
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {

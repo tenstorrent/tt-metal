@@ -82,8 +82,13 @@ template <
 struct AddIntDest : SfpuDestBinaryOp<AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>> {
     static void calculate(
         const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-        calculate_add_int<false, ITERATIONS, DataFormat::Int32, 0, SIGN_MAGNITUDE_FORMAT, TILE_SHAPE>(
-            dst_index_in0, dst_index_in1, dst_index_out);
+        calculate_add_int<
+            false /*APPROXIMATION_MODE*/,
+            ITERATIONS,
+            DataFormat::Int32,
+            0 /*INSTRUCTION_MODE*/,
+            SIGN_MAGNITUDE_FORMAT,
+            TILE_SHAPE>(dst_index_in0, dst_index_in1, dst_index_out);
     }
 };
 

@@ -40,9 +40,11 @@ inline void init_square() {
 /**
  * @brief Square a Dest span in place.
  *
+ * @tparam ITERATIONS: number of SFPI rows to process.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format; Default lets the HW derive it from the ALU config.
  * @note Call @ref init_square before this.
  */
-template <sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default, int ITERATIONS = SFPU_ITERATIONS>
+template <int ITERATIONS = SFPU_ITERATIONS, sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default>
 inline void calculate_square() {
     using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, sfpi::vFloat>>;
     using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, sfpi::vFloat, ADDR_MOD_6>>;
@@ -56,7 +58,7 @@ inline void calculate_square() {
 template <sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default, int ITERATIONS = SFPU_ITERATIONS>
 struct SquareDest : SfpuDestUnaryOp<SquareDest<LAYOUT, ITERATIONS>> {
     static void init_op() { init_square(); }
-    static void calculate() { calculate_square<LAYOUT, ITERATIONS>(); }
+    static void calculate() { calculate_square<ITERATIONS, LAYOUT>(); }
 };
 
 /** @brief SrcS square op type; Sfpi only. */

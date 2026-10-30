@@ -21,15 +21,15 @@ namespace sfpu {
 
 /** @brief Dest float ADD op type; rounds to bf16 (RNE) on store when the Dest is 16-bit and NearestEven is set. */
 template <
-    bool is_fp32_dest_acc_en,
+    bool EN_32BIT_DEST,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
-    sfpi::DataLayout LAYOUT = dest_float_layout<is_fp32_dest_acc_en>,
+    sfpi::DataLayout LAYOUT = dest_float_layout<EN_32BIT_DEST>,
     int ITERATIONS = SFPU_ITERATIONS,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 using AddDest = DestBinary<
     AddFloatMath,
     LAYOUT,
-    DestBf16RneFormat<!is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven, LAYOUT>,
+    DestBf16RneFormat<!EN_32BIT_DEST && dst_rounding_mode == DstRoundingMode::NearestEven, LAYOUT>,
     ITERATIONS,
     TILE_SHAPE>;
 
@@ -43,7 +43,8 @@ using AddDest = DestBinary<
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB)
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB). For ADD it also
+ *         selects the explicit F32 SFPLOAD/SFPSTORE layout (see dest_float_layout); SUB/MUL/DIV stay HW-implied.
  * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB results (no-op if is_fp32_dest_acc_en).
  *         DIV ignores this and always rounds RNE, to match BH semantics.
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
