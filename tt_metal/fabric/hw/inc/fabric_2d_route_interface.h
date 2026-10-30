@@ -79,7 +79,6 @@ FORCE_INLINE void copy_2d_map_to_l1(
 // A packed route-table byte holds four 2-bit next-hop codes. Expand it into four one-hot action bytes
 // in one uint32_t so the packet map can be emitted a word at a time. Fabric2DRoutingConfig::widen drops
 // Z on the axis that carries no chords in this build.
-// The parameter is not named AXIS: CCL kernels that include this header pass -DAXIS=<n>.
 template <Fabric2DAxis Axis>
 FORCE_INLINE std::uint32_t widen_packed_byte(std::uint8_t packed) {
     return static_cast<std::uint32_t>(Fabric2DRoutingConfig::widen(Axis, packed & 0x3u)) |
