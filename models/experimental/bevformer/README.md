@@ -52,14 +52,18 @@ scene selection, score filtering, and output format.
 ## Performance
 
 - For the detector's device ops, one live frame with a previous BEV between Tracy's `start` and
-  `stop` signposts by default. Set `BEVFORMER_PERF_FRAMES=10` for ten consecutive measured frames;
-  either run has one preparation frame outside the signposts:
+  `stop` signposts by default. Set `BEVFORMER_PERF_FRAMES=2` for two consecutive measured frames;
+  the harness accepts only `1` or `2`, and either run has one preparation frame outside the
+  signposts:
 
 ```sh
 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
-BEVFORMER_PERF_FRAMES=10 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
+BEVFORMER_PERF_FRAMES=2 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
 ```
+- See the demo's [recorded smoke results](demo/README.md#recorded-smoke-results) for ten-frame
+  end-to-end measurements of the bundled tiny, small and base configs. These wall-clock results
+  are separate from the Tracy harness above.
 - The per-stage harnesses in `tests/perf/` (`test_backbone_fpn_perf.py`, `test_decoder_perf.py`,
   `test_head_perf.py`) capture a trace and replay it once; add `--tracing-mode` to `tt-perf-report`.
   `test_encoder_perf.py`, `test_encoder_layer_perf.py` and `test_fused_msda_perf.py` run live.

@@ -5,6 +5,16 @@ The bundled JSON files are the validated inference-facing equivalents of upstrea
 image preprocessing and ordered camera contract consumed by this port; training-only optimizer,
 loss, schedule and dataset-path settings are intentionally omitted.
 
+| Variant | Bundled config | Upstream counterpart | Pre-pad image | Backbone | FPN levels | BEV grid | Encoder layers |
+| --- | --- | --- | ---: | --- | ---: | ---: | ---: |
+| tiny | [`bevformer_tiny.json`](bevformer_tiny.json) | [`bevformer_tiny.py`](https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_tiny.py) | 800 x 450 | ResNet-50 | 1 | 50 x 50 | 3 |
+| small | [`bevformer_small.json`](bevformer_small.json) | [`bevformer_small.py`](https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_small.py) | 1280 x 720 | ResNet-101 DCN | 1 | 150 x 150 | 3 |
+| base | [`bevformer_base.json`](bevformer_base.json) | [`bevformer_base.py`](https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_base.py) | 1600 x 900 | ResNet-101 DCN | 4 | 200 x 200 | 6 |
+
+All three variants use six cameras, 256 embedding dimensions, six decoder layers, 900 object
+queries and the same ten nuScenes classes. The image sizes above are after `image_scale` and before
+padding to the configured size divisor.
+
 `model_config.py` remains a compatibility facade for existing reference, TTNN and test imports. It
 loads `bevformer_base.json` by default, or the bundled file selected by
 `BEVFORMER_VARIANT=tiny|small|base`. The sequence demo activates the config supplied through its

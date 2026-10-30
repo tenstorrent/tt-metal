@@ -37,9 +37,12 @@ python -m models.experimental.bevformer.demo.demo \
 
 `--variant tiny|small|base` is a shorthand for the corresponding bundled config.
 
+## Recorded smoke results
+
 These runs were performed on a BH P100 with tt-metal commit
 `326b4e8aa4b28500e875d2503f3bb88cc6ecf904`. The generated `detections.json` artifacts contain
-these recorded results for ten measured frames:
+these recorded results for ten measured frames. Each row used the corresponding bundled local
+`config/bevformer_<variant>.json` file shown in the commands above:
 
 | Variant | BEV size | Encoder layers | Device-path mean (ms) | Device-path p50 (ms) | E2E mean (ms) | E2E p50 (ms) | Device FPS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
