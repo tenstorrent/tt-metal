@@ -48,8 +48,6 @@ inline constexpr std::array<uint32_t, 5> kTrafficAlignments = {0, 4, 60, 124, st
 inline constexpr uint32_t kTestKindWriteFromTl1 = 1;
 inline constexpr uint32_t kTestKindReadToTl1 = 2;
 inline constexpr uint32_t kTestKindTl1RoundTrip = 3;
-// Constant patterns could match an unwritten page after a mis-translated read, so ReadToTl1 uses only these.
-inline constexpr std::array<MimirPattern, 2> kReadToTl1Patterns = {MimirPattern::AddressDerived, MimirPattern::Prng};
 
 // The TrafficMatrix test has its own fixture: gtest takes the suite name from the fixture class, and one fixture
 // has one parameter type.
@@ -270,7 +268,9 @@ struct GuardRegion {
     std::vector<uint32_t> expected;
 };
 
-void add_guard(
+enum class GuardOutcome { Placed, NotExposed, OutsideAnchors };
+
+GuardOutcome add_guard(
     const RemoteDramRun& run,
     std::vector<GuardRegion>& guards,
     const std::string& owner,
@@ -291,7 +291,7 @@ void add_guard(
             label,
             mimir_index,
             chiplet_offset);
-        return;
+        return GuardOutcome::NotExposed;
     }
     if (!inside_an_anchor(run, location.view, location.view_offset, size_bytes)) {
         log_info(
@@ -301,11 +301,11 @@ void add_guard(
             mimir_index,
             location.view,
             location.view_offset);
-        return;
+        return GuardOutcome::OutsideAnchors;
     }
     for (const GuardRegion& existing : guards) {
         if (existing.view == location.view && existing.view_offset == location.view_offset) {
-            return;
+            return GuardOutcome::Placed;
         }
     }
     GuardRegion guard;
@@ -315,6 +315,7 @@ void add_guard(
     guard.view_offset = location.view_offset;
     guard.expected = make_seed_pattern(next_guard_tag++, size_bytes / static_cast<uint32_t>(sizeof(uint32_t)));
     guards.push_back(std::move(guard));
+    return GuardOutcome::Placed;
 }
 
 // A guard just outside a traffic window.
@@ -476,17 +477,32 @@ std::vector<HartTransfer> plan_hart_transfers(
         transfer.prefill_tag =
             (test_kind << 12) | (run.source_cce << 8) | ((anchor_index * cce_hart_count() + hart) & 0xFFu);
         const uint32_t pattern_index = hart + anchor_index + test_kind + run.source_cce;
-        const MimirPattern pattern = test_kind == kTestKindReadToTl1
-                                         ? kReadToTl1Patterns[pattern_index % kReadToTl1Patterns.size()]
-                                         : kAllMimirPatterns[pattern_index % kAllMimirPatterns.size()];
+        const MimirPattern pattern = test_kind == kTestKindWriteFromTl1
+                                         ? kAllMimirPatterns[pattern_index % kAllMimirPatterns.size()]
+                                         : kReadLegPatterns[pattern_index % kReadLegPatterns.size()];
         transfer.pattern = make_pattern(pattern, kEveryAnchorWords, transfer.chiplet_offset, transfer.seed);
         transfers.push_back(std::move(transfer));
     }
     return transfers;
 }
 
+struct DecoyCount {
+    uint32_t expected = 0;
+    uint32_t placed = 0;
+
+    void record(GuardOutcome outcome, bool must_exist) {
+        if (outcome == GuardOutcome::NotExposed && !must_exist) {
+            return;
+        }
+        ++expected;
+        placed += outcome == GuardOutcome::Placed ? 1 : 0;
+    }
+};
+
 // Decoys where a mis-translated write would land or a mis-translated read would read: the same offset on the source
 // Mimir, +/-4 GiB on the destination Mimir, and the other remote views of the destination Mimir at the same offset.
+// The source Mimir and other-view decoys must always be placed. The +/-4 GiB decoys are expected only where the
+// destination Mimir exposes that address. Fails the test if an expected decoy was not placed.
 void add_alias_decoys(
     const RemoteDramRun& run,
     const std::string& owner,
@@ -495,34 +511,41 @@ void add_alias_decoys(
     uint32_t size_bytes,
     std::vector<GuardRegion>& guards,
     uint32_t& next_guard_tag) {
-    add_guard(
-        run,
-        guards,
-        owner,
-        label_prefix + " source Mimir same offset",
-        run.source_mimir,
-        chiplet_offset,
-        size_bytes,
-        next_guard_tag);
-    add_guard(
-        run,
-        guards,
-        owner,
-        label_prefix + " destination +4 GiB",
-        run.dest_mimir,
-        chiplet_offset + kRemoteGuardDistance,
-        size_bytes,
-        next_guard_tag);
-    if (chiplet_offset >= kRemoteGuardDistance) {
+    DecoyCount decoys;
+    decoys.record(
         add_guard(
             run,
             guards,
             owner,
-            label_prefix + " destination -4 GiB",
-            run.dest_mimir,
-            chiplet_offset - kRemoteGuardDistance,
+            label_prefix + " source Mimir same offset",
+            run.source_mimir,
+            chiplet_offset,
             size_bytes,
-            next_guard_tag);
+            next_guard_tag),
+        true);
+    decoys.record(
+        add_guard(
+            run,
+            guards,
+            owner,
+            label_prefix + " destination +4 GiB",
+            run.dest_mimir,
+            chiplet_offset + kRemoteGuardDistance,
+            size_bytes,
+            next_guard_tag),
+        false);
+    if (chiplet_offset >= kRemoteGuardDistance) {
+        decoys.record(
+            add_guard(
+                run,
+                guards,
+                owner,
+                label_prefix + " destination -4 GiB",
+                run.dest_mimir,
+                chiplet_offset - kRemoteGuardDistance,
+                size_bytes,
+                next_guard_tag),
+            false);
     }
     const uint64_t dest_view_offset =
         chiplet_offset - static_cast<uint64_t>(run.soc.get_address_offset(static_cast<int>(run.dest_view)));
@@ -535,16 +558,20 @@ void add_alias_decoys(
         }
         const uint64_t other_view_chiplet =
             static_cast<uint64_t>(run.soc.get_address_offset(static_cast<int>(view))) + dest_view_offset;
-        add_guard(
-            run,
-            guards,
-            owner,
-            fmt::format("{} other remote view {}", label_prefix, view),
-            run.dest_mimir,
-            other_view_chiplet,
-            size_bytes,
-            next_guard_tag);
+        decoys.record(
+            add_guard(
+                run,
+                guards,
+                owner,
+                fmt::format("{} other remote view {}", label_prefix, view),
+                run.dest_mimir,
+                other_view_chiplet,
+                size_bytes,
+                next_guard_tag),
+            true);
     }
+    log_info(tt::LogTest, "{}: placed {} of {} decoys.", owner, decoys.placed, decoys.expected);
+    EXPECT_EQ(decoys.placed, decoys.expected) << owner << "\n" << label_prefix << ": a decoy was not placed";
 }
 
 void add_transfer_guards(
