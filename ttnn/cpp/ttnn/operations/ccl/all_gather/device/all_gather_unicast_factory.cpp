@@ -131,16 +131,27 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // Num worker cores per direction per link.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
     uint32_t num_links = operation_attributes.axis_num_links[axis];
+    const bool is_wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
+    const uint64_t busiest_link_packets =
+        tt::div_up(input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
     uint32_t workers_per_dir = 1;
-    if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
-        // Main's value, not yet re-measured with these kernels on WH.
-        workers_per_dir = 2;
+    if (is_wormhole) {
+        // WH, one link: the link caps the rate, so 2 workers keep up (ring, 6144 B payload: 3 are 3-13% slower on
+        // bf16 tiles at 2-4 MB) unless short segments cut every packet below the payload (packet_cap <
+        // max_packet_bytes: row-major rows of 1 KB or less per device, bfp8 tiles in one-tile lanes). There 3 are
+        // faster from about 400 packets on the busiest link-direction (ring 1-8 MB: 1-9%; forced-unicast line:
+        // 5-19%) and up to 5% slower below 300.
+        // From two links the chip's NOC caps the rate and 3 workers, with the writer off NOC0 (below), are faster
+        // from 192 KB of input per link (4 links: 2-12%), 3-7% slower at 128 KB.
+        constexpr uint64_t three_worker_packets = 400, three_worker_link_bytes = 192 * 1024;
+        workers_per_dir =
+            num_links >= 2
+                ? (input_bytes >= three_worker_link_bytes * num_links ? 3 : 2)
+                : (packet_cap < geo.max_packet_bytes && busiest_link_packets >= three_worker_packets ? 3 : 2);
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
         // 2 workers cannot keep up with a ring's link (3 are 1.4-7% faster at 256 KB - 9 MB); on a line 2 are 10%
         // faster at 121 packets on the busiest link-direction, 3 as fast or faster from 242.
-        const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
-        const uint64_t busiest_link_packets = tt::div_up(
-            input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
         constexpr uint64_t line_three_worker_packets = 160;
         workers_per_dir = (is_ring || busiest_link_packets >= line_three_worker_packets) ? 3 : 2;
     }
@@ -269,8 +280,15 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // writer's fabric headers.
     const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    const uint32_t packets_per_slot =
-        compute_packets_per_slot(geo, packet_cap, total_slices, packet_header_size, input_tensor);
+    // WH, one link: a ring fills at least 4 slots per worker iteration, so a short one still pipelines (1 MB, 6144 B
+    // payload: 2 packets per slot instead of 5 are 11% faster; 4352 B, 1-1.5 MB: 3-4%); a line keeps 2 (at 4352 B
+    // it was 4-10% slower with 4 at 512 KB - 1 MB). From two links one packet per slot is 3-8% faster (4 links,
+    // 16 MB), while with one link it is 3-7% slower.
+    const bool wh_multi_link = is_wormhole && num_links >= 2;
+    const uint32_t read_bytes_per_barrier = wh_multi_link ? 1 : default_read_bytes_per_barrier;
+    const uint32_t min_slots = (is_wormhole && is_ring) ? 4 : all_gather_walk::kNumSlots;
+    const uint32_t packets_per_slot = compute_packets_per_slot(
+        geo, packet_cap, total_slices, packet_header_size, input_tensor, read_bytes_per_barrier, min_slots);
     const uint32_t cb_page_size =
         all_gather_walk::slot_offsets(packets_per_slot, unit_bytes, packet_header_size, packet_cap).slot_bytes;
 
@@ -287,9 +305,13 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     });
 
     // KERNEL CREATION
-    // NOCs: the writer on NOC0 is 5-10% faster on a ring, 3-8% slower on a line (BH); the reader takes the other.
-    const auto writer_noc = is_ring ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
-    const auto reader_noc = is_ring ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+    // NOCs: the writer on NOC0 is 5-10% faster on a ring, 3-8% slower on a line (BH); the reader takes the other. WH
+    // from two links keeps the writer on NOC1 on a ring too: on NOC0, with 2 * links mux forwarders, it holds a 4-link
+    // ring to ~7 GB/s per link-direction and slows as workers are added (13-18% slower from 16 MB at 3 workers); with
+    // one link NOC1 is 1-3% slower.
+    const bool writer_on_noc0 = is_ring && !wh_multi_link;
+    const auto writer_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
+    const auto reader_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     // Reader
     std::vector<uint32_t> reader_compile_args = {
@@ -373,7 +395,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     // Data_valid cadence: about 4 signals per worker iteration, every 2 to 16 packets. Each signal is a packet: fewer
     // save link time, more start the downstream relay sooner (BH: 1-packet cadence up to 1.5x slower at 8-26 MB).
-    constexpr uint64_t signals_per_iter = 4, min_cadence_packets = 2, max_cadence_packets = 16;
+    // WH: every 2 to 64 packets (ring, 8-42 MB: 1.5-4% faster), 2 signals per iteration on a ring or from two links
+    // (4 links: 8-13% faster at 4 MB). A one-link line keeps 4: its slots are half an iteration, and 2 signals were
+    // 16% slower at 1 MB.
+    const uint64_t signals_per_iter = (is_wormhole && (is_ring || wh_multi_link)) ? 2 : 4;
+    const uint64_t max_cadence_packets = is_wormhole ? 64 : 16;
+    constexpr uint64_t min_cadence_packets = 2;
 
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
