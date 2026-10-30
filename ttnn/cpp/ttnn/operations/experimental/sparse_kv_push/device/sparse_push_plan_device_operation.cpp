@@ -154,7 +154,7 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
     add_cb(kDirtyMaps, kNumDirtyMaps * array_words * sizeof(uint32_t));
     // Every core's copy of every reduce chunk this core owns, worst case.
     add_cb(kScratch, max_chunks * cores * kChunkWords * sizeof(uint32_t));
-    add_cb(kPartials, round_up(max_ranges * attrs.num_devices * sizeof(uint32_t), kCbAlignBytes));
+    add_cb(kPartials, round_up(max_ranges * owner_stride(attrs.num_devices) * sizeof(uint32_t), kCbAlignBytes));
     add_cb(kMisc, misc_words(max_chunks) * sizeof(uint32_t));
     // Step 1's buckets (kWorkers x kWorkers of bucket_cap words), then step 2's copy lists: uint16 core ids, one list
     // of `cores` per reduce chunk.

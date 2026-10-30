@@ -15,11 +15,16 @@ import torch
 import ttnn
 
 # Which of a requester's needed rows a push sends: ALL, PREFIX (rows earlier chunks wrote) or REST.
-SparseKvPushPart = ttnn._ttnn.operations.experimental.SparseKvPushPart
+SparseKvPushPart = ttnn.experimental.SparseKvPushPart
 
 # Per link: one channel per torus direction, each with 2 senders and a fabric mux. Must match cores_needed() in
 # ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/device/sparse_kv_push_common.hpp.
 PUSH_CORES_PER_LINK = 4 * 3
+
+# Must match kMaxStripeChunk and sparse_push_plan::kChunkRows in
+# ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/device/kernels/sparse_push_constants.hpp.
+MAX_STRIPE_CHUNK = 512
+PLAN_CHUNK_ROWS = 512
 
 
 @dataclass
@@ -34,6 +39,17 @@ def sparse_kv_push_supported(mesh_device) -> bool:
     """The push sends over all four torus links of every chip."""
     rows, cols = tuple(mesh_device.shape)
     return ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY and min(rows, cols) >= 3
+
+
+def sparse_kv_push_fits(stripe_chunk: int, max_rows: int) -> bool:
+    """Whether the push can serve a cache of `max_rows` rows in blocks of `stripe_chunk` rows: a block's bitmap is
+    read as at most 64 B (512 rows, in whole 32-row words), and the plan reduces the bitmap in 512-row chunks."""
+    return (
+        0 < stripe_chunk <= MAX_STRIPE_CHUNK
+        and stripe_chunk % 32 == 0
+        and max_rows % stripe_chunk == 0
+        and max_rows % PLAN_CHUNK_ROWS == 0
+    )
 
 
 def ceil_div(a: int, b: int) -> int:
@@ -166,7 +182,8 @@ class SparseKvPushPlanner:
         return self._buffers[key]
 
     def invalidate(self):
-        """Drop the cached plan: the indexer has rewritten the shared indices buffer."""
+        """Drop the cached plan: new indices arrived in the same buffer (the indexer rewrote it, or the previous
+        pipeline stage sent them)."""
         self._plan = None
         self.prefetched.clear()
 
@@ -183,9 +200,9 @@ class SparseKvPushPlanner:
         """The plan for `indices`, cached across the layers that reuse them. The plan op reads the chunk start on
         device, so with chunk_start_tensor one cached plan serves any chunk of a traced replay."""
         start = chunk_start_tensor if chunk_start_tensor is not None else self._chunk_start(chunk_start)
-        # Keyed by buffer address: full layers rewrite the shared indices buffer in place and call invalidate(), so
-        # an unchanged address means the same indices.
-        key = (indices.buffer_address(), stripe_chunk, page_bytes, start.buffer_address())
+        # Keyed by buffer address: full layers rewrite the shared indices buffer in place and call invalidate(), as
+        # does a pipeline stage's first layer, so an unchanged address means the same indices.
+        key = (indices.buffer_address(), stripe_chunk, page_bytes, max_rows, start.buffer_address())
         if self._plan is None or self._plan_key != key:
             self._plan_key, self._plan = key, self._build(indices, stripe_chunk, page_bytes, max_rows, start)
         return self._plan

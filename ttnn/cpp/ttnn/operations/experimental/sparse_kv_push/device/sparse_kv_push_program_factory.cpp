@@ -128,6 +128,7 @@ std::vector<uint32_t> reader_compile_args(
         layout.pages,
         tensor_args.output_tensor.buffer()->num_pages(),
         static_cast<uint32_t>(params.part),
+        tensor_args.input_tensor.padded_shape()[0],  // cache slots
     };
     tt::tt_metal::TensorAccessorArgs(tensor_args.input_tensor.buffer()).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(tensor_args.table.buffer()).append_to(ct);
