@@ -53,13 +53,13 @@ def _assert_matches_scalar_rope(params, ids, starts, num_heads, seq_len, head_di
 
 @pytest.mark.requires_device
 @pytest.mark.parametrize("head_dim, seq_len", [(64, 1), (64, 32), (128, 1), (128, 5)])
-def test_rope_position_ids_matches_per_row_scalar_rope(head_dim, seq_len):
+def test_rope_positions_matches_per_row_scalar_rope(head_dim, seq_len):
     rng = np.random.default_rng(0)
     params = ttml.ops.rope.build_rope_params(MAX_SEQ_LEN, head_dim)
     shifted = STARTS + 1
 
     ids_tensor = _ids(STARTS, seq_len)
-    ids = ttml.ops.rope.RotaryEmbeddingPositionIds(ids_tensor)
+    ids = ttml.ops.rope.RotaryEmbeddingPositions(ids_tensor)
     # The second pass reads the cached rows.
     for num_heads in HEAD_COUNTS + HEAD_COUNTS:
         _assert_matches_scalar_rope(params, ids, STARTS, num_heads, seq_len, head_dim, rng)
@@ -69,6 +69,6 @@ def test_rope_position_ids_matches_per_row_scalar_rope(head_dim, seq_len):
     for num_heads in HEAD_COUNTS:
         _assert_matches_scalar_rope(params, ids, shifted, num_heads, seq_len, head_dim, rng)
 
-    new_ids = ttml.ops.rope.RotaryEmbeddingPositionIds(_ids(shifted, seq_len))
+    new_ids = ttml.ops.rope.RotaryEmbeddingPositions(_ids(shifted, seq_len))
     for num_heads in HEAD_COUNTS:
         _assert_matches_scalar_rope(params, new_ids, shifted, num_heads, seq_len, head_dim, rng)

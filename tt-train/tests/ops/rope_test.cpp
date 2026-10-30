@@ -529,7 +529,7 @@ TEST_F(RoPETest, BackwardTest) {
     EXPECT_TRUE(xt::allclose(actual_grad, expected_grad, 2e-1, 2e-1));
 }
 
-TEST_F(RoPETest, PerRowPositionIdsMatchScalarRoPE) {
+TEST_F(RoPETest, PerRowPositionsMatchScalarRoPE) {
     constexpr uint32_t batch = 2U;
     constexpr uint32_t seq_len = 5U;
     constexpr uint32_t head_dim = 64U;
@@ -543,9 +543,8 @@ TEST_F(RoPETest, PerRowPositionIdsMatchScalarRoPE) {
             ids_data.push_back(start + j);
         }
     }
-    const ops::RotaryEmbeddingPositionIds ids(
-        autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            ids_data, ttnn::Shape({batch, seq_len}), device, ttnn::Layout::ROW_MAJOR)));
+    const ops::RotaryEmbeddingPositions ids(autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        ids_data, ttnn::Shape({batch, seq_len}), device, ttnn::Layout::ROW_MAJOR)));
 
     auto random_input = [](uint32_t num_heads) {
         xt::xarray<float> data = xt::empty<float>({batch, num_heads, seq_len, head_dim});

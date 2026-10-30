@@ -166,7 +166,7 @@ class Qwen3(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         past_key_values=None,
         new_tokens: Optional[int] = None,
-        position_ids: Optional[ttml.autograd.Tensor] = None,
+        unpadded_token_positions: Optional[ttml.autograd.Tensor] = None,
         **kwargs,
     ) -> ttml.autograd.Tensor:
         TILE_SIZE = 32
@@ -201,13 +201,14 @@ class Qwen3(AbstractModuleBase):
         if past_key_values is not None:
             position_offset = past_key_values.get_seq_length()
 
-        if position_ids is not None:
-            position_ids = ttml.ops.rope.RotaryEmbeddingPositionIds(position_ids)
+        rope_positions = None
+        if unpadded_token_positions is not None:
+            rope_positions = ttml.ops.rope.RotaryEmbeddingPositions(unpadded_token_positions)
         for i, block in enumerate(self.blocks):
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
-                out = memory_efficient_runner(block, out, mask, past_key_values, position_offset, position_ids)
+                out = memory_efficient_runner(block, out, mask, past_key_values, position_offset, rope_positions)
             elif self.config.runner_type == ttml.models.RunnerType.Default:
-                out = block(out, mask, past_key_values, position_offset, position_ids)
+                out = block(out, mask, past_key_values, position_offset, rope_positions)
             else:
                 raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
             if self.track_memory and (i + 1) % self.track_memory == 0:

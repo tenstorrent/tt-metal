@@ -81,7 +81,7 @@ class Qwen3Attention(AbstractModuleBase):
         attention_mask: Optional[ttml.autograd.Tensor] = None,
         past_key_values=None,
         position_offset: int = 0,
-        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
+        rope_positions: Optional[ttml.ops.rope.RotaryEmbeddingPositions] = None,
     ):
         q = self.q_proj(hidden_states)
         # Single fused KV matmul produces the [K | V] tensor directly
@@ -98,7 +98,7 @@ class Qwen3Attention(AbstractModuleBase):
         query_heads = self.q_norm(query_heads)
         key_heads = self.k_norm(key_heads)
 
-        positions = position_offset if position_ids is None else position_ids
+        positions = position_offset if rope_positions is None else rope_positions
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, positions)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, positions)
 
