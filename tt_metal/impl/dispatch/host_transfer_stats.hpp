@@ -16,8 +16,8 @@
 
 namespace tt::tt_metal {
 
-// The kinds of host <-> device transfer HostTransferStats reports, one summary row each.
-enum class HostTransfer : uint8_t {
+// The categories of host <-> device transfer HostTransferStats reports, one summary row each.
+enum class HostTransferCategory : uint8_t {
     BufferWriteFastDispatch,
     BufferWriteSlowDispatch,
     BufferReadFastDispatch,
@@ -34,12 +34,12 @@ enum class HostTransfer : uint8_t {
     // Bytes copied into host memory that the device reads later.
     SocketPull,
 };
-inline constexpr size_t kNumHostTransfers = static_cast<size_t>(HostTransfer::SocketPull) + 1;
+inline constexpr size_t kNumHostTransferCategories = static_cast<size_t>(HostTransferCategory::SocketPull) + 1;
 
 // Bytes and busy time of host <-> device transfers, logged when the MetalContext tears down if
 // TT_METAL_HOST_TRANSFER_STATS is set. Each transfer is an interval opened with begin() and closed with end(). Busy
-// time is the wall time with at least one transfer of a kind open, so transfers that overlap across threads, devices
-// or command queues count once, and the rate is a total across all of them.
+// time is the wall time with at least one transfer of a category open, so transfers that overlap across threads,
+// devices or command queues count once, and the rate is a total across all of them.
 class HostTransferStats {
 public:
     using Clock = std::chrono::steady_clock;
@@ -55,14 +55,14 @@ public:
     bool enabled() const { return enabled_.load(std::memory_order_relaxed); }
     void set_enabled(bool enabled) { enabled_.store(enabled, std::memory_order_relaxed); }
 
-    void begin(HostTransfer kind);
+    void begin(HostTransferCategory category);
     // Closes an interval opened with begin(). Callers take `start` and `end` on different threads, so intervals can
     // close out of time order. A transfer that moved no bytes closes its interval without adding time.
-    void end(HostTransfer kind, Clock::time_point start, Clock::time_point end, uint64_t bytes);
-    void add_bytes(HostTransfer kind, uint64_t bytes);
+    void end(HostTransferCategory category, Clock::time_point start, Clock::time_point end, uint64_t bytes);
+    void add_bytes(HostTransferCategory category, uint64_t bytes);
 
     // Includes the part of a busy stretch that is still open.
-    Totals totals(HostTransfer kind) const;
+    Totals totals(HostTransferCategory category) const;
     std::vector<std::pair<std::string, std::string>> summary_rows() const;
     void log_summary() const;
     void reset();
@@ -79,14 +79,14 @@ private:
     };
 
     std::atomic<bool> enabled_;
-    std::array<Stream, kNumHostTransfers> streams_;
+    std::array<Stream, kNumHostTransferCategories> streams_;
 };
 
-// Times the scope it lives in as one transfer of `kind` while `stats` is on: for transfers that are done when the host
-// call returns. `stats` may be null, which records nothing.
+// Times the scope it lives in as one transfer of `category` while `stats` is on: for transfers that are done when the
+// host call returns. `stats` may be null, which records nothing.
 class ScopedHostTransfer {
 public:
-    ScopedHostTransfer(HostTransferStats* stats, HostTransfer kind, uint64_t bytes);
+    ScopedHostTransfer(HostTransferStats* stats, HostTransferCategory category, uint64_t bytes);
     ~ScopedHostTransfer();
 
     ScopedHostTransfer(const ScopedHostTransfer&) = delete;
@@ -96,7 +96,7 @@ public:
 
 private:
     HostTransferStats* stats_ = nullptr;
-    HostTransfer kind_;
+    HostTransferCategory category_;
     uint64_t bytes_;
     HostTransferStats::Clock::time_point start_;
 };

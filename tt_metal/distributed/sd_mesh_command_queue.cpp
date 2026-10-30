@@ -155,7 +155,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     // Timed per shard, after wait_for_cores_idle(), so the time is the transfer alone.
     ScopedHostTransfer transfer_stats(
         host_transfer_stats_,
-        HostTransfer::BufferWriteSlowDispatch,
+        HostTransferCategory::BufferWriteSlowDispatch,
         host_transfer_stats_->enabled() ? host_bytes_written(*shard_view, region_value.size, logical_core_filter) : 0);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
@@ -191,7 +191,8 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    ScopedHostTransfer transfer_stats(host_transfer_stats_, HostTransfer::BufferReadSlowDispatch, shard_view->size());
+    ScopedHostTransfer transfer_stats(
+        host_transfer_stats_, HostTransferCategory::BufferReadSlowDispatch, shard_view->size());
     tt::tt_metal::slow_dispatch::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 

@@ -67,8 +67,9 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestHostTransferStatsCountCoreWr
         distributed::Finish(fd_cq);
         EXPECT_EQ(src_data, dst_data);
 
-        for (const auto kind : {HostTransfer::CoreWriteFastDispatch, HostTransfer::CoreReadFastDispatch}) {
-            const auto totals = transfer_stats.totals(kind);
+        for (const auto category :
+             {HostTransferCategory::CoreWriteFastDispatch, HostTransferCategory::CoreReadFastDispatch}) {
+            const auto totals = transfer_stats.totals(category);
             EXPECT_EQ(totals.bytes, num_bytes);
             EXPECT_EQ(totals.transfers, 1u);
             EXPECT_GT(totals.busy, HostTransferStats::Clock::duration::zero());

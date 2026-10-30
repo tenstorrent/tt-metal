@@ -12,14 +12,14 @@ namespace tt::tt_metal {
 
 namespace {
 
-struct KindInfo {
+struct CategoryInfo {
     const char* label;
     // The device reads these bytes after the host call returns, so they are reported without a transfer time.
     bool staged = false;
 };
 
-// One entry per HostTransfer, in enum order.
-constexpr auto kKinds = std::to_array<KindInfo>({
+// One entry per HostTransferCategory, in enum order.
+constexpr auto kCategories = std::to_array<CategoryInfo>({
     {"buffer writes, fast dispatch"},
     {"buffer writes, slow dispatch"},
     {"buffer reads, fast dispatch"},
@@ -34,7 +34,7 @@ constexpr auto kKinds = std::to_array<KindInfo>({
     {"H2D socket writes, host push"},
     {"H2D socket writes, device pull", /*staged=*/true},
 });
-static_assert(kKinds.size() == kNumHostTransfers);
+static_assert(kCategories.size() == kNumHostTransferCategories);
 
 std::string format_bytes(uint64_t bytes) {
     const auto b = static_cast<double>(bytes);
@@ -62,14 +62,15 @@ std::string format_seconds(double seconds) {
 
 }  // namespace
 
-void HostTransferStats::begin(HostTransfer kind) {
-    auto& s = streams_[static_cast<size_t>(kind)];
+void HostTransferStats::begin(HostTransferCategory category) {
+    auto& s = streams_[static_cast<size_t>(category)];
     std::lock_guard lk(s.mutex);
     ++s.in_flight;
 }
 
-void HostTransferStats::end(HostTransfer kind, Clock::time_point start, Clock::time_point end, uint64_t bytes) {
-    auto& s = streams_[static_cast<size_t>(kind)];
+void HostTransferStats::end(
+    HostTransferCategory category, Clock::time_point start, Clock::time_point end, uint64_t bytes) {
+    auto& s = streams_[static_cast<size_t>(category)];
     std::lock_guard lk(s.mutex);
     if (s.in_flight == 0) {
         return;
@@ -89,15 +90,15 @@ void HostTransferStats::end(HostTransfer kind, Clock::time_point start, Clock::t
     }
 }
 
-void HostTransferStats::add_bytes(HostTransfer kind, uint64_t bytes) {
-    auto& s = streams_[static_cast<size_t>(kind)];
+void HostTransferStats::add_bytes(HostTransferCategory category, uint64_t bytes) {
+    auto& s = streams_[static_cast<size_t>(category)];
     std::lock_guard lk(s.mutex);
     s.bytes += bytes;
     ++s.transfers;
 }
 
-HostTransferStats::Totals HostTransferStats::totals(HostTransfer kind) const {
-    const auto& s = streams_[static_cast<size_t>(kind)];
+HostTransferStats::Totals HostTransferStats::totals(HostTransferCategory category) const {
+    const auto& s = streams_[static_cast<size_t>(category)];
     std::lock_guard lk(s.mutex);
     Totals totals{.bytes = s.bytes, .transfers = s.transfers, .busy = s.busy};
     if (s.stretch_start <= s.stretch_end) {
@@ -109,13 +110,13 @@ HostTransferStats::Totals HostTransferStats::totals(HostTransfer kind) const {
 std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows() const {
     std::vector<std::pair<std::string, std::string>> rows;
     for (size_t i = 0; i < streams_.size(); ++i) {
-        const Totals t = totals(static_cast<HostTransfer>(i));
+        const Totals t = totals(static_cast<HostTransferCategory>(i));
         if (t.transfers == 0) {
             continue;
         }
         const double seconds = std::chrono::duration<double>(t.busy).count();
         std::string value;
-        if (kKinds[i].staged) {
+        if (kCategories[i].staged) {
             value = fmt::format("{} staged, {} transfers", format_bytes(t.bytes), t.transfers);
         } else if (seconds > 0) {
             value = fmt::format(
@@ -127,7 +128,7 @@ std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows
         } else {
             value = fmt::format("{}, {} transfers", format_bytes(t.bytes), t.transfers);
         }
-        rows.emplace_back(kKinds[i].label, std::move(value));
+        rows.emplace_back(kCategories[i].label, std::move(value));
     }
     return rows;
 }
@@ -158,19 +159,19 @@ void HostTransferStats::reset() {
     }
 }
 
-ScopedHostTransfer::ScopedHostTransfer(HostTransferStats* stats, HostTransfer kind, uint64_t bytes) :
-    kind_(kind), bytes_(bytes) {
+ScopedHostTransfer::ScopedHostTransfer(HostTransferStats* stats, HostTransferCategory category, uint64_t bytes) :
+    category_(category), bytes_(bytes) {
     if (stats == nullptr || !stats->enabled()) {
         return;
     }
     stats_ = stats;
-    stats_->begin(kind_);
+    stats_->begin(category_);
     start_ = HostTransferStats::Clock::now();
 }
 
 ScopedHostTransfer::~ScopedHostTransfer() {
     if (stats_ != nullptr) {
-        stats_->end(kind_, start_, HostTransferStats::Clock::now(), bytes_);
+        stats_->end(category_, start_, HostTransferStats::Clock::now(), bytes_);
     }
 }
 

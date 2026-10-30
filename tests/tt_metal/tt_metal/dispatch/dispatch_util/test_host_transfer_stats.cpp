@@ -18,38 +18,39 @@ using Clock = HostTransferStats::Clock;
 TEST(HostTransferStatsTest, CPU_BytesTransfersAndBusyTimeAddUp) {
     HostTransferStats stats(true);
     const auto t0 = Clock::now();
-    stats.begin(HostTransfer::BufferWriteFastDispatch);
-    stats.end(HostTransfer::BufferWriteFastDispatch, t0, t0 + 10ms, 1000);
-    stats.begin(HostTransfer::BufferWriteFastDispatch);
-    stats.end(HostTransfer::BufferWriteFastDispatch, t0 + 20ms, t0 + 25ms, 500);
+    stats.begin(HostTransferCategory::BufferWriteFastDispatch);
+    stats.end(HostTransferCategory::BufferWriteFastDispatch, t0, t0 + 10ms, 1000);
+    stats.begin(HostTransferCategory::BufferWriteFastDispatch);
+    stats.end(HostTransferCategory::BufferWriteFastDispatch, t0 + 20ms, t0 + 25ms, 500);
 
-    const auto totals = stats.totals(HostTransfer::BufferWriteFastDispatch);
+    const auto totals = stats.totals(HostTransferCategory::BufferWriteFastDispatch);
     EXPECT_EQ(totals.bytes, 1500u);
     EXPECT_EQ(totals.transfers, 2u);
     EXPECT_EQ(totals.busy, 15ms) << "the idle gap between transfers is not busy time";
-    EXPECT_EQ(stats.totals(HostTransfer::BufferWriteSlowDispatch).transfers, 0u) << "kinds are counted separately";
+    EXPECT_EQ(stats.totals(HostTransferCategory::BufferWriteSlowDispatch).transfers, 0u)
+        << "categories are counted separately";
 }
 
 TEST(HostTransferStatsTest, CPU_OverlappingTransfersCountOnceEvenWhenClosedOutOfOrder) {
     HostTransferStats stats(true);
     const auto t0 = Clock::now();
-    stats.begin(HostTransfer::BufferReadFastDispatch);
-    stats.begin(HostTransfer::BufferReadFastDispatch);
+    stats.begin(HostTransferCategory::BufferReadFastDispatch);
+    stats.begin(HostTransferCategory::BufferReadFastDispatch);
     // The later transfer closes first; together they span t0 to t0 + 30ms.
-    stats.end(HostTransfer::BufferReadFastDispatch, t0 + 10ms, t0 + 30ms, 1);
-    EXPECT_EQ(stats.totals(HostTransfer::BufferReadFastDispatch).busy, 20ms) << "an open stretch counts so far";
-    stats.end(HostTransfer::BufferReadFastDispatch, t0, t0 + 20ms, 1);
+    stats.end(HostTransferCategory::BufferReadFastDispatch, t0 + 10ms, t0 + 30ms, 1);
+    EXPECT_EQ(stats.totals(HostTransferCategory::BufferReadFastDispatch).busy, 20ms) << "an open stretch counts so far";
+    stats.end(HostTransferCategory::BufferReadFastDispatch, t0, t0 + 20ms, 1);
 
-    EXPECT_EQ(stats.totals(HostTransfer::BufferReadFastDispatch).busy, 30ms);
+    EXPECT_EQ(stats.totals(HostTransferCategory::BufferReadFastDispatch).busy, 30ms);
 }
 
 TEST(HostTransferStatsTest, CPU_TransferWithoutBytesAddsNoTime) {
     HostTransferStats stats(true);
     const auto t0 = Clock::now();
-    stats.begin(HostTransfer::BufferWriteFastDispatch);
-    stats.end(HostTransfer::BufferWriteFastDispatch, t0, t0 + 10ms, 0);
+    stats.begin(HostTransferCategory::BufferWriteFastDispatch);
+    stats.end(HostTransferCategory::BufferWriteFastDispatch, t0, t0 + 10ms, 0);
 
-    const auto totals = stats.totals(HostTransfer::BufferWriteFastDispatch);
+    const auto totals = stats.totals(HostTransferCategory::BufferWriteFastDispatch);
     EXPECT_EQ(totals.transfers, 0u);
     EXPECT_EQ(totals.busy, Clock::duration::zero());
     EXPECT_TRUE(stats.summary_rows().empty());
@@ -58,30 +59,30 @@ TEST(HostTransferStatsTest, CPU_TransferWithoutBytesAddsNoTime) {
 TEST(HostTransferStatsTest, CPU_ScopedHostTransferRecordsOnlyWhileEnabled) {
     HostTransferStats stats(false);
     {
-        ScopedHostTransfer transfer(&stats, HostTransfer::SocketPush, 64);
+        ScopedHostTransfer transfer(&stats, HostTransferCategory::SocketPush, 64);
     }
     {
-        ScopedHostTransfer transfer(nullptr, HostTransfer::SocketPush, 64);
+        ScopedHostTransfer transfer(nullptr, HostTransferCategory::SocketPush, 64);
     }
-    EXPECT_EQ(stats.totals(HostTransfer::SocketPush).transfers, 0u);
+    EXPECT_EQ(stats.totals(HostTransferCategory::SocketPush).transfers, 0u);
 
     stats.set_enabled(true);
     {
-        ScopedHostTransfer transfer(&stats, HostTransfer::SocketPush, 64);
+        ScopedHostTransfer transfer(&stats, HostTransferCategory::SocketPush, 64);
     }
-    EXPECT_EQ(stats.totals(HostTransfer::SocketPush).bytes, 64u);
-    EXPECT_EQ(stats.totals(HostTransfer::SocketPush).transfers, 1u);
+    EXPECT_EQ(stats.totals(HostTransferCategory::SocketPush).bytes, 64u);
+    EXPECT_EQ(stats.totals(HostTransferCategory::SocketPush).transfers, 1u);
 }
 
-TEST(HostTransferStatsTest, CPU_SummaryShowsRateForTimedKindsAndStagedBytesForSocketPull) {
+TEST(HostTransferStatsTest, CPU_SummaryShowsRateForTimedCategoriesAndStagedBytesForSocketPull) {
     HostTransferStats stats(true);
     const auto t0 = Clock::now();
-    stats.begin(HostTransfer::BufferWriteSlowDispatch);
-    stats.end(HostTransfer::BufferWriteSlowDispatch, t0, t0 + 2s, 3'000'000'000);
-    stats.begin(HostTransfer::BufferReadFastDispatch);
-    stats.end(HostTransfer::BufferReadFastDispatch, t0, t0 + 2ms, 4'000'000);
-    stats.add_bytes(HostTransfer::ProgramConfigFastDispatch, 1000);
-    stats.add_bytes(HostTransfer::SocketPull, 2048);
+    stats.begin(HostTransferCategory::BufferWriteSlowDispatch);
+    stats.end(HostTransferCategory::BufferWriteSlowDispatch, t0, t0 + 2s, 3'000'000'000);
+    stats.begin(HostTransferCategory::BufferReadFastDispatch);
+    stats.end(HostTransferCategory::BufferReadFastDispatch, t0, t0 + 2ms, 4'000'000);
+    stats.add_bytes(HostTransferCategory::ProgramConfigFastDispatch, 1000);
+    stats.add_bytes(HostTransferCategory::SocketPull, 2048);
 
     const auto rows = stats.summary_rows();
     ASSERT_EQ(rows.size(), 4u);
@@ -98,11 +99,11 @@ TEST(HostTransferStatsTest, CPU_SummaryShowsRateForTimedKindsAndStagedBytesForSo
 TEST(HostTransferStatsTest, CPU_ResetClearsTotals) {
     HostTransferStats stats(true);
     const auto t0 = Clock::now();
-    stats.begin(HostTransfer::CoreWriteFastDispatch);
-    stats.end(HostTransfer::CoreWriteFastDispatch, t0, t0 + 1ms, 4);
+    stats.begin(HostTransferCategory::CoreWriteFastDispatch);
+    stats.end(HostTransferCategory::CoreWriteFastDispatch, t0, t0 + 1ms, 4);
     stats.reset();
 
-    const auto totals = stats.totals(HostTransfer::CoreWriteFastDispatch);
+    const auto totals = stats.totals(HostTransferCategory::CoreWriteFastDispatch);
     EXPECT_EQ(totals.bytes, 0u);
     EXPECT_EQ(totals.transfers, 0u);
     EXPECT_EQ(totals.busy, Clock::duration::zero());
