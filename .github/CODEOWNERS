@@ -80,7 +80,7 @@ conftest.py @tenstorrent/metalium-developers-infra
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tests/model_behavior/ @tenstorrent/metalium-models-maintainers @tchedaTT
 tests/pipeline_reorg/agentic_research_model_tests.yaml @tenstorrent/metalium-models-maintainers @tchedaTT @jonathansuTT @cglagovichTT
-tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/blaze_models_prefill_tests.yaml @tenstorrent/metalium-developers-ds-prefill @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_device_perf_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_e2e_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_sweep_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
