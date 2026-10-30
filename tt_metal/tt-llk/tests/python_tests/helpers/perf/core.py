@@ -1021,7 +1021,9 @@ class PerfConfig(TestConfig):
         code_sizes = {}
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
-            for templates, runtimes, run_type in self.run_configs:
+            _pre = {n.strip() for n in os.environ.get("LLK_RC_PRE", "").split(",") if n.strip()}
+            _extra = [c for c in self.rc_all_configs if c[2].name in _pre and c not in self.run_configs]
+            for templates, runtimes, run_type in self.run_configs + _extra:
                 self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
                 # because we run TestConfig constructor only once
