@@ -93,7 +93,10 @@ void kernel_main() {
     // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
     const uint32_t list_base = runtime_args_counter - 1U;
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        write_row(get_arg_val<uint32_t>(list_base + i));
+        const uint32_t row = get_arg_val<uint32_t>(list_base + i);
+        if (row != 0xFFFFFFFFU) {  // chain mode pads the list with rounds without a row
+            write_row(row);
+        }
     }
 #else
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {

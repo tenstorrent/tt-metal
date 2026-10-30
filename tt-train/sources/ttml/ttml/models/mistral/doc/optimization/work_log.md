@@ -129,6 +129,15 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Build + standalone check + loss tests: `O/iter14_build_check.sh` -> `O/iter14_build_check.log` (first run: 99.9 % zeros from the padded gradient tile, found by binning the error; second run exact; the test's PCC bar on the near-constant target entries replaced by a relative-error bar).
 - Chain `O/iter14.sh` -> `O/iter14.log`: harness 42 passed, TP=4 gradient check PASS, cooled TP=4 MFU 512.5 ms / 31.66 %, 4-layer TP profile, then the loss match: 8-layer host loss (`O/iter14_train_8layers_hostloss.log`, `O/iter14_loss_comparison.txt`, PASS 0.0294) and TP=4 real weights (`O/iter14_full_tp4_real.log`).
 
+### Iteration 15: SDPA forward data flow (kernel boost checklist)
+
+- Roofline: the forward moves 67 MB of K/V per call at the TP shard (8 heads x 528 Q-row x K-tile pairs x 8 tiles x 2 KB) because every query row re-reads its K/V prefix from DRAM; at ~400 GB/s that is 170 us, measured 229 us (cycle-time, iteration 11-14 profiles) = 290 GB/s; the FLOP roofline is ~15 us (2.1 GFLOP causal at 148 TFLOP/s), so the kernel is 15x off its FLOP roofline and bound by bytes it does not need to move.
+- Where the bytes go: K and V of one (batch, kv head) stream are identical for the 4 query heads x 32 rows = 128 rows of the stream; 55 cores each read their rows' prefixes independently (~34x redundancy per stream).
+- Where the cores go: 256 rows LPT over 110 cores (iteration 11), heaviest core ~40 K-tile units against an even 38.4; no idle cores.
+- Structural fix: chain mode (`CHAIN` define): per stream a contiguous run of 55 cores, rows LPT-scheduled over them, chains of 14 cores in which the first core reads each K/V chunk from DRAM and forwards it core to core (variable_matmul's in0 protocol: ready counter, valid flag, unicast write of the chunk to the same CB address on the next core); every core runs the stream's chunks each round and drops the ones past its row's diagonal. DRAM traffic per call 67 MB -> ~8 chains x 3 rounds x 8 chunks x 64 KB = 12 MB.
+- Expected: compute-bound at ~40 units x ~3 us = ~120 us per call (from 229), i.e. -0.44 ms per 4 layers per chip for the forward alone; the same restructure then applies to the Q backward (K/V stream) and the KV backward (Q/dO stream). Standalone measurement: `O/iter11_sdpa_check.py` against the pre-iteration-11 outputs (the forward must stay bit-identical).
+- Landed: 140 us per call in the step (`O/iter15_tp_ranked_ops.txt`), 150 us standalone (`O/iter15_sdpa_check.log`), bit-identical; build + check `O/iter15_build_check.sh` -> `O/iter15_build_check.log` (two build attempts: a twice-applied patch block); chain `O/iter15.sh` -> `O/iter15.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 506.0 ms / 32.06 %.
+
 ### Stage review round 7 (iterations 11-12)
 
 - `review_round7.md`: more-work-needed (UMD pointer in the iteration-11 commit; ranked table and attribution cells); answered in the same day's commits (pointer restored `415ec0f1d3e`, docs regenerated, runtime-arg guards, router M check); loss match rerun scheduled in the iteration-14 chain.
@@ -186,6 +195,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | UMD pointer | `415ec0f1d3e` | the submodule pointer bumped by the iteration-11 commit restored |
 | review 7 | `456f9cf7a8e` | round-7 items: ranked table regenerated, attribution cells, runtime-arg guards, router M check, review record |
 | 13 | `a1fc69ebed8` | `transpose_split` op, fused backward routing, harness cases, iteration-13 evidence |
-| 14 | (this commit) | `vp_cross_entropy_bw` op, loss backward routing, harness cases, loss match, iteration-14 evidence |
+| 14 | `8b86016e718` | `vp_cross_entropy_bw` op, loss backward routing, harness cases, loss match, iteration-14 evidence |
+| 15 | (this commit) | SDPA forward chain mode (`metal/ops/sdpa_fw/`), iteration-15 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

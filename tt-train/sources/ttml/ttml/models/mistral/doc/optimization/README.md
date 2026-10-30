@@ -32,7 +32,8 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | 11 | math | SDPA LPT work lists, head-split KV backward + reduce op | 35 | 524.7 | 30.92 % | landed |
 | 12 | glue + math | `lowrank_update` op (LoRA add and `dx += dh @ A` in one pass) | 38 | 518.5 | 31.29 % | landed |
 | 13 | layout | `transpose_split` op (fused backward's dX route in one pass) | 40 | 516.4 | 31.42 % | landed |
-| 14 | fixed | `vp_cross_entropy_bw` op (loss backward in one pass) | 42 | **512.5** | **31.66 %** | landed |
+| 14 | fixed | `vp_cross_entropy_bw` op (loss backward in one pass) | 42 | 512.5 | 31.66 % | landed |
+| 15 | math (kernel boost) | SDPA forward chain data flow (K/V once per chain of cores) | 42 | **506.0** | **32.06 %** | landed |
 | 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.
@@ -53,10 +54,11 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - 12: 16 LoRA-product matmuls + 16 adds per 4 layers -> 16 `lowrank_update` calls, -1.07 ms per 4 layers per chip; standalone 124 -> 72 us at N=5120. Collective sweep: defaults already fastest; the in-step collective time is chip skew.
 - 13: two slices + two transposes (+ multiply) per fused layer -> one `transpose_split`, bit-exact, 117 -> 54 us; -0.57 ms per 4 layers per chip.
 - 14: the loss backward's four passes over the `[1024, 32768]` shard (3.09 ms, one on 32 cores) -> one 0.33 ms kernel; loss match rerun PASS. Lesson: a `[1, 1, 1, 1]` tensor is a zero-padded tile on device; an elementwise multiply by it is not a scalar broadcast.
+- 15: first kernel-boost iteration (user direction 2026-10-30 evening): SDPA forward 228 -> 140 us per call, bit-identical; chains of 14 cores forward the K/V chunks, DRAM traffic 67 -> ~12 MB per call.
 
 ## State (2026-10-30)
 
-- TP=4 full model: 598.7 (baseline) -> 556.5 (exit) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> **512.5 ms / 31.66 % MFU** (14).
+- TP=4 full model: 598.7 (baseline) -> 556.5 (exit) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> 512.5 (14) -> **506.0 ms / 32.06 % MFU** (15).
 - Hard constraints (user, 2026-10-30): HiFi4 + fp32 accumulate (no lower fidelity evaluated); result = full-model TP=4 MFU only; a kernel-level item every iteration; a stage-review pass is a checkpoint, not a stop; one change per commit.
 - Loss match on this path (after 14): 8-layer host loss max |diff| 0.0294 vs torch fp64 (tol 0.10); TP=4 real-weight trajectory as the baseline's (526.1 ms warm).
 - Reviews: round 3 more-work-needed, answered in the follow-up; round 4 five P3 doc / test items fixed; round 5 clean-pass; round 6 (iterations 9-10) items answered, clean-pass on re-check; round 7 (iterations 11-12, `review_round7.md`) two P2 doc / hygiene items answered, re-check pending.

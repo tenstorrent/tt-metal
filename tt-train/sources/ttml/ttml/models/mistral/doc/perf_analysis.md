@@ -36,8 +36,9 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | 11 | SDPA work lists (LPT rows; head-split KV backward) | 524.7 (520.2) | 30.92 % | `O/iter11_tp_mfu_tp4.log` |
 | 12 | `lowrank_update` op: LoRA add and `dx += dh @ A` in one pass | 518.5 (511.8) | 31.29 % | `O/iter12_tp_mfu_tp4.log` |
 | 13 | `transpose_split` op: dX and s dh from the fused backward product in one pass | 516.4 (512.0) | 31.42 % | `O/iter13_tp_mfu_tp4.log` |
-| 14 | fused vocab-parallel cross-entropy backward (`vp_cross_entropy_bw`) | **512.5 (503.3)** | **31.66 %** | `O/iter14_tp_mfu_tp4.log` |
+| 14 | fused vocab-parallel cross-entropy backward (`vp_cross_entropy_bw`) | 512.5 (503.3) | 31.66 % | `O/iter14_tp_mfu_tp4.log` |
 | 14 | real weights, warm | 526.1 (521.0) | - | `O/iter14_full_tp4_real.log` |
+| 15 | SDPA forward chain mode: K/V read once per chain of cores, forwarded core to core | **506.0 (502.4)** | **32.06 %** | `O/iter15_tp_mfu_tp4.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -70,7 +71,7 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 | 40-85 | collectives | 17 reduce-scatter `[1024, 5120]` + 17 all-gather `[1024, 1280]` per 4 layers | chip 0 5.87 + 2.21 (waiting included), chip 3 4.0 | transfer at the library optimum (iteration 12 sweep); overlap not tried |
 | ~40 | math + glue | LoRA adapters (rank 16) | `dB` 0.58 + 0.39 + 0.19, `dA`-side matmuls 0.29 + 0.17 + 0.19, `skinny_matmul` 0.29 + 0.22 + 0.15, `lowrank_update` 0.52 + 0.38 + 0.13 | `dA` / `dB` products on 33-88 cores (K-split like `skinny_matmul`) |
 | ~32 | math | RMSNorm | bwd 1.10 + 0.74 (96 cores), fused fwd 0.59 + 0.58, first-layer plain fwd 0.15 | bandwidth-bound two-phase kernels; gamma re-read ~0.2 |
-| ~30 | math | SDPA, 8 heads per chip | bwd KV 1.16 + reduce 0.11, fwd 0.91, bwd Q 0.86 | K/V and Q/dO re-read per Q row (iteration 11): multicast or merged K-splits |
+| ~30 | math | SDPA, 8 heads per chip | bwd KV 1.16 + reduce 0.11, fwd 0.91, bwd Q 0.86; fwd 0.56 after iteration 15 | the forward's chain data flow (iteration 15) applied to the two backward kernels (iteration 16) |
 | ~29 | layout | fused-route slices / transposes / concats, heads, LoRA-grad stacking | w2 route 0.33 + 0.33 + 0.32, gate_up route 0.26 + 0.21 + 0.20, RoPE 0.21, heads 0.15, stack 0.3; ~23 after iteration 13 (`TransposeSplit` 0.31 + 0.19 replace 1.07 of slices / transposes) | forward K-concat (0.52) needs wide producer buffers |
 | ~15 | math | SwiGLU | bwd 1.05 + fwd 0.45 | at ~75 % of bandwidth |
 | ~10 | fixed | LM head, cross-entropy chain, AdamW, embedding | LM head 3.04 + 2.76; CE chain 1.64 + 1.12 + 0.67 + 0.33 (four passes, 32-core target patch); AdamW 0.4; ~8 after iteration 14 (backward 3.09 -> 0.33) | forward stats (max, sub+exp, sum: 1.3 ms) in one pass |
@@ -212,13 +213,21 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 - **Verification**: standalone vs numpy fp64 at three shapes PCC 1.000000, rel 3.7-3.9e-3 (one bf16 rounding), 398 us for the `[1024, 32768]` shard; harness 42 passed (new `test_vp_cross_entropy_bw_matches_numpy` at two shapes); TP gradient check PASS; loss match rerun on this path: 8-layer host loss max |diff| 0.0294 vs torch fp64 (tol 0.10, mean +0.0059) PASS, TP=4 real weights 10 steps 0.4414 -> 0.1406 -> 0.4512 (the baseline's trajectory), 526.1 ms warm. Bug found on the way: the first version multiplied by the padded `[1, 1, 1, 1]` gradient tile (zero outside element (0, 0)); the loss backward now repeats g into a full tile.
 - **Evidence**: `O/iter14_vpce_check.{py,log}`, `O/iter14_build_check.{sh,log}`, `O/iter14_loss_tests.log`, `O/iter14.{sh,log}`, `O/iter14_harness.log`, `O/iter14_tp_grad_check_tp4.log`, `O/iter14_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter14_train_8layers_hostloss.log`, `O/iter14_loss_comparison.txt`, `O/iter14_full_tp4_real.log`.
 
+## Iteration 15 (2026-10-30): SDPA forward data flow (kernel boost)
+
+- **Change**: math, kernel rewrite of the forward's data flow (`CHAIN` mode in `metal/ops/sdpa_fw/`): the cores are split per (batch, K/V group) stream (2 x 55 at the TP shard), the stream's 128 rows LPT-scheduled over them, and the K/V chunks are read from DRAM once per chain of 14 cores by its first core and forwarded core to core (variable_matmul's in0 protocol: ready counter, data write to the same CB address on the next core, valid flag), every core consuming the whole stream per round and dropping the chunks past its row's diagonal. DRAM traffic per call 67 MB -> ~12 MB. Checklist: `optimization/work_log.md`, "Iteration 15".
+- **Result**: TP=4 506.0 ms / 32.06 % vs 512.5 (-1.3 %) at 1.106-1.200 GHz effective (iteration 14's run 1.064-1.158), chips 49-74 C.
+- **Attribution**: chip 0, per 4 layers, cycle-time: `SDPAForward` 0.911 -> 0.559 (228 -> 140 us per call, -0.35 ms, ~-3.5 ms per 40 layers per chip); the other SDPA rows unchanged (bwd Q 0.862, bwd KV 1.151); standalone 238 -> 150 us wall at the TP shard, 882 -> 422 at the single-chip 32/8-head shape, 827 -> 445 at S=2048. Expected ~120 us (compute-bound estimate); landed at 140: the chain fill latency (14 hops) and the per-chunk handshakes are the rest.
+- **Verification**: standalone vs the pre-iteration-11 kernel outputs at six shapes: forward bit-identical (`max |diff| 0`), dQ bit-identical, dK / dV one bf16 ulp (as iteration 11); harness 42 passed; TP gradient check PASS.
+- **Evidence**: `O/iter15_build_check.{sh,log}`, `O/iter15_sdpa_check.log`, `O/iter15_attention_tests.log`, `O/iter15.{sh,log}`, `O/iter15_harness.log`, `O/iter15_tp_grad_check_tp4.log`, `O/iter15_tp_{mfu_tp4,analysis,ranked_ops}.*`.
+
 ## Loop exit (2026-10-29, after iteration 3) and resumed state
 
 - Exit condition met: 1339 ms cycle-time (2/4/8/16 fit 1345.8; 16 layers 563.6 ms device / 694.4 wall at 1100 MHz, 24.8 GiB) vs the 1620 ms target, 17 % under; wall 1661-1739 vs 2006-2101 ms at the run's clocks (ratio 0.83); stretch 1259 ms 6 % away. Overhead threshold 1 % = 13 ms.
 - Full-model report at exit: 556.5 ms / 29.15 % random init; 574.8 ms real weights warm, loss 0.4453 -> 0.1406 -> 0.4531 vs the baseline's 0.4453 -> 0.1436 -> 0.4551.
 - Final verification at exit: harness 14; TP gradient check PASS on the composite and the fused paths (first attempt un-interleaved, Ledger); loss match max |diff| 0.026 (composite 0.075); device bf16 loss quantised to 0.0625.
 - Memory peak: 13.79 GiB after the forward at 8 layers (weights + LoRA state 11.61), 279 MiB retained per layer (composite 778); TP=4 40 layers ~11 GiB weights + ~2.3 GiB activations per chip (scaled, not probed).
-- Resumed loop (iterations 4-14): TP=4 556.5 -> 547.5 (6) -> 545.9 (8) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> 512.5 ms / 31.66 % (14); single-chip projection 1339 -> ~1242 (attribution only, up to iteration 9). Remaining: see the ranked table (matmuls at ttnn's best config, collectives at the library optimum with overlap untried, adapters, norms, SDPA, layout).
+- Resumed loop (iterations 4-14): TP=4 556.5 -> 547.5 (6) -> 545.9 (8) -> 545.7 (review 3) -> 537.4 (9) -> 536.1 (10) -> 524.7 (11) -> 518.5 (12) -> 516.4 (13) -> 512.5 (14) -> 506.0 ms / 32.06 % (15); single-chip projection 1339 -> ~1242 (attribution only, up to iteration 9). Remaining: see the ranked table (matmuls at ttnn's best config, collectives at the library optimum with overlap untried, adapters, norms, SDPA, layout).
 
 Gap decomposition at exit (cycle-time, 40 layers; notes per term in `D`, "Loop exit"):
 

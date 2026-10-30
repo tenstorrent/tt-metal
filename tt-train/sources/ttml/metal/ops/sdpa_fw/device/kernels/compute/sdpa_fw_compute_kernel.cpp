@@ -268,6 +268,15 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         std::swap(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp);
         std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
     }
+#ifdef CHAIN
+    // Chain mode streams every chunk of the sequence through this core: drop the ones past the diagonal.
+    for (uint32_t k_chunk = num_kv_chunks; k_chunk < Ht / Sk_chunk_t; ++k_chunk) {
+        cb_wait_front(cb_key, Sk_chunk_t * qWt);
+        cb_pop_front(cb_key, Sk_chunk_t * qWt);
+        cb_wait_front(cb_value, Sk_chunk_t * vWt);
+        cb_pop_front(cb_value, Sk_chunk_t * vWt);
+    }
+#endif
 
     // Finalize output
     cb_wait_front(alias_cb_prev_mm_out, vWt);
@@ -371,8 +380,21 @@ void kernel_main() {
 
 #ifdef WORK_LIST
     // Work-list mode: arg0 = number of rows of this core, args 1.. = their global row indices (heaviest first).
+    // Chain mode: the same list padded with 0xFFFFFFFF rounds in which this core only consumes the K/V stream.
     for (uint32_t i = 0; i < start_idx; ++i) {
-        process_single_row(get_arg_val<uint32_t>(1U + i));
+        const uint32_t row = get_arg_val<uint32_t>(1U + i);
+#ifdef CHAIN
+        if (row == 0xFFFFFFFFU) {
+            for (uint32_t k_chunk = 0; k_chunk < Ht / Sk_chunk_t; ++k_chunk) {
+                cb_wait_front(cb_key, Sk_chunk_t * qWt);
+                cb_pop_front(cb_key, Sk_chunk_t * qWt);
+                cb_wait_front(cb_value, Sk_chunk_t * vWt);
+                cb_pop_front(cb_value, Sk_chunk_t * vWt);
+            }
+            continue;
+        }
+#endif
+        process_single_row(row);
     }
 #elif defined(BALANCED_PARALLELISM)
     // Balanced parallelism mode: process pairs of rows (light + heavy)

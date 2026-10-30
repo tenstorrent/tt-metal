@@ -9,6 +9,15 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#ifdef CHAIN
+#include <hostdevcommon/common_values.hpp>
+
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#endif
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -39,7 +48,8 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
         get_compile_time_arg_val(5);  // multi-tile K/V chunking factor (consumed in chunked reader path)
     constexpr uint32_t pairs_per_seq = Ht / 2;
-    constexpr auto query_args = TensorAccessorArgs<6>();
+    // compile-time args 6..8: the chain-mode semaphore ids (unused in the other modes)
+    constexpr auto query_args = TensorAccessorArgs<9>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -65,7 +75,88 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-#if defined(BALANCED_PARALLELISM) || defined(WORK_LIST)
+#ifdef CHAIN
+    // Chain mode. Runtime args after the five addresses: prev core (noc x, y), next core (noc x, y), is_injector,
+    // is_sink, kv stream index (batch * kv_heads + kv group), the round count and the row of every round
+    // (0xFFFFFFFF = no row). Every round streams all Ht / Sk_chunk_t K/V chunks of the stream through the chain.
+    // `num_rows_to_process` holds prev noc x and `start_row` prev noc y (same arg slots as the other modes).
+    const uint32_t prev_noc_x = num_rows_to_process;
+    const uint32_t prev_noc_y = start_row;
+    const uint32_t next_noc_x = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t next_noc_y = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t is_injector = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t is_sink = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t kv_stream = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t num_rounds = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t rows_base = runtime_args_counter;
+
+    Semaphore sender_sem(get_compile_time_arg_val(6));
+    Semaphore receiver_sem(get_compile_time_arg_val(7));
+    Semaphore valid_sem(get_compile_time_arg_val(8));
+    const Noc noc;
+    valid_sem.set(VALID);
+
+    constexpr uint32_t num_chunks = Ht / Sk_chunk_t;
+    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * qWt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vWt;
+    const uint32_t k_chunk_bytes = k_chunk_tiles * tile_bytes;
+    const uint32_t v_chunk_bytes = v_chunk_tiles * tile_bytes;
+    const uint32_t key_offset = kv_stream * qWt * Ht;
+    const uint32_t value_offset = kv_stream * vWt * Ht;
+
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        const uint32_t global_row_idx = get_arg_val<uint32_t>(rows_base + round);
+        if (global_row_idx != 0xFFFFFFFFU) {
+            read_tiles_by_row(cb_query, query_address_generator, global_row_idx * qWt, qWt, tile_bytes, qWt);
+#ifdef HAS_GATE
+            read_tiles_by_row(cb_gate, gate_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
+#endif
+        }
+        for (uint32_t k_chunk = 0; k_chunk < num_chunks; ++k_chunk) {
+            cb_reserve_back(cb_key, k_chunk_tiles);
+            cb_reserve_back(cb_value, v_chunk_tiles);
+            const uint32_t k_addr = get_write_ptr(cb_key);
+            const uint32_t v_addr = get_write_ptr(cb_value);
+            if (is_injector) {
+                const uint32_t h_start = k_chunk * Sk_chunk_t;
+                read_tile_block_transposed(
+                    cb_key, key_address_generator, key_offset + h_start * qWt, Sk_chunk_t, qWt, tile_bytes);
+                read_tiles_by_row(
+                    cb_value,
+                    value_address_generator,
+                    value_offset + h_start * vWt,
+                    v_chunk_tiles,
+                    tile_bytes,
+                    v_chunk_tiles);
+            } else {
+                receiver_sem.set(INVALID);
+                sender_sem.up(noc, prev_noc_x, prev_noc_y, 1);
+                receiver_sem.wait(VALID);
+                cb_push_back(cb_key, k_chunk_tiles);
+                cb_push_back(cb_value, v_chunk_tiles);
+            }
+            if (!is_sink) {
+                sender_sem.wait(1);
+                sender_sem.set(0);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(k_addr),
+                    UnicastEndpoint{},
+                    k_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = k_addr});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(v_addr),
+                    UnicastEndpoint{},
+                    v_chunk_bytes,
+                    {},
+                    {.noc_x = next_noc_x, .noc_y = next_noc_y, .addr = v_addr});
+                noc.async_writes_flushed();
+                valid_sem.relay_unicast(noc, receiver_sem, next_noc_x, next_noc_y);
+            }
+        }
+    }
+    noc.async_atomic_barrier();
+#elif defined(BALANCED_PARALLELISM) || defined(WORK_LIST)
     // Balanced parallelism mode: read Q/K/V for pairs of rows (light + heavy).
     // Each pair combines an early-sequence row (few K/V tiles) with a late-sequence row (many tiles),
     // so every core reads roughly the same amount of data.
