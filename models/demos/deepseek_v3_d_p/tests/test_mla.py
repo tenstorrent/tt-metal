@@ -51,7 +51,8 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     resolve_traces,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
-from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -1459,10 +1460,6 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
 )
 @pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
 @pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
-@pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
-)
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
@@ -1471,6 +1468,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    require_high_power("kimi_k3 MLA chunked perf")
     topology = per_axis_topology(device_params["fabric_config"])
     total_ns = _run_chunked_prefill(
         request,
@@ -1486,6 +1484,19 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     logger.info(
         f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
         f"expected {K3_CHUNKED_RT_PERF_NS:,} ns, band [{lower:,.0f}, {upper:,.0f}]"
+    )
+    emit_perf_metrics(
+        "kimi_k3_mla_chunked_50k_5k_torus-xy-8x4",
+        "Kimi-K3 MLA chunked 50k+5k perf (torus-xy 8x4)",
+        {
+            "prefill_len": 50 * 1024,
+            "chunk": 5120,
+            "measured_ns": total_ns,
+            "measured_ms": total_ns / 1e6,
+            "expected_ns": K3_CHUNKED_RT_PERF_NS,
+            "perf_margin_pct": K3_CHUNKED_RT_PERF_MARGIN * 100.0,
+            "within_band": lower <= total_ns <= upper,
+        },
     )
     assert lower <= total_ns <= upper, (
         f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "

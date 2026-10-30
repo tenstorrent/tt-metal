@@ -1735,6 +1735,20 @@ class ZERO_POINT(RuntimeParameter):
 
 
 @dataclass
+class OUT_ZERO_POINT(RuntimeParameter):
+    """fp32 bit-pattern of requant's output zero point, added after rounding.
+    Ignored by other binary ops."""
+
+    out_zero_point_bits: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t OUT_ZERO_POINT = {self.out_zero_point_bits}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t OUT_ZERO_POINT;", "I"
+
+
+@dataclass
 class MAX_POOL_WITH_INDICES(TemplateParameter):
     """Compile-time knobs of the Quasar max_pool_with_indices SFPU kernel.
 
