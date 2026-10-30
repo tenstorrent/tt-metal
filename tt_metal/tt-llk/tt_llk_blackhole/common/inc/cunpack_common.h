@@ -990,6 +990,9 @@ inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint3
         cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(4 * 16);
     }
     TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
+    // No TEN-3868 dummy unpack to SrcA here, unlike Wormhole: Blackhole's LLK sets SrcA's dvalid without an unpack
+    // only in an UNPACR_NOP that also zeroes SrcA (UNP_ZEROSRC with SET_DVALID), and that clear moves both of SrcA's
+    // bank pointers
 }
 
 inline void set_dst_write_addr(const std::uint32_t &context_id, const std::uint32_t &unpack_dst_format)

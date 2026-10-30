@@ -394,9 +394,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Run MOP
     ckernel::ckernel_template::run();
 
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
     if (unpack_to_dest)
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -404,6 +401,10 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
             unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
+
+    // T6::SEMGET for context release, after unpack_to_dest_tile_done's config writes so that
+    // configure_unpack_AB's wait_for_idle also waits for them
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
