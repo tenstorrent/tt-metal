@@ -116,10 +116,6 @@ elif args and args[0].endswith("summarize_ci_run.py"):
             "chunk_index": {"@5k": 0, "@55k": 10},
             "throughput_tok_s": {"@5k": 37234.8, "@55k": float(os.environ["TEST_TPS"])},
         }))
-elif args and args[0].endswith("plot_pipeline_trace.py"):
-    pass
-elif args == ["-c", "import matplotlib"]:
-    pass
 else:
     os.execv(os.environ["TEST_REAL_PYTHON"], [os.environ["TEST_REAL_PYTHON"], *args])
 """
