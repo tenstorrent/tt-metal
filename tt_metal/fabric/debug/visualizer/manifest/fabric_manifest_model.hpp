@@ -202,6 +202,7 @@ struct RouterShape {
     uint32_t num_active_eriscs = 0;
     bool channel_trimming_overrides_applied = false;
     bool vc0_bubble_flow_control = false;
+    bool has_tensix_extension = false;
 };
 
 // The group a field belongs to. Mainly for logical grouping of information in decode / visualizer.
@@ -320,6 +321,13 @@ struct LocalSync {
     uint32_t router_channels_mask = 0;
 };
 
+// Two routers on a chip that the builder connected (FabricBuilder::get_router_connection_pairs), by Ethernet channel.
+// The connection runs both ways: each router's receivers forward into the other's senders.
+struct ConnectedRouters {
+    uint32_t eth_chan1 = 0;
+    uint32_t eth_chan2 = 0;
+};
+
 // Information about a chip. Every chip in the mesh graph is listed, local or not; a chip this rank can't map to a
 // device is remote, and has only its identity.
 struct Chip {
@@ -335,6 +343,8 @@ struct Chip {
     // Null when the chip has no routers.
     std::optional<LocalSync> local_sync;
     std::vector<Router> routers;
+    // The router pairs the builder connected.
+    std::vector<ConnectedRouters> connected_routers;
 };
 
 // What carries one VC's sender credits on a mesh.
