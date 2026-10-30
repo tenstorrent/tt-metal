@@ -946,7 +946,7 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             break;
         case dev_msgs::DebugSanitizeNocMulticastOutsideNodeSet:
             error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
-            error_msg += " (multicast rectangle reaches nodes outside the destination tensor).";
+            error_msg += " (multicast rectangle reaches nodes outside the destination).";
             break;
         default:
             error_msg = fmt::format(

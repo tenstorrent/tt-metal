@@ -166,8 +166,7 @@ void RunMulticastNodeSetTest(
         ADD_FAILURE() << "Watcher did not stop the multicast";
     } catch (const std::runtime_error& exception) {
         EXPECT_THAT(
-            exception.what(),
-            ::testing::HasSubstr("(multicast rectangle reaches nodes outside the destination tensor)."));
+            exception.what(), ::testing::HasSubstr("(multicast rectangle reaches nodes outside the destination)."));
     }
 }
 
