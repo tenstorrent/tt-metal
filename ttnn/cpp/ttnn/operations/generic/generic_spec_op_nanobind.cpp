@@ -231,6 +231,9 @@ void bind_resources(nb::module_& mod) {
             data_format (ttnn.DataType, optional): Format of the entries, needed when a compute kernel reads or
                 writes the buffer.
             tile (ttnn.Tile, optional): Tile shape of the entries.
+            borrowed_from (str, optional): unique_id of an L1-resident TensorParameter. The buffer then lives in that
+                tensor's shard instead of its own L1 allocation, so its data is already in place: the producer only
+                pushes entries, without copying them.
     )doc")
         .def(
             "__init__",
@@ -239,7 +242,8 @@ void bind_resources(nb::module_& mod) {
                uint32_t entry_size,
                uint32_t num_entries,
                std::optional<tt::tt_metal::DataType> data_format,
-               std::optional<tt::tt_metal::Tile> tile) {
+               std::optional<tt::tt_metal::Tile> tile,
+               std::optional<std::string> borrowed_from) {
                 new (self) exp::DataflowBufferSpec{
                     .unique_id = exp::DFBSpecName{unique_id},
                     .entry_size = entry_size,
@@ -249,6 +253,8 @@ void bind_resources(nb::module_& mod) {
                             ? std::optional(tt::tt_metal::datatype_to_dataformat_converter(*data_format))
                             : std::nullopt,
                     .tile_format_metadata = tile,
+                    .borrowed_from =
+                        borrowed_from.has_value() ? std::optional(exp::TensorParamName{*borrowed_from}) : std::nullopt,
                 };
             },
             nb::kw_only(),
@@ -256,7 +262,8 @@ void bind_resources(nb::module_& mod) {
             nb::arg("entry_size"),
             nb::arg("num_entries"),
             nb::arg("data_format") = nb::none(),
-            nb::arg("tile") = nb::none())
+            nb::arg("tile") = nb::none(),
+            nb::arg("borrowed_from") = nb::none())
         .def_prop_ro("unique_id", [](const exp::DataflowBufferSpec& self) { return *self.unique_id; })
         .def_rw("entry_size", &exp::DataflowBufferSpec::entry_size)
         .def_rw("num_entries", &exp::DataflowBufferSpec::num_entries);
