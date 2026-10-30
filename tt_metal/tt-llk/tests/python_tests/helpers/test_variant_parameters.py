@@ -1092,6 +1092,10 @@ class TOPK(TemplateParameter):
     # Rank-stamped only: rank tag field width in the value word's low bits (16 for bf16 values,
     # narrower for fp32 keys whose low mantissa bits are zero).
     topk_tag_bits: int = 16
+    # Run the topk init through the shared SFPU harness entry
+    # (test_utils::call_unary_sfpu_operation_init<topk_local_sort>, the path the perf sweep
+    # takes) instead of the kernel's direct LLK init calls.
+    topk_harness_init: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1103,6 +1107,7 @@ class TOPK(TemplateParameter):
             f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
             f"constexpr bool TOPK_RANK_STAMPED = {str(self.topk_rank_stamped).lower()};",
             f"constexpr std::uint32_t TOPK_TAG_BITS = {self.topk_tag_bits};",
+            f"constexpr bool TOPK_HARNESS_INIT = {str(self.topk_harness_init).lower()};",
         ]
         return "\n".join(lines)
 
@@ -1116,8 +1121,9 @@ class TOPK(TemplateParameter):
             "bool TOPK_FUSED_STABLE;",
             "bool TOPK_RANK_STAMPED;",
             "std::uint32_t TOPK_TAG_BITS;",
+            "bool TOPK_HARNESS_INIT;",
         ]
-        return "\n".join(lines), "IIII???I"
+        return "\n".join(lines), "IIII???I?"
 
 
 @dataclass

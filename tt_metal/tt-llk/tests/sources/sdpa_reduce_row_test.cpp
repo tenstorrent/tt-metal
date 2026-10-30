@@ -39,17 +39,21 @@
  *   block_width>1 additionally folds block_width horizontally-adjacent tiles into the same
  *   accumulators, i.e. reduces over block_width*32 columns. This test uses block_width == 1.
  *
- * GOLDEN, made robust to the exact Dest<->tile lane mapping
- * ---------------------------------------------------------
- * The physical mapping of the "8x32 logical" rows onto the 16x16 Dest face cannot be
- * validated here (Blackhole only, no card in this environment). To stay independent of it,
- * the Python side fills the reduced face with a single constant C. Then the per-row reduction
- * is analytically the SAME for every row regardless of how the 32 columns are grouped:
- *     MAX -> C          (max of 32 equal values)
- *     SUM -> 32 * C     (sum of 32 equal values)
- * The Python side asserts ONLY column 0 of the reduced face (the op's documented output
- * lane) against that constant, per the "validate only defined lanes" rule. All other lanes
- * are left undefined by the op and are not checked.
+ * GOLDEN (which Dest datums form a logical row)
+ * ---------------------------------------------
+ * An SFPLOAD at Dest offset o reads the aligned group of four rows (o & ~3), one row per 8-lane
+ * subvector, taking the even columns when (o & 2) == 0 and the odd columns otherwise
+ * (https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPLOAD.md).
+ * The op folds offsets 0, 2, 8, 10 into LREG0 and 4, 6, 12, 14 into LREG2, so
+ * subvector s of LREG0 holds all 16 columns of face rows s and s + 8, and subvector s of LREG2
+ * all 16 columns of face rows 4 + s and 12 + s. The epilogue reduces each subvector into its
+ * lane 0 (SFPSHFT2 SHFLSHR1 shifts + folds, then SHFLROR1), and the SFPSTOREs at offsets 0 and 4
+ * put that lane into column 0 of face rows 0-3 and 4-7. In row-major 32x32 tile coordinates:
+ *     logical row r (r = 0..7) = tile[r, 0:16] ++ tile[r + 8, 0:16]
+ *     tile_out[r, 0]           = MAX / SUM over that row
+ * The Python side (test_sdpa_reduce_row.py) computes exactly that golden from random stimuli
+ * and asserts only those eight output lanes; every other lane is undefined (left as the A2D
+ * datacopy wrote it, or holding the epilogue's partials) and is not checked.
  *
  * skip_signalling == true: standalone run with no FPU<->SFPU partner, so the op's
  * t6_semaphore FPU_SFPU handshake is compiled out (matching how sdpa.h's reduce_sum path
