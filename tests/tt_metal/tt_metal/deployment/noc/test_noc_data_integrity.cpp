@@ -465,9 +465,10 @@ static bool firmware_completed(const vector<const source*>& srcs, int64_t timeou
     for (;;) {
         try {
             erase_if(pending, [&](const source* s) {
-                const auto type = !s->is_eth  ? HalProgrammableCoreType::TENSIX
-                                  : s->active ? HalProgrammableCoreType::ACTIVE_ETH
-                                              : HalProgrammableCoreType::IDLE_ETH;
+                auto type = HalProgrammableCoreType::TENSIX;
+                if (s->is_eth) {
+                    type = s->active ? HalProgrammableCoreType::ACTIVE_ETH : HalProgrammableCoreType::IDLE_ETH;
+                }
                 auto go = hal.get_dev_msgs_factory(type).create<dev_msgs::go_msg_t>();
                 const uint64_t addr = hal.get_dev_noc_addr(type, HalL1MemAddrType::GO_MSG) & ~0x3ull;
                 cluster.read_core(go.data(), go.size(), tt_cxy_pair(s->device->id(), s->virt), addr);
