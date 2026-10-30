@@ -17,6 +17,7 @@ from models.demos.gemma4.tt.attention.prefill import (
     _bounded_ring_tail_blocks,
     _owner_lane_device_index,
     _paged_tail_block_range,
+    ring_hygiene_rows,
 )
 from models.demos.gemma4.tt.capacity import (
     BFP8_BYTES,
@@ -545,6 +546,16 @@ def test_wrapped_window_walks_the_ring_in_position_order():
     blocks, first_row, take = _bounded_ring_tail_blocks(ROW, 1100, 1024, 1024, 64)
     assert take == 1024 and first_row == 12  # 76 - 64
     assert blocks == [100 + b for b in range(1, 16)] + [100, 101]
+    # The same wrap bounds what a fresh fill zeroes (``_zero_fill_ring``): a query at p < W - 1 reads the slots of
+    # positions below 0 at the ring's end, so an exact ring is zeroed whole and a ring with speculative headroom
+    # only in its headroom half -- a window's worth of zeros either way, never the ring's (the MTP rail's 2048
+    # ring paid two windows per sliding layer per prefill: 31B QB2 random c1 TTFT +17 ms, 2026-10-30).
+    assert ring_hygiene_rows(1024, 1024) == (1024, 0)
+    assert ring_hygiene_rows(2048, 1024) == (1024, 1024)
+    assert ring_hygiene_rows(4096, 1024) == (1024, 3072)
+    assert ring_hygiene_rows(2048, None) == (2048, 0) and ring_hygiene_rows(2048, 0) == (2048, 0)
+    assert ring_hygiene_rows(512, 1024) == (512, 0), "a window the ring does not exceed keeps the whole ring"
+    assert ring_hygiene_rows(0, 1024) == (0, 0) and ring_hygiene_rows(None, 1024) == (0, 0)
 
 
 def test_short_window_and_block_zero():

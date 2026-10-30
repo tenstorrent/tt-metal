@@ -192,17 +192,45 @@ def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False)
     return k_out, v_out
 
 
+def ring_hygiene_rows(modulo, window):
+    """``(rows, first_slot)`` of the bounded ring a fresh fill must zero: the slots a query past the fill can
+    read stale, ``[modulo - rows, modulo)``.
+
+    Decode at position ``p`` reads slots ``(p - W + 1 .. p) % ring`` (``W`` the
+    sliding window); the slots of positions below 0 wrap to the ring's end,
+    ``[ring + p - W + 1, ring)``. A slot below ``W`` is read only at a
+    position that has written it, so with a ring of exactly the window the
+    stale reads are the whole ring past the prompt (zeroed whole, as before),
+    and with a ring sized for speculation (``_auto_size_spec_ring``: 2048 for
+    the 1024 window) they are the headroom half ``[W, ring)`` alone -- a
+    window's worth of zeros either way, not a ring's. No window (or a window
+    the ring does not exceed) keeps the whole ring. Pure host arithmetic.
+    """
+    modulo = int(modulo or 0)
+    window = int(window or 0)
+    if modulo <= 0:
+        return 0, 0
+    rows = window if 0 < window < modulo else modulo
+    return rows, modulo - rows
+
+
 def _zero_fill_ring(config, k_cache, v_cache, nkv_local, fill_page_table, user_id, block_size, paged_modulo_kwargs):
-    """Write a whole window of zeros into the user's bounded ring (both caches) from a persistent zero buffer kept on
-    ``config`` (allocated on the first, eager, call: a trace capture only records the fills)."""
+    """Zero the slots of the user's bounded ring a query past the fill could read stale (both caches), from a
+    persistent zero buffer kept on ``config`` (allocated on the first, eager, call: a trace capture only records
+    the fills): the whole ring when it is the window, the headroom half of a ring sized for speculation
+    (``ring_hygiene_rows``), steered there by a rotated table (``_ring_fill_page_table``, a device op the capture
+    records like the fills). A table not sized to the ring (another block grid) is zeroed whole, as before."""
     modulo = int(paged_modulo_kwargs.get("cache_position_modulo") or 0)
     if modulo <= 0:
         return
-    key = (int(nkv_local), modulo, int(config.head_dim), k_cache.dtype)
+    rows, first_slot = ring_hygiene_rows(modulo, getattr(config, "sliding_window", None))
+    if first_slot and int(fill_page_table.shape[-1]) != modulo // int(block_size):
+        rows, first_slot = modulo, 0
+    key = (int(nkv_local), rows, int(config.head_dim), k_cache.dtype)
     cached = getattr(config, "_g4_ring_zero_fill", None)
     if cached is None or cached[0] != key:
         zeros = ttnn.zeros(
-            [1, int(nkv_local), modulo, int(config.head_dim)],
+            [1, int(nkv_local), rows, int(config.head_dim)],
             dtype=k_cache.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=k_cache.device(),
@@ -210,10 +238,36 @@ def _zero_fill_ring(config, k_cache, v_cache, nkv_local, fill_page_table, user_i
         )
         config._g4_ring_zero_fill = (key, zeros)
         cached = config._g4_ring_zero_fill
-    for cache in (k_cache, v_cache):
-        _paged_fill_cache(
-            cache, cached[1], fill_page_table, batch_idx=user_id, block_size=block_size, **paged_modulo_kwargs
-        )
+    table = _ring_fill_page_table(fill_page_table, first_slot, modulo, block_size) if first_slot else fill_page_table
+    try:
+        for cache in (k_cache, v_cache):
+            _paged_fill_cache(cache, cached[1], table, batch_idx=user_id, block_size=block_size, **paged_modulo_kwargs)
+    finally:
+        if table is not fill_page_table:
+            table.deallocate(True)
+
+
+def _deferred_fill_hygiene(cfg, k_fill, v_fill, k_cache, v_cache, page_table, user_id, block_size, paged_modulo_kwargs):
+    """The ring hygiene of a deferred fill at ring offset 0, returning the ``(k, v)`` fills to write.
+
+    A ring of exactly the window keeps the fill zero-extended to the window
+    (``_zero_extend_ring_fill``: the slots past the prompt are the ones a
+    short request's queries wrap onto). A ring sized for speculation has its
+    headroom half zeroed instead (``_zero_fill_ring``) and the fill goes in
+    as it is: nothing past the fill inside the window is read before this
+    request writes it, so extending the fill to the ring (twice the window's
+    writes, per sliding layer, per prefill) bought nothing. A fill that
+    already covers the window leaves no slot a wrap could read.
+    """
+    modulo = int(paged_modulo_kwargs.get("cache_position_modulo") or 0)
+    rows, first_slot = ring_hygiene_rows(modulo, getattr(cfg, "sliding_window", None))
+    if first_slot:
+        if int(k_fill.shape[-2]) < rows:
+            _zero_fill_ring(
+                cfg, k_cache, v_cache, int(k_fill.shape[1]), page_table, user_id, block_size, paged_modulo_kwargs
+            )
+        return k_fill, v_fill
+    return _zero_extend_ring_fill(k_fill, modulo), _zero_extend_ring_fill(v_fill, modulo)
 
 
 def _copy_sliding_tail_into_persistent(config, k_tail_out, v_tail_out, head_dim):
@@ -613,9 +667,17 @@ def flush_deferred_bounded_fills(layers):
         if batched_pending:
             cfg._deferred_bounded_fill_batched = None
             for p in batched_pending:
-                _mod = p["paged_modulo_kwargs"].get("cache_position_modulo")
-                k_f = _zero_extend_ring_fill(p["k_fill"], _mod)
-                v_f = _zero_extend_ring_fill(p["v_fill"], _mod)
+                k_f, v_f = _deferred_fill_hygiene(
+                    cfg,
+                    p["k_fill"],
+                    p["v_fill"],
+                    p["k_cache"],
+                    p["v_cache"],
+                    p["page_table"],
+                    p["user_id"],
+                    p["block_size"],
+                    p["paged_modulo_kwargs"],
+                )
                 try:
                     _paged_fill_cache(
                         p["k_cache"],
@@ -655,8 +717,17 @@ def flush_deferred_bounded_fills(layers):
             # Zeroing the rest of the ring clears a previous occupant's KV; on a
             # resumed chunk those slots hold this request's own in-window KV.
             if chunk_offset == 0:
-                k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
-                v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
+                k_merged, v_merged = _deferred_fill_hygiene(
+                    cfg,
+                    k_merged,
+                    v_merged,
+                    pending["k_cache"],
+                    pending["v_cache"],
+                    pending["page_table"],
+                    pending["user_id"],
+                    pending["block_size"],
+                    pending["paged_modulo_kwargs"],
+                )
             fill_page_table = _ring_fill_page_table(
                 pending["page_table"], chunk_offset, pending["modulo"], pending["block_size"]
             )

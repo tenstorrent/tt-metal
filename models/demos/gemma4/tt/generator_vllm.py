@@ -6805,7 +6805,9 @@ class MTPRowNeedsLogits:
     """Which rows of a decode step must be verified in logits mode, evaluated per row on first use.
 
     The eager dict cost every decode step a sampling-parameter walk per live row (32 rows: ~0.7 ms) that
-    only a replay's readback ever read; an all-declined step now evaluates nothing."""
+    only a replay's readback ever read; an all-declined step now evaluates nothing. ``rows`` may be a
+    zero-argument callable returning the live rows: they are read on first use too, so a step that never
+    consults this (the plain decode of an all-declined batch) never lists them."""
 
     __slots__ = ("_can_use", "_sampling", "_bitmask", "_rows", "_cache")
 
@@ -6813,12 +6815,17 @@ class MTPRowNeedsLogits:
         self._can_use = can_use
         self._sampling = sampling
         self._bitmask = bitmask
-        self._rows = tuple(int(r) for r in rows)
+        self._rows = rows if callable(rows) else tuple(int(r) for r in rows)
         self._cache = {}
+
+    def _live(self):
+        if callable(self._rows):
+            self._rows = tuple(int(r) for r in self._rows())
+        return self._rows
 
     def get(self, row, default=True):
         row = int(row)
-        if row not in self._rows:
+        if row not in self._live():
             return default
         value = self._cache.get(row)
         if value is None:
@@ -6830,13 +6837,13 @@ class MTPRowNeedsLogits:
         return self.get(row)
 
     def any(self):
-        return any(self.get(r) for r in self._rows)
+        return any(self.get(r) for r in self._live())
 
     def values(self):
-        return [self.get(r) for r in self._rows]
+        return [self.get(r) for r in self._live()]
 
     def items(self):
-        return [(r, self.get(r)) for r in self._rows]
+        return [(r, self.get(r)) for r in self._live()]
 
     def __eq__(self, other):
         try:
@@ -6862,6 +6869,8 @@ class MTPSession:
     dropped: int = 0
     stats: object = None
     trialed: bool = False  # the request had its one trial (or entered on its own): no second trial
+    # The all-declined proposals served without a walk that ``steps`` already counts (``_mtp_sync_session``).
+    epoch: int = 0
 
 
 class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
@@ -7050,6 +7059,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         # Slots released since their last prefill: the runner proposes once more for a released request (its
         # last committed block), and that proposal nobody verifies must open no session and replay nothing.
         self._mtp_released_slots = set()
+        # The proposals every row declined without a walk (``_mtp_fast_decline``): each is one plain step of
+        # every live row, counted into a session when it is next walked or dropped (``_mtp_sync_session``); a
+        # slot prefilled inside such a stretch opens its session with the steps it has had (``_mtp_slot_epoch``:
+        # slot -> the count at its prefill).
+        self._mtp_plain_epoch = 0
+        self._mtp_slot_epoch = {}
         self._mtp_last_replay = None  # the latest ServingStepResult
         # Counts the decoder calls that rewrite its shared verify-logits buffer
         # (one bump per proposal that reseeds and/or replays).
@@ -7236,14 +7251,34 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         return session
 
     def _mtp_open_session(self, slot):
-        session = MTPSession(owner=self._spec_owner_of(slot), stats=self._spec_policy.new_row())
+        """A session for ``slot``'s current generation, starting with the plain steps its row has had since its
+        prefill while every proposal declined without a walk (``_mtp_slot_epoch``)."""
+        epoch = self._mtp_plain_epoch
+        behind = max(0, epoch - self._mtp_slot_epoch.pop(int(slot), epoch))
+        session = MTPSession(
+            owner=self._spec_owner_of(slot),
+            stats=self._spec_policy.new_row(),
+            steps=behind,
+            committed=behind,
+            epoch=epoch,
+        )
         self._mtp_sessions[int(slot)] = session
         return session
+
+    def _mtp_sync_session(self, session):
+        """Count the proposals that declined without a walk since ``session`` was last walked: one plain step
+        (one committed token) of its row each (``_mtp_fast_decline``)."""
+        behind = self._mtp_plain_epoch - session.epoch
+        if behind > 0:
+            session.steps += behind
+            session.committed += behind
+            session.epoch = self._mtp_plain_epoch
 
     def _mtp_drop_session(self, slot, why):
         session = self._mtp_sessions.pop(int(slot), None)
         if session is None:
             return
+        self._mtp_sync_session(session)
         self._spec_note_row_ended()
         if session.steps:
             self._spec_policy.note_request_steps(session.steps)
@@ -7269,10 +7304,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             sessions[new] = session
         self._mtp_sessions = sessions
         self._mtp_released_slots = {moved.get(slot, slot) for slot in self._mtp_released_slots}
+        self._mtp_slot_epoch = {moved.get(slot, slot): epoch for slot, epoch in self._mtp_slot_epoch.items()}
 
     def _spec_release_slot(self, row):
         self._mtp_drop_session(row, "release")
         self._mtp_released_slots.add(int(row))
+        self._mtp_slot_epoch.pop(int(row), None)
 
     def _spec_release_all(self):
         for slot in list(self._mtp_sessions):
@@ -7296,6 +7333,8 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_step_tables = None
         self._mtp_installed_tables = None
         self._mtp_installed_keys = None
+        self._mtp_plain_epoch = 0
+        self._mtp_slot_epoch = {}
         self._spec_costs = None
         self._spec_plain_cost = None
         try:
@@ -7313,6 +7352,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._mtp_drop_session(int(slot), "prefill")
             self._spec_close_slot_generation(int(slot))
             self._mtp_released_slots.discard(int(slot))
+            self._mtp_slot_epoch[int(slot)] = self._mtp_plain_epoch
         self._spec_note_prefill()
         return super().prefill_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
 
@@ -7344,7 +7384,15 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if tokens is None:
             raise ValueError("Gemma4MTP speculative contract: decode_forward expects tokens")
         rows = self._spec_rows(tokens)
-        live = self._spec_live_rows(start_pos, rows)
+        resolved = []
+
+        def live_rows():
+            # The live rows, listed once and only by a step that walks them (a retained proposal, a verify, a
+            # replay's readback): the plain decode of an all-declined batch never reads the positions.
+            if not resolved:
+                resolved.append(self._spec_live_rows(start_pos, rows))
+            return resolved[0]
+
         self._mtp_step_tables = (kwargs.get("page_table"), page_tables_per_layer, kwargs.get("kv_cache"))
         # What this step's rows will need from their next verify: a row the
         # runner samples on the host (no sampling_params, which is also every
@@ -7353,7 +7401,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         # that follows this step must read the verify logits back for it.
         sampling = kwargs.get("sampling_params")
         bitmask = kwargs.get("grammar_bitmask")
-        self._mtp_row_needs_logits = MTPRowNeedsLogits(self._spec_row_can_use_argmax, sampling, bitmask, live)
+        self._mtp_row_needs_logits = MTPRowNeedsLogits(self._spec_row_can_use_argmax, sampling, bitmask, live_rows)
         if self._mtp_unread_replay_pending() and (sampling is None or self._mtp_row_needs_logits.any()):
             # A request that needs logits reaches a decode step before its own
             # proposal replays, so this is where every greedy-only replay still
@@ -7361,7 +7409,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             self._mtp_read_back_live_replay()
         try:
             if spec_mode is None:
-                return self._mtp_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live)
+                return self._mtp_ordinary_step(args, kwargs, page_tables_per_layer, tokens, start_pos, rows, live_rows)
             if spec_mode not in ("argmax_ids", "logits"):
                 raise ValueError(f"Gemma4MTP speculative contract: unsupported spec_mode {spec_mode!r}")
             # Timed as its own phase: a verify answered from the retained replay runs no device work, so its wall is
@@ -7375,7 +7423,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 tokens,
                 start_pos,
                 rows,
-                live,
+                live_rows(),
                 num_valid,
                 spec_mode,
             )
@@ -7422,6 +7470,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if not self._mtp_any_retained():
             # Every row declined (or never proposed): the plain decode, with no per-row walk.
             return self._spec_plain_decode(args, kwargs, page_tables_per_layer)
+        live = live() if callable(live) else live
         sampling = kwargs.get("sampling_params")
         resident = self._spec_resident_decode_declared()
         answered = {}
@@ -7756,20 +7805,72 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_installed_keys = new_keys
         return False
 
-    def _mtp_decline_step(self, rows, k, live, reason, log=True):
+    def _mtp_decline_step(self, rows, k, live, reason, log=True, sessions=None):
         """Offer no row a draft and drop every retained proposal (the next proposal reseeds).
 
         ``log`` is off for the adaptive policy's plain steps, which
-        ``_spec_policy_note`` logs on its own rate limit.
+        ``_spec_policy_note`` logs on its own rate limit. ``sessions`` are the
+        live rows' sessions when the caller walked them already (no second
+        lookup per row); else they are looked up from ``live``.
         """
         if log and reason != self._mtp_decline_logged:
             logger.info(f"Gemma4MTP speculative contract: proposing nothing ({reason})")
             self._mtp_decline_logged = reason
-        for r in live:
-            session = self._mtp_session_at(r)
+        if sessions is None:
+            sessions = (self._mtp_session_at(r) for r in live)
+        for session in sessions:
             if session is not None:
                 session.retained = None
         return self._spec_decline(rows, k)
+
+    def _mtp_fast_decline_reason(self, first, live_n, top):
+        """Why every row of the step declines before any row is walked, or None when the walk must run.
+
+        The walk is needed by a trailing row (a released slot still listed
+        live: it leaves the proposing set), by any retained proposal (a
+        consumed one is observed, an unconsumed one dropped, in the walk), by
+        a batch some table record covers (the policy decides) and by a batch
+        whose highest row the largest record's block cannot hold (such rows
+        leave the set, which can then fall under the cap). Otherwise the
+        answer is the walk's own: the records are not captured, or the rows
+        exceed the largest record.
+        """
+        if self._mtp_any_retained():
+            return None
+        if any(s < int(first.numel()) and bool(first[s] >= 0) for s in self._mtp_released_slots):
+            return None
+        if self._mtp_decoder is None or not self._mtp_captured:
+            return "the verify records are not captured (warmup incomplete)"
+        if self._mtp_shape_for(live_n) is not None:
+            return None
+        largest = self._mtp_shapes[-1]
+        if self._spec_decline_reason(top, int(largest[1]) + 1, lambda pos, s=largest: self._mtp_width_for(s, pos)):
+            return None
+        return f"{live_n} proposing rows exceed the largest record {largest} ({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})"
+
+    def _mtp_fast_decline(self, rows, k, live_n, top, reason):
+        """The all-declined proposal without a per-row walk: O(1) host work beside the plain decode.
+
+        No session is read or opened (a row prefilled above the cap opens its
+        session, with the plain steps it has had, at the first proposal the
+        walk serves: ``_mtp_slot_epoch``), the decline is logged once per
+        reason, and the closed interval is accounted as the plain step of the
+        live rows the way the walk's decline accounts it: with no proposal
+        retained the step that just committed was the plain decode, in which
+        every live row committed one token (``_spec_committed`` without
+        counts), so the runner's count block is not read.
+        """
+        t_begin = self._spec_interval_begin(live_n, live_n, live_n)
+        self._spec_mode_now = ("plain", self._spec_plain_bucket(live_n))
+        self._spec_table_now = self._spec_plain_table_ms(live_n, top)
+        try:
+            self._mtp_plain_epoch += 1
+            if reason != self._mtp_decline_logged:
+                logger.info(f"Gemma4MTP speculative contract: proposing nothing ({reason})")
+                self._mtp_decline_logged = reason
+            return self._spec_decline(rows, k)
+        finally:
+            self._spec_interval_end("Gemma4MTP", t_begin, self._spec_mode_now, live_n)
 
     # -- propose: the acceptance-adaptive record choice ---------------------------------
     @staticmethod
@@ -7905,6 +8006,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         ``max_seq_len`` or the bounded ring cannot hold are left out and
         decline; a step above ``GEMMA4_SPEC_MAX_ROWS`` or without a covering
         record declines every row.
+
+        A step that declines as a whole before any row has to be looked at
+        (``_mtp_fast_decline_reason``: the rows exceed the largest record, or
+        the records are not captured, with nothing retained and no trailing
+        row) is answered from the block's column-0 positions alone
+        (``_mtp_fast_decline``): no row list, no block read, no session.
         """
         self._spec_boundary("propose_start")
         try:
@@ -7916,10 +8023,23 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                     f"({SPEC_DRAFT_LEN_ENV})"
                 )
             rows = int(committed.shape[0]) if committed.dim() > 1 else 1
-            live = self._spec_live_rows(positions, rows)
-            if not live:
-                return self._spec_decline(rows, k)
             width = int(committed.shape[1]) if committed.dim() > 1 else 1
+            try:
+                first = positions.reshape(int(rows), -1)[:, 0]
+            except Exception:
+                first = None  # ``_spec_live_rows``' own fallback: every row is live
+            if first is not None:
+                live_mask = first >= 0
+                live_n = int(live_mask.sum())
+                if not live_n:
+                    return self._spec_decline(rows, k)
+                top = int(first.max())  # padding rows sit at -1
+                reason = self._mtp_fast_decline_reason(first, live_n, top)
+                if reason is not None:
+                    return self._mtp_fast_decline(rows, k, live_n, top, reason)
+                live = torch.nonzero(live_mask).reshape(-1).tolist()
+            else:
+                live = list(range(int(rows)))
             # The blocks are read to the host once per step; per-row tensor reads cost ~8 us each, three a row
             # (the 32-row all-declined step paid ~1 ms in them).
             counts_rows = counts.reshape(-1).tolist() if counts is not None else None
@@ -7968,6 +8088,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 trailing.append(r)
                 continue
             session = session or self._mtp_open_session(r)
+            self._mtp_sync_session(session)
             session.steps += 1
             session.committed += n
             retained = session.retained
@@ -8012,8 +8133,11 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             )
         if not targets:
             return self._spec_decline(rows, k)
+        sessions = [target[1] for target in targets]
         if self._mtp_decoder is None or not self._mtp_captured:
-            return self._mtp_decline_step(rows, k, live, "the verify records are not captured (warmup incomplete)")
+            return self._mtp_decline_step(
+                rows, k, live, "the verify records are not captured (warmup incomplete)", sessions=sessions
+            )
         # The record is chosen by the PROPOSING rows, never by the wire batch:
         # a row the captured widths, max_seq_len or the ring cannot hold is
         # left out first, and the smallest record covering what remains is
@@ -8030,9 +8154,14 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             shape = self._mtp_shape_for(len(drafting))
             check = shape if shape is not None else largest
             p_v = int(check[1]) + 1
+            width_for = lambda pos, s=check: self._mtp_width_for(s, pos)  # noqa: E731
+            # Every reason grows with the position (a rung past the ladder, max_seq_len, the ring wrap): when
+            # the highest row passes, every row does, and no row is judged on its own.
+            if self._spec_decline_reason(max(target[3] for target in drafting), p_v, width_for) is None:
+                break
             kept = []
             for target in drafting:
-                reason = self._spec_decline_reason(target[3], p_v, lambda pos, s=check: self._mtp_width_for(s, pos))
+                reason = self._spec_decline_reason(target[3], p_v, width_for)
                 if reason is None:
                     kept.append(target)
                 else:
@@ -8057,11 +8186,14 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 live,
                 f"{len(drafting)} proposing rows exceed the largest record {largest} "
                 f"({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})",
+                sessions=sessions,
             )
         last = self._mtp_last_replay
         shape, members = self._mtp_choose_record(shape, drafting, k, last, len(live), overtaken=overtaken > 0)
         if shape is None:
-            return self._mtp_decline_step(rows, k, live, "the adaptive policy chose the plain step", log=False)
+            return self._mtp_decline_step(
+                rows, k, live, "the adaptive policy chose the plain step", log=False, sessions=sessions
+            )
         if members is not None:
             # The rows left out join no replay this step: they commit one token each from the plain decode
             # the verify runs beside the replay, and reseed when the batch enters the full record.

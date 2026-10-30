@@ -774,10 +774,14 @@ def test_after_a_decline_the_next_ordinary_step_is_plain(model, mtp, adapter, mo
     keys = [10 + 2 * r for r in range(rows)]
     # the all-declined step's per-row python budget: the blocks are read to the host once per step and the
     # ordinary step walks no session, so no row is read tensor by tensor and no row's sampling is inspected
-    # (a replay's readback is the only reader of that); the c128 Galaxy point paid ~2 ms a step in both
-    budget = {"row_reads": 0, "sampling_checks": 0}
+    # (a replay's readback is the only reader of that); the c128 Galaxy point paid ~2 ms a step in both.
+    # Above the cap the proposal itself walks nothing either (``_mtp_fast_decline``): no session is looked up
+    # or opened, no row's position is listed, and the step's live rows are never resolved by the plain decode
+    # (the 26B QB2 random c16 paid ~0.5 ms a step over the plain entry, 2026-10-30).
+    budget = {"row_reads": 0, "sampling_checks": 0, "session_walks": 0, "row_lists": 0}
     base = adapter.Gemma4SpecContractBase
     orig_row, orig_can = base._spec_row, base._spec_row_can_use_argmax
+    orig_session_at, orig_live = mtp._mtp_session_at, base._spec_live_rows
 
     def counted_row(values, rows_, row):
         budget["row_reads"] += 1
@@ -787,8 +791,18 @@ def test_after_a_decline_the_next_ordinary_step_is_plain(model, mtp, adapter, mo
         budget["sampling_checks"] += 1
         return orig_can.__func__(cls, sampling_params, row, grammar_bitmask)
 
+    def counted_session_at(slot):
+        budget["session_walks"] += 1
+        return orig_session_at(slot)
+
+    def counted_live(positions, rows_):
+        budget["row_lists"] += 1
+        return orig_live(positions, rows_)
+
     monkeypatch.setattr(base, "_spec_row", staticmethod(counted_row))
     monkeypatch.setattr(base, "_spec_row_can_use_argmax", classmethod(counted_can))
+    monkeypatch.setattr(mtp, "_mtp_session_at", counted_session_at)
+    monkeypatch.setattr(base, "_spec_live_rows", staticmethod(counted_live))
     mh._ordinary(mtp, [3] * rows, [2] * rows, keys, result=_tensor([30] * rows))
     for _ in range(2):
         proposal = mh._propose(mtp, [[30] + [-1] * 5] * rows, [[3] + [-1] * 5] * rows)
@@ -800,18 +814,37 @@ def test_after_a_decline_the_next_ordinary_step_is_plain(model, mtp, adapter, mo
     ]
     out = mh._ordinary(mtp, [30] * rows, [3] * rows, keys, result="device")
     assert out == "device", "the ordinary step after a decline is the plain decode"
-    assert budget == {"row_reads": 0, "sampling_checks": 0}, budget
+    assert budget == {"row_reads": 0, "sampling_checks": 0, "session_walks": 0, "row_lists": 0}, budget
+    assert mtp._mtp_sessions == {} and mtp._mtp_plain_epoch == 2, "no session above the cap; two plain steps counted"
+    assert mtp._mtp_slot_epoch == {slot: 0 for slot in range(rows)}, "each slot remembers the count at its prefill"
+    calib = mtp._spec_policy.calibration
+    assert calib.total[0] == 1 and calib.modes[("plain", 32)].steps == 1, "the closed interval is the plain step"
     assert mtp._mtp_row_needs_logits.get(0) is False and budget["sampling_checks"] == 1, "evaluated on first use"
+    assert budget["row_lists"] == 1, "the step's rows are listed on that first use"
     assert mtp._mtp_row_needs_logits.get(0) is False and budget["sampling_checks"] == 1, "and cached"
     assert not mtp._mtp_row_needs_logits.any() and budget["sampling_checks"] == rows, "a greedy batch walks all"
     assert mtp._mtp_row_needs_logits.get(99, "off") == "off" and mtp._mtp_row_needs_logits.values() == [False] * rows
     monkeypatch.setattr(base, "_spec_row", staticmethod(orig_row))
     monkeypatch.setattr(base, "_spec_row_can_use_argmax", orig_can)
-    # Fewer rows: the next proposal reseeds the survivors and drafts again.
+    monkeypatch.setattr(mtp, "_mtp_session_at", orig_session_at)
+    monkeypatch.setattr(base, "_spec_live_rows", staticmethod(orig_live))
+    # Fewer rows: the next proposal reseeds the survivors and drafts again; their sessions open with the two
+    # plain steps they had above the cap, and this proposal is their third.
     live = 4
     proposal = mh._propose(mtp, [[31] + [-1] * 5] * live, [[4] + [-1] * 5] * live)
     assert proposal.num_valid.tolist() == [5] * live
     assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [0, 1, 2, 3], [31] * 4, [4] * 4)
+    assert sorted(mtp._mtp_sessions) == [0, 1, 2, 3] and all(s not in mtp._mtp_slot_epoch for s in range(4))
+    assert [(s.steps, s.committed, s.epoch) for s in mtp._mtp_sessions.values()] == [(3, 3, 2)] * 4
+    mtp.release_request(1)
+    assert [m for m in messages if "contract summary" in m] == [
+        "Gemma4MTP contract summary: slot 1 (release) 3 steps, 3 tokens, 1.00 tokens/step, no verified drafts"
+    ]
+    # The survivors' unconsumed proposals and the released slot listed live (the runner's trailing proposal) both
+    # need the walk: the proposals are dropped as overtaken, the trailing row leaves the proposing set, and the
+    # three survivors reseed.
+    proposal = mh._propose(mtp, [[32] + [-1] * 5] * live, [[5] + [-1] * 5] * live)
+    assert proposal.num_valid.tolist() == [5, 0, 5, 5] and _names(mtp, "reseed")[-1][2] == [0, 2, 3]
     # -- the MTP rail: seventeen proposing rows decline above the largest record
     mtp = mh.build_mtp_model(adapter, monkeypatch)
     mh._prefill(mtp, rows=17)
