@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <tt-metalium/allocator.hpp>
 #include <type_traits>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -17,6 +18,28 @@ inline uint32_t get_block_size(uint32_t num_inner, const uint32_t max_block_size
         }
     }
     return 1U;
+}
+
+/**
+ *   Number of heads H when `head_major` is [.., T, V] over B*H leading rows and `head_merged` is the same tokens
+ *   laid out as [.., T, H*V] over B leading rows. check_head_merged validates the pair.
+ */
+inline uint32_t get_num_heads_of_head_merged(const ttnn::Tensor& head_major, const ttnn::Tensor& head_merged) {
+    return head_merged.logical_shape()[-1] / head_major.logical_shape()[-1];
+}
+
+inline uint32_t get_address_or_zero(const tt::tt_metal::Buffer* buffer) {
+    return buffer != nullptr ? buffer->address() : 0U;
+}
+
+/**
+ *   Gated RMSNorm forward and backward only have kernels for rows held whole in L1 (EVERYTHING_FITS_IN_L1).
+ */
+inline void check_gated_row_fits_in_l1(const bool gated, const bool everything_fits_in_l1, const uint32_t Wt) {
+    TT_FATAL(
+        !gated || everything_fits_in_l1,
+        "Gated RMSNorm needs a whole row of {} tiles resident in L1, which does not fit on this device",
+        Wt);
 }
 
 inline uint32_t pack_two_bfloat16_to_uint32(float value) {
@@ -168,6 +191,11 @@ inline void for_each_core(uint32_t num_cores, uint32_t num_cores_y, Fn&& fn) {
             fn(core);
         }
     }
+}
+
+// L1 bytes per core left for a program's buffers: the core's L1 below what the allocator reserves.
+inline uint64_t available_l1_bytes(const ttnn::distributed::MeshDevice& device) {
+    return device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
 }  // namespace ttml::metal

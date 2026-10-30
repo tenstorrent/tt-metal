@@ -21,6 +21,12 @@ namespace sfpu {
 // Mask that keeps the low 16 bits (the UInt16 value) of a 32-bit dest word and clears the garbage high bits.
 constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 
+// Largest UInt16 value: what an out-of-range unsigned input saturates to.
+constexpr std::uint16_t UINT16_SATURATE_VALUE = 0xFFFF;
+
+// Bit width of UInt16: a uint32 fits in it exactly when it has at least this many leading zeros.
+constexpr std::uint32_t UINT16_BIT_WIDTH = 16;
+
 // SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
 constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
@@ -55,7 +61,7 @@ inline void calculate_typecast_fp32_to_uint16() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         if (is_fp32_dest_acc_en) {
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
         } else {
@@ -96,11 +102,12 @@ inline void calculate_typecast_fp32_to_uint16() {
         // mode, so this case uses the plain loop. The init still armed the macro Misc word, so
         // disarm the leftover state first (WH hangs otherwise running a plain loop with it, #46751).
         disarm_sfploadmacro_misc();
-#pragma GCC unroll 0
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFP_STOCH_RND(
+                0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
         }
     }
@@ -114,7 +121,7 @@ inline void calculate_typecast_uint16_to_fp16b() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_3, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
     }
 #else
@@ -152,7 +159,7 @@ inline void calculate_typecast_int32_to_fp16b() {
         TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // cc = lreg[1] < 0
         TTI_SFPADDI(0xcf00, p_sfpu::LREG0, 0);                            // lreg[0] += -2**31
         TTI_SFPENCC(0, 0, 0, 0);                                          // restore cc
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
     }
 #else
@@ -280,7 +287,7 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
     // so it is not equivalent and is not restored here. See #46751.
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -330,7 +337,7 @@ inline void calculate_typecast_uint16_to_fp32() {
         // this case uses the plain loop. The init still armed the macro Misc word, so disarm the
         // leftover state first (WH hangs otherwise running a plain loop with it, #46751).
         disarm_sfploadmacro_misc();
-#pragma GCC unroll 0
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
             TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
@@ -408,7 +415,7 @@ inline void calculate_typecast_uint32_to_fp16b() {
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
         TTI_SFPADDI(0x4f00, p_sfpu::LREG1, 0);  // 2^31
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
     }
 #else
@@ -553,20 +560,22 @@ inline void calculate_typecast_uint16_to_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint16() {
-    // Kept as a plain loop (no SFPLOADMACRO): #46231 rewrote this to shift the value right by 16
-    // and renormalize (2's-complement + shift + OR) before the swap-hi-lo16 store. The historical
-    // macro used a LO16-load 2-macro pipeline on a different bit layout and computes a different
-    // result, so it is not equivalent and is not restored here. See #46751.
+    // Kept as a plain loop (no SFPLOADMACRO): the historical macro used a LO16-load 2-macro
+    // pipeline on a different bit layout and computes a different result, so it is not
+    // equivalent and is not restored here. See #46751.
+    //
+    // Saturation: x >= 2^16 exactly when clz(x) < 16 (SFPLZ returns 32 for x == 0, and reads
+    // bit 31 as data), so those lanes are overwritten with 0xFFFF and the rest keep x, whose
+    // high half is already zero. The LO16 store (SFPSTORE mode 9) swaps the 16-bit halves, so
+    // the UInt16 result lands in the high half of the Dest word, where the packer reads it.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPIADD(
-            0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
-        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
-        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPSTORE(p_sfpu::LREG1, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
+        sfpi::vUInt x = sfpi::dst_reg[0].template mode<sfpi::DataLayout::U32>(ADDR_MOD_3);
+        v_if(sfpi::lz(x) < UINT16_BIT_WIDTH) { x = sfpi::vUInt(UINT16_SATURATE_VALUE); }
+        v_endif;
+        // No dst_reg++: the ADDR_MOD_2 store (hardware slot 6, dest.incr = 2 from
+        // init_typecast_uint32_to_uint16) advances Dest to the next row.
+        sfpi::dst_reg[0].template mode<sfpi::DataLayout::LO16>(ADDR_MOD_2) = x;
     }
 }
 
@@ -578,7 +587,7 @@ inline void calculate_typecast_int32_to_uint16() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
         TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
     }
 #else
@@ -1004,19 +1013,15 @@ inline void calculate_typecast_fp32_to_uint8() {
     }
 }
 
+// The uint8 wrap of any 32-bit input is its low byte: (x + 256) & 0xFF == x & 0xFF (adding 256
+// never touches bits 7:0, mod-2^32 wrap included) and (x & 0xFFFF) & 0xFF == x & 0xFF, so neither a
+// bias nor a UInt16 pre-mask is needed; `u16` is kept for the dispatchers but selects nothing.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool u16 = false>
 inline void calculate_typecast_uint_to_uint8() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d) {
-        if constexpr (u16) {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-            TTI_SFPAND(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
-        } else {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        }
-        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+        sfpi::vInt x = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_3);
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_2) = x & sfpi::vConstIntPrgm0;
     }
 }
 
@@ -1119,7 +1124,6 @@ inline void init_typecast_uint_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
-    sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }
 
 template <bool APPROXIMATION_MODE>

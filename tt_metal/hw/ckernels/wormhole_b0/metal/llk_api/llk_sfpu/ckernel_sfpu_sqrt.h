@@ -19,9 +19,11 @@ namespace sfpu {
 // Fast and accurate approximation algorithms for computing floating point square root. Numerical Algorithms (2024).
 // https://doi.org/10.1007/s11075-024-01932-7
 
-// x's bits with the sign shifted out: `_bits_without_sign_(x) != 0` is a magnitude test that
-// treats -0.0 and +0.0 alike, which a bare `as<vInt>(x) != 0` does not.
-sfpi_inline sfpi::vInt _bits_without_sign_(const sfpi::vFloat x) { return sfpi::as<sfpi::vInt>(x) << 1; }
+// Zero/nonzero magnitude-test bits: only +/-0 map to zero.
+// Float-mode SFPABS clears the sign except for -NaN, which remains nonzero.
+// Use this only for == 0 / != 0 tests, not as an unconditional sign-bit mask.
+// SFPABS is one instruction; a shift needs a copy first because x stays live.
+sfpi_inline sfpi::vInt _bits_without_sign_(const sfpi::vFloat x) { return sfpi::as<sfpi::vInt>(sfpi::abs(x)); }
 
 // Computes the square root or reciprocal square root of a positive floating point value x.
 template <bool APPROXIMATE = false, bool RECIPROCAL = false, bool FAST_APPROX = false>

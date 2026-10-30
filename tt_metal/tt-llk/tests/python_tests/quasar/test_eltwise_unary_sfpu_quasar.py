@@ -90,7 +90,6 @@ def _seed_rng():
 # Formats swept by every op.
 SFPU_UNARY_FORMATS = input_output_formats(
     [
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Float16_b,
     ]
@@ -827,6 +826,15 @@ def _is_int32_to_fp16b(src_format: DataFormat, dst_format: DataFormat) -> bool:
     return src_format == DataFormat.Int32 and dst_format == DataFormat.Float16_b
 
 
+def _is_uint16_to_fp32(src_format: DataFormat, dst_format: DataFormat) -> bool:
+    return src_format == DataFormat.UInt16 and dst_format == DataFormat.Float32
+
+
+# 32768 and 65535 catch a signed load: Quasar's signed 16-bit format is sign-magnitude,
+# so a signed read gives -0.0 and -32767 instead.
+_UINT16_TO_FP32_SEEDS = (0, 1, 32767, 32768, 65535)
+
+
 def _prepare_typecast_input(
     src_A: torch.Tensor,
     src_B: torch.Tensor,
@@ -870,6 +878,13 @@ def _prepare_typecast_input(
                 -v for v in _INT32_TO_FP16B_RNE_BOUNDARIES
             ]
             for i, seed in enumerate(seeds):
+                if i < flat.numel():
+                    flat[i] = seed
+            result = flat.reshape(result.shape)
+
+        if _is_uint16_to_fp32(src_format, dst_format):
+            flat = result.flatten()
+            for i, seed in enumerate(_UINT16_TO_FP32_SEEDS):
                 if i < flat.numel():
                     flat[i] = seed
             result = flat.reshape(result.shape)
@@ -1016,7 +1031,7 @@ def _assert_op_format_pairs_partition_configs():
 
 
 # Float formats whose 16-bit Dest route gets an explicit MOVA2D (FPU datacopy) signbit variant.
-SIGNBIT_MOVA2D_FORMATS = (DataFormat.Float16, DataFormat.Float16_b)
+SIGNBIT_MOVA2D_FORMATS = (DataFormat.Float16_b,)
 
 
 def signbit_fpu_route_variants() -> List[QuasarSfpuVariant]:
@@ -1531,12 +1546,11 @@ def test_eltwise_unary_sfpu_signbit_fpu_route_quasar(
 #   1. the kernel addresses Dest as the TILE-layout tile `copy_tile` puts there, not as an
 #      untilized row-major buffer, and
 #   2. the running total crosses the face-pair boundary (tile row 15 -> 16) intact.
-# Pinned to the 16-bit float formats on purpose: a Float32 input would be written straight
+# Pinned to a 16-bit float format on purpose: a Float32 input would be written straight
 # to Dest by UNPACR_DEST, bypassing the SrcA -> A2D datacopy that is `copy_tile`.
 # ---------------------------------------------------------------------------
 CUMSUM_DETECTOR_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
 ]
 
 # The tile row the accumulation chain crosses from face pair 0/1 into face pair 2/3.
@@ -2000,6 +2014,98 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
         f"got      {result[:32].tolist()}\n"
         f"expected {expected_flat[:32].tolist()}"
     )
+
+
+def _uint16_to_fp32_tile() -> tuple:
+    """Repeat the uint16 boundary seeds across one tile, with the fp32 oracle."""
+    element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    repeats = math.ceil(element_count / len(_UINT16_TO_FP32_SEEDS))
+    inputs = list(_UINT16_TO_FP32_SEEDS) * repeats
+    inputs = inputs[:element_count]
+    return (
+        torch.tensor(inputs, dtype=torch.int64),
+        torch.tensor(inputs, dtype=torch.float32),
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_uint16_to_fp32_quasar(dest_sync):
+    """UInt16 -> Float32 over a full tile of the boundary seeds."""
+    dest_sync = dest_sync[0]
+
+    formats = InputOutputFormat(DataFormat.UInt16, DataFormat.Float32)
+    variants = generate_quasar_sfpu_format_variants(MathOperation.Typecast, [formats])
+    assert len(variants) == 1, (
+        "expected exactly one UInt16 -> Float32 Quasar variant, got "
+        f"{len(variants)}: {variants}"
+    )
+    variant = variants[0]
+
+    src_A, expected_flat = _uint16_to_fp32_tile()
+    src_B = torch.zeros_like(src_A)
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Typecast),
+                APPROX_MODE(ApproximationMode.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(dest_sync),
+                TYPECAST_FORMATS(
+                    input_format=variant.sfpu_src,
+                    output_format=variant.sfpu_dst,
+                ),
+            ],
+            "runtimes": [
+                TILE_COUNT(1),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": variant.unpack_to_dest,
+            "dest_acc": variant.dest_acc,
+        },
+    )
+
+    variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+    result = torch.tensor(res_from_L1, dtype=torch.float32)
+    assert (
+        result.numel() == expected_flat.numel()
+    ), f"result has {result.numel()} elements, expected {expected_flat.numel()}"
+
+    period = len(_UINT16_TO_FP32_SEEDS)
+    for case_index, value in enumerate(_UINT16_TO_FP32_SEEDS):
+        got = result[case_index::period]
+        mismatched = (got != float(value)).nonzero().flatten()
+        assert mismatched.numel() == 0, (
+            f"UInt16 {value} should convert to {float(value)}, got "
+            f"{got[mismatched[:8]].tolist()} at {mismatched.numel()} of "
+            f"{got.numel()} tile positions"
+        )
 
 
 # Dropout seeding: the PRNG mask is unpredictable, so check 0-or-x*scale, the dropped fraction,

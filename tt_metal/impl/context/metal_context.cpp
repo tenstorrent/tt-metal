@@ -33,7 +33,7 @@
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
@@ -48,8 +48,8 @@
 #include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>
@@ -240,7 +240,6 @@ void MetalContext::initialize(
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
-        rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
     // Emulated devices have no firmware for the watcher to poll; skip it. A null
@@ -349,7 +348,6 @@ void MetalContext::teardown() {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
-        rtoptions().set_disable_dma_ops(false);
     }
 
     if (!get_cluster().is_mock_or_emulated()) {

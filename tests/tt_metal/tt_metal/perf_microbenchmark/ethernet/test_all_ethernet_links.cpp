@@ -13,7 +13,7 @@
 #include <optional>
 #include <fstream>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -328,7 +328,11 @@ private:
 // NOLINTEND(cppcoreguidelines-prefer-member-initializer)
 
 std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper, const TestParams& params) {
-    std::vector<tt_metal::Program> programs(device_helper.num_devices);
+    std::vector<tt_metal::Program> programs;
+    programs.reserve(device_helper.devices.size());
+    for (const auto& device : device_helper.devices) {
+        programs.push_back(tt_metal::CreateProgram(*device));
+    }
     // Create a mapping from chip ID to vector index
     std::map<ChipId, size_t> chip_to_index;
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
