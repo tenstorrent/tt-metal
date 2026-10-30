@@ -118,21 +118,21 @@ Rows 17 onward cover the Tensor Prefetcher on CCEs. They use the same environmen
 | 46 | `MimirPrefetcher.MM7T2FanOut3To012` | Fan-out from CCE 3 to CCEs 0, 1 and 2 | 2x only |
 | 47 | `MimirPrefetcher.MM7T2TwoSenders01To2` | Two senders, CCEs 0 and 1, into two GCBs on CCE 2 | 2x only |
 | 48 | `MimirPrefetcher.MM7T2TwoSenders02To3` | Two senders, CCEs 0 and 2, into two GCBs on CCE 3 | 2x only |
-| 49 | `MimirPrefetcher.MM7T3SubChunkLocal0To1` | A block larger than a stage third, in sub-chunks through two stage slots | all |
-| 50 | `MimirPrefetcher.MM7T3SubChunkD2d0To2` | The same across D2D | 2x only |
-| 51 | `MimirPrefetcher.MM7T3BelowStageThirdLocal0To1` | Blocks smaller than a stage third, two per stage slot | all |
-| 52 | `MimirPrefetcher.MM7T3BelowStageThirdD2d0To2` | The same across D2D | 2x only |
-| 53 | `MimirPrefetcher.MM7T3PartialStageChunkLocal0To1` | A round that ends in a partial stage chunk | all |
-| 54 | `MimirPrefetcher.MM7T3AboveStageThirdLocal0To1` | A block above the default stage third, in one-tile sub-chunks | all |
-| 55 | `MimirPrefetcher.MM7T3AboveStageThirdD2d0To2` | The same across D2D | 2x only |
-| 56 | `MimirPrefetcher.MM7T3PageSplitLocal0To1` | One Queue call split into two request pages; local only, since the split is on the host | all |
-| 57 | `MimirPrefetcher.MM7T3AbaLocal0To1` | Tensors A, B, A with different page sizes; resize and wrap | all |
-| 58 | `MimirPrefetcher.MM7T3AbaD2d0To2` | The same across D2D | 2x only |
-| 59 | `MimirPrefetcher.MM7T3WrapAndResizeLocal0To1` | Resize padding and wraps in a FIFO the page size does not divide | all |
-| 60 | `MimirPrefetcher.MM7T3WrapAndResizeD2d0To2` | The same across D2D | 2x only |
-| 61 | `MimirPrefetcher.MM7T3GcbSwitchLocal0To1` | GCB 1, then 2, then 1, resuming mid-FIFO | all |
-| 62 | `MimirPrefetcher.MM7T3GcbSwitchD2d0To2` | The same across D2D | 2x only |
-| 62a | `MimirPrefetcher.MM7T3ReceiverSwitch0To1Then2` | GCB 1 to CCE 1, then GCB 2 to CCE 2 across D2D, then GCB 1 again | 2x only |
+| 49 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/SubChunkLocal0To1` | A block larger than a stage third, in sub-chunks through two stage slots | all |
+| 50 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/SubChunkD2d0To2` | The same across D2D | 2x only |
+| 51 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/BelowStageThirdLocal0To1` | Blocks smaller than a stage third, two per stage slot | all |
+| 52 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/BelowStageThirdD2d0To2` | The same across D2D | 2x only |
+| 53 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/PartialStageChunkLocal0To1` | A round that ends in a partial stage chunk | all |
+| 54 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AboveStageThirdLocal0To1` | A block above the default stage third, in one-tile sub-chunks | all |
+| 55 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AboveStageThirdD2d0To2` | The same across D2D | 2x only |
+| 56 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/PageSplitLocal0To1` | One Queue call split into two request pages; local only, since the split is on the host | all |
+| 57 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AbaLocal0To1` | Tensors A, B, A with different page sizes; resize and wrap | all |
+| 58 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/AbaD2d0To2` | The same across D2D | 2x only |
+| 59 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/WrapAndResizeLocal0To1` | Resize padding and wraps in a FIFO the page size does not divide | all |
+| 60 | `MM7T3/MimirPrefetcherT3SingleGcb.Delivers/WrapAndResizeD2d0To2` | The same across D2D | 2x only |
+| 61 | `MM7T3/MimirPrefetcherT3GcbSwitch.Delivers/GcbSwitchLocal0To1` | GCB 1, then 2, then 1, resuming mid-FIFO | all |
+| 62 | `MM7T3/MimirPrefetcherT3GcbSwitch.Delivers/GcbSwitchD2d0To2` | The same across D2D | 2x only |
+| 62a | `MM7T3/MimirPrefetcherT3GcbSwitch.Delivers/ReceiverSwitch0To1Then2` | GCB 1 to CCE 1, then GCB 2 to CCE 2 across D2D, then GCB 1 again | 2x only |
 | 63 | `MimirPrefetcher.MM7T3FenceLocal0To1` | A WAIT_CQ fence holds delivery until the slot is written | all |
 | 64 | — | Removed on 2026-10-29: trace capture needs fast dispatch, and Mimir runs slow dispatch only | — |
 | 65 | `MimirPrefetcher.MM7RejectKRowMajorTensor` | Queue rejects a K-row-major tensor | all |

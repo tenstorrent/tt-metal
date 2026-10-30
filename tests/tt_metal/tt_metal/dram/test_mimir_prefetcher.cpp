@@ -2026,71 +2026,41 @@ SingleGcbCase t3_wrap_and_resize_case() {
         .sender_requests = 6};
 }
 
-TEST_F(MimirPrefetcher, MM7T3SubChunkLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_single_gcb_case(kT3LocalReceiverCce, t3_sub_chunk_case());
+struct T3SingleGcbParam {
+    const char* name;
+    SingleGcbCase (*make_case)();
+    uint32_t receiver_cce;
+};
+
+class MimirPrefetcherT3SingleGcb : public MimirPrefetcher, public ::testing::WithParamInterface<T3SingleGcbParam> {};
+
+TEST_P(MimirPrefetcherT3SingleGcb, Delivers) {
+    const T3SingleGcbParam param = GetParam();
+    if (param.receiver_cce == kT3D2dReceiverCce) {
+        skip_unless_mimir_local_package();
+    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, param.receiver_cce});
+    run_single_gcb_case(param.receiver_cce, param.make_case());
 }
 
-TEST_F(MimirPrefetcher, MM7T3SubChunkD2d0To2) {
-    skip_unless_mimir_local_package();
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
-    run_single_gcb_case(kT3D2dReceiverCce, t3_sub_chunk_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3BelowStageThirdLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_single_gcb_case(kT3LocalReceiverCce, t3_below_stage_third_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3BelowStageThirdD2d0To2) {
-    skip_unless_mimir_local_package();
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
-    run_single_gcb_case(kT3D2dReceiverCce, t3_below_stage_third_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3PartialStageChunkLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_single_gcb_case(kT3LocalReceiverCce, t3_partial_stage_chunk_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3AboveStageThirdLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_single_gcb_case(kT3LocalReceiverCce, t3_above_stage_third_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3AboveStageThirdD2d0To2) {
-    skip_unless_mimir_local_package();
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
-    run_single_gcb_case(kT3D2dReceiverCce, t3_above_stage_third_case());
-}
-
-// Local only: the split happens in host serialization, before any page reaches the route.
-TEST_F(MimirPrefetcher, MM7T3PageSplitLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_single_gcb_case(kT3LocalReceiverCce, t3_page_split_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3AbaLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_single_gcb_case(kT3LocalReceiverCce, t3_aba_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3AbaD2d0To2) {
-    skip_unless_mimir_local_package();
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
-    run_single_gcb_case(kT3D2dReceiverCce, t3_aba_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3WrapAndResizeLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_single_gcb_case(kT3LocalReceiverCce, t3_wrap_and_resize_case());
-}
-
-TEST_F(MimirPrefetcher, MM7T3WrapAndResizeD2d0To2) {
-    skip_unless_mimir_local_package();
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
-    run_single_gcb_case(kT3D2dReceiverCce, t3_wrap_and_resize_case());
-}
+// PageSplit is local only: the split happens in host serialization, before any page reaches the route.
+INSTANTIATE_TEST_SUITE_P(
+    MM7T3,
+    MimirPrefetcherT3SingleGcb,
+    ::testing::Values(
+        T3SingleGcbParam{"SubChunkLocal0To1", t3_sub_chunk_case, kT3LocalReceiverCce},
+        T3SingleGcbParam{"SubChunkD2d0To2", t3_sub_chunk_case, kT3D2dReceiverCce},
+        T3SingleGcbParam{"BelowStageThirdLocal0To1", t3_below_stage_third_case, kT3LocalReceiverCce},
+        T3SingleGcbParam{"BelowStageThirdD2d0To2", t3_below_stage_third_case, kT3D2dReceiverCce},
+        T3SingleGcbParam{"PartialStageChunkLocal0To1", t3_partial_stage_chunk_case, kT3LocalReceiverCce},
+        T3SingleGcbParam{"AboveStageThirdLocal0To1", t3_above_stage_third_case, kT3LocalReceiverCce},
+        T3SingleGcbParam{"AboveStageThirdD2d0To2", t3_above_stage_third_case, kT3D2dReceiverCce},
+        T3SingleGcbParam{"PageSplitLocal0To1", t3_page_split_case, kT3LocalReceiverCce},
+        T3SingleGcbParam{"AbaLocal0To1", t3_aba_case, kT3LocalReceiverCce},
+        T3SingleGcbParam{"AbaD2d0To2", t3_aba_case, kT3D2dReceiverCce},
+        T3SingleGcbParam{"WrapAndResizeLocal0To1", t3_wrap_and_resize_case, kT3LocalReceiverCce},
+        T3SingleGcbParam{"WrapAndResizeD2d0To2", t3_wrap_and_resize_case, kT3D2dReceiverCce}),
+    [](const ::testing::TestParamInfo<T3SingleGcbParam>& info) { return std::string(info.param.name); });
 
 inline constexpr uint32_t kT3SwitchFirstTensorId = 59;
 inline constexpr uint32_t kT3SwitchSecondTensorId = 60;
@@ -2139,23 +2109,37 @@ void run_t3_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
     expect_validated_delivery(second_smoke, 0, second_schedule);
 }
 
-TEST_F(MimirPrefetcher, MM7T3GcbSwitchLocal0To1) {
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
-    run_t3_gcb_switch(kT3LocalReceiverCce, kT3LocalReceiverCce);
+struct T3GcbSwitchParam {
+    const char* name;
+    uint32_t receiver_cce;
+    uint32_t second_receiver_cce;
+};
+
+class MimirPrefetcherT3GcbSwitch : public MimirPrefetcher, public ::testing::WithParamInterface<T3GcbSwitchParam> {};
+
+TEST_P(MimirPrefetcherT3GcbSwitch, Delivers) {
+    const T3GcbSwitchParam param = GetParam();
+    if (param.receiver_cce == kT3D2dReceiverCce || param.second_receiver_cce == kT3D2dReceiverCce) {
+        skip_unless_mimir_local_package();
+    }
+    if (param.second_receiver_cce == param.receiver_cce) {
+        MIMIR_ROUTE_GUARD({kT3SenderCce, param.receiver_cce});
+    } else {
+        MIMIR_ROUTE_GUARD({kT3SenderCce, param.receiver_cce, param.second_receiver_cce});
+    }
+    run_t3_gcb_switch(param.receiver_cce, param.second_receiver_cce);
 }
 
-TEST_F(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
-    skip_unless_mimir_local_package();
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
-    run_t3_gcb_switch(kT3D2dReceiverCce, kT3D2dReceiverCce);
-}
-
-// The same switch, with GCB2 on another receiver CCE across D2D: CCE 1, then CCE 2, then back to CCE 1.
-TEST_F(MimirPrefetcher, MM7T3ReceiverSwitch0To1Then2) {
-    skip_unless_mimir_local_package();
-    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce, kT3D2dReceiverCce});
-    run_t3_gcb_switch(kT3LocalReceiverCce, kT3D2dReceiverCce);
-}
+// ReceiverSwitch0To1Then2 is the same switch with GCB2 on another receiver CCE across D2D: CCE 1, then CCE 2, then back
+// to CCE 1.
+INSTANTIATE_TEST_SUITE_P(
+    MM7T3,
+    MimirPrefetcherT3GcbSwitch,
+    ::testing::Values(
+        T3GcbSwitchParam{"GcbSwitchLocal0To1", kT3LocalReceiverCce, kT3LocalReceiverCce},
+        T3GcbSwitchParam{"GcbSwitchD2d0To2", kT3D2dReceiverCce, kT3D2dReceiverCce},
+        T3GcbSwitchParam{"ReceiverSwitch0To1Then2", kT3LocalReceiverCce, kT3D2dReceiverCce}),
+    [](const ::testing::TestParamInfo<T3GcbSwitchParam>& info) { return std::string(info.param.name); });
 
 // The fence: a WAIT_CQ for a value the CQ signal slot does not hold yet, queued through the manager's test hook, then a
 // PREFETCH. The sender waits in WAIT_CQ and delivers nothing until the test writes the value into the slot. The session
