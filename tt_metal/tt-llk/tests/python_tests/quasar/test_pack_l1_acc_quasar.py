@@ -53,7 +53,6 @@ TILE_DIMENSIONS = [32, 32]
 PACK_L1_ACC_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
