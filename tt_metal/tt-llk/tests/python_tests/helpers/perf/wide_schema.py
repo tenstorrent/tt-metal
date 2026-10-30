@@ -136,6 +136,7 @@ DB_SCHEMA = [
     Column("output_num_tiles_in_block", "int64", True, "configuration"),
     Column("output_tile_cnt", "int64", True, "configuration"),
     Column("overlap_first_half", "bool", True, "configuration"),
+    Column("pack_untilize_benchmark", "string", True, "configuration"),
     Column("partial_a", "bool", True, "configuration"),
     Column("partial_b", "bool", True, "configuration"),
     Column("partial_face_math", "bool", True, "configuration"),

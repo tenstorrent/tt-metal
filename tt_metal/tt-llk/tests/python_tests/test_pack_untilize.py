@@ -30,6 +30,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     NUM_FACES,
+    PACK_UNTILIZE_BENCHMARK,
     TILE_COUNT,
     TILE_DST_CT_OFFSET,
     generate_input_dim,
@@ -66,6 +67,8 @@ def test_pack_untilize(
     run_types=None,
     loop_factor=1,
     block_ct_dim=None,
+    compile_time_formats=False,
+    benchmark="functional",
 ):
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
@@ -161,6 +164,7 @@ def test_pack_untilize(
             ),
             DEST_SYNC(dest_sync),
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
+            PACK_UNTILIZE_BENCHMARK(benchmark),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -180,6 +184,7 @@ def test_pack_untilize(
         ),
         "dest_acc": dest_acc,
         "unpack_to_dest": unpack_to_dest,
+        "compile_time_formats": compile_time_formats,
     }
 
     configuration = create_test_or_perf_config(
