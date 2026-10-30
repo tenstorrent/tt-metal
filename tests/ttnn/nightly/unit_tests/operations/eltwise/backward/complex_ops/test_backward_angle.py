@@ -11,8 +11,14 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
+from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_pcc,
+    comp_equal,
+    comp_allclose,
+)
 
 from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.complex_ops.backward_complex_utility_funcs import (
@@ -87,7 +93,9 @@ def test_angle_bw_extreme_exponent_range(dtype, z_pair, device):
     )
     grad_tensor = ttnn.Tensor(grad_data, dtype).to(ttnn.TILE_LAYOUT).to(device)
 
-    tt_dev = convert_to_torch_tensor(ttnn.angle_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    tt_dev = convert_to_torch_tensor(
+        ttnn.angle_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
 
     # PyTorch's native angle_backward evaluates self.abs().pow(2) in single precision,
     # which underflows to 0.0f and produces NaN for |z| < 2^-63 when FTZ (flush-to-zero)

@@ -13,7 +13,11 @@ import ttnn
 from loguru import logger
 from math import pi
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_pcc,
+    comp_equal,
+    comp_allclose,
+)
 
 from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.complex_ops.backward_complex_utility_funcs import (
@@ -87,7 +91,9 @@ def test_polar_bw_extreme_exponent_range(dtype, r_scale, device):
         ttnn.Tensor(grad_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device),
     )
 
-    tt_dev = convert_to_torch_tensor(ttnn.polar_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    tt_dev = convert_to_torch_tensor(
+        ttnn.polar_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
     golden_tensor = ttnn.get_golden_function(ttnn.polar_bw)(grad_data, in_data)
 
     assert not torch.isnan(tt_dev[0]).any()
