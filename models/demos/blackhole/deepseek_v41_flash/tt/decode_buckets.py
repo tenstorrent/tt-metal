@@ -17,6 +17,7 @@ All persistent buffers of a bucket are allocated by ``__init__`` / ``prepare`` a
 """
 
 import copy
+import os
 import time
 
 import torch
@@ -31,6 +32,12 @@ def corruptible(md):
     """
     from ttnn.tools.trace_allocation_tracker import corruptible_allocation_scope
 
+    if (
+        os.environ.get("DSV41_TRACE_NO_CORRUPTIBLE") == "1"
+    ):  # diagnostics: the tracker also counts the buffers a capture allocates and python keeps alive
+        import contextlib
+
+        return contextlib.nullcontext()
     return corruptible_allocation_scope(md)
 
 

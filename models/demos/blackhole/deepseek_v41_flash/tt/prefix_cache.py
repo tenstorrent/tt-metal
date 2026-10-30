@@ -233,10 +233,27 @@ def write_batch(model, batch, targets, mask_d):
     big = ttnn.from_torch(
         host, device=md, dtype=ttnn.bfloat16, layout=t0_.layout, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=mesh
     )
+    chk = os.environ.get("DSV41_APC_ADDRCHK") == "1"
     for j, (sp, per_col) in enumerate(batch):
         t = sp.tensor
+        a_before = t.buffer_address() if chk else None
         new_j = ttnn.slice(big, [0, 0, j * rn, 0], [Up, 1, (j + 1) * rn, D]) if len(batch) > 1 else big
-        if tail:
+        if tail and os.environ.get("DSV41_APC_INPLACE", "1") == "1":
+            # IN PLACE: ``slice_write`` into a tile-layout carried tensor converts it to row-major and back, i.e. RE-ALLOCATES it (found by TT_METAL_TRACE_ALLOC_TRACKING: 4 buffers allocated
+            # here, alive at the next replay): the captured prefill trace keeps reading / writing the OLD address of the halo / key FIFO / latent FIFO, so a restored prefix was invisible to
+            # the trace (and the freed old buffer was reused). The slot's rows are rebuilt as a whole tensor and copied into the existing buffer like the non-tail kinds (``ttnn.copy``).
+            row0 = sp.row0(t.shape[2], n)
+            parts = []
+            if row0 > 0:
+                parts.append(ttnn.slice(t, [0, 0, 0, 0], [Up, 1, row0, D]))
+            parts.append(new_j)
+            if row0 + n < t.shape[2]:
+                parts.append(ttnn.slice(t, [0, 0, row0 + n, 0], [Up, 1, t.shape[2], D]))
+            full_new = ttnn.concat(parts, dim=2) if len(parts) > 1 else new_j
+            upd = _where(mask_d, full_new, t)
+            ttnn.copy(upd, t)
+            extra = tuple(x for x in parts if x is not new_j) + ((full_new,) if full_new is not new_j else ())
+        elif tail:
             row0 = sp.row0(t.shape[2], n)
             old = ttnn.slice(t, [0, 0, row0, 0], [Up, 1, row0 + n, D])
             upd = _where(mask_d, new_j, old)
@@ -248,6 +265,14 @@ def write_batch(model, batch, targets, mask_d):
             extra = ()
         for x in (upd,) + extra + ((new_j,) if len(batch) > 1 else ()):
             ttnn.deallocate(x)
+        if (
+            chk
+        ):  # DSV41_APC_ADDRCHK=1: a persistent carried tensor must keep its device address (the captured prefill trace reads / writes it there)
+            a_after = t.buffer_address()
+            print(
+                f"APC-ADDR {sp.name} {'tail' if tail else 'full'} {'MOVED' if a_after != a_before else 'same'} {a_before} -> {a_after}",
+                flush=True,
+            )
     ttnn.deallocate(big)
 
 

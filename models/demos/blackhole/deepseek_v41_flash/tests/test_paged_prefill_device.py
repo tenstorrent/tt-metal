@@ -92,6 +92,10 @@ def _run(mesh_device):
         log=log,
     )
     assert pool.scratch_rows > 0, "build with DSV41_PF_PAGED=write|read"
+    if (
+        os.environ.get("PP_WARM_EXPORT") == "1"
+    ):  # the server order: the key hand-off's persistent tensors / programs exist before any trace is captured
+        m.warm_key_export()
     assert (
         pool.dtype == ttnn.bfloat16 or set(MODES) == {"0"} or os.environ.get("DSV41_PF_PAGED_FP8", "0") == "1"
     ), "write / read need a bf16 pool (P1)"
@@ -103,6 +107,8 @@ def _run(mesh_device):
     ):  # every decode user prefilled (all slots of every mesh row busy: real tokens in all Up*C rows)
         users = list(range(B))
     lens_pick = [ISL, ISL - 197, ISL - 1024 - 3, ISL - 512]  # aligned, unaligned, short unaligned, chunk-aligned
+    if os.environ.get("PP_USERS"):  # e.g. "0,2,4,6": one user per mesh row of a B=8 model (U=2)
+        users = [int(x) for x in os.environ["PP_USERS"].split(",")]
     if os.environ.get("PP_SAME_LEN") == "1":
         lens_pick = [ISL] * 4
     lens = {u: lens_pick[i % 4] for i, u in enumerate(users)}
@@ -147,8 +153,37 @@ def _run(mesh_device):
         }
 
     results = {}
+    rec = None
+    if (
+        os.environ.get("PP_PROFILE") == "1"
+    ):  # op names of the trace: python-level op recorder + marks around every trace capture (tools: pf_up4/prof_sum.py)
+        from models.demos.blackhole.deepseek_v41_flash.tests.op_table_recorder import OpRecorder
+
+        rec = OpRecorder()
+        rec.install()
+        rec.enabled = True
+        _bt, _et = ttnn.begin_trace_capture, ttnn.end_trace_capture
+
+        def _bt2(*a, **k):
+            rec.mark("begin_trace")
+            return _bt(*a, **k)
+
+        def _et2(*a, **k):
+            rec.mark("end_trace")
+            return _et(*a, **k)
+
+        ttnn.begin_trace_capture, ttnn.end_trace_capture = _bt2, _et2
     for mode in MODES:
         PG.set_mode(mode.split("#")[0])  # "0#b": a second dense run (run-to-run noise baseline)
+        if (
+            os.environ.get("PP_HEAD_AB") == "1"
+        ):  # "read#hs": the same mode with DSV41_PF_HEAD_SPLIT=1 (the head as its own trace); other modes: 0
+            os.environ["DSV41_PF_HEAD_SPLIT"] = "1" if "#hs" in mode else "0"
+            os.environ["DSV41_PF_LAYOUT_SHIFT_MIB"] = "37" if "#sh" in mode else "0"
+            os.environ["DSV41_PF_EAGER_DEBUG"] = "1" if "#eg" in mode else "0"
+            from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune as _pft
+
+            _pft.ROPE_TAB_CACHE = "#rc" in mode  # "#rc": DSV41_PF_ROPE_CACHE (shared RoPE table slices)
         m.prefill_model.teardown_dyn()
         m.release_trace()
         m.pf_resume = {}
@@ -167,11 +202,30 @@ def _run(mesh_device):
             for u in range(B):
                 m.release_user(u)
             m.pf_resume = {}
+            if (
+                "#pz" in mode or "#pn" in mode or "#p0" in mode
+            ):  # poison ALL free DRAM (finite 3.0 / NaN / 0.0), then free it again: same layout, different leftover contents
+                ttnn.synchronize_device(md)
+                mv = ttnn.get_memory_view(md, ttnn.BufferType.DRAM)
+                per_bank = int(mv.largest_contiguous_bytes_free_per_bank * 0.97)
+                W = (per_bank * 8 // 64) // 32 * 32
+                val = float("nan") if "#pn" in mode else (0.0 if "#p0" in mode else 3.0)
+                pz = ttnn.full([1, 1, 32, W], val, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=md)
+                ttnn.synchronize_device(md)
+                ttnn.deallocate(pz)
+                ttnn.synchronize_device(md)
+                log(f"PP poisoned {per_bank / 2**20:.0f} MiB/bank with {val} before rep {rep}")
             t0 = time.perf_counter()
             res = m.prefill_interleaved(
                 [(u, prompts[u], 0, lens[u]) for u in users], CHUNK, s_pad_max=S_pad, want_logits=True
             )
             wall = time.perf_counter() - t0
+            if (
+                os.environ.get("PP_PROFILE") == "1"
+            ):  # device profiler: rep 0 = capture / compile (drained and dropped), the later reps are pure trace replays
+                ttnn.synchronize_device(md)
+                ttnn.ReadDeviceProfiler(md)
+                log(f"PP PROFILE drained after rep {rep}")
             tm = dict(m.timing)
             times.append((wall, tm.get("replay_s", 0.0), tm.get("replays", 0)))
             log(
@@ -214,6 +268,15 @@ def _run(mesh_device):
         )
         st = snap()
         results[mode] = dict(res=res, pool=st, times=times, dram=free, dec=dec, pre=pre)
+    if rec is not None:
+        import json
+
+        rec.enabled = False
+        json.dump(
+            {"rows": rec.rows, "marks": rec.marks},
+            open(os.path.join(os.environ["TT_METAL_PROFILER_DIR"], "rows_all.json"), "w"),
+        )
+        log(f"PP PROFILE rows_all.json: {len(rec.rows)} rows, marks {rec.marks}")
 
     if os.environ.get(
         "PP_SAVE"

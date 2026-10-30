@@ -17,7 +17,12 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
+from models.demos.blackhole.deepseek_v41_flash.tt import trace_alloc_diag as _tad  # noqa: E402
+
+_tad.install()  # DSV41_TRACE_ALLOC_LOG=1
+_tad.install_upload_log()  # DSV41_TRACE_UPLOAD_LOG=1
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as _PS
+from models.demos.blackhole.deepseek_v41_flash.tt import trace_dump as _TD  # noqa: E402
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d, recording, replay
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_attention import clear_chunk_caches, pad_len
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import colsplit_active, unpack_streams
@@ -396,6 +401,19 @@ class DSV41PrefillModel:
                 if id(pl_.pmoe) not in seen:
                     seen.add(id(pl_.pmoe))
                     pl_.pmoe.warmup()
+        if dyn and _TD.ON:
+            _k0 = next(
+                (
+                    l.pa.sparse.indexer.keys
+                    for _, l in self.layers
+                    if l.pa.sparse is not None
+                    and l.pa.sparse.indexer is not None
+                    and l.pa.sparse.indexer.keys is not None
+                ),
+                None,
+            )
+            if _k0 is not None:
+                _TD.put("keys_start", _k0)
         for lid, pl in self.layers:
             if (part == "front" and lid >= REPLAY_BACK) or (part == "back" and lid < REPLAY_BACK):
                 continue
@@ -490,6 +508,23 @@ class DSV41PrefillModel:
                     ttnn.deallocate(p)
             xs, pres = outs, pouts
             sync("layers", t0)
+            if (
+                dyn
+            ):  # DSV41_PF_LAYER_DUMP=1: the stream-0 output of every layer (+ the key FIFO of the first index owner after every layer)
+                _TD.put(f"L{lid}.out", xs[0])
+                if _TD.ON:
+                    _k = next(
+                        (
+                            l.pa.sparse.indexer.keys
+                            for _, l in self.layers
+                            if l.pa.sparse is not None
+                            and l.pa.sparse.indexer is not None
+                            and l.pa.sparse.indexer.keys is not None
+                        ),
+                        None,
+                    )
+                    if _k is not None:
+                        _TD.put(f"keys_after_L{lid}", _k)
             if hook is not None:
                 xs, pres = unpack_streams(xs, pres)
                 hook(lid, xs, pres)
@@ -972,6 +1007,9 @@ class DSV41PrefillModel:
         """
         if not self.compile_dyn(C, S_pad):
             return False
+        hook = self.__dict__.get("pre_capture_hook")
+        if hook is not None:
+            hook()  # persistent buffers / programs / semaphores the post-replay work (key hand-off) creates lazily: they must exist BEFORE the capture (see trace_hazard notes)
         self.capture_dyn_trace(C)
         return True
 
@@ -1045,6 +1083,68 @@ class DSV41PrefillModel:
             flush=True,
         )
 
+    def _addr_roots(self):
+        return {
+            "layers": [(lid, pl.pa) for lid, pl in self.layers],
+            "dyn": self.dyn,
+            "sink": getattr(self, "sink", None),
+            "bufs": getattr(self, "_bufs", None),
+            "pm": {"dyn_out": getattr(self, "dyn_out", None)},
+        }
+
+    def _addr_check(self, tag):
+        a0 = getattr(self, "_addr0", None)
+        if a0 is None:
+            return
+        now = _TD.addr_snapshot(self._addr_roots())
+        moved = [(k, a0[k], now.get(k)) for k in a0 if now.get(k) != a0[k]]
+        new = [k for k in now if k not in a0]
+        if (moved or new) and getattr(self, "_addr_msg", None) != (len(moved), len(new)):
+            self._addr_msg = (len(moved), len(new))
+            print(
+                f"ADDRCHECK {tag}: {len(moved)} tensors moved / freed since the capture, {len(new)} new; first: {moved[:12]} new: {new[:12]}",
+                flush=True,
+            )
+
+    def _keychk(self, tag):
+        """DSV41_PF_KEYCHK=1: host read of the first index owner's key FIFO (a persistent tensor, no device allocation) right before / after every window trace: KEYCHK <n> <tag> <per mesh row sums>"""
+        ix = next(
+            (
+                l.pa.sparse.indexer
+                for _, l in self.layers
+                if l.pa.sparse is not None and l.pa.sparse.indexer is not None and l.pa.sparse.indexer.keys is not None
+            ),
+            None,
+        )
+        if ix is None:
+            return
+        ttnn.synchronize_device(self.md)
+        self._kc_n = getattr(self, "_kc_n", 0) + (1 if tag == "pre" else 0)
+        for dv in (
+            0,
+            1,
+            self.cols,
+        ):  # (mesh row 0 column 0 / 1, mesh row 1 column 0): the first key owner's FIFO, one checksum per 32-row block (KEYFIFO <n> <tag> <dev> <block>:<sum> ...)
+            kt_ = ttnn.to_torch(ttnn.get_device_tensors(ix.keys)[dv]).double()
+            blk_ = kt_.reshape(kt_.shape[0], -1, 32, kt_.shape[-1]).sum(dim=(2, 3))
+            print(
+                f"KEYFIFO {self._kc_n} {tag} dev{dv} addr={ix.keys.buffer_address()} "
+                + " ".join(f"{b}:{v:.6e}" for b, v in enumerate(blk_[0].tolist()) if v != 0.0),
+                flush=True,
+            )
+        for path, t in sorted(_TD.tensor_map(self._addr_roots()).items()):
+            if "dyn_out" in path or ("pool" in path and not (path.endswith("pool.pool") and (self._kc_n - 1) % 16 < 4)):
+                continue
+            try:
+                devs = ttnn.get_device_tensors(t)
+                x = ttnn.to_torch(devs[0]).double()
+                print(
+                    f"KEYCHK {self._kc_n} {tag} {path} {x.sum().item():.9e}/{x.abs().sum().item():.9e}/{int(x.isnan().sum())}",
+                    flush=True,
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"KEYCHK {self._kc_n} {tag} {path} ERR {type(e).__name__}", flush=True)
+
     def _warm_gather_plans(self, C):
         """``DSV41PrefillIndexer.warm_gather`` for every distinct score width of the column-sharded indexers of the active context; right before a chunk-trace capture (DSV41_PF_WARM_GATHER=0 disables it)."""
         if os.environ.get("DSV41_PF_WARM_GATHER", "1") != "1":
@@ -1081,6 +1181,16 @@ class DSV41PrefillModel:
             ttnn.synchronize_device(self.md)
         tr0 = self._trace_region_mib()
         self._warm_gather_plans(C)
+        sh_ = int(os.environ.get("DSV41_PF_LAYOUT_SHIFT_MIB", "0"))
+        if (
+            sh_ > 0
+        ):  # diagnostics: a persistent dummy buffer before the capture moves the trace's temporaries (layout sensitivity of the numerics)
+            self._shift_buf = ttnn.zeros(
+                [1, 1, 32, sh_ * 2**20 // (32 * 2 * 8 * 32 // 32)],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.md,
+            )
         self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
         _PS.CAPTURING[0] = True
         with corruptible(self.md):
@@ -1089,6 +1199,9 @@ class DSV41PrefillModel:
         ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
         ttnn.synchronize_device(self.md)
         self._log_chunk_trace(C, tr0)
+        if os.environ.get("DSV41_PF_ADDR_CHECK") == "1":
+            self._addr0 = _TD.addr_snapshot(self._addr_roots())
+            print(f"ADDRCHECK snapshot at capture end: {len(self._addr0)} tensors", flush=True)
         self._dyn_compiled = None
         self.timing["compile_and_capture"] = time.perf_counter() - t0
 
@@ -1232,6 +1345,10 @@ class DSV41PrefillModel:
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
 
         check_trace_allocations(self.md, self.dyn_trace, "prefill chunk")
+        if os.environ.get("DSV41_PF_ADDR_CHECK") == "1":
+            self._addr_check(f"before replay of window s0={s0}")
+        if os.environ.get("DSV41_PF_KEYCHK") == "1":
+            self._keychk("pre")
         ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
         if (
             back and getattr(self, "dyn_trace_b", None) is not None
@@ -1241,6 +1358,8 @@ class DSV41PrefillModel:
             self.timing["replays_a_only"] = self.timing.get("replays_a_only", 0) + (
                 1 if getattr(self, "dyn_trace_b", None) is not None else 0
             )
+        if os.environ.get("DSV41_PF_KEYCHK") == "1":
+            self._keychk("post")
         hist.append(ttnn.record_event(self.md, 0))
         del hist[:-2]
         if w is not None:
@@ -1257,6 +1376,9 @@ class DSV41PrefillModel:
         c0 = self.__dict__.get("_call_t0")
         if c0 is not None:  # (call timeline for the server log: when the first trace of the call was enqueued)
             self.timing.setdefault("first_enq_rel", t_en - c0)
+        if _TD.ON:
+            self._dump_win = getattr(self, "_dump_win", 0) + 1
+            _TD.report(self.md, self.rows, self.cols, self._dump_win)
         if not sync:
             self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
             self.timing["async_windows"] = self.timing.get("async_windows", 0) + 1

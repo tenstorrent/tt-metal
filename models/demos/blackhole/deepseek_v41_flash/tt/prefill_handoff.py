@@ -262,6 +262,9 @@ class GenPrefillModel(DSV41PrefillModel):
         selected on the device with a per-(mesh row, user, sub-chunk) 0/1 mask (persistent tensor refreshed by ``PagedStateSink.update``), run through the
         head and sampled greedily. The outputs (tokens [32,1], logits shard [1,1,32,vocab/cols] per user) are trace outputs read by ``Model._post_chunk``:
         NO eager device op or allocation happens between replays (they hang / corrupt traced programs)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt import trace_dump as _td
+
+        _td.begin()
         out = super().forward_device(bufs, S, s0, C, hook=hook, profile=profile, dyn=dyn)
         if (
             dyn and getattr(self, "_part", None) != "front"

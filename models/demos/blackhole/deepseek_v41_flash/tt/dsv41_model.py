@@ -1847,6 +1847,8 @@ class Model:
             pm.dyn is None or pm.dyn.C != C or pm.dyn.S_pad != S_pad or pm.dyn_trace is None
         ):
             self.flush_key_exports(why="trace re-capture")  # (the key FIFOs of the finished prompts are re-allocated)
+        if os.environ.get("DSV41_PRECAPTURE_WARM", "1") == "1":
+            pm.pre_capture_hook = self.warm_key_export  # (warm_serving does the same by hand)
         if pm.capture_dyn(
             C, S_pad
         ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM

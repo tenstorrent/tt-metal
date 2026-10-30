@@ -28,6 +28,7 @@ import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_paged as PG
 from models.demos.blackhole.deepseek_v41_flash.tt import prefill_single as PS
+from models.demos.blackhole.deepseek_v41_flash.tt import trace_dump as _TD1
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, LOCAL_HEADS, WINDOW
 from models.demos.blackhole.deepseek_v41_flash.tt.h2d import h2d
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM as IDIM
@@ -749,6 +750,7 @@ class DSV41PrefillIndexer:
     def add_keys_single(self, lat_pre, tab, Cc, ctx):
         """the chunk's index keys -> scratch (static slice_write) + history (``key_append`` at the tensor-driven offset)"""
         d, U, sh = self.dec, self.U, self.sh
+        _TD1.put("kin", self.keys)
         x = ttnn.reshape(lat_pre, [1, 1, U * Cc, HEAD_DIM])
         k = ttnn.linear(x, d.wk, compute_kernel_config=self.ckc)
         k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=d.k_norm_w, epsilon=d.k_eps)
@@ -765,8 +767,22 @@ class DSV41PrefillIndexer:
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )  # [U*Cc8, 1, 128]: this column's rows (global slot jj % cols == column)
         klt = ttnn.to_layout(ttnn.reshape(kl, [U, 1, Cc8, IDIM]), ttnn.TILE_LAYOUT)
-        ttnn.experimental.slice_write(klt, self.keys, [0, 0, 0, 0], [U, 1, Cc8, IDIM], [1, 1, 1, 1])
+        _ka = self.keys.buffer_address() if os.environ.get("DSV41_PF_KEYADDR") == "1" else None
+        if os.environ.get("DSV41_PF_KEY_SCRATCH_INPLACE", "1") == "1":
+            PS.key_append(
+                klt, ctx.sg.kzero[self.ratio], self.keys, U, Cc8 // 32, int(self.keys.shape[2])
+            )  # scratch rows, in place
+        else:  # (the old write: re-allocates the FIFO, see SingleCtx.ensure)
+            ttnn.experimental.slice_write(klt, self.keys, [0, 0, 0, 0], [U, 1, Cc8, IDIM], [1, 1, 1, 1])
+        if _ka is not None:
+            print(
+                f"KEYADDR ratio {self.ratio} capturing={PS.CAPTURING[0]} slice_write: {_ka} -> {self.keys.buffer_address()} ({'MOVED' if _ka != self.keys.buffer_address() else 'same'})",
+                flush=True,
+            )
+        _TD1.put("kscr", self.keys)
+        _TD1.put("knew", klt)
         PS.key_append(klt, ctx.sg.kofs[self.ratio], self.keys, U, Cc8 // 32, int(self.keys.shape[2]))
+        _TD1.put("kout", self.keys)
 
     def select_single(self, h, qr, tab, C, ctx):
         """ids [U,1,C,512] = GLOBAL slots (scratch / history layout) of the top-512 entries of every query of the chunk (0xFFFFFFFF where fewer are visible): per column the local top-512 of the
@@ -816,6 +832,23 @@ class DSV41PrefillIndexer:
             sc = ttnn.experimental.indexer_score_dsa(
                 qu, self.slab, wu, chunk_start_idx=Lc, program_config=self.cfg, cache_batch_idx=u, **kvarg
             )  # [1,1,C,Lc+32] RM: only the columns [0, nvalid) are written
+            if (
+                os.environ.get("DSV41_PF_SCORE_MASK") == "1"
+            ):  # diagnostics: the columns [nvalid, Lc + 32) of the score buffer are never written: -inf instead of whatever the buffer held
+                key_ = ("iota", id(self.md), Lc + 32)
+                if key_ not in _PERSIST:
+                    _PERSIST[key_] = _rep(
+                        self.md,
+                        torch.arange(Lc + 32, dtype=torch.float32).reshape(1, 1, 1, -1),
+                        ttnn.float32,
+                        ttnn.TILE_LAYOUT,
+                    )
+                nvf = ttnn.typecast(ttnn.to_layout(ttnn.reshape(nvalid, [1, 1, 1, 1]), ttnn.TILE_LAYOUT), ttnn.float32)
+                vm = ttnn.typecast(ttnn.repeat(ttnn.lt(_PERSIST[key_], nvf), [1, 1, C, 1]), ttnn.bfloat16)
+                sc_t = ttnn.where(vm, ttnn.to_layout(sc, ttnn.TILE_LAYOUT), float("-inf"))
+                ttnn.deallocate(sc)
+                sc = ttnn.to_layout(sc_t, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(sc_t)
             tk.tick("score")
             scr = ttnn.to_layout(ttnn.slice(sc, [0, 0, 0, 0], [1, 1, C, Cc8]), ttnn.TILE_LAYOUT)
             blk = ttnn.to_layout(ttnn.add(scr, sh["stair"]), ttnn.ROW_MAJOR_LAYOUT)
@@ -1004,6 +1037,7 @@ class DSV41PrefillSparse:
                 idx = ttnn.concat([win, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3)
             if s0 == 0:
                 idx = compact_rows(idx, self._perm())
+            _TD.put("idxrows", idx)
             qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             qu = ttnn.concat([qu, zero_heads], dim=1)  # [1,32,C,512]
             o = ttnn.transformer.sparse_sdpa(
@@ -1326,6 +1360,11 @@ class DSV41PrefillSparse:
                 self.ids = (ix.select_dyn_sharded if ix.sh else ix.select_dyn)(
                     h, qr, ctx.tabs[True], ctx.sp_vis[r], C, L
                 )
+            from models.demos.blackhole.deepseek_v41_flash.tt import trace_dump as _TD0
+
+            _TD0.put("slots", self.ids)
+            if getattr(ix, "keys", None) is not None:
+                _TD0.put("keys", ix.keys)
             if paged:  # FIFO slots -> pool rows (one translation per (kv source, index source) pair)
                 if getattr(self, "pids", None) is not None:
                     ttnn.deallocate(self.pids)
@@ -1333,6 +1372,9 @@ class DSV41PrefillSparse:
         ids = self.ids if ix is not None else self.idx_src.ids
         if paged:
             ids = self.pids if ix is not None else self.idx_src.pids
+        from models.demos.blackhole.deepseek_v41_flash.tt import trace_dump as _TD
+
+        _TD.put("ids", ids)
         win = ctx.sp_win[r]
         zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM])
         outs = []
@@ -1361,7 +1403,9 @@ class DSV41PrefillSparse:
             ttnn.deallocate(idx)
             outs.append(ttnn.to_layout(ttnn.slice(o, [0, 0, 0, 0], [1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.TILE_LAYOUT))
             ttnn.deallocate(o)
-        return outs[0] if U == 1 else ttnn.concat(outs, dim=0)
+        res = outs[0] if U == 1 else ttnn.concat(outs, dim=0)
+        _TD.put("sdpa", res)
+        return res
 
 
 def lazy_tables_on():

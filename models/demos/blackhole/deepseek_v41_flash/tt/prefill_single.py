@@ -163,7 +163,7 @@ class SingleCtx:
         self.md, self.ctx, self.U = md, ctx, U
         self.per_row = bool(getattr(ctx, "per_row", False))
         self.rows, self.cols = tuple(md.shape)
-        self.nvalid, self.kofs = {}, {}
+        self.nvalid, self.kofs, self.kzero = {}, {}, {}
         self._rep = ttnn.ReplicateTensorToMesh(md)
         self._shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
 
@@ -185,6 +185,17 @@ class SingleCtx:
             for _ in range(U if self.per_row else 1)
         ]
         self.kofs[r] = ttnn.from_torch(
+            torch.zeros(self.rows * U, 32, dtype=torch.int32),
+            device=md,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self._shard,
+        )
+        # constant all-zero append offsets: ``key_append`` at row block 0 writes the chunk's keys into the SCRATCH rows of the key FIFO IN PLACE (``slice_write`` of a tile chunk into the tile FIFO
+        # converts the FIFO to row-major and back, i.e. re-allocates it: a captured trace keeps reading the address it was captured with (stale after the capture) -> the carried history is lost
+        # whenever the allocator does not hand the old address back; layout-dependent logits)
+        self.kzero[r] = ttnn.from_torch(
             torch.zeros(self.rows * U, 32, dtype=torch.int32),
             device=md,
             dtype=ttnn.uint32,
