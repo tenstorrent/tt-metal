@@ -500,12 +500,12 @@ inline std::unique_ptr<Program> launch_cce_program(IDevice* device, const std::v
 }
 
 // Runs one cce_copy_ops kernel per launch, all in one Program with slow dispatch.
-inline ::testing::AssertionResult run_cce_copy_ops(
+inline void run_cce_copy_ops(
     IDevice* device, const std::vector<CceCopyLaunch>& launches, std::vector<CceCopyResult>& results) {
     results.clear();
     check_tl1_layout();
     if (launches.empty()) {
-        return ::testing::AssertionSuccess();
+        return;
     }
 
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -564,7 +564,6 @@ inline ::testing::AssertionResult run_cce_copy_ops(
         result.xor_signature = done_words[cce_copy_ops_abi::kDoneXorWord];
         results.push_back(result);
     }
-    return ::testing::AssertionSuccess();
 }
 
 // Topology and host accessors.
@@ -668,7 +667,7 @@ inline MimirDramAddressInfo mimir_dram_address(
     return info;
 }
 
-inline ::testing::AssertionResult mimir_host_dram_write(
+inline void mimir_host_dram_write(
     const Cluster& cluster,
     const metal_SocDescriptor& soc,
     ChipId chip,
@@ -678,10 +677,9 @@ inline ::testing::AssertionResult mimir_host_dram_write(
     const uint32_t size = static_cast<uint32_t>(data.size() * sizeof(uint32_t));
     static_cast<void>(mimir_dram_address(soc, chip, view, view_offset, size));
     cluster.write_dram_vec(data.data(), size, chip, static_cast<int>(view), view_offset);
-    return ::testing::AssertionSuccess();
 }
 
-inline ::testing::AssertionResult mimir_host_dram_read(
+inline void mimir_host_dram_read(
     const Cluster& cluster,
     const metal_SocDescriptor& soc,
     ChipId chip,
@@ -694,7 +692,6 @@ inline ::testing::AssertionResult mimir_host_dram_read(
     data.assign(size_bytes / sizeof(uint32_t), 0);
     // No dram_barrier: EmuAxi runs on SimulationChip, whose dram_membar is a no-op.
     cluster.read_dram_vec(data.data(), size_bytes, chip, static_cast<int>(view), view_offset);
-    return ::testing::AssertionSuccess();
 }
 
 struct MimirAnchor {

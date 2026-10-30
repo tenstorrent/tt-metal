@@ -94,11 +94,8 @@ std::string view_param_name(const ::testing::TestParamInfo<uint32_t>& info) {
     const std::vector<uint32_t>& expected,
     const std::string& label) {
     std::vector<uint32_t> actual;
-    const ::testing::AssertionResult read = mimir_host_dram_read(
+    mimir_host_dram_read(
         cluster, soc, kChipId, view, view_offset, static_cast<uint32_t>(expected.size() * sizeof(uint32_t)), actual);
-    if (!read) {
-        return read;
-    }
     return compare_words(label, expected, actual);
 }
 
@@ -109,11 +106,7 @@ std::string view_param_name(const ::testing::TestParamInfo<uint32_t>& info) {
     uint64_t view_offset,
     const std::vector<uint32_t>& expected,
     const std::string& label) {
-    const ::testing::AssertionResult written =
-        mimir_host_dram_write(cluster, soc, kChipId, view, view_offset, expected);
-    if (!written) {
-        return written;
-    }
+    mimir_host_dram_write(cluster, soc, kChipId, view, view_offset, expected);
     return read_and_compare(cluster, soc, view, view_offset, expected, label);
 }
 
@@ -189,9 +182,7 @@ TEST_P(MimirHostDramView, PatternReadback) {
                     ++tag;
                 }
                 for (const GuardSpot& guard : guards) {
-                    EXPECT_TRUE(
-                        mimir_host_dram_write(cluster, soc, kChipId, view, guard.view_offset, make_guard(guard.tag)))
-                        << label;
+                    mimir_host_dram_write(cluster, soc, kChipId, view, guard.view_offset, make_guard(guard.tag));
                 }
                 EXPECT_TRUE(write_then_read_back(
                     cluster,
@@ -237,8 +228,7 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
     const size_t boundary_words = kBoundaryTransferBytes / sizeof(uint32_t);
     const uint64_t unique_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     for (uint32_t other_view = 0; other_view < topology.num_views; ++other_view) {
-        EXPECT_TRUE(mimir_host_dram_write(
-            cluster, soc, kChipId, other_view, unique_offset, make_guard(other_view, boundary_words)));
+        mimir_host_dram_write(cluster, soc, kChipId, other_view, unique_offset, make_guard(other_view, boundary_words));
     }
     for (uint32_t other_view = 0; other_view < topology.num_views; ++other_view) {
         EXPECT_TRUE(read_and_compare(
@@ -256,13 +246,13 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
     }
     // All words are written before any is read, so a stuck or swapped address bit shows as an overwritten word.
     for (size_t index = 0; index < alias_walk_offsets.size(); ++index) {
-        EXPECT_TRUE(mimir_host_dram_write(
+        mimir_host_dram_write(
             cluster,
             soc,
             kChipId,
             view,
             alias_walk_offsets[index],
-            make_guard(kAliasWalkTagBase + static_cast<uint32_t>(index), 1)));
+            make_guard(kAliasWalkTagBase + static_cast<uint32_t>(index), 1));
     }
     for (size_t index = 0; index < alias_walk_offsets.size(); ++index) {
         EXPECT_TRUE(read_and_compare(
@@ -300,9 +290,7 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
 
         const std::vector<uint32_t> upper_half(pattern.begin() + boundary_words / 2, pattern.end());
         std::vector<uint32_t> next_view_words;
-        ASSERT_TRUE(
-            mimir_host_dram_read(cluster, soc, kChipId, next_view, 0, kBoundaryTransferBytes / 2, next_view_words))
-            << label;
+        mimir_host_dram_read(cluster, soc, kChipId, next_view, 0, kBoundaryTransferBytes / 2, next_view_words);
         EXPECT_TRUE(compare_words(
             fmt::format("view {} offset 0 returns the bytes written past the end of view {}", next_view, view),
             upper_half,
@@ -358,8 +346,7 @@ TEST(MimirHostDram, ReconnectPersists) {
                 anchor.view_offset,
                 make_pattern(
                     MimirPattern::Prng, kRegionBytes / sizeof(uint32_t), info.flat_address, mimir_test_seed())};
-            ASSERT_TRUE(mimir_host_dram_write(writer, writer_soc, kChipId, view, region.view_offset, region.expected))
-                << info.to_string();
+            mimir_host_dram_write(writer, writer_soc, kChipId, view, region.view_offset, region.expected);
             dram_regions.push_back(region);
         }
         for (uint32_t cce_index : persisted_cces) {
@@ -426,9 +413,8 @@ TEST(MimirHostDram, HostSideRejections) {
     const uint64_t tl1_last_word_offset = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
                                           hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) -
                                           sizeof(uint32_t);
-    ASSERT_TRUE(mimir_host_dram_write(cluster, soc, kChipId, kView, 0, make_guard(kRejectSentinelTag, 2)));
-    ASSERT_TRUE(
-        mimir_host_dram_write(cluster, soc, kChipId, kView, last_word_of_stride, make_guard(kStrideEndSentinelTag, 1)));
+    mimir_host_dram_write(cluster, soc, kChipId, kView, 0, make_guard(kRejectSentinelTag, 2));
+    mimir_host_dram_write(cluster, soc, kChipId, kView, last_word_of_stride, make_guard(kStrideEndSentinelTag, 1));
     write_cce_tl1(
         cluster, kChipId, tl1_cce_index, tl1_last_word_offset, make_guard(kTl1EndSentinelTag, 1), Tl1Range::WholeTl1);
 
@@ -477,7 +463,7 @@ TEST(MimirHostDram, HostSideRejections) {
         read_cce_tl1(cluster, kChipId, tl1_cce_index, tl1_offset, tl1_bytes, Tl1Range::WholeTl1)));
 
     const std::vector<uint32_t> tl1_words = make_guard(kL1PatternTag, 4);
-    ASSERT_TRUE(mimir_host_dram_write(cluster, soc, kChipId, kView, tl1_offset, make_guard(kTl1AliasGddrTag, 4)));
+    mimir_host_dram_write(cluster, soc, kChipId, kView, tl1_offset, make_guard(kTl1AliasGddrTag, 4));
     cluster.write_dram_vec(tl1_words.data(), tl1_bytes, kChipId, kView, l1_noc_offset + tl1_offset);
     EXPECT_TRUE(compare_words(
         "DRAM API write at the L1 tag, read through CCE TL1",
