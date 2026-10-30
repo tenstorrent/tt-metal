@@ -75,18 +75,12 @@ _SAMPLES = 5
 _WALL_SAMPLES = 30
 # Set to report without gating, e.g. while re-baselining.
 _REPORT_ONLY = os.environ.get("ATTN_RES_PERF_REPORT_ONLY") == "1"
-# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power): the median of runs
-# 41112791430, 41117934062 and 41130107396 (2026-10-30), on bh-glx-120-d08u08, -d06u02 and -d09u02. Traced held
-# within 0.4% across the three boxes (boundary 1716-1722, ordinary 140.4-141.2); untraced within 1.5% on the
-# boundary layer (4596-4664) and 4% on the ordinary one (313-326). Untraced is host-dispatch bound here, with
-# the device idle between AttnRes programs, so it follows the host CPU and gets the wider band. Off the pool,
-# bh-glx-120-b07u02 measures the traced boundary layer 6% high, so a run there may need
-# ATTN_RES_PERF_REPORT_ONLY=1.
-_REFERENCE_E2E_US = {
-    "traced": {"boundary": 1720.0, "ordinary": 141.0},
-    "untraced": {"boundary": 4620.0, "ordinary": 323.0},
-}
-_MARGIN = {"traced": 0.05, "untraced": 0.10}
+# Galaxy end-to-end time (us) of each layer's AttnRes on the CI pool (bh_sc1_high_power). Traced and untraced
+# share the reference and the band: production prefill runs untraced, and the untraced walk is held to the
+# traced time. Within a box the spread is under 2%; bh-glx-120-b07u02 measures the traced boundary layer ~6%
+# above CI, so a run off the CI pool may need ATTN_RES_PERF_REPORT_ONLY=1.
+_REFERENCE_E2E_US = {"boundary": 1656.0, "ordinary": 141.0}
+_MARGIN = 0.05
 # The stand-in module: never issued by AttnRes, so its programs are identifiable by kernel path.
 _MODULE_KERNEL = "normalization/softmax"
 
@@ -279,7 +273,7 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
     _log_ops("boundary", median_layers[0])
     _log_ops("ordinary", median_layers[1])
 
-    references, margin = _REFERENCE_E2E_US[mode], _MARGIN[mode]
+    references, margin = _REFERENCE_E2E_US, _MARGIN
     logger.info(
         f"AttnRes layers {LAYER}-{LAYER + ORDINARY_LAYERS} (S = {INHERITED_SNAPSHOTS} -> {INHERITED_SNAPSHOTS + 1}), "
         f"{num_tokens} tokens, SP8xTP4 torus-XY, {mode}:"
