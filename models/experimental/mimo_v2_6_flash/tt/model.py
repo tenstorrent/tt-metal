@@ -1753,6 +1753,15 @@ class TtMiMoModel:
         """Replays the decode trace (``sample``: the sampled one); returns its output."""
         trace = self.decode_trace["sampled"] if sample else self.decode_trace
         assert trace is not None, "a sampled decode step needs the DeviceSampler's trace (vLLM mode)"
+        if sample:
+            # The sampled step replays only on an empty queue. Replayed behind commands still in flight (the last
+            # step's token read, a reload's copies), it now and then breaks the replica's decode for good: every
+            # slot's logits turn flat or inf from then on, new requests included, while its inputs, page tables and
+            # sampling parameters read back intact and the sampler draws correctly from what it is given (4x8
+            # Galaxy, SPEED-Bench 1k at c=16, T=1: 14 of 64 requests garbled). The greedy trace never does; any
+            # extra small copy ahead of the sampled one makes it more likely. The fault is below the model. The
+            # drain costs nothing measurable: the same run then garbles 0 of 64, streaming 897 chunks/s against 836.
+            ttnn.synchronize_device(self.mesh_device)
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return trace["output"]
 
