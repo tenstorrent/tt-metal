@@ -57,6 +57,21 @@ targets:
               gpqa_tolerance: 0.2
             owner_id: U03HY7MK4BT
             team: models
+          # Serving perf shapes. Without these, the GPQA entry above applies to them and fails on a missing gpqa.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U03HY7MK4BT
+            team: models
+          - batch_size: 32
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U03HY7MK4BT
+            team: models
   gemma4-26b-a4b-qb2:
     skus:
       p300x2:
@@ -113,6 +128,49 @@ targets:
               # First 10/198 GPQA Diamond questions; require at least 9/10.
               gpqa: 100
               gpqa_tolerance: 0.1
+            owner_id: U08BGTAMU1W
+            team: models
+          # Serving perf shapes. Without these, the GPQA entry above applies to them and fails on a missing gpqa.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
             owner_id: U08BGTAMU1W
             team: models
   # Consolidation: additive central-accuracy targets for models whose TTTv2 demo has no committed CI e2e
