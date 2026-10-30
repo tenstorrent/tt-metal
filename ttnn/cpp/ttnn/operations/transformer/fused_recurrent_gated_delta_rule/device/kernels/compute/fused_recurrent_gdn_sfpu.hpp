@@ -162,6 +162,34 @@ inline void addsub_rows4_body(uint32_t a, uint32_t b) {
     }
 }
 
+// Keep the column-0 lanes of an even-column vector (lane % 8 == 0, i.e. (vConstTileId & 0xE) == 0), zero the rest.
+inline sfpi::vFloat keep_col0(sfpi::vFloat x) {
+    v_if((sfpi::vConstTileId & static_cast<int>(0xE)) != 0) { x = 0.0f; }
+    v_endif;
+    return x;
+}
+
+// The vector pass's constants tile, see build_ebc16. Vector 0 of a slot holds rows 0..3 of its face 0 (even
+// columns); band b of face 0 of the output is vector 2 * b. All three sources are read before anything is written.
+inline void build_ebc16_body(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c, uint32_t slot_out) {
+    const sfpi::vFloat e0 = keep_col0(sfpi::dst_reg[slot_e * kSlotVecs]);
+    const sfpi::vFloat b0 = keep_col0(sfpi::dst_reg[slot_b * kSlotVecs]);
+    const sfpi::vFloat c0 = keep_col0(sfpi::dst_reg[slot_c * kSlotVecs]);
+    const uint32_t ob = slot_out * kSlotVecs;
+    sfpi::dst_reg[ob + 0] = e0;    // rows 0..3, column 0 = e
+    sfpi::dst_reg[ob + 2] = b0;    // rows 4..7, column 0 = beta
+    sfpi::dst_reg[ob + 4] = c0;    // rows 8..11, column 0 = c
+    sfpi::dst_reg[ob + 1] = 0.0f;  // odd columns of rows 0..3
+    sfpi::dst_reg[ob + 3] = 0.0f;
+    sfpi::dst_reg[ob + 5] = 0.0f;
+    sfpi::dst_reg[ob + 6] = 0.0f;  // rows 12..15
+    sfpi::dst_reg[ob + 7] = 0.0f;
+#pragma GCC unroll 8
+    for (uint32_t v = kFaceVecs; v < 2 * kFaceVecs; v++) {  // face 1: columns 16..31
+        sfpi::dst_reg[ob + v] = 0.0f;
+    }
+}
+
 // exp (the fp32-accurate body exp_tile<false> runs on an fp32 DEST, _sfpu_exp_fp32_accurate_) on the eight vectors
 // that hold column 0 of a 32x32 tile; the other columns are left as they are.
 inline void exp_col0_body(uint32_t dst) {
@@ -194,6 +222,22 @@ inline void exp_tile_exact(uint32_t dst) {
 // gcol32 -> ecol32: the only consumer of ecol32 is mul_col_bcast, which reads column 0 alone. Needs no init.
 inline void exp_col0_exact(uint32_t dst) {
     MATH((detail::run([&] { detail::exp_col0_body(dst); })));
+}
+
+// The vector pass's single constants tile ebc16, built in DEST[slot_out] as a 16x32 tile ready for pack_tile:
+//   column 0 rows 0..3  <- rows 0..3 of column 0 of DEST[slot_e]  (ecol32 after the exp: e)
+//   column 0 rows 4..7  <- rows 0..3 of column 0 of DEST[slot_b]  (bcol16: beta)
+//   column 0 rows 8..11 <- rows 0..3 of column 0 of DEST[slot_c]  (ccol32, or the FPU's c tile: c)
+//   every other element of faces 0 and 1 <- +0.0 (all 16 vectors written: whole rows, clean pack).
+// Only column 0 rows 0..3 of each source is read, whatever else the sources hold; the sources are read before
+// anything is written, so slot_out may be one of them (the 3-argument form builds in place in slot_e; use a free
+// slot_out when ecol32 must also be packed from the same acquire, e.g. build_ebc16(0, 1, 2, 3)). Consumers:
+// mul_col_bcast_band0(dst, ebc, 0) for e, (.., 1) for beta, (.., 2) for c. Faces 2 and 3 of slot_out are untouched.
+inline void build_ebc16(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c, uint32_t slot_out) {
+    MATH((detail::run([&] { detail::build_ebc16_body(slot_e, slot_b, slot_c, slot_out); })));
+}
+inline void build_ebc16(uint32_t slot_e, uint32_t slot_b, uint32_t slot_c) {
+    build_ebc16(slot_e, slot_b, slot_c, slot_e);
 }
 
 // Rows 0..3 of DEST[dst] <- DEST[dst][r][c] * DEST[dst_col][4 * col_band + r][0] (r = 0..3): the LLK band kernel
