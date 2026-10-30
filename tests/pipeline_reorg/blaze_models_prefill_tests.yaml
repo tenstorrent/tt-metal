@@ -1382,7 +1382,7 @@
   sp_config: sc1
 
 
-# MiniMax-M3 16-stage pipeline-prefill perf matrix (tt-metal#57827): 5 cached x 7 new token counts, idle + loaded,
+# MiniMax-M3 16-stage pipeline-prefill perf matrix: 5 cached x 7 new token counts, idle + loaded,
 # chunk 2048, dense layers on their own stages, one runner with a 1M-token KV cache. Perf is reported, not gated.
 - name: "(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"
   cmd: |
