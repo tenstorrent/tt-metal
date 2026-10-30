@@ -45,12 +45,15 @@ void kernel_main() {
     // chunk-local origin of my per-core block
     const uint32_t row0 = get_arg_val<uint32_t>(mrs::writer_rt::ROW0);
     const uint32_t col0 = get_arg_val<uint32_t>(mrs::writer_rt::COL0);
-    const uint32_t fwd_port_xy = get_arg_val<uint32_t>(mrs::writer_rt::FWD_PORT_XY);
-    const uint32_t bwd_port_xy = get_arg_val<uint32_t>(mrs::writer_rt::BWD_PORT_XY);
+    // my link's ports, from its row in the common args
+    const uint32_t port_row = get_arg_val<uint32_t>(mrs::writer_rt::PORT_ROW);
+    const uint32_t fwd_port_xy = get_common_arg_val<uint32_t>(port_row + mrs::writer_port::FWD_XY);
+    const uint32_t bwd_port_xy = get_common_arg_val<uint32_t>(port_row + mrs::writer_port::BWD_XY);
     const uint32_t mailbox_slot_addr = get_common_arg_val<uint32_t>(mrs::writer_common::MAILBOX_ADDR) +
                                        get_arg_val<uint32_t>(mrs::writer_rt::MAILBOX_SLOT_OFFSET);
-    const uint32_t waves_idx = mrs::writer_rt::COUNT;  // per wave: row_off | col_off << 8 | rows << 16 | cols << 24
-    const uint32_t kinds_idx = waves_idx + num_waves;
+    // common: per wave row_off | col_off << 8 | rows << 16 | cols << 24, and my half's row of kind words
+    constexpr uint32_t waves_idx = mrs::writer_common::COUNT;
+    const uint32_t kinds_idx = get_arg_val<uint32_t>(mrs::writer_rt::HALF_ROW);
     auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
         return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
     };
@@ -94,7 +97,7 @@ void kernel_main() {
 
     for (uint32_t eg = 0; eg < num_chunks * num_entries; ++eg) {
         const uint32_t e = eg % num_entries;
-        const uint32_t kind = get_arg_val<uint32_t>(kinds_idx + e);
+        const uint32_t kind = get_common_arg_val<uint32_t>(kinds_idx + e);
         const uint32_t slot = finished_base + (eg % depth_handoff) * P * tile_bytes;
         if (kind == KIND_FIN) {
             // stream the output: write each valid tile as soon as the finish has packed it, so the DRAM writes of
@@ -102,7 +105,7 @@ void kernel_main() {
             const uint32_t c = eg / num_entries;
             const uint32_t im = m_outer ? c / n_inner : c % n_inner;
             const uint32_t in = m_outer ? c % n_inner : c / n_inner;
-            const uint32_t wave = get_arg_val<uint32_t>(waves_idx + e % num_waves);
+            const uint32_t wave = get_common_arg_val<uint32_t>(waves_idx + e % num_waves);
             const uint32_t row_off = wave & 0xFF, col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
             const uint32_t m_valid_w = wave_valid(valid_ext(block_m, chunk_m, im, row0), row_off, (wave >> 16) & 0xFF);
             const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);

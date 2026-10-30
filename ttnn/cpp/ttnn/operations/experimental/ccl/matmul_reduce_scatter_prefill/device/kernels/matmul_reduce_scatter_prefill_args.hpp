@@ -99,14 +99,26 @@ enum : uint32_t {
     COUNT
 };
 }  // namespace reader_ct
+// Everything that is the same on the cores of a half (or of a half and link) is written once, as a row of the common
+// args, and a core gets the offsets of its rows: per-core args stay a few words however many cores there are.
 namespace reader_common {
 enum : uint32_t { A_ADDR, W_ADDR, ARR_FWD_ADDR, ARR_BWD_ADDR, REPORT_CHUNKS, COUNT };
 }  // namespace reader_common
-// Per-core; tail from COUNT: num_waves wave words (row_off | col_off << 8 | rows << 16 | cols << 24), then per entry
-// ENTRY_WORDS words [block | mask << 16 | lag << 20, thr_fwd | thr_bwd << 16], then the multicast args.
-namespace reader_rt {
-enum : uint32_t { ROW0, COL0, TOTAL_FWD, TOTAL_BWD, SLOTS_FWD, SLOTS_BWD, REP_FWD_XY, REP_BWD_XY, COUNT };
+// Common tail from reader_common::COUNT: num_waves wave words (row_off | col_off << 8 | rows << 16 | cols << 24), then
+// a half row per half, then a report row per (half, link).
+// Half row: the reader_half words, then per entry ENTRY_WORDS words [block | mask << 16 | lag << 20, thr_fwd |
+// thr_bwd << 16].
+namespace reader_half {
+enum : uint32_t { TOTAL_FWD, TOTAL_BWD, SLOTS_FWD, SLOTS_BWD, COUNT };
 constexpr uint32_t ENTRY_WORDS = 2;
+}  // namespace reader_half
+// Report row: the ports a core reports its consumed fwd / bwd chunks to (0 where it receives none).
+namespace reader_report {
+enum : uint32_t { FWD_XY, BWD_XY, COUNT };
+}  // namespace reader_report
+// Per-core; the multicast args follow from COUNT. HALF_ROW / REPORT_ROW are common-arg offsets of the core's rows.
+namespace reader_rt {
+enum : uint32_t { ROW0, COL0, HALF_ROW, REPORT_ROW, COUNT };
 }  // namespace reader_rt
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -134,8 +146,11 @@ enum : uint32_t {
     COUNT
 };
 }  // namespace compute_ct
-// Per-core: no fixed slots. num_waves words (rows | cols << 8 | sb_h << 16 | sb_w << 24), then per entry
+// Common: num_waves words (rows | cols << 8 | sb_h << 16 | sb_w << 24), then a row per half of one word per entry,
 // role | lag << role::LAG_SHIFT.
+namespace compute_rt {
+enum : uint32_t { HALF_ROW, COUNT };  // common-arg offset of the core's half row
+}  // namespace compute_rt
 
 // ---------------------------------------------------------------------------------------------------------------
 // Matmul writer (BRISC, NoC1)
@@ -164,10 +179,15 @@ enum : uint32_t {
 namespace writer_common {
 enum : uint32_t { OUT_ADDR, MAILBOX_ADDR, COUNT };
 }  // namespace writer_common
-// Per-core; MAILBOX_SLOT_OFFSET = k * MAILBOX_STRIDE (the kernel adds MAILBOX_ADDR). Tail from COUNT: num_waves wave
-// words, then one kind word per entry.
+// Common tail from writer_common::COUNT: num_waves wave words, then a row per half of one kind word per entry, then a
+// port row per link.
+namespace writer_port {
+enum : uint32_t { FWD_XY, BWD_XY, COUNT };
+}  // namespace writer_port
+// Per-core; MAILBOX_SLOT_OFFSET = k * MAILBOX_STRIDE (the kernel adds MAILBOX_ADDR). HALF_ROW / PORT_ROW are
+// common-arg offsets of the core's rows.
 namespace writer_rt {
-enum : uint32_t { ROW0, COL0, FWD_PORT_XY, BWD_PORT_XY, MAILBOX_SLOT_OFFSET, COUNT };
+enum : uint32_t { ROW0, COL0, MAILBOX_SLOT_OFFSET, HALF_ROW, PORT_ROW, COUNT };
 }  // namespace writer_rt
 
 // ---------------------------------------------------------------------------------------------------------------

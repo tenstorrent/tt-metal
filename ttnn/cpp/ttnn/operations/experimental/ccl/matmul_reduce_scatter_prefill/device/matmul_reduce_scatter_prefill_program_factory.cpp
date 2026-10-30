@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -643,7 +644,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
                 dir == Direction::Fin ? args::kind::FIN : (dir == Direction::Fwd ? args::kind::FWD : args::kind::BWD));
         }
         TT_FATAL(
-            ent_words[h].size() == args::reader_rt::ENTRY_WORDS * finish.size(),
+            ent_words[h].size() == args::reader_half::ENTRY_WORDS * finish.size(),
             "matmul_reduce_scatter_prefill: reader entry words are out of sync with "
             "matmul_reduce_scatter_prefill_args.hpp");
     }
@@ -674,70 +675,118 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     writer.config =
         DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_1_default};
 
-    for (uint32_t k = 0; k < n_cores; ++k) {
-        const auto& [gm, gn, core] = mm_cores[k];
-        const uint32_t h = half(k);
-        const uint32_t l = link_of(k);
-        std::optional<CoreCoord> pf;
-        std::optional<CoreCoord> pb;
-        if (peers[kFwd].has_value()) {
-            pf = port_vcore(p, kFwd, l);
-        }
-        if (peers[kBwd].has_value()) {
-            pb = port_vcore(p, kBwd, l);
-        }
-        const std::array<uint32_t, 2> n_arr{
-            static_cast<uint32_t>(sc.arrivals[h][kFwd].size()), static_cast<uint32_t>(sc.arrivals[h][kBwd].size())};
-        // a consumed chunk of d arrivals is reported to the port sending back upstream (opposite direction)
-        const std::array<std::optional<CoreCoord>, 2> rep{pb, pf};
-        for (uint32_t d : {kFwd, kBwd}) {
-            TT_FATAL(
-                n_arr[d] == 0 || rep[d].has_value(),
-                "matmul_reduce_scatter_prefill: core {} receives arrivals with no port to report to",
-                k);
-        }
-
-        std::vector<uint32_t> r_rt(args::reader_rt::COUNT);
-        r_rt[args::reader_rt::ROW0] = gm * core_m;
-        r_rt[args::reader_rt::COL0] = gn * core_n;
-        // ARRIVAL_INC_PER_WAVE: every arrival carries its own increment
-        r_rt[args::reader_rt::TOTAL_FWD] = n_arr[kFwd];
-        r_rt[args::reader_rt::TOTAL_BWD] = n_arr[kBwd];
-        r_rt[args::reader_rt::SLOTS_FWD] = n_arr[kFwd];
-        r_rt[args::reader_rt::SLOTS_BWD] = n_arr[kBwd];
-        r_rt[args::reader_rt::REP_FWD_XY] = n_arr[kFwd] != 0 ? mrs_xy16(*rep[kFwd]) : 0;
-        r_rt[args::reader_rt::REP_BWD_XY] = n_arr[kBwd] != 0 ? mrs_xy16(*rep[kBwd]) : 0;
-        mrs_append(r_rt, wave_words);
-        mrs_append(r_rt, ent_words[h]);
-        reader.runtime_args.emplace_back(core, std::move(r_rt));
-
-        std::vector<uint32_t> c_rt = wave_mm_words;
-        mrs_append(c_rt, roles_words[h]);
-        compute.runtime_args.emplace_back(core, std::move(c_rt));
-
-        std::vector<uint32_t> w_rt(args::writer_rt::COUNT);
-        w_rt[args::writer_rt::ROW0] = gm * core_m;
-        w_rt[args::writer_rt::COL0] = gn * core_n;
-        w_rt[args::writer_rt::FWD_PORT_XY] = pf.has_value() ? mrs_xy16(*pf) : 0;
-        w_rt[args::writer_rt::BWD_PORT_XY] = pb.has_value() ? mrs_xy16(*pb) : 0;
-        w_rt[args::writer_rt::MAILBOX_SLOT_OFFSET] = k * detail::kMailboxStride;
-        mrs_append(w_rt, wave_words);
-        mrs_append(w_rt, kind_words[h]);
-        writer.runtime_args.emplace_back(core, std::move(w_rt));
-    }
-
+    // Common rows: the words every core of a half (or of a half and link) shares are written once, and a core gets the
+    // common-arg offsets of its rows. Rows are only built for the (half, link) pairs that have cores.
     std::vector<SlotValue> reader_common(args::reader_common::COUNT, 0u);
     reader_common[args::reader_common::A_ADDR] = a.buffer();
     reader_common[args::reader_common::W_ADDR] = w.buffer();
     reader_common[args::reader_common::ARR_FWD_ADDR] = arr_addr[kFwd];
     reader_common[args::reader_common::ARR_BWD_ADDR] = arr_addr[kBwd];
     reader_common[args::reader_common::REPORT_CHUNKS] = credit_chunks;
-    reader.emplace_common_runtime_args(mrs_rt_list(reader_common));
-
     std::vector<SlotValue> writer_common(args::writer_common::COUNT, 0u);
     writer_common[args::writer_common::OUT_ADDR] = output.buffer();
     writer_common[args::writer_common::MAILBOX_ADDR] = res.mailbox.buffer();
+    std::vector<SlotValue> compute_common;
+    auto add_row = [](std::vector<SlotValue>& common, const std::vector<uint32_t>& words) {
+        const auto offset = static_cast<uint32_t>(common.size());
+        common.insert(common.end(), words.begin(), words.end());
+        return offset;
+    };
+    add_row(reader_common, wave_words);
+    add_row(writer_common, wave_words);
+    add_row(compute_common, wave_mm_words);
+    // the ports a link's cores send their finished tiles to (fwd / bwd)
+    auto fwd_port = [&](uint32_t l) -> std::optional<CoreCoord> {
+        return peers[kFwd].has_value() ? std::optional<CoreCoord>(port_vcore(p, kFwd, l)) : std::nullopt;
+    };
+    auto bwd_port = [&](uint32_t l) -> std::optional<CoreCoord> {
+        return peers[kBwd].has_value() ? std::optional<CoreCoord>(port_vcore(p, kBwd, l)) : std::nullopt;
+    };
+    std::array<std::optional<uint32_t>, 2> reader_half_row;
+    std::array<uint32_t, 2> writer_half_row{};
+    std::array<uint32_t, 2> compute_half_row{};
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> report_row;  // (half, link) -> reader common offset
+    std::map<uint32_t, uint32_t> port_row;                         // link -> writer common offset
+    for (uint32_t k = 0; k < n_cores; ++k) {
+        const uint32_t h = half(k);
+        const uint32_t l = link_of(k);
+        const std::array<uint32_t, 2> n_arr{
+            static_cast<uint32_t>(sc.arrivals[h][kFwd].size()), static_cast<uint32_t>(sc.arrivals[h][kBwd].size())};
+        if (!reader_half_row[h].has_value()) {
+            std::vector<uint32_t> half_words(args::reader_half::COUNT);
+            // ARRIVAL_INC_PER_WAVE: every arrival carries its own increment
+            half_words[args::reader_half::TOTAL_FWD] = n_arr[kFwd];
+            half_words[args::reader_half::TOTAL_BWD] = n_arr[kBwd];
+            half_words[args::reader_half::SLOTS_FWD] = n_arr[kFwd];
+            half_words[args::reader_half::SLOTS_BWD] = n_arr[kBwd];
+            mrs_append(half_words, ent_words[h]);
+            reader_half_row[h] = add_row(reader_common, half_words);
+            writer_half_row[h] = add_row(writer_common, kind_words[h]);
+            compute_half_row[h] = add_row(compute_common, roles_words[h]);
+        }
+        if (!report_row.contains({h, l})) {
+            // a consumed chunk of d arrivals is reported to the port sending back upstream (opposite direction)
+            const std::array<std::optional<CoreCoord>, 2> rep{bwd_port(l), fwd_port(l)};
+            std::vector<uint32_t> report_words(args::reader_report::COUNT);
+            for (uint32_t d : {kFwd, kBwd}) {
+                TT_FATAL(
+                    n_arr[d] == 0 || rep[d].has_value(),
+                    "matmul_reduce_scatter_prefill: half {} link {} receives arrivals with no port to report to",
+                    h,
+                    l);
+                report_words[d == kFwd ? args::reader_report::FWD_XY : args::reader_report::BWD_XY] =
+                    n_arr[d] != 0 ? mrs_xy16(*rep[d]) : 0;
+            }
+            report_row[{h, l}] = add_row(reader_common, report_words);
+        }
+        if (!port_row.contains(l)) {
+            std::vector<uint32_t> port_words(args::writer_port::COUNT);
+            const auto pf = fwd_port(l);
+            const auto pb = bwd_port(l);
+            port_words[args::writer_port::FWD_XY] = pf.has_value() ? mrs_xy16(*pf) : 0;
+            port_words[args::writer_port::BWD_XY] = pb.has_value() ? mrs_xy16(*pb) : 0;
+            port_row[l] = add_row(writer_common, port_words);
+        }
+    }
+    auto check_common = [](const char* kernel, const std::vector<SlotValue>& common) {
+        TT_FATAL(
+            common.size() <= tt::tt_metal::max_runtime_args,
+            "matmul_reduce_scatter_prefill: {} common args ({} words) exceed the {}-word limit",
+            kernel,
+            common.size(),
+            tt::tt_metal::max_runtime_args);
+    };
+    check_common("reader", reader_common);
+    check_common("writer", writer_common);
+    check_common("compute", compute_common);
+
+    for (uint32_t k = 0; k < n_cores; ++k) {
+        const auto& [gm, gn, core] = mm_cores[k];
+        const uint32_t h = half(k);
+        const uint32_t l = link_of(k);
+
+        std::vector<uint32_t> r_rt(args::reader_rt::COUNT);
+        r_rt[args::reader_rt::ROW0] = gm * core_m;
+        r_rt[args::reader_rt::COL0] = gn * core_n;
+        r_rt[args::reader_rt::HALF_ROW] = *reader_half_row[h];
+        r_rt[args::reader_rt::REPORT_ROW] = report_row.at({h, l});
+        reader.runtime_args.emplace_back(core, std::move(r_rt));
+
+        std::vector<uint32_t> c_rt(args::compute_rt::COUNT);
+        c_rt[args::compute_rt::HALF_ROW] = compute_half_row[h];
+        compute.runtime_args.emplace_back(core, std::move(c_rt));
+
+        std::vector<uint32_t> w_rt(args::writer_rt::COUNT);
+        w_rt[args::writer_rt::ROW0] = gm * core_m;
+        w_rt[args::writer_rt::COL0] = gn * core_n;
+        w_rt[args::writer_rt::MAILBOX_SLOT_OFFSET] = k * detail::kMailboxStride;
+        w_rt[args::writer_rt::HALF_ROW] = writer_half_row[h];
+        w_rt[args::writer_rt::PORT_ROW] = port_row.at(l);
+        writer.runtime_args.emplace_back(core, std::move(w_rt));
+    }
+    reader.emplace_common_runtime_args(mrs_rt_list(reader_common));
     writer.emplace_common_runtime_args(mrs_rt_list(writer_common));
+    compute.emplace_common_runtime_args(mrs_rt_list(compute_common));
 
     // ---- multicast families (after the reader's own args) ----
     const McastConfig mc_cfg{.noc = NOC::NOC_0, .handshake = true};

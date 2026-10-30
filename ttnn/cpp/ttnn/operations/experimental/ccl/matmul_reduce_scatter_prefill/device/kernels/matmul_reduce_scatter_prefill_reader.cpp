@@ -146,25 +146,28 @@ void kernel_main() {
     const uint32_t w_addr = get_common_arg_val<uint32_t>(mrs::reader_common::W_ADDR);
     const uint32_t row0 = get_arg_val<uint32_t>(mrs::reader_rt::ROW0);  // gm * core_m (chunk-local)
     const uint32_t col0 = get_arg_val<uint32_t>(mrs::reader_rt::COL0);  // gn * core_n (chunk-local)
+    // my half's row and my (half, link)'s report row in the common args
+    const uint32_t half_row = get_arg_val<uint32_t>(mrs::reader_rt::HALF_ROW);
+    const uint32_t report_row = get_arg_val<uint32_t>(mrs::reader_rt::REPORT_ROW);
     const uint32_t arr_fwd_addr = get_common_arg_val<uint32_t>(mrs::reader_common::ARR_FWD_ADDR);
     const uint32_t arr_bwd_addr = get_common_arg_val<uint32_t>(mrs::reader_common::ARR_BWD_ADDR);
     // arrival increments my counters receive per chunk
-    const uint32_t total_fwd = get_arg_val<uint32_t>(mrs::reader_rt::TOTAL_FWD);
-    const uint32_t total_bwd = get_arg_val<uint32_t>(mrs::reader_rt::TOTAL_BWD);
+    const uint32_t total_fwd = get_common_arg_val<uint32_t>(half_row + mrs::reader_half::TOTAL_FWD);
+    const uint32_t total_bwd = get_common_arg_val<uint32_t>(half_row + mrs::reader_half::TOTAL_BWD);
     // arrival slots I consume per chunk, per direction
-    const uint32_t slots_fwd = get_arg_val<uint32_t>(mrs::reader_rt::SLOTS_FWD);
-    const uint32_t slots_bwd = get_arg_val<uint32_t>(mrs::reader_rt::SLOTS_BWD);
+    const uint32_t slots_fwd = get_common_arg_val<uint32_t>(half_row + mrs::reader_half::SLOTS_FWD);
+    const uint32_t slots_bwd = get_common_arg_val<uint32_t>(half_row + mrs::reader_half::SLOTS_BWD);
     // port counting my consumed fwd / bwd chunks
-    const uint32_t rep_fwd_xy = get_arg_val<uint32_t>(mrs::reader_rt::REP_FWD_XY);
-    const uint32_t rep_bwd_xy = get_arg_val<uint32_t>(mrs::reader_rt::REP_BWD_XY);
+    const uint32_t rep_fwd_xy = get_common_arg_val<uint32_t>(report_row + mrs::reader_report::FWD_XY);
+    const uint32_t rep_bwd_xy = get_common_arg_val<uint32_t>(report_row + mrs::reader_report::BWD_XY);
     // chunks the upstream waits for (num - zone sets)
     const uint32_t report_chunks = get_common_arg_val<uint32_t>(mrs::reader_common::REPORT_CHUNKS);
-    // per wave: row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
-    const uint32_t waves_idx = mrs::reader_rt::COUNT;
+    // per wave (common): row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
+    constexpr uint32_t waves_idx = mrs::reader_common::COUNT;
     // per entry: [block | arrival_mask << 16 | lag << 20, thr_fwd | thr_bwd << 16]; an arrival has landed once my
     // counter of its direction reaches its threshold (one fused increment per (core, unit), in the upstream's order)
-    const uint32_t entries_idx = waves_idx + num_waves;
-    constexpr uint32_t ENTRY_WORDS = mrs::reader_rt::ENTRY_WORDS;
+    const uint32_t entries_idx = half_row + mrs::reader_half::COUNT;  // in my half's row
+    constexpr uint32_t ENTRY_WORDS = mrs::reader_half::ENTRY_WORDS;
     constexpr uint32_t total_entries = num_chunks * num_entries;
     // chunk c's tile origin inside the block and my valid extents there
     auto chunk_mn = [](uint32_t c, uint32_t& im, uint32_t& in) {
@@ -215,8 +218,8 @@ void kernel_main() {
         while (land_next < total_entries) {
             const uint32_t le = land_next % num_entries;
             const uint32_t lc = land_next / num_entries;
-            const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le);
-            const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le + 1);
+            const uint32_t word0 = get_common_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le);
+            const uint32_t word1 = get_common_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le + 1);
             const uint32_t mask = (word0 >> 16) & 0x3;
             invalidate_l1_cache();
             if ((mask & 1) &&
@@ -258,10 +261,10 @@ void kernel_main() {
     const uint32_t w_base = get_write_ptr(cb_weight_k_window);
     constexpr uint32_t num_steps = total_entries * num_k_blocks;
     auto block_of = [&](uint32_t step) {
-        return get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * ((step / num_k_blocks) % num_entries)) & 0xFFFF;
+        return get_common_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * ((step / num_k_blocks) % num_entries)) & 0xFFFF;
     };
     auto wave_of = [&](uint32_t step) {
-        return get_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
+        return get_common_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
     };
     // valid extent of a wave along one axis: my valid tiles past the wave's offset, capped at its extent
     auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
