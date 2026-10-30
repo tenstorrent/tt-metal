@@ -2474,6 +2474,13 @@ def _policy_the_policy_picks_k5_at_high_acceptance_and_drops_to_k3_k1_and_plain_
     cooled.note_plain_steps()
     assert cooled.since_exit == 3 and not cooled.cooling()
     assert cooled.decide(entering, good, _PLAIN, 3).reason == "enter" and cooled.since_exit is None
+    # a new batch (every row at its first proposal) is not cooled by its predecessor's exit: the cooldown is
+    # against one batch's enter-exit-enter cycles, and the first proposal is the entry whose reseed is verified
+    cooled.since_exit = 0
+    assert cooled.cooling() and not cooled.would_speculate(entering, good, _PLAIN)
+    newcomer = [_row([0.7] * 5)]
+    assert cooled.would_speculate(entering, newcomer, _PLAIN, fresh=True) and not cooled.cooling()
+    assert cooled.decide(entering, newcomer, _PLAIN, 3, fresh=True).reason == "enter" and cooled.since_exit is None
     free = SpecPolicy(SpecPolicyConfig(probe_steps=0, retry_steps=3), 5)
     assert free.decide(_cands(_COSTS), good, _PLAIN, 3).reason == "gain"
     assert (
@@ -2915,7 +2922,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert all(slow.decide(short, [row], _PLAIN, 3) is None for _ in range(2000)) and slow.last_reason == "budget"
     # ... unless its last run failed (the pool's older samples describe the text before it: prose, then random
     # prompts) or its measured run length cannot amortize the cycle (marginal random prompts: runs of a few steps)
-    # -- then the record is exploration like any other: the bucket decides (a cold rung waits), not the credit
+    # -- then the record is exploration like any other: the bucket decides (a cold rung waits), not the credit.
     failed = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
     for _ in range(2):
         failed.calibration.note_step(("step", (8, 3), 2048), 35.0, 1, True, 35.0, 1)
@@ -2990,80 +2997,67 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert known.decide(_cands(_COSTS), [row], _PLAIN, 5, fresh=True) is None, "0.93x on the model: under the bar"
     rich = _row([0.9] * 5)  # (16,1): 1.9 tokens at 1.5x = 1.27x on the model, at the bar
     assert known.decide(_cands(_COSTS), [rich], _PLAIN, 5, fresh=True).reason == "gain"
-    # a batch that is not all new: its trial needs the hypothesis that the new rows accept every draft to clear
-    # the entry bar, since the trial reseeds every row. Eight rows at 0.9/0.1/0.1/0.1/0.1 (2.0 tokens a step at
-    # K=3) on the (8,3) at 35 ms (1.75x plain): the prior's gain 1.14 clears trial_gain, but one new row at 4
-    # tokens makes 2.25 tokens/row = 1.29x < the 1.30 bar (declined); three new rows make 2.75 = 1.57x (trial),
-    # and the (8,3)'s 230 ms reseed must pay over the joining rows' horizon (not over 10 steps) as served: the
-    # batch is mid-request, so the replay the in-flight plain step overtakes takes only when every row's first
-    # draft matches, 1 / 0.9^8 = 2.3 reseeds of 245 ms expected (at 0.3 a row, the 26B's arrival waves, 1 / 0.3^8
-    # = 15000: hopeless, whatever the hypothesis)
+    # a batch of more than one row reseeds into a record only on the entry gain (``entry_bar``): a new batch's
+    # trial needs the cheapest candidate's own estimate at the bar, the hypothesis that its new rows accept every
+    # draft admits nothing, and there is no exploration retry -- a marginal record at rows desynchronizes the
+    # batch, and a client keeping c requests in flight then prefills one arrival at a time inside the other rows'
+    # decode (the 31B QB2 random c8, v51: a 47-step (8,3) run at an estimated 1.00x, 1.16x on its steps, -12 %
+    # TPOT on the point). Eight rows at 0.9/0.1/0.1/0.1/0.1 (2.0 tokens a step at K=3) on the (8,3) at 35 ms
+    # (1.75x plain): 1.14x on the prior, under the 1.30 bar, so no trial with three new rows (the hypothesis
+    # reads 2.75 tokens a row, 1.57x, and is not consulted), none with five new rows of eight, none all new at a
+    # first proposal; the same prior at one row trials the record at trial_gain
     batch = [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)]
     eight = _served(
         SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
     )
     only83 = [c for c in _cands(_COSTS, n=8) if c.shape == (8, 3)]
     assert rank_records(only83, batch, _PLAIN)[0].gain == pytest.approx(1.999 * 20 / 35, abs=1e-3)
-    hyped = rank_records(only83, batch, _PLAIN, optimistic=(0,))
-    assert hyped[0].expected_tokens == pytest.approx(7 * 1.999 + 4, abs=1e-2)
+    hyped = rank_records(only83, batch, _PLAIN, optimistic=(0, 1, 2))
+    assert hyped[0].expected_tokens == pytest.approx(5 * 1.999 + 12, abs=1e-2)
     assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0,)) is None and eight.last_reason == "declined"
-    assert not eight.would_speculate(only83, batch, _PLAIN, fresh=(0,))
-    assert eight.would_speculate(only83, batch, _PLAIN, fresh=(0, 1, 2))
-    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
-    assert eight.would_speculate(only83, batch, _PLAIN), "the one-step trial served: 1.14x holds on"
-    # with the (16,1) at 30 ms beside it (1.9 tokens at 1.5x: 1.27x, the best and the cheapest) three new rows
-    # make 1.29x: still declined; five new rows of eight make 1.31x
+    assert not eight.would_speculate(only83, batch, _PLAIN, fresh=(0, 1, 2))
+    assert eight.decide(only83, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None and eight.last_reason == "declined"
+    assert eight.entry_bar() == 1.30 and eight._rows == 8
     both = _cands(_COSTS, n=8)
-    assert rank_records(both, batch, _PLAIN)[0].shape == (16, 1)
-    pair = _served(
-        SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
-    )
-    assert pair.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None
-    assert pair.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2, 3, 4)).shape == (16, 1)
+    assert rank_records(both, batch, _PLAIN)[0].shape == (16, 1)  # 1.9 tokens at 1.5x: 1.27x, the best and cheapest
+    assert eight.decide(both, batch, _PLAIN, 3, fresh=(0, 1, 2, 3, 4)) is None and eight.last_reason == "declined"
     reseeding8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0), RecordCandidate((16, 1), 2048, 30.0, 300.0)]
-    eight = _served(
+    assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)) is None and eight.last_reason == "declined"
+    assert eight._attempts == pytest.approx(1 / 0.9**8) and not eight._at_start
+    newbatch = [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)]
+    assert eight.decide(reseeding8, newbatch, _PLAIN, 3, fresh=True) is None and eight._at_start
+    assert eight.last_reason == "declined"
+    single = _served(
         SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=0, retry_overhead=1.0, probe_steps=0), 5)
     )
-    assert eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(0, 1, 2)).reason == "trial"
-    assert eight._attempts == pytest.approx(1 / 0.9**8) and not eight._at_start
-    assert eight.decide(reseeding8, batch, _PLAIN, 3, remaining=10, fresh=(0, 1, 2)) is None
-    waves = [_row([0.3] * 5) for _ in range(8)]
-    assert eight.decide(reseeding8, waves, _PLAIN, 3, fresh=(0, 1, 2)) is None, "2.4 x 0.3^8: 15000 reseeds"
-    newbatch = [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)]
-    assert (
-        eight.decide(reseeding8, newbatch, _PLAIN, 3, fresh=True).reason == "trial" and eight._at_start
-    ), "a batch all new at its first proposal: one reseed, verified, pays over the horizon"
-    # a record serving measured at the rung keeps its measured tokens per row for the new rows too: seven new
-    # rows of eight (the 26B's arrival waves) no longer re-trial an (8,3) measured at 1.46 tokens a row (0.83x),
-    # while the same record unmeasured is their trial; the floor still refuses a measured record below it
+    one = [_row([0.9, 0.1, 0.1, 0.1, 0.1])]
+    assert single.decide(reseeding8, one, _PLAIN, 3, fresh=True).reason == "trial" and single.entry_bar() == 1.0
+    # a record serving measured at the rung is credited its measured tokens per row for the new rows too, and at
+    # rows enters on that evidence only at the bar: 1.46 a row (0.83x) and 1.9 (1.09x) are declined, not trialed,
+    # whether seven rows of eight are new (the 26B's arrival waves) or all are; 2.4 (1.37x) enters. Between
+    # break-even and the bar a single row re-enters on the bucket (exploration, "retry"); rows do not
     measured8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.46)]
     wave = tuple(range(7))
     assert rank_records(measured8, batch, _PLAIN, optimistic=wave)[0].expected_tokens == pytest.approx(8 * 1.46)
     assert eight.decide(measured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "declined"
-    # ... the unmeasured record is their trial in principle, but mid-batch it reseeds eight rows 2.33 times over
-    # (571 ms) plus a record step: more than the rung's bucket holds (1.5 trials of 245), so the trial waits
-    # for a first proposal, where the reseed is verified at once (245 within 367.5)
     unmeasured8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0)]
-    assert eight.decide(unmeasured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "budget"
-    assert eight.rung_cap[2048] == pytest.approx(367.5)
-    assert (
-        eight.decide(unmeasured8, [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)], _PLAIN, 3, fresh=True).reason
-        == "trial"
-    )
+    assert eight.decide(unmeasured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "declined"
+    assert eight.decide(unmeasured8, newbatch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
     good = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.4)]  # measured above the bar: an entry
     assert eight.decide(good, batch, _PLAIN, 3, fresh=wave).reason == "enter"
+    assert eight.measured_pays(rank_records(good, batch, _PLAIN)[0], _PLAIN)
     assert (
         eight.decide(measured8, [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)], _PLAIN, 3, fresh=True) is None
         and eight.last_reason == "declined"
     ), "all new: a measured record below the entry bar (0.83x) gets no trial either"
     even = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.9)]  # 1.09x: below the 1.30 bar
     assert eight.decide(even, batch, _PLAIN, 3, fresh=True) is None and eight.last_reason == "declined"
-    assert (
-        _served(SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.05, retry_steps=0, entry_horizon=128), 5))
-        .decide(even, [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)], _PLAIN, 3, fresh=True)
-        .reason
-        == "enter"
-    ), "a first proposal: 128 x 3 ms covers the 230 ms reseed"
+    assert not eight.measured_pays(rank_records(even, batch, _PLAIN)[0], _PLAIN)
+    rows_retry = _served(SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=1, probe_steps=0), 5))
+    assert all(rows_retry.decide(even, batch, _PLAIN, 3) is None for _ in range(4))
+    assert rows_retry.last_reason == "declined"
+    one_retry = _served(SpecPolicy(SpecPolicyConfig(trial_steps=1, min_gain=1.30, retry_steps=1, probe_steps=0), 5))
+    assert one_retry.decide(even, one, _PLAIN, 3) is None and one_retry.decide(even, one, _PLAIN, 3).reason == "retry"
     assert rank_records(even, batch, _PLAIN)[0].measured and not rank_records(reseeding8, batch, _PLAIN)[0].measured
     with pytest.raises(ValueError, match="fresh rows .* outside the 8 rows"):  # allow-pytest.raises (pure)
         eight.decide(reseeding8, batch, _PLAIN, 3, fresh=(8,))

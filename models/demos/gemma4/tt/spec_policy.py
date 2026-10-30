@@ -104,8 +104,9 @@ reads that cost. An entry rests on evidence (``measured_pays``) when serving
 measured the record at break-even or better at the rung, the last run on
 its pool paid as a whole (however it ended: a dip, a probe, the request's
 end) and its entry as served pays over the horizon: such an entry is free,
-and the prose c1 re-enters on it at every request. Any other entry is
-exploration, admitted when the rung's bucket holds its expected loss:
+and the prose c1 re-enters on it at every request. Any other entry of a
+single-row batch is exploration, admitted when the rung's bucket holds its
+expected loss:
 
     bucket(rung) >= entry cost + GEMMA4_SPEC_TRIAL_STEPS * max(0, step - credit * plain)
 
@@ -164,6 +165,23 @@ below the rows-based cap, after ``GEMMA4_SPEC_PROBE_STEPS`` consecutive such
 steps one step is replayed at the next larger draft length (no reseed), so
 deeper positions are re-observed and the larger record's pool is fed (``0``
 disables the probe).
+
+Rows
+----
+
+A batch of more than one row reseeds into a record only on the entry gain
+(``entry_bar``): a measured credit at the bar re-enters on evidence, a new
+batch's trial needs its own estimate at the bar whatever serving knows of the
+record, and there is no exploration retry. The step accounting does not see
+what a marginal record costs at rows: its rows finish at different steps, and
+a client that keeps ``c`` requests in flight then hands the server one arrival
+at a time, each prefilled inside the decode of the rows still running, where
+a lock-step batch had one batched prefill while nobody decoded. The 31B QB2
+random c8 (v51, 2026-10-30) entered a 47-step (8,3) run as exploration at an
+estimated 1.00x, served 1.16x on its steps, and paid 13 per-arrival prefills
+in the two waves after it: -12 % TPOT at +0.9 % throughput. The hysteresis
+(``exit_gain``) still holds a record the batch is in: leaving resynchronizes
+nothing.
 
 Calibration
 -----------
@@ -1226,6 +1244,7 @@ class SpecPolicy:
         self._at_start = True  # the step being decided is every row's first proposal (no plain step in flight)
         self._attempts = 1.0  # expected reseeds before a mid-request entry's first draft matches on every row
         self._plain_ms = None  # the plain step of the last decision (prices a run ``note_plain_steps`` closes)
+        self._rows = 1  # the rows of the batch being decided (``_frame``): at rows the entry gain is the only bar
 
     def new_row(self):
         return self.prior.child()
@@ -1262,6 +1281,7 @@ class SpecPolicy:
         the 12B QB2 re-entered its (8,3) at the tail of every wave and every replay was overtaken and missed on
         some row, 2026-10-30)."""
         n = len(rows)
+        self._rows = n
         idx = fresh_indices(fresh, n)
         self._at_start = len(idx) == n and all(int(getattr(r, "steps", 0)) == 0 for r in rows)
         if self._at_start:
@@ -1378,8 +1398,13 @@ class SpecPolicy:
             self.trial_age -= 1
 
     def cooling(self):
-        """Whether the batch left a record fewer than ``retry_steps`` plain steps ago: no reseeding entry yet."""
-        return self.since_exit is not None and self.since_exit < self.config.retry_steps
+        """Whether the batch left a record fewer than ``retry_steps`` plain steps ago: no reseeding entry yet. A
+        new batch (every row at its first proposal, ``_at_start``) is not cooled by its predecessor's exit: the
+        cooldown is against one batch's enter-exit-enter cycles, and a first proposal is the one entry whose
+        reseed is verified -- at rows, where nothing explores, the only cheap one (a prose wave after a prose
+        request that left its record at the tail stayed plain for the cooldown's steps and then faced the
+        mid-request price, 2026-10-30 replay)."""
+        return not self._at_start and self.since_exit is not None and self.since_exit < self.config.retry_steps
 
     @property
     def speculating(self):
@@ -1447,8 +1472,10 @@ class SpecPolicy:
         """The retry for a plain-serving batch, or None, once at least ``retry_steps`` plain steps passed: the
         best record serving has measured at break-even or better whose retry cycle (times the reseeds expected
         before a mid-request replay takes) pays over the entry horizon (a re-entry on the pool's credit: the
-        trial that follows measures it again before the hold), else the cheapest candidate (entry plus step)
-        as exploration; either way the rung's budget (``budget_ok``, applied by ``decide``) bounds it."""
+        trial that follows measures it again before the hold), else, for a single row, the cheapest candidate
+        (entry plus step) as exploration; either way the rung's budget (``budget_ok``, applied by ``decide``)
+        bounds it. At rows the measured credit must clear the entry gain (``entry_bar``) and there is no
+        exploration: a marginal record desynchronizes the batch, which costs more than its steps show."""
         cfg = self.config
         if cfg.retry_steps <= 0 or self.declined < cfg.retry_steps:
             return None
@@ -1459,12 +1486,14 @@ class SpecPolicy:
         # text (runs of a few steps) cannot amortize it, prose (runs of a request) can at once. The 12B QB2
         # prose c1 waited 337 plain steps after a 1.1x run under the overhead bound alone (2026-10-30).
         for choice in ranked:
-            if choice.measured and choice.gain >= 1.0:
+            if choice.measured and choice.gain >= self.entry_bar():
                 # a pool whose last run failed describes the text before it (prose, then random prompts): the
                 # exploration below decides, not the older samples
                 if self.measured_pays(choice, plain_ms) and not (cooling and choice.entry_ms > 0.0):
                     return dataclasses.replace(choice, reason="retry")
                 break
+        if self._rows > 1:
+            return None  # no exploration at rows (``entry_bar``)
         cheapest = _cheapest(ranked)
         if cheapest.gain < cfg.min_gain * RETRY_MIN_GAIN_FRACTION or (cooling and cheapest.entry_ms > 0.0):
             return None
@@ -1486,7 +1515,8 @@ class SpecPolicy:
         which must clear ``min_gain`` too, else at the candidate's own estimate. A trial below break-even on
         the engine's own prior (the 12B QB2 random c1 ran one per request at 0.64-1.00x, ~150 ms each under
         asynchronous scheduling, 2026-10-30) reseeds for nothing. Independent of the retry cadence, the reseed
-        is the trial's only extra cost."""
+        is the trial's only extra cost. At rows the candidate's own estimate must clear ``min_gain`` whatever
+        serving knows of the record (``entry_bar``): the hypothesis admits no trial there."""
         if self.cooling():
             return None
         cheapest = _cheapest(ranked)
@@ -1494,7 +1524,7 @@ class SpecPolicy:
         known = self.calibration.pool_known(mode)
         bar = (
             max(self.config.trial_gain, self.config.min_gain)
-            if (cheapest.measured or known)
+            if (cheapest.measured or known or self._rows > 1)
             else self.config.trial_gain
         )
         if cheapest.gain < bar:
@@ -1607,13 +1637,26 @@ class SpecPolicy:
         steps = self.config.trial_steps if (informed or choice.measured) else 1
         return self.budget_ok(choice, plain_ms, steps)
 
+    def entry_bar(self):
+        """The gain a reseeding entry needs on its estimate before the exploration bucket or the evidence rules are
+        consulted: break-even for a single row (the bucket pays for what it learns), the entry gain at rows. A
+        record that barely pays at rows costs more than its steps: its rows finish at different steps, and a
+        client that keeps ``c`` requests in flight then hands the server one arrival at a time, each prefilled
+        inside the decode of the rows still running, where a lock-step batch had one prefill while nobody decoded.
+        The 31B QB2 random c8 (v51, 2026-10-30): a 47-step (8,3) run entered as exploration at an estimated 1.00x
+        served 1.16x on its steps, and the 13 per-arrival prefills of the two waves after it (3.8 s inside their
+        decode) cost the point 12 % of its TPOT at 0.9 % more throughput; a 3-step trial costs the same in replay.
+        Nothing in the step accounting sees that stall, so at rows only a record expected to clear the entry gain
+        is worth breaking the lock-step for."""
+        return 1.0 if self._rows <= 1 else float(self.config.min_gain)
+
     def measured_pays(self, choice, plain_ms):
-        """Whether ``choice`` re-enters on evidence: serving measured it at break-even or better, the last run on
-        its pool did not fail (its samples would describe the text before it: prose, then random prompts), and
-        its entry as served pays over the horizon."""
+        """Whether ``choice`` re-enters on evidence: serving measured it at break-even or better (at the entry gain
+        for rows, ``entry_bar``), the last run on its pool did not fail (its samples would describe the text before
+        it: prose, then random prompts), and its entry as served pays over the horizon."""
         return (
             choice.measured
-            and choice.gain >= 1.0
+            and choice.gain >= self.entry_bar()
             and not self.last_run_failed(choice, plain_ms)
             and self.entry_pays(choice, plain_ms)
         )
@@ -1668,6 +1711,8 @@ class SpecPolicy:
             raise ValueError("decide needs at least one candidate record")
         self._plain_ms = float(plain_ms)
         self._frame(rows, fresh)
+        if self._at_start:
+            self.since_exit = None  # a new batch: its predecessor's exit cools nothing (``cooling``)
         if self._at_start and (self.speculating or self.probing or self.run_open):
             # every row is at its first proposal: a new batch, whose predecessor's run ended with it. Read on,
             # that run's window held the predecessor's tail (a prose answer ends accepting little) and the new
