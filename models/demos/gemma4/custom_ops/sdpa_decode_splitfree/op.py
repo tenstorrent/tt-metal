@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """``SdpaDecodeSplitfree``: paged decode attention whose output for a row is bitwise identical whatever the padded
-batch, the cores the row gets or the grid (tt-metal#59300), while a lone row still spreads over the whole grid.
+batch or the cores the row gets (tt-metal#59300), while a lone row still spreads over the whole grid.
 
 Two ``ttnn.generic_op`` programs per call (the trace captures both), sharing a persistent fp32 scratch the model
 allocates once (``allocate_scratch``) and passes in:
@@ -17,9 +17,14 @@ allocates once (``allocate_scratch``) and passes in:
    unit order with the stock correction step, normalises once and writes the group's head rows in bf16.
 
 Because every unit partial is computed by identical code on identical data in one fixed order, and the merge
-order is fixed by the unit indices, the result cannot depend on which core computed what, on the padded batch or
-on the grid. The chunk is the largest of ``planner.CHUNK_LADDER`` that fits the arch's L1 (head dim and cache
-format decide it, never the batch or the grid); the unit is 4096 tokens (one chunk on a sliding layer).
+order is fixed by the unit indices, the result cannot depend on which core computed what or on the padded batch.
+The chunk is the largest of ``planner.CHUNK_LADDER`` that fits the arch's L1 (head dim and cache format decide
+it, never the batch or the grid); the unit is derived from the grid and the context (``planner.derive_unit``: the
+smallest chunk multiple whose count at the page table's reach is at most the grid's cores, at most 4096 -- 2048
+on a 13x10 Blackhole grid, 4096 on the Wormhole 8x8; one chunk on a sliding layer), so a lone row at the full
+context puts one unit on (nearly) every core. Grid, chunk and context are build constants of a chip: every
+decode graph of one build shares them, and a row's bits are the same in every graph; a different grid (another
+harvesting, another arch) is a different unit and different bits unless ``GEMMA4_SDPA_SPLITFREE_UNIT`` pins it.
 
 Contract (the stock ``paged_scaled_dot_product_attention_decode`` call of ``tt/attention/decode.py``):
 ``q [1, B <= 32, Hq <= 32, D]`` bf16 TILE interleaved (DRAM or L1), ``k / v [blocks, nkv, block, D]`` bf16 or

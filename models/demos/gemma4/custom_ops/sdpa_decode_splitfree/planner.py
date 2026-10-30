@@ -10,8 +10,13 @@ Vocabulary (tokens are KV positions of one row's paged cache):
   ``CHUNK_LADDER`` at or below ``GEMMA4_SDPA_SPLITFREE_CHUNK`` (default 256) whose circular buffers fit the
   per-core L1 of the arch (``grid.sdpa_decode_cb_budget_bytes``). It depends on the head dim, the cache format
   and the arch only, never on the batch or the grid, so every decode graph of one build chunks alike.
-* ``unit`` (``U = nsub * C``): the work unit. ``GEMMA4_SDPA_SPLITFREE_UNIT`` (default 4096) on a layer without a
-  window; one chunk on a windowed (sliding) layer, whose live range is at most ``window`` tokens. A unit's chunks
+* ``unit`` (``U = nsub * C``): the work unit. On a layer without a window it is derived from the grid
+  (``derive_unit``): the smallest multiple of the chunk whose unit count at ``max_context`` is at most the grid's
+  cores, at most ``DEFAULT_UNIT`` (4096) -- so a lone row at the full context puts one unit on (nearly) every core:
+  2048 tokens on the 13x10 Blackhole grid (128 units of a 256K context on 130 cores), 2304 on a harvested 12x10,
+  4096 on the Wormhole 8x8 (64 units); ``GEMMA4_SDPA_SPLITFREE_UNIT`` pins it. The grid is a build constant of a
+  chip, so every decode graph of one build units alike; a row's bits follow the unit (and the chunk), never the
+  core mapping. One chunk on a windowed (sliding) layer, whose live range is at most ``window`` tokens. A unit's chunks
   are walked in ascending order on ONE core with the stock online-softmax recurrence; its partial (running max
   ``m``, denominator ``l``, unnormalised numerator ``O``) is written to the scratch. Unit ``u`` of row ``b`` covers
   tokens ``[u*U, (u+1)*U)``; the chunk holding ``cur_pos`` is masked, chunks past it (and before the window
@@ -61,6 +66,18 @@ def _env_int(env, name, default, multiple=1):
 
 def ceil_div(a, b):
     return -(-int(a) // int(b))
+
+
+def derive_unit(chunk, max_context, n_cores, cap=DEFAULT_UNIT):
+    """The unit of a layer without a window on a grid of ``n_cores``: the smallest multiple of ``chunk`` whose
+    unit count at ``max_context`` is at most ``n_cores`` (a lone row at the full context lands one unit per core,
+    the shortest per-core walk the one-level combine allows), never above ``cap`` (``DEFAULT_UNIT``: a wider
+    grid or a shorter context does not shrink the unit below what 4096 tokens per core cost) nor below the
+    chunk. Depends on the grid, the chunk and the context only -- all build constants of a chip -- never on the
+    batch or on ``cur_pos``."""
+    chunk, max_context, n_cores = int(chunk), int(max_context), max(1, int(n_cores))
+    unit = ceil_div(ceil_div(max_context, n_cores), chunk) * chunk
+    return max(chunk, min(int(cap), unit))
 
 
 def partial_cb_bytes(dht, sk, kv_tile_bytes, window, pos_stick, pt_stick, qk_tile_bytes=BF16_TILE_BYTES):
@@ -243,7 +260,9 @@ def plan_splitfree(
 ):
     """The plan of one call: ``grid`` the ``(x, y)`` compute grid, ``batch`` the padded rows, ``groups`` the local
     KV heads the call attends, ``heads_per_group`` the Q heads of each, ``max_context`` the page table's reach
-    in tokens, ``window`` the sliding window (None / 0: attend everything), ``kv_dtype`` the cache format."""
+    in tokens (the model's ``max_seq_len``: ``kv_cache_hybrid`` and the vLLM plugin size every page table to it,
+    so it is a build constant like the grid and the unit it decides), ``window`` the sliding window (None / 0:
+    attend everything), ``kv_dtype`` the cache format."""
     env = os.environ if env is None else env
     gx, gy = (int(v) for v in grid)
     n_cores = grid_cores((gx, gy))
@@ -265,7 +284,7 @@ def plan_splitfree(
     kv_tile = sdpa_tile_bytes(kv_dtype)
     budget = sdpa_decode_cb_budget_bytes(arch) if budget_bytes is None else int(budget_bytes)
     chunk_cap = _env_int(env, CHUNK_ENV, DEFAULT_CHUNK, TILE)
-    unit_cfg = _env_int(env, UNIT_ENV, DEFAULT_UNIT, TILE)
+    unit_cfg = _env_int(env, UNIT_ENV, 0, TILE)  # 0: derive the unit from the grid (derive_unit)
     reads = _env_int(env, READS_ENV, DEFAULT_READS)
     qk_tile = BF16_TILE_BYTES if str(env.get(QK_FP32_ENV, "") or "").strip() == "0" else F32_TILE_BYTES
     dht = head_dim // TILE
@@ -280,7 +299,12 @@ def plan_splitfree(
     if chosen is None:
         raise ValueError(f"{CHUNK_ENV}={chunk_cap} is below the smallest chunk {CHUNK_LADDER[-1]}")
     chunk, pcb = chosen
-    unit = chunk if window else max(chunk, (unit_cfg // chunk) * chunk)
+    if window:
+        unit = chunk
+    elif unit_cfg:
+        unit = max(chunk, (unit_cfg // chunk) * chunk)  # pinned by the env
+    else:
+        unit = derive_unit(chunk, max_context, n_cores)
     max_units = ceil_div(max_context, unit)
     n_slots = max_units if not window else min(max_units, ceil_div(window - 1, unit) + 1)
     modulus = min(n_cores, max_units)
