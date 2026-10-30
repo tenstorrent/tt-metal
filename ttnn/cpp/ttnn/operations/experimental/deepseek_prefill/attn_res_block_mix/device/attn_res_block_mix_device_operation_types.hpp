@@ -5,13 +5,14 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct AttnResScoresParams {
+struct AttnResBlockMixParams {
     uint32_t num_sites;
     float inv_hidden_size;
     float eps;
@@ -19,11 +20,12 @@ struct AttnResScoresParams {
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-// stats - [1, C, N, 32 * P] float32, TILE layout: P tensor-parallel partials side by side,
-//         as an all-gather on the last dim leaves them, or P = 1 already summed. Within a
-//         partial, column 0 is a candidate's sum of squares and column 1 + r its dot with
-//         query r.
-struct AttnResScoresInputs {
+// sealed - [1, S_i, N, d] bfloat16 tensors, TILE, interleaved; their planes in order are the
+//          C candidates.
+// stats  - [1, C, N, 32 * P] float32, TILE: P tensor-parallel partials side by side, each
+//          with the sum of squares in column 0 and query r's dot in column 1 + r.
+struct AttnResBlockMixInputs {
+    std::vector<ttnn::Tensor> sealed;
     ttnn::Tensor stats;
 };
 

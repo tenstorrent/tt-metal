@@ -485,7 +485,7 @@ class TtAttnRes(LightweightModule):
         """R folded queries -> one `[1, 1, d/tp, 32]` operand whose column 1 + r is query r.
 
         Column 0 and the columns past the last site are zero, so the matmul against it
-        lands each site's dot in the column `attn_res_scores` reads it from and leaves
+        lands each site's dot in the column `attn_res_block_mix` reads it from and leaves
         column 0 free for the sum of squares — which `rms_norm_pre_all_gather` writes to
         column 0 of an otherwise zero tile, so one `add` packs both statistics into a
         single tile column and one collective carries them.
@@ -523,40 +523,28 @@ class TtAttnRes(LightweightModule):
         return self.one_pass_squares and self.stats_dtype == ttnn.float32 and len(queries) < ttnn.TILE_SIZE
 
     def _inter_block_fused(self, block_residual, queries):
-        """`inter_block` as six dispatches: the two statistics, packed into one tile column,
-        one collective, one scoring op, and the mixture.
+        """`inter_block` as three dispatches: both statistics in one pass over the sealed set,
+        one collective, and the scoring and the mixture in a second pass.
 
-        The composed chain is a dozen more — typecasts around the collective, a second
-        collective, the folds, the composite max and sum, the site-major permutes — and
-        every one of them is billed to the host when the walk runs untraced, which is how
-        prefill runs. The scores are also kept in fp32 the whole way here, where the
+        Each pass reads every sealed tile once, for all the block's read sites. The composed
+        chain reads the set three times and adds a dozen more dispatches — typecasts around
+        the collective, a second collective, the folds, the composite max and sum, the
+        site-major permutes — each billed to the host when the walk runs untraced, which is
+        how prefill runs. The scores are also kept in fp32 the whole way here, where the
         composed chain narrowed the reduced statistics to bf16.
         """
-        sum_squares = ttnn.rms_norm_pre_all_gather(
-            block_residual, dtype=ttnn.float32, compute_kernel_config=STATS_FIDELITY
+        local = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
+            [block_residual], self._score_columns(queries), compute_kernel_config=STATS_FIDELITY
         )
-        dots = ttnn.matmul(
-            block_residual,
-            self._score_columns(queries),
-            dtype=ttnn.float32,
-            compute_kernel_config=STATS_FIDELITY,
-        )
-        local = ttnn.add(sum_squares, dots)
-        ttnn.deallocate(sum_squares)
-        ttnn.deallocate(dots)
-
-        # Gathered rather than reduced: the scoring op sums the ranks' partials in fp32
-        # dest, so the collective only has to move them.
+        # Gathered rather than reduced: the mixture sums the ranks' partials in fp32 dest, so
+        # the collective only has to move them.
         stats = self._all_gather(local)
         ttnn.deallocate(local)
 
-        exponentials, site_shifts, site_masses = ttnn.experimental.deepseek_prefill.attn_res_scores(
-            stats, num_sites=len(queries), inv_hidden_size=1.0 / self.hidden_size, eps=self.eps
+        partials, site_shifts, site_masses = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
+            [block_residual], stats, num_sites=len(queries), inv_hidden_size=1.0 / self.hidden_size, eps=self.eps
         )
         ttnn.deallocate(stats)
-
-        partials = self._mix(block_residual, exponentials)
-        ttnn.deallocate(exponentials)
         return partials, site_shifts, site_masses
 
     def _dots_by_site(self, v, queries):
