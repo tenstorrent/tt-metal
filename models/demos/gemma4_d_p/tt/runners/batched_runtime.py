@@ -3,7 +3,7 @@
 
 """Packed traced prefill forwards into engine-owned Gemma4 KV slots: up to forward_chunks chunks of 2048 tokens each.
 
-Implements prefill_forward for PREFILL_FORWARD_CHUNKS > 1 (forward_entries): each non-empty entry is one chunk of one
+Implements prefill_forward for PREFILL_FORWARD_TOKENS_BUDGET > the chunk size (prefill_chunk): each non-empty entry is one chunk of one
 request, a request may take several adjacent entries, and every entry starts on a 256-token slab boundary
 (Gemma4PrefillRuntime.resume_granularity), its tokens rotated to its block-cyclic rows
 (chunk_layout.pack_forward_tokens). One trace per number of non-empty entries, all compiled before any is captured: a
@@ -20,7 +20,7 @@ finishes (set_layer_completion_sink).
 import torch
 
 import ttnn
-from models.demos.common.prefill.forward_entries import PrefillEntry
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillLanes
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
@@ -52,7 +52,7 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
 
     def _host_entry_metadata(self, entry):
         return ttnn.from_torch(
-            torch.tensor([entry.slot, entry.start, entry.end], dtype=torch.int64).reshape(1, 1, 1, 3),
+            torch.tensor([entry.slot_id, entry.actual_start, entry.actual_end], dtype=torch.int64).reshape(1, 1, 1, 3),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -60,18 +60,18 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
 
     def _zero_entries(self, n):
         chunk = self.config.chunk_size
-        return [PrefillEntry(0, k * chunk, (k + 1) * chunk) for k in range(n)]
+        return [PrefillChunk(0, k * chunk, (k + 1) * chunk) for k in range(n)]
 
     def _stage(self, entries):
         """Host refresh of the positions, per-entry model metadata and per-entry ack records a replay reads."""
         n = len(entries)
-        positions = [self._chunk_positions(e.start) for e in entries]
+        positions = [self._chunk_positions(e.actual_start) for e in entries]
         ttnn.copy_host_to_device_tensor(self._host_rows(positions), self.positions[n])
         for metadata, e in zip(self.model.lane_prefill_metadata(n), entries):
-            metadata.update(slot_idx=e.slot, kv_actual_global=e.start)
+            metadata.update(slot_idx=e.slot_id, kv_actual_global=e.actual_start)
         if n > 1:
             self.model.lane_vector_metadata(n).update(
-                slot_idx=[e.slot for e in entries], kv_actual_global=[e.start for e in entries]
+                slot_idx=[e.slot_id for e in entries], kv_actual_global=[e.actual_start for e in entries]
             )
         for record, e in zip(self.entry_metadata, entries):
             ttnn.copy_host_to_device_tensor(self._host_entry_metadata(e), record)
@@ -142,7 +142,7 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
             self.traces[n] = trace_id
 
     def validate_forward(self, entries):
-        """Gemma4's rules on top of forward_entries.validate_forward_entries (which the runner applies): every
+        """Gemma4's rules on top of prefill_chunk.validate_chunks (which the runner applies): every
         non-empty entry starts at a multiple of the resume granularity, and a slot's first entry starts within what the
         slot holds."""
         chunk = self.config.chunk_size
@@ -153,29 +153,35 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
             raise ValueError(f"A forward needs 1 to {self.forward_chunks} non-empty entries before any empty one")
         seen = set()
         for i, e in enumerate(real):
-            if not 0 <= e.slot < self.config.num_users:
-                raise ValueError(f"Entry {i}: KV slot {e.slot} is outside [0, {self.config.num_users})")
-            if e.start < 0 or e.start % self.resume_granularity:
+            if not 0 <= e.slot_id < self.config.num_users:
+                raise ValueError(f"Entry {i}: KV slot {e.slot_id} is outside [0, {self.config.num_users})")
+            if e.actual_start < 0 or e.actual_start % self.resume_granularity:
                 raise ValueError(
-                    f"Entry {i}: start {e.start} is not a nonnegative multiple of {self.resume_granularity}"
+                    f"Entry {i}: start {e.actual_start} is not a nonnegative multiple of {self.resume_granularity}"
                 )
-            if not e.start < e.end <= min(e.start + chunk, self.config.max_seq_len):
-                raise ValueError(f"Entry {i}: [{e.start}, {e.end}) must hold 1 to {chunk} tokens within the context")
+            if not e.actual_start < e.actual_end <= min(e.actual_start + chunk, self.config.max_seq_len):
+                raise ValueError(
+                    f"Entry {i}: [{e.actual_start}, {e.actual_end}) must hold 1 to {chunk} tokens within the context"
+                )
             previous = real[i - 1] if i else None
-            if previous is not None and previous.slot == e.slot:
-                if previous.end != previous.start + chunk or e.start != previous.end:
+            if previous is not None and previous.slot_id == e.slot_id:
+                if previous.actual_end != previous.actual_start + chunk or e.actual_start != previous.actual_end:
                     raise ValueError(
-                        f"Entry {i}: slot {e.slot}'s entries must be consecutive full chunks, partial last"
+                        f"Entry {i}: slot {e.slot_id}'s entries must be consecutive full chunks, partial last"
                     )
-            elif e.slot in seen:
-                raise ValueError(f"Entry {i}: slot {e.slot}'s entries must be adjacent")
-            elif e.start > self.slot_ends[e.slot]:  # a resume may rewind into the cached prefix, not skip past it
-                raise ValueError(f"Slot {e.slot} holds {self.slot_ends[e.slot]} tokens, got an entry at {e.start}")
-            seen.add(e.slot)
+            elif e.slot_id in seen:
+                raise ValueError(f"Entry {i}: slot {e.slot_id}'s entries must be adjacent")
+            elif (
+                e.actual_start > self.slot_ends[e.slot_id]
+            ):  # a resume may rewind into the cached prefix, not skip past it
+                raise ValueError(
+                    f"Slot {e.slot_id} holds {self.slot_ends[e.slot_id]} tokens, got an entry at {e.actual_start}"
+                )
+            seen.add(e.slot_id)
         return real
 
     def prefill_forward(self, input_tensor, kv_cache, entries, request_id=0, d2h_service=None, *, metadata_msg=None):
-        """One packed forward (forward_entries.PrefillEntry, in pack order, empty ones at the tail). Frees
+        """One packed forward (prefill_chunk.PrefillChunk, in pack order, empty ones at the tail). Frees
         input_tensor and metadata_msg after the forward; if it raises, they stay the caller's, as in prefill_chunk."""
         real = self.validate_forward(list(entries))
         self._check_cache(kv_cache)
@@ -194,11 +200,17 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
         ttnn.execute_trace(self.mesh_device, self.traces[n], cq_id=0, blocking=False)
         ttnn.synchronize_device(self.mesh_device)
         for e in real:
-            self.slot_ends[e.slot] = e.end
+            self.slot_ends[e.slot_id] = e.actual_end
         if self.layer_completion_sink is not None:
             for e in real:
                 for layer_idx in range(self.config.num_layers):
-                    self.layer_completion_sink.layers_completed(layer_idx, layer_idx + 1, e.slot, e.start, e.end)
+                    self.layer_completion_sink.layers_completed(
+                        layer_start=layer_idx,
+                        layer_end=layer_idx + 1,
+                        slot_id=e.slot_id,
+                        pos_start=e.actual_start,
+                        pos_end=e.actual_end,
+                    )
         ttnn.deallocate(input_tensor)
         if metadata_msg is not None:
             ttnn.deallocate(metadata_msg)

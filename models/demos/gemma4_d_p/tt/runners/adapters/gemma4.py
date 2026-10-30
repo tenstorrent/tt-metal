@@ -17,7 +17,7 @@ class Gemma4ServiceConfig:
     CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
     MAX_SEQ_LEN = 262144
     MAX_USER_SLOTS = 6
-    # Packed forwards (PREFILL_FORWARD_CHUNKS > 1; manifest_batched.json): every entry is one 2048-token chunk.
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET above the chunk size; manifest_batched.json): 2048-token chunks.
     BATCHED_CHUNK_SIZE = 2048
     MAX_FORWARD_CHUNKS = 4
 

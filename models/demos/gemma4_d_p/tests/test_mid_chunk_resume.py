@@ -21,7 +21,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
-from models.demos.common.prefill.forward_entries import PrefillEntry, pad_entries
+from models.demos.common.prefill.prefill_chunk import PrefillChunk, pad_chunks
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.demo.text_demo_prefill import TRACE_REGION_SIZE
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
@@ -39,16 +39,19 @@ MIN_PCC = 0.99
 
 
 def _chunks(slot, start, end, chunk):
-    return [PrefillEntry(slot, s, min(end, s + chunk)) for s in range(start, end, chunk)]
+    return [PrefillChunk(slot, s, min(end, s + chunk)) for s in range(start, end, chunk)]
 
 
 def _run(runtime, caches, prompt, entries):
     """One forward of ``entries``, packed and rotated as the producer sends it; its ms."""
     chunk, cp = runtime.config.chunk_size, runtime.mesh_config.cp_degree
-    entries = pad_entries(entries, runtime.config.forward_chunks)
-    chunks = [prompt[e.start : e.end].tolist() + [0] * (chunk - (e.end - e.start)) for e in entries]
+    entries = pad_chunks(entries, runtime.config.forward_chunks)
+    chunks = [
+        prompt[e.actual_start : e.actual_end].tolist() + [0] * (chunk - (e.actual_end - e.actual_start))
+        for e in entries
+    ]
     tensor = ttnn.from_torch(
-        torch.tensor(pack_forward_tokens(chunks, [e.start for e in entries], cp)).reshape(1, -1),
+        torch.tensor(pack_forward_tokens(chunks, [e.actual_start for e in entries], cp)).reshape(1, -1),
         device=runtime.mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -57,7 +60,7 @@ def _run(runtime, caches, prompt, entries):
     t0 = time.perf_counter()
     if runtime.config.forward_chunks == 1:
         e = entries[0]
-        runtime.prefill_chunk(tensor, caches, slot_id=e.slot, actual_start=e.start, actual_end=e.end)
+        runtime.prefill_chunk(tensor, caches, slot_id=e.slot_id, actual_start=e.actual_start, actual_end=e.actual_end)
     else:
         runtime.prefill_forward(tensor, caches, entries)
     return (time.perf_counter() - t0) * 1000

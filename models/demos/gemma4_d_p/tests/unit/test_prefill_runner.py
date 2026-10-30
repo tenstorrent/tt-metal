@@ -248,8 +248,8 @@ def test_batched_service_shapes(expect_error):
 
 
 def test_packed_forwards_continue_each_slot(expect_error):
-    from models.demos.common.prefill.forward_entries import EMPTY_ENTRY
-    from models.demos.common.prefill.forward_entries import PrefillEntry as E
+    from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK
+    from models.demos.common.prefill.prefill_chunk import PrefillChunk as E
     from models.demos.gemma4_d_p.tt.runners.batched_runtime import Gemma4BatchedPrefillRuntime
 
     runtime = Gemma4BatchedPrefillRuntime.__new__(Gemma4BatchedPrefillRuntime)
@@ -262,24 +262,24 @@ def test_packed_forwards_continue_each_slot(expect_error):
         E(1, 0, 2048),
         E(2, 2048, 2100),
     ]
-    assert runtime.validate_forward([E(0, 0, 2048), E(3, 0, 1), EMPTY_ENTRY, EMPTY_ENTRY]) == [
+    assert runtime.validate_forward([E(0, 0, 2048), E(3, 0, 1), EMPTY_CHUNK, EMPTY_CHUNK]) == [
         E(0, 0, 2048),
         E(3, 0, 1),
     ]
     # Mid-chunk resumes on a slab boundary (256 tokens at chunk 2048), one rewinding into what slot 2 holds.
-    assert runtime.validate_forward([E(1, 2304, 4352), E(2, 1792, 3840), EMPTY_ENTRY, EMPTY_ENTRY]) == [
+    assert runtime.validate_forward([E(1, 2304, 4352), E(2, 1792, 3840), EMPTY_CHUNK, EMPTY_CHUNK]) == [
         E(1, 2304, 4352),
         E(2, 1792, 3840),
     ]
     for entries in (
         [E(0, 6144, 8192)],  # three entries short
-        [E(0, 6144, 8192), EMPTY_ENTRY, EMPTY_ENTRY, EMPTY_ENTRY],  # slot 0 resumes at 4096
-        [E(2, 0, 2048), E(2, 4096, 6144), EMPTY_ENTRY, EMPTY_ENTRY],  # not consecutive
-        [E(2, 0, 1000), E(2, 1000, 2048), EMPTY_ENTRY, EMPTY_ENTRY],  # partial before the run's last entry
-        [E(1, 0, 2048), E(3, 0, 2048), E(1, 2048, 4096), EMPTY_ENTRY],  # slot 1 in two runs
-        [E(4, 0, 2048), EMPTY_ENTRY, EMPTY_ENTRY, EMPTY_ENTRY],  # no such slot
-        [E(1, 2336, 4384), EMPTY_ENTRY, EMPTY_ENTRY, EMPTY_ENTRY],  # tile-aligned but not slab-aligned
-        [EMPTY_ENTRY, E(1, 0, 2048), EMPTY_ENTRY, EMPTY_ENTRY],  # empty before a real entry
+        [E(0, 6144, 8192), EMPTY_CHUNK, EMPTY_CHUNK, EMPTY_CHUNK],  # slot 0 resumes at 4096
+        [E(2, 0, 2048), E(2, 4096, 6144), EMPTY_CHUNK, EMPTY_CHUNK],  # not consecutive
+        [E(2, 0, 1000), E(2, 1000, 2048), EMPTY_CHUNK, EMPTY_CHUNK],  # partial before the run's last entry
+        [E(1, 0, 2048), E(3, 0, 2048), E(1, 2048, 4096), EMPTY_CHUNK],  # slot 1 in two runs
+        [E(4, 0, 2048), EMPTY_CHUNK, EMPTY_CHUNK, EMPTY_CHUNK],  # no such slot
+        [E(1, 2336, 4384), EMPTY_CHUNK, EMPTY_CHUNK, EMPTY_CHUNK],  # tile-aligned but not slab-aligned
+        [EMPTY_CHUNK, E(1, 0, 2048), EMPTY_CHUNK, EMPTY_CHUNK],  # empty before a real entry
     ):
         with expect_error(ValueError, "Slot|slot|Entry|entries"):
             runtime.validate_forward(entries)

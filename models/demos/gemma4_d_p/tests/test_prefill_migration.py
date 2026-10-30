@@ -4,7 +4,7 @@
 """One GPU-trace comparison with six allocated KV slots; optional loopback copy.
 
 test_batched_prefill_migration serves several slots at chunk 2048 twice, one chunk per forward and four chunks per
-packed forward (PREFILL_FORWARD_CHUNKS): the first run takes the GPU-trace checks, the packed run is checked against
+packed forward (PREFILL_FORWARD_TOKENS_BUDGET): the first run takes the GPU-trace checks, the packed run is checked against
 the first.
 """
 
@@ -268,7 +268,7 @@ def _serve_batched(gate, env, output_dir, forward_chunks):
         GEMMA4_TEST_CHUNK_SIZE=str(Gemma4ServiceConfig.BATCHED_CHUNK_SIZE),
         PREFILL_MANIFEST=str(Path(__file__).parents[1] / "tt/runners/manifest_batched.json"),
         PREFILL_CHUNK_SIZE=str(Gemma4ServiceConfig.BATCHED_CHUNK_SIZE),
-        PREFILL_FORWARD_CHUNKS=str(forward_chunks),
+        PREFILL_FORWARD_TOKENS_BUDGET=str(forward_chunks * Gemma4ServiceConfig.BATCHED_CHUNK_SIZE),
         PREFILL_NUM_USERS=str(len(BATCHED_SLOT_LENGTHS) + (2 if gate == "loopback" else 0)),
         PREFILL_PCC_SUMMARY_DIR=str(output_dir),
     )
