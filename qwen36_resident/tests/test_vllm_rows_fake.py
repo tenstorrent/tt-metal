@@ -189,9 +189,9 @@ class FakePP:
         self.done = drain
 
     def run_batch(self, items, model, chunk=None):
-        """PPPrefill.run_batch: whole prompts [(ids but the last, block table, slot)] at one chunk through one pass;
-        each slot ends as reset + run + handoff of its prompt alone (refused while a split prompt is partial)"""
-        assert self.ids is None or self.done or not self.ids, "run_batch while a split prompt is partial"
+        """PPPrefill.run_batch: whole prompts [(ids but the last, block table, slot)] at one chunk through one pass,
+        after a reset of its own (a dropped split prompt leaves nothing); each slot ends as reset + run + handoff of its
+        prompt alone"""
         assert len({slot for _, _, slot in items}) == len(items), "run_batch: slots must be distinct"
         for ids, block_table, slot in items:
             self.reset()

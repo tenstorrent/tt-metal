@@ -558,9 +558,8 @@ class RowsEngine:
 
     def prefill_batch(self, items, chunk):
         """items [(prompt ids but the last, block table, slot)] at one PP chunk: one PP pass, each prompt handed off
-        into its slot as reset + run + handoff of it alone would. The reset first: a split prompt the plugin aborted or
-        preempted mid-prefill is abandoned in the PP pipeline (the adapter only drops its pp_partial)"""
-        self.pp.reset()
+        into its slot as reset + run + handoff of it alone would (run_batch resets the pipeline itself: a split prompt
+        the plugin aborted mid-prefill, which the adapter only drops from pp_partial, leaves nothing behind)"""
         self.pp.run_batch([(torch.as_tensor(ids), blocks, r) for ids, blocks, r in items], self.model, chunk=chunk)
 
     def prefill_begin(self, r):
