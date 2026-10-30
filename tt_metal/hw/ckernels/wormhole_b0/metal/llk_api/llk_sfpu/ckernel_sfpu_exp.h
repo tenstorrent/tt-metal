@@ -744,10 +744,6 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
 #endif
 }
 
-constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
-constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
-constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
-
 template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
@@ -785,16 +781,16 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
         constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-        TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(THRESHOLD_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(THRESHOLD_scaled));
         TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
 #ifndef DISABLE_SFPLOADMACRO
@@ -961,13 +957,13 @@ void exp_init() {
         constexpr float A_scaled = A * scale_fp32;
 
         // Load constant A into LREG[12]
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(A_scaled));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(A_scaled));
         TTI_SFPCONFIG(0, 12, 0);
 
         // Load constant (B-C) into LREG[13]
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+        TTI_SFPLOADI(0, 0xA, Converter::lo16(B_minus_C));
+        TTI_SFPLOADI(0, 0x8, Converter::hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0);
 
         // Load shift amount (15) into LREG[14] for SFPSHFT2
