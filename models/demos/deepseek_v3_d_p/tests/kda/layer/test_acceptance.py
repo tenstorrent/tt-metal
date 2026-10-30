@@ -15,7 +15,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    fabric_1d_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
@@ -98,6 +102,16 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
+        ),
+        # Local verification only: Fabric2D on a Galaxy without the x wrap cabled.
+        pytest.param(
+            (8, 4),
+            1,
+            fabric2d_device_params(),
+            PREFILL_CHUNK_TOKENS,
+            None,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-fabric2d",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -223,6 +237,14 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
+        ),
+        pytest.param(
+            (8, 4),
+            1,
+            fabric2d_device_params(),
+            512,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-fabric2d",
         ),
     ],
     indirect=["mesh_device", "device_params"],
