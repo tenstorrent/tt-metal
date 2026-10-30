@@ -20,7 +20,8 @@
 # env: HF_MODEL (required; a local checkpoint dir, or a repo id the offline HF cache resolves), PORT (8000),
 #   SERVED_MODEL_NAME (Qwen/Qwen3.8-27B), MAX_MODEL_LEN (32768), VLLM_VENV (a venv with vLLM 0.26 + vllm-tt-plugin),
 #   VLLM_TT_PLUGIN_SRC (put a plugin source tree first on PYTHONPATH), TT_VISIBLE_DEVICES (0,1,2,3);
-#   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
+#   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, PREFILL_GANG_TOKENS / PREFILL_GANG_IDLE_TOKENS (prefill gangs, 0 = off),
+#   SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
 #   1,540,096 = 24,064 blocks), RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS (default 28 / 4 for this profile).
 set -euo pipefail
 PROFILE=${1:?usage: serve_local.sh plain|mtp|dflash2|multi|multi-long [vllm serve args...]}
@@ -66,7 +67,12 @@ case $PROFILE in
     export RESIDENT_MAX_TOKENS_ALL_USERS=${RESIDENT_MAX_TOKENS_ALL_USERS:-1540096}
     SAMPLING=''
     [ "${SAMPLE_ON_DEVICE:-0}" = 1 ] && SAMPLING=', "sample_on_device_mode": "decode_only"'
-    TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING}}"
+    # prefill gangs (plugin resident-mu-sched): waiting prompts run whole, several per prefill step, capped at
+    # PREFILL_GANG_TOKENS while others decode and PREFILL_GANG_IDLE_TOKENS (0: the step's budget) while none do
+    GANG=''
+    [ "${PREFILL_GANG_TOKENS:-0}" != 0 ] && GANG=", \"prefill_gang_tokens\": $PREFILL_GANG_TOKENS"
+    [ "${PREFILL_GANG_IDLE_TOKENS:-0}" != 0 ] && GANG="$GANG, \"prefill_gang_idle_tokens\": $PREFILL_GANG_IDLE_TOKENS"
+    TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING$GANG}}"
     ;;
   *) echo "unknown profile $PROFILE (plain|mtp|dflash2|multi|multi-long)" >&2; exit 2 ;;
 esac

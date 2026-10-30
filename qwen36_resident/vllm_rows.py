@@ -29,12 +29,18 @@ holds the host bookkeeping the vLLM plugin's contract (docs/DECODE_RELOAD_CONTRA
 RowsEngine binds this to ResidentModel / PPPrefill; tests/test_vllm_rows_fake.py drives the same adapter on CPU
 with a fake model and prefill that check slots, block tables, conv-history preservation and outputs.
 """
+import json
 import math
+import os
+import time
 
 import torch
 from loguru import logger
 
 ROWS = 8  # users per launch: the rows-mode build is compiled at width 8 for every launch
+# RESIDENT_SCHED_TRACE=<file>: one JSON line per prefill_forward call (wall times of each row's PP + handoff and
+# first-token launch; the PP calls end in a device sync, so host time is device time) for the scheduling analysis
+SCHED_TRACE = os.environ.get("RESIDENT_SCHED_TRACE")
 BLOCK = 64  # KV block (positions) = vLLM block_size
 CHUNK_UNIT = 1024  # the PP prefill's largest chunk: a split prompt resumes only at its multiples
 
@@ -212,12 +218,21 @@ class ResidentRowsAdapter:
         if len(firsts) + len(conts) > 1:
             raise RuntimeError(f"more than one split prompt in one step (starts {starts}, finals {finals})")
         out = torch.zeros(n, 1, self.vocab)
+        trace = [] if SCHED_TRACE else None
+        t_call = time.time()
         # whole prompts first, the first chunk of a split prompt last: a whole prompt restarts the PP pipeline
         for j in wholes + conts + firsts:
             ids = tokens[j, : ends[j]]
-            lg = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j])
+            t0 = time.perf_counter()
+            lg = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j], trace)
+            if trace is not None:
+                trace[-1]["ms"] = round((time.perf_counter() - t0) * 1000, 2)
             if lg is not None:
                 out[j, 0] = lg
+        if trace is not None:
+            with open(SCHED_TRACE, "a") as f:
+                f.write(json.dumps(dict(t=round(t_call, 4), ms=round((time.time() - t_call) * 1000, 2), rows=trace)))
+                f.write("\n")
         return (out, torch.zeros(n, dtype=torch.long)) if self.mrope else out
 
     def _pp_chunk(self, total):
@@ -228,8 +243,10 @@ class ResidentRowsAdapter:
             raise RuntimeError(f"PP chunk {c} does not divide the chunk unit {self.chunk}")
         return c
 
-    def _prefill_row(self, ids, table_row, vslot, start, end, final, total):
+    def _prefill_row(self, ids, table_row, vslot, start, end, final, total, trace=None):
         C = self.chunk
+        if trace is not None:
+            trace.append(dict(start=start, end=end, total=total, final=final))
         if start == 0:
             if self.pp_partial is not None:
                 # a new prompt restarts the pipeline: the plugin must not start one while a split prompt is in flight
@@ -249,7 +266,7 @@ class ResidentRowsAdapter:
                     self.engine.prefill_whole(ids[: T - 1], r, self._blocks_for(table_row, T), self._pp_chunk(T))
                 else:
                     self.engine.clear_slot(r)
-                return self._first_token(r, ids, T, table_row)
+                return self._first_token(r, ids, T, table_row, trace)
             if end % C:
                 raise RuntimeError(f"first chunk ends at {end}, not a multiple of the PP chunk unit {C}")
             c = self._pp_chunk(total)
@@ -279,10 +296,11 @@ class ResidentRowsAdapter:
         self.pp_partial = None
         # the churn check counts these: split prompts are the ones whose numerics the per-sequence chunk keeps whole
         logger.info(f"split prefill: resident slot {r}, {T} tokens in {calls + 1} calls at PP chunk {c}")
-        return self._first_token(r, ids, T, table_row)
+        return self._first_token(r, ids, T, table_row, trace)
 
-    def _first_token(self, r, ids, T, table_row):
+    def _first_token(self, r, ids, T, table_row, trace=None):
         """the masked first-token launch of resident slot r at position T - 1: [vocab] logits"""
+        t0 = time.perf_counter()
         self.tables[r] = [int(b) for b in table_row]
         self._write_tables()
         k = self._launch(r)
@@ -292,6 +310,8 @@ class ResidentRowsAdapter:
         # the launch's token state now runs only row r: the next decode must rewrite it (the plugin reloads inputs
         # after a prefill), and the device sampler's fed state of this launch is stale
         self._fed_launches = None
+        if trace is not None:
+            trace[-1]["first_ms"] = round((time.perf_counter() - t0) * 1000, 2)
         return lg
 
     # ------------------------------------------------------------------ decode

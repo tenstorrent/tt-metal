@@ -62,8 +62,9 @@ class ResidentModel(ResidentRowsAdapter):
         return []
 
 
-def vllm_config(max_num_seqs, async_scheduling, device_sampling, cls=None):
-    """the VllmConfig vLLM builds for the class (ResidentModel unless given) under the running plugin"""
+def vllm_config(max_num_seqs, async_scheduling, device_sampling, cls=None, tt_extra=None):
+    """the VllmConfig vLLM builds for the class (ResidentModel unless given) under the running plugin; tt_extra: more
+    additional_config['tt'] knobs"""
     cls = cls or ResidentModel
     if not MODEL_CONFIG.is_dir():
         pytest.skip(f"no plugin test model config at {MODEL_CONFIG}")
@@ -79,6 +80,7 @@ def vllm_config(max_num_seqs, async_scheduling, device_sampling, cls=None):
     )
     cc = CacheConfig(block_size=BLOCK, gpu_memory_utilization=0.9, cache_dtype="auto", enable_prefix_caching=False)
     tt = {"sample_on_device_mode": "decode_only"} if device_sampling else {}
+    tt.update(tt_extra or {})
     with (
         patch("vllm_tt_plugin.platform.TTPlatform._tt_vllm_config", None),
         patch("vllm_tt_plugin.platform.register_tt_models"),
@@ -102,8 +104,8 @@ def vllm_config(max_num_seqs, async_scheduling, device_sampling, cls=None):
 class Engine:
     """vLLM's EngineCore loop over the real scheduler and runner (step / step_with_batch_queue)"""
 
-    def __init__(self, max_num_seqs, async_scheduling, device_sampling, num_blocks):
-        self.config = vllm_config(max_num_seqs, async_scheduling, device_sampling)
+    def __init__(self, max_num_seqs, async_scheduling, device_sampling, num_blocks, tt_extra=None):
+        self.config = vllm_config(max_num_seqs, async_scheduling, device_sampling, tt_extra=tt_extra)
         self.vocab = self.config.model_config.get_vocab_size()
         kvc = KVCacheConfig(
             num_blocks=num_blocks,
@@ -230,11 +232,12 @@ def drive(
     lengths=LENGTHS,
     max_tokens=(1, 60),
     arrival=0.3,
+    tt_extra=None,
 ):
     rng = random.Random(seed)
     if num_blocks is None:
         num_blocks = max_num_seqs * MAX_LEN // BLOCK + 1
-    eng = Engine(max_num_seqs, async_scheduling, device_sampling, num_blocks)
+    eng = Engine(max_num_seqs, async_scheduling, device_sampling, num_blocks, tt_extra=tt_extra)
     reqs = {}
     pending = deque()
     for i in range(n_requests):
@@ -354,3 +357,43 @@ def test_kv_pressure_preempts_and_replays(async_scheduling, device_sampling):
     assert done >= 14
     replayed = [rid for rid, at in eng.replays.items() if eng.finished[rid] != "aborted" and max(at) > 0]
     assert len(replayed) >= 3, f"the pool was meant to force preemptions mid-decode: {eng.replays}"
+
+
+def plugin_has_gangs():
+    try:
+        from vllm_tt_plugin.config import TTPrefillChunkPolicy
+    except ImportError:
+        return False
+    return "gang_idle_tokens" in TTPrefillChunkPolicy._fields
+
+
+@pytest.mark.parametrize("seed", range(3))
+@pytest.mark.parametrize("device_sampling", [False, True], ids=["host-sampled", "device-sampled"])
+@pytest.mark.parametrize("async_scheduling", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("max_num_seqs", [8, 16])
+def test_prefill_gangs(max_num_seqs, async_scheduling, device_sampling, seed, monkeypatch):
+    """the plugin's prefill gangs (resident-mu-sched): several whole prompts in one prefill step, also while others
+    decode (up to prefill_gang_tokens; a longer first prompt splits as before) and in bursts (prefill_gang_idle_tokens):
+    every completed output stays exact, prompts over the cap still split between decode launches"""
+    if not plugin_has_gangs():
+        pytest.skip("no prefill gangs in this plugin")
+    rows_per_call = []
+    prefill_forward = ResidentModel.prefill_forward
+
+    def counted(self, tokens, page_table, kv_cache, prompt_lens, *args, **kwargs):
+        rows_per_call.append(len(prompt_lens))
+        return prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, *args, **kwargs)
+
+    monkeypatch.setattr(ResidentModel, "prefill_forward", counted)
+    eng, done = drive(
+        max_num_seqs,
+        async_scheduling,
+        device_sampling,
+        seed,
+        n_requests=24,
+        arrival=0.5,
+        tt_extra={"prefill_gang_tokens": 1200, "prefill_gang_idle_tokens": 4000},
+    )
+    assert done >= 20
+    assert max(rows_per_call) > 1, "no step carried several prompts"
+    assert eng.pp.interleaved > 0, "no prompt over the cap was split between decode launches"
