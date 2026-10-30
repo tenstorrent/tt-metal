@@ -18,6 +18,7 @@ CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/streaming_profiler_external)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/streaming_profiler_telemetry)
 
 add_custom_target(
     profiler_examples
@@ -26,4 +27,6 @@ add_custom_target(
         test_streaming_profiler_zones
         metal_example_external_process
         metal_example_metal_process
+        metal_example_telemetry_external_process
+        metal_example_telemetry_metal_process
 )
