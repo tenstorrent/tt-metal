@@ -56,20 +56,16 @@ class Fpu:
         dest_ties_away: Optional[bool] = None,
     ) -> None:
         # Mantissa bits the multiplier takes from each operand per phase, as
-        # (srcA, srcB). None means this architecture's multiplier is not
-        # modelled: multiplies are exact and math_fidelity is ignored.
+        # (srcA, srcB).
         self.mantissa_split = mantissa_split
 
         # Mantissa bits of srcA the multiplier can reach, which on some
-        # architectures is fewer than the register holds. None means all of
-        # them. It is the multiplier's reach rather than the register's width,
-        # so an add still sees the whole datum.
+        # architectures is fewer than the register holds. The multiplier's
+        # reach, not the register's width: an add still sees all 10.
         self.multiplier_srcA_bits = multiplier_srcA_bits
 
         # Rounding mode for a 16-bit Dest write: True for ties away from
-        # zero, False for ties to even. None means this architecture's mode is
-        # not pinned down, and there is no safe default to fall back on, so a
-        # write that actually lands on a tie warns rather than guessing.
+        # zero, False for ties to even.
         self.dest_ties_away = dest_ties_away
 
         self.l1 = l1
