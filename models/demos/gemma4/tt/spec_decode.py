@@ -40,8 +40,10 @@ import time
 from dataclasses import dataclass, field
 
 import torch
+from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt import pli_env
 from models.demos.gemma4.tt.assistant.masked_embedding import CmeLogits
 from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.lane_prefill import lane_frame_rows, lane_of_row, lane_row_groups
@@ -756,6 +758,9 @@ class SpeculativeDecoder:
             getattr(target_model, "hidden_size_per_layer_input", 0)
             and getattr(target_model, "per_layer_input_weights", None)
         )
+        # Speculative decoding defaults to device PLI: the fused bodies compute
+        # per-layer inputs from on-device draft tokens. GEMMA4_PLI=host overrides.
+        self._pli_dev_host = pli_env.pli_on_device(default=True)
         # Tracing: persistent I/O buffers + execute_trace replace per-op host
         # dispatch (the untraced loop is host-bound: ~77ms/decode vs a few ms
         # traced). Verify traces are keyed by batch (K+1 for verify, 1 for
@@ -794,6 +799,9 @@ class SpeculativeDecoder:
         # least one draft was accepted. These are A/B knobs for acceptance vs
         # seed quality without paying a full target reseed.
         self._fused_shift_seed = os.environ.get("GEMMA4_SPEC_FUSED_SHIFT_SEED", "current")
+        self._last_route = None
+        self._last_metrics = None
+        self._metrics_active = False
         # Persistent anchor-hidden buffer for the traced loop (allocated once).
         # The traced loop MUST be allocation-free: any ttnn.clone/slice between
         # execute_trace calls can land in memory a later trace replay uses as
@@ -873,6 +881,59 @@ class SpeculativeDecoder:
         self._srv_lane_devices = (
             [int(d) for d in target_model.lane_device_indices()] if self._srv_lanes > 1 else [0]
         )  # each lane's first chip: where its column's outputs are read back from
+
+    def _metrics_begin(self, route):
+        if self._metrics_active:
+            return
+        self._metrics_active = True
+        self._last_fused_setup_s = None
+        self._last_fused_replay_s = None
+        self._last_first_iter_s = None
+        self._last_metrics = {
+            "route": route,
+            "start": time.perf_counter(),
+            "setup_s": 0.0,
+            "first_s": 0.0,
+            "rest_s": 0.0,
+            "first_tokens": 0,
+            "rest_tokens": 0,
+            "first_iters": 0,
+            "rest_iters": 0,
+            "wall_s": 0.0,
+        }
+
+    def _metrics_setup_done(self):
+        metrics = self._last_metrics
+        if metrics is not None and metrics["first_iters"] == metrics["rest_iters"] == 0:
+            metrics["setup_s"] = time.perf_counter() - metrics["start"]
+
+    def _metrics_iteration(self, started, tokens):
+        metrics = self._last_metrics
+        if metrics is None:
+            return
+        first = metrics["first_iters"] == 0
+        prefix = "first" if first else "rest"
+        metrics[f"{prefix}_s"] += time.perf_counter() - started
+        metrics[f"{prefix}_tokens"] += tokens
+        metrics[f"{prefix}_iters"] += 1
+
+    def _metrics_finish(self):
+        if self._last_metrics is not None:
+            self._last_metrics["route"] = self._last_route
+            self._last_metrics["wall_s"] = time.perf_counter() - self._last_metrics["start"]
+        self._metrics_active = False
+
+    def _prepare_fused_pli(self):
+        """Upload the device PLI weights the fused bodies use (PLI targets only).
+
+        The fused bodies compute PLI on device from the candidate IDs. The upload
+        is idempotent and must precede the seed and any trace capture.
+        """
+        if not self.target_has_pli:
+            return
+        if not self._pli_dev_host:
+            raise ValueError("fused speculative decoding of a PLI target requires GEMMA4_PLI=device")
+        self.target.init_pli_device_weights()
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -1620,6 +1681,7 @@ class SpeculativeDecoder:
             kv_write_idxs = [
                 self._pv_from_torch(torch.tensor([c + p], dtype=torch.int32), ttnn.int32) for p in range(P)
             ]
+        device_pli = self.target_has_pli and self._pli_dev_host
         return self.target.ttnn_packed_verify_forward(
             x=dev["x"],
             position_idx=dev["pos"],
@@ -1638,7 +1700,8 @@ class SpeculativeDecoder:
             # exactly as wide as its type's mask. Applies unbounded too -- the
             # full-width flat table's unwritten tail diluted softmax.
             page_tables_per_layer=self._pv_tables_per_layer(dev["S_k"]),
-            token_ids_host=tokens,
+            token_ids_host=None if device_pli else tokens,
+            pli_on_device=device_pli,
         )
 
     def _verify_packed(self, tokens, positions):
@@ -1720,7 +1783,8 @@ class SpeculativeDecoder:
         """Batched verify. Returns (logits_host [B,vocab], hidden_device [1,1,B,h])."""
         if self._use_trace and self.target_has_pli:
             raise NotImplementedError(
-                "Traced verification passes no per-layer inputs; disable GEMMA4_SPEC_TRACE for this path"
+                "Traced verification passes no per-layer inputs; disable GEMMA4_SPEC_TRACE for this "
+                "path (the fused routes compute PLI on device)"
             )
         # Packed-query verify: all K+1 candidates in one batch=1 pass (positions
         # packed into the query-heads dim, loop-free staging KV write).
@@ -1741,6 +1805,7 @@ class SpeculativeDecoder:
         x = self._tokens_tensor(tokens)
         pos_u, pos_i = self._pos_tensors(positions)
         pt = self._page_table(len(tokens))
+        device_pli = self.target_has_pli and self._pli_dev_host
         logits, hidden = self.target.ttnn_verify_forward(
             x=x,
             current_pos=pos_u,
@@ -1748,7 +1813,8 @@ class SpeculativeDecoder:
             page_table=pt,
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=self._page_tables_per_layer(len(tokens)),
-            token_ids_host=tokens,
+            token_ids_host=None if device_pli else tokens,
+            pli_on_device=device_pli,
         )
         lh = self._logits_to_host(logits).reshape(len(tokens), -1)
         logits.deallocate(True)
@@ -1942,12 +2008,12 @@ class SpeculativeDecoder:
 
     def _id_to_host(self, id_tt):
         """[*,1] uint32 device id -> python int (TP: read device-0 replica)."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0]) if self._tp > 1 else ttnn.to_torch(id_tt)
+        t = self._read_replica(id_tt)
         return int(t.reshape(-1)[0])
 
     def _ids_to_host(self, ids_tt, n):
         """[1,1,n] uint32 device ids -> list[int] (TP: read device-0 replica)."""
-        t = ttnn.to_torch(ttnn.get_device_tensors(ids_tt)[0]) if self._tp > 1 else ttnn.to_torch(ids_tt)
+        t = self._read_replica(ids_tt)
         flat = t.reshape(-1)
         return [int(flat[j]) for j in range(n)]
 
@@ -2002,6 +2068,7 @@ class SpeculativeDecoder:
             page_table=v_pt,
             kv_cache=self.tt_kv_cache,
             page_tables_per_layer=self._page_tables_per_layer(K + 1),
+            pli_on_device=self.target_has_pli,
         )
         vidx = self._argmax_last(vlogits, rows=K + 1)  # [1,1,K+1] uint32 RM (fast multicore argmax)
 
@@ -2075,7 +2142,7 @@ class SpeculativeDecoder:
         hidden.deallocate(True)
         return h
 
-    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens):
+    def generate_fused(self, anchor_token, anchor_pos, max_new_tokens, *, _nested=False):
         """Greedy speculative decode using the fully on-device fused iteration.
 
         Each iteration reads back only the ``2K+1`` token ids; the drafter
@@ -2084,7 +2151,27 @@ class SpeculativeDecoder:
         anchor position ``p+m+1`` (slice ``vhidden[m+1]``) — no extra reseed
         forward, so the whole iteration is one device program (this is the eager
         twin of the fused trace). Returns ``(generated_ids, accepts_per_iter)``.
+        PLI targets compute PLI on device in either verify layout.
         """
+        if not _nested:
+            self._last_metrics = None
+            self._last_route = None
+            self._metrics_active = False
+        if self.target_has_pli and not self._pli_dev_host:
+            raise ValueError("fused speculative decoding of a PLI target requires GEMMA4_PLI=device")
+        # Name the body that runs: the traced capture uses packed verify when
+        # _fused_packed_enabled() holds; the eager iteration never does.
+        if not self._use_trace:
+            self._last_route = "fused-batch-dim-eager"
+        elif self._fused_packed_enabled():
+            self._last_route = "fused-packed-traced"
+        else:
+            self._last_route = "fused-batch-dim-traced"
+        self._metrics_begin(self._last_route)
+        if max_new_tokens <= 0:
+            self._metrics_finish()
+            return [], []
+        self._prepare_fused_pli()
         if self._use_trace:
             return self._generate_fused_traced(anchor_token, anchor_pos, max_new_tokens)
         self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
@@ -2094,7 +2181,9 @@ class SpeculativeDecoder:
         loop_t0 = time.perf_counter()
         anchor_hidden = self.seed(anchor_token, anchor_pos)  # [1,1,1,h] device
         anchor_tok_tt = self._tokens_tensor([anchor_token])
+        self._metrics_setup_done()
         while len(out) < max_new_tokens:
+            iter_t0, before = time.perf_counter(), len(out)
             if self._fused_reseed:
                 new_anchor_hidden = self.seed(anchor_token, anchor_pos)
                 anchor_hidden.deallocate(True)
@@ -2131,13 +2220,17 @@ class SpeculativeDecoder:
                 if tok in self.stop_tokens:
                     anchor_hidden.deallocate(True)
                     anchor_tok_tt.deallocate(True)
+                    self._metrics_iteration(iter_t0, len(out) - before)
                     self._last_fused_replay_s = time.perf_counter() - loop_t0
+                    self._metrics_finish()
                     return out, accepts
                 if len(out) >= max_new_tokens:
                     break
+            self._metrics_iteration(iter_t0, len(out) - before)
         anchor_hidden.deallocate(True)
         anchor_tok_tt.deallocate(True)
         self._last_fused_replay_s = time.perf_counter() - loop_t0
+        self._metrics_finish()
         return out, accepts
 
     # ── fused single-iteration trace (greedy) ───────────────────────────────
@@ -2160,6 +2253,7 @@ class SpeculativeDecoder:
                 page_table=tr["d_pt"],
                 kv_cache=self.tt_kv_cache,
                 page_tables_per_layer=tr["d_ptl"],
+                pli_on_device=self.target_has_pli,
             )
             seed_idx = self._argmax_last(seed_logits, rows=1)
             seed_logits.deallocate(True)
@@ -2204,6 +2298,7 @@ class SpeculativeDecoder:
                 hot_pt_full=tr["pv_hot"].get("full_attention"),
                 hot_pt_sliding=tr["pv_hot"].get("sliding_attention"),
                 page_tables_per_layer=tr["pv_ptl"],
+                pli_on_device=self.target_has_pli,
             )
             mask_full.deallocate(True)
             mask_slide.deallocate(True)
@@ -2215,6 +2310,7 @@ class SpeculativeDecoder:
                 page_table=tr["v_pt"],
                 kv_cache=self.tt_kv_cache,
                 page_tables_per_layer=tr["v_ptl"],
+                pli_on_device=self.target_has_pli,
             )
         tail_rows = K if self._fused_reseed else K + 1
         tail_idx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K or K+1] uint32 RM
@@ -2258,6 +2354,8 @@ class SpeculativeDecoder:
         with the SAME tokens (deterministic), so the writes are idempotent."""
         from loguru import logger as _lg
 
+        if self.target_has_pli and not getattr(self.target, "_pli_dev_ready", False):
+            raise RuntimeError("device PLI weights must be initialized before fused trace capture")
         K = self.draft_len
         v_pos = [anchor_pos + 1 + j for j in range(K)] if self._fused_reseed else [anchor_pos + j for j in range(K + 1)]
         d_pu, d_pi = self._pos_tensors([anchor_pos])
@@ -2349,7 +2447,7 @@ class SpeculativeDecoder:
         scratch on a re-replay)."""
         tr = self._fused_trace
         vh = tr["vhidden"]
-        vh_t = ttnn.to_torch(ttnn.get_device_tensors(vh)[0]) if self._tp > 1 else ttnn.to_torch(vh)
+        vh_t = self._read_replica(vh)
         sel = vh_t[:, :, row : row + 1, :].contiguous()  # [1,1,1,backbone]
         host_h = ttnn.from_torch(sel, layout=ttnn.TILE_LAYOUT, dtype=tr["h"].dtype, mesh_mapper=self._mapper)
         ttnn.copy_host_to_device_tensor(host_h, tr["h"])
@@ -2373,12 +2471,14 @@ class SpeculativeDecoder:
         anchor_hidden.deallocate(True)
         tr = self._fused_trace
         self._last_fused_setup_s = time.perf_counter() - setup_t0
+        self._metrics_setup_done()
 
         out, accepts = [], []
         cur_token, cur_pos = anchor_token, anchor_pos
         first = True  # capture already bound the first inputs (token/pos/hidden)
         replay_t0 = time.perf_counter()
         while len(out) < max_new_tokens:
+            iter_t0, before = time.perf_counter(), len(out)
             if not first:
                 h_tok = self._host_tokens([cur_token])
                 ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
@@ -2431,11 +2531,7 @@ class SpeculativeDecoder:
             _lg.debug(f"[spec-trace] fused replay pos={cur_pos} execute")
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
 
-            vx = (
-                ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0])
-                if self._tp > 1
-                else ttnn.to_torch(tr["verify_x"])
-            )
+            vx = self._read_replica(tr["verify_x"])
             vx = vx.reshape(-1)
             drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
             target_ids = self._ids_to_host(tr["vidx"], K + 1)
@@ -2453,11 +2549,15 @@ class SpeculativeDecoder:
             for tok in committed:
                 out.append(tok)
                 if tok in self.stop_tokens:
+                    self._metrics_iteration(iter_t0, len(out) - before)
                     self._last_fused_replay_s = time.perf_counter() - replay_t0
+                    self._metrics_finish()
                     return out, accepts
                 if len(out) >= max_new_tokens:
                     break
+            self._metrics_iteration(iter_t0, len(out) - before)
         self._last_fused_replay_s = time.perf_counter() - replay_t0
+        self._metrics_finish()
         return out, accepts
 
     # ── serving: batched fused records (vLLM contract adapter) ───────────────
@@ -2577,6 +2677,8 @@ class SpeculativeDecoder:
         """
         from loguru import logger as _lg
 
+        if self.target_has_pli:
+            raise NotImplementedError("serving sessions do not support per-layer-input targets")
         if self._srv_records is not None:
             raise RuntimeError("serving_prepare already ran; serving_release before preparing again")
         shapes, widths = serving_plan(shapes, widths_by_shape, max_rows, max_context=max_context, max_rungs=max_rungs)
@@ -4219,6 +4321,7 @@ class SpeculativeDecoder:
         x = self._tokens_tensor(tokens)  # [1,B]
         pu, pi = self._pos_tensors(positions)  # pu [1,32] (B filled), pi [B]
         pt = self._page_table_users(len(tokens))  # [B, blocks] distinct
+        device_pli = self.target_has_pli and self._pli_dev_host
         logits, hidden = self.target.ttnn_verify_forward(
             x=x,
             current_pos=pu,
@@ -4229,7 +4332,8 @@ class SpeculativeDecoder:
             # per-layer tables under bounded sliding slices row b>=1 of a 1-row
             # table (see _capture_fused_trace).
             page_tables_per_layer=self._page_tables_per_layer_users(len(tokens)),
-            token_ids_host=tokens,
+            token_ids_host=None if device_pli else tokens,
+            pli_on_device=device_pli,
         )
         logits.deallocate(True)
         for t in (x, pu, pi, pt):
@@ -4298,6 +4402,7 @@ class SpeculativeDecoder:
         # Width-match the table to the masks' S_k (see _page_table_users).
         _bs = int(self.tt_kv_cache[0][0].padded_shape[2])
         pt = self._page_table_users(B, width=S_k // _bs)
+        device_pli = self.target_has_pli and self._pli_dev_host
         logits, vhidden = target.ttnn_packed_verify_forward(
             x=x,
             position_idx=position_idx,
@@ -4310,7 +4415,8 @@ class SpeculativeDecoder:
             embed_idx_full=None,
             embed_idx_sliding=None,
             hot_pt=None,
-            token_ids_host=[token for user_tokens in tokens_b for token in user_tokens],
+            token_ids_host=None if device_pli else [token for user_tokens in tokens_b for token in user_tokens],
+            pli_on_device=device_pli,
         )
         lh = self._logits_to_host(logits).reshape(B * P, -1)
         logits.deallocate(True)
@@ -4410,6 +4516,7 @@ class SpeculativeDecoder:
             embed_idx_full=None,
             embed_idx_sliding=None,
             hot_pt=None,
+            pli_on_device=self.target_has_pli,
         )
         vidx = self._argmax_last(vlogits, rows=B * P)  # [1,1,B*P] uint32 RM
         vlogits.deallocate(True)
@@ -4419,6 +4526,8 @@ class SpeculativeDecoder:
         """Capture ONE fused batched iteration over persistent buffers."""
         from loguru import logger as _lg
 
+        if self.target_has_pli and not getattr(self.target, "_pli_dev_ready", False):
+            raise RuntimeError("device PLI weights must be initialized before fused trace capture")
         K = self.draft_len
         B = len(anchor_tokens)
         P = K + 1
@@ -4475,7 +4584,7 @@ class SpeculativeDecoder:
         tr = self._fused_trace_batched
         B, P = tr["B"], tr["P"]
         vh = tr["vhidden"]
-        vh_t = ttnn.to_torch(ttnn.get_device_tensors(vh)[0]) if self._tp > 1 else ttnn.to_torch(vh)
+        vh_t = self._read_replica(vh)
         sel = torch.cat([vh_t[:, :, b * P + rows_b[b] : b * P + rows_b[b] + 1, :] for b in range(B)], dim=2)
         host_h = ttnn.from_torch(
             sel.contiguous(), layout=ttnn.TILE_LAYOUT, dtype=tr["h"].dtype, mesh_mapper=self._mapper
@@ -4494,6 +4603,8 @@ class SpeculativeDecoder:
         S_k = ((max_seq_len + 63) // 64) * 64
 
         setup_t0 = time.perf_counter()
+        # Weight upload precedes capture; no allocation may occur inside it.
+        self._prepare_fused_pli()
         # Eager (untraced) batched seed, then capture (mirrors the single-user path:
         # an active verify trace would collide with the fused capture allocations).
         self._use_trace = False
@@ -4503,6 +4614,7 @@ class SpeculativeDecoder:
         seed_h.deallocate(True)
         tr = self._fused_trace_batched
         self._last_fused_setup_s = time.perf_counter() - setup_t0
+        self._metrics_setup_done()
 
         toks = list(anchor_tokens)
         pos = list(anchor_positions)
@@ -4516,6 +4628,7 @@ class SpeculativeDecoder:
         first = True
         replay_t0 = time.perf_counter()
         while not all(done):
+            iter_t0, before = time.perf_counter(), sum(map(len, outs))
             if not first:
                 cs = list(pos)
                 h_tok = self._host_tokens(toks)
@@ -4554,11 +4667,7 @@ class SpeculativeDecoder:
 
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
 
-            vx = (
-                ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0])
-                if self._tp > 1
-                else ttnn.to_torch(tr["verify_x"])
-            ).reshape(-1)
+            vx = self._read_replica(tr["verify_x"]).reshape(-1)
             gids = self._ids_to_host(tr["vidx"], B * P)
 
             rows_b = []
@@ -4583,11 +4692,15 @@ class SpeculativeDecoder:
 
             if not all(done):
                 self._hidden_rows_to_device_batched(rows_b)
+            self._metrics_iteration(iter_t0, sum(map(len, outs)) - before)
 
         self._last_fused_replay_s = time.perf_counter() - replay_t0
+        self._metrics_finish()
         return outs, accepts
 
-    def generate_batched(self, anchor_tokens, anchor_positions, max_new_tokens, max_seq_len, temperature=0.0):
+    def generate_batched(
+        self, anchor_tokens, anchor_positions, max_new_tokens, max_seq_len, temperature=0.0, *, _nested=False
+    ):
         """Greedy batched speculative decode for B independent users (ragged).
 
         Each iteration drafts ALL B users in one batch=B drafter chain, runs ONE
@@ -4599,10 +4712,24 @@ class SpeculativeDecoder:
         Returns (outs: list[B] of generated token-id lists, accepts: list[B] of
         per-iteration accept counts).
         """
+        if not _nested:
+            self._last_metrics = None
+            self._last_route = None
+            self._metrics_active = False
         if temperature and temperature > 0:
             raise NotImplementedError("batched spec-decode supports greedy only (temperature<=0)")
+        self._last_route = "fused-packed-traced" if self._use_trace else "host-loop-eager"
+        self._metrics_begin(self._last_route)
+        if max_new_tokens <= 0:
+            outs, accepts = [[] for _ in anchor_tokens], [[] for _ in anchor_tokens]
+            self._metrics_finish()
+            return outs, accepts
+        if self._fused_reseed:
+            logger.warning("GEMMA4_SPEC_FUSED_RESEED=1 has no effect: batched speculative decoding only shift-seeds")
         if self._use_trace:
             return self._generate_fused_traced_batched(anchor_tokens, anchor_positions, max_new_tokens, max_seq_len)
+        if self.target_has_pli and self._pli_dev_host:
+            self.target.init_pli_device_weights()
         B = len(anchor_tokens)
         K = self.draft_len
         P = K + 1
@@ -4620,10 +4747,12 @@ class SpeculativeDecoder:
         backbone = seed_h.shape[-1]
         anchor_h = [ttnn.clone(ttnn.slice(seed_h, [0, 0, b, 0], [1, 1, b + 1, backbone])) for b in range(B)]
         seed_h.deallocate(True)
+        self._metrics_setup_done()
 
         _draft_mode = os.environ.get("GEMMA4_SPEC_DRAFT_MODE", "batched")
 
         while not all(done):
+            iter_t0, before = time.perf_counter(), sum(map(len, outs))
             if _draft_mode == "loop":
                 drafts_b = [self._draft(toks[b], anchor_h[b], pos[b], temperature=0.0, user_idx=b)[0] for b in range(B)]
             else:
@@ -4655,13 +4784,24 @@ class SpeculativeDecoder:
                 if pos[b] >= pos_cap:
                     done[b] = True
             vhidden.deallocate(True)
+            self._metrics_iteration(iter_t0, sum(map(len, outs)) - before)
 
         for b in range(B):
             anchor_h[b].deallocate(True)
+        self._metrics_finish()
         return outs, accepts
 
     def generate(
-        self, anchor_token, anchor_pos, max_new_tokens, anchor_hidden=None, temperature=0.0, top_p=1.0, top_k=0
+        self,
+        anchor_token,
+        anchor_pos,
+        max_new_tokens,
+        anchor_hidden=None,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        *,
+        _nested=False,
     ):
         """Run speculative decode from a prompt anchor (prefill must have filled the KV).
 
@@ -4670,16 +4810,32 @@ class SpeculativeDecoder:
             anchor_pos: its absolute position p.
             max_new_tokens: max tokens to generate.
             anchor_hidden: optional pre-seeded target hidden at p; computed via
-                ``seed`` when None.
+                ``seed`` when None. Only the host loop accepts it; the fused body
+                seeds itself, so passing it on a fused route raises.
 
         Returns:
             (generated_token_ids, num_accept_per_iter) — the latter for accept-rate stats.
         """
+        if not _nested:
+            self._last_metrics = None
+            self._last_route = None
+            self._metrics_active = False
         greedy = not temperature or temperature <= 0
+        # Traced greedy decoding runs the fused body, which needs device PLI on a
+        # PLI target; everything else runs the host loop.
+        fused = self._use_trace and greedy and (not self.target_has_pli or self._pli_dev_host)
+        self._last_route = "fused" if fused else "host-loop"
+        self._metrics_begin(self._last_route)
+        if max_new_tokens <= 0:
+            self._metrics_finish()
+            return [], []
+        if fused:
+            if anchor_hidden is not None:
+                raise ValueError("anchor_hidden is only accepted by the host loop; the fused body seeds itself")
+            return self.generate_fused(anchor_token, anchor_pos, max_new_tokens, _nested=True)
+        if self.target_has_pli and self._pli_dev_host:
+            self.target.init_pli_device_weights()
         if self._use_trace:
-            if greedy:
-                return self.generate_fused(anchor_token, anchor_pos, max_new_tokens)
-
             # Sampling mode cannot use the single fused greedy trace because the
             # draft/verify token selection is non-deterministic (it depends on the
             # sampled token), so draft and verify must run as two SEPARATE traces
@@ -4694,10 +4850,11 @@ class SpeculativeDecoder:
             #      trace still references, corrupting in-flight state.
             # Greedy sidesteps both by fusing draft+verify into ONE trace; sampling
             # has no fused equivalent yet, so fall back to the untraced host loop.
+            # Greedy decoding of a PLI target with host PLI falls back the same way.
             from loguru import logger as _lg
 
             _lg.warning(
-                "Disabling speculative trace for sampling mode; separate draft/verify "
+                "Disabling speculative trace for the host loop; separate draft/verify "
                 "trace interleaving deadlocks the mesh (see generate() for details)"
             )
             self._use_trace = False
@@ -4710,10 +4867,12 @@ class SpeculativeDecoder:
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
+                    _nested=True,
                 )
             finally:
                 self._use_trace = True
 
+        self._last_route = "host-loop-eager"
         traced = self._use_trace
         self._pv_a_prev = -1  # re-seed packed-verify staging for the new anchor/request
         out = []
@@ -4725,7 +4884,9 @@ class SpeculativeDecoder:
         if anchor_hidden is None:
             anchor_hidden = self.seed(anchor_token, anchor_pos)
         draft_fn = self._draft_traced if self._use_trace else self._draft
+        self._metrics_setup_done()
         while len(out) < max_new_tokens:
+            iter_t0, before = time.perf_counter(), len(out)
             drafts, draft_logits = draft_fn(
                 anchor_token, anchor_hidden, anchor_pos, temperature=temperature, top_p=top_p, top_k=top_k
             )
@@ -4778,10 +4939,14 @@ class SpeculativeDecoder:
                 if tok in self.stop_tokens:
                     if owns_anchor_hidden:
                         anchor_hidden.deallocate(True)
+                    self._metrics_iteration(iter_t0, len(out) - before)
+                    self._metrics_finish()
                     return out, accepts
                 if len(out) >= max_new_tokens:
                     break
+            self._metrics_iteration(iter_t0, len(out) - before)
 
         if owns_anchor_hidden:
             anchor_hidden.deallocate(True)
+        self._metrics_finish()
         return out, accepts
