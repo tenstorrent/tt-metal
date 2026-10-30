@@ -484,7 +484,8 @@ inline void add_cce_kernels(IDevice* device, Program& program, const std::vector
 }
 
 // Checks that every CCE of `launches` is idle, then launches `program` and returns without waiting. The caller ends it
-// with detail::WaitProgramDone; a blocking slow-dispatch mesh workload would stall every later host access instead.
+// with slow_dispatch::WaitProgramDone; a blocking slow-dispatch mesh workload would stall every later host access
+// instead.
 inline void launch_on_idle_cces(IDevice* device, Program& program, const std::vector<CceKernelLaunch>& launches) {
     require_idle_cces(device, launches);
     slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);

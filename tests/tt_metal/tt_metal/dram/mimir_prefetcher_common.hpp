@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -70,7 +71,7 @@ public:
             return;
         }
         try {
-            detail::WaitProgramDone(device_, *program, /*read_device_profiler_results=*/false);
+            slow_dispatch::WaitProgramDone(*device_, *program);
         } catch (const std::exception& error) {
             ADD_FAILURE() << "WaitProgramDone on the receiver Program threw: " << error.what();
         }

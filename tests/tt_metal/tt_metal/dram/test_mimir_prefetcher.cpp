@@ -34,6 +34,7 @@
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/tensor_prefetcher_transport.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -686,7 +687,7 @@ public:
                 0,
                 schedule)};
         std::unique_ptr<Program> program = launch_cce_program(device_, {sender});
-        detail::WaitProgramDone(device_, *program, /*read_device_profiler_results=*/false);
+        slow_dispatch::WaitProgramDone(*device_, *program);
         const std::vector<uint32_t> status = read_status(sender_cce_);
         log_info(tt::LogTest, "MM7GcbSmoke sender CCE {}: {}", sender_cce_, gcb_status_string(status));
         return status;
