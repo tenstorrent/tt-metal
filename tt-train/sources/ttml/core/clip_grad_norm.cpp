@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_set>
+#include <variant>
 
 #include "core/compute_kernel_config.hpp"
 #include "serialization/serializable.hpp"
@@ -68,10 +70,18 @@ ttnn::Tensor pow_sum(
     return ttnn_fixed::sum_over_dim(tmp_pow_sum, /* dim */ 0);
 }
 
+// step3 writes into the grads and relabels them with the union of all its inputs' placements, so a dim-2 shard
+// scaled alongside a dim-3 shard would come back labelled dim 3. Each grad's own label is restored afterwards.
 void scale_in_place(
     const std::vector<ttnn::Tensor>& grads,
     const ttnn::Tensor& clip_coef_clamped,
     const ttnn::DeviceComputeKernelConfig& compute_config) {
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(grads.size());
+    for (const auto& grad : grads) {
+        topologies.push_back(grad.tensor_topology());
+    }
+
     const auto num_grads = static_cast<uint32_t>(grads.size());
     const auto chunk = max_inputs_per_launch(*grads.front().device());
     for (uint32_t offset = 0; offset < num_grads; offset += chunk) {
@@ -81,6 +91,12 @@ void scale_in_place(
             clip_coef_clamped,
             /* memory_config */ std::nullopt,
             compute_config);
+    }
+
+    for (size_t i = 0; i < grads.size(); ++i) {
+        // A Tensor is a handle: this copy shares the stored grad's attributes, so the relabel lands on the grad.
+        auto grad = grads[i];
+        grad.update_tensor_topology(topologies[i]);
     }
 }
 
@@ -92,6 +108,45 @@ void validate_grads(const std::vector<ttnn::Tensor>& grads, const ttnn::Tensor& 
         }
         if (grad.dtype() != reference.dtype() || grad.memory_config() != reference.memory_config()) {
             throw std::logic_error("clip_grad_norm_tp: all gradients must share dtype and memory config");
+        }
+    }
+}
+
+// A parameter in both groups would be counted twice and scaled twice.
+void reject_duplicates(
+    const serialization::NamedParameters& sharded, const serialization::NamedParameters& replicated) {
+    std::unordered_set<const autograd::Tensor*> sharded_tensors;
+    for (const auto& [_, tensor] : sharded) {
+        sharded_tensors.insert(tensor.get());
+    }
+    for (const auto& [name, tensor] : replicated) {
+        if (sharded_tensors.contains(tensor.get())) {
+            throw std::logic_error(
+                fmt::format("clip_grad_norm_tp: parameter '{}' is in both sharded and replicated", name));
+        }
+    }
+}
+
+// The two groups are reduced differently, so a parameter in the wrong one silently skews the norm. A tensor
+// distributed over a collapsed 1-D shape carries a single placement for the whole mesh.
+void validate_placements(
+    const serialization::NamedParameters& parameters, uint32_t cluster_axis, bool expect_sharded) {
+    for (const auto& [name, tensor] : parameters) {
+        if (!tensor->get_requires_grad() || !tensor->is_grad_initialized()) {
+            continue;
+        }
+        const auto& placements = tensor->get_value().tensor_topology().placements();
+        const size_t idx = placements.size() == 1U ? 0U : cluster_axis;
+        const bool is_sharded =
+            idx < placements.size() &&
+            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[idx]);
+        if (is_sharded != expect_sharded) {
+            throw std::logic_error(fmt::format(
+                "clip_grad_norm_tp: parameter '{}' is passed as {} but is {} on cluster_axis {}",
+                name,
+                expect_sharded ? "sharded" : "replicated",
+                is_sharded ? "sharded" : "replicated",
+                cluster_axis));
         }
     }
 }
@@ -121,6 +176,7 @@ autograd::TensorPtr clip_grad_norm_tp(
     if (!std::isfinite(p_norm_type) || p_norm_type <= 0.0F) {
         throw std::logic_error("clip_grad_norm_tp: p_norm_type must be finite and positive");
     }
+    reject_duplicates(sharded, replicated);
     auto sharded_grads = collect_grads(sharded);
     auto replicated_grads = collect_grads(replicated);
     if (sharded_grads.empty() && replicated_grads.empty()) {
@@ -137,7 +193,13 @@ autograd::TensorPtr clip_grad_norm_tp(
             "clip_grad_norm_tp: cluster_axis {} out of range for mesh with {} dims", cluster_axis, mesh_shape.dims()));
     }
     const auto tp_size = mesh_shape[static_cast<int32_t>(cluster_axis)];
+    if (tp_size > 1U) {
+        validate_placements(sharded, cluster_axis, /* expect_sharded */ true);
+        validate_placements(replicated, cluster_axis, /* expect_sharded */ false);
+    }
 
+    // step1/step3 currently ignore this (their factories build a default compute config) and accumulate
+    // Sum[|g|^p] in bf16, so the norm is underestimated for gradients of more than ~1k tiles per device (#63505).
     const auto compute_config = ttml::core::ComputeKernelConfig::precise();
 
     // Sharded gradients are disjoint pieces of one tensor, so their partial sums add across the TP axis.
