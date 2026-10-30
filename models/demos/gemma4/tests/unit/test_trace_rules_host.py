@@ -14,7 +14,13 @@ from models.demos.gemma4.tt import generator_trace as gt
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
 from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Mixin
 from models.demos.gemma4.tt.generator import filter_warmup_sampling_params
-from models.demos.gemma4.tt.warmup_isls import ENV_VAR, parse_warmup_isls, run_prefill_ladder, warmup_prefill_isls
+from models.demos.gemma4.tt.warmup_isls import (
+    ENV_VAR,
+    parse_warmup_isls,
+    run_prefill_ladder,
+    run_prefix_continuation_warmup,
+    warmup_prefill_isls,
+)
 
 
 class _View:
@@ -524,6 +530,20 @@ def test_ladder_runs_once_per_process_and_per_model():
         == []
     )
     assert len(gen.calls) == 4
+
+
+def test_prefix_continuation_warmup_prefills_a_tail_past_one_chunk_once_per_process():
+    gen = _Gen(data_parallel=2)
+    assert run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), chunk=4096)
+    assert [c["start_pos"] for c in gen.calls] == [[4096], [4096]], "one continuation per model, past one chunk"
+    assert all(c["tokens"] == (1, 4096 + 128) and c["enable_trace"] is False for c in gen.calls)
+    assert [c["model_id_warmup"] for c in gen.calls] == [0, 1]
+    gen.calls.clear()
+    assert not run_prefix_continuation_warmup(gen, kv_cache="kv", prefill_forward=_prefill_recorder(gen), chunk=4096)
+    assert gen.calls == [], "once per process"
+    off = _Gen(data_parallel=1, paged=False)
+    assert not run_prefix_continuation_warmup(off, kv_cache="kv", prefill_forward=_prefill_recorder(off), chunk=4096)
+    assert off.calls == [], "no cached prefix to continue from with paged attention off"
 
 
 def test_ladder_stops_at_the_chunk_when_paged_attention_is_off():

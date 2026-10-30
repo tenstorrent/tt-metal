@@ -9,7 +9,7 @@ import os
 import torch
 from loguru import logger
 
-from models.demos.gemma4.tt.warmup_isls import run_prefill_ladder, warmup_prefill_isls
+from models.demos.gemma4.tt.warmup_isls import run_prefill_ladder, run_prefix_continuation_warmup, warmup_prefill_isls
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
@@ -1315,7 +1315,9 @@ def _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, *, prefill_forward_fn
         return
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
     chunk = int(getattr(model_args, "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
-    run_prefill_ladder(generator, kv_cache, prefill_forward, ladder, chunk=chunk)
+    if run_prefill_ladder(generator, kv_cache, prefill_forward, ladder, chunk=chunk):
+        # the shape a prefix-cache hit prefills (a short tail past cached tokens): eager, compiled here, not on a request
+        run_prefix_continuation_warmup(generator, kv_cache, prefill_forward, chunk=chunk)
 
 
 def warmup_gemma4_model_prefill(

@@ -103,3 +103,37 @@ def run_prefill_ladder(
             if model_id == 0:
                 warmed.append(isl)
     return warmed
+
+
+#: The tail a prefix-cache continuation warmup prefills past one chunk of cached tokens (the shape a served APC hit
+#: takes: the uncached remainder of a prompt, padded to the SDPA chunk alignment).
+CONTINUATION_TAIL = 128
+
+
+def run_prefix_continuation_warmup(
+    generator, kv_cache, prefill_forward: Callable, *, chunk: int, tail: int = CONTINUATION_TAIL
+) -> bool:
+    """Run one eager batch-1 prefill of ``tail`` tokens past ``chunk`` cached tokens (``start_pos=[chunk]``) on every
+    data-parallel model of ``generator``, once per process: the shape a prefix-cache hit prefills in serving. The
+    continuation is eager by design and its first use compiled on the request that hit the cache (the 12B QB2's
+    first cached request took 2.7 s against 0.6 s for the next, 2026-10-30). Returns whether it ran: with paged
+    attention off (no page table) there is no cached prefix to continue from."""
+    if getattr(generator, "_warmed_prefix_continuation", False):
+        return False
+    generator._warmed_prefix_continuation = True
+    for model_id in range(generator.data_parallel):
+        warmup_args = generator._mock_tokens(1, int(chunk) + int(tail), kv_cache, model_id)
+        if warmup_args.get("page_table") is None:
+            logger.warning("Skipping the prefix-cache continuation warmup: paged attention off (no page table)")
+            return False
+        logger.info("Warming up the eager prefix-cache continuation: {} tokens past {} cached", tail, chunk)
+        prefill_forward(
+            **warmup_args,
+            kv_cache=kv_cache,
+            start_pos=[int(chunk)],
+            enable_trace=False,
+            model_id_warmup=model_id,
+            sampling_params=None,
+            warmup_prefill=False,
+        )
+    return True
