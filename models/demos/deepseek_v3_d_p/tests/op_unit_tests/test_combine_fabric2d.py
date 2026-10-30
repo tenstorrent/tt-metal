@@ -36,6 +36,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config, get_gate_outputs
 
@@ -44,12 +45,11 @@ CHUNK = 5 * 1024
 DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
 
-# These cases are synthetic rather than any one model, but they route top-8 over an 8-chip dispatch
-# group, which is the shape the models carrying MOE_FWD_VC_PAGES = 67 have -- so this takes 67.
-# Correctness does not depend on it: the forwarding region is split by movement class, so no size can
-# deadlock the ring, which is why one value serves every case here. Taking the smaller region is the
-# more demanding choice of the two, so these cases cover the shallower channels rather than avoid them.
-FWD_VC_PAGES = 67
+# These cases are synthetic rather than any one model, but they route top-8 over 256 experts on an
+# 8-chip dispatch group, which is DeepSeek-V3's shape. Correctness does not depend on the depth: the
+# forwarding region is split by movement class, so no size can deadlock the ring, which is why one
+# value serves every case here.
+FWD_VC_PAGES = DeepSeekV3Config.MOE_FWD_VC_PAGES
 
 # The production Galaxy row and its 8x1 TorusY LoudBox proxy. The proxy is one dispatch group on a
 # single-axis ring, so it covers neither cross-group routing nor the 2D torus.
