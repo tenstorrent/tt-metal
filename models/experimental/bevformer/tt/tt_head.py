@@ -26,10 +26,15 @@ from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDe
 class TTBEVFormerHead:
     """BEVFormer's detection head, batch-first on device."""
 
-    def __init__(self, params, device):
+    def __init__(self, params, device, all_layers=True):
         """``params`` comes from ``create_head_parameters``, with the reference head's BEV shape
-        and the ``pc_range`` corner and size its [0, 1] reference points map to in metres."""
+        and the ``pc_range`` corner and size its [0, 1] reference points map to in metres.
+
+        ``all_layers`` returns every decoder layer's logits and boxes, as the reference does for
+        its per-layer training losses; without it only the last layer's, the ones the coder reads.
+        The decoder runs every layer either way, as each refines the previous one's points."""
         self.params = params
+        self.all_layers = all_layers
         # The box predictions' center channels, which the refined centers fill.
         self._center_mask = ttnn.to_device(
             ttnn.Tensor(
@@ -54,7 +59,7 @@ class TTBEVFormerHead:
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
         (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
         the box code in ``model_config.py``'s ``CENTERS_FIRST`` order with cx, cy and cz in metres,
-        which ``CODE_ORDER`` takes to the reference's.
+        which ``CODE_ORDER`` takes to the reference's. Without ``all_layers``, L is 1, the last layer.
         """
         signpost(header="TTNN Head Forward Start")
         p = self.params
@@ -68,10 +73,11 @@ class TTBEVFormerHead:
         signpost(header="Head Decoder Start")
         hs, refined_points, box_codes = self.decoder(query, bev_embed, query_pos, reference_points, p.reg_branches)
         signpost(header="Head Decoder End")
+        layers = range(len(p.cls_branches)) if self.all_layers else [len(p.cls_branches) - 1]
+        if not self.all_layers:
+            refined_points, box_codes = refined_points[layers[0] :], box_codes[layers[0] :]
         signpost(header="Head ClsBranches Start")
-        all_cls_scores = ttnn.stack(
-            [self._cls_branch(hs[lvl], branch) for lvl, branch in enumerate(p.cls_branches)], dim=0
-        )
+        all_cls_scores = ttnn.stack([self._cls_branch(hs[lvl], p.cls_branches[lvl]) for lvl in layers], dim=0)
         signpost(header="Head ClsBranches End")
         signpost(header="Head BoxPreds Start")
 
