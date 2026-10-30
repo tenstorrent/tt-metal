@@ -142,6 +142,9 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                 for tile_dimensions in tile_sizes:
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
                         continue
+                    # Int8 reduce only supports full 32x32 tiles
+                    if in_fmt == DataFormat.Int8 and tuple(tile_dimensions) != (32, 32):
+                        continue
                     tile_shape = construct_tile_shape(tile_dimensions)
                     dimensions_list = (
                         generate_perf_input_dimensions(acc, dest_sync, tile_shape)
