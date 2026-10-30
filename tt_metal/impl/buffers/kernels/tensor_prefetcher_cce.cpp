@@ -17,10 +17,12 @@
 #include <stdint.h>
 
 #include "experimental/cce_gddr.h"
+#include "experimental/cce_hart.h"
 #include "experimental/cce_remote_cb.h"
 #include "tt_metal/impl/buffers/tensor_prefetcher_cce_abi.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
+namespace hart = experimental::cce_hart;
 namespace remote_cb = experimental::cce_remote_cb;
 
 using tt::tt_metal::CceSenderState;
@@ -47,14 +49,14 @@ struct RequestOutcome {
 // Stores the detail words, then the state behind a fence, so a host that reads the new state reads the
 // detail that goes with it.
 void publish_status(uint32_t status_addr, CceSenderState state, uint32_t request_index, const RequestOutcome& outcome) {
-    *remote_cb::own_tl1_word(status_addr + offsetof(CceSenderStatus, code)) = static_cast<uint32_t>(outcome.code);
-    *remote_cb::own_tl1_word(status_addr + offsetof(CceSenderStatus, request_index)) = request_index;
-    *remote_cb::own_tl1_word(status_addr + offsetof(CceSenderStatus, target_state_addr)) = outcome.target_state_addr;
-    *remote_cb::own_tl1_word(status_addr + offsetof(CceSenderStatus, receiver)) = outcome.receiver;
-    *remote_cb::own_tl1_word(status_addr + offsetof(CceSenderStatus, sent)) = outcome.sent;
-    *remote_cb::own_tl1_word(status_addr + offsetof(CceSenderStatus, acked)) = outcome.acked;
+    *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, code)) = static_cast<uint32_t>(outcome.code);
+    *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, request_index)) = request_index;
+    *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, target_state_addr)) = outcome.target_state_addr;
+    *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, receiver)) = outcome.receiver;
+    *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, sent)) = outcome.sent;
+    *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, acked)) = outcome.acked;
     asm volatile("fence w, w" ::: "memory");
-    *remote_cb::own_tl1_word(status_addr + offsetof(CceSenderStatus, state)) = static_cast<uint32_t>(state);
+    *hart::own_tl1_words(status_addr + offsetof(CceSenderStatus, state)) = static_cast<uint32_t>(state);
 }
 
 // DRAIN: the target words follow the header. A GlobalCircularBuffer's counters live in the sender state the
@@ -105,10 +107,10 @@ RequestOutcome wait_for_cq_signal(
         outcome.receiver = cq_index;
         return outcome;
     }
-    const volatile uint32_t* slot = remote_cb::own_tl1_word(
+    const volatile uint32_t* slot = hart::own_tl1_words(
         control_base + tt::tt_metal::kCceCqSignalSlotsOffset + cq_index * tt::tt_metal::kCceCqSignalSlotStrideBytes);
     const uint32_t wait_value = header.wait_cq.cq_wait_value;
-    const remote_cb::WaitDeadline deadline(budget_cycles);
+    const hart::WaitDeadline deadline(budget_cycles);
     uint32_t observed = *slot;
     while (static_cast<int32_t>(observed - wait_value) < 0) {
         if (deadline.expired()) {
@@ -148,7 +150,7 @@ void deliver_chunk(
     // DRAM writes land before it releases a WAIT_CQ (SDMeshCommandQueue::enqueue_write_dram_core_counter).
     const volatile uint32_t* source = reinterpret_cast<const volatile uint32_t*>(
         experimental::cce_gddr_address(context.mimir, context.view_offset + view_byte_offset));
-    volatile uint32_t* stage = remote_cb::own_tl1_word(stage_slot_addr);
+    volatile uint32_t* stage = hart::own_tl1_words(stage_slot_addr);
     const uint32_t num_words = bytes / sizeof(uint32_t);
     for (uint32_t word = 0; word < num_words; ++word) {
         stage[word] = source[word];
@@ -284,23 +286,21 @@ RequestOutcome prefetch_request(
 void kernel_main() {
     const uint32_t control_base = get_arg_val<uint32_t>(tt::tt_metal::kCceSenderArgControlBase);
     const uint64_t budget_cycles =
-        (static_cast<uint64_t>(get_arg_val<uint32_t>(tt::tt_metal::kCceSenderArgBudgetHi)) << 32) |
-        get_arg_val<uint32_t>(tt::tt_metal::kCceSenderArgBudgetLo);
+        hart::arg_u64(tt::tt_metal::kCceSenderArgBudgetLo, tt::tt_metal::kCceSenderArgBudgetHi);
     const uint32_t stage_ring_bytes = get_arg_val<uint32_t>(tt::tt_metal::kCceSenderArgStageRingBytes);
     const PrefetchContext prefetch_context{
         .stage_ring_base = control_base + tt::tt_metal::kCceSenderControlBytes,
         .stage_third = stage_ring_bytes / 3,
         .mimir = get_arg_val<uint32_t>(tt::tt_metal::kCceSenderArgMimir),
-        .view_offset = (static_cast<uint64_t>(get_arg_val<uint32_t>(tt::tt_metal::kCceSenderArgViewOffsetHi)) << 32) |
-                       get_arg_val<uint32_t>(tt::tt_metal::kCceSenderArgViewOffsetLo),
+        .view_offset = hart::arg_u64(tt::tt_metal::kCceSenderArgViewOffsetLo, tt::tt_metal::kCceSenderArgViewOffsetHi),
         .budget_cycles = budget_cycles,
     };
 
     const uint32_t ring_meta_addr = control_base + tt::tt_metal::kCceRingMetaOffset;
     const volatile uint32_t* bytes_sent =
-        remote_cb::own_tl1_word(ring_meta_addr + offsetof(tt::tt_metal::RingMeta, bytes_sent));
+        hart::own_tl1_words(ring_meta_addr + offsetof(tt::tt_metal::RingMeta, bytes_sent));
     volatile uint32_t* bytes_acked =
-        remote_cb::own_tl1_word(ring_meta_addr + offsetof(tt::tt_metal::RingMeta, bytes_acked));
+        hart::own_tl1_words(ring_meta_addr + offsetof(tt::tt_metal::RingMeta, bytes_acked));
     const uint32_t status_addr = control_base + tt::tt_metal::kCceSenderStatusOffset;
     const uint32_t ring_addr = control_base + tt::tt_metal::kCceRequestRingOffset;
 
@@ -315,7 +315,7 @@ void kernel_main() {
         // The host stored the page before the count; read the page only after the count.
         asm volatile("fence r, r" ::: "memory");
         const uint32_t slot = (bytes_consumed / kRequestPageBytes) % tt::tt_metal::kCceRequestRingSlots;
-        const volatile uint32_t* slot_words = remote_cb::own_tl1_word(ring_addr + slot * kRequestPageBytes);
+        const volatile uint32_t* slot_words = hart::own_tl1_words(ring_addr + slot * kRequestPageBytes);
         // Copy the page word by word: packed header fields read in place could become byte loads.
         uint32_t page_words[kRequestPageWords];
         for (uint32_t word = 0; word < kRequestPageWords; ++word) {

@@ -7,13 +7,16 @@
 #include <stdint.h>
 #include "dev_mem_map.h"
 #include "experimental/cce_gddr.h"
-#include "experimental/cce_remote_cb.h"
+#include "experimental/cce_hart.h"
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 
 namespace cce_test {
 
-using experimental::cce_remote_cb::read_cycle_counter;
-using experimental::cce_remote_cb::WaitDeadline;
+using experimental::cce_hart::arg_u64;
+using experimental::cce_hart::own_tl1_words;
+using experimental::cce_hart::read_cycle_counter;
+using experimental::cce_hart::wait_until;
+using experimental::cce_hart::WaitDeadline;
 
 inline constexpr uint32_t kLineBytes = L2_CACHE_LINE_SIZE;
 
@@ -26,16 +29,6 @@ inline __attribute__((always_inline)) void copy_words(
     }
 }
 
-inline uint64_t arg_u64(uint32_t lo_index, uint32_t hi_index) {
-    return (static_cast<uint64_t>(get_arg_val<uint32_t>(hi_index)) << 32) | get_arg_val<uint32_t>(lo_index);
-}
-
-// Words of this CCE's TL1 that another agent (the host or another hart) writes or reads.
-template <typename T = uint32_t>
-inline volatile T* own_tl1_words(uint64_t tl1_offset) {
-    return reinterpret_cast<volatile T*>(tl1_offset + static_cast<uint64_t>(MEM_L1_UNCACHED_BASE));
-}
-
 inline bool on_one_line(uint64_t first_address, uint64_t second_address) {
     return first_address / kLineBytes == second_address / kLineBytes;
 }
@@ -45,10 +38,7 @@ template <typename Ready>
 inline bool poll_bounded(Ready ready, uint64_t budget_cycles, uint32_t& cycles_spent) {
     const uint64_t start = read_cycle_counter();
     const WaitDeadline deadline(budget_cycles);
-    bool is_ready = ready();
-    while (!is_ready && !deadline.expired()) {
-        is_ready = ready();
-    }
+    const bool is_ready = wait_until(deadline, ready);
     cycles_spent = static_cast<uint32_t>(read_cycle_counter() - start);
     return is_ready;
 }

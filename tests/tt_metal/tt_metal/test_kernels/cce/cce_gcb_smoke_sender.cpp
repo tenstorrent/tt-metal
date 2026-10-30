@@ -6,9 +6,11 @@
 // one page at a time, per the schedule, then waits until every receiver has acked everything.
 
 #include "cce_gcb_receiver_abi.h"
+#include "experimental/cce_hart.h"
 #include "experimental/cce_remote_cb.h"
 
 namespace abi = cce_gcb_receiver_abi;
+namespace hart = experimental::cce_hart;
 namespace remote_cb = experimental::cce_remote_cb;
 
 struct SendProgress {
@@ -53,8 +55,7 @@ uint32_t send_schedule(remote_cb::Sender& sender, uint32_t seed, uint64_t budget
 void kernel_main() {
     const uint32_t state_addr = get_arg_val<uint32_t>(abi::kArgGcbAddr);
     const uint32_t block_addr = get_arg_val<uint32_t>(abi::kArgBlockAddr);
-    const uint64_t budget_cycles = (static_cast<uint64_t>(get_arg_val<uint32_t>(abi::kArgBudgetHi)) << 32) |
-                                   get_arg_val<uint32_t>(abi::kArgBudgetLo);
+    const uint64_t budget_cycles = hart::arg_u64(abi::kArgBudgetLo, abi::kArgBudgetHi);
     const uint32_t seed = get_arg_val<uint32_t>(abi::kArgSeed);
 
     remote_cb::Sender sender = remote_cb::sender_init(state_addr);
@@ -62,7 +63,7 @@ void kernel_main() {
     const uint32_t code = send_schedule(sender, seed, budget_cycles, progress);
     remote_cb::store_sender_wr_ptr(sender);
 
-    volatile uint32_t* status = remote_cb::own_tl1_word(block_addr + abi::kStatusLineOffset);
+    volatile uint32_t* status = hart::own_tl1_words(block_addr + abi::kStatusLineOffset);
     status[abi::kStatusCode] = code;
     status[abi::kStatusRequestsDone] = progress.requests_done;
     status[abi::kStatusPagesDone] = progress.pages_done;
