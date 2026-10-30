@@ -252,7 +252,7 @@ def test_fabric_hang_skips_config_sweep(tmp_path, monkeypatch):
     calls = _fake_sh(monkeypatch, 137, write)
     r = fabric_step().run(Ctx(tmp_path, tmp_path, False), State())
     assert r.status == Status.HANG
-    assert len(calls) == 1
+    assert len([c for c in calls if c.startswith("pytest")]) == 1
 
 
 def test_reset_failure_points_to_log(tmp_path, monkeypatch):
@@ -544,3 +544,17 @@ def test_models_layout_a(tmp_path, monkeypatch):
     assert step.startswith("   block-random ") and l0.startswith("     dense_L0 ") and l1.startswith("     moe_L1 ")
     assert step.index("PASS") == l0.index("PASS") == l1.index("PASS") == sm.index("FAIL") == so.index("SKIP")
     assert sm.startswith("   smoke ") and "iter 1 KV cache DIFFERS" in sm
+
+
+def test_device_step_saves_smi_snapshot_after_run(tmp_path, monkeypatch):
+    from gwdt_steps import Ctx, State, build_steps
+
+    seen = []
+
+    def write(cmd, log, env):
+        seen.append((cmd, log))
+
+    _fake_sh(monkeypatch, 0, write)
+    step = next(s for s in build_steps(["glm53"]) if s.key == "block-random:glm53")
+    step.run(Ctx(tmp_path, tmp_path, False), State())
+    assert seen[-1] == ("tt-smi -s --snapshot_no_tty", tmp_path / "block-random" / "glm53" / "tt-smi.json")

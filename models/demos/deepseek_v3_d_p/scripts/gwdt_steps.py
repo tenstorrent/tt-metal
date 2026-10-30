@@ -166,6 +166,12 @@ def run_collect(ctx: Ctx, key: str, ids: list[str]) -> Result:
 
 
 RESET_CMD = "tt-smi -glx_reset_auto"
+SMI_CMD = "tt-smi -s --snapshot_no_tty"
+
+
+def save_smi(ctx: Ctx, d: Path) -> None:
+    """Device telemetry right after a device step, before the next reset, for post-mortem."""
+    sh(ctx, SMI_CMD, d / "tt-smi.json", timeout=120)
 
 
 def reset(ctx: Ctx, log: Path, state: State) -> Result | None:
@@ -204,6 +210,7 @@ def pytest_step(
             sh(ctx, cmd, log, {**(common_sh(ctx.repo, model)[0] if model else {}), **triage_env(ctx.repo, csv)})
         finally:
             ctx.tick = outer_tick
+        save_smi(ctx, d)
         state.rows = row_results(read_tail(log), ids)
         if csv.is_file() and csv.stat().st_size > 0:
             return Result(Status.HANG, f"triage {csv}")
@@ -263,6 +270,7 @@ def stress_step(phase: str, model: str, loops: int, ids: dict[str, str], iters: 
             sh(ctx, f"bash {SCRIPTS}/stress.sh {d.name} {loops}", d / "stress.log", env)
         finally:
             ctx.tick = outer_tick
+        save_smi(ctx, d)
         state.loops = loop_results(d, loops)
         state.now = ""
         return stress_result(state.loops, d / "stress.log")
@@ -337,7 +345,7 @@ def reset_gate() -> Step:
 
 
 def smi_step() -> Step:
-    cmd = "tt-smi -s --snapshot_no_tty"
+    cmd = SMI_CMD
 
     def run(ctx: Ctx, state: State) -> Result:
         if ctx.mode_co:
