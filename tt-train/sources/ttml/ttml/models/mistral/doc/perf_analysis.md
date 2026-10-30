@@ -226,6 +226,7 @@ Gap decomposition at exit (cycle-time, 40 layers; notes per term in `D`, "Loop e
 | 320 tiny per-adapter scale ops | 31 (stale-shape row) | iteration 3 fusion | absorbed for qkv / out / gate_up; w2's remain (~8) |
 | Gamma re-read per work item in the fused norm forward | ~0.2 per 4 layers per chip | not attempted | multicast or resident copy; listed |
 | `UnpackToDestFp32` read-back of fp32 partials (three all-core ops) | 0 | review round 6 note | relative 2^-11, below bf16 rounding; PCCs 0.999997-0.999999; left as is |
+| TP collective parameters (links, workers per link, chunks per sync, buffers per channel) through env knobs in `ttnn_fixed/distributed/ttnn_ops.cpp` | 6.8 ms per 4 layers per chip on chip 0 (17 reduce-scatters at 281 us + 17 all-gathers at 120 us) | standalone sweep on the 1x4 mesh at the step's shapes (`O/iter12_ccl_sweep.{py,sh,log}`): reduce-scatter 122 us, all-gather 114 us with the defaults (2 links, 8 workers per link); 1 link 217 / 209, 1-2 workers 176 / 148-278, chunks per sync 1-4 slower for the all-gather, buffers per channel no effect | the library defaults are the fastest; the in-step 281 / 120 us vs 122 / 114 standalone is waiting for the slower chips (1.149-1.273 GHz effective), i.e. the collectives carry the clock skew, not a transfer cost; nothing kernel-level to gain |
 
 Full text of each: `D`, "Rejected".
 

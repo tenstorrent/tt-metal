@@ -4,6 +4,7 @@
 
 #include "ttnn_ops.hpp"
 
+#include <cstdlib>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -84,6 +85,23 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
 
 }  // namespace
 
+namespace {
+
+// Experimental CCL knobs for the TP sweeps (iteration 12 of the Mistral loop): unset = the library defaults.
+std::optional<uint32_t> ccl_env(const char* name) {
+    const char* v = std::getenv(name);
+    if (v == nullptr || *v == '\0') {
+        return std::nullopt;
+    }
+    return static_cast<uint32_t>(std::strtoul(v, nullptr, 10));
+}
+
+uint32_t ccl_num_links(uint32_t library_default) {
+    return ccl_env("TTML_CCL_NUM_LINKS").value_or(library_default);
+}
+
+}  // namespace
+
 ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
@@ -103,13 +121,17 @@ ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::op
         /* persistent_output_buffer */ std::nullopt,
         dim,
         ccl_resources.get_all_gather_semaphore(),
-        num_links,
+        ccl_num_links(num_links),
         /* memory_config */ std::nullopt,
         topology,
         /* subdevice_id */ std::nullopt,
         cluster_axis,
         /* use_optimal_ccl_for_llama */ false,
-        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+        /* barrier_semaphore */ ccl_resources.get_barrier_semaphore(),
+        /* use_all_gather_async_via_broadcast */ false,
+        ccl_env("TTML_CCL_AG_CHUNKS_PER_SYNC"),
+        ccl_env("TTML_CCL_AG_WORKERS_PER_LINK"),
+        ccl_env("TTML_CCL_AG_BUFFERS_PER_CHANNEL"));
 }
 
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
@@ -179,12 +201,15 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
         dim,
         ccl_resources.get_reduce_scatter_semaphores(),
         ccl_resources.get_barrier_semaphore(),
-        num_links,
+        ccl_num_links(num_links),
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,
         topology,
         /* subdevice_id */ std::nullopt,
-        /* cluster_axis */ cluster_axis);
+        /* cluster_axis */ cluster_axis,
+        ccl_env("TTML_CCL_RS_CHUNKS_PER_SYNC"),
+        ccl_env("TTML_CCL_RS_WORKERS_PER_LINK"),
+        ccl_env("TTML_CCL_RS_BUFFERS_PER_CHANNEL"));
 }
 
 ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {

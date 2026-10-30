@@ -1,0 +1,20 @@
+=== build 2026-10-30T15:01:57Z
+build rc=0
+=== sweep 2026-10-30T15:02:08Z
+default: reduce_scatter 122 us, all_gather 114 us (wall per op, 20 iters)
+{'TTML_CCL_NUM_LINKS': 1}: reduce_scatter 217 us, all_gather 209 us (wall per op, 20 iters)
+{'TTML_CCL_NUM_LINKS': 2}: reduce_scatter 121 us, all_gather 114 us (wall per op, 20 iters)
+{'TTML_CCL_RS_WORKERS_PER_LINK': 1, 'TTML_CCL_AG_WORKERS_PER_LINK': 1}: reduce_scatter 176 us, all_gather 278 us (wall per op, 20 iters)
+{'TTML_CCL_RS_WORKERS_PER_LINK': 2, 'TTML_CCL_AG_WORKERS_PER_LINK': 2}: reduce_scatter 175 us, all_gather 148 us (wall per op, 20 iters)
+{'TTML_CCL_RS_WORKERS_PER_LINK': 4, 'TTML_CCL_AG_WORKERS_PER_LINK': 4}: reduce_scatter 131 us, all_gather 114 us (wall per op, 20 iters)
+{'TTML_CCL_RS_WORKERS_PER_LINK': 8, 'TTML_CCL_AG_WORKERS_PER_LINK': 8}: reduce_scatter 121 us, all_gather 117 us (wall per op, 20 iters)
+{'TTML_CCL_RS_CHUNKS_PER_SYNC': 1, 'TTML_CCL_AG_CHUNKS_PER_SYNC': 1}: reduce_scatter 122 us, all_gather 251 us (wall per op, 20 iters)
+{'TTML_CCL_RS_CHUNKS_PER_SYNC': 2, 'TTML_CCL_AG_CHUNKS_PER_SYNC': 2}: reduce_scatter 117 us, all_gather 173 us (wall per op, 20 iters)
+{'TTML_CCL_RS_CHUNKS_PER_SYNC': 4, 'TTML_CCL_AG_CHUNKS_PER_SYNC': 4}: reduce_scatter 121 us, all_gather 135 us (wall per op, 20 iters)
+{'TTML_CCL_RS_CHUNKS_PER_SYNC': 8, 'TTML_CCL_AG_CHUNKS_PER_SYNC': 8}: reduce_scatter 134 us, all_gather 121 us (wall per op, 20 iters)
+{'TTML_CCL_RS_CHUNKS_PER_SYNC': 16, 'TTML_CCL_AG_CHUNKS_PER_SYNC': 16}: reduce_scatter 134 us, all_gather 117 us (wall per op, 20 iters)
+{'TTML_CCL_RS_CHUNKS_PER_SYNC': 32, 'TTML_CCL_AG_CHUNKS_PER_SYNC': 32}: reduce_scatter 134 us, all_gather 114 us (wall per op, 20 iters)
+{'TTML_CCL_RS_BUFFERS_PER_CHANNEL': 2, 'TTML_CCL_AG_BUFFERS_PER_CHANNEL': 2}: reduce_scatter 121 us, all_gather 112 us (wall per op, 20 iters)
+{'TTML_CCL_RS_BUFFERS_PER_CHANNEL': 4, 'TTML_CCL_AG_BUFFERS_PER_CHANNEL': 4}: reduce_scatter 121 us, all_gather 113 us (wall per op, 20 iters)
+{'TTML_CCL_RS_BUFFERS_PER_CHANNEL': 8, 'TTML_CCL_AG_BUFFERS_PER_CHANNEL': 8}: reduce_scatter 120 us, all_gather 115 us (wall per op, 20 iters)
+=== done 2026-10-30T15:02:18Z
