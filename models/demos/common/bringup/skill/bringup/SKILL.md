@@ -170,6 +170,16 @@ Fork tests (owner, 2026-10-27, F198 / F199): transparency on what works and what
 never "known" or "pre-existing": report every failing and every skipped test (with its reason) to the owner, fix it or
 let the owner waive it (`tests.fork_waivers`). The full strict run of every fork's every test is task F.1, the run's
 last task (`testing/fork_suite.py`, about an hour on a 2x2), and the rebase skill's baseline; not on every fork change.
+No step runs a fork's regression or unit suite on a large box (owner, 2026-10-30: the 8x4 is too expensive for it);
+a perf or fix step runs only the tests it adds for its change and the model-level checks; put that in every brief.
+
+A run that is killed or fails oddly (owner, 2026-10-30, DeepSeek-V4.1 P.16: one A/B side SIGKILLed at model load; the
+overseer moved the A/B records by hand, called the tooling broken after misreading a resume that correctly waited for
+a decision, and started its own measurement script, which collided with the orchestrator's re-measurement on the
+device): do not improvise. Read the logs and say what happened; rerun only the failed piece through the framework's
+own command (`decide --rerun` then `resume`, `gate --unit`); call the tooling broken only with evidence from its code,
+and then fix it at the cause (selftest, BREADCRUMBS). Never move or edit the framework's records by hand, never run a
+perf pick's measurement yourself, and never start a device job while an orchestrator is running.
 
 Watch the orchestrator log for gate results, attempts, stops and problems. After every gate, re-export and republish
 the dashboards.
