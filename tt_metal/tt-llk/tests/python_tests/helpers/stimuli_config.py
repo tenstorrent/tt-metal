@@ -105,6 +105,14 @@ class StimuliConfig:
         use_dense_tile_dimensions: bool = False,
         operand_res_tile_size: int = None,
         twos_complement: bool = False,
+        num_faces_A: int = None,
+        num_faces_B: int = None,
+        face_r_dim_A: int = None,
+        face_r_dim_B: int = None,
+        tile_dimensions_A: list[int] = None,
+        tile_dimensions_B: list[int] = None,
+        num_faces_res: int = None,
+        face_r_dim_res: int = None,
     ):
 
         # Fields init
@@ -134,6 +142,21 @@ class StimuliConfig:
         self.use_dense_tile_dimensions = use_dense_tile_dimensions
         self.operand_res_tile_size = operand_res_tile_size
         self.twos_complement = twos_complement
+
+        # Per-operand geometry of a matmul with tiny tiles: operand A is in0 (unpacker 1), operand B is in1 (unpacker 0), each with its own face count,
+        # face rows and tile dimensions; unset, an operand follows num_faces, face_r_dim and tile_dimensions as before.
+        self.per_operand_geometry = any(
+            v is not None
+            for v in (num_faces_A, num_faces_B, face_r_dim_A, face_r_dim_B, tile_dimensions_A, tile_dimensions_B, num_faces_res, face_r_dim_res)
+        )
+        self.num_faces_A = num_faces if num_faces_A is None else num_faces_A
+        self.num_faces_B = num_faces if num_faces_B is None else num_faces_B
+        self.face_r_dim_A = face_r_dim if face_r_dim_A is None else face_r_dim_A
+        self.face_r_dim_B = face_r_dim if face_r_dim_B is None else face_r_dim_B
+        self.tile_dimensions_A = tile_dimensions if tile_dimensions_A is None else tile_dimensions_A
+        self.tile_dimensions_B = tile_dimensions if tile_dimensions_B is None else tile_dimensions_B
+        self.num_faces_res = num_faces if num_faces_res is None else num_faces_res
+        self.face_r_dim_res = face_r_dim if face_r_dim_res is None else face_r_dim_res
 
         # Hardware flags injected by TestConfig via set_use_srcs() / set_srcs_32bit_mode()
         self.use_srcs = False
@@ -208,13 +231,13 @@ class StimuliConfig:
         """Compute tile sizes and L1 buffer addresses from current flags."""
         self.tile_size_A_bytes = calculate_tile_size_bytes(
             self.stimuli_A_format,
-            self.tile_dimensions,
+            self.tile_dimensions_A,
             format_tile_sizes,
             use_srcs=self._operand_use_srcs("A"),
         )
         self.tile_size_B_bytes = calculate_tile_size_bytes(
             self.stimuli_B_format,
-            self.tile_dimensions,
+            self.tile_dimensions_B,
             format_tile_sizes,
             use_srcs=self._operand_use_srcs("B"),
         )
@@ -266,6 +289,14 @@ class StimuliConfig:
                 use_srcs=self._operand_use_srcs("Res"),
                 dest_acc=self._srcs_32bit_mode,
             )
+
+    @property
+    def operand_unpack_words(self):
+        """(tile size of unpacker 0, tile size of unpacker 1) in 16 byte words from the per-operand geometry, or None without one.
+        Unpacker 0 reads in1 (operand B) and unpacker 1 reads in0 (operand A), each strided by its own L1 tile size."""
+        if not self.per_operand_geometry:
+            return None
+        return self.tile_size_B_bytes // 16, self.tile_size_A_bytes // 16
 
     def set_use_srcs(self, unpack_to_srcs: bool):
         """Enable SrcS-interleaved L1 layout. Called by TestConfig."""
@@ -669,8 +700,8 @@ class StimuliConfig:
             pack_function_A,
             self.buf_a_addr,
             self.tile_size_A_bytes,
-            self.num_faces,
-            self.face_r_dim,
+            self.num_faces_A,
+            self.face_r_dim_A,
             location,
             self.write_full_tiles,
             use_srcs=self._operand_use_srcs("A"),
@@ -683,8 +714,8 @@ class StimuliConfig:
             pack_function_B,
             self.buf_b_addr,
             self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
+            self.num_faces_B,
+            self.face_r_dim_B,
             location,
             self.write_full_tiles,
             use_srcs=self._operand_use_srcs("B"),
@@ -714,9 +745,9 @@ class StimuliConfig:
             pack_function_A,
             self.buf_a_addr,
             self.tile_size_A_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            self.tile_dimensions,
+            self.num_faces_A,
+            self.face_r_dim_A,
+            self.tile_dimensions_A,
             location,
             use_srcs=self._operand_use_srcs("A"),
             twos_complement=self.twos_complement,
@@ -727,9 +758,9 @@ class StimuliConfig:
             pack_function_B,
             self.buf_b_addr,
             self.tile_size_B_bytes,
-            self.num_faces,
-            self.face_r_dim,
-            self.tile_dimensions,
+            self.num_faces_B,
+            self.face_r_dim_B,
+            self.tile_dimensions_B,
             location,
             use_srcs=self._operand_use_srcs("B"),
             twos_complement=self.twos_complement,
@@ -787,8 +818,8 @@ class StimuliConfig:
             fmt,
             count,
             sfpu,
-            self.num_faces,
-            self.face_r_dim,
+            self.num_faces_res if operand == "Res" else self.num_faces,
+            self.face_r_dim_res if operand == "Res" else self.face_r_dim,
             tile_stride_bytes=stride_bytes,
             use_srcs=use_srcs,
             dest_acc=self._srcs_32bit_mode,

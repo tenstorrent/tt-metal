@@ -648,6 +648,17 @@ def unpack_res_tiles(
         elements_per_tile_needed = output_format.num_bytes_per_tile(
             num_faces * face_r_dim * FACE_C_DIM
         )
+        bfp_mantissa_bits = {
+            DataFormat.Bfp8_b: 8,
+            DataFormat.Bfp4_b: 4,
+            DataFormat.Bfp2_b: 2,
+        }.get(output_format)
+        if bfp_mantissa_bits is not None and num_faces * face_r_dim < MIN_BFP_EXPONENTS:
+            # a partial block float tile keeps 16 exponent bytes before its mantissas
+            elements_per_tile_needed = (
+                MIN_BFP_EXPONENTS
+                + num_faces * face_r_dim * FACE_C_DIM * bfp_mantissa_bits // 8
+            )
     else:
         # Dense tile path: extract the entire tile.
         # This is necessary because calculate_tile_size_bytes accounts for
