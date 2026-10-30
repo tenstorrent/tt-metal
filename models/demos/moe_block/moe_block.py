@@ -547,6 +547,7 @@ class MoEBlock(LightweightModule):
         # head keeps after placing its arena, and after placing it again (the head frees them then) - nothing kept
         # stranded below the arena, where the other programs' circular buffers go; the head built and run once, its
         # arena settled (free L1 right above it filled) and freed.
+        _l1_step(mesh_device, "start")
         tfits = FusedTail.fits(g, model, self.head_mode) if not owners else "the owners residual (the tail is an add)"
         assert options.tail != "fused" or tfits is True, f"the fused tail: {tfits}"
         self.tail = None
@@ -557,8 +558,10 @@ class MoEBlock(LightweightModule):
             )
             if layer is not None and self.tail.a2a is None:  # (a latent model: the layer's latent up / norm)
                 layer.tails[id(self.tail)] = self.tail.w
+            _l1_step(mesh_device, "tail built")
         if self.head_mode == "fused":
             self._warm_up_tail()
+            _l1_step(mesh_device, "tail warm-up")
             # (PERSIST_L1=small: the kept words go to L1_SMALL - no holes, which settle_arena would otherwise fill
             # with a filler kept in L1 below everything)
             from ttnn.bringup.combine_rf import persist_l1
@@ -583,8 +586,11 @@ class MoEBlock(LightweightModule):
                     w_dtype=dtypes.shared_weights,
                     dram_fallback=options.head_dram_fallback,
                 )
+                _l1_step(mesh_device, "fused head built")
                 self._warm_up_head()
+                _l1_step(mesh_device, "head warm-up")
                 self.fused.head.settle_arena()
+                _l1_step(mesh_device, "head arena settled")
             except (AssertionError, ValueError, RuntimeError) as e:
                 # (a fused head that FusedHead.fits allows but does not build raises, unless options.head_fallback:
                 # then the ops head; the partial head's buffers go with it)
@@ -617,8 +623,10 @@ class MoEBlock(LightweightModule):
                 self._head_ops_fallback(weights, dtypes, options)
         else:
             self._warm_up()
+        _l1_step(mesh_device, "before the exchange")
         try:
             self.exchange.build()
+            _l1_step(mesh_device, "exchange built")
         except AssertionError as e:
             # (the exchange in the L1 the fused head leaves - the flat op's arena, the combine at the head planner's
             # accumulators (ports apart, A pinned): head_plan.fit does not size the exchange; the ops head keeps less
@@ -1197,6 +1205,28 @@ def _free_device_tensors(roots, modules, l1_only):
             stack.extend(vars(o).values())
         elif ours(type(o)) and hasattr(o, "__dict__"):
             stack.extend(vars(o).values())
+
+
+_L1_SNAP = {}
+
+
+def _l1_step(mesh, tag):
+    """MOE_L1_STEPS=1 (debug): the plain-L1 buffers (address, bytes a bank) new since the last step, logged - which
+    stage of the block's build leaves persistent L1 where (the K3 chunked model's static-CB clash)."""
+    if os.environ.get("MOE_L1_STEPS") != "1":
+        return
+    from loguru import logger
+
+    now = {
+        (int(b.address), int(b.max_size_per_bank))
+        for b in ttnn._ttnn.reports.get_buffers(mesh)
+        if str(b.buffer_type).endswith(".L1")
+    }
+    prev = _L1_SNAP.get(id(mesh), set())
+    new = sorted(now - prev)
+    gone = len(prev - now)
+    _L1_SNAP[id(mesh)] = now
+    logger.info(f"MOE_L1_STEP {tag}: {len(new)} new plain-L1 buffers, {gone} freed; new: {new[:12]}")
 
 
 def _l1_hole(mesh, nbytes):

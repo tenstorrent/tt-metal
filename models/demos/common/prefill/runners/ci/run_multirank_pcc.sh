@@ -289,6 +289,7 @@ setsid python3 "${TTRUN_PY}" \
     ${NUM_LAYERS_ENV} \
     export LOGURU_LEVEL=INFO; \
     ${RUNNER_ENV} \
+    ${PREFILL_EXTRA_RUNNER_ENV:-} \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"

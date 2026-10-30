@@ -281,6 +281,14 @@ def _cases():
 CASES = _cases()
 
 
+def _snap_env():
+    """MOE_COMBINE_SNAP: the combine's snap q - "2^-14" or a float; unset / 0: plain fp32 adds in landing order."""
+    v = os.environ.get("MOE_COMBINE_SNAP", "")
+    if not v or v == "0":
+        return None
+    return 2.0 ** int(v[2:]) if v.startswith("2^") else float(v)
+
+
 def run_checked(mesh_device, block, m, w, tag, *, eager, replays, nx=16):
     """eager calls, then (replays > 0) a trace replayed on fresh inputs; every checked call against the host model on
     the device's own routing (PCC > 0.98) -> dict(pcc=[...], agree=[...]) (the routing agreement with the host's)."""
@@ -298,9 +306,23 @@ def run_checked(mesh_device, block, m, w, tag, *, eager, replays, nx=16):
     x_in = block.input_buffer()
     refs, stats = {}, dict(pcc=[], agree=[])
 
+    first_y = {}  # (determinism: input k's first output - a same-x call's routing rows and output bits against it)
+    det = stats.setdefault("det", dict(calls=0, rows_diff=0, y_diff=0, y_maxabs=0.0))
+
     def check(out, k):
         y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
         rows = block.taps()["rows"]
+        if k in first_y:  # (a same-x call: the routing is bit-identical by construction - deterministic fin; the
+            # output too with combine_snap, else its fp32 sums in landing order differ in the last bits)
+            det["calls"] += 1
+            if not all(torch.equal(a, b) for a, b in zip(rows, refs[k][0])):
+                det["rows_diff"] += 1
+            dy = (y - first_y[k]).abs()
+            if bool((dy > 0).any()):
+                det["y_diff"] += 1
+                det["y_maxabs"] = max(det["y_maxabs"], float(dy.max()))
+        else:
+            first_y[k] = y.clone()
         if k not in refs or not all(torch.equal(a, b) for a, b in zip(rows, refs[k][0])):
             ids_d, wts_d = device_routing(rows, g.tokens_per_chip, m.top_k)
             y_ref = reference(xs[k], w, m, ids=ids_d, wts=wts_d)[0]
@@ -391,7 +413,10 @@ def test_moe_block_matrix(mesh_device, device_params, case: Case):
     try:
         from models.demos.moe_block.moe_block import MoEOptions
 
-        opts = MoEOptions(router_split=os.environ.get("MOE_ROUTER_SPLIT") == "1")  # (test-only: the router split A/B)
+        opts = MoEOptions(
+            router_split=os.environ.get("MOE_ROUTER_SPLIT") == "1",  # (test-only: the router split A/B)
+            combine_snap=_snap_env(),
+        )
         block = MoEBlock(mesh_device, m, case.rows * R, w, WeightCache(path=None, layer=0), options=opts)
     except (AssertionError, ValueError, NotImplementedError, RuntimeError) as e:
         msg = " | ".join(l.strip() for l in str(e).splitlines() if l.strip() and "---" not in l)[:600]
@@ -399,6 +424,11 @@ def test_moe_block_matrix(mesh_device, device_params, case: Case):
         pytest.xfail(f"does not build: {type(e).__name__}: {msg[:300]}")
     logger.info(f"MATRIX {case.id}: {m.num_experts} experts (fold {m.router.fold}), {block.summary}")
     stats = run_checked(mesh_device, block, m, w, case.id, eager=2, replays=case.replays)
+    d_ = stats.get("det", {})
+    logger.info(
+        f"MATRIX_DET {case.id}: snap {opts.combine_snap}: {d_.get('calls', 0)} same-x calls, routing rows differ in "
+        f"{d_.get('rows_diff', 0)}, outputs differ in {d_.get('y_diff', 0)} (max |dy| {d_.get('y_maxabs', 0.0):.3g})"
+    )
     logger.info(
         f"MATRIX_RESULT {case.id}: PCC min {min(stats['pcc']):.5f} median {statistics.median(stats['pcc']):.5f}; "
         f"routing agreement min {min(stats['agree']):.4f}; {len(stats['pcc'])} checks; {block.summary}"

@@ -581,7 +581,9 @@ class TtK3MoEBlockFfn:
             try:
                 from models.demos.moe_block.moe_block import MoEOptions
 
-                opts = MoEOptions(head=os.environ.get("MOE_BLOCK_HEAD", "auto"))  # (MOE_BLOCK_HEAD=ops: the ops head)
+                sv = os.environ.get("MOE_COMBINE_SNAP", "")  # (the combine's snap q: "2^-14" or a float; unset: none)
+                snap = None if not sv or sv == "0" else (2.0 ** int(sv[2:]) if sv.startswith("2^") else float(sv))
+                opts = MoEOptions(head=os.environ.get("MOE_BLOCK_HEAD", "auto"), combine_snap=snap)  # (MOE_BLOCK_HEAD=ops: the ops head)
                 block = MoEBlock(
                     self.mesh, self.model, chunk, built, WeightCache(path=None, layer=0), options=opts, num_links=LINKS
                 )

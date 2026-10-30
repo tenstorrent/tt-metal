@@ -241,6 +241,16 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
+def _glm_payload():
+    """GLM's TtMoe payload; MOE_IMPL=block: at least the MoE block combine's (2 x 6144 + 32 B, 64-B aligned)."""
+    payload = moe_fabric_payload(GLM53Config)
+    if os.environ.get("MOE_IMPL") == "block":
+        from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
+
+        payload = max(payload, fabric_payload(GLM53Config.EMB_SIZE))
+    return payload
+
+
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     # Scaled-FP8 KV cache, CI run 39456857459 / job 118751643362.
     (78, 11, 10): [0.416, 0.418, 0.428, 0.421, 0.429, 0.429, 0.426, 0.426, 0.438, 0.443, 0.448],
@@ -327,6 +337,12 @@ def _load_metadata_token_ids(trace_dir: Path, total_len: int, require_full: bool
     golden shorter than the row indexes past every golden tensor, not just this one (Mistral's is
     15,360, so full55k raises IndexError), and a missing prerequisite should skip rather than fail.
     The no-PCC caller tiles a short golden instead -- it compares nothing."""
+    prompt = os.environ.get("PREFILL_PROMPT_TOKENS")
+    if prompt:  # (stress: our own prompt - a torch int64 file of this model's token ids, tiled to the row's length)
+        t = torch.load(prompt).flatten().to(torch.int64)
+        reps = -(-total_len // t.numel())
+        logger.info(f"PREFILL_PROMPT_TOKENS {prompt}: {t.numel()} tokens (x{reps} to {total_len})")
+        return t.repeat(reps)[:total_len]
     with open(trace_dir / "metadata.json") as f:
         md = json.load(f)
     ids = md["token_ids"][:total_len]
@@ -1322,7 +1338,7 @@ def test_kimi_prefill_transformer_chunked_padded(
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
             # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1580,7 +1596,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1596,7 +1612,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -2859,16 +2875,6 @@ def test_kimi_prefill_transformer_chunked(
     )
 
 
-def _glm_payload():
-    """GLM's TtMoe payload; MOE_IMPL=block: at least the MoE block combine's (2 x 6144 + 32 B, 64-B aligned)."""
-    payload = moe_fabric_payload(GLM53Config)
-    if os.environ.get("MOE_IMPL") == "block":
-        from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
-
-        payload = max(payload, fabric_payload(GLM53Config.EMB_SIZE))
-    return payload
-
-
 def _k3_device_params():
     """K3's fabric (K3_FABRIC=torus_xy: the XY torus); K3_MOE_IMPL=block also opens it with the payload the MoE block's
     combine needs (2 x 3584 + 32 B: K3's own 7168 is short of it)."""
@@ -3076,7 +3082,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM_L1_SMALL_SIZE
+                fabric_payload_size=_glm_payload(), l1_small_size=GLM_L1_SMALL_SIZE
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -3133,6 +3139,8 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         preload_isl=preload_isl,
         use_trace=use_trace,
         kv_cache_format=GLM_KV_CACHE_FORMAT,
+        # (PREFILL_DETERMINISM=1: the whole KV cache bit-identical to iteration 0's on every iteration)
+        determinism_check=os.environ.get("PREFILL_DETERMINISM") == "1",
     )
 
 

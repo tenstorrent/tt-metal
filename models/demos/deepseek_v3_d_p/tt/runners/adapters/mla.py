@@ -60,7 +60,12 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     def fabric_payload_size(self) -> int:
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
 
-        return moe_fabric_payload_size(self.model_config)
+        payload = moe_fabric_payload_size(self.model_config)
+        if os.environ.get("MOE_IMPL") == "block":  # (the MoE block's combine: a bf16 row + its trailer a packet)
+            from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
+
+            payload = max(payload, fabric_payload(self.model_config.EMB_SIZE))
+        return payload
 
     # ------------------------------------------------------------------
     # HF config
