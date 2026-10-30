@@ -13,19 +13,20 @@
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
-    uint32_t scalar_arg = get_arg_val<uint32_t>(3);
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // set to 1
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t scalar_arg = get_arg(args::scalar_arg);
+    constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);  // set to 1
 
-    DataflowBuffer dfb_in0(tt::CBIndex::c_0);  // input_a
-    DataflowBuffer dfb_in1(tt::CBIndex::c_1);  // input_b
-    DataflowBuffer dfb_in2(tt::CBIndex::c_2);  // input_c
-    DataflowBuffer dfb_out(tt::CBIndex::c_3);
+    DataflowBuffer dfb_in0(dfb::in_a);  // input_a
+    DataflowBuffer dfb_in1(dfb::in_b);  // input_b
+    DataflowBuffer dfb_in2(dfb::in_c);  // input_c
+    DataflowBuffer dfb_out(dfb::out);
 
-    compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out.get_id());
-    copy_init(dfb_in0.get_id());
+    compute_kernel_hw_startup(dfb::in_a, dfb::out);
+    copy_init(dfb::in_a);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         dfb_in0.wait_front(num_tiles_per_cycle);
@@ -36,17 +37,17 @@ void kernel_main() {
 
         tile_regs_acquire();
 
-        copy_init(dfb_in0.get_id());
-        copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
+        copy_init(dfb::in_a);
+        copy_tile(dfb::in_a, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        reconfig_data_format_srca(dfb_in0.get_id(), dfb_in1.get_id());
-        copy_init(dfb_in1.get_id());
-        copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
+        reconfig_data_format_srca(dfb::in_a, dfb::in_b);
+        copy_init(dfb::in_b);
+        copy_tile(dfb::in_b, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        reconfig_data_format_srca(dfb_in1.get_id(), dfb_in2.get_id());
-        copy_init(dfb_in2.get_id());
-        copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
-        reconfig_data_format_srca(dfb_in2.get_id(), dfb_in0.get_id());
+        reconfig_data_format_srca(dfb::in_b, dfb::in_c);
+        copy_init(dfb::in_c);
+        copy_tile(dfb::in_c, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        reconfig_data_format_srca(dfb::in_c, dfb::in_a);
 
         TERNARY_SFPU_OP_INIT();
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
@@ -54,7 +55,7 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        pack_tile(0, dfb_out.get_id());
+        pack_tile(0, dfb::out);
 
         tile_regs_release();
 
