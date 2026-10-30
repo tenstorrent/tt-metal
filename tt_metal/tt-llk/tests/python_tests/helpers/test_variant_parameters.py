@@ -93,6 +93,14 @@ class THROTTLE_LEVEL(TemplateParameter):
 
 
 @dataclass
+class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
+    pack_untilize_benchmark: str
+
+    def convert_to_cpp(self) -> str:
+        return f"// pack_untilize benchmark: {self.pack_untilize_benchmark}"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 
