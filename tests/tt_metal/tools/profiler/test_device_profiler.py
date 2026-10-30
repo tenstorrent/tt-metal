@@ -1216,9 +1216,7 @@ def test_noc_event_profiler_linked_multicast_hang():
         noc_trace_data = json.load(nocTraceJson)
 
 
-@pytest.mark.parametrize(
-    "brisc_ring_index, tail_zone", [(510, ""), (512, ""), (510, "zone"), (12, "midzone")]
-)
+@pytest.mark.parametrize("brisc_ring_index, tail_zone", [(510, ""), (512, ""), (510, "zone"), (12, "midzone")])
 def test_noc_event_ring_overrun(brisc_ring_index, tail_zone):
     # Regression test for profiler markers written past the end of the L1 ring. One worker core: BRISC fills its
     # 512-word profiler ring to exactly `brisc_ring_index` with 2-word event records (accepted by the plain room

@@ -102,11 +102,17 @@ int main(int argc, char** argv) {
         return 1;
     }
     const uint32_t brisc_events = (ring_index - RING_FIRST_USER) / 2;
+    const char* brisc_extra = "";
+    if (tail_zone) {
+        brisc_extra = "an empty zone, ";
+    } else if (midzone_push) {
+        brisc_extra = "a quick push inside a zone of nested zones, ";
+    }
     fmt::print(
         "noc_event_ring_overrun: BRISC ring index {} ({} event records), {}then one NoC read\n",
         ring_index,
         brisc_events,
-        tail_zone ? "an empty zone, " : (midzone_push ? "a quick push inside a zone of nested zones, " : ""));
+        brisc_extra);
 
     bool pass = true;
     try {
