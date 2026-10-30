@@ -222,10 +222,8 @@ def decide(
             slower.append((hv - bv) / bv > limit and hv - bv > min_cycles)
         wkey = _config_key(c["module"], c["run_type"], c["config"])
         bw, cw = base_windows.get(wkey), cur_windows.get(wkey)
-        threads = []
-        if bw and cw:
-            threads = sorted(t for t in bw if t != "nodeid" and bw.get(t) != cw.get(t))
-        # The loop fingerprint only labels TILE_LOOP rows; the positions decide.
+        # The loop fingerprint only labels TILE_LOOP rows; the positions decide. Other markers, and TILE_LOOP rows
+        # with no fingerprint, get the outcomes that say nothing about the loop code: regression or placement.
         labelled = (
             c["marker"] == "TILE_LOOP"
             and bw
@@ -234,11 +232,14 @@ def decide(
                 str(v).startswith("no-") for v in list(bw.values()) + list(cw.values())
             )
         )
+        threads = []
+        if labelled:
+            threads = sorted(t for t in bw if t != "nodeid" and bw.get(t) != cw.get(t))
         why = ""
         if not any(slower):
             outcome = "not-reproduced"
         elif all(slower):
-            outcome = "regression" if threads or not labelled else "review"
+            outcome = "review" if labelled and not threads else "regression"
         else:
             outcome = "partial" if threads else "placement"
         row["slower"] = sum(slower)
@@ -271,7 +272,8 @@ _SECTIONS = (
     (
         "regression",
         "Confirmed regressions",
-        "Slower at every code position, and the code of the measured loop changed.",
+        "Slower at every code position. For a TILE_LOOP row, the last column names the threads whose loop code "
+        "changed; INIT, UNINIT and KERNEL rows have no loop fingerprint, so it is empty for them.",
         False,
     ),
     (
@@ -291,9 +293,9 @@ _SECTIONS = (
     (
         "placement",
         "Code-placement effects (hardware)",
-        "The loop code did not change and it is slower at some code positions only: the move follows where the "
-        "code sits, not what it does. This is real hardware behaviour (branch predictor, instruction fetch or "
-        "similar), reported so it is not hidden, but the PR's loop code is not the cause.",
+        "Slower at some code positions only: the move follows where the code sits, not what it does. For a "
+        "TILE_LOOP row, the loop code also did not change. This is real hardware behaviour (branch predictor, "
+        "instruction fetch or similar), reported so it is not hidden.",
         False,
     ),
     (
@@ -475,9 +477,7 @@ def main(argv=None):
         )
         report = render(results, a.arch)
         if notes:
-            report += "\n\n" + "\n".join(
-                f"> ⚠️ {n} The gate keeps blocking." for n in notes
-            )
+            report += "\n\n" + "\n".join(f"> ⚠️ {n}" for n in notes)
         Path(a.report).write_text(report + "\n")
         return 1 if notes or blocks(results) else 0
     if a.cmd == "render":
