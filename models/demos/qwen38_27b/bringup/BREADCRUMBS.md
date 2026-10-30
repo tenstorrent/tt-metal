@@ -71,3 +71,19 @@
   both block types.
 - Result: PCC 0.999997, auto_margin_min 1.97, 1 device op, host FLOPs 0.
 - Re-run: `bfw job check --task C.linear.attn_residual --gate-only`.
+
+## C.linear.mlp (device SwiGLU MLP, layer 0), 2026-10-30
+
+- `tt/mlp.py` `TtMLP`, stock TTNN only, on the plan's Megatron split. TP column c holds the gate and up rows
+  [4352 c, 4352 (c + 1)) as one `[8704, 5120]` bfp8 weight (gate then up), plus the down_proj inputs
+  [4352 c, 4352 (c + 1)) as `[5120, 4352]` bfp8. Each chip runs on its 640 rows: one `ttnn.linear` (fp32 out), two
+  slices, `silu(gate) * up` to bf16, down_proj (fp32 partials), `all_reduce(cluster_axis=1)`, then typecast to bf16.
+  That is 8 device ops.
+- Weights stay `[out, in]` and run with `transpose_b=True`, as in gdn.py, so the bfp8 exponent blocks run along the
+  reduction dim. Switches: `MLP_FIDELITY` (HiFi4) and `MLP_FP32_ACC` (True) in `tt/settings.py`.
+- `device_component` serves `mlp` for any layer. The module has nothing block-specific, so the attn block's mlp can
+  use the same branch.
+- Result: PCC 0.999984, rel vs CPU 0.0054 (limit 0.0113), auto_margin_min 2.11, host FLOPs 0, deterministic.
+- The first gate run timed out at pytest's 300 s while it was still recording passing metrics. The JSON writes on
+  NFS were about 10 s apart. The re-run took 137 s. The test body's run time varies with host and NFS load.
+- Re-run: `bfw job check --task C.linear.mlp --gate-only`.

@@ -96,6 +96,20 @@ def device_component(mesh, spec, layer, step):
                 return _to_host(mesh, out, x.shape)
 
         return run
+    if step == "mlp":
+        from models.demos.qwen38_27b.tt.mlp import TtMLP
+
+        cfg = Config.load(str(spec.hf_dir))
+        ckpt = Checkpoint(str(spec.hf_dir))
+        p = f"{PREFIX}layers.{layer}.mlp."
+        w = {"mlp." + n[len(p) :]: ckpt.get(n, torch.bfloat16) for n in ckpt.index if n.startswith(p)}
+        mlp = TtMLP(mesh, cfg, w)
+
+        def run(ctx, x):
+            with _hooked_dispatch():
+                return _to_host(mesh, mlp(_to_device(mesh, x)), x.shape)
+
+        return run
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 

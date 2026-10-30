@@ -30,6 +30,8 @@ TABLE = {
         "inter-chunk state updates of 32, about half its error (layer-0 state + layer-3 inputs: o rel 0.028 vs 0.060). "
         "32: the rank-3 flat path with in-kernel l2 norm (faster)",
     ),
+    "MLP_FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi3", "HiFi2", "LoFi"), "rule 7 default: MLP matmuls at HiFi4"),
+    "MLP_FP32_ACC": Setting(True, (True, False), "rule 7 default: MLP matmuls accumulate in fp32"),
 }
 
 MAX_PRECISION = {
@@ -39,6 +41,8 @@ MAX_PRECISION = {
     "GDN_FIDELITY": "HiFi4",
     "GDN_FP32_ACC": True,
     "GDN_CHUNK": 64,
+    "MLP_FIDELITY": "HiFi4",
+    "MLP_FP32_ACC": True,
 }
 
 settings = Settings("QWEN38_27B_", TABLE, max_precision=MAX_PRECISION)
