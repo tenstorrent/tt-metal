@@ -284,7 +284,7 @@ jobs:
           du -sh --apparent-size "$HF_HUB_CACHE/models--${HF_MODEL//\//--}" || true
 
       - name: 🚀 Run server
-        timeout-minutes: 1
+        timeout-minutes: 6
         run: |
           TT_CONFIG_RAW='${{ matrix.test-group.tt-config }}'
           if [ -n "$TT_CONFIG_RAW" ]; then
@@ -432,6 +432,21 @@ jobs:
                 *) echo "extra-env: ignoring malformed entry '$_kv'" ;;
               esac
             done
+          fi
+          # TEMPORARY (APC A/B, #61418): a one-row engine sees only its row's chips, as serving/serve_rows.sh does
+          # (MESH_DEVICE (1, 8) on the whole Galaxy leaves the ethernet links to the other rows unanswered).
+          if [ "${MIMO_ROW_ENGINE:-0}" = "1" ]; then
+            ROW_DEVICES=$(MESH_DEVICE= timeout 240 python3 -c 'import ttnn
+          mesh = ttnn.open_mesh_device(ttnn.MeshShape(4, 8))
+          rows = mesh.create_submeshes(ttnn.MeshShape(1, 8))
+          ids = ",".join(str(i) for i in rows[0].get_device_ids())
+          for r in rows:
+              ttnn.close_mesh_device(r)
+          ttnn.close_mesh_device(mesh)
+          print("ROW0=" + ids, flush=True)' 2>&1 | sed -n 's/^ROW0=//p' | tail -n 1)
+            [ -n "$ROW_DEVICES" ] || { echo "row discovery failed"; exit 1; }
+            export TT_VISIBLE_DEVICES="$ROW_DEVICES"
+            echo "MiMo row engine: TT_VISIBLE_DEVICES=$TT_VISIBLE_DEVICES"
           fi
 
           # Build the VLLM server arguments array
