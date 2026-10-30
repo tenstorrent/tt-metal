@@ -147,6 +147,46 @@ result, run only the delta), fix the framework at once (dev tree, selftest, live
 or rationalize the waste to the owner as "the framework does X". Every hour wasted is an hour of the owner's progress
 lost.
 
+**The overseer queues; it never does the work (owner, 2026-10-30).** Every code change is a ledger task an agent
+does: a model fix, a perf idea, and also taking another branch or a code drop (a merge), as a fix job (`overseer fix`)
+or a perf pick in tasks.yaml. Every device measurement that judges the model or a change (a profile at positions, an
+accuracy re-check, the end-to-end and contract checks) is the gate of a ledger task the orchestrator runs, so its result
+stays in results/, the A/B tables and the dashboard. The overseer never merges a branch into the model's tree, never
+rebuilds for a change, never runs `core.verify`, a profile script or a measurement of its own to judge a change
+(DeepSeek-V4.1, 2026-10-30: the overseer merged a MoE drop itself, profiled 50k / 500k with scripts outside the tree and
+started a verify; none of it reached the ledger).
+- A change without a switch (a branch merge, a code drop): a perf pick with `ab: {before: true}` (F230). The
+  orchestrator measures 'before' on the tree as it is, then the agent merges and rebuilds, then it measures 'after'
+  and waits for the decision, as for any pick. `ab_positions: [<start>, ...]` adds, on and off, one chunk's device
+  time per section, warm wall and host cProfile at each position (e.g. 51200 and 512000 for 50k -> 55k and 500k ->
+  505k). Brief: the branch and commit, "take it as is, change nothing else", rebuild, the model-level checks only;
+  `paths` covers every file the drop touches (`git diff --name-only <base> <branch>`).
+- A profile of the committed tree at positions (no change): a task without a role whose gate runs, per position,
+  `BRINGUP_POS=<p> BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/common/bringup/tests/test_profile.py` (metrics `<name>_p<p>`; the gate adds the clean wall run).
+- Still the overseer's: framework fixes with selftests, the spec, approvals, waivers, its own records (supervision.md,
+  overseer.yaml, dashboards), the box test, and a rebuild after a reboot or a pull of what HEAD already holds.
+
+**The overseer queues; it never does the work (owner, 2026-10-30).** Every code change is a ledger task an agent
+does: a model fix, a perf idea, and also taking another branch or a code drop (a merge), as a fix job (`overseer fix`)
+or a perf pick in tasks.yaml. Every device measurement that judges the model or a change (a profile at positions, an
+accuracy re-check, the end-to-end and contract checks) is the gate of a ledger task the orchestrator runs, so its result
+stays in results/, the A/B tables and the dashboard. The overseer never merges a branch into the model's tree, never
+rebuilds for a change, never runs `core.verify`, a profile script or a measurement of its own to judge a change
+(DeepSeek-V4.1, 2026-10-30: the overseer merged a MoE drop itself, profiled 50k / 500k with scripts outside the tree and
+started a verify; none of it reached the ledger).
+- A change without a switch (a branch merge, a code drop): a perf pick with `ab: {before: true}` (F230). The
+  orchestrator measures 'before' on the tree as it is, then the agent merges and rebuilds, then it measures 'after'
+  and waits for the decision, as for any pick. `ab_positions: [<start>, ...]` adds, on and off, one chunk's device
+  time per section, warm wall and host cProfile at each position (e.g. 51200 and 512000 for 50k -> 55k and 500k ->
+  505k). Brief: the branch and commit, "take it as is, change nothing else", rebuild, the model-level checks only;
+  `paths` covers every file the drop touches (`git diff --name-only <base> <branch>`).
+- A profile of the committed tree at positions (no change): a task without a role whose gate runs, per position,
+  `BRINGUP_POS=<p> BRINGUP_PROFILE_HOST=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/common/bringup/tests/test_profile.py` (metrics `<name>_p<p>`; the gate adds the clean wall run).
+- Still the overseer's: framework fixes with selftests, the spec, approvals, waivers, its own records (supervision.md,
+  overseer.yaml, dashboards), the box test, and a rebuild after a reboot or a pull of what HEAD already holds.
+
 Gate rules (hard, owner 2026-10-22, F169):
 1. A gate never restarts. Every test is its own unit; a passed unit stays passed for its task until the code under
    test changes (the model's code and tests, the forks, ttnn / tt_metal, the goldens). The overseer's edits (the spec,
@@ -415,6 +455,10 @@ Never:
   sections. Never brief an agent to use the device profiler's per-op mode, which syncs after every ttnn call (about a
   minute per layer; Xing P.3: 40 layers ran 40 minutes and hit the agent's time limit); it stays only for a
   deliberate cross-check of kernel time (perf.profiler: device);
+- merge a branch or apply a code drop to the model's tree yourself, or profile / verify a change by hand: queue it
+  (above, "The overseer queues");
+- merge a branch or apply a code drop to the model's tree yourself, or profile / verify a change by hand: queue it
+  (above, "The overseer queues");
 - run device measurements for a perf pick by hand. Every perf task gets an `ab` switch in tasks.yaml (`ab: {env:
   {<VAR>: <old value>}}`, the old path; optional `ab_rungs`). After its agent (which stops at the first frozen-test
   failure), the orchestrator itself produces the on/off table (frozen tests, ladder at `last` and the full-target

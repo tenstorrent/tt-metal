@@ -350,6 +350,75 @@ def test_a_side_killed_before_any_test_is_measured_again_on_rerun(mk):
     assert o.led.state()["P.1"]["ab"]["quick"]["new"]["chunk_wall_ms"] == 250.0
 
 
+def before_mode(mk, sandbox, **kw):
+    """F230: a pick without a switch (a branch merge): the tree itself is the switch. The fake runner reads the tree
+    (src/impl.txt) instead of a variable; positions record their metrics with _p<pos>, as testing/profile.py does."""
+    o = mk(
+        [pick(ab={"before": True, "env": {"TOY_TABLE": "resident"}}, ab_mode="quick", ab_positions=[51200], **kw)],
+        CHANGE,
+    )
+    real = o.run_cmd
+
+    def run_cmd(cmd, env, log):
+        tree = (sandbox.repo / "src/impl.txt").read_text().strip()
+        if "BRINGUP_POS=" in cmd:
+            on = tree == "hifi2"
+            mk.calls.append(
+                {"cmd": cmd, "on": on, "dir": Path(env[M.RESULTS_ENV]), "rung": None, "ab": env.get("TOY_TABLE")}
+            )
+            pos = cmd.split("BRINGUP_POS=")[1].split()[0]
+            rec = {"device_ms_total": 90.0 if on else 100.0, "device_ms_experts": 8.0 if on else 12.0}
+            rec.update(chunk_wall_ms=250.0 if on else 300.0, host_launch_ms=150.0 if on else 180.0)
+            out = Path(env[M.RESULTS_ENV])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "P.1.json").write_text(
+                json.dumps({"metrics": {f"{k}_p{pos}": {"value": v} for k, v in rec.items()}})
+            )
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(f"$ {cmd}\n")
+            return 0
+        return real(cmd, dict(env, TOY_FIDELITY=tree), log)
+
+    o.run_cmd = run_cmd
+    return o
+
+
+def test_a_merge_pick_measures_before_then_lets_the_agent_change_the_tree(mk, sandbox):
+    """F230 (owner 2026-10-30): 'before' runs on the tree before the agent's merge, 'after' on the merged tree; one
+    table with the position rows (device and host) on and off."""
+    o = before_mode(mk, sandbox)
+    assert o.run() == HUMAN, mk.lines
+    assert [c["on"] for c in mk.calls] == [False, False, True, True], mk.calls  # quick + p51200 before, then after
+    assert any("A/B before: measuring the tree before the change" in x for x in mk.lines)
+    rec = o.led.state()["P.1"]["ab"]
+    assert rec["positions"]["p51200"]["old"]["device_ms_total"] == 100.0
+    assert rec["positions"]["p51200"]["new"]["host_launch_ms"] == 150.0
+    table = Path(rec["table"]).read_text()
+    assert "measured before the agent started" in table and "position 51,200" in table and "TOY_TABLE=resident" in table
+    assert [c["ab"] for c in mk.calls if "BRINGUP_POS=" in c["cmd"]] == ["resident", "resident"]  # ab.env, both sides
+    assert "| device_ms_total | 90.0000 | 100.0000 | -10.0 |" in table, table
+    assert not rec["note"], rec["note"]
+
+
+def test_a_merge_picks_before_side_is_never_measured_on_the_changed_tree(mk, sandbox):
+    """F230: decide --rerun measures 'after' again and keeps 'before' (the tree no longer holds it)."""
+    o = before_mode(mk, sandbox)
+    assert o.run() == HUMAN
+    n = len(mk.calls)
+    assert decide(o, "P.1", "rerun") == 0
+    assert o.run() == HUMAN, mk.lines
+    assert mk.calls[n:] == [] or all(c["on"] for c in mk.calls[n:])  # nothing off on the merged tree
+
+
+def test_a_merge_pick_without_its_before_side_on_a_changed_tree_waits(mk, sandbox):
+    """F230: no 'before' measured and the tree already changed under the task's paths: a person decides."""
+    o = before_mode(mk, sandbox)
+    (sandbox.repo / "src/impl.txt").write_text("hifi2\n")
+    assert o.run() == HUMAN, mk.lines
+    assert mk.calls == [] and mk.agents() == []
+    assert "is not measured and the tree already holds changes" in o.led.state()["P.1"]["waiting"]
+
+
 def test_a_setting_name_switches_its_variable(mk, monkeypatch):
     """F103: ab names a model setting (EXPERTS_IMPL), the code reads its variable (DS41_EXPERTS_IMPL): the report sets
     the variable on both sides (DeepSeek-V4.1 P.1 measured bfp8 against bfp8: an identical table); a value outside the

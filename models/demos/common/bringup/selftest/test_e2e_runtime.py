@@ -5,6 +5,7 @@
 models' runner contract tests. CPU only."""
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
@@ -94,3 +95,39 @@ def test_the_quick_profile_records_layer_and_state_limits(gspec, noise, monkeypa
     for i in range(3):
         assert m[f"err_layer_L{i:02d}"] <= m[f"err_layer_L{i:02d}_limit"] and f"pcc_layer_L{i:02d}" in m
         assert f"err_state_key_L{i:02d}_limit" in m and f"err_state_value_L{i:02d}" in m
+
+
+def test_a_profile_at_a_position_records_timing_with_its_suffix_and_the_host_profile(
+    gspec, noise, monkeypatch
+):  # noqa: F811
+    """F230 (owner 2026-10-30): one chunk at a token position (no golden there: zero prefix, random tokens, nothing
+    compared), its warm wall and HOST_RUNS runs under cProfile, every metric named _p<pos> so one gate holds several
+    positions; the raw stats beside the results."""
+    from models.demos.common.bringup.core import metrics as M
+    from models.demos.common.bringup.testing import profile
+
+    s = gspec()
+    noise(1e-3)
+    from models.demos.common.bringup.selftest.fixture_model import V
+
+    s.data.setdefault("checkpoint", {}).setdefault("config", {})["vocab_size"] = V  # the toy's vocabulary
+    pos = 2 * int(s.get("target.chunk"))
+    monkeypatch.setenv("BRINGUP_POS", str(pos))
+    monkeypatch.setenv("BRINGUP_PROFILE_WALL", "1")
+    monkeypatch.setenv("BRINGUP_PROFILE_HOST", "1")
+    monkeypatch.delenv("BRINGUP_QUICK", raising=False)
+    monkeypatch.delenv(M.SUFFIX_ENV, raising=False)
+    monkeypatch.delenv("TT_METAL_DEVICE_PROFILER", raising=False)
+    monkeypatch.setattr(profile, "WALL_RUNS", 2)
+    monkeypatch.setattr(profile, "WALL_WARM", 1)
+    monkeypatch.setattr(profile, "HOST_RUNS", 2)
+    monkeypatch.setattr(profile.accuracy_guard, "check", lambda s: None)
+    try:
+        profile.run_profile(s, None)
+    finally:
+        os.environ.pop(M.SUFFIX_ENV, None)
+    m = got()
+    p = f"_p{pos}"
+    assert m[f"chunk_wall_ms{p}"] > 0 and m[f"host_cprofile_ms{p}"] > 0 and f"host_launch_calls{p}" in m
+    assert "chunk_wall_ms" not in m and not any(k.startswith("pcc_") for k in m), sorted(m)
+    assert list(M.results_dir().glob(f"*_host{p}.pstats")) and list(M.results_dir().glob(f"*_host{p}.json"))
