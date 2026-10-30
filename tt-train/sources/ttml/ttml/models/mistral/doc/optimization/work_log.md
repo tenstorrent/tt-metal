@@ -155,6 +155,15 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Standalone (`O/iter17_rmsnorm_check.log`): 172 us wall with the residual gradient (155 without), PCC 0.999999 / rel 1.7e-3 vs torch fp64 (the two-phase op's accuracy); norm harness tests 8 passed (`O/iter17_rmsnorm_tests.log`; the 2-batch case falls back to the two-phase op).
 - In the step (`O/iter17_tp_ranked_ops.txt`): 1.093 + 0.740 -> 1.320 ms per 4 layers (229 -> 165 us per call); chain `O/iter17.sh` -> `O/iter17.log`: harness 42, TP gradient check PASS, cooled TP=4 MFU 505.6 ms / 32.09 %.
 
+### Iteration 20 (rejected): norm kernels' per-tile math on the FPU (kernel boost checklist)
+
+- Roofline / bytes: `add_rmsnorm_fw_rows` 126 us per call in the step for 40 MB (317 GB/s), `rmsnorm_bw_rows` 165 us for 50 MB (303 GB/s); both bandwidth-bound by ~80 % and compute-bound by the rest: one tile per DEST acquire with 5-10 SFPU / unpack / pack steps each (the SFPU runs fp32 exactly; the acquire / commit / wait / release handshake is paid per tile).
+- Structural fix tried: the per-tile chains on the FPU (`mul_tiles_bcast_rows`, accumulating `mul_tiles`, `mul_reuse_dest` / `add_reuse_dest` with the tile already in DEST), 3-4 tiles per acquire. Expected -0.3 ms per 4 layers per chip (forward 126 -> ~105, backward 165 -> ~135).
+- Landed standalone (`O/iter20_build_check{,2}.log`, `O/iter20_norm_bw_variants.log`, `O/iter20_norm_bw_hybrid.log`): forward 138 -> 134 us (-3 %); backward 172 -> 145 us with the residual gradient (-16 %) but rel error vs fp64 1.66e-3 -> 4.09e-3: every `*_reuse_dest` op feeds the fp32 DEST tile back through a 19-bit source register, and the precision loss sits entirely in pass 2 (variant A, SFPU pass 1 + FPU pass 2: 4.09e-3 / 149 us; variant B, FPU pass 1 + SFPU pass 2: 1.66e-3 / 171 us). A precision-preserving hybrid (FPU broadcast and accumulating products with t split into an exact bf16 part and an fp32 remainder, scale and residual add on the SFPU) keeps 1.66e-3 but runs at 173 us: no gain. The forward's 4 us is not worth losing bit-exactness with the two-phase op.
+- Kernel sources of the measured variants: `O/iter20_rmsnorm_bw_rows_kernel_{fpu,variantA,variantB}.cpp.txt` (the hybrid pass 2 and the forward FPU pass 2 survive only in the logs and this description).
+- Rejected: both kernels reverted to the committed SFPU versions (`O/iter20_norm_{bw,fw}_reverted.log`, norm tests `O/iter20_norm_tests_reverted.log`). The remaining norm cost is the per-tile handshake of exact fp32 SFPU math; a larger per-acquire group is capped by the four fp32 DEST tiles.
+- Lesson (also in the Ledger): a kernel run against a stale `_ttml` binary (new CBs in the factory not yet built) hangs the chip; the killed run left the box unusable until `tt-smi -r` (bounded reset per the device-usage skill); build logs must use absolute paths when the build step changes directory.
+
 ### Iteration 19: single-phase fused add + RMSNorm forward (kernel boost checklist) and the w2 forward matmul config
 
 - Roofline / bytes (norm forward, `[1024, 5120]`, 8 calls per 4 layers): the two-phase `add_rmsnorm_fw_allcore` moves 50 MB per call (phase A reads residual and delta 20 MB, writes the sum 10 MB and the partials; phase B reads the sum 10 MB and gamma, writes out 10 MB): 125 us at 400 GB/s, measured 148 us in the step (74 + 74) = 340 GB/s, 166 us standalone. The minimum is 40 MB (residual, delta once; sum, out written once): 100 us.
@@ -248,6 +257,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 16 | `f045fb8eba8` | SDPA backward chain mode (`metal/ops/sdpa_bw/`), iteration-16 evidence |
 | 17 | `f07712081ba` | `rmsnorm_bw_rows` op and its dispatch from `rmsnorm_bw_allcore`, iteration-17 evidence |
 | 18 | `2a75ffce1bd` | `skinny_contract` op, `skinny_contract` router in `lora.py` (ttnn `[r, N]` orientation for dA and the wide dB), iteration-18 evidence |
-| 19 | (this commit) | `add_rmsnorm_fw_rows` op (dispatched from `add_rmsnorm_fw_allcore`), 2D program config for the w2 forward matmul (`frozen_linear.py`), review-round-8 answers, iteration-19 evidence |
+| 19 | `11f9d923524` | `add_rmsnorm_fw_rows` op (dispatched from `add_rmsnorm_fw_allcore`), 2D program config for the w2 forward matmul (`frozen_linear.py`), review-round-8 answers, iteration-19 evidence |
+| 20 | (this commit) | rejected FPU norm-kernel experiment: evidence and docs only (kernels unchanged) |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

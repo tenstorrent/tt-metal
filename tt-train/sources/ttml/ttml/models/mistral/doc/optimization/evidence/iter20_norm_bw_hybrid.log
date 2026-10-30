@@ -1,0 +1,3 @@
+T=1024 C=5120 residual=True: pcc 0.999999 rel 1.66e-03 | wall us 173
+T=1024 C=5120 residual=False: pcc 0.999999 rel 1.67e-03 | wall us 142
+T=512 C=2048 residual=True: pcc 0.999999 rel 1.67e-03 | wall us 110

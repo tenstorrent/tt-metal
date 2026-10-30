@@ -1,0 +1,8 @@
+=== variant A (SFPU pass 1 + FPU pass 2)
+T=1024 C=5120 residual=True: pcc 0.999993 rel 4.09e-03 | wall us 149
+T=1024 C=5120 residual=False: pcc 0.999998 rel 3.32e-03 | wall us 133
+T=512 C=2048 residual=True: pcc 0.999993 rel 4.21e-03 | wall us 39
+=== variant B (FPU pass 1 + SFPU pass 2)
+T=1024 C=5120 residual=True: pcc 0.999999 rel 1.66e-03 | wall us 171
+T=1024 C=5120 residual=False: pcc 0.999999 rel 1.67e-03 | wall us 155
+T=512 C=2048 residual=True: pcc 0.999999 rel 1.67e-03 | wall us 42

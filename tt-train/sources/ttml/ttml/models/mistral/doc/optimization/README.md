@@ -37,7 +37,8 @@ Phase 3 of the tt-train bring-up. Contract `../plan.md`; state and numbers `../p
 | 16 | math (kernel boost) | SDPA backward chain data flow (Q, KV kernels) | 42 | 508.4 | 31.91 % | landed, -0.13 ms per 4 layers per chip (compute-bound kernels) |
 | 17 | math (kernel boost) | single-phase RMSNorm backward (`rmsnorm_bw_rows`) | 42 | 505.6 | 32.09 % | landed |
 | 18 | math (kernel boost, partial) | LoRA gradient products: `skinny_contract` op (narrow dB) + ttnn `[r, N]` orientation (dA, wide dB) | 45 | 503.9 | 32.19 % | landed |
-| 19 | math (kernel boost) + config | single-phase fused add + RMSNorm forward (`add_rmsnorm_fw_rows`), 2D w2-forward matmul config | 47 | **495.4** | ****32.75 %**** | landed |
+| 19 | math (kernel boost) + config | single-phase fused add + RMSNorm forward (`add_rmsnorm_fw_rows`), 2D w2-forward matmul config | 47 | **495.4** | **32.75 %** | landed |
+| 20 | math (kernel boost) | norm kernels' per-tile math on the FPU | - | - | - | rejected: -16 % only at 2.5x the error (19-bit DEST feedback); exact variant no faster |
 | 12 candidate | collectives | TP collective parameter sweep | - | - | - | rejected: library defaults fastest |
 
 Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2) -> 1339.0 (3) -> 1256.3 (4) -> ~1242 (6); attribution only after iteration 4.
@@ -62,7 +63,8 @@ Single-chip cycle-time projection (40 layers): 1658.6 -> 1592.5 (1) -> 1398.7 (2
 - 16: the same for the two backward kernels: -0.13 ms per 4 layers only; they are compute-bound (12-16 matmul tiles plus SFPU per unit), next fix is one merged backward pass with dQ partials.
 - 17: RMSNorm backward 229 -> 165 us per call (one program, operands resident, partial dots exchanged over the NoC); -0.51 ms per 4 layers per chip.
 - 18: new `skinny_contract` op beat ttnn's `[N, r]` orientation (157 -> 123 us gate_up dB) but not ttnn's `[r, N]` orientation + transpose (110 us); router sends dA and the wide dB there, the narrow qkv dB to the op (25 vs 28 us). Run A (op for the wide dB, not the committed router) 498.0 / 32.58 %, run B (committed) 503.9 ms / 32.19 %; product rows 1.63 -> 1.32 ms per 4 layers per chip.
-- 19: fused norm forward in one phase 166 -> 158 us per call (bit-exact; SFPU-bound, not DRAM-bound, so below the expected 120-130); w2 forward matmul 2D config -11 % standalone (ttnn's 1D choice beaten only for this shape). 495.4 ms / 32.75 %.
+- 19: fused norm forward in one phase 166 -> 138 us per call standalone, 140 -> 126 in the step (bit-exact; the first resident-slice version was slower in the step, the streaming one landed below the expected 100-125: compute-bound per tile); w2 forward matmul 2D config -11 % standalone, 3.69 -> 3.25 ms per 4 layers (ttnn's 1D choice beaten only for this shape). 495.4 ms / 32.75 %.
+- 20 (rejected): FPU per-tile math in both norm kernels; the only fast variant feeds fp32 DEST tiles back through 19-bit source registers (rel error 1.66e-3 -> 4.09e-3 vs fp64); the exact variant is no faster. Kernels unchanged.
 
 ## State (2026-10-30)
 
