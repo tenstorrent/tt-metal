@@ -598,10 +598,18 @@ uint32_t staging_tiles(const Plan& plan) {
 namespace {
 
 Plan solve_plan_uncached(const PlanInputs& in) {
-    if (auto unchunked = plan_if_fits(in)) {
-        return std::move(*unchunked);  // whatever fits unchunked keeps its plan
-    }
+    // Scatter on N: the unchunked plan (when it fits) competes with the chunk splits in chunk_cost_us (measured on 50
+    // prefill shapes, QB2 1x4 ring: an unchunked plan whose K-block shrank to fit loses to a chunked one by up to 1.8x,
+    // and the model never picked a split slower than the unchunked plan). Scatter on M keeps whatever fits unchunked:
+    // the model misranks it there.
     std::optional<std::pair<double, Plan>> best;
+    if (auto unchunked = plan_if_fits(in)) {
+        if (in.scatter_dim == -2) {
+            return std::move(*unchunked);
+        }
+        const double cost = chunk_cost_us(*unchunked, in);
+        best = std::make_pair(cost, std::move(*unchunked));
+    }
     for (const auto& [n_m, n_n] : chunk_candidates(in.block_m, in.block_n, in.scatter_dim)) {
         if (n_m * n_n == 1) {
             continue;

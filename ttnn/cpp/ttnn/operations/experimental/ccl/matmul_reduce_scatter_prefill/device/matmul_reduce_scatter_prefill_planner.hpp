@@ -131,10 +131,10 @@ constexpr uint32_t kPortGroup = 4;           // chunks per port batch (cb::PORT_
 constexpr uint32_t kPrefetchSteps = 1;       // K-block windows a sender reads ahead
 constexpr uint32_t kL1Headroom = 64 * 1024;  // bytes kept free per core beyond the footprint
 
-// The entry's plan: 1x1, else the auto (model) search over chunk_candidates. TT_THROWs when no plan fits L1 or the
-// geometry cannot be laid out. A solved plan is remembered per input, so a repeated call looks it up instead of
-// re-planning. The memo is never erased, so the reference stays valid for the process: callers keep the inputs and
-// look the plan up, never copy it.
+// The entry's plan: the cheapest (chunk_cost_us) of the unchunked plan and the chunk_candidates that fit L1; scatter on
+// M takes the unchunked plan whenever it fits. TT_THROWs when no plan fits L1 or the geometry cannot be laid out. A
+// solved plan is remembered per input, so a repeated call looks it up instead of re-planning. The memo is never erased,
+// so the reference stays valid for the process: callers keep the inputs and look the plan up, never copy it.
 const Plan& solve_plan(const PlanInputs& in);
 
 // The schedule pieces the factory walks.

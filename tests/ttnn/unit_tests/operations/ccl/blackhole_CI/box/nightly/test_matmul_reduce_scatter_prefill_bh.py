@@ -154,6 +154,8 @@ MODEL_CASES = {
     # output chunks (the block misses L1): 1 x 6 and 3 x 2 chunks on a 1x4 ring
     "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16, ttnn.bfloat16),
     "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16),
+    # fits L1 unchunked only with a 2-tile K-block: the cost model picks 3 x 1 chunks instead
+    "llama_70b_wo_prefill": ((1, 1, 8192, 1024), (1024, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     # decode (one tile row): the folded 1D grid (56, 16 and 30 cores), and a block too narrow for it (2D, 4 cores)
     "kimi_k27_o_proj_decode": ((1, 1, 32, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     "llama_70b_w2_decode": ((1, 1, 32, 3584), (3584, 2048), -1, ttnn.bfloat16, ttnn.bfloat8_b),
