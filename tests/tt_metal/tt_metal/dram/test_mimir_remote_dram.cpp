@@ -998,10 +998,7 @@ TEST(MimirRemoteMixed, Concurrent) {
     if (topology.num_mimirs < 2) {
         GTEST_SKIP() << "Remote DRAM needs two Mimirs; the descriptor has one.";
     }
-    const std::string& preflight = mimir_remote_preflight_result();
-    if (!preflight.empty()) {
-        GTEST_SKIP() << preflight;
-    }
+    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
@@ -1203,10 +1200,7 @@ TEST_P(MimirRemoteDram, WriteFromTl1) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    const std::string& preflight = mimir_remote_preflight_result();
-    if (!preflight.empty()) {
-        GTEST_SKIP() << preflight;
-    }
+    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
@@ -1232,10 +1226,7 @@ TEST_P(MimirRemoteDram, ReadToTl1) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    const std::string& preflight = mimir_remote_preflight_result();
-    if (!preflight.empty()) {
-        GTEST_SKIP() << preflight;
-    }
+    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
@@ -1261,10 +1252,7 @@ TEST_P(MimirRemoteDram, Tl1RoundTrip) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    const std::string& preflight = mimir_remote_preflight_result();
-    if (!preflight.empty()) {
-        GTEST_SKIP() << preflight;
-    }
+    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
@@ -1294,10 +1282,7 @@ TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    const std::string& preflight = mimir_remote_preflight_result();
-    if (!preflight.empty()) {
-        GTEST_SKIP() << preflight;
-    }
+    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();

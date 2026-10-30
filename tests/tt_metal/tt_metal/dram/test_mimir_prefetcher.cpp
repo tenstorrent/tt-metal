@@ -848,7 +848,7 @@ std::string gcb_smoke_d2d_skip_reason() {
     if (topology_from(configured_soc_desc()).num_mimirs < 2) {
         return "Needs a receiver on another Mimir; this descriptor has one Mimir.";
     }
-    return mimir_remote_preflight_result();
+    return "";
 }
 
 // Drain N: the sender completes and every counter on both ends agrees.
@@ -959,6 +959,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeValidatorD2d) {
     if (const std::string skip_reason = gcb_smoke_d2d_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
+    MIMIR_REQUIRE_REMOTE_PREFLIGHT();
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
@@ -1607,8 +1608,7 @@ std::optional<uint32_t> bank_with_sender_cce(distributed::MeshDevice& mesh, uint
     return std::nullopt;
 }
 
-// Why a test whose senders and receivers are `route_cces` cannot run on this descriptor, or empty. A route that spans
-// Mimirs also needs the remote preflight.
+// Why a test whose senders and receivers are `route_cces` cannot run on this descriptor, or empty.
 std::string route_skip_reason(const std::vector<uint32_t>& route_cces) {
     if (std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         return skip_reason;
@@ -1618,13 +1618,27 @@ std::string route_skip_reason(const std::vector<uint32_t>& route_cces) {
     if (highest_cce >= num_cces) {
         return fmt::format("Descriptor exposes {} CCEs; this route needs CCE {}.", num_cces, highest_cce);
     }
-    for (const uint32_t cce_index : route_cces) {
-        if (mimir_index_for_cce(cce_index) != mimir_index_for_cce(route_cces.front())) {
-            return mimir_remote_preflight_result();
-        }
-    }
     return "";
 }
+
+bool route_spans_mimirs(const std::vector<uint32_t>& route_cces) {
+    for (const uint32_t cce_index : route_cces) {
+        if (mimir_index_for_cce(cce_index) != mimir_index_for_cce(route_cces.front())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Skip when route_skip_reason() is non-empty; a route that spans Mimirs then fails on a remote preflight mismatch.
+// Variadic so a braced route such as {0, 1} passes through.
+#define MIMIR_ROUTE_GUARD(...)                                                                \
+    if (const std::string route_skip = route_skip_reason(__VA_ARGS__); !route_skip.empty()) { \
+        GTEST_SKIP() << route_skip;                                                           \
+    }                                                                                         \
+    if (route_spans_mimirs(__VA_ARGS__)) {                                                    \
+        MIMIR_REQUIRE_REMOTE_PREFLIGHT();                                                     \
+    }
 
 // A UINT32 TILE tensor one tile wide on one DRAM bank: `num_slabs` receiver slabs, each `blocks` blocks of
 // `block_tiles` tiles. Slab s is shard s, so tile t of slab s is page s * slab_tiles() + t. A block is one validator
@@ -1742,35 +1756,27 @@ void run_t1_route(uint32_t sender_cce, uint32_t receiver_cce) {
 
 TEST(MimirPrefetcher, MM7T1Local0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({0, 1}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({0, 1});
     run_t1_route(0, 1);
 }
 
 TEST(MimirPrefetcher, MM7T1Local3To2) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({3, 2}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({3, 2});
     run_t1_route(3, 2);
 }
 
 TEST(MimirPrefetcher, MM7T1D2d0To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({0, 2}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({0, 2});
     run_t1_route(0, 2);
 }
 
 TEST(MimirPrefetcher, MM7T1D2d3To1) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({3, 1}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({3, 1});
     run_t1_route(3, 1);
 }
 
@@ -1879,36 +1885,28 @@ void run_t2_two_senders(uint32_t first_sender_cce, uint32_t second_sender_cce, u
 TEST(MimirPrefetcher, MM7T2FanOut0To123) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({0, 1, 2, 3}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({0, 1, 2, 3});
     run_t2_fan_out(0, {1, 2, 3});
 }
 
 TEST(MimirPrefetcher, MM7T2FanOut3To012) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({3, 0, 1, 2}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({3, 0, 1, 2});
     run_t2_fan_out(3, {0, 1, 2});
 }
 
 TEST(MimirPrefetcher, MM7T2TwoSenders01To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({0, 1, 2}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({0, 1, 2});
     run_t2_two_senders(0, 1, 2);
 }
 
 TEST(MimirPrefetcher, MM7T2TwoSenders02To3) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({0, 2, 3}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({0, 2, 3});
     run_t2_two_senders(0, 2, 3);
 }
 
@@ -2072,103 +2070,79 @@ SingleGcbCase t3_wrap_and_resize_case() {
 
 TEST(MimirPrefetcher, MM7T3SubChunkLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_single_gcb_case(kT3LocalReceiverCce, t3_sub_chunk_case());
 }
 
 TEST(MimirPrefetcher, MM7T3SubChunkD2d0To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
     run_single_gcb_case(kT3D2dReceiverCce, t3_sub_chunk_case());
 }
 
 TEST(MimirPrefetcher, MM7T3BelowStageThirdLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_single_gcb_case(kT3LocalReceiverCce, t3_below_stage_third_case());
 }
 
 TEST(MimirPrefetcher, MM7T3BelowStageThirdD2d0To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
     run_single_gcb_case(kT3D2dReceiverCce, t3_below_stage_third_case());
 }
 
 TEST(MimirPrefetcher, MM7T3PartialStageChunkLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_single_gcb_case(kT3LocalReceiverCce, t3_partial_stage_chunk_case());
 }
 
 TEST(MimirPrefetcher, MM7T3AboveStageThirdLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_single_gcb_case(kT3LocalReceiverCce, t3_above_stage_third_case());
 }
 
 TEST(MimirPrefetcher, MM7T3AboveStageThirdD2d0To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
     run_single_gcb_case(kT3D2dReceiverCce, t3_above_stage_third_case());
 }
 
 // Local only: the split happens in host serialization, before any page reaches the route.
 TEST(MimirPrefetcher, MM7T3PageSplitLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_single_gcb_case(kT3LocalReceiverCce, t3_page_split_case());
 }
 
 TEST(MimirPrefetcher, MM7T3AbaLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_single_gcb_case(kT3LocalReceiverCce, t3_aba_case());
 }
 
 TEST(MimirPrefetcher, MM7T3AbaD2d0To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
     run_single_gcb_case(kT3D2dReceiverCce, t3_aba_case());
 }
 
 TEST(MimirPrefetcher, MM7T3WrapAndResizeLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_single_gcb_case(kT3LocalReceiverCce, t3_wrap_and_resize_case());
 }
 
 TEST(MimirPrefetcher, MM7T3WrapAndResizeD2d0To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
     run_single_gcb_case(kT3D2dReceiverCce, t3_wrap_and_resize_case());
 }
 
@@ -2221,18 +2195,14 @@ void run_t3_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
 
 TEST(MimirPrefetcher, MM7T3GcbSwitchLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     run_t3_gcb_switch(kT3LocalReceiverCce, kT3LocalReceiverCce);
 }
 
 TEST(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3D2dReceiverCce});
     run_t3_gcb_switch(kT3D2dReceiverCce, kT3D2dReceiverCce);
 }
 
@@ -2240,10 +2210,7 @@ TEST(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
 TEST(MimirPrefetcher, MM7T3ReceiverSwitch0To1Then2) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce, kT3D2dReceiverCce});
-        !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce, kT3D2dReceiverCce});
     run_t3_gcb_switch(kT3LocalReceiverCce, kT3D2dReceiverCce);
 }
 
@@ -2253,9 +2220,7 @@ TEST(MimirPrefetcher, MM7T3ReceiverSwitch0To1Then2) {
 // sender, before anything crosses the route.
 TEST(MimirPrefetcher, MM7T3FenceLocal0To1) {
     skip_unless_programmable_dram_package();
-    if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({kT3SenderCce, kT3LocalReceiverCce});
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     const std::optional<uint32_t> sender_bank = t3_sender_bank(*mesh, kT3LocalReceiverCce);
@@ -2410,9 +2375,7 @@ TEST(MimirPrefetcher, MM7T4MismatchD2d2To0) {
 TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({1, 3});
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     IDevice* device = mesh->get_devices().front();
@@ -2471,9 +2434,7 @@ TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
 TEST(MimirPrefetcher, MM7T4DrainTimeoutD2d1To3) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
-    if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
-        GTEST_SKIP() << skip_reason;
-    }
+    MIMIR_ROUTE_GUARD({1, 3});
     std::shared_ptr<distributed::MeshDevice> mesh = distributed::MeshDevice::create_unit_mesh(0);
     ScopedMesh mesh_closer(mesh);
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();

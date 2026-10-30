@@ -103,15 +103,32 @@ std::vector<MimirRegister> read_debug_last(
     ChipId chip);  // DEBUG_LAST_SRC/DEST/TRANSLATION on live tiles
 void dump_debug_last(const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip);  // log only; call on failure
 
-// Host suites. Cached per process. "" = identity, setup and CCE remap match the Chippy values.
-// Uses MetalContext::instance().get_cluster(), so no initialize().
+// Host suites. Cached per process. "" = identity, setup and CCE remap match the Chippy values; otherwise the mismatch.
+// Uses MetalContext::instance().get_cluster(), so no initialize(). Call through MIMIR_REQUIRE_IDENTITY.
 const std::string& mimir_identity_result();
 // Remote suites, before CreateDevice. Cached per process.
-// "" = identity, SS_BAR, ATT and interleave match. No DMRISC registers.
+// "" = identity, SS_BAR, ATT and interleave match; otherwise the mismatch. No DMRISC registers. Call through
+// MIMIR_REQUIRE_REMOTE_PREFLIGHT.
 const std::string& mimir_remote_preflight_result();
-// Remote suites, after CreateDevice (UMD has rewritten the DMRISC remap entries). Cached per process. Only valid after
-// CreateDevice; call it once mimir_remote_preflight_result() is empty. "" = remap start, end, remap_start and valid bit
-// match UMD's values.
+// Skip when the watcher is enabled (before any SMC read), then fail the test on a mismatch. Use before any device is
+// opened.
+#define MIMIR_REQUIRE_IDENTITY()                                                                          \
+    if (const std::string mimir_watcher_reason = ::tt::tt_metal::mimir_test::mimir_watcher_skip_reason(); \
+        !mimir_watcher_reason.empty()) {                                                                  \
+        GTEST_SKIP() << mimir_watcher_reason;                                                             \
+    }                                                                                                     \
+    ASSERT_TRUE(::tt::tt_metal::mimir_test::mimir_identity_result().empty())                              \
+        << ::tt::tt_metal::mimir_test::mimir_identity_result()
+#define MIMIR_REQUIRE_REMOTE_PREFLIGHT()                                                                  \
+    if (const std::string mimir_watcher_reason = ::tt::tt_metal::mimir_test::mimir_watcher_skip_reason(); \
+        !mimir_watcher_reason.empty()) {                                                                  \
+        GTEST_SKIP() << mimir_watcher_reason;                                                             \
+    }                                                                                                     \
+    ASSERT_TRUE(::tt::tt_metal::mimir_test::mimir_remote_preflight_result().empty())                      \
+        << ::tt::tt_metal::mimir_test::mimir_remote_preflight_result()
+// Remote suites, after CreateDevice. Chippy bring-up programs the DMRISC remap entries and nothing rewrites them.
+// Cached per process. Only valid after CreateDevice; call it once mimir_remote_preflight_result() is empty. "" = remap
+// start, end, remap_start and valid bit match UMD's values.
 const std::string& mimir_remote_remap_result();
 
 }  // namespace tt::tt_metal::mimir_test
