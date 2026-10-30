@@ -32,6 +32,7 @@ from ttml.models.mistral import Mistral, MistralConfig, load_from_safetensors, u
 from ttml.modules import LoraConfig, LoraModel, fuse_lora_into_frozen_weights, transpose_frozen_weights
 from ttml.modules.fused_lora import reduce_partial_lora_grads
 from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
+from ttml.models.mistral.fused_residual_norm import use_fused_residual_norm
 
 DEFAULT_MODEL = "mistralai/Mistral-Small-24B-Base-2501"
 DEFAULT_REVISION = "b0a2e4ed093c26997495ae625528f81ea04b749f"
@@ -63,6 +64,9 @@ def parse_args() -> argparse.Namespace:
         "--no-fused-lora", action="store_true", help="keep the LoRA update as separate ops (no K-concat fusion)"
     )
     p.add_argument("--no-allcore-rmsnorm", action="store_true", help="keep the one-core-per-tile-row RMSNorm backward")
+    p.add_argument(
+        "--no-fused-residual-norm", action="store_true", help="keep the residual adds separate from the norms"
+    )
     p.add_argument(
         "--no-transposed-weights",
         action="store_true",
@@ -173,6 +177,8 @@ def main() -> None:
     if not args.no_allcore_rmsnorm:
         norms = use_allcore_rmsnorm_backward(model)
         print(f"RMSNorm layers on the all-core backward: {len(norms)}")
+    if not args.no_fused_residual_norm:
+        print(f"residual adds fused into the norms: {use_fused_residual_norm(model)}")
     model.train()
     params = model.parameters()
     trainable = sum(int(np.prod(t.shape())) for t in params.values() if t.get_requires_grad())

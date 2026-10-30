@@ -49,9 +49,13 @@ The TP-local qkv / out shards were put on the transposed + fused LoRA path. Grad
 
 `FrozenVocabParallelEmbedding` in `models/mistral/frozen_embedding.py`: the TP embedding's `[32768, 5120]` shard was untilized by the ttml op on every step (1.5 ms per step per chip). Gradient check PASS, loss identical. **TP=4 full model 545.9 ms / 29.72 %** (best 542.9). Details in `../perf_analysis.md`, "Iteration 8".
 
-## State after the resumed loop (2026-10-29)
+### Iteration 9: residual add fused into an all-core RMSNorm forward / backward (math + glue), landed
 
-TP=4 full model 598.7 (composite baseline) -> 556.5 (loop exit, iteration 3) -> **545.7 ms / 29.73 % MFU** (iteration 8 + the review-3 follow-up). Loss match on this path: 8-layer host-loss max |diff| 0.027 vs torch, TP=4 real-weight trajectory as the baseline (`../perf_analysis.md`, "Review round 3 follow-up"). Stage review round 3: `review_round3.md` (more-work-needed, all findings answered in the follow-up). The remaining ranking at TP=4 and what each item needs is in `../perf_analysis.md`, "Loop resumed": the base matmuls at ttnn's optimum for the TP shapes, inherent TP collectives, and three kernel projects (SDPA, attention on the fused heads layout, residual-fused RMSNorm forward / all-core forward).
+`metal/ops/add_rmsnorm_fw_allcore` (sum, rms and the normalized output in two all-core phases) and `rmsnorm_bw_allcore(..., residual_grad=)`; `models/mistral/fused_residual_norm.py` re-pairs the layer boundaries (`fused_forward`, opted in by `use_fused_residual_norm`). Removes the two residual adds and the two gradient-accumulation adds per layer and the 32-core norm forward. Also fixes a latent CB wrap hazard of the ported all-core backward (second work item on a core), with two-items-per-core harness cases. Harness 20 passed, TP gradient check PASS, 2-layer model equal to the block path. **TP=4 full model 537.4 ms / 30.19 %** (best 533.9) from 545.7. Details in `../perf_analysis.md`, "Iteration 9".
+
+## State after the resumed loop (2026-10-29, extended 2026-10-30)
+
+TP=4 full model 598.7 (composite baseline) -> 556.5 (loop exit, iteration 3) -> 545.7 ms / 29.73 % (iteration 8 + the review-3 follow-up) -> **537.4 ms / 30.19 % MFU** (iteration 9). Loss match on this path: 8-layer host-loss max |diff| 0.027 vs torch, TP=4 real-weight trajectory as the baseline (`../perf_analysis.md`, "Review round 3 follow-up"). Stage review round 3: `review_round3.md` (more-work-needed, all findings answered in the follow-up). The remaining ranking at TP=4 and what each item needs is in `../perf_analysis.md`, "Loop resumed": the base matmuls at ttnn's optimum for the TP shapes, inherent TP collectives, and three kernel projects (SDPA, attention on the fused heads layout, residual-fused RMSNorm forward / all-core forward).
 
 ## Exit
 

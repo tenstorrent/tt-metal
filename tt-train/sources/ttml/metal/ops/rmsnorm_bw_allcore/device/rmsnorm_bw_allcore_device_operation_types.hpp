@@ -15,7 +15,7 @@ namespace ttml::metal::ops::rmsnorm_bw_allcore::device {
 //
 //   partial:  P_s = sum_{c in slice s} a * gamma * dL_dout           (one fp32 tile per (tile-row, slice))
 //   apply:    P   = sum_s P_s (row-reduced), scale = P / rms
-//             dL_da = (gamma * dL_dout - a * P / (C * rms^2)) / rms
+//             dL_da = (gamma * dL_dout - a * P / (C * rms^2)) / rms  [+ residual_grad]
 //             dL_dgamma_components = a * dL_dout / rms              (optional; reduced over rows on host)
 //
 // A work item is (tile-row r, slice s); slice s covers tiles [s*slice_tiles, min(Wt, (s+1)*slice_tiles)).
@@ -87,6 +87,9 @@ struct RMSNormBackwardInputs {
     ttnn::Tensor rms;  // [B, N, S, 1] bf16 TILE (column 0 of each tile)
     ttnn::Tensor dL_dout;
     ttnn::Tensor partials;  // output of phase A
+    // Optional: a gradient reaching the input through another path (the residual stream of a fused
+    // add + RMSNorm), added to dL_da in the kernel instead of by a separate add.
+    std::optional<ttnn::Tensor> residual_grad;
 };
 
 using operation_attributes_t = RMSNormBackwardParams;

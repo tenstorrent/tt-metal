@@ -155,6 +155,9 @@ def main():
 
     norms = use_allcore_rmsnorm_backward(model)
     print(f"RMSNorm layers on the all-core backward: {len(norms)}")
+    from ttml.models.mistral.fused_residual_norm import use_fused_residual_norm
+
+    print(f"residual adds fused into the norms: {use_fused_residual_norm(model)}")
     print(f"tp {args.tp}: transposed {len(converted)}, fused {len(fused)}")
     model.train()
 

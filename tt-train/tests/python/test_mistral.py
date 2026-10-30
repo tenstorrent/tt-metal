@@ -265,13 +265,17 @@ def test_rmsnorm_frozen_gamma_gets_no_gradient():
     assert not layer.gamma.tensor.is_grad_initialized()
 
 
-def test_rmsnorm_allcore_backward_with_frozen_gamma():
-    """The all-core RMSNorm backward (`rmsnorm_bw_allcore`, iteration 6) on a frozen-gamma layer matches torch."""
+@pytest.mark.parametrize("batches", [1, 2], ids=["32 tile-rows", "64 tile-rows: two work items per core"])
+def test_rmsnorm_allcore_backward_with_frozen_gamma(batches):
+    """The all-core RMSNorm backward (`rmsnorm_bw_allcore`, iteration 6) on a frozen-gamma layer matches torch.
+    With 64 tile-rows the 3-slice split gives 192 work items, so cores process two items in a row (the CB
+    full-block discipline of iteration 9)."""
     from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
 
     rng = seeded(3)
-    x_np, g_np = rand_x(rng), bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN)))
-    dout_np = rand_x(rng, std=0.01)
+    x_np = bf16(rng.normal(0.0, 1.0, (1, batches, SEQ, HIDDEN)))
+    g_np = bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN)))
+    dout_np = bf16(rng.normal(0.0, 0.01, (1, batches, SEQ, HIDDEN)))
 
     layer = RMSNormLayer(HIDDEN, EPS)
     assign(layer.gamma.tensor, g_np)
@@ -290,6 +294,124 @@ def test_rmsnorm_allcore_backward_with_frozen_gamma():
     rep = Report("rmsnorm all-core backward")
     rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
     rep.check("dx", grad_of(x), xr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.done()
+
+
+@pytest.mark.parametrize("batches", [1, 2], ids=["32 tile-rows", "64 tile-rows: two work items per core"])
+def test_add_rmsnorm_fused_forward_and_gradients(batches):
+    """The fused residual add + RMSNorm (`add_rmsnorm_fw_allcore` and the all-core backward with the residual
+    gradient folded in, iteration 9) against torch: the sum, the normalized output and the gradient reaching both
+    the residual and the delta through both outputs. 64 tile-rows: cores process two work items in a row."""
+    from ttml.models.mistral.fused_residual_norm import add_rmsnorm
+
+    rng = seeded(8)
+    shape = (1, batches, SEQ, HIDDEN)
+    r_np, d_np = bf16(rng.normal(0.0, 1.0, shape)), bf16(rng.normal(0.0, 0.5, shape))
+    g_np = bf16(rng.normal(1.0, 0.1, (1, 1, 1, HIDDEN)))
+    dout_np, dsum_np = bf16(rng.normal(0.0, 0.01, shape)), bf16(rng.normal(0.0, 0.01, shape))
+    layer = RMSNormLayer(HIDDEN, EPS)
+    assign(layer.gamma.tensor, g_np)
+    layer.gamma.tensor.set_requires_grad(False)
+
+    rep = Report("fused residual add + RMSNorm")
+    # (sum, out): a gradient reaches the sum through the next residual add and the out through the sublayer
+    r, d = to_device(r_np, requires_grad=True), to_device(d_np, requires_grad=True)
+    s, out = add_rmsnorm(r, d, layer)
+    s_val, out_val = to_host(s), to_host(out)
+    s.set_grad(to_device(dsum_np).get_value())
+    out.set_grad(to_device(dout_np).get_value())
+    s.backward(False)
+    rr, dr, gr = t(r_np, True), t(d_np, True), t(g_np)
+    s_ref = rr + dr
+    out_ref = ref_rmsnorm(s_ref, gr)
+    (out_ref * t(dout_np)).sum().backward(retain_graph=True)
+    rep.check("sum", s_val, s_ref.detach().numpy(), FWD_PCC, FWD_REL)
+    rep.check("out", out_val, out_ref.detach().numpy(), FWD_PCC, FWD_REL)
+    # the gradient through out only (return_sum=False path has the same backward without the residual term)
+    rep.check("d residual (out only)", _out_only_grad(layer, r_np, d_np, dout_np), rr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    (s_ref * t(dsum_np)).sum().backward()
+    rep.check("d residual", grad_of(r), rr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.check("d delta", grad_of(d), dr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.done()
+    assert not layer.gamma.tensor.is_grad_initialized()
+
+
+def _out_only_grad(layer, r_np, d_np, dout_np):
+    from ttml.models.mistral.fused_residual_norm import add_rmsnorm
+
+    r, d = to_device(r_np, requires_grad=True), to_device(d_np, requires_grad=True)
+    out = add_rmsnorm(r, d, layer, return_sum=False)
+    _backward(out, dout_np)
+    dr, dd = grad_of(r), grad_of(d)
+    assert np.array_equal(dr, dd), "the residual and the delta receive the same gradient"
+    return dr
+
+
+def test_fused_residual_norm_model_matches_the_block_path():
+    """A 2-layer model on the final training path (transposed + fused LoRA, all-core norm backward) with and without
+    the fused residual norm: the same loss and the same LoRA gradients; the fused forward builds the expected number
+    of fused norms (2 per layer, the final norm included, the first norm plain)."""
+    from ttml.common.utils import set_seed
+    from ttml.models.mistral.fused_residual_norm import use_fused_residual_norm
+    from ttml.models.mistral.rmsnorm_allcore import use_allcore_rmsnorm_backward
+
+    layers = 2
+    cfg = MistralConfig.from_hf(HF_CONFIG, max_position_embeddings=SEQ, num_hidden_layers=layers)
+    rng = seeded(9)
+    ids = rng.integers(0, VOCAB, (1, 1, 1, SEQ), dtype=np.uint32)
+    targets = rng.integers(0, VOCAB, (1, SEQ), dtype=np.uint32)
+    lora_B = {}
+    fingerprints = []
+
+    def build(fused_residual):
+        set_seed(1234)
+        model = LoraModel(
+            Mistral(cfg),
+            LoraConfig(
+                rank=RANK,
+                alpha=ALPHA,
+                target_modules=[
+                    r"attention\.qkv_linear$",
+                    r"attention\.out_linear$",
+                    r"mlp\.w_gate_up$",
+                    r"mlp\.w2$",
+                ],
+            ),
+        )
+        for name, tensor in model.parameters().items():
+            if "lora_B" in name:  # zero-initialised: random so that the A gradients are not zero
+                if name not in lora_B:
+                    lora_B[name] = bf16(rng.normal(0.0, 0.02, tuple(tensor.shape())))
+                assign(tensor, lora_B[name])
+        qkv = next(n for n in model.parameters() if n.endswith("blocks/0/attention/qkv_linear/weight"))
+        fingerprints.append(float(np.abs(to_host(model.parameters()[qkv])).sum()))
+        assert fingerprints[0] == fingerprints[-1], "the two models must start from the same random init"
+        transpose_frozen_weights(model)
+        fuse_lora_into_frozen_weights(model)
+        use_allcore_rmsnorm_backward(model)
+        if fused_residual:
+            assert use_fused_residual_norm(model) == 2 * layers
+        model.train()
+        return model
+
+    def run(model):
+        x = ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        y = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        loss = ttml.ops.loss.cross_entropy_loss(model(x, None), y, ttml.ops.ReduceType.MEAN)
+        loss.backward(False)
+        grads = {n: grad_of(p) for n, p in model.parameters().items() if p.get_requires_grad()}
+        loss_val = float(to_host(loss).ravel()[0])
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+        return loss_val, grads
+
+    loss_ref, grads_ref = run(build(False))
+    loss_fused, grads_fused = run(build(True))
+    print(f"loss: block path {loss_ref:.5f}, fused residual norm {loss_fused:.5f}")
+    assert abs(loss_fused - loss_ref) <= 0.02 + 0.01 * abs(loss_ref)
+    rep = Report("fused residual norm vs the block path, 2 layers")
+    assert grads_ref.keys() == grads_fused.keys() and len(grads_ref) == 8 * layers
+    for name in sorted(grads_ref):
+        rep.check(name, grads_fused[name], grads_ref[name], GRAD_PCC, GRAD_REL)
     rep.done()
 
 

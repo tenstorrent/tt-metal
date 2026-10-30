@@ -129,6 +129,15 @@ void RMSNormBackwardDeviceOperation::validate_on_program_cache_miss(
         "RMS tensor must have shape [B, N, S, 1] matching the input, got {}",
         rms_shape);
 
+    if (tensor_args.residual_grad.has_value()) {
+        check_tensor(*tensor_args.residual_grad, "residual_grad", tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(
+            tensor_args.residual_grad->logical_shape() == input_shape,
+            "residual_grad must match the input shape {}, got {}",
+            input_shape,
+            tensor_args.residual_grad->logical_shape());
+    }
+
     const uint32_t rows = rows_tiles(tensor_args.input);
     const auto& pshape = tensor_args.partials.logical_shape();
     TT_FATAL(
@@ -169,6 +178,7 @@ ttsl::hash::hash_t RMSNormBackwardDeviceOperation::compute_program_hash(
         args.compute_dgamma,
         args.num_slices,
         args.slice_tiles,
+        tensor_args.residual_grad.has_value(),
         tensor_args.input.dtype(),
         tensor_args.input.logical_shape());
 }
@@ -200,7 +210,8 @@ ttml_rmsnorm_bw_allcore(
     const ttnn::Tensor& partials_tensor,
     const ttml::metal::ops::rmsnorm_bw_allcore::device::WorkSplit& split,
     float epsilon,
-    bool compute_dgamma) {
+    bool compute_dgamma,
+    const std::optional<ttnn::Tensor>& residual_grad) {
     using OperationType = ttml::metal::ops::rmsnorm_bw_allcore::device::RMSNormBackwardDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .epsilon = epsilon,
@@ -213,6 +224,7 @@ ttml_rmsnorm_bw_allcore(
         .rms = rms_tensor,
         .dL_dout = dL_dout_tensor,
         .partials = partials_tensor,
+        .residual_grad = residual_grad,
     };
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

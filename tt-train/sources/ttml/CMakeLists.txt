@@ -173,6 +173,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/device/rmsnorm_bw_allcore_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw_allcore/device/rmsnorm_bw_allcore_program_factory.cpp
     # WriteTileBlock
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_allcore/add_rmsnorm_fw_allcore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_allcore/device/add_rmsnorm_fw_allcore_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/add_rmsnorm_fw_allcore/device/add_rmsnorm_fw_allcore_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/write_tile_block/write_tile_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/write_tile_block/device/write_tile_block_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/write_tile_block/device/write_tile_block_program_factory.cpp

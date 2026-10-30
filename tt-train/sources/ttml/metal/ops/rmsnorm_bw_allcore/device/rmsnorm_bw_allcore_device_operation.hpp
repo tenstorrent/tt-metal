@@ -58,6 +58,7 @@ ttml_rmsnorm_bw_allcore(
     const ttnn::Tensor& partials_tensor,
     const ttml::metal::ops::rmsnorm_bw_allcore::device::WorkSplit& split,
     float epsilon = 1e-6F,
-    bool compute_dgamma = true);
+    bool compute_dgamma = true,
+    const std::optional<ttnn::Tensor>& residual_grad = std::nullopt);
 
 }  // namespace ttnn::prim

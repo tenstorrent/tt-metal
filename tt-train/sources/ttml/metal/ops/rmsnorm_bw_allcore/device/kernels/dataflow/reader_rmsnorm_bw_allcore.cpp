@@ -4,7 +4,8 @@
 
 // Reader for both rmsnorm_bw phases. Work item = (tile-row r, slice s); the slice's tiles
 // [s*St, min(Wt, (s+1)*St)) of a / gamma / dL_dout are streamed `block` tiles at a time.
-// With APPLY (phase B) the row's rms tile and its S partial-sum tiles are read first.
+// With APPLY (phase B) the row's rms tile and its S partial-sum tiles are read first; with ADD_RESIDUAL_GRAD the
+// residual gradient tiles are streamed alongside.
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
@@ -32,10 +33,13 @@ FORCE_INLINE void generate_ones_row0_tile(uint32_t cb_id) {
     cb_push_back(cb_id, 1);
 }
 
+// Reserves `reserve` tiles and fills the first `n`: a CB push must never straddle the end of the buffer (the
+// producer writes contiguous memory and only an exact wrap is legal), so the streamed CBs always move in full
+// `block` pushes and the shorter tail of a slice leaves the rest of its block stale.
 template <typename Accessor>
 FORCE_INLINE void read_block_async(
-    uint32_t cb_id, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t tile_bytes) {
-    cb_reserve_back(cb_id, n);
+    uint32_t cb_id, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t tile_bytes, uint32_t reserve) {
+    cb_reserve_back(cb_id, reserve);
     uint32_t l1 = get_write_ptr(cb_id);
     for (uint32_t j = 0; j < n; ++j) {
         noc_async_read_page(first_page + j, acc, l1);
@@ -50,6 +54,7 @@ void kernel_main() {
     const uint32_t dy_addr = get_arg_val<uint32_t>(arg++);
     [[maybe_unused]] const uint32_t rms_addr = get_arg_val<uint32_t>(arg++);
     [[maybe_unused]] const uint32_t partials_addr = get_arg_val<uint32_t>(arg++);
+    [[maybe_unused]] const uint32_t dres_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t work_start = get_arg_val<uint32_t>(arg++);
     const uint32_t work_count = get_arg_val<uint32_t>(arg++);
 
@@ -65,6 +70,10 @@ void kernel_main() {
     const auto rms_acc = TensorAccessor(rms_args, rms_addr);
     const auto partials_acc = TensorAccessor(partials_args, partials_addr);
     const uint32_t f32_tile_bytes = get_tile_size(cb::partials);
+#ifdef ADD_RESIDUAL_GRAD
+    constexpr auto dres_args = TensorAccessorArgs<partials_args.next_compile_time_args_offset()>();
+    const auto dres_acc = TensorAccessor(dres_args, dres_addr);
+#endif
 #endif
 
     const uint32_t tile_bytes = get_tile_size(cb::a);
@@ -89,8 +98,8 @@ void kernel_main() {
 
 #ifdef APPLY
         // rms is [rows*32, 1] -> one tile per tile-row; partials are [rows*32, S*32] -> S tiles per tile-row.
-        read_block_async(cb::rms, rms_acc, r, 1, tile_bytes);
-        read_block_async(cb::partials, partials_acc, r * S, S, f32_tile_bytes);
+        read_block_async(cb::rms, rms_acc, r, 1, tile_bytes, 1);
+        read_block_async(cb::partials, partials_acc, r * S, S, f32_tile_bytes, S);
         noc_async_read_barrier();
         cb_push_back(cb::rms, 1);
         cb_push_back(cb::partials, S);
@@ -99,13 +108,19 @@ void kernel_main() {
         for (uint32_t c = 0; c < ncols; c += block) {
             const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
             const uint32_t page = r * Wt + col0 + c;
-            read_block_async(cb::a, a_acc, page, n, tile_bytes);
-            read_block_async(cb::gamma, gamma_acc, col0 + c, n, tile_bytes);
-            read_block_async(cb::dy, dy_acc, page, n, tile_bytes);
+            read_block_async(cb::a, a_acc, page, n, tile_bytes, block);
+            read_block_async(cb::gamma, gamma_acc, col0 + c, n, tile_bytes, block);
+            read_block_async(cb::dy, dy_acc, page, n, tile_bytes, block);
+#if defined(APPLY) && defined(ADD_RESIDUAL_GRAD)
+            read_block_async(cb::dres, dres_acc, page, n, tile_bytes, block);
+#endif
             noc_async_read_barrier();
-            cb_push_back(cb::a, n);
-            cb_push_back(cb::gamma, n);
-            cb_push_back(cb::dy, n);
+            cb_push_back(cb::a, block);
+            cb_push_back(cb::gamma, block);
+            cb_push_back(cb::dy, block);
+#if defined(APPLY) && defined(ADD_RESIDUAL_GRAD)
+            cb_push_back(cb::dres, block);
+#endif
         }
     }
 }

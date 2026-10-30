@@ -31,6 +31,7 @@ constexpr uint32_t kReaderGammaIdx = 1U;
 constexpr uint32_t kReaderDyIdx = 2U;
 constexpr uint32_t kReaderRmsIdx = 3U;
 constexpr uint32_t kReaderPartialsIdx = 4U;
+constexpr uint32_t kReaderDresIdx = 5U;
 constexpr uint32_t kWriterOut0Idx = 0U;
 constexpr uint32_t kWriterOut1Idx = 1U;
 
@@ -178,7 +179,8 @@ RMSNormBackwardPartialProgramFactory::cached_program_t RMSNormBackwardPartialPro
          tensor_args.gamma.buffer()->address(),
          tensor_args.dL_dout.buffer()->address(),
          /*rms*/ 0U,
-         /*partials*/ 0U},
+         /*partials*/ 0U,
+         /*residual_grad*/ 0U},
         {output.buffer()->address(), /*out1*/ 0U});
 
     return cached_program_t{std::move(program), {reader, writer, std::move(cores)}};
@@ -218,6 +220,7 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     const uint32_t St = args.slice_tiles;
     const uint32_t block = std::min(kBlockTiles, St);
     const bool compute_dgamma = args.compute_dgamma;
+    const bool add_residual_grad = tensor_args.residual_grad.has_value();
     const CoreSplit split = split_items(device, geo.rows * S);
 
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -240,10 +243,16 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     if (compute_dgamma) {
         create_circular_buffer(program, split.all_cores, cb::dgamma, bf16, bf16_tile, 2U * block);
     }
+    if (add_residual_grad) {
+        create_circular_buffer(program, split.all_cores, cb::dres, bf16, bf16_tile, 2U * block);
+    }
 
     std::map<std::string, std::string> defines{{"APPLY", "1"}};
     if (compute_dgamma) {
         defines["COMPUTE_DGAMMA"] = "1";
+    }
+    if (add_residual_grad) {
+        defines["ADD_RESIDUAL_GRAD"] = "1";
     }
 
     std::vector<uint32_t> reader_ct_args{geo.Wt, S, St, block, geo.mask_w};
@@ -252,6 +261,9 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(tensor_args.dL_dout.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.rms.buffer()).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(tensor_args.partials.buffer()).append_to(reader_ct_args);
+    if (add_residual_grad) {
+        tt::tt_metal::TensorAccessorArgs(tensor_args.residual_grad->buffer()).append_to(reader_ct_args);
+    }
     auto reader = create_reader_kernel(program, split.all_cores, reader_ct_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_ct_args{geo.Wt, S, St, block};
@@ -276,7 +288,8 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
          tensor_args.gamma.buffer()->address(),
          tensor_args.dL_dout.buffer()->address(),
          tensor_args.rms.buffer()->address(),
-         tensor_args.partials.buffer()->address()},
+         tensor_args.partials.buffer()->address(),
+         add_residual_grad ? tensor_args.residual_grad->buffer()->address() : 0U},
         {output[0].buffer()->address(), compute_dgamma ? output[1].buffer()->address() : 0U});
 
     return cached_program_t{std::move(program), {reader, writer, std::move(cores)}};
@@ -298,6 +311,9 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
         r[kReaderDyIdx] = tensor_args.dL_dout.buffer()->address();
         r[kReaderRmsIdx] = tensor_args.rms.buffer()->address();
         r[kReaderPartialsIdx] = tensor_args.partials.buffer()->address();
+        if (tensor_args.residual_grad.has_value()) {
+            r[kReaderDresIdx] = tensor_args.residual_grad->buffer()->address();
+        }
         auto& w = writer_args[core.x][core.y];
         w[kWriterOut0Idx] = output[0].buffer()->address();
         if (args.compute_dgamma) {

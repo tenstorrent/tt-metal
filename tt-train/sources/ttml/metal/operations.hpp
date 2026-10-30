@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ops/add_rmsnorm_fw_allcore/add_rmsnorm_fw_allcore.hpp"
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
 #include "ops/frobenius_normalize/frobenius_normalize.hpp"

@@ -1,0 +1,25 @@
+=== iter10 skinny_matmul standalone check 2026-10-30T10:19:19Z
+rc=0
+M=1024 K=5120 N=16 transpose_b=True: shape (1, 1, 1024, 16) pcc 0.999999 rel 1.47e-03 | wall us/op ttnn 83.9 skinny 47.7
+M=1024 K=8192 N=16 transpose_b=True: shape (1, 1, 1024, 16) pcc 0.999999 rel 1.49e-03 | wall us/op ttnn 123.3 skinny 67.5
+M=1024 K=1024 N=16 transpose_b=True: shape (1, 1, 1024, 16) pcc 0.999999 rel 1.41e-03 | wall us/op ttnn 21.1 skinny 26.5
+M=1024 K=5120 N=16 transpose_b=False: shape (1, 1, 1024, 16) pcc 0.999999 rel 1.41e-03 | wall us/op ttnn 77.8 skinny 47.5
+M=1024 K=1536 N=16 transpose_b=False: shape (1, 1, 1024, 16) pcc 0.999999 rel 1.41e-03 | wall us/op ttnn 26.4 skinny 27.4
+=== iter9 harness 2026-10-30T10:19:22Z
+harness rc=0
+================== 20 passed, 2 warnings in 212.35s (0:03:32) ==================
+=== iter9 TP=4 gradient check 2026-10-30T10:22:57Z
+tp4 rc=0
+residual adds fused into the norms: 2
+tp 4: transposed 3, fused 2
+PASS
+=== iter9 single-chip Tracy 8 layers 2026-10-30T10:23:40Z
+tracy 8 rc=0
+=== iter9_tp TP=4 MFU after 600s cool-down 2026-10-30T10:24:58Z
+rc=0
+40 of 40 layers, tp 4: 537.4 ms/step over 6 steps (best 533.9), 179.3 TFLOP/s, MFU 30.19%
+=== iter9_tp TP=4 Tracy 4 layers 2026-10-30T10:38:18Z
+rc=0
+4 of 40 layers, tp 4: 61.6 ms/step over 2 steps (best 60.5), 196.6 TFLOP/s, MFU 33.11%
+=== done 2026-10-30T10:39:46Z
+=== iter9 chain finished 2026-10-30T10:39:47Z

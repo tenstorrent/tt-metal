@@ -6,7 +6,7 @@
 //   inv = 1 / rms                                   (row value broadcast along columns)
 //   P   = rowsum(sum_s partial_s)                   (= sum_c a * gamma * dL_dout over the whole row)
 //   t   = P * inv^2 / C
-//   dL_da                = inv * (gamma * dL_dout - t * a)
+//   dL_da                = inv * (gamma * dL_dout - t * a)  [+ residual_grad with ADD_RESIDUAL_GRAD]
 //   dL_dgamma_components = a * inv * dL_dout        (COMPUTE_DGAMMA; reduced over rows on host)
 
 #include "rmsnorm_bw_allcore_compute_common.hpp"
@@ -61,9 +61,14 @@ void kernel_main() {
 
         for (uint32_t c = 0; c < sl.ncols; c += block) {
             const uint32_t n = (c + block <= sl.ncols) ? block : (sl.ncols - c);
-            cb_wait_front(cb::a, n);
-            cb_wait_front(cb::gamma, n);
-            cb_wait_front(cb::dy, n);
+            // Full-block CB traffic (see the reader): wait and pop `block`, use the first n tiles, and pad the
+            // outputs of a shorter tail to a full block so the writer's pops never straddle the CB end either.
+            cb_wait_front(cb::a, block);
+            cb_wait_front(cb::gamma, block);
+            cb_wait_front(cb::dy, block);
+#ifdef ADD_RESIDUAL_GRAD
+            cb_wait_front(cb::dres, block);
+#endif
             for (uint32_t i = 0; i < n; ++i) {
                 // dL_da = inv * (gamma * dy - t * a)
                 tile_regs_acquire();
@@ -77,6 +82,11 @@ void kernel_main() {
                 load_tile(cb::inv, 0, 1);
                 mul_binary_tile_init();
                 mul_binary_tile(0, 1, 0);
+#ifdef ADD_RESIDUAL_GRAD
+                load_tile(cb::dres, i, 1);
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+#endif
                 tile_regs_commit();
                 pack_and_push(0, cb::dx);
 
@@ -93,9 +103,22 @@ void kernel_main() {
                 pack_and_push(0, cb::dgamma);
 #endif
             }
-            cb_pop_front(cb::a, n);
-            cb_pop_front(cb::gamma, n);
-            cb_pop_front(cb::dy, n);
+            for (uint32_t i = n; i < block; ++i) {  // tail padding (unused tiles)
+                tile_regs_acquire();
+                tile_regs_commit();
+                pack_and_push(0, cb::dx);
+#ifdef COMPUTE_DGAMMA
+                tile_regs_acquire();
+                tile_regs_commit();
+                pack_and_push(0, cb::dgamma);
+#endif
+            }
+            cb_pop_front(cb::a, block);
+            cb_pop_front(cb::gamma, block);
+            cb_pop_front(cb::dy, block);
+#ifdef ADD_RESIDUAL_GRAD
+            cb_pop_front(cb::dres, block);
+#endif
         }
 
         cb_pop_front(cb::rms, 1);

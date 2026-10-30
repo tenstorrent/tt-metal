@@ -29,5 +29,6 @@ constexpr uint32_t acc = 11;       // [1] fp32 sum of the partial tiles
 constexpr uint32_t t = 12;         // [1] fp32 P / (C * rms^2) broadcast along columns
 constexpr uint32_t dx = 13;        // [2*block] bf16 dL_da
 constexpr uint32_t dgamma = 14;    // [2*block] bf16 dL_dgamma components
+constexpr uint32_t dres = 15;      // [2*block] bf16 residual_grad (ADD_RESIDUAL_GRAD), added to dL_da
 
 }  // namespace rmsnorm_bw_cb

@@ -15,10 +15,12 @@ constexpr uint32_t S = get_compile_time_arg_val(1);
 constexpr uint32_t St = get_compile_time_arg_val(2);
 constexpr uint32_t block = get_compile_time_arg_val(3);
 
+// Waits for `wait` tiles and writes the first `n`: the compute kernel emits full `block` pushes (the tail of a
+// slice padded with unused tiles), so the pops here never straddle the end of the CB.
 template <typename Accessor>
 FORCE_INLINE void write_block_async(
-    uint32_t cb_id, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t tile_bytes) {
-    cb_wait_front(cb_id, n);
+    uint32_t cb_id, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t tile_bytes, uint32_t wait) {
+    cb_wait_front(cb_id, wait);
     uint32_t l1 = get_read_ptr(cb_id);
     for (uint32_t j = 0; j < n; ++j) {
         noc_async_write_page(first_page + j, acc, l1);
@@ -52,19 +54,19 @@ void kernel_main() {
         for (uint32_t c = 0; c < ncols; c += block) {
             const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
             const uint32_t page = r * Wt + col0 + c;
-            write_block_async(cb::dx, out0_acc, page, n, tile_bytes);
+            write_block_async(cb::dx, out0_acc, page, n, tile_bytes, block);
 #ifdef COMPUTE_DGAMMA
-            write_block_async(cb::dgamma, out1_acc, page, n, tile_bytes);
+            write_block_async(cb::dgamma, out1_acc, page, n, tile_bytes, block);
 #endif
             noc_async_write_barrier();
-            cb_pop_front(cb::dx, n);
+            cb_pop_front(cb::dx, block);
 #ifdef COMPUTE_DGAMMA
-            cb_pop_front(cb::dgamma, n);
+            cb_pop_front(cb::dgamma, block);
 #endif
         }
 #else
         const uint32_t tile_bytes = get_tile_size(cb::partial_out);
-        write_block_async(cb::partial_out, out0_acc, r * S + s, 1, tile_bytes);
+        write_block_async(cb::partial_out, out0_acc, r * S + s, 1, tile_bytes, 1);
         noc_async_write_barrier();
         cb_pop_front(cb::partial_out, 1);
 #endif

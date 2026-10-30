@@ -17,6 +17,7 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/add_rmsnorm_fw_allcore/add_rmsnorm_fw_allcore.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
@@ -762,9 +763,19 @@ void py_module(nb::module_& m) {
             nb::arg("rms"),
             nb::arg("dL_dout"),
             nb::arg("compute_dgamma") = true,
+            nb::arg("residual_grad") = nb::none(),
             "RMSNorm backward (ungated) -> [dL_dinput, dL_dgamma or None], every tile-row split over several cores "
             "(two phases: per-slice partial sums, then the row scale and the gradients) instead of one core per "
-            "tile-row.");
+            "tile-row. `residual_grad` (input shape) is added to dL_dinput in the kernel.");
+        py_metal.def(
+            "add_rmsnorm_fw_allcore",
+            &ttml::metal::add_rmsnorm_fw_allcore,
+            nb::arg("residual"),
+            nb::arg("delta"),
+            nb::arg("gamma"),
+            nb::arg("epsilon") = 1e-6F,
+            "Residual add fused with RMSNorm, every tile-row split over several cores: sum = residual + delta, "
+            "out = sum / sqrt(mean(sum^2) + eps) * gamma -> [sum, out, rms].");
         py_metal.def(
             "write_tile_block",
             &ttml::metal::write_tile_block,

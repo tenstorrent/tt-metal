@@ -14,7 +14,8 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,
     const ttnn::Tensor& dL_dout_tensor,
-    bool compute_dgamma) {
+    bool compute_dgamma,
+    const std::optional<ttnn::Tensor>& residual_grad) {
     // Spread each row over several cores: phase A produces per-slice partial sums of a * gamma * dL_dout,
     // phase B folds them into the row's scale and emits the gradients. Both phases are parallel over
     // (tile-row, slice) items, so a [1, 1, T, C] input is not limited to T/32 cores.
@@ -33,7 +34,8 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_allcore(
         partials,
         split,
         /* epsilon */ 1e-6F,  // host-side attribute only, the kernels never read it (rms comes from the forward)
-        compute_dgamma);
+        compute_dgamma,
+        residual_grad);
 
     std::vector<std::optional<ttnn::Tensor>> out{result[0], std::nullopt};
     if (compute_dgamma) {
