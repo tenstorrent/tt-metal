@@ -15,14 +15,35 @@ from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
 
+def _rs_owns(module, t):
+    """Whether ``t`` is a persistent decode reduce-scatter output of ``module`` (QWEN36_MTP_RS_PERSISTENT: the MTP drafter
+    layer only). The layer consumes it in the residual add and must not free it; False for every other module."""
+    rs = getattr(module, "decode_rs", None)
+    return rs is not None and rs.owns(t)
+
+
 class Qwen36DecoderLayer:
     """Single transformer layer with hybrid attention dispatch.
 
     Pattern: x → attention_norm → attention → residual → ff_norm → MLP → residual
     Attention is either GatedAttention (full, with RoPE) or GatedDeltaNet (linear).
+
+    attn_dtype / mlp_dtype (TP full-attention / dense-MLP only; default None = the flag-driven dtypes): weight dtype
+    overrides, used by the MTP drafter layer under QWEN36_MTP_LAYER_BFP4. bfloat4_b also switches that module's decode
+    matmuls to LoFi, which reads every mantissa bit of a BFP4 weight.
     """
 
-    def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None):
+    def __init__(
+        self,
+        mesh_device,
+        args,
+        state_dict,
+        layer_num,
+        tensor_cache_path=None,
+        tt_ccl=None,
+        attn_dtype=None,
+        mlp_dtype=None,
+    ):
         self.layer_num = layer_num
         self.device = mesh_device
         self.args = args
@@ -93,9 +114,15 @@ class Qwen36DecoderLayer:
                 from models.demos.blackhole.qwen36.tt.attention.tp import TPAttention, load_attention_weights_tp
 
                 tw = load_attention_weights_tp(
-                    mesh_device, substate(state_dict, f"layers.{layer_num}.self_attn"), args, cache_dir=tp_cache
+                    mesh_device,
+                    substate(state_dict, f"layers.{layer_num}.self_attn"),
+                    args,
+                    cache_dir=tp_cache,
+                    attn_dtype=attn_dtype,
                 )
                 self.attention = TPAttention(mesh_device, args, tw, tt_ccl)
+                if attn_dtype == ttnn.bfloat4_b:  # QWEN36_MTP_LAYER_BFP4 (drafter layer): LoFi decode QKV / wo
+                    self.attention.qkv_cfg = self.attention.wo_cfg = tpc.COMPUTE_LOFI
             else:
                 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 
@@ -124,7 +151,9 @@ class Qwen36DecoderLayer:
                 mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
             )
         else:
-            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+            # mlp_dtype (QWEN36_MTP_LAYER_BFP4, drafter layer): explicit gate/up/down dtypes, which also select LoFi.
+            _mlp_kw = {} if mlp_dtype is None else {"down_dtype": mlp_dtype, "gateup_dtype": mlp_dtype}
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl, **_mlp_kw)
 
     def _make_norm(
         self,
@@ -369,7 +398,9 @@ class Qwen36DecoderLayer:
             return None
 
         h = _dar.add_residual(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)
-        if h is not attn_output:  # fused (QWEN36_DECODE_AR_FUSE_RESIDUAL=1): h is the all_reduce output itself
+        # fused (QWEN36_DECODE_AR_FUSE_RESIDUAL=1): h is the all_reduce output itself. A persistent reduce-scatter output
+        # (QWEN36_MTP_RS_PERSISTENT, drafter layer) is reused by the next call, so it is not freed either.
+        if h is not attn_output and not _rs_owns(self.attention, attn_output):
             ttnn.deallocate(attn_output)
 
         if _dar is not None:
@@ -383,7 +414,7 @@ class Qwen36DecoderLayer:
 
         output = _dar.add_residual(h, ff_output) if _dar is not None else ttnn.add(h, ff_output)
         ttnn.deallocate(h)
-        if output is not ff_output:
+        if output is not ff_output and not _rs_owns(self.feed_forward, ff_output):
             ttnn.deallocate(ff_output)
 
         return output

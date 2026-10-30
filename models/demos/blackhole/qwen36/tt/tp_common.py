@@ -210,6 +210,198 @@ def mtp_kv_only_enabled():
     return os.environ.get("QWEN36_MTP_KV_ONLY", "0") == "1"
 
 
+# --------------------------------------------------------------------------------------------------------------------- #
+# r6 drafter bundle: MTP drafter micro-optimizations, each behind its own flag. Every default is off, and off is today's
+# drafter byte for byte. They change only the DRAFTER's programs: the verify arbitrates every draft, so the output stays
+# lossless and only acceptance can move. All are read when the MTP head is built (Qwen36MTP.__init__), TP only.
+# --------------------------------------------------------------------------------------------------------------------- #
+MTP_FC_PROGCFG_ENV = "QWEN36_MTP_FC_PROGCFG"
+MTP_FC_IBW_ENV = "QWEN36_MTP_FC_IBW"
+MTP_FC_CORES_ENV = "QWEN36_MTP_FC_CORES"
+MTP_SDPA_WINDOW_ENV = "QWEN36_MTP_SDPA_WINDOW"
+MTP_LAYER_BFP4_ENV = "QWEN36_MTP_LAYER_BFP4"
+MTP_EMBED_ROW_ENV = "QWEN36_MTP_EMBED_ROW"
+MTP_RS_LINKS_ENV = "QWEN36_MTP_RS_LINKS"
+MTP_RS_PERSISTENT_ENV = "QWEN36_MTP_RS_PERSISTENT"
+
+
+def _env_int(name, default=0):
+    """Integer env value; unset or blank -> ``default``. A non-integer raises ValueError (no silent default)."""
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else default
+
+
+def mtp_fc_decode_progcfg(k, n, grid_w):
+    """QWEN36_MTP_FC_PROGCFG (default "0"): the MTP fc (eh_proj, [rows, 2*dim] x [2*dim, dim/tp] BFP8, HiFi2) of a
+    decode-width call (rows <= 32: the draft steps, the batched reseed, the join warms) runs on an explicit 1D mcast
+    program config, its concat input in L1, instead of ttnn's auto config on a DRAM input. Auto picks in0_block_w=2 for
+    this K (2*dim = 320 k-tiles): 160 in0 multicast rounds, 145-148 us per call (7 MB at ~48 GB/s), 4 calls per K=3
+    iteration (sp5 drafter profile).
+    QWEN36_MTP_FC_IBW (default 32) caps in0_block_w (largest divisor of the k-tiles <= the cap; 32 -> 10 rounds) and
+    QWEN36_MTP_FC_CORES (default 20 = one 32-wide output column per core at dim/tp = 640) is the core budget, shaped
+    wide-first on the device grid width ``grid_w``. The K-block partial sums reassociate, so a near-tie can draft a
+    different token: only acceptance can move. Returns the program config (built once by the caller), or None when off."""
+    if os.environ.get(MTP_FC_PROGCFG_ENV, "0") != "1":
+        return None
+    ibw = _env_int(MTP_FC_IBW_ENV, 32)
+    cores = _env_int(MTP_FC_CORES_ENV, 20)
+    if ibw <= 0 or cores <= 0:
+        raise ValueError(f"{MTP_FC_IBW_ENV}={ibw} / {MTP_FC_CORES_ENV}={cores}: both must be > 0")
+    return create_matmul_1d_decode_progcfg(TILE_SIZE, k, n, num_cores=cores, grid_w=grid_w, max_in0_block_w=ibw)
+
+
+def mtp_sdpa_window():
+    """QWEN36_MTP_SDPA_WINDOW (default 0 = off): W > 0 gives the MTP drafter's decode SDPA (the paged draft steps; also
+    the full-layer reseed when QWEN36_MTP_KV_ONLY is off, whose output nobody reads) a sliding window: each row attends
+    the W positions [pos + 1 - W, pos] (ttnn sliding_window_size; the kernel starts its K-chunk loop at the window) instead
+    of the whole context. A 32K draft-step SDPA reads 1/8 of the KV at W = 4096. The drafter KV cache, its writes and the
+    verify are untouched; a context of <= W positions attends exactly what it did before. Drafts can change once the
+    context is longer than W, so only acceptance can move. Returns W, or 0 when off."""
+    w = _env_int(MTP_SDPA_WINDOW_ENV, 0)
+    return w if w > 0 else 0
+
+
+def mtp_layer_bfp4_parts():
+    """QWEN36_MTP_LAYER_BFP4 (default "0"): the MTP drafter layer's (mtp.layers.0) weights in bfloat4_b with LoFi decode
+    matmuls, for the drafter only. The drafter layer has its own checkpoint weights and its own cache files (the dtype is
+    in the file name), so the base model and the verify keep their dtypes and no extra DRAM is needed (the BFP4 copies
+    replace the drafter layer's BFP8 ones). "1" / "all": attention (fused q|k|v|gate and wo) and MLP (gate/up/down);
+    "attn" or "mlp" (or "attn,mlp") picks parts. Returns a frozenset of {"attn", "mlp"}, empty when off."""
+    raw = os.environ.get(MTP_LAYER_BFP4_ENV, "0").strip().lower()
+    if raw in ("", "0", "off", "none"):
+        return frozenset()
+    if raw in ("1", "all"):
+        return frozenset({"attn", "mlp"})
+    parts = frozenset(p.strip() for p in raw.split(",") if p.strip())
+    bad = parts - {"attn", "mlp"}
+    if bad or not parts:
+        raise ValueError(f"{MTP_LAYER_BFP4_ENV}={raw!r}: expected 0, 1, all, attn, mlp or attn,mlp")
+    return parts
+
+
+def mtp_embed_row_enabled():
+    """QWEN36_MTP_EMBED_ROW (default "0"): the MTP drafter's token embedding (Qwen36MTP.forward_decode) is looked up
+    row-major, viewed as [1,1,rows,dim/tp] and tilized as ONE tile row, instead of the TILE lookup over [rows,1] ids that
+    gives every id its own padded 32-row tile and then re-packs the rows with a reshape copy (sp5: a 27 us tilize + a 6 us
+    reshape per draft step, 30 + 20 us for the 32-row reseed). The same bf16 rows reach the same place, so the drafter's
+    input, its drafts and the output are byte-identical."""
+    return os.environ.get(MTP_EMBED_ROW_ENV, "0") == "1"
+
+
+def mtp_rs_links():
+    """QWEN36_MTP_RS_LINKS (default unset = None = today's auto-detect): N > 0 runs the MTP drafter layer's decode
+    reduce-scatters (attention wo and MLP down on the fractured residual; tt_all_reduce -> reduce_scatter_minimal_async)
+    on N Ethernet links. The decode tt_all_reduce asks for cluster_axis=0, the size-1 axis of the 1x8 TP mesh, so the
+    auto-detect resolves to 1 link (the moe_utils.cpp:122 fallback warning) while the ring row has 2. Decode rows only
+    (<= 32): the drafter's prompt warm-up keeps QWEN36_PREFILL_RS_LINKS. Returns N, or None when unset."""
+    n = _env_int(MTP_RS_LINKS_ENV, 0)
+    return n if n > 0 else None
+
+
+def mtp_rs_persistent_enabled():
+    """QWEN36_MTP_RS_PERSISTENT (default "0"): the same decode reduce-scatters write into caller-owned persistent buffers
+    (one set per call site and row count, allocated by the first, eager call, so before any trace capture), which lets
+    the op skip its start-of-op barrier handshake with the neighbours (use_barrier_sem is off with persistent buffers).
+    Ring topology only. Uses QWEN36_MTP_RS_LINKS links (1 if unset)."""
+    return os.environ.get(MTP_RS_PERSISTENT_ENV, "0") == "1"
+
+
+class MTPDecodeReduceScatter:
+    """The MTP drafter layer's decode reduce-scatter (QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT), attached to the
+    drafter's TPAttention and Qwen36MLP as ``decode_rs`` (base-model layers never get one). Called with the row-parallel
+    partial [1,1,rows,dim] of a decode-width (rows <= 32) forward; returns the fractured [1,1,rows,dim/tp] sum.
+
+    Non-persistent: tt_all_reduce exactly as today, plus num_reduce_scatter_links=links. Persistent: the same op and
+    arguments with persistent_output_buffers = [contiguous staging intermediate, output, penult intermediate] (allocated
+    once per row count with reduce_scatter_minimal_async_create_intermediate_buffer); the returned tensor IS the persistent
+    output, which ``owns`` reports, so Qwen36DecoderLayer consumes it in its residual add and does not free it. One instance
+    per call site (attention, MLP): between two uses of the same buffers every device passes the other site's
+    reduce-scatter and the drafter's all-gathers, so a peer can never write into a buffer a lagging device still reads."""
+
+    def __init__(self, mesh, tt_ccl, topology, links=None, persistent=False):
+        self.mesh = mesh
+        self.tt_ccl = tt_ccl
+        self.topology = topology
+        self.links = links
+        self.persistent = bool(persistent) and topology == ttnn.Topology.Ring
+        if persistent and not self.persistent:
+            logger.warning(f"{MTP_RS_PERSISTENT_ENV}=1 needs the Ring topology (have {topology}): per-call buffers kept")
+        self._bufs = {}  # rows -> (intermediate, output, penult)
+        self._out_addrs = set()
+
+    def owns(self, t):
+        """Whether ``t`` is one of the persistent outputs (the caller must not deallocate it)."""
+        if not self._out_addrs:
+            return False
+        try:
+            return t.buffer_address() in self._out_addrs
+        except Exception:  # pragma: no cover
+            return False
+
+    def _buffers(self, partial):
+        rows = int(partial.shape[-2])
+        bufs = self._bufs.get(rows)
+        if bufs is None:
+            interm, penult = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                partial, 3, topology=self.topology
+            )
+            nd = self.mesh.get_num_devices()
+            w = int(partial.shape[-1]) // nd
+            out = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows, w]), partial.dtype, ttnn.TILE_LAYOUT, self.mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
+            bufs = (interm, out, penult)
+            self._bufs[rows] = bufs
+            self._out_addrs.add(out.buffer_address())
+        return bufs
+
+    def __call__(self, partial):
+        from models.tt_transformers.tt.ccl import tt_all_reduce
+
+        if not self.persistent:
+            return tt_all_reduce(
+                partial,
+                self.mesh,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                num_reduce_scatter_links=self.links,
+                topology=self.topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        # tt_all_reduce's 1xN branch, verbatim apart from the buffers: interleave a sharded input first.
+        x = partial
+        if x.is_sharded():
+            x = ttnn.sharded_to_interleaved(partial, ttnn.L1_MEMORY_CONFIG)
+            partial.deallocate(True)
+        bufs = self._buffers(x)
+        out = ttnn.experimental.reduce_scatter_minimal_async(
+            x,
+            persistent_output_buffers=list(bufs),
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            num_links=self.links or 1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.topology,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        x.deallocate(True)
+        return out
+
+
+def build_mtp_decode_rs(mesh, tt_ccl, topology):
+    """An MTPDecodeReduceScatter for the drafter layer's call sites, or None when both flags are off (today's
+    tt_all_reduce call, byte for byte)."""
+    links, persistent = mtp_rs_links(), mtp_rs_persistent_enabled()
+    if links is None and not persistent:
+        return None
+    return MTPDecodeReduceScatter(mesh, tt_ccl, topology, links=links, persistent=persistent)
+
+
 def spec_hostfix_enabled():
     """Host-side spec-step fixes (QWEN36_SPEC_HOSTFIX, default 1; 0 = the old code paths): conflict check without
     tolist, one read of the drafter ids, vectorized row loops, drafter page tables skipped when unchanged.

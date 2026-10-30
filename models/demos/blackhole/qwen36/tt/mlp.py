@@ -259,6 +259,8 @@ class Qwen36MLP:
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        # Decode reduce-scatter override (tp_common.MTPDecodeReduceScatter): only the MTP drafter layer sets it.
+        self.decode_rs = None
 
     def forward(self, x, mode=None, decode_ar=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
@@ -421,6 +423,12 @@ class Qwen36MLP:
 
         if decode_ar is not None:
             return decode_ar.all_reduce(partial)
+
+        # The MTP drafter's QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT decode reduce-scatter (set by Qwen36MTP only;
+        # a Qwen36MLP built without __init__ has none). Decode rows only: the prompt warm-up keeps the call below.
+        _rs = getattr(self, "decode_rs", None)
+        if _rs is not None and partial.shape[-2] <= ttnn.TILE_SIZE:
+            return _rs(partial)
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
         out = tt_all_reduce(

@@ -138,6 +138,34 @@ class Qwen36MTP:
                 cache_file_name=(str(mtp_cache / "fc") if mtp_cache is not None else None),
             )
 
+        # r6 drafter bundle (tp_common, TP only; every flag off = today's drafter, byte for byte):
+        #   QWEN36_MTP_FC_PROGCFG -> _fc_decode_pc (explicit 1D decode progcfg for the fc, see _fuse)
+        #   QWEN36_MTP_EMBED_ROW  -> _embed_row (one-tile-row token embedding, see _embed_rows)
+        #   QWEN36_MTP_LAYER_BFP4 -> bfloat4_b drafter layer weights (attention and/or MLP)
+        #   QWEN36_MTP_SDPA_WINDOW, QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT -> set on the layer's modules below
+        self._fc_decode_pc = None
+        self._embed_row = False
+        _bfp4_parts = frozenset()
+        if self.num_devices > 1:
+            from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+            self._fc_decode_pc = tpc.mtp_fc_decode_progcfg(
+                2 * args.dim, args.dim // self.num_devices, getattr(args, "decode_grid_w", 8)
+            )
+            self._embed_row = tpc.mtp_embed_row_enabled()
+            _bfp4_parts = tpc.mtp_layer_bfp4_parts()
+            if self._fc_decode_pc is not None:
+                logger.info(f"MTP drafter: fc decode program config {self._fc_decode_pc} (QWEN36_MTP_FC_PROGCFG=1)")
+            if self._embed_row:
+                logger.info("MTP drafter: one-tile-row token embedding (QWEN36_MTP_EMBED_ROW=1)")
+            if _bfp4_parts:
+                logger.info(f"MTP drafter: layer weights in BFP4 + LoFi for {sorted(_bfp4_parts)} (QWEN36_MTP_LAYER_BFP4)")
+        _layer_kw = {}
+        if "attn" in _bfp4_parts:
+            _layer_kw["attn_dtype"] = ttnn.bfloat4_b
+        if "mlp" in _bfp4_parts:
+            _layer_kw["mlp_dtype"] = ttnn.bfloat4_b
+
         # Reuse the full-attention decoder layer for mtp.layers.0. Remap the checkpoint keys to a
         # full-attention layer index L so is_full_attention_layer(L) is True and the substate loader
         # finds layers.{L}.self_attn.* / .mlp.* / .{input,post_attention}_layernorm.
@@ -154,7 +182,7 @@ class Qwen36MTP:
         # Dedicated cache root (.../mtp/) so the reused layer's sharded weights never collide with
         # the real layer L's cache.
         self.decoder = Qwen36DecoderLayer(
-            mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl
+            mesh_device, args, mtp_layer_sd, layer_num=L, tensor_cache_path=mtp_cache, tt_ccl=tt_ccl, **_layer_kw
         )
         # KV accessor for allocate_kv_caches / rollback.
         self.attention = self.decoder.attention
@@ -169,6 +197,24 @@ class Qwen36MTP:
         # token — that only shifts acceptance, never correctness: every draft is arbitrated by verify.
         # QWEN36_MTP_SDPA_MAX_CORES pins it (the bucket equivalence tests set 13: every row count then resolves to the same split).
         self.attention.decode_sdpa_max_cores = int(os.environ.get("QWEN36_MTP_SDPA_MAX_CORES", "64"))
+        if self.num_devices > 1:
+            # QWEN36_MTP_SDPA_WINDOW: sliding-window draft-step SDPA (this TPAttention only; see tp_common.mtp_sdpa_window).
+            _win = tpc.mtp_sdpa_window()
+            if _win:
+                self.attention.decode_sdpa_window = _win
+                logger.info(f"MTP drafter: decode SDPA sliding window {_win} (QWEN36_MTP_SDPA_WINDOW)")
+            # QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT: the layer's two decode reduce-scatters (attention wo, MLP
+            # down), one instance per call site so each keeps its own persistent buffers.
+            _topo = args.ccl_topology()
+            _rs_attn = tpc.build_mtp_decode_rs(mesh_device, tt_ccl, _topo)
+            if _rs_attn is not None:
+                self.attention.decode_rs = _rs_attn
+                self.decoder.feed_forward.decode_rs = tpc.build_mtp_decode_rs(mesh_device, tt_ccl, _topo)
+                logger.info(
+                    f"MTP drafter: decode reduce-scatters on {_rs_attn.links or 'auto'} link(s), "
+                    f"persistent buffers {'on' if _rs_attn.persistent else 'off'} "
+                    "(QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT)"
+                )
 
         # QWEN36_MTP_KV_ONLY=1 (TP only; default off): a need_logits=False forward (reseed / join warm / catch-up) stops
         # after the drafter layer's paged KV write and returns (None, None). See tp_common.mtp_kv_only_enabled.
@@ -472,13 +518,38 @@ class Qwen36MTP:
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
         e = self.pre_fc_norm_embedding(token_emb, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
         h = self.pre_fc_norm_hidden(hidden_states, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
-        cat = ttnn.concat([e, h], dim=-1)  # [1,1,*,2*dim]  (order: [embedding, hidden])
+        # QWEN36_MTP_FC_PROGCFG: a decode-width fc takes the explicit 1D decode progcfg on an L1 concat (mcast_in0 reads
+        # in0 interleaved). None (flag off, prefill rows, a head built without __init__) = today's auto-config call.
+        pc = getattr(self, "_fc_decode_pc", None)
+        if pc is not None and (mode != Mode.DECODE or e.shape[-2] > ttnn.TILE_SIZE):
+            pc = None
+        cat_kw = {} if pc is None else {"memory_config": ttnn.L1_MEMORY_CONFIG}
+        cat = ttnn.concat([e, h], dim=-1, **cat_kw)  # [1,1,*,2*dim]  (order: [embedding, hidden])
         ttnn.deallocate(e)
         ttnn.deallocate(h)
         kw = dict(compute_kernel_config=self._fc_compute_cfg) if self._fc_compute_cfg is not None else {}
+        if pc is not None:
+            kw["program_config"] = pc
         fused = ttnn.linear(cat, self.fc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)  # [1,1,*,dim/tp]
         ttnn.deallocate(cat)
         return fused
+
+    def _embed_rows(self, token_ids):
+        """QWEN36_MTP_EMBED_ROW: the token embedding of ``token_ids`` ([B,1] or [1,B] uint32) as [1,1,B,dim/tp] TILE in
+        DRAM, from a row-major lookup viewed as one [1,1,B,dim/tp] row block and tilized as one tile row. The TILE lookup
+        it replaces pads every id to its own 32-row tile ([B,1,dim/tp]) and needs a reshape copy to gather the rows; both
+        produce the same bf16 rows (pure data movement), so the drafter's input is byte-identical."""
+        rows = int(token_ids.shape[0]) * int(token_ids.shape[-1])
+        rm = ttnn.embedding(
+            token_ids, self.embd.weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        view = ttnn.reshape(rm, (1, 1, rows, rm.shape[-1]))  # same pages (a row per id): a metadata view
+        out = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # A reshape is a metadata alias or a copy; deallocate is a no-op on an already-freed buffer, so freeing both
+        # handles frees each buffer once.
+        ttnn.deallocate(view)
+        ttnn.deallocate(rm)
+        return out
 
     def forward_decode(
         self,
@@ -510,8 +581,11 @@ class Qwen36MTP:
         not None.
         """
         mode = Mode.DECODE
-        tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
-        tok_emb = ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
+        if getattr(self, "_embed_row", False):  # QWEN36_MTP_EMBED_ROW (a head built without __init__ has none)
+            tok_emb = self._embed_rows(token_ids)  # [1,1,B,dim/tp]
+        else:
+            tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
+            tok_emb = ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
         fused = self._fuse(tok_emb, hidden_states, mode)
         ttnn.deallocate(tok_emb)
 

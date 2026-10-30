@@ -227,7 +227,9 @@ def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
             data = json.load(f)
         entry = data[idx]
         context = _load_and_cache_context(entry["context"], entry.get("max_length"))
-        instruction = entry["prompt"]
+        # QWEN36_DEMO_INSTRUCTION (default unset = the file's task): replace the task asked after the long context, e.g.
+        # a verbatim-retrieval task that copies text from the start of the context (drafter long-range acceptance).
+        instruction = os.environ.get("QWEN36_DEMO_INSTRUCTION") or entry["prompt"]
         prefix = "<|im_start|>user\n"
         # Seed <think> for reasoning; QWEN35_NO_THINK=1 disables it
         if os.environ.get("QWEN35_NO_THINK"):

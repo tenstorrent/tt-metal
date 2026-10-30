@@ -81,8 +81,11 @@ def _free_unless_view(src, padded):
         ttnn.deallocate(src)
 
 
-def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
-    """Shard one full-attention layer's weights across the mesh."""
+def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None, attn_dtype=None):
+    """Shard one full-attention layer's weights across the mesh.
+
+    attn_dtype: QKV + wo weight dtype override (the MTP drafter layer under QWEN36_MTP_LAYER_BFP4); None (every other
+    caller) keeps the QWEN36_BFP4_ATTN choice below."""
     if cache_dir is not None:
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -94,6 +97,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # Distinct cache names — as_tensor reload ignores requested memcfg.
     # QKV + wo weight dtype (QWEN36_BFP4_ATTN, default off): BFP8; =1 -> BFP4. Cache stems unchanged (dtype is in the file name).
     _attn_dtype = ttnn.bfloat4_b if tpc.bfp4_attn_enabled() else ttnn.bfloat8_b
+    if attn_dtype is not None:
+        _attn_dtype = attn_dtype
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
@@ -254,6 +259,11 @@ class TPAttention:
         # Per-instance override for the decode SDPA's max_cores_per_head_batch (None = the ttnn
         # default of 16). Only the MTP drafter sets it — see Qwen36MTP.__init__.
         self.decode_sdpa_max_cores = None
+        # Per-instance decode SDPA sliding window (None = whole context) and decode reduce-scatter
+        # (tp_common.MTPDecodeReduceScatter; None = tt_all_reduce as before). Only the MTP drafter sets them
+        # (QWEN36_MTP_SDPA_WINDOW, QWEN36_MTP_RS_LINKS / QWEN36_MTP_RS_PERSISTENT); see Qwen36MTP.__init__.
+        self.decode_sdpa_window = None
+        self.decode_rs = None
         # False: forward_decode keeps the legacy path even where the lean one is eligible (see _decode_lean_eligible).
         self.lean_decode = True
         self.k_caches = None
@@ -1169,6 +1179,7 @@ class TPAttention:
                     # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
                     # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
                     memory_config=_L1,
+                    **self._decode_window_kw(),
                 )
                 ttnn.deallocate(q)
         else:
@@ -1234,6 +1245,9 @@ class TPAttention:
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
+        _rs = getattr(self, "decode_rs", None)  # a TPAttention built without __init__ (host tests) has none
+        if _rs is not None and B <= tpc.TILE_SIZE:
+            return _rs(wo_partial)  # the MTP drafter's QWEN36_MTP_RS_LINKS / _PERSISTENT reduce-scatter
         return tt_all_reduce(
             wo_partial,
             self.mesh,
@@ -1243,6 +1257,11 @@ class TPAttention:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def _decode_window_kw(self):
+        """sliding_window_size kwarg of a decode SDPA call: {} (today's call) unless this instance has a window."""
+        w = getattr(self, "decode_sdpa_window", None)  # a TPAttention built without __init__ (host tests) has none
+        return {"sliding_window_size": int(w)} if w else {}
 
     def _kv_fused_cores_ok(self, n):
         """Whether the fused K+V cache update can take an n-row group: its two inputs need disjoint, equal-size core sets.
@@ -1632,6 +1651,7 @@ class TPAttention:
             scale=self.scale,
             program_config=sdpa_dec_cfg,
             memory_config=_L1,
+            **self._decode_window_kw(),
         )
         ttnn.deallocate(q)
 
@@ -1658,6 +1678,9 @@ class TPAttention:
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         if decode_ar is not None:
             return decode_ar.all_reduce(wo_partial)
+        _rs = getattr(self, "decode_rs", None)  # a TPAttention built without __init__ (host tests) has none
+        if _rs is not None and B <= tpc.TILE_SIZE:
+            return _rs(wo_partial)  # the MTP drafter's QWEN36_MTP_RS_LINKS / _PERSISTENT reduce-scatter
         return tt_all_reduce(
             wo_partial,
             self.mesh,
