@@ -1581,6 +1581,26 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 06:40: served decode parity closed at 32 users; the capstone runs with the interleave
+
+The harness at the served context closes the parity question: the traced step is 48.36 ms at max_seq_len 256 and
+54.92 ms at 1 M with the user-partitioned cache (`e2e_8x4_B4_ctx256` / `ctx1m_r2`: +6.6 ms is the step's own
+context-size cost, a metal item), and the engine's `execute_model` costs 4.9 ms per decode step
+(`profile_step_32_r2`), so the 59.5 ms served ITL is the device step plus 8 %. The async / replay A/B is complete
+(plan 2c table): async scheduling pays only with the non-blocking replay (batch 128: 129.6 off, 129.1 on blocking,
+108.4 on non-blocking). The slot mask costs nothing (`ab_slotmask_32_r2`: 59.4 ms) and the interleave arm
+(`ab_interleave_32`: the mask + `decode_interleave_enabled=true`, one decode step per prefill step) is a no-op on a
+single-burst bench (59.7 / 60.3 / P99 66.0 ms, TTFT 5.50 s), so the 32 x 1 M capstone (`served_8x4_needle1m_32_r1`,
+queued 06:40) runs with it: the early arrivals decode between the later prompts' chunks instead of waiting ~4 h.
+
+The 128-row wave bucket: -32 % burst TTFT (`ab_wave128_32`: 3.77 s vs 5.54 s), but its trace is not the eager
+wave's: on the block at 6 layers (`wave_gate_128_block_r4`) the traced 128-row wave has the right first token with
+logits at pcc 0.999887 to the eager wave, exactly the eager-vs-SP correlation, i.e. the T=128 trace groups the KDA
+recurrence like the SP path, while the 256-row trace equals its eager wave; at 45 layers the depth-chaotic dump
+prompt flipped (`wave128_gate`). The default stays 256,512 until the grouping difference is found (per-layer
+traced-vs-eager on the block). The capstone waiter never fired (an empty-file `grep -c` fallback doubled its
+count); its steps were done by hand at idle and the runner relaunched with the 7 h budget (pid 3215363).
+
 ### 2026-10-30 04:25: the non-blocking replay is the default; the slot mask validated on the block
 
 The a-e gate under the non-blocking replay passed (`nb_gate_32`: first tokens exact, repeats identical, 4/4 64 K
