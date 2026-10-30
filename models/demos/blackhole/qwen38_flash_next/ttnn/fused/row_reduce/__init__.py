@@ -36,6 +36,11 @@ TRANSPORT_KERNEL = fp.kernel_source(NAME, "transport.cpp")
 COMPUTE_KERNEL = fp.kernel_source(NAME, "compute.cpp")
 CB_IN, PACK_CB, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT = range(8)
 LINKS = 1
+# QWEN38_ROW_REDUCE_LINKS (default "1" = one transport core / one link per direction): "2" sends the packets of the v2
+# programs over min(2, the line's link count) links, the packed bytes cut in two halves, one per transport core (QWEN38_ROW_REDUCE_SPLIT=0: packets dealt round robin)
+# (kernels/transport2l.cpp, transport3l.cpp); the landing slots, the sum order and the rounding are unchanged
+LINKS_ENV = "QWEN38_ROW_REDUCE_LINKS"
+SPLIT_ENV = "QWEN38_ROW_REDUCE_SPLIT"  # two links: "1" (default) each link carries half of the packed bytes; "0" packet p over link p % 2
 ROWS_MAX = {ttnn.bfloat16: 2, ttnn.float32: 1}
 READ_ALIGN = 64  # the DRAM read alignment of Blackhole: transport.cpp reads each chunk into a 64 B aligned scratch
 # MIRROR flips which neighbour direction is the "forward" chain of the tree (the stock op's order, established by
@@ -85,6 +90,11 @@ def version(environ=None) -> int:
 
 TRANSPORT2_KERNEL = fp.kernel_source(NAME, "transport2.cpp")
 TRANSPORT3_KERNEL = fp.kernel_source(NAME, "transport3.cpp")
+TRANSPORT2L_KERNEL = fp.kernel_source(NAME, "transport2l.cpp")
+TRANSPORT3L_KERNEL = fp.kernel_source(NAME, "transport3l.cpp")
+SEM_LINK = 3  # v2 two-link: the second transport core tells the reduce core it is done (the fold program: SEM_LINK_W)
+SEM_LINK_W = 4
+COUNTER_SCRATCH = 64  # bytes after the staging slot: the second link core's reads of the call counter, 16 B per RISC
 COMPUTE3_KERNEL = fp.kernel_source(NAME, "compute3.cpp")
 CB_SBF, CB_A, CB_COEF, CB_RES, CB_UPD, CB_NEW = range(8, 14)
 HELPER_KERNEL = fp.kernel_source(NAME, "helper.cpp")
@@ -133,6 +143,31 @@ def prepare2(mesh, tiles: int = 80) -> dict:
     return state
 
 
+def _links(mesh, tiles: int, pitch: int, payload: int) -> int:
+    """Links the v2 programs use for one call: 1 (default) or, with QWEN38_ROW_REDUCE_LINKS=2, min(2, the line's links)
+    when the packets are whole chunks and there are at least two of them."""
+
+    try:
+        want = int(os.environ.get(LINKS_ENV, "1"))
+    except ValueError:
+        want = 1
+    if want < 2:
+        return 1
+    packets = -(-(tiles * 2 * pitch) // payload)
+    if payload % pitch or packets < 2:
+        return 1
+    return max(1, min(2, want, len(gr_fold.TRANSPORT["partials"]), gr_fold.line(mesh).links))
+
+
+def _split() -> int:
+    return 0 if os.environ.get(SPLIT_ENV, "1") == "0" else 1
+
+
+def _reduce_core_xy(mesh):
+    w = mesh.worker_core_from_logical_core(gr_fold.TRANSPORT["partials"][0])
+    return (w.x, w.y)
+
+
 def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
     state = prepare2(mesh, tiles)
     tile_bytes = fp.TILE_BYTES[partial.dtype]
@@ -141,8 +176,10 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
         raise ValueError("row_reduce v2: the dense tile of a slice does not fit a tile")
     total = tiles * 2 * pitch
     payload = _payload()
-    transports = gr_fold.TRANSPORT["partials"][:LINKS]
+    links = _links(mesh, tiles, pitch, payload)
+    transports = gr_fold.TRANSPORT["partials"][:links]
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in transports])
+    first_core = ttnn.CoreRangeSet([ttnn.CoreRange(transports[0], transports[0])])
     spec = gr_fold.Transport(
         out,
         partial,
@@ -154,7 +191,8 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
         page_strides=(1, tiles),
         rows=rows,
         pack_cb=PACK_CB,
-        kernel=TRANSPORT2_KERNEL,
+        kernel=TRANSPORT2L_KERNEL if links > 1 else TRANSPORT2_KERNEL,
+        consumers=(_reduce_core_xy(mesh),) if links > 1 else (),
         extra_args=(
             rows,
             PACK_CB,
@@ -171,12 +209,13 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
             state["data1"],
             payload,
             state["slot"],
+            *((SEM_LINK, total, _split()) if links > 1 else ()),
         ),
     )
     dtype = partial.dtype
     cbs = [
         fp.cb_descriptor(CB_IN, dtype, tile_bytes, TP_SIZE, cores),
-        fp.cb_descriptor(PACK_CB, dtype, total, 1, cores),
+        fp.cb_descriptor(PACK_CB, dtype, total + (COUNTER_SCRATCH if links > 1 else 0), 1, cores),
         fp.cb_descriptor(CB_FS, dtype, tile_bytes, 2, cores),
         fp.cb_descriptor(CB_BS, dtype, tile_bytes, 2, cores),
         fp.cb_descriptor(CB_F, dtype, tile_bytes, 2, cores),
@@ -185,7 +224,8 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
         fp.cb_descriptor(CB_OUT, dtype, tile_bytes, 1, cores),
     ]
     semaphores = [
-        fp.semaphore_descriptor(sem, cores) for sem in (gr_fold.SEM_GO, gr_fold.SEM_SCRATCH, gr_fold.SEM_DONE)
+        fp.semaphore_descriptor(sem, cores)
+        for sem in (gr_fold.SEM_GO, gr_fold.SEM_SCRATCH, gr_fold.SEM_DONE, *((SEM_LINK,) if links > 1 else ()))
     ]
 
     def compute(rank):
@@ -193,7 +233,7 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
         return [
             fp.compute_kernel(
                 COMPUTE_KERNEL,
-                cores,
+                first_core,
                 [CB_IN, CB_FS, CB_BS, CB_F, CB_B, CB_G, CB_OUT, 1, TP_SIZE],
                 [(transports[0], [logical])],
                 fp32_dest=dtype == ttnn.float32,
@@ -208,12 +248,12 @@ def _row_reduce_v2(partial, out, rows, tiles, out_tiles, chunk, mesh):
         writes=(out,),
         l1_bytes=total + (TP_SIZE - 1) * total,
         flops=(TP_SIZE - 1) * out_tiles * fp.TILE * fp.TILE,
-        cores=LINKS,
+        cores=links,
         outputs=((out, 3),),
     )
     fp.run_program(
         [partial, out],
-        gr_fold.transport_mesh_program(mesh, [spec], semaphores=semaphores, cbs=cbs, kernels=compute, links=LINKS),
+        gr_fold.transport_mesh_program(mesh, [spec], semaphores=semaphores, cbs=cbs, kernels=compute, links=links),
         meta=meta,
     )
     return fp.stamp_topology(out, partial, 3)
@@ -498,9 +538,11 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
     is_fp32 = partial.dtype == ttnn.float32
     pitch = chunk if (chunk % READ_ALIGN == 0 or fp.in_l1(partial)) else READ_ALIGN
     total = tiles * 2 * pitch
-    transports = gr_fold.TRANSPORT["partials"][:LINKS]
-    cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in transports])
     payload = _payload()
+    links = _links(mesh, tiles, pitch, payload)
+    transports = gr_fold.TRANSPORT["partials"][:links]
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in transports])
+    first_core = ttnn.CoreRangeSet([ttnn.CoreRange(transports[0], transports[0])])
     bf = fp.TILE_BYTES[ttnn.bfloat16]
     helper_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in HELPER_CORES])
     every = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in (*transports, *HELPER_CORES)])
@@ -516,12 +558,13 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
         page_strides=(1, tiles),
         rows=rows,
         pack_cb=PACK_CB,
-        kernel=TRANSPORT3_KERNEL,
+        kernel=TRANSPORT3L_KERNEL if links > 1 else TRANSPORT3_KERNEL,
         # the residual / injection / new residual addresses ride in the consumer slots of the runtime phase block
         consumers=(
             (residual.buffer_address(), injection.buffer_address()),
             (new_residual.buffer_address(), 0),
             *helper_xy,
+            *((_reduce_core_xy(mesh),) if links > 1 else ()),
         ),
         extra_args=(
             rows,
@@ -546,6 +589,7 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
             CB_NEW,
             int(is_fp32),
             SEM_HELP,
+            *((SEM_LINK_W, total + bf, _split()) if links > 1 else ()),
             *fp.accessor_args(residual),
             *fp.accessor_args(injection),
             *fp.accessor_args(new_residual),
@@ -556,7 +600,7 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
     # helpers' CB_A from the reduce core)
     cbs = [
         fp.cb_descriptor(CB_IN, dtype, tile_bytes, TP_SIZE, every),
-        fp.cb_descriptor(PACK_CB, dtype, total + bf, 1, every),
+        fp.cb_descriptor(PACK_CB, dtype, total + bf + (COUNTER_SCRATCH if links > 1 else 0), 1, every),
         fp.cb_descriptor(CB_FS, dtype, tile_bytes, 2, every),
         fp.cb_descriptor(CB_BS, dtype, tile_bytes, 2, every),
         fp.cb_descriptor(CB_F, dtype, tile_bytes, 2, every),
@@ -574,6 +618,8 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
         fp.semaphore_descriptor(sem, cores) for sem in (gr_fold.SEM_GO, gr_fold.SEM_SCRATCH, gr_fold.SEM_DONE)
     ]
     semaphores.append(fp.semaphore_descriptor(SEM_HELP, every))
+    if links > 1:
+        semaphores.append(fp.semaphore_descriptor(SEM_LINK_W, cores))
     acc = [*fp.accessor_args(residual), *fp.accessor_args(injection), *fp.accessor_args(new_residual)]
     addresses = [residual.buffer_address(), injection.buffer_address(), new_residual.buffer_address()]
 
@@ -601,7 +647,7 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
         return [
             fp.compute_kernel(
                 COMPUTE3_KERNEL,
-                cores,
+                first_core,
                 [*args, 0],
                 [(transports[0], [logical])],
                 fp32_dest=is_fp32,
@@ -626,12 +672,12 @@ def _row_reduce_write(partial, out, rows, tiles, out_tiles, chunk, mesh, state):
         writes=(out, new_residual),
         l1_bytes=total + (TP_SIZE - 1) * total,
         flops=(TP_SIZE - 1) * fp.TILE * fp.TILE + 2 * BRANCHES * fp.TILE * fp.TILE,
-        cores=LINKS,
+        cores=links,
         outputs=((out, 3),),
     )
     fp.run_program(
         [partial, residual, injection, out, new_residual],
-        gr_fold.transport_mesh_program(mesh, [spec], semaphores=semaphores, cbs=cbs, kernels=compute, links=LINKS),
+        gr_fold.transport_mesh_program(mesh, [spec], semaphores=semaphores, cbs=cbs, kernels=compute, links=links),
         meta=meta,
     )
     new_residual.update_tensor_topology(

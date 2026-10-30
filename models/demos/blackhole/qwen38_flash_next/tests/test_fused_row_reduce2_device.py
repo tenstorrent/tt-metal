@@ -79,10 +79,34 @@ def test_row_reduce_v2(mesh_device):
             "v1": base._traced_us(mesh, lambda: _call(1, partial)),
             "v2": base._traced_us(mesh, lambda: _call(2, partial)),
         }
+        # QWEN38_ROW_REDUCE_LINKS: 1 vs 2 links, both bitwise vs the stock op, slope per link count
+        for links, split in (("1", "0"), ("2", "0"), ("2", "1")):  # "2","1" = the default split of two links
+            os.environ[rr.LINKS_ENV] = links
+            os.environ[rr.SPLIT_ENV] = split
+            links = links + ("s1" if split == "1" else "")
+            got = _host(mesh, _call(2, partial), rows)
+            report[f"v2_links{links}_vs_stock"] = base._mismatches(got, stock, dtype) + sum(
+                base._mismatches(_host(mesh, _call(2, partial), rows), stock, dtype) for _ in range(8)
+            )
+            _call(2, partial)
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            outs = [_call(2, partial) for _ in range(5)]
+            ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            bad_l = 0
+            for _ in range(7):
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+                bad_l += sum(base._mismatches(_host(mesh, o, rows), stock, dtype) for o in outs)
+            ttnn.release_trace(mesh, tid)
+            report[f"v2_links{links}_trace_mismatch"] = bad_l
+            report["us_slope_and_mean12"][f"v2_links{links}"] = base._traced_us(mesh, lambda: _call(2, partial))
+        os.environ.pop(rr.LINKS_ENV, None)
+        os.environ.pop(rr.SPLIT_ENV, None)
         print("ROW_REDUCE2_RESULT " + json.dumps(report))
         report_all.append(report)
         inputs.append((dtype, rows, partial, stock))
         assert report["v2_vs_stock"] == 0 and report["v2_repeat_mismatch"] == 0 and bad == 0, report
+        assert all(report[k] == 0 for k in report if k.endswith("_vs_stock")), report
+        assert all(report[k] == 0 for k in report if k.endswith("trace_mismatch")), report
     # all shapes interleaved in one trace of 7 calls (odd), replayed 5 times
     order = [0, 2, 4, 1, 3, 5, 0, 2]
     for dtype, rows, partial, stock in inputs:

@@ -117,6 +117,33 @@ def test_rr_write_is_bitwise_reduce_plus_gr_write(mesh_device):
             return base._traced_us(mesh, call)
 
         report["us_slope_and_mean12"] = {"reduce_plus_gr_write": timed(chain), "folded": timed(folded)}
+        # QWEN38_ROW_REDUCE_LINKS 1 vs 2: the folded program bitwise vs reduce + gr_write, slope per link count
+        for links, split in (("1", "0"), ("2", "0"), ("2", "1")):  # "2","1" = the default split of two links
+            os.environ[rr.LINKS_ENV] = links
+            os.environ[rr.SPLIT_ENV] = split
+            links = links + ("s1" if split == "1" else "")
+            bl = 0
+            for _ in range(3):
+                b2, n2 = folded()
+                bl += base._mismatches(_host(mesh, n2, rows), ref_new_h, "bf16") + base._mismatches(
+                    _host(mesh, b2, rows), ref_block_h, dtype
+                )
+            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+            outs = [folded() for _ in range(5)]
+            ttnn.end_trace_capture(mesh, tid, cq_id=0)
+            for _ in range(5):
+                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+                bl += sum(
+                    base._mismatches(_host(mesh, n, rows), ref_new_h, "bf16")
+                    + base._mismatches(_host(mesh, b, rows), ref_block_h, dtype)
+                    for b, n in outs
+                )
+            ttnn.release_trace(mesh, tid)
+            report[f"links{links}_mismatch"] = bl
+            report["us_slope_and_mean12"][f"folded_links{links}"] = timed(folded)
+            assert bl == 0, report
+        os.environ.pop(rr.LINKS_ENV, None)
+        os.environ.pop(rr.SPLIT_ENV, None)
         print("RR_WRITE_RESULT " + json.dumps(report))
         results.append(report)
         assert (
