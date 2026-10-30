@@ -166,7 +166,7 @@ class Qwen3(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         past_key_values=None,
         new_tokens: Optional[int] = None,
-        position_ids: Optional[ttml.autograd.Tensor] = None,
+        position_ids: Optional[ttml.ops.rope.RotaryEmbeddingPositionIds] = None,
         **kwargs,
     ) -> ttml.autograd.Tensor:
         TILE_SIZE = 32
