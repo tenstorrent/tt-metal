@@ -1211,6 +1211,7 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
     total_len = n_chunks * CHUNK
     config.max_seq_len = SEQ_CACHE
     has_indexer = resolve_has_indexer(config)
+    kv_format = MlaKvCacheFormat.SCALED_FP8 if has_indexer else MlaKvCacheFormat.BFP8_TILE
 
     block = TtPrefillBlock(
         mesh_device=mesh_device,
@@ -1233,11 +1234,12 @@ def run_chunked_block_random(variant, config, mesh_device, layer_idx, n_chunks, 
         layer_num=1,
         routing_use_l1_small_for_semaphores=True,
         tp_shard_kv=True,
+        sparse_kv_cache_format=kv_format,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=SEQ_CACHE, chunk_size_global=CHUNK)
     tt_kvpe_cache = init_mla_kv_cache(
-        cache_format=MlaKvCacheFormat.BF16_RM if has_indexer else MlaKvCacheFormat.BFP8_TILE,
+        cache_format=kv_format,
         hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_CACHE,
