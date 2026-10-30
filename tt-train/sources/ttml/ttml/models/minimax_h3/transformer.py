@@ -175,10 +175,8 @@ class RMSNorm(AbstractModuleBase):
 class H3Attention(AbstractModuleBase):
     """Full bidirectional self-attention, per-head QK RMSNorm, optional rotary on q/k.
 
-    q, k and v come from one matmul against the frozen `[Wq; Wk; Wv]`, fused from the three projections on the
-    first forward; the separate copies are freed then, so read them before. With LoRA on the three projections
-    their A matrices are fused the same way: one `x @ [A_q; A_k; A_v]^T`, then the three B matmuls, so LoRA dropout
-    draws one mask for all three."""
+    q, k, v (and their LoRA A) come from one fused matmul; the fused weight is built on the first forward, which
+    frees the separate to_q/to_k/to_v weights."""
 
     def __init__(self, config: H3Config) -> None:
         super().__init__()
