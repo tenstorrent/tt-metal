@@ -8,13 +8,14 @@
 #include "dev_mem_map.h"
 #include "experimental/cce_gddr.h"
 #include "experimental/cce_remote_cb.h"
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 
 namespace cce_test {
 
 using experimental::cce_remote_cb::read_cycle_counter;
 using experimental::cce_remote_cb::WaitDeadline;
 
-inline constexpr uint32_t kLineBytes = 64;
+inline constexpr uint32_t kLineBytes = L2_CACHE_LINE_SIZE;
 
 inline __attribute__((always_inline)) void copy_words(
     volatile uint32_t* dst, const volatile uint32_t* src, uint32_t num_words, uint32_t& xor_accumulator) {

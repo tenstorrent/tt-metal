@@ -271,7 +271,7 @@ static uint32_t clean_store_and_discard(uint64_t data_address, uint32_t num_word
         "li %[pointer], 0\n\t"
         "9:\n\t"
         "sd %[pointer], 0(%[flush_register])\n\t"
-        "addi %[pointer], %[pointer], 64\n\t"
+        "addi %[pointer], %[pointer], %[line_bytes]\n\t"
         "bltu %[pointer], %[cacheable_end], 9b\n\t"
         "fence\n\t"
         "lw %[scratch], 0(%[drain_address])\n\t"
@@ -303,7 +303,8 @@ static uint32_t clean_store_and_discard(uint64_t data_address, uint32_t num_word
           [value] "r"(value),
           [flush_register] "r"(L2_FLUSH_ADDR),
           [cacheable_end] "r"(static_cast<uint64_t>(MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE)),
-          [drain_address] "r"(MEM_PORT_NONCACHEABLE_BASE_ADDR)
+          [drain_address] "r"(MEM_PORT_NONCACHEABLE_BASE_ADDR),
+          [line_bytes] "i"(L2_CACHE_LINE_SIZE)
         : "memory");
     return static_cast<uint32_t>(matches);
 }
@@ -333,7 +334,7 @@ static WipeResult clean_and_wipe(
         "li %[pointer], 0\n\t"
         "9:\n\t"
         "sd %[pointer], 0(%[flush_register])\n\t"
-        "addi %[pointer], %[pointer], 64\n\t"
+        "addi %[pointer], %[pointer], %[line_bytes]\n\t"
         "bltu %[pointer], %[cacheable_end], 9b\n\t"
         "fence\n\t"
         "lw %[scratch], 0(%[drain_address])\n\t"
@@ -370,7 +371,7 @@ static WipeResult clean_and_wipe(
         "addi %[pointer], %[pointer], 4\n\t"
         "bltu %[pointer], %[end], 4b\n\t"
         "fence\n\t"
-        "li %[scratch], 0xFF\n\t"
+        "li %[scratch], %[all_harts_mask]\n\t"
         "sd %[scratch], 0(%[wipe_register])\n\t"
         "fence\n\t"
         "li %[wiped], 0\n\t"
@@ -403,7 +404,9 @@ static WipeResult clean_and_wipe(
           [cacheable_end] "r"(static_cast<uint64_t>(MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE)),
           [drain_address] "r"(MEM_PORT_NONCACHEABLE_BASE_ADDR),
           [wipe_register] "r"(L2_FULL_INVALIDATE_ADDR),
-          [budget] "r"(budget_cycles)
+          [budget] "r"(budget_cycles),
+          [line_bytes] "i"(L2_CACHE_LINE_SIZE),
+          [all_harts_mask] "i"((1 << MEM_CCE_LOCAL_HARTS) - 1)
         : "memory");
     return {static_cast<uint32_t>(warm_old), static_cast<uint32_t>(stale_before), wiped != 0};
 }
@@ -1045,9 +1048,10 @@ static bool mm41_args_valid(const Args& args) {
                    args.other_offset >= args.aux_offset && other_end <= region_end;
         }
         case abi::kModeSharedConcurrentWriter:
-            return words && budget && args.num_harts != 0 && args.num_harts <= 8 && args.hart_slot < args.num_harts &&
-                   lines_in_test_area(args.flag_offset, args.num_harts) && args.passes != 0 && args.passes <= 256 &&
-                   args.num_words <= 256 && args.stride_bytes % sizeof(uint32_t) == 0 &&
+            return words && budget && args.num_harts != 0 && args.num_harts <= MEM_CCE_LOCAL_HARTS &&
+                   args.hart_slot < args.num_harts && lines_in_test_area(args.flag_offset, args.num_harts) &&
+                   args.passes != 0 && args.passes <= 256 && args.num_words <= 256 &&
+                   args.stride_bytes % sizeof(uint32_t) == 0 &&
                    in_test_area(
                        args.data_offset, static_cast<uint64_t>(args.num_harts - 1) * args.stride_bytes + data_bytes);
         case abi::kModeExternalReader:
