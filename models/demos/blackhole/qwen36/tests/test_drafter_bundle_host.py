@@ -247,7 +247,9 @@ def test_embed_rows_ops(monkeypatch, ids_shape):
 
     monkeypatch.setattr(ttnn, "reshape", reshape)
     monkeypatch.setattr(
-        ttnn, "pad", lambda t, p, value=None: log.append(("pad", tuple(map(tuple, p)), value)) or _T((1, 1, rows + pad, 640))
+        ttnn,
+        "pad",
+        lambda t, p, value=None: log.append(("pad", tuple(map(tuple, p)), value)) or _T((1, 1, rows + pad, 640)),
     )
     monkeypatch.setattr(
         ttnn,

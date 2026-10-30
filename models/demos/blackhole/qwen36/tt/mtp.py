@@ -167,7 +167,9 @@ class Qwen36MTP:
             if self._embed_row:
                 logger.info("MTP drafter: one-tile-row token embedding (QWEN36_MTP_EMBED_ROW=1)")
             if _bfp4_parts:
-                logger.info(f"MTP drafter: layer weights in BFP4 + LoFi for {sorted(_bfp4_parts)} (QWEN36_MTP_LAYER_BFP4)")
+                logger.info(
+                    f"MTP drafter: layer weights in BFP4 + LoFi for {sorted(_bfp4_parts)} (QWEN36_MTP_LAYER_BFP4)"
+                )
         _layer_kw = {}
         if "attn" in _bfp4_parts:
             _layer_kw["attn_dtype"] = ttnn.bfloat4_b
@@ -206,7 +208,7 @@ class Qwen36MTP:
         # QWEN36_MTP_SDPA_MAX_CORES pins it (the bucket equivalence tests set 13: every row count then resolves to the same split).
         self.attention.decode_sdpa_max_cores = int(os.environ.get("QWEN36_MTP_SDPA_MAX_CORES", "64"))
         if self.num_devices > 1:
-            # QWEN36_MTP_SDPA_WINDOW: sliding-window draft-step SDPA (this TPAttention only; see tp_common.mtp_sdpa_window).
+            # QWEN36_MTP_SDPA_WINDOW: sliding-window draft-step SDPA (this TPAttention only; tp_common.mtp_sdpa_window).
             _win = tpc.mtp_sdpa_window()
             if _win:
                 self.attention.decode_sdpa_window = _win

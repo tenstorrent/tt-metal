@@ -210,11 +210,11 @@ def mtp_kv_only_enabled():
     return os.environ.get("QWEN36_MTP_KV_ONLY", "0") == "1"
 
 
-# --------------------------------------------------------------------------------------------------------------------- #
+# -------------------------------------------------------------------------------------------------------------------- #
 # r6 drafter bundle: MTP drafter micro-optimizations, each behind its own flag. Every default is off, and off is today's
 # drafter byte for byte. They change only the DRAFTER's programs: the verify arbitrates every draft, so the output stays
 # lossless and only acceptance can move. All are read when the MTP head is built (Qwen36MTP.__init__), TP only.
-# --------------------------------------------------------------------------------------------------------------------- #
+# -------------------------------------------------------------------------------------------------------------------- #
 MTP_FC_PROGCFG_ENV = "QWEN36_MTP_FC_PROGCFG"
 MTP_FC_IBW_ENV = "QWEN36_MTP_FC_IBW"
 MTP_FC_CORES_ENV = "QWEN36_MTP_FC_CORES"
@@ -238,7 +238,8 @@ def mtp_fc_decode_progcfg(k, n, grid_w):
     QWEN36_MTP_FC_IBW (default 32) caps in0_block_w (largest divisor of the k-tiles <= the cap; 32 -> 10 rounds) and
     QWEN36_MTP_FC_CORES (default 20 = one 32-wide output column per core at dim/tp = 640) is the core budget, shaped
     wide-first on the device grid width ``grid_w``. The K-block partial sums reassociate, so a near-tie can draft a
-    different token: only acceptance can move. Returns the program config (built once by the caller), or None when off."""
+    different token: only acceptance can move. Returns the program config (built once by the caller), or None when
+    off."""
     if os.environ.get(MTP_FC_PROGCFG_ENV, "0") != "1":
         return None
     ibw = _env_int(MTP_FC_IBW_ENV, 32)
@@ -249,22 +250,23 @@ def mtp_fc_decode_progcfg(k, n, grid_w):
 
 
 def mtp_sdpa_window():
-    """QWEN36_MTP_SDPA_WINDOW (default 0 = off): W > 0 gives the MTP drafter's decode SDPA (the paged draft steps; also
-    the full-layer reseed when QWEN36_MTP_KV_ONLY is off, whose output nobody reads) a sliding window: each row attends
-    the W positions [pos + 1 - W, pos] (ttnn sliding_window_size; the kernel starts its K-chunk loop at the window) instead
-    of the whole context. A 32K draft-step SDPA reads 1/8 of the KV at W = 4096. The drafter KV cache, its writes and the
-    verify are untouched; a context of <= W positions attends exactly what it did before. Drafts can change once the
-    context is longer than W, so only acceptance can move. Returns W, or 0 when off."""
+    """QWEN36_MTP_SDPA_WINDOW (default 0 = off): W > 0 gives the MTP drafter's decode SDPA (the paged draft steps;
+    also the full-layer reseed when QWEN36_MTP_KV_ONLY is off, whose output nobody reads) a sliding window: each row
+    attends the W positions [pos + 1 - W, pos] (ttnn sliding_window_size; the kernel starts its K-chunk loop at the
+    window) instead of the whole context. A 32K draft-step SDPA reads 1/8 of the KV at W = 4096. The drafter KV cache,
+    its writes and the verify are untouched; a context of <= W positions attends exactly what it did before. Drafts can
+    change once the context is longer than W, so only acceptance can move. Returns W, or 0 when off."""
     w = _env_int(MTP_SDPA_WINDOW_ENV, 0)
     return w if w > 0 else 0
 
 
 def mtp_layer_bfp4_parts():
-    """QWEN36_MTP_LAYER_BFP4 (default "0"): the MTP drafter layer's (mtp.layers.0) weights in bfloat4_b with LoFi decode
-    matmuls, for the drafter only. The drafter layer has its own checkpoint weights and its own cache files (the dtype is
-    in the file name), so the base model and the verify keep their dtypes and no extra DRAM is needed (the BFP4 copies
-    replace the drafter layer's BFP8 ones). "1" / "all": attention (fused q|k|v|gate and wo) and MLP (gate/up/down);
-    "attn" or "mlp" (or "attn,mlp") picks parts. Returns a frozenset of {"attn", "mlp"}, empty when off."""
+    """QWEN36_MTP_LAYER_BFP4 (default "0"): the MTP drafter layer's (mtp.layers.0) weights in bfloat4_b with LoFi
+    decode matmuls, for the drafter only. The drafter layer has its own checkpoint weights and its own cache files (the
+    dtype is in the file name), so the base model and the verify keep their dtypes and no extra DRAM is needed (the
+    BFP4 copies replace the drafter layer's BFP8 ones). "1" / "all": attention (fused q|k|v|gate and wo) and MLP
+    (gate/up/down); "attn" or "mlp" (or "attn,mlp") picks parts. Returns a frozenset of {"attn", "mlp"}, empty when
+    off."""
     raw = os.environ.get(MTP_LAYER_BFP4_ENV, "0").strip().lower()
     if raw in ("", "0", "off", "none"):
         return frozenset()
@@ -279,10 +281,10 @@ def mtp_layer_bfp4_parts():
 
 def mtp_embed_row_enabled():
     """QWEN36_MTP_EMBED_ROW (default "0"): the MTP drafter's token embedding (Qwen36MTP.forward_decode) is looked up
-    row-major, viewed as [1,1,rows,dim/tp] and tilized as ONE tile row, instead of the TILE lookup over [rows,1] ids that
-    gives every id its own padded 32-row tile and then re-packs the rows with a reshape copy (sp5: a 27 us tilize + a 6 us
-    reshape per draft step, 30 + 20 us for the 32-row reseed). The same bf16 rows reach the same place, so the drafter's
-    input, its drafts and the output are byte-identical."""
+    row-major, viewed as [1,1,rows,dim/tp] and tilized as ONE tile row, instead of the TILE lookup over [rows,1] ids
+    that gives every id its own padded 32-row tile and then re-packs the rows with a reshape copy (sp5: a 27 us tilize
+    + a 6 us reshape per draft step, 30 + 20 us for the 32-row reseed). The same bf16 rows reach the same place, so
+    the drafter's input, its drafts and the output are byte-identical."""
     return os.environ.get(MTP_EMBED_ROW_ENV, "0") == "1"
 
 
