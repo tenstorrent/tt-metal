@@ -12,6 +12,9 @@ Only checkouts of the exact version the wrapper forwards to (actions/checkout
 v6.0.2, or a v6 tag) are migrated, so no consumer changes checkout version.
 Excluded on purpose:
   * the wrapper's internal checkout (replacing it would recurse);
+  * jobs whose runs-on is a literal GitHub-hosted label (ubuntu-*, windows-*,
+    macos-*): cachew is a no-op there and the remote action only adds an archive
+    download, so --write turns their cachew pins back into actions/checkout;
   * gh-aw generated lock files and their .md sources (generated, and they pin
     their own checkout version; they also run on GitHub-hosted runners, where
     cachew is a no-op);
@@ -43,6 +46,13 @@ CHECKOUT = re.compile(
     r"(?P=quote)(?:[ \t]*#[^\n]*)?[ \t]*$"
 )
 ANY_PIN = re.compile(re.escape(ACTION_REPO) + r"(?P<subpath>/[\w./-]+)?@(?P<sha>[0-9a-f]{40})")
+PLAIN_CHECKOUT = f"actions/checkout@{FORWARDED_CHECKOUT} # v6.0.2"
+HOSTED_LABEL = re.compile(r"(?:ubuntu|windows|macos)-[\w.-]+")
+TOP_LEVEL = re.compile(r"^(?P<key>[\w-]+):")
+JOB = re.compile(r"^  [\w-]+:[ \t]*(?:#.*)?$")
+RUNS_ON = re.compile(r"^    runs-on:[ \t]*(?P<quote>['\"]?)(?P<label>[^'\"#\s]+)(?P=quote)[ \t]*(?:#.*)?$")
+# Only the files cached checkouts execute; docs and tests can change without a re-pin.
+RUNTIME_FILES = ("action.yml", "checkout.py", "git_wrapper.py", "session", "trusted_caches.json")
 
 
 def repository_root():
@@ -58,12 +68,44 @@ def excluded(path):
     return path.suffix == ".md"
 
 
+def hosted_jobs(text):
+    """Character ranges of the workflow jobs whose runs-on is a literal GitHub-hosted label."""
+    spans, start, hosted, in_jobs, offset = [], None, False, False, 0
+
+    def close(end):
+        if start is not None and hosted:
+            spans.append((start, end))
+
+    for line in text.splitlines(keepends=True):
+        top = TOP_LEVEL.match(line)
+        if top:
+            close(offset)
+            start, hosted, in_jobs = None, False, top["key"] == "jobs"
+        elif in_jobs and JOB.match(line):
+            close(offset)
+            start, hosted = offset, False
+        elif start is not None:
+            runs_on = RUNS_ON.match(line)
+            if runs_on:
+                hosted = bool(HOSTED_LABEL.fullmatch(runs_on["label"]))
+        offset += len(line)
+    close(offset)
+    return spans
+
+
 def rewrite(text):
     # A trailing "cachew: keep" comment opts a checkout out (e.g. a bootstrap
     # checkout that must test the working tree's action).
-    return CHECKOUT.sub(
-        lambda match: match[0] if "cachew: keep" in match[0] else f"{match['prefix']}{ACTION} # cachew checkout", text
-    )
+    hosted = hosted_jobs(text)
+
+    def replace(match):
+        if "cachew: keep" in match[0]:
+            return match[0]
+        if any(start <= match.start() < end for start, end in hosted):
+            return f"{match['prefix']}{PLAIN_CHECKOUT}" if ACTION_REPO in match[0] else match[0]
+        return f"{match['prefix']}{ACTION} # cachew checkout"
+
+    return CHECKOUT.sub(replace, text)
 
 
 def migrate_file(path, write=False, root=None):
@@ -119,8 +161,8 @@ def verify_pins(root, require_main):
         if not git_ok(root, "cat-file", "-e", f"{sha}^{{commit}}"):
             problems.append(f"pin {sha} is not a known commit (fetch it, or it was never pushed)")
             continue
-        if not git_ok(root, "diff", "--quiet", sha, "--", str(ACTION_DIR)):
-            problems.append(f"pin {sha} differs from this tree in {ACTION_DIR} (used by {files[0]})")
+        if not git_ok(root, "diff", "--quiet", sha, "--", *(str(ACTION_DIR / name) for name in RUNTIME_FILES)):
+            problems.append(f"pin {sha} differs from this tree's {ACTION_DIR} runtime files (used by {files[0]})")
         if require_main and not git_ok(root, "merge-base", "--is-ancestor", sha, "origin/main"):
             problems.append(f"pin {sha} is not reachable from origin/main and may be garbage-collected")
     for problem in problems:

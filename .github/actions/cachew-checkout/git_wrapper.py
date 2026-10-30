@@ -7,6 +7,8 @@ Any failed cache read is retried once against upstream. Only failures of the
 cache endpoint itself (connection, TLS, 3xx/5xx, stall, deadline) remove the
 job's cache rewrite; answers about one repository or ref (401/403/404, missing
 ref, `ls-remote --exit-code` finding nothing) keep caching on for later reads.
+Reads whose effective URL is not the cache (other hosts, token-in-URL or SSH
+remotes, a promisor origin pinned upstream) run unchanged and never affect it.
 """
 
 import json
@@ -21,7 +23,13 @@ import tempfile
 import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from checkout import TRANSPORT_ERRORS  # noqa: E402
+from checkout import (  # noqa: E402
+    DEFAULT_FETCH_TIMEOUT_SECONDS,
+    HARD_DEADLINE_SECONDS,
+    MAX_DEADLINE_SECONDS,
+    MAX_FETCH_TIMEOUT_SECONDS,
+    TRANSPORT_ERRORS,
+)
 
 
 OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
@@ -48,7 +56,26 @@ CLONE_OPTIONS_WITH_VALUE = {
     "--bundle-uri",
     "--ref-format",
 }
-HARD_DEADLINE_SECONDS = 3600
+READ_OPTIONS_WITH_VALUE = {
+    "clone": CLONE_OPTIONS_WITH_VALUE,
+    "fetch": {
+        "--depth",
+        "--deepen",
+        "--shallow-since",
+        "--shallow-exclude",
+        "--upload-pack",
+        "--refmap",
+        "-o",
+        "--server-option",
+        "--filter",
+        "-j",
+        "--jobs",
+        "--negotiation-tip",
+        "--recurse-submodules-default",
+        "--submodule-prefix",
+    },
+    "ls-remote": {"--upload-pack", "--sort", "-o", "--server-option"},
+}
 TERMINATE_GRACE_SECONDS = 10
 STDERR_TAIL_BYTES = 65536
 
@@ -221,10 +248,48 @@ def seconds(environ, name, default, maximum):
         return float(default)
 
 
+def repository_argument(arguments, index):
+    """The repository a read names, "" for the default remote, or None if unsure."""
+    command = arguments[index]
+    tail = arguments[index + 1 :]
+    if command == "fetch" and any(arg in ("--all", "--multiple") for arg in tail):
+        return None
+    with_value = READ_OPTIONS_WITH_VALUE[command]
+    position = 0
+    while position < len(tail):
+        arg = tail[position]
+        if arg == "--":
+            return tail[position + 1] if position + 1 < len(tail) else None
+        if arg in with_value:
+            position += 2
+        elif arg.startswith("-"):
+            position += 1
+        else:
+            return arg
+    return None if command == "clone" else ""
+
+
+def reaches_cache(real_git, arguments, index, environ, cache):
+    """Whether the read's effective URL is the cache. Unknown counts as the cache,
+    so only reads that provably go elsewhere skip the cache attempt."""
+    repository = repository_argument(arguments, index)
+    if repository is None or not cache:
+        return True
+    result = subprocess.run(
+        [real_git, *arguments[:index], "ls-remote", "--get-url", *([repository] if repository else [])],
+        env=environ,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode:
+        return True
+    return result.stdout.decode(errors="replace").strip().startswith(cache.rstrip("/") + "/git/")
+
+
 def cache_attempt(real_git, arguments, environ, index):
     """Run once through the cache. Returns (exit status, stderr tail)."""
-    stall = seconds(environ, "CACHEW_GIT_FETCH_TIMEOUT", 120, 600)
-    deadline = seconds(environ, "CACHEW_HARD_DEADLINE", HARD_DEADLINE_SECONDS, 86400)
+    stall = seconds(environ, "CACHEW_GIT_FETCH_TIMEOUT", DEFAULT_FETCH_TIMEOUT_SECONDS, MAX_FETCH_TIMEOUT_SECONDS)
+    deadline = seconds(environ, "CACHEW_HARD_DEADLINE", HARD_DEADLINE_SECONDS, MAX_DEADLINE_SECONDS)
 
     def terminate(process):
         try:
@@ -291,7 +356,7 @@ def run(arguments, environ):
     try:
         state = json.loads((session / "state.json").read_text())
     except (OSError, ValueError):
-        # A missing session must not prevent Git from running after post cleanup.
+        # A missing session must not prevent Git from running after the runner empties RUNNER_TEMP.
         return subprocess.call([real_git, *arguments], env=environ)
     if not state.get("active") or (session / "cache-disabled").exists():
         return subprocess.call([real_git, *arguments], env=environ)
@@ -301,7 +366,9 @@ def run(arguments, environ):
     ):
         with UpstreamView(real_git, environ, session, state) as upstream:
             return subprocess.call([real_git, *arguments], env=upstream)
-    if command not in ("clone", "fetch", "ls-remote"):
+    if command not in ("clone", "fetch", "ls-remote") or not reaches_cache(
+        real_git, arguments, index, environ, state.get("cache")
+    ):
         return subprocess.call([real_git, *arguments], env=environ)
     target = CloneTarget(arguments, index)
     result, errors = cache_attempt(real_git, arguments, environ, index)

@@ -115,6 +115,18 @@ class RunnerGateTests(unittest.TestCase):
             with self.subTest(context=context):
                 self.assertEqual(self.active_steps(context), ["checkout"])
 
+    def test_opt_out_after_an_activated_session_still_isolates_the_checkout(self):
+        # An earlier checkout activated the session: prepare must take the job-wide
+        # rewrite out of this checkout's way, but no cache attempt runs.
+        for context in (
+            runner("self-hosted", cachew="false"),
+            runner("self-hosted", kill_switch="false"),
+        ):
+            with self.subTest(context=context):
+                context["env.CACHEW_SESSION_DIR"] = "/runner/_work/_temp/cachew-session"
+                self.assertEqual(self.active_steps(context), ["session", "checkout", "configure"])
+        self.assertEqual(self.active_steps(runner("self-hosted", os="macOS")), ["checkout"])
+
     def test_explicit_opt_in_on_other_linux_runners(self):
         self.assertEqual(
             self.active_steps(runner("github-hosted", cachew="true")), ["session", "cachew", "checkout", "configure"]

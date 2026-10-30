@@ -51,7 +51,9 @@ class DownstreamGitTests(unittest.TestCase):
         ]
         for key, value in self.managed:
             subprocess.run([self.real_git, "config", "--file", str(active), "--add", key, value], check=True)
-        (self.session / "state.json").write_text(json.dumps({"active": True, "managed": self.managed}))
+        (self.session / "state.json").write_text(
+            json.dumps({"active": True, "managed": self.managed, "cache": self.cache.url})
+        )
         shim = self.session / "bin/git"
         shim.parent.mkdir()
         shim.write_text(
@@ -230,6 +232,28 @@ class DownstreamGitTests(unittest.TestCase):
     def assert_enabled(self):
         self.assertFalse((self.session / "cache-disabled").exists())
         self.assertIn(self.cache.url.encode(), (self.session / "global.config").read_bytes())
+
+    def test_failures_of_remotes_that_are_not_the_cache_keep_caching_on(self):
+        unreachable = "http://127.0.0.1:1/org/elsewhere"
+        for arguments in (["ls-remote", unreachable], ["clone", unreachable, str(self.root / "elsewhere")]):
+            with self.subTest(command=arguments[0]):
+                result = subprocess.run(["git", *arguments], env=self.env, text=True, capture_output=True, timeout=30)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("Cachew", result.stderr)
+        target = self.root / "pinned-upstream"
+        self.run_git("init", "-q", str(target))
+        self.run_git("-C", str(target), "remote", "add", "origin", unreachable)
+        result = subprocess.run(
+            ["git", "-C", str(target), "fetch", "--depth", "1", "origin"],
+            env=self.env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Cachew", result.stderr)
+        self.assertEqual(self.cache.requests, [])
+        self.assert_enabled()
 
     def test_global_writes_survive_cache_disable(self):
         # M2: a job's own `git config --global` writes must survive the cache

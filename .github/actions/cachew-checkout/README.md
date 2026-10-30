@@ -34,7 +34,10 @@ Cachew is only reachable from runners on the CI VLAN. With the default
 runners (`ubuntu-latest`, `ubuntu-slim`, larger runners) the action is exactly the
 pinned `actions/checkout`: no probe, no token, no Git wrapper and no configuration
 change. A job or workflow `env: CACHEW_CHECKOUT: 'false'` disables cachew for every
-checkout in its scope without editing each step.
+checkout in its scope without editing each step. After an earlier checkout in the
+job activated cachew, a `cachew: false` checkout still runs the session's prepare
+step, so the official checkout runs upstream with its own throwaway global file;
+the job-wide rewrite stays in place for later steps.
 
 The trusted origins are listed in [`trusted_caches.json`](trusted_caches.json),
 one per cluster, as deployed by tt-flux `apps/cachew`:
@@ -75,23 +78,28 @@ remains: checkout clones each submodule's default branch, which adds a local
 tracking branch and, when shallow, a single-branch refspec; cachew fetches only
 the gitlink commit and keeps the default refspec.
 
-A commit SHA, including the event's `GITHUB_SHA`, never contacts upstream.
-A branch, tag or other ref name, or the default branch of another repository,
-costs one upstream `ls-remote` with the token; the objects for the resolved
-SHA then come from cachew. The main repository is fetched once, then each
-requested submodule at its exact gitlink SHA, including nested submodules.
-Cachew serves commit SHAs and `refs/pull/*` from its mirror and forwards
-anything missing upstream. Full-history checkouts fetch all branches and tags
-from the cache; `fetch-tags` takes the tag list from the cache. Worktree and
-submodule commands run with `protocol.allow=never`, so any missing object fails
-the attempt rather than reaching upstream.
+A shallow checkout of a commit SHA, including the event's `GITHUB_SHA`, never
+contacts upstream. A branch, tag or other ref name, the default branch of another
+repository, `fetch-depth: 0` or `fetch-tags: true` costs one upstream `ls-remote`
+with the token, so branch and tag names always match GitHub even when the
+cache's ref list lags; the objects for those exact SHAs then come from cachew.
+The main repository is fetched once, then each requested submodule at its exact
+gitlink SHA, including nested submodules. Cachew serves commit SHAs and
+`refs/pull/*` from its mirror and forwards anything missing upstream. Worktree
+and submodule commands run with `protocol.allow=never`, so any missing object
+fails the attempt rather than reaching upstream.
+
+The whole cache phase has a 300-second budget (`CACHEW_CHECKOUT_BUDGET`) on top
+of the per-fetch stall timeout, so a slow but moving cache falls back to the
+official checkout well within the step's `timeout-minutes`.
 
 With `filter`, the main repository needs two cache fetches: the complete tip
 commit, then the filtered history at the requested depth. The worktree
 therefore needs no lazy fetches. `origin` is recorded as the promisor remote with
-the same filter, as standard checkout does, so objects missing later are
-fetched lazily from upstream. Submodules are fetched unfiltered, as standard
-checkout fetches them.
+the same filter, as standard checkout does, and a repository-local `insteadOf`
+pins it upstream, so objects missing later are fetched lazily from upstream
+rather than through the job's cache rewrite. The same applies to sparse
+checkouts. Submodules are fetched unfiltered, as standard checkout fetches them.
 
 `sparse-checkout` works like standard checkout: it implies `filter: blob:none`,
 applies the patterns (`sparse-checkout set`, or `info/sparse-checkout` without
@@ -150,9 +158,12 @@ with this environment must set its own `GIT_CONFIG_GLOBAL`, or the job should us
 ## Upstream fallback
 
 For later Git reads, a small `git` wrapper on `PATH` sends `clone`, `fetch` and
-`ls-remote` through cachew once. Other commands go straight to Git without
-starting Python. If the cache attempt fails, the same operation is retried once
-upstream. Only failures of the cache endpoint itself (connection, TLS, 3xx/5xx,
+`ls-remote` through cachew once when their effective URL is the cache. Python
+starts only for commands that can reach a remote (`clone`, `fetch`, `ls-remote`,
+`push`, `pull`, `submodule`, `remote`); the rest go straight to Git. If the
+cache attempt fails, the same operation is retried once upstream. Reads of other
+remotes (other hosts, token-in-URL or SSH URLs) run unchanged and never affect
+the cache. Only failures of the cache endpoint itself (connection, TLS, 3xx/5xx,
 a stall longer than `cachew-fetch-timeout`, or the one-hour hard deadline) remove
 the job's cache rewrite; answers about one repository or ref (401/403/404, a
 missing ref, `ls-remote --exit-code` finding nothing) keep caching on. A failed
@@ -170,17 +181,32 @@ CHECKOUT_ACTION_JS=/absolute/path/to/checkout/dist/index.js \
 
 Everything runs from this action's own directory, so the consumers' pin to this
 action (`ACTION_SHA` in `.github/scripts/utils/cachew_checkout.py`) is the only
-pin. To release a change:
+pin. `--verify-pins` compares the pin with this tree's runtime files
+(`action.yml`, `checkout.py`, `git_wrapper.py`, `session/`,
+`trusted_caches.json`); README and test changes need no re-pin. To release a
+change:
 
 1. Commit the action change. In a second commit, set `ACTION_SHA` to the first
    commit and run `python3 .github/scripts/utils/cachew_checkout.py --write`.
    Push both together; `--verify-pins` checks that the pin matches this tree.
-2. After merging, re-pin `ACTION_SHA` to the merge commit on `main` and run
-   `--write` again (`--verify-pins --require-main`). A commit that is only on a
-   deleted branch can be garbage-collected, which would break every consumer.
+2. Main is squash-merged, so the pin is not on `main` after merging; GitHub keeps
+   it fetchable through `refs/pull/<n>/head`, and the test workflow only warns.
+   Re-pin `ACTION_SHA` to the merge commit in a follow-up and run `--write`
+   again (`--verify-pins --require-main`).
 
 A checkout with a trailing `# cachew: keep` comment is never migrated (the test
 workflow's bootstrap checkout uses this to test the working tree's action).
+Use it where cachew can never serve the checkout: composite actions whose
+callers run on GitHub-hosted runners, or that run in an already populated
+workspace. `--write` itself keeps `actions/checkout` (and turns cachew pins back
+into it) in jobs whose `runs-on` is a literal GitHub-hosted label (`ubuntu-*`,
+`windows-*`, `macos-*`), where cachew is a no-op. It cannot see runner labels
+behind expressions or reusable-workflow inputs.
+
+The remote `uses:` costs a download of the tt-metal archive at the pinned commit
+(about 425 MB, 20-45 seconds of "Set up job") the first time a job uses it,
+even where cachew is skipped. That is why hosted-runner checkouts keep
+`actions/checkout`.
 
 `--check` and `--write` migrate only checkouts of the version this action
 forwards to (v6.0.2). gh-aw generated workflows, intentionally floating

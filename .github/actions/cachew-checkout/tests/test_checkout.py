@@ -71,6 +71,7 @@ class GitServer:
         self.fail_status = 503
         self.disconnect = False
         self.fetch_delay = 0
+        self.request_delay = 0
         self.block_submodules = False
         self.required_auth = {}
         self.duplicate_auth = []
@@ -101,6 +102,7 @@ class GitServer:
                         self.send_header("Location", "/redirected-health")
                     self.end_headers()
                     return
+                time.sleep(owner.request_delay)
                 path = url.path
                 if owner.upstream_host:
                     prefix = f"/git/{owner.upstream_host}/"
@@ -242,7 +244,7 @@ class CheckoutTests(unittest.TestCase):
             CACHEW_PERSIST_CREDENTIALS="true",
             CACHEW_SET_SAFE_DIRECTORY="true",
             CACHEW_FETCH_DEPTH="1",
-            CACHEW_FETCH_TAGS="true",
+            CACHEW_FETCH_TAGS="false",
             CACHEW_SUBMODULES="recursive",
             CACHEW_TOKEN=TOKEN,
             CACHEW_REAL_GIT=real_git,
@@ -494,10 +496,14 @@ class CheckoutTests(unittest.TestCase):
                 self.env = {**base, "CACHEW_FETCH_DEPTH": "500", "CACHEW_FETCH_TAGS": "false", **values}
                 shutil.rmtree(self.target, ignore_errors=True)
                 self.cache.requests.clear()
-                by_name = self.env["CACHEW_REF"] in names or (
-                    not self.env["CACHEW_REF"] and self.env["GITHUB_REF"].startswith("refs/tags/")
+                by_name = (
+                    self.env["CACHEW_REF"] in names
+                    or (not self.env["CACHEW_REF"] and self.env["GITHUB_REF"].startswith("refs/tags/"))
+                    or self.env["CACHEW_FETCH_DEPTH"] == "0"
+                    or self.env["CACHEW_FETCH_TAGS"] == "true"
                 )
-                # Names cost one upstream ls-remote; SHAs never contact upstream.
+                # Names (including every branch and tag a refspec would fetch) cost one
+                # upstream ls-remote; anything else never contacts upstream.
                 self.assert_matches_checkout(["/org/main/info/refs"] if by_name else [])
 
     def test_filtered_clone_is_offline_beyond_the_cache(self):
@@ -564,6 +570,37 @@ class CheckoutTests(unittest.TestCase):
         self.assertEqual(git(self.target, "rev-parse", "refs/remotes/origin/another-branch"), other)
         self.assertEqual(git(self.target, "rev-parse", "refs/tags/other-tag"), other)
         self.assert_single_cache_attempts(["main", "child", "grand"])
+
+    def test_branches_and_tags_come_from_upstream_names_not_the_cache_advertisement(self):
+        # The cache serves its own (possibly stale) copy; upstream has a newer tag and
+        # branch, and the cache still advertises a branch upstream has deleted.
+        cache_root = self.root / "cache-repositories"
+        shutil.copytree(self.project_root, cache_root, symlinks=True)
+        self.cache.root = cache_root
+        stale = cache_root / "org/main"
+        git(stale, "branch", "deleted-upstream", env=self.env)
+        source = self.project_root / "org/main"
+        git(source, "tag", "-a", "-m", "release", "v9.9.9", env=self.env)
+        git(source, "branch", "new-branch", env=self.env)
+        # The cache can still serve the new objects (pull-through), just not the names.
+        for name in ("refs/tags/v9.9.9", "refs/heads/new-branch"):
+            sha = git(source, "rev-parse", name)
+            git(stale, "fetch", str(source), f"+{name}:refs/hidden/{name.rsplit('/', 1)[-1]}", env=self.env)
+            self.assertEqual(git(stale, "rev-parse", f"refs/hidden/{name.rsplit('/', 1)[-1]}"), sha)
+        for depth, tags in (("0", "false"), ("1", "true")):
+            with self.subTest(depth=depth, tags=tags):
+                self.env.update(CACHEW_REF=self.sha, CACHEW_FETCH_DEPTH=depth, CACHEW_FETCH_TAGS=tags)
+                self.upstream.requests.clear()
+                self.assertTrue(self.attempt())
+                self.assertEqual(self.upstream.discoveries(), ["/org/main/info/refs"])
+                self.assertEqual(
+                    git(self.target, "rev-parse", "refs/tags/v9.9.9"), git(source, "rev-parse", "refs/tags/v9.9.9")
+                )
+                branches = git(self.target, "for-each-ref", "--format=%(refname)", "refs/remotes/").splitlines()
+                self.assertNotIn("refs/remotes/origin/deleted-upstream", branches)
+                if depth == "0":
+                    self.assertIn("refs/remotes/origin/new-branch", branches)
+                shutil.rmtree(self.target)
 
     @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
     def test_health_failure_immediately_uses_upstream(self):
@@ -668,6 +705,18 @@ class CheckoutTests(unittest.TestCase):
         self.assertFalse(self.attempt())
         self.assert_single_cache_attempts(["main"])
         self.assertEqual(list(self.target.iterdir()), [])
+
+    def test_slow_but_moving_cache_is_abandoned_after_the_checkout_budget(self):
+        # Every cache request answers, slowly: no single fetch stalls, but the
+        # main repository plus two submodules overrun the whole-checkout budget.
+        self.cache.request_delay = 0.4
+        self.env["CACHEW_CHECKOUT_BUDGET"] = "1.5"
+        started = time.monotonic()
+        self.assertFalse(self.attempt())
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(self.output()["available"], "false")
+        self.assertEqual(list(self.target.iterdir()), [])
+        self.assertEqual([p for p in self.runtime.iterdir() if p.name.startswith("git-credentials-")], [])
 
     def test_unsupported_modes_and_existing_checkout_skip_without_health_probe(self):
         for name, value in [

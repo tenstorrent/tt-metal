@@ -81,6 +81,7 @@ class SessionTests(unittest.TestCase):
             "fetch-depth": self.env["CACHEW_FETCH_DEPTH"],
             "fetch-tags": self.env["CACHEW_FETCH_TAGS"],
             "submodules": self.env["CACHEW_SUBMODULES"],
+            "filter": self.env.get("CACHEW_FILTER", ""),
             "clean": "true",
             "persist-credentials": self.env["CACHEW_PERSIST_CREDENTIALS"],
             "set-safe-directory": self.env.get("CACHEW_SET_SAFE_DIRECTORY", "true"),
@@ -214,7 +215,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.safe_directories(), ["", trusted])
         self.finish()
 
-    def test_downstream_new_repository_uses_global_cache_and_post_cleans_auth(self):
+    def test_downstream_new_repository_uses_global_cache_and_leaves_no_credentials_after_the_job(self):
         self.fixture.repository("dependency")
         expected = "basic " + base64.b64encode(f"x-access-token:{fixtures.TOKEN}".encode()).decode()
         self.fixture.cache.required_auth["dependency"] = expected
@@ -355,6 +356,60 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.fixture.cache.requests, cache_before)
         self.finish()
+
+    def test_cachew_false_after_activation_checks_out_upstream_with_throwaway_globals(self):
+        self.assertEqual(self.flow(), (True, True))
+        global_config = Path(self.env["CACHEW_SESSION_DIR"]) / "global.config"
+        self.env["CACHEW_PATH"] = "second-checkout"
+        # action.yml with cachew: false: prepare, official checkout, configure; no cache attempt.
+        self.prepare()
+        self.checkout()
+        self.assertTrue((self.fixture.workspace / "second-checkout/deps/child/deep/grand/content.txt").exists())
+        self.assertNotIn("git-credentials-", global_config.read_text())
+        self.assertTrue(self.activate())
+        self.assertNotIn("git-credentials-", global_config.read_text())
+        self.finish()
+
+    def test_checkout_include_path_write_keeps_the_job_settings_visible(self):
+        # actions/checkout's submodule setup: `git config --global include.path <credentials>`,
+        # without --add, against the checkout-time global file.
+        self.prepare()
+        credentials = self.fixture.runtime / "git-credentials-fixture.config"
+        credentials.write_text("")
+        self.real_git("config", "--global", "include.path", str(credentials))
+        self.assertEqual(self.real_git("config", "--global", "--get", "checkout.workers"), "0")
+        self.assertEqual(self.real_git("config", "--global", "--get", "user.name"), "Fixture")
+        self.assertEqual(self.real_git("config", "--global", "--get-all", "include.path"), str(credentials))
+        self.assertTrue(self.activate())
+        self.finish()
+
+    def assert_lazy_fetches_stay_upstream(self, cached):
+        self.fixture.update_main()
+        old_blob = self.real_git("-C", str(self.fixture.project_root / "org/main"), "rev-parse", "HEAD~1:content.txt")
+        self.env.update(CACHEW_FILTER="blob:none", CACHEW_SUBMODULES="false")
+        if not cached:
+            self.fixture.cache.fail_repo = "main"
+        seeded, active = self.flow()
+        self.assertEqual(seeded, cached)
+        origin = self.real_git("-C", str(self.fixture.target), "ls-remote", "--get-url", "origin")
+        self.assertEqual(origin, f"{self.fixture.upstream.url}/org/main")
+        if active:
+            # Every other upstream URL still goes through the cache.
+            other = self.real_git("ls-remote", "--get-url", f"{self.fixture.upstream.url}/org/child")
+            self.assertTrue(other.startswith(self.fixture.cache.url), other)
+        cache_before = list(self.fixture.cache.requests)
+        self.fixture.upstream.requests.clear()
+        # A history blob is not in the partial clone: Git fetches it lazily.
+        self.assertEqual(self.real_git("-C", str(self.fixture.target), "cat-file", "-p", old_blob), "main")
+        self.assertEqual(self.fixture.cache.requests, cache_before)
+        self.assertIn("POST", [method for method, _, _ in self.fixture.upstream.requests])
+        self.finish()
+
+    def test_cachew_filtered_checkout_lazy_fetches_stay_upstream(self):
+        self.assert_lazy_fetches_stay_upstream(cached=True)
+
+    def test_fallback_filtered_checkout_lazy_fetches_stay_upstream(self):
+        self.assert_lazy_fetches_stay_upstream(cached=False)
 
     def test_unsupported_mode_still_configures_later_dependencies(self):
         self.prepare()

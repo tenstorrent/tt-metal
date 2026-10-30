@@ -9,9 +9,9 @@
 //                    rewrites removed). User `git config --global` writes land
 //                    here and are never discarded; cachew only adds and removes
 //                    its own keys (state.managed) in place, through Git's lock.
-//   checkout.config  GIT_CONFIG_GLOBAL while actions/checkout runs. Includes
-//                    global.config, so checkout sees the caller's settings, while
-//                    checkout's temporary global writes (submodule auth, its
+//   checkout.config  GIT_CONFIG_GLOBAL while actions/checkout runs. A flattened
+//                    copy of global.config, so checkout sees the caller's settings,
+//                    while checkout's temporary global writes (submodule auth, its
 //                    transient safe.directory) stay in this throwaway file.
 //   state.json       Session state, including cache-scoped auth headers.
 //
@@ -37,6 +37,11 @@ const PERFORMANCE = [
 ];
 // GIT_CONFIG_GLOBAL needs Git 2.32. Older Git would silently ignore the isolation.
 const MINIMUM_GIT = [2, 32];
+// Input limits; checkout.py (MAX_*_TIMEOUT_SECONDS, DEFAULT_FETCH_TIMEOUT_SECONDS) uses the same values.
+const MAX_HEALTH_TIMEOUT_SECONDS = 30;
+const MAX_FETCH_TIMEOUT_SECONDS = 600;
+const DEFAULT_FETCH_TIMEOUT_SECONDS = 120;
+const DEFAULT_HEALTH_TIMEOUT_SECONDS = 2;
 
 function fileCommand(file, key, value) {
   if (!file) return;
@@ -132,10 +137,10 @@ function settings() {
   if (!repositoryValid) valid = false;
   let timeout = Number(process.env.CACHEW_CACHEW_FETCH_TIMEOUT);
   let healthTimeout = Number(process.env.CACHEW_CACHEW_HEALTH_TIMEOUT);
-  if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 600 || !Number.isFinite(healthTimeout) || healthTimeout <= 0 || healthTimeout > 30) {
+  if (!Number.isFinite(timeout) || timeout <= 0 || timeout > MAX_FETCH_TIMEOUT_SECONDS || !Number.isFinite(healthTimeout) || healthTimeout <= 0 || healthTimeout > MAX_HEALTH_TIMEOUT_SECONDS) {
     valid = false;
-    timeout = 120;
-    healthTimeout = 2;
+    timeout = DEFAULT_FETCH_TIMEOUT_SECONDS;
+    healthTimeout = DEFAULT_HEALTH_TIMEOUT_SECONDS;
   }
   return {upstream, caches, repository, timeout, healthTimeout, valid, upstreamValid, repositoryValid};
 }
@@ -172,6 +177,24 @@ function cacheTarget(value, selected) {
   try { return new URL(value).pathname.startsWith('/git/') && isCacheHost(value, selected); } catch { return false; }
 }
 
+// Every [key, value] of `git config <selection> --list`; a key without a value is boolean true.
+function listEntries(state, selection) {
+  const entries = [];
+  for (const item of git(state, ['config', ...selection, '--null', '--list']).split('\0')) {
+    if (!item) continue;
+    const separator = item.indexOf('\n');
+    entries.push(separator < 0 ? [item, 'true'] : [item.slice(0, separator), item.slice(separator + 1)]);
+  }
+  return entries;
+}
+
+// The subsection of `<prefix><subsection><suffix>` (matched case-insensitively), or null.
+function subsection(key, prefix, suffix) {
+  const lower = key.toLowerCase();
+  if (!lower.startsWith(prefix) || !lower.endsWith(suffix) || key.length < prefix.length + suffix.length) return null;
+  return key.slice(prefix.length, key.length - suffix.length);
+}
+
 // Copy the caller's global configuration, following includes, without any
 // inherited cachew rewrite or cache credential.
 function copyGlobals(directory, state, caches) {
@@ -186,16 +209,13 @@ function copyGlobals(directory, state, caches) {
     if (copies.size > 30) throw new Error('Too many included Git configuration files');
     const destination = path.join(directory, `base-${counter++}.config`);
     copies.set(source, destination);
-    const contents = git(state, ['config', '--file', source, '--no-includes', '--null', '--list']);
     let result = '';
-    for (const item of contents.split('\0')) {
-      if (!item) continue;
-      const separator = item.indexOf('\n');
-      let key = separator < 0 ? item : item.slice(0, separator);
-      let value = separator < 0 ? 'true' : item.slice(separator + 1);
+    for (let [key, value] of listEntries(state, ['--file', source, '--no-includes'])) {
       const lower = key.toLowerCase();
-      if (lower.startsWith('url.') && lower.endsWith('.insteadof') && cacheTarget(key.slice(4, -10), caches)) continue;
-      if (lower.startsWith('http.') && lower.endsWith('.extraheader') && isCacheHost(key.slice(5, -12), caches)) continue;
+      const rewritten = subsection(key, 'url.', '.insteadof');
+      if (rewritten !== null && cacheTarget(rewritten, caches)) continue;
+      const header = subsection(key, 'http.', '.extraheader');
+      if (header !== null && isCacheHost(header, caches)) continue;
       if (lower === 'include.path' || /^includeif\..*\.path$/.test(lower)) {
         const included = value.startsWith('~/') ? path.join(originalHome, value.slice(2)) : path.resolve(path.dirname(source), value);
         const copied = copy(included);
@@ -224,14 +244,22 @@ function addManaged(state, file, entries) {
   for (const [key, value] of entries) run(state.realGit, ['config', '--file', file, '--add', key, value]);
 }
 
-function getAll(state, file, key) {
+function getAll(state, file, key, includes = false) {
   if (!fs.existsSync(file)) return [];
-  const result = run(state.realGit, ['config', '--file', file, '--no-includes', '--null', '--get-all', key], [0, 1]);
+  const result = run(state.realGit, ['config', '--file', file, includes ? '--includes' : '--no-includes', '--null', '--get-all', key], [0, 1]);
   return result.status === 0 ? result.stdout.split('\0').slice(0, -1) : [];
 }
 
-function writeCheckoutConfig(directory) {
-  writePrivate(path.join(directory, 'checkout.config'), entry('include.path', path.join(directory, 'global.config')));
+// A flattened copy of global.config rather than an include of it: with submodules,
+// actions/checkout runs `git config --global include.path <credentials>`, which
+// replaces a single include.path (and fails on several). Conditional includes
+// stay as they are and are evaluated when Git reads the copy.
+function writeCheckoutConfig(directory, state) {
+  const entries = listEntries(state, ['--file', path.join(directory, 'global.config'), '--includes'])
+    .filter(([key]) => key.toLowerCase() !== 'include.path');
+  // activate copies back only what checkout adds after this snapshot.
+  state.checkoutSafeDirectories = entries.filter(([key]) => key.toLowerCase() === 'safe.directory').length;
+  writePrivate(path.join(directory, 'checkout.config'), entries.map(([key, value]) => entry(key, value)).join(''));
 }
 
 function disableInPlace(directory, state) {
@@ -250,7 +278,7 @@ function prepare() {
     try {
       removeManaged(state, path.join(existing, 'global.config'));
       state.active = false;
-      writeCheckoutConfig(existing);
+      writeCheckoutConfig(existing, state);
       writeState(existing, state);
     } catch (error) {
       try { disableInPlace(existing, state); writeState(existing, state); } catch {}
@@ -268,7 +296,6 @@ function prepare() {
     fs.chmodSync(directory, 0o700);
     const originalHome = process.env.HOME || os.homedir();
     const state = {
-      version: 2,
       active: false,
       realGit,
       originalGlobal: process.env.GIT_CONFIG_GLOBAL ?? null,
@@ -280,7 +307,7 @@ function prepare() {
     };
     const base = copyGlobals(directory, state, config.caches);
     writePrivate(path.join(directory, 'global.config'), base + PERFORMANCE.map(([key, value]) => entry(key, value)).join(''));
-    writeCheckoutConfig(directory);
+    writeCheckoutConfig(directory, state);
     writeState(directory, state);
     return {directory, state, created: true};
   } catch (error) {
@@ -301,7 +328,6 @@ function prepareMain() {
     return;
   }
   const {directory, state} = prepared;
-  output('session-dir', directory);
   output('ready', 'true');
   environment('CACHEW_SESSION_DIR', directory);
   environment('CACHEW_REAL_GIT', state.realGit);
@@ -341,6 +367,22 @@ exec "$CACHEW_REAL_GIT" "$@"
 `;
 }
 
+// Git runs a partial clone's lazy fetches itself, not through the PATH shim, so
+// they would follow the job-wide cache rewrite without the wrapper's upstream
+// retry. A repository-local self-mapping is a longer insteadOf match, so the
+// checkout's promisor origin keeps reaching upstream directly, as standard
+// checkout leaves it.
+function pinPromisorOrigin(state, config) {
+  const repository = path.resolve(process.env.GITHUB_WORKSPACE || '.', process.env.CACHEW_PATH || '');
+  const file = path.join(repository, '.git', 'config');
+  if (!fs.existsSync(file)) return;
+  if (!getAll(state, file, 'remote.origin.promisor').some(value => value.toLowerCase() === 'true')) return;
+  const [url] = getAll(state, file, 'remote.origin.url');
+  if (!url || !url.startsWith(config.upstream + '/')) return;
+  const key = `url.${url}.insteadOf`;
+  if (!getAll(state, file, key).includes(url)) run(state.realGit, ['config', '--file', file, '--add', key, url]);
+}
+
 function activate() {
   const directory = process.env.CACHEW_SESSION_DIR;
   const state = readState(directory);
@@ -358,11 +400,11 @@ function activate() {
   // Keep checkout's safe.directory entries (written to checkout.config) for later steps.
   // An empty value resets the list in Git, so only entries after the last reset count.
   const trusted = [];
-  for (const value of getAll(state, path.join(directory, 'checkout.config'), 'safe.directory')) {
+  for (const value of getAll(state, path.join(directory, 'checkout.config'), 'safe.directory').slice(state.checkoutSafeDirectories || 0)) {
     if (value === '') trusted.length = 0;
     if (!trusted.includes(value)) trusted.push(value);
   }
-  const present = getAll(state, global, 'safe.directory');
+  const present = getAll(state, global, 'safe.directory', true);
   for (const value of trusted) {
     if (value !== '' && present.includes(value)) continue;
     run(state.realGit, ['config', '--file', global, '--add', 'safe.directory', value]);
@@ -398,6 +440,7 @@ function activate() {
     }
     addManaged(state, global, entries);
   }
+  pinPromisorOrigin(state, config);
   state.active = !fs.existsSync(disabled);
   writeState(directory, state);
   if (python && state.active) {

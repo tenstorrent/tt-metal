@@ -48,8 +48,9 @@ jobs:
         run: python3 .github/scripts/utils/cachew_checkout.py --check
       - name: Verify the action pins match this tree
         # The consumers' pin (ACTION_SHA) is the only pin. It must point at a pushed
-        # commit with this action code; on main it must also be on main, or GitHub
-        # may garbage-collect it once its branch is deleted.
+        # commit whose action runtime files match this tree. Squash merges leave a
+        # PR pin off main's history; refs/pull/<n>/head keeps it fetchable, so on
+        # main that only warns until the follow-up re-pin to the merge commit lands.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -59,7 +60,10 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = push ]; then
             for sha in $pins; do
               status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$sha" --jq .status)
-              case "$status" in behind|identical) ;; *) echo "::error::cachew pin $sha is not on main ($status)"; exit 1 ;; esac
+              case "$status" in
+                behind|identical) ;;
+                *) echo "::warning::cachew pin $sha is not on main ($status); re-pin ACTION_SHA to the merge commit" ;;
+              esac
             done
           fi
       - name: Working-tree action is a strict no-op on GitHub-hosted runners

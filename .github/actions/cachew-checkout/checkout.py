@@ -17,6 +17,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import urllib.parse
 import uuid
 
@@ -32,12 +33,23 @@ TRANSPORT_ERRORS = re.compile(
     rb"returned error: (?:3|5)\d\d",
     re.IGNORECASE,
 )
-# A slow cache is fine; a stalled one is not. The wall-clock cap only guards
-# against a transfer that trickles forever just above the low-speed limit.
+# Input limits for cachew-health-timeout and cachew-fetch-timeout. session/index.js
+# settings() enforces the same values; keep them in sync.
+MAX_HEALTH_TIMEOUT_SECONDS = 30
+MAX_FETCH_TIMEOUT_SECONDS = 600
+DEFAULT_FETCH_TIMEOUT_SECONDS = 120
+# The whole cache checkout (every fetch, the lazy blob fetches of a sparse
+# checkout, and the local steps) must leave the upstream fallback room inside
+# consumers' `timeout-minutes: 20`: a degraded cache that still moves above the
+# low-speed limit is abandoned after this budget.
+CHECKOUT_BUDGET_SECONDS = 300
+# Downstream reads through the wrapper have no step-level budget; this cap only
+# guards against a transfer that trickles forever just above the low-speed limit.
 HARD_DEADLINE_SECONDS = 3600
+MAX_DEADLINE_SECONDS = 86400
+MAX_SUBMODULE_DEPTH = 10
+MAX_SUBMODULES = 100
 SHA = re.compile(r"[0-9a-fA-F]{40}")
-HEADS_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
-TAGS_REFSPEC = "+refs/tags/*:refs/tags/*"
 
 
 class Bypass(Exception):
@@ -85,6 +97,15 @@ def relative_path(value):
 def container_path(*parts):
     """Node's path.posix.join, which also collapses '..' segments."""
     return posixpath.normpath(posixpath.join("/github/workspace", *parts))
+
+
+def apply_git_config(env, entries, append=False):
+    """Command-scoped Git configuration through GIT_CONFIG_COUNT/KEY_n/VALUE_n."""
+    base = int(env.get("GIT_CONFIG_COUNT") or 0) if append else 0
+    for index, (key, value) in enumerate(entries, base):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    env["GIT_CONFIG_COUNT"] = str(base + len(entries))
 
 
 def duration(value, maximum):
@@ -144,17 +165,19 @@ class Checkout:
             self.filter = "blob:none"
         if self.filter and not re.fullmatch(r"[\w:=+.%-]+", self.filter, re.ASCII):
             raise Bypass("unsupported partial-clone filter")
-        # GIT_CONFIG_COUNT (2.31) carries the transport settings below; older Git
-        # would silently ignore them and use inherited helpers and rewrites.
-        if not git_version_at_least(self.git_executable, (2, 31)):
-            raise Bypass("Git 2.31 or newer is required")
+        # GIT_CONFIG_COUNT (2.31) carries the transport settings below and
+        # GIT_CONFIG_GLOBAL (2.32) isolates them; older Git would silently ignore
+        # them and use inherited helpers and rewrites.
+        if not git_version_at_least(self.git_executable, (2, 32)):
+            raise Bypass("Git 2.32 or newer is required")
         self.upstream = origin(environ.get("CACHEW_GITHUB_SERVER_URL") or environ["GITHUB_SERVER_URL"], environ)
         self.caches = cache_candidates(environ.get("CACHEW_CACHEW_URL", "auto"), self.upstream, environ)
         self.cache = None
-        self.health_timeout = duration(environ["CACHEW_CACHEW_HEALTH_TIMEOUT"], 30)
+        self.health_timeout = duration(environ["CACHEW_CACHEW_HEALTH_TIMEOUT"], MAX_HEALTH_TIMEOUT_SECONDS)
         # Seconds without progress before a cache transfer is abandoned.
-        self.fetch_timeout = duration(environ["CACHEW_CACHEW_FETCH_TIMEOUT"], 600)
-        self.hard_deadline = duration(environ.get("CACHEW_HARD_DEADLINE", str(HARD_DEADLINE_SECONDS)), 86400)
+        self.fetch_timeout = duration(environ["CACHEW_CACHEW_FETCH_TIMEOUT"], MAX_FETCH_TIMEOUT_SECONDS)
+        budget = duration(environ.get("CACHEW_CHECKOUT_BUDGET", str(CHECKOUT_BUDGET_SECONDS)), MAX_DEADLINE_SECONDS)
+        self.deadline = time.monotonic() + budget
         repository = environ.get("CACHEW_REPOSITORY") or environ["GITHUB_REPOSITORY"]
         if not re.fullmatch(r"[\w.-]+/[\w.-]+", repository, re.ASCII):
             raise Bypass("unsupported repository name")
@@ -241,12 +264,10 @@ class Checkout:
         ]
         if self.token:
             upstream_config.append((f"http.{self.upstream}/.extraHeader", f"AUTHORIZATION: basic {self.auth}"))
-        self.upstream_env["GIT_CONFIG_COUNT"] = str(len(upstream_config))
-        for index, (key, value) in enumerate(upstream_config):
-            self.upstream_env[f"GIT_CONFIG_KEY_{index}"] = key
-            self.upstream_env[f"GIT_CONFIG_VALUE_{index}"] = value
+        apply_git_config(self.upstream_env, upstream_config)
         self.modules = 0
         self.refs = {}
+        self.listed = None
         self.want = ""
         self.checkout_target = None
         self.credentials = None
@@ -262,24 +283,28 @@ class Checkout:
             ("http.lowSpeedTime", str(max(1, math.ceil(self.fetch_timeout)))),
         ]
         if self.token:
-            auth = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
-            config.append((f"http.{self.cache}/.extraHeader", f"AUTHORIZATION: basic {auth}"))
+            config.append((f"http.{self.cache}/.extraHeader", f"AUTHORIZATION: basic {self.auth}"))
         self.cache_config = config
-        self.env["GIT_CONFIG_COUNT"] = str(len(config))
-        for index, (key, value) in enumerate(config):
-            self.env[f"GIT_CONFIG_KEY_{index}"] = key
-            self.env[f"GIT_CONFIG_VALUE_{index}"] = value
+        apply_git_config(self.env, config)
 
-    def run_git(self, command, env, message, upstream=False):
+    def run_git(self, command, env, message, upstream=False, input=None):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise Bypass("cache checkout time budget exhausted", transport=not upstream)
         with subprocess.Popen(
-            command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+            command,
+            env=env,
+            stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         ) as process:
             try:
-                output, errors = process.communicate(timeout=self.hard_deadline)
+                output, errors = process.communicate(input=input, timeout=remaining)
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
-                raise Bypass(f"{message} timed out", transport=not upstream) from None
+                raise Bypass(f"{message} exceeded the cache checkout time budget", transport=not upstream) from None
         if process.returncode:
             # Git's diagnostics may contain credentials or untrusted server text,
             # so they are only classified, never printed.
@@ -287,8 +312,9 @@ class Checkout:
             raise Bypass(f"{message} failed", transport=transport)
         return output
 
-    def git(self, gitdir, *arguments):
-        return self.run_git([self.git_executable, f"--git-dir={gitdir}", *arguments], self.env, "cache Git operation")
+    def git(self, gitdir, *arguments, input=None):
+        command = [self.git_executable, f"--git-dir={gitdir}", *arguments]
+        return self.run_git(command, self.env, "cache Git operation", input=input)
 
     def local(self, *arguments, cwd=None):
         command = [self.git_executable, "-c", "protocol.allow=never", "-C", str(cwd or self.target), *arguments]
@@ -299,11 +325,7 @@ class Checkout:
         checkout does from upstream, but only from the selected cache. The
         persisted origin stays upstream."""
         env = dict(self.local_env)
-        base = int(env.get("GIT_CONFIG_COUNT") or 0)
-        for index, (key, value) in enumerate(self.cache_config, base):
-            env[f"GIT_CONFIG_KEY_{index}"] = key
-            env[f"GIT_CONFIG_VALUE_{index}"] = value
-        env["GIT_CONFIG_COUNT"] = str(base + len(self.cache_config))
+        apply_git_config(env, self.cache_config, append=True)
         scheme = urllib.parse.urlsplit(self.cache).scheme
         command = [
             self.git_executable,
@@ -334,7 +356,10 @@ class Checkout:
         return refs, symrefs
 
     def lookup(self, ref, *options):
-        sha = self.ls_remote("--refs", *options, self.url, ref)[0].get(ref)
+        if self.listed is not None and ref.startswith(("refs/heads/", "refs/tags/")):
+            sha = self.listed.get(ref)
+        else:
+            sha = self.ls_remote("--refs", *options, self.url, ref)[0].get(ref)
         if not sha:
             raise Bypass("ref not found upstream")
         return sha
@@ -343,6 +368,16 @@ class Checkout:
         """The local refs and checkout target that actions/checkout's fetch and
         getCheckoutInfo produce for the same input, keyed by object name."""
         ref, commit = self.ref, self.commit
+        if self.depth == 0 or self.tags:
+            # Standard checkout fetches every tag (and, for full history, every
+            # branch) by refspec. Their names resolve upstream too: the cache's
+            # advertisement can lag a tag pushed minutes ago.
+            self.listed = self.ls_remote("--refs", "--heads", "--tags", self.url)[0]
+            for name, sha in self.listed.items():
+                if name.startswith("refs/tags/"):
+                    self.refs[name] = sha
+                elif self.depth == 0:
+                    self.refs[f"refs/remotes/origin/{name[len('refs/heads/'):]}"] = sha
         if not ref and not commit:
             refs, symrefs = self.ls_remote("--symref", self.url, "HEAD")
             ref = symrefs.get("HEAD", "")
@@ -371,7 +406,9 @@ class Checkout:
                 self.want, self.checkout_target = self.refs[ref], (ref, None)
         elif ref:
             # The refspecs refs/heads/<ref>* and refs/tags/<ref>*, then a branch before a tag.
-            listed = self.ls_remote("--refs", "--heads", "--tags", self.url)[0]
+            listed = (
+                self.listed if self.listed is not None else self.ls_remote("--refs", "--heads", "--tags", self.url)[0]
+            )
             for name, sha in listed.items():
                 if name.startswith(f"refs/heads/{ref}"):
                     self.refs[f"refs/remotes/origin/{name[len('refs/heads/'):]}"] = sha
@@ -396,7 +433,6 @@ class Checkout:
         self.git(gitdir, "remote", "add", "origin", self.url)
         cache_url = self.cache_url(self.url)
         options = ["--force", "--no-recurse-submodules", "--no-tags"]
-        refspecs = [HEADS_REFSPEC, TAGS_REFSPEC] if self.depth == 0 else [TAGS_REFSPEC] if self.tags else []
         if self.depth:
             options.append(f"--depth={self.depth}")
         # Explicit URL, never a persisted rewrite.
@@ -423,8 +459,10 @@ class Checkout:
             self.git(gitdir, "config", "remote.origin.promisor", "true")
             self.git(gitdir, "config", "remote.origin.partialclonefilter", self.filter)
             options.append(f"--filter={self.filter}")
+        # Exact objects only: every name came from upstream, never from the cache's
+        # advertisement, which may lag upstream.
         wants = sorted({self.want, *self.refs.values()})
-        self.git(gitdir, "fetch", *options, "--", cache_url, *refspecs, *wants)
+        self.git(gitdir, "fetch", *options, "--stdin", cache_url, input="".join(f"{sha}\n" for sha in wants).encode())
         if self.filter:
             # A filtered fetch from a URL registers that URL as a promisor remote.
             section = f"remote.{cache_url}."
@@ -433,9 +471,13 @@ class Checkout:
                 for line in self.git(gitdir, "config", "--local", "--list").decode().splitlines()
             ):
                 self.git(gitdir, "config", "--remove-section", section[:-1])
-        # Upstream's answer wins over the cache's copy of the same name.
-        for name, sha in self.refs.items():
-            self.git(gitdir, "update-ref", name, sha)
+        if self.refs:
+            self.git(
+                gitdir,
+                "update-ref",
+                "--stdin",
+                input="".join(f"update {name} {sha}\n" for name, sha in self.refs.items()).encode(),
+            )
         commit = self.git(gitdir, "rev-parse", f"{self.want}^{{commit}}").decode().strip()
         if self.commit and commit != self.commit:
             raise Bypass("ref does not point to the expected commit")
@@ -488,8 +530,10 @@ class Checkout:
                 raise Bypass("submodule uses another upstream")
             relative_path(child_url[len(self.upstream) + 1 :])
             self.modules += 1
-            if level >= 10 or self.modules > 100:
-                raise Bypass("submodule traversal limit reached")
+            if level >= MAX_SUBMODULE_DEPTH:
+                raise Bypass(f"submodule nesting deeper than {MAX_SUBMODULE_DEPTH}")
+            if self.modules > MAX_SUBMODULES:
+                raise Bypass(f"more than {MAX_SUBMODULES} submodules")
             child_dir = gitdir / "modules" / name
             if child_dir.exists() or any(
                 (parent / "config").is_file()

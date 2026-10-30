@@ -63,8 +63,10 @@ inputs:
     description: >-
       auto (default) uses cachew only on self-hosted Linux runners and is a strict no-op
       elsewhere: no probe, no token, no Git wrapper and no configuration change.
-      false always runs plain actions/checkout. true also tries cachew on other Linux
-      runners. A job-level CACHEW_CHECKOUT=false environment variable disables it too.
+      false always runs plain actions/checkout against upstream; if an earlier checkout
+      in the job already activated cachew, it stays active for later steps. true also
+      tries cachew on other Linux runners. A CACHEW_CHECKOUT=false environment variable
+      disables it too.
     default: 'auto'
   cachew-url:
     description: >-
@@ -96,11 +98,14 @@ runs:
     # The gate is evaluated by the runner, before any process starts. On
     # GitHub-hosted runners (no access to the CI VLAN) every cachew step is
     # skipped and only the official checkout below runs, exactly as before.
+    # Once an earlier checkout activated a session, this step also runs with
+    # cachew disabled: the job-wide rewrite and Git wrapper are already in place,
+    # and only prepare takes them out of this checkout's way.
     - name: Prepare isolated upstream Git configuration
       id: session
       if: >-
-        runner.os == 'Linux' && env.CACHEW_CHECKOUT != 'false' && inputs.cachew != 'false' &&
-        (inputs.cachew == 'true' || runner.environment == 'self-hosted')
+        runner.os == 'Linux' && (env.CACHEW_SESSION_DIR != '' || (env.CACHEW_CHECKOUT != 'false' &&
+        inputs.cachew != 'false' && (inputs.cachew == 'true' || runner.environment == 'self-hosted')))
       shell: bash
       env:
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
@@ -115,7 +120,7 @@ runs:
       run: bash "$GITHUB_ACTION_PATH/session/prepare.sh"
     - name: Checkout from cachew
       id: cachew
-      if: steps.session.outputs.ready == 'true'
+      if: steps.session.outputs.ready == 'true' && env.CACHEW_CHECKOUT != 'false' && inputs.cachew != 'false'
       continue-on-error: true
       shell: bash
       env:
@@ -191,6 +196,7 @@ runs:
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
         CACHEW_GITHUB_SERVER_URL: ${{ inputs.github-server-url }}
         CACHEW_REPOSITORY: ${{ inputs.repository }}
+        CACHEW_PATH: ${{ inputs.path }}
         CACHEW_TOKEN: ${{ inputs.token }}
         CACHEW_PERSIST_CREDENTIALS: ${{ inputs.persist-credentials }}
       run: '"$CACHEW_NODE" "$CACHEW_CONFIG_HELPER" activate'
