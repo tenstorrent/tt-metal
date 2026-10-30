@@ -319,11 +319,13 @@ def test_fuse_progcfg_not_for_prefill_or_wide(monkeypatch, rows, mode):
     ]
 
 
-@pytest.mark.parametrize("ids_shape", [(8, 1), (1, 8), (32, 1)])
+@pytest.mark.parametrize("ids_shape", [(8, 1), (1, 8), (32, 1), (1, 1), (64, 1)])
 def test_embed_rows_ops(monkeypatch, ids_shape):
-    """QWEN36_MTP_EMBED_ROW: a row-major lookup, a [1,1,rows,dim/tp] view, one tilize; both handles freed."""
+    """QWEN36_MTP_EMBED_ROW: a row-major lookup, a [1,1,rows,dim/tp] view, zero rows up to whole tiles (row-major pad),
+    one tilize, and a view back to the logical rows; the intermediates are freed, the result is not."""
     log, freed = [], []
     rows = ids_shape[0] * ids_shape[1]
+    pad = -rows % 32
     monkeypatch.setattr(ttnn, "deallocate", lambda t, *a: freed.append(t))
     monkeypatch.setattr(
         ttnn,
@@ -331,7 +333,15 @@ def test_embed_rows_ops(monkeypatch, ids_shape):
         lambda ids, w, layout=None, memory_config=None: log.append(("embedding", ids.shape, w, layout, memory_config))
         or _T((ids_shape[0], ids_shape[1], 640)),
     )
-    monkeypatch.setattr(ttnn, "reshape", lambda t, shape: log.append(("reshape", tuple(shape))) or _T(tuple(shape)))
+
+    def reshape(t, shape, padded=None):
+        log.append(("reshape", tuple(shape), None if padded is None else tuple(padded)))
+        return _T(tuple(shape))
+
+    monkeypatch.setattr(ttnn, "reshape", reshape)
+    monkeypatch.setattr(
+        ttnn, "pad", lambda t, p, value=None: log.append(("pad", tuple(map(tuple, p)), value)) or _T((1, 1, rows + pad, 640))
+    )
     monkeypatch.setattr(
         ttnn,
         "to_layout",
@@ -342,12 +352,21 @@ def test_embed_rows_ops(monkeypatch, ids_shape):
     m.embd = types.SimpleNamespace(weights="W")
     out = m._embed_rows(_T(ids_shape, ttnn.uint32))
     assert out.shape == (1, 1, rows, 640)
-    assert log == [
+    want = [
         ("embedding", ids_shape, "W", ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
-        ("reshape", (1, 1, rows, 640)),
-        ("to_layout", (1, 1, rows, 640), ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+        ("reshape", (1, 1, rows, 640), None),
     ]
-    assert len(freed) == 2 and out not in freed
+    if pad:
+        want += [
+            ("pad", ((0, 0), (0, 0), (0, pad), (0, 0)), 0.0),
+            ("to_layout", (1, 1, rows + pad, 640), ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG),
+            ("reshape", (1, 1, rows, 640), (1, 1, rows + pad, 640)),
+        ]
+    else:
+        want += [("to_layout", (1, 1, rows, 640), ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG)]
+    assert log == want
+    assert out not in freed
+    assert len(freed) == (4 if pad else 2)  # rm + view (+ the padded row-major block + the tilized buffer view source)
 
 
 def _decode_head(monkeypatch, embed_row):

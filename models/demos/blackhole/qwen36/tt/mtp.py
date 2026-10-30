@@ -21,6 +21,14 @@ from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.tt_transformers.tt.common import Mode
 
 
+def _aliases(a, b):
+    """Whether two handles name the same device buffer (tp_common.aliases; True when the address is unavailable, so a
+    caller skips the extra free rather than double-freeing an alias)."""
+    from models.demos.blackhole.qwen36.tt.tp_common import aliases
+
+    return aliases(a, b)
+
+
 def argmax_last(logits):
     """argmax over the vocab dim of drafter logits -> [1,1,B,1] uint32 ROW_MAJOR (one id per row).
 
@@ -536,15 +544,27 @@ class Qwen36MTP:
 
     def _embed_rows(self, token_ids):
         """QWEN36_MTP_EMBED_ROW: the token embedding of ``token_ids`` ([B,1] or [1,B] uint32) as [1,1,B,dim/tp] TILE in
-        DRAM, from a row-major lookup viewed as one [1,1,B,dim/tp] row block and tilized as one tile row. The TILE lookup
-        it replaces pads every id to its own 32-row tile ([B,1,dim/tp]) and needs a reshape copy to gather the rows; both
+        DRAM, from a row-major lookup viewed as one [1,1,B,dim/tp] row block, zero-padded to whole 32-row tiles in
+        row-major (a pad of B < 32 rows straight into the tilize takes a slow path: 23 us at B=8 vs 7 us for 32 rows),
+        tilized, and viewed back to B logical rows (the padded shape is kept: a metadata view). The TILE lookup it
+        replaces pads every id to its own 32-row tile ([B,1,dim/tp]) and needs a reshape copy to gather the rows; both
         produce the same bf16 rows (pure data movement), so the drafter's input is byte-identical."""
         rows = int(token_ids.shape[0]) * int(token_ids.shape[-1])
         rm = ttnn.embedding(
             token_ids, self.embd.weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        view = ttnn.reshape(rm, (1, 1, rows, rm.shape[-1]))  # same pages (a row per id): a metadata view
-        out = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        width = int(rm.shape[-1])
+        view = ttnn.reshape(rm, (1, 1, rows, width))  # same pages (a row per id): a metadata view
+        pad_rows = -rows % ttnn.TILE_SIZE
+        if pad_rows:
+            full = ttnn.pad(view, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)  # zero rows, row-major
+            tiled = ttnn.to_layout(full, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.reshape(tiled, ttnn.Shape([1, 1, rows, width]), ttnn.Shape([1, 1, rows + pad_rows, width]))
+            if out is not tiled and not _aliases(out, tiled):
+                ttnn.deallocate(tiled)
+            ttnn.deallocate(full)
+        else:
+            out = ttnn.to_layout(view, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # A reshape is a metadata alias or a copy; deallocate is a no-op on an already-freed buffer, so freeing both
         # handles frees each buffer once.
         ttnn.deallocate(view)
