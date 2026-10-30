@@ -173,7 +173,7 @@ manifest::content::L1 describe_l1_array(const ManifestRouterInputs& inputs, size
         size,
         sizeof(T));
     manifest::content::L1 array =
-        manifest::describe_l1_region<T>(static_cast<uint32_t>(address), static_cast<uint32_t>(size / sizeof(T)));
+        manifest::register_l1_region<T>(static_cast<uint32_t>(address), static_cast<uint32_t>(size / sizeof(T)));
     array.cleared_by_host = is_cleared_by_host(inputs, address);
     return array;
 }
@@ -225,13 +225,13 @@ std::optional<manifest::content::L1> describe_ring_buffer(
     if (num_slots == 0) {
         return std::nullopt;
     }
-    manifest::content::L1 ring_buffer = manifest::describe_l1_region<std::byte>(
+    manifest::content::L1 ring_buffer = manifest::register_l1_region<std::byte>(
         static_cast<uint32_t>(address), static_cast<uint32_t>(num_slots), static_cast<uint32_t>(slot_size));
     ring_buffer.cleared_by_host = is_cleared_by_host(inputs, address);
     return ring_buffer;
 }
 
-// The L1 from the end of what the router uses to the end of loadable L1.
+// The L1 from the end of what the router places to max_l1_loading_size, the end of the L1 the router may load into.
 std::optional<manifest::content::L1> collect_leftover_l1(const ManifestRouterInputs& inputs) {
     const size_t start = inputs.erisc_builder.get_allocated_l1_end_address();
     const size_t end = inputs.erisc_builder.config.max_l1_loading_size;
@@ -239,15 +239,15 @@ std::optional<manifest::content::L1> collect_leftover_l1(const ManifestRouterInp
         return std::nullopt;
     }
     manifest::content::L1 leftover =
-        manifest::describe_l1_region<std::byte>(static_cast<uint32_t>(start), static_cast<uint32_t>(end - start), 1);
+        manifest::register_l1_region<std::byte>(static_cast<uint32_t>(start), static_cast<uint32_t>(end - start), 1);
     leftover.cleared_by_host = is_cleared_by_host(inputs, start);
     return leftover;
 }
 
-// Stream `stream_id`'s `reg`, with its value read as the registered type `type`: where the register is, from the HAL,
-// and how many of its low bits hold the value.
+// The described stream register `stream_reg` on stream `stream_id`: where it is, from the HAL, and how many of its low
+// bits hold its value.
 manifest::content::StreamReg describe_stream_register(
-    const tt::tt_metal::Hal& hal, uint32_t stream_id, manifest::StreamRegister reg, std::string_view type) {
+    const tt::tt_metal::Hal& hal, uint32_t stream_id, const manifest::StreamRegField& stream_reg) {
     TT_FATAL(
         hal.has_stream_registers(),
         "Fabric manifest: the HAL gives no stream register addresses on {}",
@@ -259,7 +259,7 @@ manifest::content::StreamReg describe_stream_register(
         StreamRegAssignments::num_eth_stream_registers);
     // The register's index within its stream's block, and how many of its low bits hold its value.
     const auto [reg_index, value_bits] = [&]() -> std::pair<uint32_t, uint32_t> {
-        switch (reg) {
+        switch (stream_reg.reg) {
             case manifest::StreamRegister::BUF_SPACE_AVAILABLE:
                 return {
                     hal.get_noc_stream_remote_dest_buf_space_available_reg_index(),
@@ -268,14 +268,14 @@ manifest::content::StreamReg describe_stream_register(
                 // The fabric's scratch register: four 6-bit fields on Wormhole and Blackhole (fabric_stream_regs.hpp).
                 return {hal.get_noc_stream_remote_src_reg_index(), 24};
         }
-        TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(reg));
+        TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(stream_reg.reg));
     }();
     return {
         .stream_id = stream_id,
         .address = hal.get_noc_overlay_start_addr() + (stream_id * hal.get_noc_stream_reg_space_size()) +
                    static_cast<uint32_t>(reg_index * sizeof(uint32_t)),
         .value_bits = value_bits,
-        .type = type,
+        .type = stream_reg.type,
     };
 }
 
@@ -311,7 +311,7 @@ manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::R
                 return l1;
             },
             [&](const manifest::StreamRegField& stream) -> manifest::Content {
-                return describe_stream_register(inputs.hal, arg, stream.reg, stream.type);
+                return describe_stream_register(inputs.hal, arg, stream);
             },
             [&](manifest::content::Number number) -> manifest::Content {
                 number.value = arg;
@@ -429,8 +429,7 @@ std::optional<manifest::content::StreamReg> read_fed_stream(
     return describe_stream_register(
         inputs.hal,
         stream_id,
-        manifest::StreamRegister::BUF_SPACE_AVAILABLE,
-        manifest::get_manifest_type_name<uint32_t>());
+        manifest::register_stream_region<uint32_t>(manifest::StreamRegister::BUF_SPACE_AVAILABLE));
 }
 
 // The kernel runs VC1's channel steps only under FABRIC_2D_VC1_SERVICED, and VC2's only under FABRIC_2D_VC2_SERVICED.
