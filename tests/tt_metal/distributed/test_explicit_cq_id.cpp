@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -84,6 +85,25 @@ TEST_F(ExplicitCqIdTest, AddressBackedGlobalSemaphoreInitOnRequestedQueue) {
     EXPECT_ANY_THROW(experimental::CreateGlobalSemaphore(
         *mesh_device, cores, /*initial_value=*/6, BufferType::L1, address, kOutOfRangeCqId));
 }
+
+// Compatibility test for the deprecated thread-local queue selection (removed after the deprecation window).
+// Out-of-tree callers that only use Metal keep the old behavior; an explicit id always wins.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+TEST_F(ExplicitCqIdTest, DeprecatedThreadLocalSelectionStillHonoredWhenIdOmitted) {
+    auto mesh_device = get_mesh_device();
+    ASSERT_EQ(GetCurrentCommandQueueIdForThread(), 0);
+    EXPECT_EQ(mesh_device->mesh_command_queue().id(), 0);
+
+    PushCurrentCommandQueueIdForThread(1);
+    EXPECT_EQ(GetCurrentCommandQueueIdForThread(), 1);
+    EXPECT_EQ(mesh_device->mesh_command_queue().id(), 1);
+    EXPECT_EQ(mesh_device->mesh_command_queue(0).id(), 0);  // explicit id wins
+    EXPECT_EQ(PopCurrentCommandQueueIdForThread(), 1);
+
+    EXPECT_EQ(mesh_device->mesh_command_queue().id(), 0);
+}
+#pragma GCC diagnostic pop
 
 TEST_F(ExplicitCqIdTest, GlobalCircularBufferConfigWriteOnSecondQueue) {
     auto mesh_device = get_mesh_device();

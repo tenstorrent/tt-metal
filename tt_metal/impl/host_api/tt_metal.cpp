@@ -1103,18 +1103,7 @@ uint8_t PopCurrentCommandQueueIdForThread() {
     return cq_id;
 }
 
-uint8_t GetCurrentCommandQueueIdForThread() {
-    // TODO: Make GetCurrentCommandQueueIdForThread work for non-default contexts
-    // https://github.com/tenstorrent/tt-metal/issues/39819
-    if (!MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return 0;
-    }
-    const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
-    if (cq_stack.empty()) {
-        return 0;
-    }
-    return cq_stack.back();
-}
+uint8_t GetCurrentCommandQueueIdForThread() { return MetalContext::current_command_queue_id_for_thread(); }
 
 namespace experimental {
 
