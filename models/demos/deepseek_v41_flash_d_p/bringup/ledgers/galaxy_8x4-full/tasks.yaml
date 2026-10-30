@@ -1550,6 +1550,44 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: P.16
+  title: 'FORK_OUT_BUFFERS: the bring-up rms_norm / mHC / RoPE forks write into load-time output buffers'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.15
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-10-30 (P.15''s next host idea, DS41-171). ~500 calls a chunk of ttnn.bringup.rms_norm, mhc_post,
+      mhc_pre_xing / mhc_pre_xing_pack and rotary_embedding_indexed allocate their output on every call (~35 us host
+      each, ~17 ms a chunk). Give each fork an optional output tensor (behind an option, default = today''s
+      allocation; extend the fork''s C++ / Python and its tests, rebuild), then have the model pass load-time buffers
+      (tt/host_alloc.py, P.15''s pattern) at every call site whose output is consumed within its step. First check each
+      site''s output lifetime: an output kept across layers or chunks (e.g. by the indexer''s per-chunk memo, the mHC
+      residual streams) must not be overwritten - those sites keep allocating. Bit-identical outputs. Setting
+      FORK_OUT_BUFFERS (default on, ''off'' = today''s path). Report per-op calls a chunk and host us a call before /
+      after, allocations a chunk, host_overhead_ms, device time and warm wall per chunk (DS41_ENGRAM_TABLE=resident) on
+      vs off.'
+  ab:
+    env:
+      DS41_FORK_OUT_BUFFERS: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_FORK_OUT_BUFFERS: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -1559,6 +1597,7 @@ tasks:
   - P.13
   - P.14
   - P.15
+  - P.16
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
