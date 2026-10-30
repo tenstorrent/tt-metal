@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -15,13 +17,13 @@
 
 #include <enchantum/enchantum.hpp>
 #include <hostdevcommon/fabric_common.h>
+#include <tt_stl/type_name.hpp>
 
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 
 // The router facts the manifest reads straight from what the router kernel is fed, one entry each, in one table per
 // place a field sits.
@@ -78,28 +80,51 @@ struct BuilderMember {
 // What the kernel is fed that holds a field: the address, the stream id or the value.
 using Source = std::variant<NamedArg, BuilderMember>;
 
-// Contents (fabric_manifest_model.hpp) that hold a T.
-template <typename T>
-constexpr content::L1 l1() {
-    return {.type = layout::type_of<T>()};
-}
+// Which register of its stream a stream field reads. The router pass turns the stream id the kernel is fed and the
+// register into the register's address.
+enum class StreamRegister : uint8_t {
+    // The increment-on-write credit or slot count.
+    BUF_SPACE_AVAILABLE,
+    // A plain read-write register.
+    REMOTE_SRC,
+};
+
+// A stream field as the table gives it, before the router pass reads its stream id: which register, and the registered
+// name of the type its value is read as.
+struct StreamRegField {
+    StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
+    std::string_view type;
+};
 
 template <typename T>
-constexpr content::Stream stream(StreamRegister reg) {
-    return {.reg = reg, .type = layout::type_of<T>()};
+constexpr StreamRegField stream(StreamRegister reg) {
+    static_assert(sizeof(T) <= sizeof(uint32_t), "A stream register holds one word, so its value fits in a uint32_t");
+    return {.reg = reg, .type = get_manifest_type_name<T>()};
 }
 
 template <typename E>
     requires std::is_enum_v<E>
 constexpr content::Enum enum_of() {
     return {
-        .type = layout::type_of<E>(),
-        .is_enumerator =
-            [](uint32_t value) {
-                return enchantum::cast<E>(static_cast<std::underlying_type_t<E>>(value)).has_value();
-            },
+        .type = ttsl::short_type_name<E>,
+        .name_value = [](uint32_t value) -> std::optional<std::string_view> {
+            using Underlying = std::underlying_type_t<E>;
+            if (!std::in_range<Underlying>(value)) {
+                return std::nullopt;
+            }
+            const auto enumerator = enchantum::cast<E>(static_cast<Underlying>(value));
+            if (!enumerator.has_value()) {
+                return std::nullopt;
+            }
+            return enchantum::to_string(*enumerator);
+        },
     };
 }
+
+// What a table entry holds: a content (fabric_manifest_model.hpp), except that a stream is the register to read until
+// the router pass reads the stream id.
+using FieldContent = std::variant<content::L1, StreamRegField, content::Number, content::Flag, content::Enum>;
+
 // A member every entry sets: it has no default, so an entry that leaves it out does not compile.
 template <typename T>
 struct Required {
@@ -114,7 +139,7 @@ struct RouterField {
     Required<std::string_view> key;
     Source source;
     Required<FieldCategory> category;
-    Required<Content> content;
+    Required<FieldContent> content;
     Required<std::string_view> description;
 };
 
@@ -126,21 +151,21 @@ inline constexpr auto k_router_fields = [] {
             .key = "edm_status",
             .source = "EDM_STATUS_PTR_ADDR",
             .category = LIFECYCLE,
-            .content = l1<EDMStatus>(),
+            .content = describe_l1_region<EDMStatus>(),
             .description = "How far the router has come through startup and teardown.",
         },
         RouterField{
             .key = "termination_signal",
             .source = "TERMINATION_SIGNAL_ADDR",
             .category = LIFECYCLE,
-            .content = l1<TerminationSignal>(),
+            .content = describe_l1_region<TerminationSignal>(),
             .description = "Where the router is told to stop.",
         },
         RouterField{
             .key = "local_sync",
             .source = "EDM_LOCAL_SYNC_PTR_ADDR",
             .category = LIFECYCLE,
-            .content = l1<uint32_t>(),
+            .content = describe_l1_region<uint32_t>(),
             .description = "The count the chip's routers sync through at startup: the others notify the master "
                            "router, which then notifies them all.",
         },
@@ -148,14 +173,14 @@ inline constexpr auto k_router_fields = [] {
             .key = "local_tensix_sync",
             .source = "EDM_LOCAL_TENSIX_SYNC_PTR_ADDR",
             .category = LIFECYCLE,
-            .content = l1<uint32_t>(),
+            .content = describe_l1_region<uint32_t>(),
             .description = "The count the router waits on until its downstream tensix connections are ready.",
         },
         RouterField{
             .key = "handshake",
             .source = "HANDSHAKE_ADDR",
             .category = LIFECYCLE,
-            .content = l1<erisc::datamover::handshake::handshake_info_t>(),
+            .content = describe_l1_region<erisc::datamover::handshake::handshake_info_t>(),
             .description = "The Ethernet handshake scratch. Each end of the link writes its scratch into the first "
                            "16 bytes of the other's.",
         },
@@ -198,7 +223,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "notify_worker_src",
             .source = "NOTIFY_WORKER_OF_READ_COUNTER_UPDATE_SRC_ADDR",
             .category = FLOW_CONTROL,
-            .content = l1<uint32_t>(),
+            .content = describe_l1_region<uint32_t>(),
             .description = "Where the router stages the source of the inline write that updates a producer's read "
                            "counter. Allocated only on Blackhole.",
         },
@@ -305,9 +330,8 @@ inline constexpr auto k_router_fields = [] {
             .key = "perf_telemetry",
             .source = "PERF_TELEMETRY_BUFFER_ADDR",
             .category = DIAGNOSTICS,
-            .content =
-                content::L1{
-                    .type = {layout::element::Bytes{}, FabricEriscDatamoverConfig::perf_telemetry_buffer_size, 0}},
+            .content = describe_l1_region<std::byte>(
+                0, static_cast<uint32_t>(FabricEriscDatamoverConfig::perf_telemetry_buffer_size), 1),
             .description = "Where the router records its bandwidth telemetry, when bandwidth telemetry is on. "
                            "Allocated only then, except on Blackhole, which always allocates it.",
         },
@@ -315,7 +339,7 @@ inline constexpr auto k_router_fields = [] {
             .key = "code_profiling",
             .source = "CODE_PROFILING_BUFFER_ADDR",
             .category = DIAGNOSTICS,
-            .content = l1<CodeProfilingTimerResult[get_max_code_profiling_timer_types()]>(),
+            .content = describe_l1_region<CodeProfilingTimerResult>(0, get_max_code_profiling_timer_types()),
             .description = "Where the router accumulates each code profiling timer's cycles and captures, one result "
                            "per timer type. Allocated only with code profiling on.",
         },
@@ -332,7 +356,7 @@ inline constexpr auto k_router_fields = [] {
             .source =
                 NamedArg{"RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS", ArgIndex::NONE, Emitted::CHANNEL_TRIMMING_CAPTURE},
             .category = DIAGNOSTICS,
-            .content = l1<ChannelTrimmingOverrides>(),
+            .content = describe_l1_region<ChannelTrimmingOverrides>(),
             .description = "Where it records them: the packet sizes each sender channel saw, and which sender and "
                            "receiver channels carried traffic.",
         },
@@ -470,7 +494,7 @@ inline constexpr auto k_sender_channel_fields = [] {
                 return static_cast<uint32_t>(builder.sender_channels_connection_semaphore_id[index.compact]);
             }},
             .category = CONTROL_INFO,
-            .content = l1<connection_interface::ConnectionValue>(),
+            .content = describe_l1_region<connection_interface::ConnectionValue>(),
             .description = "The state of the producer's connection: the producer writes open and close requested, and "
                            "the router writes unused once it has torn the connection down. In the router's runtime "
                            "args.",
@@ -479,7 +503,7 @@ inline constexpr auto k_sender_channel_fields = [] {
             .key = "conn_info",
             .source = NamedArg{"LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", ArgIndex::COMPACT},
             .category = CONTROL_INFO,
-            .content = l1<EDMChannelWorkerLocationInfo>(),
+            .content = describe_l1_region<EDMChannelWorkerLocationInfo>(),
             .description = "Where the producer writes where it is, and the router its read counter.",
         },
         RouterField{
@@ -492,7 +516,7 @@ inline constexpr auto k_sender_channel_fields = [] {
                            : 0u;
             }},
             .category = CONTROL_INFO,
-            .content = l1<SenderChannelProducerCursor>(),
+            .content = describe_l1_region<SenderChannelProducerCursor>(),
             .description = "Where the worker channel's producer keeps its write cursor across connections, for the "
                            "next producer to pick up. In the producer's runtime args, from the channel's connection "
                            "spec. Null on the other channels, whose producer keeps none.",
@@ -598,7 +622,7 @@ inline constexpr auto k_downstream_edge_fields = [] {
                 return static_cast<uint32_t>(index.teardown < ids.size() ? ids[index.teardown].value_or(-1) : -1);
             }},
             .category = CONTROL_INFO,
-            .content = l1<uint32_t>(),
+            .content = describe_l1_region<uint32_t>(),
             .description = "Where the sibling acks the router closing the edge's connection at teardown. In the "
                            "router's runtime args.",
         },

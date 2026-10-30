@@ -10,11 +10,15 @@
 #include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <numeric>
 #include <span>
+#include <string_view>
+#include <utility>
 #include <variant>
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
@@ -22,7 +26,6 @@
 #include "tt_metal/fabric/fabric_router_builder.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_fabric {
@@ -168,11 +171,10 @@ manifest::content::L1 describe_l1_array(const ManifestRouterInputs& inputs, size
         address,
         size,
         sizeof(T));
-    return {
-        .address = static_cast<uint32_t>(address),
-        .type = layout::array_of<T>(static_cast<uint32_t>(size / sizeof(T))),
-        .cleared_by_host = is_cleared_by_host(inputs, address),
-    };
+    manifest::content::L1 array =
+        manifest::describe_l1_region<T>(static_cast<uint32_t>(address), static_cast<uint32_t>(size / sizeof(T)));
+    array.cleared_by_host = is_cleared_by_host(inputs, address);
+    return array;
 }
 
 // A credit counter array's base address and the compile-time argument that passes it to the kernel.
@@ -216,23 +218,16 @@ manifest::L1CreditCounters collect_credit_counters(const ManifestRouterInputs& i
     };
 }
 
-// A channel's packet slots, each `slot_size` bytes, or none when it has no slots. No struct describes a slot: it
-// holds a packet.
+// A channel's packet slots, each `slot_size` bytes, or none when it has no slots. A slot is left as raw bytes.
 std::optional<manifest::content::L1> describe_ring_buffer(
     const ManifestRouterInputs& inputs, size_t address, size_t num_slots, size_t slot_size) {
     if (num_slots == 0) {
         return std::nullopt;
     }
-    return manifest::content::L1{
-        .address = static_cast<uint32_t>(address),
-        .type =
-            {
-                .element = layout::element::Bytes{},
-                .size = static_cast<uint32_t>(num_slots * slot_size),
-                .count = static_cast<uint32_t>(num_slots),
-            },
-        .cleared_by_host = is_cleared_by_host(inputs, address),
-    };
+    manifest::content::L1 ring_buffer = manifest::describe_l1_region<std::byte>(
+        static_cast<uint32_t>(address), static_cast<uint32_t>(num_slots), static_cast<uint32_t>(slot_size));
+    ring_buffer.cleared_by_host = is_cleared_by_host(inputs, address);
+    return ring_buffer;
 }
 
 // The L1 from the end of what the router uses to the end of loadable L1.
@@ -242,10 +237,44 @@ std::optional<manifest::content::L1> collect_leftover_l1(const ManifestRouterInp
     if (start == end) {
         return std::nullopt;
     }
-    return manifest::content::L1{
-        .address = static_cast<uint32_t>(start),
-        .type = {.element = layout::element::Bytes{}, .size = static_cast<uint32_t>(end - start), .count = 0},
-        .cleared_by_host = is_cleared_by_host(inputs, start),
+    manifest::content::L1 leftover =
+        manifest::describe_l1_region<std::byte>(static_cast<uint32_t>(start), static_cast<uint32_t>(end - start), 1);
+    leftover.cleared_by_host = is_cleared_by_host(inputs, start);
+    return leftover;
+}
+
+// Stream `stream_id`'s `reg`, with its value read as the registered type `type`: where the register is, from the HAL,
+// and how many of its low bits hold the value.
+manifest::content::StreamReg describe_stream_register(
+    const tt::tt_metal::Hal& hal, uint32_t stream_id, manifest::StreamRegister reg, std::string_view type) {
+    TT_FATAL(
+        hal.has_stream_registers(),
+        "Fabric manifest: the HAL gives no stream register addresses on {}",
+        manifest::lower_enum_name(hal.get_arch()));
+    TT_FATAL(
+        stream_id < StreamRegAssignments::num_eth_stream_registers,
+        "Fabric manifest: stream id {} is not one of the {} stream registers",
+        stream_id,
+        StreamRegAssignments::num_eth_stream_registers);
+    // The register's index within its stream's block, and how many of its low bits hold its value.
+    const auto [reg_index, value_bits] = [&]() -> std::pair<uint32_t, uint32_t> {
+        switch (reg) {
+            case manifest::StreamRegister::BUF_SPACE_AVAILABLE:
+                return {
+                    hal.get_noc_stream_remote_dest_buf_space_available_reg_index(),
+                    hal.get_noc_stream_remote_dest_words_free_width()};
+            case manifest::StreamRegister::REMOTE_SRC:
+                // The fabric's scratch register: four 6-bit fields on Wormhole and Blackhole (fabric_stream_regs.hpp).
+                return {hal.get_noc_stream_remote_src_reg_index(), 24};
+        }
+        TT_THROW("Fabric manifest: unknown stream register {}", static_cast<int>(reg));
+    }();
+    return {
+        .stream_id = stream_id,
+        .address = hal.get_noc_overlay_start_addr() + (stream_id * hal.get_noc_stream_reg_space_size()) +
+                   static_cast<uint32_t>(reg_index * sizeof(uint32_t)),
+        .value_bits = value_bits,
+        .type = type,
     };
 }
 
@@ -262,41 +291,50 @@ std::string get_arg_name(const manifest::NamedArg& arg, const FieldIndex& index)
     TT_THROW("Fabric manifest: unknown argument index {}", static_cast<int>(arg.index));
 }
 
-// `field`, with its content's address, stream id or value filled in from `arg`, the value of its source. An L1 address
-// of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled), and
-// k_unused_stream_id a stream register it did not allocate.
+// `field`, with its content's address, stream register or value filled in from `arg`, the value of its source. An L1
+// address of 0 is a buffer the builder did not allocate (FabricRouterDiagnosticBufferMap::BufferRegion::is_enabled),
+// and k_unused_stream_id a stream register it did not allocate.
 manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg) {
     const std::string_view key = field.key.value;
     const bool unallocated =
         (std::holds_alternative<manifest::content::L1>(field.content.value) && arg == 0) ||
-        (std::holds_alternative<manifest::content::Stream>(field.content.value) && arg == k_unused_stream_id);
+        (std::holds_alternative<manifest::StreamRegField>(field.content.value) && arg == k_unused_stream_id);
     if (unallocated) {
         return {.key = key, .category = field.category.value, .content = std::nullopt};
     }
-    manifest::Content content = field.content.value;
-    std::visit(
+    manifest::Content content = std::visit(
         ttsl::overloaded{
-            [&](manifest::content::L1& l1) {
+            [&](manifest::content::L1 l1) -> manifest::Content {
                 l1.address = arg;
                 l1.cleared_by_host = is_cleared_by_host(inputs, arg);
+                return l1;
             },
-            [&](manifest::content::Stream& stream) { stream.stream_id = arg; },
-            [&](manifest::content::Number& number) { number.value = arg; },
-            [&](manifest::content::Flag& flag) {
+            [&](const manifest::StreamRegField& stream) -> manifest::Content {
+                return describe_stream_register(inputs.hal, arg, stream.reg, stream.type);
+            },
+            [&](manifest::content::Number number) -> manifest::Content {
+                number.value = arg;
+                return number;
+            },
+            [&](manifest::content::Flag flag) -> manifest::Content {
                 TT_FATAL(arg <= 1, "Fabric manifest: field {} is a flag, but is {}", key, arg);
                 flag.value = arg != 0;
+                return flag;
             },
-            [&](manifest::content::Enum& enumerator) {
+            [&](manifest::content::Enum enumerator) -> manifest::Content {
+                const std::optional<std::string_view> value_name = enumerator.name_value(arg);
                 TT_FATAL(
-                    enumerator.is_enumerator(arg),
-                    "Fabric manifest: field {} is {}, which is not a {}",
+                    value_name.has_value(),
+                    "Fabric manifest: field {} is {}, which is none of {}'s enumerators",
                     key,
                     arg,
-                    manifest::schema_name(enumerator.type));
+                    enumerator.type);
                 enumerator.value = arg;
+                enumerator.value_name = *value_name;
+                return enumerator;
             },
         },
-        content);
+        field.content.value);
     return {
         .key = key,
         .category = field.category.value,
@@ -383,16 +421,17 @@ struct ChannelContext {
 };
 
 // The stream register the kernel is fed under `name`, or null when the builder did not allocate one.
-std::optional<manifest::content::Stream> read_fed_stream(const ManifestRouterInputs& inputs, const std::string& name) {
+std::optional<manifest::content::StreamReg> read_fed_stream(
+    const ManifestRouterInputs& inputs, const std::string& name) {
     const uint32_t stream_id = read_emitted_value(inputs.kernel.named_ct_args, name);
     if (stream_id == k_unused_stream_id) {
         return std::nullopt;
     }
-    return manifest::content::Stream{
-        .stream_id = stream_id,
-        .reg = manifest::StreamRegister::BUF_SPACE_AVAILABLE,
-        .type = layout::type_of<uint32_t>(),
-    };
+    return describe_stream_register(
+        inputs.hal,
+        stream_id,
+        manifest::StreamRegister::BUF_SPACE_AVAILABLE,
+        manifest::get_manifest_type_name<uint32_t>());
 }
 
 // The kernel runs VC1's channel steps only under FABRIC_2D_VC1_SERVICED, and VC2's only under FABRIC_2D_VC2_SERVICED.
