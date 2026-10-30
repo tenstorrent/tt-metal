@@ -19,13 +19,14 @@ import ttml
 import ttnn
 
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import build_causal_mask, no_grad, run_mode
+from ttml.common.utils import no_grad, run_mode
 from ttml.modules import RunMode
 from ttml.trainers.grpo_trainer import (
     RolloutBatch,
     grpo_ttml_model,
     layout_microbatch,
     place_old_nlog_probs,
+    policy_nlog_probs,
     save_checkpoint,
 )
 from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model
@@ -266,12 +267,11 @@ MIXED_LENGTH_QUESTIONS = [
 def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch):
     inputs, targets, mask, Tp = layout_microbatch(batch.prompts, batch.completions, sampler._pad_token)
     B = inputs.shape[0]
+    layout = sampler._batch_layout
     with run_mode(model, RunMode.EVAL), no_grad():
-        x = ttml.autograd.Tensor.from_numpy(inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
-        logits = model(x, build_causal_mask(Tp, device=True))
-        tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
-        nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
-        teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32), dtype=np.float32).reshape(B, Tp)
+        nlog = policy_nlog_probs(model, inputs, targets, layout.mapper)
+        teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32, composer=layout.composer), dtype=np.float32)
+        teacher = teacher.reshape(B, Tp)
     ttml.autograd.AutoContext.get_instance().reset_graph()
     sampled = -place_old_nlog_probs(batch.prompts, batch.completions, batch.logprobs, Tp)
     return teacher, sampled, mask

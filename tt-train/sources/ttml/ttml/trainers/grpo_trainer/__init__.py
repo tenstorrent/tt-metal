@@ -18,6 +18,7 @@ from .grpo_trainer import (
     iter_micro_batch,
     layout_microbatch,
     place_old_nlog_probs,
+    policy_nlog_probs,
     save_checkpoint,
     upload_micro_advantages,
 )
