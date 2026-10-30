@@ -137,6 +137,7 @@ def pack_uint4(torch_tensor, num_faces=None, face_r_dim=None):
 # ============================================================================
 
 FP32_QUIET_NAN_BIT = 1 << 22
+BFP8_MAGNITUDE_BITS = 7
 
 
 def _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim):
@@ -191,7 +192,7 @@ def _bfp_collect_blocks(flattened_tensor, block_size, magnitude_bits):
     shared_exps, bfp8_mants = _bfp8_mantissas_per_block(
         mants.reshape(num_blocks, block_size), exps.reshape(num_blocks, block_size)
     )
-    magnitudes = bfp8_mants >> (7 - magnitude_bits)
+    magnitudes = bfp8_mants >> (BFP8_MAGNITUDE_BITS - magnitude_bits)
     # Drop the sign of zero magnitudes: a sign-only datum decodes to -inf in hardware.
     mantissas = torch.where(
         magnitudes != 0,
@@ -207,7 +208,9 @@ def _bfp_collect_blocks(flattened_tensor, block_size, magnitude_bits):
 def float_to_bfp8_block(block):
     """Encode one block using the same quantizer as pack_bfp8_b."""
     exponents, mantissas = _bfp_collect_blocks(
-        torch.as_tensor(block, dtype=torch.float32), len(block), magnitude_bits=7
+        torch.as_tensor(block, dtype=torch.float32),
+        len(block),
+        magnitude_bits=BFP8_MAGNITUDE_BITS,
     )
     return exponents[0], mantissas
 
@@ -231,7 +234,7 @@ def pack_bfp8_b(tensor, block_size=16, num_faces=4, face_r_dim=16):
     """
     flattened_tensor = _bfp_prepare_blocks(tensor, block_size, num_faces, face_r_dim)
     exponents, mantissas = _bfp_collect_blocks(
-        flattened_tensor, block_size, magnitude_bits=7
+        flattened_tensor, block_size, magnitude_bits=BFP8_MAGNITUDE_BITS
     )
     return exponents + mantissas
 
@@ -321,7 +324,11 @@ def pack_dense_tiles(tensor, tile_count, pack_function, num_faces, face_r_dim):
         return None
 
     values = tensor[: tile_count * tile_elements]
-    magnitude_bits = {pack_bfp8_b: 7, pack_bfp4_b: 3, pack_bfp2_b: 1}.get(pack_function)
+    magnitude_bits = {
+        pack_bfp8_b: BFP8_MAGNITUDE_BITS,
+        pack_bfp4_b: 3,
+        pack_bfp2_b: 1,
+    }.get(pack_function)
     if magnitude_bits is None:
         return pack_function(values)
 

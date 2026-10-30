@@ -62,13 +62,13 @@ def test_sinkhorn_restores_lconst_neg1():
 
     src_A = _inputs()
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
-    tile_dimensions = [32, 32]
-    tilized_A = tilize_block(src_A, tile_dimensions, formats.input_format).flatten()
+    input_dimensions = [32, 32]
+    tilized_A = tilize_block(src_A, input_dimensions, formats.input_format).flatten()
 
     configuration = TestConfig(
         "sources/sinkhorn_lconst_neg1_regression_test.cpp",
         formats,
-        templates=[generate_input_dim(tile_dimensions, tile_dimensions)],
+        templates=[generate_input_dim(input_dimensions, input_dimensions)],
         runtimes=[],
         variant_stimuli=StimuliConfig(
             tilized_A,
