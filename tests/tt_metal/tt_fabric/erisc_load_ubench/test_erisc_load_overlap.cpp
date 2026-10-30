@@ -87,6 +87,14 @@ constexpr PatternInfo kPatterns[kNumPatterns] = {
     {"TXQ cmd, status into one reg, used at once", 2},
     {"S + TXQ (one reg) + NoC, K, use 3", 3},
     {"4 stream reads + TXQ (one reg), K, use all", 5},
+    {"baseline, 7 adds", 7},
+    {"4 stream reads, then D, K, use all", 5},
+    {"D, then 4 stream reads, K, use all", 5},
+    {"4 stream reads, then D D2 D3, K, use all", 7},
+    {"D D2 D3, then 4 stream reads, K, use all", 7},
+    {"4 stream, K, use; header L (slot in reg) at once", 5},
+    {"4 stream + slot DS, K, use; header via DS at once", 5},
+    {"slot DS, header via DS used at once, K", 2},
 };
 
 }  // namespace
@@ -165,9 +173,14 @@ TEST(EriscLoadOverlap, ReadLatencyHiding) {
     auto overhead3 = [&](uint32_t k) { return per_block(BASE3, k) - kFill[k] - 3.0; };
     auto overhead4 = [&](uint32_t k) { return per_block(BASE4, k) - kFill[k] - 4.0; };
     auto overhead5 = [&](uint32_t k) { return per_block(BASE5, k) - kFill[k] - 5.0; };
+    auto overhead7 = [&](uint32_t k) { return per_block(BASE7, k) - kFill[k] - 7.0; };
     auto load_cost = [&](uint32_t p, uint32_t k) {
         const uint32_t adds = kPatterns[p].adds;
-        const double oh = adds == 5 ? overhead5(k) : adds == 4 ? overhead4(k) : adds == 3 ? overhead3(k) : overhead(k);
+        const double oh = adds == 7   ? overhead7(k)
+                          : adds == 5 ? overhead5(k)
+                          : adds == 4 ? overhead4(k)
+                          : adds == 3 ? overhead3(k)
+                                      : overhead(k);
         return per_block(p, k) - kFill[k] - adds - oh;
     };
 

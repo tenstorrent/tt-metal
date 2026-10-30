@@ -1,0 +1,560 @@
+pattern,name,fill,cycles_per_block,load_cost
+0,"baseline, 2 adds",0,4.01953,0
+0,"baseline, 2 adds",2,6.0166,0
+0,"baseline, 2 adds",4,8.01465,0
+0,"baseline, 2 adds",5,9.0127,0
+0,"baseline, 2 adds",6,10.0195,0
+0,"baseline, 2 adds",7,11.0186,0
+0,"baseline, 2 adds",8,12.0176,0
+0,"baseline, 2 adds",10,14.0166,0
+0,"baseline, 2 adds",12,16.0146,0
+0,"baseline, 2 adds",16,20.0127,0
+0,"baseline, 2 adds",24,28.0166,0
+0,"baseline, 2 adds",32,36.0166,0
+0,"baseline, 2 adds",48,52.0166,0
+1,"S used at once",0,11.0176,6.99805
+1,"S used at once",2,13.0166,7
+1,"S used at once",4,15.0146,7
+1,"S used at once",5,16.0205,7.00781
+1,"S used at once",6,17.0195,7
+1,"S used at once",7,18.0186,7
+1,"S used at once",8,19.0176,7
+1,"S used at once",10,21.0166,7
+1,"S used at once",12,23.0146,7
+1,"S used at once",16,27.0205,7.00781
+1,"S used at once",24,35.0166,7
+1,"S used at once",32,43.0166,7
+1,"S used at once",48,59.0166,7
+2,"L used at once",0,12.0166,7.99707
+2,"L used at once",2,14.0166,8
+2,"L used at once",4,16.0146,8
+2,"L used at once",5,17.0205,8.00781
+2,"L used at once",6,18.0195,8
+2,"L used at once",7,19.0186,8
+2,"L used at once",8,20.0176,8
+2,"L used at once",10,22.0166,8
+2,"L used at once",12,24.0146,8
+2,"L used at once",16,28.0205,8.00781
+2,"L used at once",24,36.0166,8
+2,"L used at once",32,44.0166,8
+2,"L used at once",48,60.0166,8
+3,"S used at once, L used at once (today)",0,19.0176,14.998
+3,"S used at once, L used at once (today)",2,21.0166,15
+3,"S used at once, L used at once (today)",4,23.0146,15
+3,"S used at once, L used at once (today)",5,24.0205,15.0078
+3,"S used at once, L used at once (today)",6,25.0195,15
+3,"S used at once, L used at once (today)",7,26.0186,15
+3,"S used at once, L used at once (today)",8,27.0166,14.999
+3,"S used at once, L used at once (today)",10,29.0156,14.999
+3,"S used at once, L used at once (today)",12,31.0137,14.999
+3,"S used at once, L used at once (today)",16,35.0205,15.0078
+3,"S used at once, L used at once (today)",24,43.0156,14.999
+3,"S used at once, L used at once (today)",32,51.0156,14.999
+3,"S used at once, L used at once (today)",48,67.0156,14.999
+4,"S, K, use",0,11.0156,6.99609
+4,"S, K, use",2,12.0166,6
+4,"S, K, use",4,14.0146,6
+4,"S, K, use",5,15.0205,6.00781
+4,"S, K, use",6,16.0195,6
+4,"S, K, use",7,17.0186,6
+4,"S, K, use",8,18.0176,6
+4,"S, K, use",10,20.0166,6
+4,"S, K, use",12,22.0146,6
+4,"S, K, use",16,26.0205,6.00781
+4,"S, K, use",24,34.0166,6
+4,"S, K, use",32,42.0166,6
+4,"S, K, use",48,58.0166,6
+5,"L, K, use",0,12.0166,7.99707
+5,"L, K, use",2,13.0166,7
+5,"L, K, use",4,15.0146,7
+5,"L, K, use",5,16.0205,7.00781
+5,"L, K, use",6,17.0195,7
+5,"L, K, use",7,18.0186,7
+5,"L, K, use",8,20.0176,8
+5,"L, K, use",10,22.0166,8
+5,"L, K, use",12,24.0146,8
+5,"L, K, use",16,28.0205,8.00781
+5,"L, K, use",24,36.0166,8
+5,"L, K, use",32,44.0166,8
+5,"L, K, use",48,60.0166,8
+6,"S + L, K, use both (prefetch)",0,12.0166,7.99707
+6,"S + L, K, use both (prefetch)",2,12.0156,5.99902
+6,"S + L, K, use both (prefetch)",4,12.0137,3.99902
+6,"S + L, K, use both (prefetch)",5,12.0195,3.00684
+6,"S + L, K, use both (prefetch)",6,13.0186,2.99902
+6,"S + L, K, use both (prefetch)",7,14.0176,2.99902
+6,"S + L, K, use both (prefetch)",8,21.0166,8.99902
+6,"S + L, K, use both (prefetch)",10,23.0156,8.99902
+6,"S + L, K, use both (prefetch)",12,25.0137,8.99902
+6,"S + L, K, use both (prefetch)",16,29.0195,9.00684
+6,"S + L, K, use both (prefetch)",24,37.0156,8.99902
+6,"S + L, K, use both (prefetch)",32,45.0156,8.99902
+6,"S + L, K, use both (prefetch)",48,61.0156,8.99902
+7,"L + S, K, use both",0,13.0205,9.00098
+7,"L + S, K, use both",2,13.0156,6.99902
+7,"L + S, K, use both",4,13.0137,4.99902
+7,"L + S, K, use both",5,13.0195,4.00684
+7,"L + S, K, use both",6,13.0186,2.99902
+7,"L + S, K, use both",7,20.0176,8.99902
+7,"L + S, K, use both",8,21.0166,8.99902
+7,"L + S, K, use both",10,23.0156,8.99902
+7,"L + S, K, use both",12,25.0137,8.99902
+7,"L + S, K, use both",16,29.0195,9.00684
+7,"L + S, K, use both",24,37.0156,8.99902
+7,"L + S, K, use both",32,45.0156,8.99902
+7,"L + S, K, use both",48,61.0156,8.99902
+8,"S + D, K, use both",0,11.0156,6.99609
+8,"S + D, K, use both",2,11.0156,4.99902
+8,"S + D, K, use both",4,11.0137,2.99902
+8,"S + D, K, use both",5,11.0186,2.00586
+8,"S + D, K, use both",6,12.0176,1.99805
+8,"S + D, K, use both",7,13.0166,1.99805
+8,"S + D, K, use both",8,14.0156,1.99805
+8,"S + D, K, use both",10,16.0146,1.99805
+8,"S + D, K, use both",12,18.0127,1.99805
+8,"S + D, K, use both",16,22.0186,2.00586
+8,"S + D, K, use both",24,30.0146,1.99805
+8,"S + D, K, use both",32,38.0146,1.99805
+8,"S + D, K, use both",48,54.0146,1.99805
+9,"S + S2, K, use both",0,11.0156,6.99609
+9,"S + S2, K, use both",2,11.0156,4.99902
+9,"S + S2, K, use both",4,11.0137,2.99902
+9,"S + S2, K, use both",5,11.0186,2.00586
+9,"S + S2, K, use both",6,12.0176,1.99805
+9,"S + S2, K, use both",7,13.0166,1.99805
+9,"S + S2, K, use both",8,14.0156,1.99805
+9,"S + S2, K, use both",10,16.0146,1.99805
+9,"S + S2, K, use both",12,18.0127,1.99805
+9,"S + S2, K, use both",16,22.0186,2.00586
+9,"S + S2, K, use both",24,30.0146,1.99805
+9,"S + S2, K, use both",32,38.0146,1.99805
+9,"S + S2, K, use both",48,54.0146,1.99805
+10,"L + D, K, use both",0,11.0156,6.99609
+10,"L + D, K, use both",2,11.0156,4.99902
+10,"L + D, K, use both",4,11.0137,2.99902
+10,"L + D, K, use both",5,12.0195,3.00684
+10,"L + D, K, use both",6,13.0186,2.99902
+10,"L + D, K, use both",7,20.0176,8.99902
+10,"L + D, K, use both",8,21.0166,8.99902
+10,"L + D, K, use both",10,23.0156,8.99902
+10,"L + D, K, use both",12,25.0137,8.99902
+10,"L + D, K, use both",16,29.0195,9.00684
+10,"L + D, K, use both",24,37.0156,8.99902
+10,"L + D, K, use both",32,45.0156,8.99902
+10,"L + D, K, use both",48,61.0156,8.99902
+11,"L + L2, K, use both",0,13.0156,8.99609
+11,"L + L2, K, use both",2,13.0166,7
+11,"L + L2, K, use both",4,13.0137,4.99902
+11,"L + L2, K, use both",5,13.0195,4.00684
+11,"L + L2, K, use both",6,13.0186,2.99902
+11,"L + L2, K, use both",7,20.0176,8.99902
+11,"L + L2, K, use both",8,21.0166,8.99902
+11,"L + L2, K, use both",10,23.0156,8.99902
+11,"L + L2, K, use both",12,25.0146,9
+11,"L + L2, K, use both",16,29.0205,9.00781
+11,"L + L2, K, use both",24,37.0156,8.99902
+11,"L + L2, K, use both",32,45.0156,8.99902
+11,"L + L2, K, use both",48,61.0156,8.99902
+12,"S + discarded D load, K, use S",0,11.0156,6.99609
+12,"S + discarded D load, K, use S",2,13.0156,6.99902
+12,"S + discarded D load, K, use S",4,15.0137,6.99902
+12,"S + discarded D load, K, use S",5,16.0195,7.00684
+12,"S + discarded D load, K, use S",6,17.0186,6.99902
+12,"S + discarded D load, K, use S",7,18.0176,6.99902
+12,"S + discarded D load, K, use S",8,19.0166,6.99902
+12,"S + discarded D load, K, use S",10,21.0156,6.99902
+12,"S + discarded D load, K, use S",12,23.0137,6.99902
+12,"S + discarded D load, K, use S",16,27.0195,7.00684
+12,"S + discarded D load, K, use S",24,35.0156,6.99902
+12,"S + discarded D load, K, use S",32,43.0156,6.99902
+12,"S + discarded D load, K, use S",48,59.0156,6.99902
+13,"baseline, 3 adds",0,5.01953,0
+13,"baseline, 3 adds",2,7.01562,0
+13,"baseline, 3 adds",4,9.01367,0
+13,"baseline, 3 adds",5,10.0195,0
+13,"baseline, 3 adds",6,11.0186,0
+13,"baseline, 3 adds",7,12.0176,0
+13,"baseline, 3 adds",8,13.0166,0
+13,"baseline, 3 adds",10,15.0156,0
+13,"baseline, 3 adds",12,17.0137,0
+13,"baseline, 3 adds",16,21.0195,0
+13,"baseline, 3 adds",24,29.0156,0
+13,"baseline, 3 adds",32,37.0156,0
+13,"baseline, 3 adds",48,53.0156,0
+14,"D used at once",0,7.0166,1.99707
+14,"D used at once",2,9.01562,2
+14,"D used at once",4,11.0137,2
+14,"D used at once",5,12.0195,2
+14,"D used at once",6,13.0186,2
+14,"D used at once",7,14.0176,2
+14,"D used at once",8,15.0166,2
+14,"D used at once",10,17.0156,2
+14,"D used at once",12,19.0137,2
+14,"D used at once",16,23.0195,2
+14,"D used at once",24,31.0156,2
+14,"D used at once",32,39.0156,2
+14,"D used at once",48,55.0156,2
+15,"S2 used at once",0,12.0156,6.99609
+15,"S2 used at once",2,14.0156,7
+15,"S2 used at once",4,16.0137,7
+15,"S2 used at once",5,17.0195,7
+15,"S2 used at once",6,18.0186,7
+15,"S2 used at once",7,19.0176,7
+15,"S2 used at once",8,20.0166,7
+15,"S2 used at once",10,22.0156,7
+15,"S2 used at once",12,24.0137,7
+15,"S2 used at once",16,28.0195,7
+15,"S2 used at once",24,36.0156,7
+15,"S2 used at once",32,44.0156,7
+15,"S2 used at once",48,60.0156,7
+16,"S + L, K/2, D used at once, K/2, use",0,15.0156,9.99609
+16,"S + L, K/2, D used at once, K/2, use",2,12.0137,4.99805
+16,"S + L, K/2, D used at once, K/2, use",4,17.0195,8.00586
+16,"S + L, K/2, D used at once, K/2, use",5,18.0176,7.99805
+16,"S + L, K/2, D used at once, K/2, use",6,19.0166,7.99805
+16,"S + L, K/2, D used at once, K/2, use",7,20.0156,7.99805
+16,"S + L, K/2, D used at once, K/2, use",8,21.0146,7.99805
+16,"S + L, K/2, D used at once, K/2, use",10,23.0137,7.99805
+16,"S + L, K/2, D used at once, K/2, use",12,25.0195,8.00586
+16,"S + L, K/2, D used at once, K/2, use",16,32.0176,10.998
+16,"S + L, K/2, D used at once, K/2, use",24,40.0137,10.998
+16,"S + L, K/2, D used at once, K/2, use",32,48.0137,10.998
+16,"S + L, K/2, D used at once, K/2, use",48,64.0137,10.998
+17,"S + L, K/2, S2 used at once, K/2, use",0,15.0137,9.99414
+17,"S + L, K/2, S2 used at once, K/2, use",2,17.0137,9.99805
+17,"S + L, K/2, S2 used at once, K/2, use",4,19.0195,10.0059
+17,"S + L, K/2, S2 used at once, K/2, use",5,20.0176,9.99805
+17,"S + L, K/2, S2 used at once, K/2, use",6,21.0166,9.99805
+17,"S + L, K/2, S2 used at once, K/2, use",7,22.0156,9.99805
+17,"S + L, K/2, S2 used at once, K/2, use",8,23.0146,9.99805
+17,"S + L, K/2, S2 used at once, K/2, use",10,25.0137,9.99805
+17,"S + L, K/2, S2 used at once, K/2, use",12,27.0195,10.0059
+17,"S + L, K/2, S2 used at once, K/2, use",16,37.0176,15.998
+17,"S + L, K/2, S2 used at once, K/2, use",24,45.0137,15.998
+17,"S + L, K/2, S2 used at once, K/2, use",32,53.0137,15.998
+17,"S + L, K/2, S2 used at once, K/2, use",48,69.0137,15.998
+18,"S + L + D, K, use all",0,13.0137,7.99414
+18,"S + L + D, K, use all",2,13.0137,5.99805
+18,"S + L + D, K, use all",4,13.0195,4.00586
+18,"S + L + D, K, use all",5,14.0176,3.99805
+18,"S + L + D, K, use all",6,15.0166,3.99805
+18,"S + L + D, K, use all",7,22.0156,9.99805
+18,"S + L + D, K, use all",8,23.0146,9.99805
+18,"S + L + D, K, use all",10,25.0137,9.99805
+18,"S + L + D, K, use all",12,27.0195,10.0059
+18,"S + L + D, K, use all",16,31.0176,9.99805
+18,"S + L + D, K, use all",24,39.0137,9.99805
+18,"S + L + D, K, use all",32,47.0137,9.99805
+18,"S + L + D, K, use all",48,63.0137,9.99805
+19,"S + S2 + L, K, use all",0,14.0137,8.99414
+19,"S + S2 + L, K, use all",2,14.0137,6.99805
+19,"S + S2 + L, K, use all",4,14.0195,5.00586
+19,"S + S2 + L, K, use all",5,14.0176,3.99805
+19,"S + S2 + L, K, use all",6,15.0166,3.99805
+19,"S + S2 + L, K, use all",7,16.0156,3.99805
+19,"S + S2 + L, K, use all",8,23.0146,9.99805
+19,"S + S2 + L, K, use all",10,25.0137,9.99805
+19,"S + S2 + L, K, use all",12,27.0195,10.0059
+19,"S + S2 + L, K, use all",16,31.0176,9.99805
+19,"S + S2 + L, K, use all",24,39.0137,9.99805
+19,"S + S2 + L, K, use all",32,47.0137,9.99805
+19,"S + S2 + L, K, use all",48,63.0137,9.99805
+20,"baseline, 4 adds",0,6.0127,0
+20,"baseline, 4 adds",2,8.01465,0
+20,"baseline, 4 adds",4,10.0127,0
+20,"baseline, 4 adds",5,11.0186,0
+20,"baseline, 4 adds",6,12.0176,0
+20,"baseline, 4 adds",7,13.0166,0
+20,"baseline, 4 adds",8,14.0156,0
+20,"baseline, 4 adds",10,16.0146,0
+20,"baseline, 4 adds",12,18.0127,0
+20,"baseline, 4 adds",16,22.0186,0
+20,"baseline, 4 adds",24,30.0146,0
+20,"baseline, 4 adds",32,38.0146,0
+20,"baseline, 4 adds",48,54.0146,0
+21,"4 stream reads, K, use all",0,13.0156,7.00293
+21,"4 stream reads, K, use all",2,13.0195,5.00488
+21,"4 stream reads, K, use all",4,14.0166,4.00391
+21,"4 stream reads, K, use all",5,15.0146,3.99609
+21,"4 stream reads, K, use all",6,16.0137,3.99609
+21,"4 stream reads, K, use all",7,17.0127,3.99609
+21,"4 stream reads, K, use all",8,18.0195,4.00391
+21,"4 stream reads, K, use all",10,20.0186,4.00391
+21,"4 stream reads, K, use all",12,22.0166,4.00391
+21,"4 stream reads, K, use all",16,26.0146,3.99609
+21,"4 stream reads, K, use all",24,34.0186,4.00391
+21,"4 stream reads, K, use all",32,42.0186,4.00391
+21,"4 stream reads, K, use all",48,58.0186,4.00391
+22,"baseline, 5 adds",0,7.01953,0
+22,"baseline, 5 adds",2,9.01367,0
+22,"baseline, 5 adds",4,11.0195,0
+22,"baseline, 5 adds",5,12.0176,0
+22,"baseline, 5 adds",6,13.0166,0
+22,"baseline, 5 adds",7,14.0156,0
+22,"baseline, 5 adds",8,15.0146,0
+22,"baseline, 5 adds",10,17.0137,0
+22,"baseline, 5 adds",12,19.0195,0
+22,"baseline, 5 adds",16,23.0176,0
+22,"baseline, 5 adds",24,31.0137,0
+22,"baseline, 5 adds",32,39.0137,0
+22,"baseline, 5 adds",48,55.0137,0
+23,"4 stream reads + L, K, use all",0,21.0156,13.9961
+23,"4 stream reads + L, K, use all",2,23.0186,14.0049
+23,"4 stream reads + L, K, use all",4,25.0166,13.9971
+23,"4 stream reads + L, K, use all",5,26.0146,13.9971
+23,"4 stream reads + L, K, use all",6,21.0205,8.00391
+23,"4 stream reads + L, K, use all",7,22.0195,8.00391
+23,"4 stream reads + L, K, use all",8,29.0195,14.0049
+23,"4 stream reads + L, K, use all",10,31.0176,14.0039
+23,"4 stream reads + L, K, use all",12,33.0156,13.9961
+23,"4 stream reads + L, K, use all",16,37.0137,13.9961
+23,"4 stream reads + L, K, use all",24,45.0176,14.0039
+23,"4 stream reads + L, K, use all",32,53.0176,14.0039
+23,"4 stream reads + L, K, use all",48,69.0186,14.0049
+24,"TXQ cmd used at once",0,11.0176,6.99805
+24,"TXQ cmd used at once",2,13.0166,7
+24,"TXQ cmd used at once",4,15.0146,7
+24,"TXQ cmd used at once",5,16.0205,7.00781
+24,"TXQ cmd used at once",6,17.0195,7
+24,"TXQ cmd used at once",7,18.0186,7
+24,"TXQ cmd used at once",8,19.0176,7
+24,"TXQ cmd used at once",10,21.0166,7
+24,"TXQ cmd used at once",12,23.0146,7
+24,"TXQ cmd used at once",16,27.0205,7.00781
+24,"TXQ cmd used at once",24,35.0166,7
+24,"TXQ cmd used at once",32,43.0166,7
+24,"TXQ cmd used at once",48,59.0166,7
+25,"TXQ cmd + status used at once (busy)",0,12.0166,7.99707
+25,"TXQ cmd + status used at once (busy)",2,14.0156,7.99902
+25,"TXQ cmd + status used at once (busy)",4,16.0137,7.99902
+25,"TXQ cmd + status used at once (busy)",5,17.0195,8.00684
+25,"TXQ cmd + status used at once (busy)",6,18.0186,7.99902
+25,"TXQ cmd + status used at once (busy)",7,19.0176,7.99902
+25,"TXQ cmd + status used at once (busy)",8,20.0166,7.99902
+25,"TXQ cmd + status used at once (busy)",10,22.0156,7.99902
+25,"TXQ cmd + status used at once (busy)",12,24.0137,7.99902
+25,"TXQ cmd + status used at once (busy)",16,28.0195,8.00684
+25,"TXQ cmd + status used at once (busy)",24,36.0156,7.99902
+25,"TXQ cmd + status used at once (busy)",32,44.0156,7.99902
+25,"TXQ cmd + status used at once (busy)",48,60.0156,7.99902
+26,"NoC write-sent status used at once",0,11.0156,6.99609
+26,"NoC write-sent status used at once",2,13.0166,7
+26,"NoC write-sent status used at once",4,15.0146,7
+26,"NoC write-sent status used at once",5,16.0205,7.00781
+26,"NoC write-sent status used at once",6,17.0195,7
+26,"NoC write-sent status used at once",7,18.0186,7
+26,"NoC write-sent status used at once",8,19.0176,7
+26,"NoC write-sent status used at once",10,21.0166,7
+26,"NoC write-sent status used at once",12,23.0146,7
+26,"NoC write-sent status used at once",16,27.0205,7.00781
+26,"NoC write-sent status used at once",24,35.0166,7
+26,"NoC write-sent status used at once",32,43.0166,7
+26,"NoC write-sent status used at once",48,59.0166,7
+27,"NoC cmd-buf ready used at once",0,11.0205,7.00098
+27,"NoC cmd-buf ready used at once",2,13.0166,7
+27,"NoC cmd-buf ready used at once",4,15.0146,7
+27,"NoC cmd-buf ready used at once",5,16.0205,7.00781
+27,"NoC cmd-buf ready used at once",6,17.0195,7
+27,"NoC cmd-buf ready used at once",7,18.0186,7
+27,"NoC cmd-buf ready used at once",8,19.0176,7
+27,"NoC cmd-buf ready used at once",10,21.0166,7
+27,"NoC cmd-buf ready used at once",12,23.0146,7
+27,"NoC cmd-buf ready used at once",16,27.0205,7.00781
+27,"NoC cmd-buf ready used at once",24,35.0166,7
+27,"NoC cmd-buf ready used at once",32,43.0166,7
+27,"NoC cmd-buf ready used at once",48,59.0166,7
+28,"TXQ cmd + status, K, use status",0,12.0166,7.99707
+28,"TXQ cmd + status, K, use status",2,13.0156,6.99902
+28,"TXQ cmd + status, K, use status",4,15.0137,6.99902
+28,"TXQ cmd + status, K, use status",5,16.0195,7.00684
+28,"TXQ cmd + status, K, use status",6,17.0186,6.99902
+28,"TXQ cmd + status, K, use status",7,18.0176,6.99902
+28,"TXQ cmd + status, K, use status",8,19.0166,6.99902
+28,"TXQ cmd + status, K, use status",10,21.0156,6.99902
+28,"TXQ cmd + status, K, use status",12,23.0137,6.99902
+28,"TXQ cmd + status, K, use status",16,27.0195,7.00684
+28,"TXQ cmd + status, K, use status",24,35.0156,6.99902
+28,"TXQ cmd + status, K, use status",32,43.0156,6.99902
+28,"TXQ cmd + status, K, use status",48,59.0156,6.99902
+29,"S + TXQ cmd + status, K, use S + status",0,12.0156,7.99609
+29,"S + TXQ cmd + status, K, use S + status",2,12.0146,5.99805
+29,"S + TXQ cmd + status, K, use S + status",4,12.0205,4.00586
+29,"S + TXQ cmd + status, K, use S + status",5,12.0176,3.00488
+29,"S + TXQ cmd + status, K, use S + status",6,13.0166,2.99707
+29,"S + TXQ cmd + status, K, use S + status",7,14.0156,2.99707
+29,"S + TXQ cmd + status, K, use S + status",8,15.0146,2.99707
+29,"S + TXQ cmd + status, K, use S + status",10,17.0137,2.99707
+29,"S + TXQ cmd + status, K, use S + status",12,19.0195,3.00488
+29,"S + TXQ cmd + status, K, use S + status",16,23.0176,3.00488
+29,"S + TXQ cmd + status, K, use S + status",24,31.0137,2.99707
+29,"S + TXQ cmd + status, K, use S + status",32,39.0137,2.99707
+29,"S + TXQ cmd + status, K, use S + status",48,55.0137,2.99707
+30,"S + NoC write-sent, K, use both",0,11.0146,6.99512
+30,"S + NoC write-sent, K, use both",2,11.0156,4.99902
+30,"S + NoC write-sent, K, use both",4,11.0137,2.99902
+30,"S + NoC write-sent, K, use both",5,11.0186,2.00586
+30,"S + NoC write-sent, K, use both",6,12.0176,1.99805
+30,"S + NoC write-sent, K, use both",7,13.0166,1.99805
+30,"S + NoC write-sent, K, use both",8,14.0156,1.99805
+30,"S + NoC write-sent, K, use both",10,16.0146,1.99805
+30,"S + NoC write-sent, K, use both",12,18.0127,1.99805
+30,"S + NoC write-sent, K, use both",16,22.0186,2.00586
+30,"S + NoC write-sent, K, use both",24,30.0146,1.99805
+30,"S + NoC write-sent, K, use both",32,38.0146,1.99805
+30,"S + NoC write-sent, K, use both",48,54.0146,1.99805
+31,"S + TXQ cmd/status + NoC, K, use 3",0,13.0156,7.99609
+31,"S + TXQ cmd/status + NoC, K, use 3",2,13.0205,6.00488
+31,"S + TXQ cmd/status + NoC, K, use 3",4,13.0176,4.00391
+31,"S + TXQ cmd/status + NoC, K, use 3",5,14.0156,3.99609
+31,"S + TXQ cmd/status + NoC, K, use 3",6,15.0146,3.99609
+31,"S + TXQ cmd/status + NoC, K, use 3",7,16.0137,3.99609
+31,"S + TXQ cmd/status + NoC, K, use 3",8,17.0127,3.99609
+31,"S + TXQ cmd/status + NoC, K, use 3",10,19.0195,4.00391
+31,"S + TXQ cmd/status + NoC, K, use 3",12,21.0176,4.00391
+31,"S + TXQ cmd/status + NoC, K, use 3",16,25.0156,3.99609
+31,"S + TXQ cmd/status + NoC, K, use 3",24,33.0195,4.00391
+31,"S + TXQ cmd/status + NoC, K, use 3",32,41.0195,4.00391
+31,"S + TXQ cmd/status + NoC, K, use 3",48,57.0195,4.00391
+32,"TXQ cmd, status into one reg, used at once",0,12.0205,8.00098
+32,"TXQ cmd, status into one reg, used at once",2,14.0156,7.99902
+32,"TXQ cmd, status into one reg, used at once",4,16.0137,7.99902
+32,"TXQ cmd, status into one reg, used at once",5,17.0195,8.00684
+32,"TXQ cmd, status into one reg, used at once",6,18.0186,7.99902
+32,"TXQ cmd, status into one reg, used at once",7,19.0176,7.99902
+32,"TXQ cmd, status into one reg, used at once",8,20.0166,7.99902
+32,"TXQ cmd, status into one reg, used at once",10,22.0156,7.99902
+32,"TXQ cmd, status into one reg, used at once",12,24.0137,7.99902
+32,"TXQ cmd, status into one reg, used at once",16,28.0195,8.00684
+32,"TXQ cmd, status into one reg, used at once",24,36.0156,7.99902
+32,"TXQ cmd, status into one reg, used at once",32,44.0156,7.99902
+32,"TXQ cmd, status into one reg, used at once",48,60.0156,7.99902
+33,"S + TXQ (one reg) + NoC, K, use 3",0,13.0156,7.99609
+33,"S + TXQ (one reg) + NoC, K, use 3",2,13.0205,6.00488
+33,"S + TXQ (one reg) + NoC, K, use 3",4,13.0176,4.00391
+33,"S + TXQ (one reg) + NoC, K, use 3",5,14.0156,3.99609
+33,"S + TXQ (one reg) + NoC, K, use 3",6,15.0146,3.99609
+33,"S + TXQ (one reg) + NoC, K, use 3",7,16.0137,3.99609
+33,"S + TXQ (one reg) + NoC, K, use 3",8,17.0127,3.99609
+33,"S + TXQ (one reg) + NoC, K, use 3",10,19.0195,4.00391
+33,"S + TXQ (one reg) + NoC, K, use 3",12,21.0176,4.00391
+33,"S + TXQ (one reg) + NoC, K, use 3",16,25.0156,3.99609
+33,"S + TXQ (one reg) + NoC, K, use 3",24,33.0195,4.00391
+33,"S + TXQ (one reg) + NoC, K, use 3",32,41.0195,4.00391
+33,"S + TXQ (one reg) + NoC, K, use 3",48,57.0195,4.00391
+34,"4 stream reads + TXQ (one reg), K, use all",0,21.0205,14.001
+34,"4 stream reads + TXQ (one reg), K, use all",2,23.0166,14.0029
+34,"4 stream reads + TXQ (one reg), K, use all",4,25.0146,13.9951
+34,"4 stream reads + TXQ (one reg), K, use all",5,20.0205,8.00293
+34,"4 stream reads + TXQ (one reg), K, use all",6,21.0195,8.00293
+34,"4 stream reads + TXQ (one reg), K, use all",7,28.0186,14.0029
+34,"4 stream reads + TXQ (one reg), K, use all",8,29.0176,14.0029
+34,"4 stream reads + TXQ (one reg), K, use all",10,31.0166,14.0029
+34,"4 stream reads + TXQ (one reg), K, use all",12,33.0146,13.9951
+34,"4 stream reads + TXQ (one reg), K, use all",16,37.0205,14.0029
+34,"4 stream reads + TXQ (one reg), K, use all",24,45.0166,14.0029
+34,"4 stream reads + TXQ (one reg), K, use all",32,53.0166,14.0029
+34,"4 stream reads + TXQ (one reg), K, use all",48,69.0166,14.0029
+35,"baseline, 7 adds",0,9.0166,0
+35,"baseline, 7 adds",2,11.0146,0
+35,"baseline, 7 adds",4,13.0137,0
+35,"baseline, 7 adds",5,14.0195,0
+35,"baseline, 7 adds",6,15.0186,0
+35,"baseline, 7 adds",7,16.0176,0
+35,"baseline, 7 adds",8,17.0166,0
+35,"baseline, 7 adds",10,19.0156,0
+35,"baseline, 7 adds",12,21.0137,0
+35,"baseline, 7 adds",16,25.0195,0
+35,"baseline, 7 adds",24,33.0156,0
+35,"baseline, 7 adds",32,41.0156,0
+35,"baseline, 7 adds",48,57.0156,0
+36,"4 stream reads, then D, K, use all",0,14.0166,6.99707
+36,"4 stream reads, then D, K, use all",2,14.0127,4.99902
+36,"4 stream reads, then D, K, use all",4,16.0186,4.99902
+36,"4 stream reads, then D, K, use all",5,17.0166,4.99902
+36,"4 stream reads, then D, K, use all",6,18.0156,4.99902
+36,"4 stream reads, then D, K, use all",7,19.0146,4.99902
+36,"4 stream reads, then D, K, use all",8,20.0137,4.99902
+36,"4 stream reads, then D, K, use all",10,22.0127,4.99902
+36,"4 stream reads, then D, K, use all",12,24.0186,4.99902
+36,"4 stream reads, then D, K, use all",16,28.0166,4.99902
+36,"4 stream reads, then D, K, use all",24,36.0127,4.99902
+36,"4 stream reads, then D, K, use all",32,44.0127,4.99902
+36,"4 stream reads, then D, K, use all",48,60.0127,4.99902
+37,"D, then 4 stream reads, K, use all",0,15.0137,7.99414
+37,"D, then 4 stream reads, K, use all",2,15.0137,6
+37,"D, then 4 stream reads, K, use all",4,16.0186,4.99902
+37,"D, then 4 stream reads, K, use all",5,17.0166,4.99902
+37,"D, then 4 stream reads, K, use all",6,18.0156,4.99902
+37,"D, then 4 stream reads, K, use all",7,19.0146,4.99902
+37,"D, then 4 stream reads, K, use all",8,20.0137,4.99902
+37,"D, then 4 stream reads, K, use all",10,22.0127,4.99902
+37,"D, then 4 stream reads, K, use all",12,24.0186,4.99902
+37,"D, then 4 stream reads, K, use all",16,28.0166,4.99902
+37,"D, then 4 stream reads, K, use all",24,36.0127,4.99902
+37,"D, then 4 stream reads, K, use all",32,44.0127,4.99902
+37,"D, then 4 stream reads, K, use all",48,60.0127,4.99902
+38,"4 stream reads, then D D2 D3, K, use all",0,16.0127,6.99609
+38,"4 stream reads, then D D2 D3, K, use all",2,18.0166,7.00195
+38,"4 stream reads, then D D2 D3, K, use all",4,20.0146,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",5,21.0127,6.99316
+38,"4 stream reads, then D D2 D3, K, use all",6,22.0195,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",7,23.0186,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",8,24.0176,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",10,26.0166,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",12,28.0146,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",16,32.0127,6.99316
+38,"4 stream reads, then D D2 D3, K, use all",24,40.0166,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",32,48.0166,7.00098
+38,"4 stream reads, then D D2 D3, K, use all",48,64.0166,7.00098
+39,"D D2 D3, then 4 stream reads, K, use all",0,19.0176,10.001
+39,"D D2 D3, then 4 stream reads, K, use all",2,19.0176,8.00293
+39,"D D2 D3, then 4 stream reads, K, use all",4,20.0146,7.00098
+39,"D D2 D3, then 4 stream reads, K, use all",5,21.0127,6.99316
+39,"D D2 D3, then 4 stream reads, K, use all",6,22.0195,7.00098
+39,"D D2 D3, then 4 stream reads, K, use all",7,23.0186,7.00098
+39,"D D2 D3, then 4 stream reads, K, use all",8,24.0156,6.99902
+39,"D D2 D3, then 4 stream reads, K, use all",10,26.0146,6.99902
+39,"D D2 D3, then 4 stream reads, K, use all",12,28.0127,6.99902
+39,"D D2 D3, then 4 stream reads, K, use all",16,32.0186,6.99902
+39,"D D2 D3, then 4 stream reads, K, use all",24,40.0146,6.99902
+39,"D D2 D3, then 4 stream reads, K, use all",32,48.0146,6.99902
+39,"D D2 D3, then 4 stream reads, K, use all",48,64.0146,6.99902
+40,"4 stream, K, use; header L (slot in reg) at once",0,22.0166,14.9971
+40,"4 stream, K, use; header L (slot in reg) at once",2,22.0195,13.0059
+40,"4 stream, K, use; header L (slot in reg) at once",4,23.0176,11.998
+40,"4 stream, K, use; header L (slot in reg) at once",5,24.0156,11.998
+40,"4 stream, K, use; header L (slot in reg) at once",6,25.0146,11.998
+40,"4 stream, K, use; header L (slot in reg) at once",7,26.0137,11.998
+40,"4 stream, K, use; header L (slot in reg) at once",8,27.0205,12.0059
+40,"4 stream, K, use; header L (slot in reg) at once",10,29.0195,12.0059
+40,"4 stream, K, use; header L (slot in reg) at once",12,31.0176,11.998
+40,"4 stream, K, use; header L (slot in reg) at once",16,35.0156,11.998
+40,"4 stream, K, use; header L (slot in reg) at once",24,43.0195,12.0059
+40,"4 stream, K, use; header L (slot in reg) at once",32,51.0195,12.0059
+40,"4 stream, K, use; header L (slot in reg) at once",48,67.0195,12.0059
+41,"4 stream + slot DS, K, use; header via DS at once",0,22.0205,15.001
+41,"4 stream + slot DS, K, use; header via DS at once",2,22.0186,13.0049
+41,"4 stream + slot DS, K, use; header via DS at once",4,24.0166,12.9971
+41,"4 stream + slot DS, K, use; header via DS at once",5,25.0146,12.9971
+41,"4 stream + slot DS, K, use; header via DS at once",6,26.0137,12.9971
+41,"4 stream + slot DS, K, use; header via DS at once",7,27.0205,13.0049
+41,"4 stream + slot DS, K, use; header via DS at once",8,28.0195,13.0049
+41,"4 stream + slot DS, K, use; header via DS at once",10,30.0186,13.0049
+41,"4 stream + slot DS, K, use; header via DS at once",12,32.0166,12.9971
+41,"4 stream + slot DS, K, use; header via DS at once",16,36.0146,12.9971
+41,"4 stream + slot DS, K, use; header via DS at once",24,44.0186,13.0049
+41,"4 stream + slot DS, K, use; header via DS at once",32,52.0186,13.0049
+41,"4 stream + slot DS, K, use; header via DS at once",48,68.0186,13.0049
+42,"slot DS, header via DS used at once, K",0,14.0146,9.99512
+42,"slot DS, header via DS used at once, K",2,16.0176,10.001
+42,"slot DS, header via DS used at once, K",4,18.0156,10.001
+42,"slot DS, header via DS used at once, K",5,19.0137,10.001
+42,"slot DS, header via DS used at once, K",6,20.0205,10.001
+42,"slot DS, header via DS used at once, K",7,21.0195,10.001
+42,"slot DS, header via DS used at once, K",8,22.0186,10.001
+42,"slot DS, header via DS used at once, K",10,24.0176,10.001
+42,"slot DS, header via DS used at once, K",12,26.0156,10.001
+42,"slot DS, header via DS used at once, K",16,30.0137,10.001
+42,"slot DS, header via DS used at once, K",24,38.0176,10.001
+42,"slot DS, header via DS used at once, K",32,46.0176,10.001
+42,"slot DS, header via DS used at once, K",48,62.0176,10.001

@@ -273,6 +273,19 @@ SYNTH = {
     "bh_2d_udm": ("bh_2d_mux", {"UDM_MODE": "1", "LOCAL_RELAY_NUM_BUFFERS": "8",
                                 "NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS": "1"}, ["-DUDM_MODE=1"]),
     "wh_1d_nofuse": ("wh_1d", {"FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR": "0"}, []),
+    # Study delay instruments (variants/v4trmd, V4_PROFILE.md): both spins on, to check they compile in every program
+    "bh_2d_delay": ("bh_2d", {"EXP_TX_DELAY": "32", "EXP_RX_DELAY": "32"}, []),
+    "bh_1d_delay": ("bh_1d", {"EXP_TX_DELAY": "32", "EXP_RX_DELAY": "32"}, []),
+    "bh_ring_delay": ("bh_ring", {"EXP_TX_DELAY": "32", "EXP_RX_DELAY": "32"}, []),
+    "bh_vc1_delay": ("bh_vc1", {"EXP_TX_DELAY": "32", "EXP_RX_DELAY": "32"}, []),
+    "bh_2d_1erisc_delay": ("bh_2d_1erisc", {"EXP_TX_DELAY": "32", "EXP_RX_DELAY": "32"}, []),
+    "bh_2d_mux_delay": ("bh_2d_mux", {"EXP_TX_DELAY": "32", "EXP_RX_DELAY": "32"}, []),
+    "bh_neighbor_delay": ("bh_neighbor", {"EXP_TX_DELAY": "32", "EXP_RX_DELAY": "32"}, []),
+    # Per-pass spins (EXP_DRISC_DELAY: low 16 bits sender pass, high 16 bits receiver pass; 16 each = 0x100010)
+    "bh_2d_passdelay": ("bh_2d", {"EXP_DRISC_DELAY": str(0x100010)}, []),
+    "bh_vc1_passdelay": ("bh_vc1", {"EXP_DRISC_DELAY": str(0x100010)}, []),
+    "bh_2d_1erisc_passdelay": ("bh_2d_1erisc", {"EXP_DRISC_DELAY": str(0x100010)}, []),
+    "bh_ring_passdelay": ("bh_ring", {"EXP_DRISC_DELAY": str(0x100010)}, []),
 }
 
 

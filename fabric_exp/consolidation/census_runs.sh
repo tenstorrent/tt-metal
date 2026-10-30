@@ -12,7 +12,10 @@
 #   val_ring_p150), hang capture armed. two2 exp_burst (burst), v4/exp_ring (ring), v4/exp_torus_y (torusy).
 # GROUP one: one ERISC (TT_METAL_DISABLE_FABRIC_TWO_ERISC=1) exp_2d_4352 (4352_1e), exp_1d_4352 (1d_1e), v4/exp_ring_se
 #   (rse); mux mode v4/exp_mux (mux); channel-trimmed exp_2d_trim_4352 (trim; main and v4trm only).
-# Labels cen<pass>_<router>_<suite>; compare with same_job_compare.py. A hang stops the job.
+# Labels cen<pass>_<router>_<suite>; compare with census_report.py. A hang stops the job.
+# ROUTERS (default "main_fw main v3qm v4trm") picks the routers: main_fw, main, or any variant directory name (swapped
+# into the v2 slot). PASS is free text (e.g. sh1a): label prefix cen<PASS>. The v3qm validation runs only in the default
+# set; VALIDATE=<variant> runs the same validation for that variant at the start of two1.
 source /home/aagarwal/tt-metal/fabric_exp/consolidation/jobs_lib.sh
 source $CON/cap_lib.sh
 [ -n "$out" ] && [ -d "$out" ] || { echo "no results directory"; exit 1; }
@@ -24,7 +27,8 @@ E="TT_METAL_DISABLE_FABRIC_TWO_ERISC=1"
 V1="TT_FABRIC_KERNEL_VERSION=1 TT_FABRIC_EXP_FLAGS=0"
 stop() { python3 $CON/swap.py restore $BK; echo STOPPED; exit 1; }
 cache() { echo /home/aagarwal/.tt-metal-cache-cen-$1-$G; }
-for r in main_fw main v3qm v4trm; do c=$(cache $r); rm -rf "${c:?}"; mkdir -p $c; done
+ALL=${ROUTERS:-main_fw main v3qm v4trm}
+for r in $ALL; do c=$(cache $r); rm -rf "${c:?}"; mkdir -p $c; done
 
 # one ROUTER SUITE YAML TIMEOUT [ENV...]: one suite on one router (the v2-slot routers must be swapped in by the caller)
 one() {
@@ -42,21 +46,22 @@ suite() {
     local s=$1 y=$2 t=$3 routers=$4 r; shift 4
     for r in $routers; do
         case $r in
-            v3qm|v4trm) python3 $CON/swap.py apply fabric_exp/variants/$r $BK || stop
+            main_fw|main) one $r $s $y $t "$@" ;;
+            *) python3 $CON/swap.py apply fabric_exp/variants/$r $BK || stop
                         one $r $s $y $t "$@"
                         python3 $CON/swap.py restore $BK || { echo STOPPED; exit 1; } ;;
-            *) one $r $s $y $t "$@" ;;
         esac
     done
 }
-ALL="main_fw main v3qm v4trm"
 
 if [ $G = two1 ]; then
-    if [ $P = a ]; then
-        echo "##### v3qm validation (job at ${SECONDS} s)"
-        python3 $CON/swap.py apply fabric_exp/variants/v3qm $BK || stop
-        run_cap cenval_v3qm_mesh $(suite_yaml mesh) $(cache v3qm) 300; [ $? = 2 ] && stop
-        run_cap cenval_v3qm_ring fabric_exp/v4/val_ring_p150.yaml $(cache v3qm) 120; [ $? = 2 ] && stop
+    V=${VALIDATE:-}
+    [ $P = a ] && [ -z "${ROUTERS:-}" ] && V=v3qm
+    if [ -n "$V" ]; then
+        echo "##### $V validation (job at ${SECONDS} s)"
+        python3 $CON/swap.py apply fabric_exp/variants/$V $BK || stop
+        run_cap cenval_${V}_mesh $(suite_yaml mesh) $(cache $V) 300; [ $? = 2 ] && stop
+        run_cap cenval_${V}_ring fabric_exp/v4/val_ring_p150.yaml $(cache $V) 120; [ $? = 2 ] && stop
         python3 $CON/swap.py restore $BK || { echo STOPPED; exit 1; }
     fi
     for s in 4352 1d mix; do
@@ -76,7 +81,7 @@ else
     echo "##### mux (job at ${SECONDS} s)"
     suite mux fabric_exp/v4/exp_mux.yaml 400 "$ALL"
     echo "##### trimmed (job at ${SECONDS} s)"
-    suite trim fabric_exp/exp_2d_trim_4352.yaml 300 "main_fw main v4trm"
+    suite trim fabric_exp/exp_2d_trim_4352.yaml 300 "$(echo $ALL | sed 's/\bv3qm\b//')"
 fi
 rm -f $M
 echo "ALL_DONE (job at ${SECONDS} s)"

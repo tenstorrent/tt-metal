@@ -30,7 +30,7 @@ SECTIONS = [
     (r"FreeSlots<.*>::has_packet", "E0 has-packet test"),
     (r"sender::total_sent", "E0 per-round"),
     (r"next_round|end_round|start_running|terminating|run_router_command", "per-round"),
-    (r"receiver::acknowledge_arrival<", "E1 ack"),
+    (r"receiver::acknowledge_arrival", "E1 ack"),
     (r"release_completions", "E1 completions"),
     (r"slot_retired", "E1 retire"),
     (r"receiver::retire<", "E1 retire"),

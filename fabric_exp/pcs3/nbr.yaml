@@ -1,0 +1,24 @@
+# One long row for PC sampling (nbr): NeighborExchange (the speedy path) from exp_1d_4352, 4352 B write.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: nbr
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: NeighborExchange
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000000
+  patterns:
+  - type: neighbor_exchange
+    iterations: 1

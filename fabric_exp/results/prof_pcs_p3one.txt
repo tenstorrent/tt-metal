@@ -1,0 +1,87 @@
+
+### ew4352: 179.1 cycles/packet
+1 router ERISCs carry traffic, 39 idle, 56 without a kernel match (unused links)
+  chip 0 eth 6 E1 (8026 kernel samples, 36% in work sections):
+      63.6%   113.9 cyc/pkt  E1 loop and round control
+      26.6%    47.6 cyc/pkt  E1 forward
+       8.7%    15.6 cyc/pkt  E1 decode
+       1.1%     2.1 cyc/pkt  E1 admission
+
+### lin1: 159.1 cycles/packet
+1 router ERISCs carry traffic, 39 idle, 56 without a kernel match (unused links)
+  chip 0 eth 6 E1 (7571 kernel samples, 31% in work sections):
+      68.7%   109.3 cyc/pkt  E1 loop and round control
+      31.3%    49.8 cyc/pkt  E1 local delivery
+
+### nbr: 231.5 cycles/packet
+0 router ERISCs carry traffic, 40 idle, 56 without a kernel match (unused links)
+
+### ringbidir: 343.6 cycles/packet
+0 router ERISCs carry traffic, 40 idle, 56 without a kernel match (unused links)
+
+### muxfullring: 398.3 cycles/packet
+16 router ERISCs carry traffic, 24 idle, 56 without a kernel match (unused links)
+  chip 5 eth 7 E1 (30896 kernel samples, 23% in work sections):
+      76.9%   306.2 cyc/pkt  E1 loop and round control
+      21.1%    84.0 cyc/pkt  E1 forward
+       2.0%     8.0 cyc/pkt  E1 local delivery
+  chip 3 eth 6 E1 (30896 kernel samples, 23% in work sections):
+      77.3%   307.8 cyc/pkt  E1 loop and round control
+      20.7%    82.4 cyc/pkt  E1 forward
+       2.0%     8.0 cyc/pkt  E1 local delivery
+  chip 6 eth 6 E1 (30896 kernel samples, 23% in work sections):
+      77.4%   308.3 cyc/pkt  E1 loop and round control
+      20.6%    82.2 cyc/pkt  E1 forward
+       1.9%     7.7 cyc/pkt  E1 local delivery
+  chip 0 eth 6 E1 (30897 kernel samples, 23% in work sections):
+      77.4%   308.4 cyc/pkt  E1 loop and round control
+      20.7%    82.3 cyc/pkt  E1 forward
+       1.9%     7.6 cyc/pkt  E1 local delivery
+  chip 7 eth 11 E1 (30896 kernel samples, 23% in work sections):
+      77.5%   308.5 cyc/pkt  E1 loop and round control
+      20.5%    81.7 cyc/pkt  E1 forward
+       2.0%     8.1 cyc/pkt  E1 local delivery
+  chip 6 eth 7 E1 (30896 kernel samples, 23% in work sections):
+      77.5%   308.5 cyc/pkt  E1 loop and round control
+      20.6%    82.2 cyc/pkt  E1 forward
+       1.9%     7.5 cyc/pkt  E1 local delivery
+  chip 5 eth 11 E1 (30896 kernel samples, 22% in work sections):
+      77.7%   309.6 cyc/pkt  E1 loop and round control
+      20.4%    81.1 cyc/pkt  E1 forward
+       1.9%     7.5 cyc/pkt  E1 local delivery
+  chip 1 eth 8 E1 (30897 kernel samples, 22% in work sections):
+      77.8%   310.0 cyc/pkt  E1 loop and round control
+      20.2%    80.3 cyc/pkt  E1 forward
+       2.0%     8.0 cyc/pkt  E1 local delivery
+  chip 0 eth 7 E1 (30897 kernel samples, 22% in work sections):
+      77.9%   310.4 cyc/pkt  E1 loop and round control
+      20.3%    80.7 cyc/pkt  E1 forward
+       1.8%     7.2 cyc/pkt  E1 local delivery
+  chip 1 eth 5 E1 (30897 kernel samples, 22% in work sections):
+      78.2%   311.6 cyc/pkt  E1 loop and round control
+      19.8%    78.7 cyc/pkt  E1 forward
+       2.0%     8.0 cyc/pkt  E1 local delivery
+  chip 2 eth 5 E1 (30897 kernel samples, 22% in work sections):
+      78.3%   311.9 cyc/pkt  E1 loop and round control
+      19.7%    78.3 cyc/pkt  E1 forward
+       2.0%     8.0 cyc/pkt  E1 local delivery
+  chip 3 eth 8 E1 (30896 kernel samples, 22% in work sections):
+      78.4%   312.2 cyc/pkt  E1 loop and round control
+      19.6%    78.1 cyc/pkt  E1 forward
+       2.0%     7.9 cyc/pkt  E1 local delivery
+  chip 2 eth 4 E1 (30897 kernel samples, 21% in work sections):
+      78.5%   312.8 cyc/pkt  E1 loop and round control
+      19.5%    77.8 cyc/pkt  E1 forward
+       1.9%     7.7 cyc/pkt  E1 local delivery
+  chip 4 eth 4 E1 (30896 kernel samples, 21% in work sections):
+      78.7%   313.5 cyc/pkt  E1 loop and round control
+      19.3%    77.0 cyc/pkt  E1 forward
+       2.0%     7.8 cyc/pkt  E1 local delivery
+  chip 4 eth 5 E1 (30896 kernel samples, 21% in work sections):
+      78.8%   313.9 cyc/pkt  E1 loop and round control
+      19.4%    77.3 cyc/pkt  E1 forward
+       1.8%     7.1 cyc/pkt  E1 local delivery
+  chip 7 eth 4 E1 (30896 kernel samples, 21% in work sections):
+      78.9%   314.1 cyc/pkt  E1 loop and round control
+      19.1%    76.0 cyc/pkt  E1 forward
+       2.0%     8.1 cyc/pkt  E1 local delivery

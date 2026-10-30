@@ -54,6 +54,17 @@ enum Pattern : uint32_t {
     DEP_TXQ_BUSY_WAW,  // T + Q into one register, Q used at once, K
     PRE_E1_GROUP_WAW,  // S + T, Q into one register + N, K, use S, Q, N
     PRE_S4_TXQ,        // S, S2, S3, S4 + T, Q into one register, K, use all five (E0's grouped read + its busy check)
+    // Parked send cursors (V4_STATE.md, 2026-10-30): local-memory words loaded with the grouped stream reads, and the
+    // send's header read through a slot address held in a register or loaded from local memory. D, D2, D3 = three
+    // local-memory words; DS = a local-memory word holding the address of the L1 word L (a parked slot).
+    BASE7,           // K filler + 7 adds, no loads
+    PRE_S4_D,        // S, S2, S3, S4, then D, K, use all five
+    PRE_D_S4,        // D, then S, S2, S3, S4, K, use all five
+    PRE_S4_D3,       // S, S2, S3, S4, then D, D2, D3, K, use all seven
+    PRE_D3_S4,       // D, D2, D3, then S, S2, S3, S4, K, use all seven
+    PRE_S4_HDR,      // S..S4, K, use them, then L (the header, slot in a register) used at once
+    PRE_S4_DS_HDR,   // S..S4 + DS (the slot, loaded with the group), K, use S..S4, then L through DS used at once
+    DEP_DS_HDR,      // DS, then L through it used at once (slot loaded right before the header), K
     kNumPatterns,
 };
 
@@ -68,8 +79,8 @@ constexpr uint32_t kStream4 = 3;
 // The patterns do not all fit the 24 KB kernel code limit at once; the host runs the kernel once per group,
 // selected by ERISC_LOAD_GROUP (patterns [first, last) of each group).
 constexpr uint32_t kGroups[][2] = {
-    {0, PRE_BOTH_REV}, {PRE_BOTH_REV, BASE3}, {BASE3, BASE5}, {BASE5, DEP_CMDBUF}, {DEP_CMDBUF, kNumPatterns}};
-constexpr uint32_t kNumGroups = 5;
+    {0, PRE_BOTH_REV}, {PRE_BOTH_REV, BASE3}, {BASE3, BASE5}, {BASE5, DEP_CMDBUF}, {DEP_CMDBUF, BASE7}, {BASE7, kNumPatterns}};
+constexpr uint32_t kNumGroups = 6;
 constexpr uint32_t kTxq = 1;     // TX queue whose registers are read (the receiving ERISC's ack queue)
 constexpr uint32_t kNiuNoc = 1;  // NoC whose status registers are read (the router's local-write NoC)
 

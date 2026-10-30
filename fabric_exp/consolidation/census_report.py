@@ -8,6 +8,15 @@ import csv, os, statistics, sys
 
 R = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
 ROUTERS = ["main_fw", "main", "v3qm", "v4trm"]
+PASSES = ["a", "b"]
+REF = "v4trm"  # the column the others are compared with
+for arg in sys.argv[1:]:
+    if arg.startswith("--routers="):
+        ROUTERS = arg.split("=", 1)[1].split(",")
+    elif arg.startswith("--passes="):
+        PASSES = arg.split("=", 1)[1].split(",")
+    elif arg.startswith("--ref="):
+        REF = arg.split("=", 1)[1]
 SUITES = ["4352", "1d", "mix", "burst", "ring", "torusy", "4352_1e", "1d_1e", "rse", "mux", "trim", "vc1", "vc1i"]
 
 
@@ -44,11 +53,11 @@ def main():
     for s in args or SUITES:
         data = {}
         for r in ROUTERS:
-            a, b = rows(path("a", r, s)), rows(path("b", r, s))
-            if a is None and b is None:
+            ds = [rows(path(p, r, s)) for p in PASSES]
+            if all(d is None for d in ds):
                 continue
-            ks = set((a or {}).keys()) | set((b or {}).keys())
-            data[r] = {k: [d[k] for d in (a, b) if d and k in d] for k in ks}
+            ks = set().union(*[set(d.keys()) for d in ds if d])
+            data[r] = {k: [d[k] for d in ds if d and k in d] for k in ks}
         if not data:
             continue
         cols = [r for r in ROUTERS if r in data]
@@ -67,16 +76,14 @@ def main():
                 print(f"{lab[:56]:56}" + cells)
         means = {c: statistics.mean(statistics.mean(data[c][k]) for k in ks_mean) for c in cols}
         print(f"{'MEAN':56}" + "".join(f"{means[c]:10.1f} " for c in cols))
-        if "v4trm" in means:
-            print(f"{'v4trm / router':56}" + "".join(f"{means['v4trm'] / means[c]:10.3f} " for c in cols))
+        if REF in means:
+            print(f"{REF + ' / router':56}" + "".join(f"{means[REF] / means[c]:10.3f} " for c in cols))
         summary.append((s, len(ks_mean), means))
-    print("\n## summary (suite means, cycles/packet)")
-    print(f"{'suite':10}{'rows':>5}" + "".join(f"{c:>10}" for c in ROUTERS) + f"{'v4/main_fw':>12}{'v4/main':>9}{'v4/v3qm':>9}")
+    print("\n## summary (suite means, cycles/packet; ratios = each router / " + REF + ")")
+    print(f"{'suite':10}{'rows':>5}" + "".join(f"{c:>10}" for c in ROUTERS) + "".join(f"{c + '/' + REF:>16}" for c in ROUTERS if c != REF))
     for s, n, m in summary:
-        r = lambda c: f"{m['v4trm'] / m[c]:.3f}" if c in m and "v4trm" in m else "-"
         print(f"{s:10}{n:5}" + "".join(f"{m[c]:10.1f}" if c in m else f"{'-':>10}" for c in ROUTERS)
-              + f"{r('main_fw'):>12}{r('main'):>9}{r('v3qm'):>9}")
-
+              + "".join(f"{(m[c] / m[REF] if c in m and REF in m else float('nan')):16.3f}" for c in ROUTERS if c != REF))
 
 if __name__ == "__main__":
     main()

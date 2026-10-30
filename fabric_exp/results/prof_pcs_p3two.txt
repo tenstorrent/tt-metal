@@ -1,0 +1,782 @@
+
+### ew4352: 126.9 cycles/packet
+2 router ERISCs carry traffic, 78 idle, 16 without a kernel match (unused links)
+  chip 1 eth 5 E0 (5618 kernel samples, 52% in work sections):
+      45.0%    57.2 cyc/pkt  E0 worker: send
+      12.0%    15.2 cyc/pkt  E0 worker: send check
+       9.3%    11.8 cyc/pkt  E0 worker: connection poll
+       8.5%    10.8 cyc/pkt  E0 VC0 forwarding: idle test
+       7.9%    10.1 cyc/pkt  E0 VC0 free-slots group read
+       6.6%     8.4 cyc/pkt  E0 worker: credit
+       5.7%     7.2 cyc/pkt  E0 worker: completion check
+       2.7%     3.4 cyc/pkt  E0 loop and round control
+       1.5%     1.9 cyc/pkt  E0 per-round (out of line)
+  chip 0 eth 6 E1 (5618 kernel samples, 78% in work sections):
+      28.0%    35.6 cyc/pkt  E1 local delivery
+      18.1%    23.0 cyc/pkt  E1 completions: send
+      15.5%    19.7 cyc/pkt  E1 decode
+      11.3%    14.3 cyc/pkt  E1 poll
+      10.8%    13.7 cyc/pkt  E1 retire
+       5.1%     6.5 cyc/pkt  E1 completions: batch check
+       4.9%     6.2 cyc/pkt  E1 deferred atomic
+       3.3%     4.1 cyc/pkt  E1 loop and round control
+       1.9%     2.4 cyc/pkt  E1 per-round (out of line)
+       1.1%     1.4 cyc/pkt  E1 admission
+
+### hop3: 142.8 cycles/packet
+6 router ERISCs carry traffic, 74 idle, 16 without a kernel match (unused links)
+  chip 2 eth 5 E0 (5580 kernel samples, 64% in work sections):
+      45.3%    64.7 cyc/pkt  E0 VC0 forwarding: visit: send
+      11.5%    16.4 cyc/pkt  E0 VC0 forwarding: idle test
+      11.4%    16.2 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+       8.5%    12.1 cyc/pkt  E0 worker: send check
+       6.9%     9.9 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.3%     8.9 cyc/pkt  E0 worker: connection poll
+       5.3%     7.5 cyc/pkt  E0 VC0 free-slots group read
+       2.1%     3.0 cyc/pkt  E0 loop and round control
+  chip 0 eth 7 E0 (5578 kernel samples, 63% in work sections):
+      45.3%    64.6 cyc/pkt  E0 VC0 forwarding: visit: send
+      11.3%    16.2 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      11.2%    16.0 cyc/pkt  E0 VC0 forwarding: idle test
+       8.6%    12.3 cyc/pkt  E0 worker: send check
+       6.7%     9.5 cyc/pkt  E0 worker: connection poll
+       6.6%     9.4 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       5.9%     8.4 cyc/pkt  E0 VC0 free-slots group read
+       1.8%     2.6 cyc/pkt  E0 loop and round control
+       1.1%     1.6 cyc/pkt  E0 per-round (out of line)
+  chip 1 eth 5 E0 (5578 kernel samples, 45% in work sections):
+      39.7%    56.6 cyc/pkt  E0 worker: send
+      13.8%    19.7 cyc/pkt  E0 worker: send check
+      10.7%    15.3 cyc/pkt  E0 worker: connection poll
+       9.6%    13.6 cyc/pkt  E0 VC0 forwarding: idle test
+       7.7%    11.1 cyc/pkt  E0 worker: completion check
+       7.7%    11.0 cyc/pkt  E0 VC0 free-slots group read
+       5.8%     8.3 cyc/pkt  E0 worker: credit
+       2.7%     3.8 cyc/pkt  E0 loop and round control
+       1.6%     2.3 cyc/pkt  E0 per-round (out of line)
+  chip 0 eth 6 E1 (5578 kernel samples, 88% in work sections):
+      36.5%    52.2 cyc/pkt  E1 forward
+      14.8%    21.1 cyc/pkt  E1 decode
+      14.2%    20.2 cyc/pkt  E1 completions: send
+       9.4%    13.5 cyc/pkt  E1 retire
+       8.9%    12.7 cyc/pkt  E1 admission
+       4.8%     6.9 cyc/pkt  E1 poll
+       3.7%     5.2 cyc/pkt  E1 deferred atomic
+       3.2%     4.6 cyc/pkt  E1 completions: batch check
+       2.4%     3.4 cyc/pkt  E1 loop and round control
+       1.5%     2.1 cyc/pkt  E1 per-round (out of line)
+  chip 2 eth 4 E1 (5578 kernel samples, 86% in work sections):
+      35.7%    50.9 cyc/pkt  E1 forward
+      14.7%    20.9 cyc/pkt  E1 decode
+      14.6%    20.9 cyc/pkt  E1 completions: send
+      10.3%    14.7 cyc/pkt  E1 retire
+       7.8%    11.1 cyc/pkt  E1 admission
+       6.6%     9.4 cyc/pkt  E1 poll
+       3.6%     5.2 cyc/pkt  E1 completions: batch check
+       2.7%     3.8 cyc/pkt  E1 deferred atomic
+       2.3%     3.3 cyc/pkt  E1 loop and round control
+       1.4%     2.0 cyc/pkt  E1 per-round (out of line)
+  chip 3 eth 6 E1 (5578 kernel samples, 74% in work sections):
+      24.6%    35.1 cyc/pkt  E1 local delivery
+      18.5%    26.4 cyc/pkt  E1 completions: send
+      15.9%    22.8 cyc/pkt  E1 decode
+      13.6%    19.4 cyc/pkt  E1 poll
+       8.9%    12.6 cyc/pkt  E1 retire
+       6.6%     9.4 cyc/pkt  E1 completions: batch check
+       5.4%     7.7 cyc/pkt  E1 deferred atomic
+       3.6%     5.2 cyc/pkt  E1 loop and round control
+       2.2%     3.1 cyc/pkt  E1 per-round (out of line)
+
+### mcast: 141.1 cycles/packet
+32 router ERISCs carry traffic, 48 idle, 16 without a kernel match (unused links)
+  chip 6 eth 7 E0 (36169 kernel samples, 74% in work sections):
+      37.8%    53.3 cyc/pkt  E0 VC0 forwarding: visit: send
+      16.6%    23.4 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      10.6%    15.0 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.8%    11.0 cyc/pkt  E0 VC0 forwarding: idle test
+       6.8%     9.7 cyc/pkt  E0 worker: send
+       6.2%     8.8 cyc/pkt  E0 worker: send check
+       4.4%     6.1 cyc/pkt  E0 worker: connection poll
+       3.9%     5.5 cyc/pkt  E0 VC0 free-slots group read
+       2.4%     3.4 cyc/pkt  E0 worker: credit
+       1.4%     2.0 cyc/pkt  E0 loop and round control
+       1.1%     1.5 cyc/pkt  E0 worker: completion check
+  chip 2 eth 5 E0 (36169 kernel samples, 74% in work sections):
+      36.9%    52.0 cyc/pkt  E0 VC0 forwarding: visit: send
+      16.9%    23.9 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      10.7%    15.2 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       8.1%    11.4 cyc/pkt  E0 VC0 forwarding: idle test
+       7.1%    10.0 cyc/pkt  E0 worker: send
+       6.2%     8.8 cyc/pkt  E0 worker: send check
+       4.4%     6.3 cyc/pkt  E0 worker: connection poll
+       3.8%     5.3 cyc/pkt  E0 VC0 free-slots group read
+       2.3%     3.3 cyc/pkt  E0 worker: credit
+       1.2%     1.7 cyc/pkt  E0 loop and round control
+       1.1%     1.6 cyc/pkt  E0 worker: completion check
+  chip 4 eth 4 E0 (36169 kernel samples, 74% in work sections):
+      37.1%    52.4 cyc/pkt  E0 VC0 forwarding: visit: send
+      16.4%    23.2 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      11.0%    15.5 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       8.0%    11.3 cyc/pkt  E0 VC0 forwarding: idle test
+       6.8%     9.6 cyc/pkt  E0 worker: send
+       6.2%     8.7 cyc/pkt  E0 worker: send check
+       4.8%     6.7 cyc/pkt  E0 worker: connection poll
+       3.8%     5.3 cyc/pkt  E0 VC0 free-slots group read
+       2.4%     3.4 cyc/pkt  E0 worker: credit
+       1.3%     1.9 cyc/pkt  E0 loop and round control
+       1.2%     1.7 cyc/pkt  E0 worker: completion check
+  chip 0 eth 6 E0 (36169 kernel samples, 74% in work sections):
+      37.5%    52.9 cyc/pkt  E0 VC0 forwarding: visit: send
+      16.6%    23.4 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      10.4%    14.7 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       8.3%    11.7 cyc/pkt  E0 VC0 forwarding: idle test
+       6.7%     9.4 cyc/pkt  E0 worker: send
+       6.2%     8.7 cyc/pkt  E0 worker: send check
+       4.6%     6.5 cyc/pkt  E0 worker: connection poll
+       3.8%     5.3 cyc/pkt  E0 VC0 free-slots group read
+       2.4%     3.3 cyc/pkt  E0 worker: credit
+       1.4%     2.0 cyc/pkt  E0 loop and round control
+       1.1%     1.6 cyc/pkt  E0 worker: completion check
+  chip 4 eth 5 E0 (36169 kernel samples, 64% in work sections):
+      23.3%    32.9 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      22.0%    31.0 cyc/pkt  E0 VC0 forwarding: visit: send
+       8.7%    12.3 cyc/pkt  E0 VC0 forwarding: idle test
+       7.9%    11.1 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.8%    11.0 cyc/pkt  E0 worker: send check
+       7.5%    10.5 cyc/pkt  E0 worker: send
+       6.1%     8.6 cyc/pkt  E0 worker: completion check
+       5.6%     7.9 cyc/pkt  E0 worker: connection poll
+       4.8%     6.7 cyc/pkt  E0 VC0 free-slots group read
+       3.4%     4.8 cyc/pkt  E0 worker: credit
+       1.8%     2.5 cyc/pkt  E0 loop and round control
+  chip 2 eth 4 E0 (36169 kernel samples, 64% in work sections):
+      22.9%    32.3 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      21.4%    30.2 cyc/pkt  E0 VC0 forwarding: visit: send
+       9.0%    12.6 cyc/pkt  E0 VC0 forwarding: idle test
+       8.3%    11.7 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       8.1%    11.4 cyc/pkt  E0 worker: send check
+       7.9%    11.2 cyc/pkt  E0 worker: send
+       5.9%     8.3 cyc/pkt  E0 worker: completion check
+       5.7%     8.0 cyc/pkt  E0 worker: connection poll
+       4.6%     6.5 cyc/pkt  E0 VC0 free-slots group read
+       3.4%     4.8 cyc/pkt  E0 worker: credit
+       1.6%     2.2 cyc/pkt  E0 loop and round control
+  chip 6 eth 6 E0 (36169 kernel samples, 64% in work sections):
+      23.2%    32.8 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      21.8%    30.8 cyc/pkt  E0 VC0 forwarding: visit: send
+       9.1%    12.8 cyc/pkt  E0 VC0 forwarding: idle test
+       8.0%    11.3 cyc/pkt  E0 worker: send check
+       7.8%    11.0 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.5%    10.5 cyc/pkt  E0 worker: send
+       6.0%     8.4 cyc/pkt  E0 worker: completion check
+       5.5%     7.8 cyc/pkt  E0 worker: connection poll
+       4.7%     6.7 cyc/pkt  E0 VC0 free-slots group read
+       3.4%     4.8 cyc/pkt  E0 worker: credit
+       1.9%     2.7 cyc/pkt  E0 loop and round control
+  chip 0 eth 7 E0 (36170 kernel samples, 63% in work sections):
+      22.8%    32.2 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      21.6%    30.5 cyc/pkt  E0 VC0 forwarding: visit: send
+       9.1%    12.8 cyc/pkt  E0 VC0 forwarding: idle test
+       7.9%    11.1 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.8%    11.1 cyc/pkt  E0 worker: send check
+       7.5%    10.6 cyc/pkt  E0 worker: send
+       6.2%     8.7 cyc/pkt  E0 worker: completion check
+       5.8%     8.2 cyc/pkt  E0 worker: connection poll
+       4.7%     6.6 cyc/pkt  E0 VC0 free-slots group read
+       3.5%     4.9 cyc/pkt  E0 worker: credit
+       1.8%     2.6 cyc/pkt  E0 loop and round control
+  chip 1 eth 5 E0 (36169 kernel samples, 39% in work sections):
+      18.7%    26.4 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      15.2%    21.4 cyc/pkt  E0 VC0 forwarding: idle test
+      12.4%    17.5 cyc/pkt  E0 worker: send check
+      12.2%    17.1 cyc/pkt  E0 worker: completion check
+       9.2%    12.9 cyc/pkt  E0 worker: connection poll
+       7.4%    10.5 cyc/pkt  E0 VC0 free-slots group read
+       7.1%    10.0 cyc/pkt  E0 worker: send
+       6.9%     9.8 cyc/pkt  E0 VC0 forwarding: visit: send
+       3.4%     4.8 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       2.9%     4.1 cyc/pkt  E0 worker: credit
+       2.6%     3.6 cyc/pkt  E0 loop and round control
+       1.4%     2.0 cyc/pkt  E0 per-round (out of line)
+  chip 5 eth 7 E0 (36169 kernel samples, 38% in work sections):
+      19.0%    26.8 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      16.0%    22.6 cyc/pkt  E0 VC0 forwarding: idle test
+      12.1%    17.0 cyc/pkt  E0 worker: send check
+      11.9%    16.8 cyc/pkt  E0 worker: completion check
+       9.5%    13.4 cyc/pkt  E0 worker: connection poll
+       7.4%    10.4 cyc/pkt  E0 VC0 free-slots group read
+       7.0%     9.9 cyc/pkt  E0 VC0 forwarding: visit: send
+       6.5%     9.2 cyc/pkt  E0 worker: send
+       3.0%     4.2 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       2.9%     4.0 cyc/pkt  E0 worker: credit
+       2.7%     3.8 cyc/pkt  E0 loop and round control
+       1.5%     2.1 cyc/pkt  E0 per-round (out of line)
+  chip 3 eth 6 E0 (36169 kernel samples, 38% in work sections):
+      19.2%    27.0 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      16.1%    22.7 cyc/pkt  E0 VC0 forwarding: idle test
+      12.3%    17.3 cyc/pkt  E0 worker: send check
+      12.2%    17.2 cyc/pkt  E0 worker: completion check
+       9.2%    13.0 cyc/pkt  E0 worker: connection poll
+       7.4%    10.5 cyc/pkt  E0 VC0 free-slots group read
+       6.7%     9.4 cyc/pkt  E0 VC0 forwarding: visit: send
+       6.6%     9.3 cyc/pkt  E0 worker: send
+       2.9%     4.1 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       2.8%     4.0 cyc/pkt  E0 worker: credit
+       2.8%     3.9 cyc/pkt  E0 loop and round control
+       1.3%     1.8 cyc/pkt  E0 per-round (out of line)
+  chip 7 eth 4 E0 (36169 kernel samples, 38% in work sections):
+      18.5%    26.1 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      16.2%    22.8 cyc/pkt  E0 VC0 forwarding: idle test
+      12.1%    17.1 cyc/pkt  E0 worker: completion check
+      12.1%    17.1 cyc/pkt  E0 worker: send check
+       9.4%    13.2 cyc/pkt  E0 worker: connection poll
+       7.3%    10.3 cyc/pkt  E0 VC0 free-slots group read
+       6.9%     9.7 cyc/pkt  E0 VC0 forwarding: visit: send
+       6.7%     9.5 cyc/pkt  E0 worker: send
+       3.0%     4.2 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       2.9%     4.1 cyc/pkt  E0 worker: credit
+       2.8%     4.0 cyc/pkt  E0 loop and round control
+       1.5%     2.1 cyc/pkt  E0 per-round (out of line)
+  chip 0 eth 7 E1 (36169 kernel samples, 91% in work sections):
+      25.0%    35.3 cyc/pkt  E1 forward
+      17.4%    24.6 cyc/pkt  E1 local delivery
+      16.0%    22.6 cyc/pkt  E1 completions: send
+      13.1%    18.5 cyc/pkt  E1 decode
+       9.9%    14.0 cyc/pkt  E1 admission
+       6.3%     8.9 cyc/pkt  E1 retire
+       3.8%     5.4 cyc/pkt  E1 completions: batch check
+       2.9%     4.0 cyc/pkt  E1 deferred atomic
+       2.4%     3.4 cyc/pkt  E1 poll
+       2.1%     3.0 cyc/pkt  E1 loop and round control
+  chip 4 eth 5 E1 (36169 kernel samples, 91% in work sections):
+      25.9%    36.5 cyc/pkt  E1 forward
+      17.3%    24.4 cyc/pkt  E1 local delivery
+      16.0%    22.6 cyc/pkt  E1 completions: send
+      12.8%    18.0 cyc/pkt  E1 decode
+       9.5%    13.4 cyc/pkt  E1 admission
+       6.5%     9.1 cyc/pkt  E1 retire
+       3.8%     5.3 cyc/pkt  E1 completions: batch check
+       2.7%     3.8 cyc/pkt  E1 deferred atomic
+       2.4%     3.5 cyc/pkt  E1 poll
+       2.2%     3.1 cyc/pkt  E1 loop and round control
+  chip 2 eth 4 E1 (36169 kernel samples, 91% in work sections):
+      25.1%    35.4 cyc/pkt  E1 forward
+      17.1%    24.2 cyc/pkt  E1 local delivery
+      16.0%    22.6 cyc/pkt  E1 completions: send
+      13.1%    18.4 cyc/pkt  E1 decode
+      10.0%    14.1 cyc/pkt  E1 admission
+       6.4%     9.1 cyc/pkt  E1 retire
+       3.9%     5.5 cyc/pkt  E1 completions: batch check
+       2.9%     4.1 cyc/pkt  E1 deferred atomic
+       2.4%     3.4 cyc/pkt  E1 poll
+       2.1%     2.9 cyc/pkt  E1 loop and round control
+       1.0%     1.5 cyc/pkt  E1 per-round (out of line)
+  chip 6 eth 6 E1 (36169 kernel samples, 90% in work sections):
+      25.9%    36.5 cyc/pkt  E1 forward
+      16.9%    23.8 cyc/pkt  E1 local delivery
+      16.2%    22.8 cyc/pkt  E1 completions: send
+      12.6%    17.8 cyc/pkt  E1 decode
+       9.3%    13.2 cyc/pkt  E1 admission
+       6.8%     9.6 cyc/pkt  E1 retire
+       3.9%     5.5 cyc/pkt  E1 completions: batch check
+       2.8%     3.9 cyc/pkt  E1 deferred atomic
+       2.5%     3.5 cyc/pkt  E1 poll
+       2.2%     3.1 cyc/pkt  E1 loop and round control
+       1.0%     1.4 cyc/pkt  E1 per-round (out of line)
+  chip 3 eth 8 E1 (36169 kernel samples, 86% in work sections):
+      36.2%    51.0 cyc/pkt  E1 admission
+      23.7%    33.4 cyc/pkt  E1 decode
+       9.2%    13.0 cyc/pkt  E1 forward
+       8.0%    11.3 cyc/pkt  E1 completions: send
+       6.7%     9.4 cyc/pkt  E1 completions: batch check
+       4.5%     6.3 cyc/pkt  E1 local delivery
+       4.1%     5.7 cyc/pkt  E1 loop and round control
+       2.6%     3.6 cyc/pkt  E1 deferred atomic
+       1.9%     2.7 cyc/pkt  E1 poll
+       1.8%     2.5 cyc/pkt  E1 per-round (out of line)
+       1.5%     2.1 cyc/pkt  E1 retire
+  chip 7 eth 11 E1 (36169 kernel samples, 85% in work sections):
+      35.5%    50.1 cyc/pkt  E1 admission
+      24.3%    34.3 cyc/pkt  E1 decode
+       9.2%    13.0 cyc/pkt  E1 forward
+       8.0%    11.3 cyc/pkt  E1 completions: send
+       6.9%     9.7 cyc/pkt  E1 completions: batch check
+       4.3%     6.1 cyc/pkt  E1 local delivery
+       4.1%     5.8 cyc/pkt  E1 loop and round control
+       2.5%     3.5 cyc/pkt  E1 deferred atomic
+       1.9%     2.6 cyc/pkt  E1 poll
+       1.8%     2.5 cyc/pkt  E1 per-round (out of line)
+       1.5%     2.1 cyc/pkt  E1 retire
+  chip 0 eth 6 E1 (36169 kernel samples, 85% in work sections):
+      23.9%    33.7 cyc/pkt  E1 decode
+      21.7%    30.6 cyc/pkt  E1 admission
+      12.9%    18.3 cyc/pkt  E1 completions: send
+      11.8%    16.7 cyc/pkt  E1 forward
+       8.2%    11.6 cyc/pkt  E1 local delivery
+       7.1%    10.0 cyc/pkt  E1 completions: batch check
+       4.1%     5.8 cyc/pkt  E1 loop and round control
+       3.2%     4.5 cyc/pkt  E1 deferred atomic
+       3.1%     4.4 cyc/pkt  E1 retire
+       2.1%     2.9 cyc/pkt  E1 poll
+       1.8%     2.5 cyc/pkt  E1 per-round (out of line)
+  chip 4 eth 4 E1 (36169 kernel samples, 85% in work sections):
+      24.2%    34.2 cyc/pkt  E1 decode
+      21.7%    30.5 cyc/pkt  E1 admission
+      12.5%    17.7 cyc/pkt  E1 completions: send
+      11.9%    16.7 cyc/pkt  E1 forward
+       8.1%    11.4 cyc/pkt  E1 local delivery
+       7.3%    10.3 cyc/pkt  E1 completions: batch check
+       4.1%     5.8 cyc/pkt  E1 loop and round control
+       3.4%     4.8 cyc/pkt  E1 deferred atomic
+       2.9%     4.1 cyc/pkt  E1 retire
+       2.1%     2.9 cyc/pkt  E1 poll
+       1.8%     2.6 cyc/pkt  E1 per-round (out of line)
+  chip 2 eth 5 E1 (36169 kernel samples, 85% in work sections):
+      24.1%    34.0 cyc/pkt  E1 decode
+      21.3%    30.0 cyc/pkt  E1 admission
+      12.6%    17.7 cyc/pkt  E1 completions: send
+      12.2%    17.2 cyc/pkt  E1 forward
+       8.1%    11.5 cyc/pkt  E1 local delivery
+       7.3%    10.3 cyc/pkt  E1 completions: batch check
+       4.2%     5.9 cyc/pkt  E1 loop and round control
+       3.2%     4.5 cyc/pkt  E1 deferred atomic
+       3.1%     4.4 cyc/pkt  E1 retire
+       2.2%     3.0 cyc/pkt  E1 poll
+       1.8%     2.5 cyc/pkt  E1 per-round (out of line)
+  chip 6 eth 7 E1 (36169 kernel samples, 84% in work sections):
+      23.7%    33.5 cyc/pkt  E1 decode
+      21.6%    30.5 cyc/pkt  E1 admission
+      13.0%    18.3 cyc/pkt  E1 completions: send
+      11.6%    16.4 cyc/pkt  E1 forward
+       8.2%    11.6 cyc/pkt  E1 local delivery
+       7.3%    10.3 cyc/pkt  E1 completions: batch check
+       4.2%     6.0 cyc/pkt  E1 loop and round control
+       3.2%     4.6 cyc/pkt  E1 deferred atomic
+       3.1%     4.4 cyc/pkt  E1 retire
+       2.1%     3.0 cyc/pkt  E1 poll
+       1.9%     2.6 cyc/pkt  E1 per-round (out of line)
+  chip 1 eth 8 E1 (36169 kernel samples, 83% in work sections):
+      30.0%    42.3 cyc/pkt  E1 decode
+      27.0%    38.1 cyc/pkt  E1 admission
+       9.3%    13.1 cyc/pkt  E1 forward
+       8.1%    11.5 cyc/pkt  E1 completions: send
+       8.0%    11.3 cyc/pkt  E1 completions: batch check
+       4.7%     6.6 cyc/pkt  E1 loop and round control
+       4.4%     6.2 cyc/pkt  E1 local delivery
+       2.9%     4.1 cyc/pkt  E1 deferred atomic
+       2.0%     2.8 cyc/pkt  E1 per-round (out of line)
+       2.0%     2.8 cyc/pkt  E1 poll
+       1.6%     2.3 cyc/pkt  E1 retire
+  chip 5 eth 11 E1 (36169 kernel samples, 83% in work sections):
+      29.9%    42.2 cyc/pkt  E1 decode
+      27.1%    38.2 cyc/pkt  E1 admission
+       9.1%    12.9 cyc/pkt  E1 forward
+       8.5%    12.0 cyc/pkt  E1 completions: send
+       7.9%    11.1 cyc/pkt  E1 completions: batch check
+       4.7%     6.6 cyc/pkt  E1 loop and round control
+       4.2%     5.9 cyc/pkt  E1 local delivery
+       2.8%     3.9 cyc/pkt  E1 deferred atomic
+       2.3%     3.2 cyc/pkt  E1 per-round (out of line)
+       2.0%     2.8 cyc/pkt  E1 poll
+       1.6%     2.3 cyc/pkt  E1 retire
+  chip 5 eth 7 E1 (36169 kernel samples, 77% in work sections):
+      25.8%    36.4 cyc/pkt  E1 local delivery
+      21.5%    30.4 cyc/pkt  E1 completions: send
+      15.0%    21.2 cyc/pkt  E1 decode
+      12.2%    17.2 cyc/pkt  E1 poll
+       9.5%    13.5 cyc/pkt  E1 retire
+       5.6%     7.9 cyc/pkt  E1 completions: batch check
+       4.5%     6.4 cyc/pkt  E1 deferred atomic
+       3.5%     4.9 cyc/pkt  E1 loop and round control
+       1.4%     2.0 cyc/pkt  E1 per-round (out of line)
+  chip 3 eth 6 E1 (36169 kernel samples, 77% in work sections):
+      25.7%    36.2 cyc/pkt  E1 local delivery
+      21.6%    30.5 cyc/pkt  E1 completions: send
+      14.7%    20.7 cyc/pkt  E1 decode
+      12.4%    17.5 cyc/pkt  E1 poll
+      10.0%    14.1 cyc/pkt  E1 retire
+       5.6%     7.9 cyc/pkt  E1 completions: batch check
+       4.2%     6.0 cyc/pkt  E1 deferred atomic
+       3.3%     4.6 cyc/pkt  E1 loop and round control
+       1.5%     2.2 cyc/pkt  E1 per-round (out of line)
+  chip 2 eth 8 E1 (36169 kernel samples, 77% in work sections):
+      23.2%    32.8 cyc/pkt  E1 admission
+      23.0%    32.5 cyc/pkt  E1 forward
+      13.6%    19.2 cyc/pkt  E1 decode
+       9.2%    13.0 cyc/pkt  E1 poll
+       8.1%    11.4 cyc/pkt  E1 completions: send
+       7.4%    10.4 cyc/pkt  E1 completions: batch check
+       4.9%     7.0 cyc/pkt  E1 local delivery
+       4.3%     6.1 cyc/pkt  E1 loop and round control
+       2.6%     3.7 cyc/pkt  E1 deferred atomic
+       2.0%     2.8 cyc/pkt  E1 per-round (out of line)
+       1.6%     2.3 cyc/pkt  E1 retire
+  chip 7 eth 4 E1 (36169 kernel samples, 77% in work sections):
+      25.5%    36.0 cyc/pkt  E1 local delivery
+      21.5%    30.4 cyc/pkt  E1 completions: send
+      14.8%    20.9 cyc/pkt  E1 decode
+      12.4%    17.4 cyc/pkt  E1 poll
+       9.8%    13.9 cyc/pkt  E1 retire
+       5.8%     8.1 cyc/pkt  E1 completions: batch check
+       4.5%     6.4 cyc/pkt  E1 deferred atomic
+       3.3%     4.6 cyc/pkt  E1 loop and round control
+       1.5%     2.1 cyc/pkt  E1 per-round (out of line)
+  chip 1 eth 5 E1 (36169 kernel samples, 77% in work sections):
+      25.7%    36.3 cyc/pkt  E1 local delivery
+      21.5%    30.3 cyc/pkt  E1 completions: send
+      14.7%    20.7 cyc/pkt  E1 decode
+      12.5%    17.6 cyc/pkt  E1 poll
+       9.7%    13.7 cyc/pkt  E1 retire
+       5.6%     7.9 cyc/pkt  E1 completions: batch check
+       4.6%     6.4 cyc/pkt  E1 deferred atomic
+       3.2%     4.6 cyc/pkt  E1 loop and round control
+       1.6%     2.2 cyc/pkt  E1 per-round (out of line)
+  chip 6 eth 11 E1 (36169 kernel samples, 77% in work sections):
+      24.2%    34.1 cyc/pkt  E1 admission
+      21.5%    30.4 cyc/pkt  E1 forward
+      13.9%    19.6 cyc/pkt  E1 decode
+       9.5%    13.4 cyc/pkt  E1 poll
+       7.9%    11.1 cyc/pkt  E1 completions: send
+       7.3%    10.3 cyc/pkt  E1 completions: batch check
+       4.8%     6.8 cyc/pkt  E1 local delivery
+       4.4%     6.3 cyc/pkt  E1 loop and round control
+       2.6%     3.7 cyc/pkt  E1 deferred atomic
+       2.1%     3.0 cyc/pkt  E1 per-round (out of line)
+       1.7%     2.4 cyc/pkt  E1 retire
+  chip 0 eth 8 E1 (36169 kernel samples, 76% in work sections):
+      22.7%    32.1 cyc/pkt  E1 forward
+      20.1%    28.3 cyc/pkt  E1 admission
+      15.8%    22.2 cyc/pkt  E1 decode
+       9.6%    13.5 cyc/pkt  E1 poll
+       8.5%    12.0 cyc/pkt  E1 completions: send
+       7.7%    10.8 cyc/pkt  E1 completions: batch check
+       4.9%     6.9 cyc/pkt  E1 local delivery
+       4.4%     6.2 cyc/pkt  E1 loop and round control
+       2.5%     3.6 cyc/pkt  E1 deferred atomic
+       2.1%     3.0 cyc/pkt  E1 per-round (out of line)
+       1.7%     2.5 cyc/pkt  E1 retire
+  chip 4 eth 11 E1 (36169 kernel samples, 76% in work sections):
+      21.9%    30.9 cyc/pkt  E1 forward
+      20.6%    29.1 cyc/pkt  E1 admission
+      15.5%    21.9 cyc/pkt  E1 decode
+       9.7%    13.6 cyc/pkt  E1 poll
+       8.7%    12.3 cyc/pkt  E1 completions: send
+       7.9%    11.1 cyc/pkt  E1 completions: batch check
+       4.9%     6.9 cyc/pkt  E1 local delivery
+       4.6%     6.5 cyc/pkt  E1 loop and round control
+       2.4%     3.4 cyc/pkt  E1 deferred atomic
+       2.2%     3.1 cyc/pkt  E1 per-round (out of line)
+       1.6%     2.3 cyc/pkt  E1 retire
+
+### lin1: 124.4 cycles/packet
+2 router ERISCs carry traffic, 78 idle, 16 without a kernel match (unused links)
+  chip 1 eth 5 E0 (6130 kernel samples, 49% in work sections):
+      42.1%    52.4 cyc/pkt  E0 worker: send
+      14.0%    17.4 cyc/pkt  E0 worker: send check
+      10.5%    13.1 cyc/pkt  E0 worker: connection poll
+      10.0%    12.5 cyc/pkt  E0 VC0 forwarding: idle test
+       7.4%     9.2 cyc/pkt  E0 worker: completion check
+       5.8%     7.2 cyc/pkt  E0 worker: credit
+       3.6%     4.4 cyc/pkt  E0 VC0 free-slots group read
+       2.7%     3.4 cyc/pkt  E0 loop and round control
+       1.8%     2.3 cyc/pkt  E0 per-round (out of line)
+       1.3%     1.6 cyc/pkt  E0 VC0 forwarding: visit: send
+  chip 0 eth 6 E1 (6130 kernel samples, 76% in work sections):
+      27.1%    33.8 cyc/pkt  E1 local delivery
+      18.9%    23.5 cyc/pkt  E1 completions: send
+      13.0%    16.1 cyc/pkt  E1 poll
+      10.3%    12.8 cyc/pkt  E1 retire
+       8.7%    10.8 cyc/pkt  E1 admission
+       7.6%     9.4 cyc/pkt  E1 1D route decision
+       5.5%     6.9 cyc/pkt  E1 completions: batch check
+       3.3%     4.1 cyc/pkt  E1 loop and round control
+       2.6%     3.2 cyc/pkt  E1 decode
+       2.1%     2.6 cyc/pkt  E1 per-round (out of line)
+
+### ring1: 176.7 cycles/packet
+2 router ERISCs carry traffic, 78 idle, 16 without a kernel match (unused links)
+  chip 1 eth 5 E0 (5366 kernel samples, 50% in work sections):
+      29.2%    51.6 cyc/pkt  E0 worker: send
+      19.7%    34.8 cyc/pkt  E0 worker: credit
+      16.1%    28.5 cyc/pkt  E0 worker: completion check
+      11.5%    20.4 cyc/pkt  E0 worker: send check
+       9.4%    16.5 cyc/pkt  E0 VC0 forwarding: idle test
+       6.4%    11.3 cyc/pkt  E0 worker: connection poll
+       3.1%     5.5 cyc/pkt  E0 VC0 free-slots group read
+       1.9%     3.4 cyc/pkt  E0 loop and round control
+       1.2%     2.0 cyc/pkt  E0 per-round (out of line)
+  chip 0 eth 6 E1 (5366 kernel samples, 28% in work sections):
+      72.3%   127.8 cyc/pkt  E1 loop and round control
+      27.7%    48.9 cyc/pkt  E1 local delivery
+
+### halfring: 229.7 cycles/packet
+32 router ERISCs carry traffic, 48 idle, 16 without a kernel match (unused links)
+  chip 0 eth 6 E0 (10650 kernel samples, 63% in work sections):
+      22.5%    51.6 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      21.0%    48.3 cyc/pkt  E0 VC0 forwarding: visit: send
+      13.5%    31.1 cyc/pkt  E0 worker: completion check
+      10.0%    22.9 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.7%    17.6 cyc/pkt  E0 worker: send check
+       6.3%    14.4 cyc/pkt  E0 VC0 forwarding: idle test
+       6.0%    13.7 cyc/pkt  E0 worker: send
+       5.0%    11.5 cyc/pkt  E0 worker: connection poll
+       3.7%     8.5 cyc/pkt  E0 worker: credit
+       2.0%     4.5 cyc/pkt  E0 VC0 free-slots group read
+       1.3%     3.1 cyc/pkt  E0 loop and round control
+  chip 4 eth 4 E0 (10650 kernel samples, 63% in work sections):
+      22.5%    51.7 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      21.2%    48.7 cyc/pkt  E0 VC0 forwarding: visit: send
+      14.6%    33.6 cyc/pkt  E0 worker: completion check
+       9.9%    22.7 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.6%    17.5 cyc/pkt  E0 worker: send check
+       6.0%    13.8 cyc/pkt  E0 VC0 forwarding: idle test
+       5.8%    13.2 cyc/pkt  E0 worker: send
+       4.7%    10.8 cyc/pkt  E0 worker: connection poll
+       3.7%     8.6 cyc/pkt  E0 worker: credit
+       1.6%     3.8 cyc/pkt  E0 VC0 free-slots group read
+       1.4%     3.1 cyc/pkt  E0 loop and round control
+  chip 6 eth 7 E0 (10650 kernel samples, 63% in work sections):
+      23.1%    53.1 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      20.0%    45.9 cyc/pkt  E0 VC0 forwarding: visit: send
+      13.7%    31.6 cyc/pkt  E0 worker: completion check
+      10.3%    23.8 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.2%    16.4 cyc/pkt  E0 worker: send check
+       6.9%    15.9 cyc/pkt  E0 VC0 forwarding: idle test
+       5.8%    13.4 cyc/pkt  E0 worker: send
+       5.2%    11.8 cyc/pkt  E0 worker: connection poll
+       3.6%     8.2 cyc/pkt  E0 worker: credit
+       1.7%     3.9 cyc/pkt  E0 VC0 free-slots group read
+       1.6%     3.7 cyc/pkt  E0 loop and round control
+  chip 7 eth 4 E0 (10650 kernel samples, 63% in work sections):
+      22.2%    51.0 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      20.4%    47.0 cyc/pkt  E0 VC0 forwarding: visit: send
+      13.9%    31.9 cyc/pkt  E0 worker: completion check
+      10.0%    22.9 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.5%    17.2 cyc/pkt  E0 worker: send check
+       6.3%    14.6 cyc/pkt  E0 VC0 forwarding: idle test
+       6.2%    14.2 cyc/pkt  E0 worker: send
+       5.1%    11.8 cyc/pkt  E0 worker: connection poll
+       4.0%     9.2 cyc/pkt  E0 worker: credit
+       1.9%     4.4 cyc/pkt  E0 VC0 free-slots group read
+       1.4%     3.2 cyc/pkt  E0 loop and round control
+  chip 2 eth 5 E0 (10650 kernel samples, 63% in work sections):
+      22.3%    51.3 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      20.5%    47.2 cyc/pkt  E0 VC0 forwarding: visit: send
+      13.2%    30.2 cyc/pkt  E0 worker: completion check
+      10.1%    23.2 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.8%    17.9 cyc/pkt  E0 worker: send check
+       6.7%    15.5 cyc/pkt  E0 VC0 forwarding: idle test
+       6.4%    14.6 cyc/pkt  E0 worker: send
+       5.3%    12.2 cyc/pkt  E0 worker: connection poll
+       3.4%     7.7 cyc/pkt  E0 worker: credit
+       1.8%     4.0 cyc/pkt  E0 VC0 free-slots group read
+       1.4%     3.1 cyc/pkt  E0 loop and round control
+  chip 1 eth 5 E0 (10650 kernel samples, 63% in work sections):
+      22.2%    51.0 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      20.6%    47.4 cyc/pkt  E0 VC0 forwarding: visit: send
+      14.0%    32.0 cyc/pkt  E0 worker: completion check
+      10.0%    22.9 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.3%    16.8 cyc/pkt  E0 worker: send check
+       6.5%    14.9 cyc/pkt  E0 VC0 forwarding: idle test
+       6.1%    14.0 cyc/pkt  E0 worker: send
+       5.0%    11.5 cyc/pkt  E0 worker: connection poll
+       3.8%     8.7 cyc/pkt  E0 worker: credit
+       1.8%     4.1 cyc/pkt  E0 VC0 free-slots group read
+       1.6%     3.7 cyc/pkt  E0 loop and round control
+  chip 5 eth 7 E0 (10650 kernel samples, 63% in work sections):
+      22.9%    52.6 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      20.4%    46.8 cyc/pkt  E0 VC0 forwarding: visit: send
+      14.2%    32.6 cyc/pkt  E0 worker: completion check
+      10.0%    23.1 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.3%    16.8 cyc/pkt  E0 worker: send check
+       6.6%    15.2 cyc/pkt  E0 VC0 forwarding: idle test
+       6.0%    13.8 cyc/pkt  E0 worker: send
+       5.2%    12.0 cyc/pkt  E0 worker: connection poll
+       3.3%     7.5 cyc/pkt  E0 worker: credit
+       1.7%     3.9 cyc/pkt  E0 VC0 free-slots group read
+       1.3%     3.0 cyc/pkt  E0 loop and round control
+  chip 3 eth 6 E0 (10650 kernel samples, 62% in work sections):
+      22.5%    51.6 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      20.2%    46.3 cyc/pkt  E0 VC0 forwarding: visit: send
+      14.2%    32.6 cyc/pkt  E0 worker: completion check
+      10.3%    23.6 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       7.4%    17.0 cyc/pkt  E0 worker: send check
+       6.6%    15.1 cyc/pkt  E0 VC0 forwarding: idle test
+       5.6%    12.9 cyc/pkt  E0 worker: send
+       5.0%    11.5 cyc/pkt  E0 worker: connection poll
+       3.8%     8.8 cyc/pkt  E0 worker: credit
+       1.9%     4.3 cyc/pkt  E0 VC0 free-slots group read
+       1.4%     3.3 cyc/pkt  E0 loop and round control
+  chip 2 eth 4 E0 (10650 kernel samples, 59% in work sections):
+      26.9%    61.7 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      14.5%    33.2 cyc/pkt  E0 VC0 forwarding: visit: send
+      13.0%    29.9 cyc/pkt  E0 worker: completion check
+       9.0%    20.7 cyc/pkt  E0 worker: send check
+       8.0%    18.4 cyc/pkt  E0 VC0 forwarding: idle test
+       6.9%    15.9 cyc/pkt  E0 worker: send
+       6.8%    15.6 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       5.9%    13.6 cyc/pkt  E0 worker: connection poll
+       3.7%     8.6 cyc/pkt  E0 worker: credit
+       1.9%     4.5 cyc/pkt  E0 VC0 free-slots group read
+       1.8%     4.1 cyc/pkt  E0 loop and round control
+  chip 6 eth 6 E0 (10650 kernel samples, 58% in work sections):
+      26.7%    61.3 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      14.2%    32.7 cyc/pkt  E0 worker: completion check
+      13.5%    31.1 cyc/pkt  E0 VC0 forwarding: visit: send
+       8.8%    20.2 cyc/pkt  E0 worker: send check
+       7.6%    17.5 cyc/pkt  E0 VC0 forwarding: idle test
+       7.4%    16.9 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.6%    15.2 cyc/pkt  E0 worker: send
+       6.0%    13.8 cyc/pkt  E0 worker: connection poll
+       4.0%     9.3 cyc/pkt  E0 worker: credit
+       2.2%     5.0 cyc/pkt  E0 VC0 free-slots group read
+       1.5%     3.6 cyc/pkt  E0 loop and round control
+       1.0%     2.3 cyc/pkt  E0 per-round (out of line)
+  chip 5 eth 11 E0 (10650 kernel samples, 58% in work sections):
+      26.6%    61.0 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      14.5%    33.3 cyc/pkt  E0 worker: completion check
+      13.6%    31.3 cyc/pkt  E0 VC0 forwarding: visit: send
+       8.6%    19.8 cyc/pkt  E0 worker: send check
+       7.1%    16.3 cyc/pkt  E0 VC0 forwarding: idle test
+       7.0%    16.2 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.5%    14.8 cyc/pkt  E0 worker: send
+       6.4%    14.6 cyc/pkt  E0 worker: connection poll
+       4.5%    10.4 cyc/pkt  E0 worker: credit
+       2.1%     4.9 cyc/pkt  E0 VC0 free-slots group read
+       1.8%     4.1 cyc/pkt  E0 loop and round control
+  chip 7 eth 11 E0 (10650 kernel samples, 58% in work sections):
+      27.1%    62.1 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      13.5%    30.9 cyc/pkt  E0 VC0 forwarding: visit: send
+      12.9%    29.7 cyc/pkt  E0 worker: completion check
+       9.2%    21.2 cyc/pkt  E0 worker: send check
+       8.9%    20.3 cyc/pkt  E0 VC0 forwarding: idle test
+       7.0%    16.1 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.4%    14.7 cyc/pkt  E0 worker: send
+       6.0%    13.9 cyc/pkt  E0 worker: connection poll
+       4.0%     9.3 cyc/pkt  E0 worker: credit
+       2.1%     4.7 cyc/pkt  E0 VC0 free-slots group read
+       1.7%     3.8 cyc/pkt  E0 loop and round control
+  chip 0 eth 7 E0 (10650 kernel samples, 58% in work sections):
+      27.2%    62.5 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      14.5%    33.2 cyc/pkt  E0 worker: completion check
+      13.2%    30.4 cyc/pkt  E0 VC0 forwarding: visit: send
+       8.9%    20.4 cyc/pkt  E0 worker: send check
+       7.3%    16.8 cyc/pkt  E0 VC0 forwarding: idle test
+       6.8%    15.6 cyc/pkt  E0 worker: send
+       6.6%    15.2 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.5%    14.8 cyc/pkt  E0 worker: connection poll
+       4.0%     9.2 cyc/pkt  E0 worker: credit
+       2.1%     4.8 cyc/pkt  E0 VC0 free-slots group read
+       1.6%     3.6 cyc/pkt  E0 loop and round control
+       1.1%     2.4 cyc/pkt  E0 per-round (out of line)
+  chip 4 eth 5 E0 (10650 kernel samples, 58% in work sections):
+      27.0%    62.0 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      13.0%    29.8 cyc/pkt  E0 VC0 forwarding: visit: send
+      12.6%    29.0 cyc/pkt  E0 worker: completion check
+       9.4%    21.5 cyc/pkt  E0 worker: send check
+       9.0%    20.6 cyc/pkt  E0 VC0 forwarding: idle test
+       6.9%    15.8 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.6%    15.1 cyc/pkt  E0 worker: send
+       5.9%    13.6 cyc/pkt  E0 worker: connection poll
+       4.4%    10.2 cyc/pkt  E0 worker: credit
+       2.2%     5.1 cyc/pkt  E0 VC0 free-slots group read
+       1.7%     3.9 cyc/pkt  E0 loop and round control
+       1.0%     2.4 cyc/pkt  E0 per-round (out of line)
+  chip 3 eth 8 E0 (10650 kernel samples, 57% in work sections):
+      26.6%    61.2 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      13.2%    30.2 cyc/pkt  E0 VC0 forwarding: visit: send
+      12.4%    28.5 cyc/pkt  E0 worker: completion check
+      10.1%    23.2 cyc/pkt  E0 worker: send check
+       8.7%    20.0 cyc/pkt  E0 VC0 forwarding: idle test
+       7.2%    16.6 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.5%    14.9 cyc/pkt  E0 worker: connection poll
+       6.4%    14.7 cyc/pkt  E0 worker: send
+       3.9%     9.1 cyc/pkt  E0 worker: credit
+       2.0%     4.5 cyc/pkt  E0 VC0 free-slots group read
+       1.8%     4.1 cyc/pkt  E0 loop and round control
+  chip 1 eth 8 E0 (10650 kernel samples, 57% in work sections):
+      26.2%    60.2 cyc/pkt  E0 VC0 forwarding: visit: completions and bookkeeping
+      13.2%    30.4 cyc/pkt  E0 worker: completion check
+      13.2%    30.4 cyc/pkt  E0 VC0 forwarding: visit: send
+       9.4%    21.6 cyc/pkt  E0 worker: send check
+       8.7%    20.0 cyc/pkt  E0 VC0 forwarding: idle test
+       6.9%    15.9 cyc/pkt  E0 VC0 forwarding: visit: upstream credit
+       6.4%    14.8 cyc/pkt  E0 worker: send
+       6.3%    14.4 cyc/pkt  E0 worker: connection poll
+       4.2%     9.7 cyc/pkt  E0 worker: credit
+       2.1%     4.8 cyc/pkt  E0 VC0 free-slots group read
+       2.0%     4.6 cyc/pkt  E0 loop and round control
+  chip 5 eth 7 E1 (10650 kernel samples, 28% in work sections):
+      72.0%   165.3 cyc/pkt  E1 loop and round control
+      16.1%    37.0 cyc/pkt  E1 forward
+      11.9%    27.4 cyc/pkt  E1 local delivery
+  chip 2 eth 5 E1 (10650 kernel samples, 28% in work sections):
+      72.1%   165.6 cyc/pkt  E1 loop and round control
+      16.2%    37.3 cyc/pkt  E1 forward
+      11.7%    26.8 cyc/pkt  E1 local delivery
+  chip 0 eth 6 E1 (10650 kernel samples, 28% in work sections):
+      72.1%   165.7 cyc/pkt  E1 loop and round control
+      16.0%    36.7 cyc/pkt  E1 forward
+      11.9%    27.3 cyc/pkt  E1 local delivery
+  chip 4 eth 4 E1 (10650 kernel samples, 28% in work sections):
+      72.3%   166.0 cyc/pkt  E1 loop and round control
+      16.2%    37.1 cyc/pkt  E1 forward
+      11.6%    26.6 cyc/pkt  E1 local delivery
+  chip 7 eth 4 E1 (10650 kernel samples, 28% in work sections):
+      72.4%   166.3 cyc/pkt  E1 loop and round control
+      15.9%    36.6 cyc/pkt  E1 forward
+      11.7%    26.8 cyc/pkt  E1 local delivery
+  chip 6 eth 7 E1 (10650 kernel samples, 27% in work sections):
+      72.6%   166.7 cyc/pkt  E1 loop and round control
+      15.6%    35.8 cyc/pkt  E1 forward
+      11.8%    27.2 cyc/pkt  E1 local delivery
+  chip 1 eth 5 E1 (10650 kernel samples, 27% in work sections):
+      72.6%   166.9 cyc/pkt  E1 loop and round control
+      15.2%    35.0 cyc/pkt  E1 forward
+      12.1%    27.8 cyc/pkt  E1 local delivery
+  chip 3 eth 6 E1 (10650 kernel samples, 27% in work sections):
+      72.9%   167.6 cyc/pkt  E1 loop and round control
+      15.6%    35.9 cyc/pkt  E1 forward
+      11.4%    26.2 cyc/pkt  E1 local delivery
+  chip 2 eth 4 E1 (10650 kernel samples, 25% in work sections):
+      75.1%   172.6 cyc/pkt  E1 loop and round control
+      24.9%    57.1 cyc/pkt  E1 forward
+  chip 7 eth 11 E1 (10649 kernel samples, 24% in work sections):
+      75.7%   173.9 cyc/pkt  E1 loop and round control
+      24.3%    55.8 cyc/pkt  E1 forward
+  chip 6 eth 6 E1 (10650 kernel samples, 24% in work sections):
+      75.8%   174.2 cyc/pkt  E1 loop and round control
+      24.2%    55.5 cyc/pkt  E1 forward
+  chip 4 eth 5 E1 (10650 kernel samples, 24% in work sections):
+      76.0%   174.5 cyc/pkt  E1 loop and round control
+      24.0%    55.2 cyc/pkt  E1 forward
+  chip 1 eth 8 E1 (10650 kernel samples, 24% in work sections):
+      76.0%   174.6 cyc/pkt  E1 loop and round control
+      24.0%    55.1 cyc/pkt  E1 forward
+  chip 5 eth 11 E1 (10650 kernel samples, 24% in work sections):
+      76.4%   175.5 cyc/pkt  E1 loop and round control
+      23.6%    54.2 cyc/pkt  E1 forward
+  chip 0 eth 7 E1 (10650 kernel samples, 24% in work sections):
+      76.5%   175.6 cyc/pkt  E1 loop and round control
+      23.5%    54.0 cyc/pkt  E1 forward
+  chip 3 eth 8 E1 (10650 kernel samples, 23% in work sections):
+      76.6%   176.1 cyc/pkt  E1 loop and round control
+      23.4%    53.6 cyc/pkt  E1 forward
+
+### torusns: 173.0 cycles/packet
+2 router ERISCs carry traffic, 78 idle, 16 without a kernel match (unused links)
+  chip 1 eth 8 E0 (5397 kernel samples, 47% in work sections):
+      29.7%    51.4 cyc/pkt  E0 worker: send
+      17.2%    29.7 cyc/pkt  E0 worker: credit
+      13.4%    23.2 cyc/pkt  E0 worker: completion check
+      12.3%    21.2 cyc/pkt  E0 VC0 forwarding: idle test
+      11.2%    19.4 cyc/pkt  E0 worker: send check
+       6.3%    10.8 cyc/pkt  E0 VC0 free-slots group read
+       5.5%     9.6 cyc/pkt  E0 worker: connection poll
+       2.3%     4.0 cyc/pkt  E0 loop and round control
+       1.4%     2.4 cyc/pkt  E0 per-round (out of line)
+  chip 5 eth 11 E1 (5395 kernel samples, 34% in work sections):
+      66.2%   114.6 cyc/pkt  E1 loop and round control
+      25.1%    43.4 cyc/pkt  E1 forward
+       7.6%    13.1 cyc/pkt  E1 decode
+       1.1%     1.8 cyc/pkt  E1 admission

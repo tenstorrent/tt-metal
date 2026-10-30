@@ -1,0 +1,59 @@
+
+## v4trm_O3: 284 ELFs  (medians per case / ERISC / function; 'pass' = loop depth >= 3, or the whole body of an out-of-line pass function)
+case                 E function                     n frame saved insns pass ins pass ld pass st mem ld mem st consts calls loop ld/st
+bh_1d                0 v4 sender                   10   176    13   350      256      17      10     60     36     43     5         33
+bh_1d                1 v4 receiver                 10   160    13   573      435       9       8     86     83     61     4         18
+bh_1d_1erisc         1 v4 single                   10   384    13   156        0       0       0      0      0      0     0          4
+bh_1d_1erisc         1 v4 single.receiver_pass     10    48     1   568      568       5       5    104    123     84     2          9
+bh_1d_1erisc         1 v4 single.sender_pass       10    32     2   275      275       5       5     70     50     43     2         10
+bh_1d_mux            1 v4 single                   10   384    13   142        0       0       0      0      0      0     0          3
+bh_1d_mux            1 v4 single.receiver_pass     10    48     1   563      563       3       3    102    121     84     2          5
+bh_1d_mux            1 v4 single.sender_pass       10    32     1   127      127       3       3     38     20     19     2          6
+bh_2d                0 v4 sender                   28   224    13   695      582      58      19    131     81     95     6         83
+bh_2d                1 v4 receiver                 28   160    13   572      439       4       4     73     83     67     2         12
+bh_2d_1erisc         1 v4 single                   28   464    13   189        0       0       0      0      0      0     0          4
+bh_2d_1erisc         1 v4 single.receiver_pass     28    32     1   571      571       2       2    100    122     86     1          4
+bh_2d_1erisc         1 v4 single.sender_pass       28    32     2   549      549       5       5    126    102     92     2         10
+bh_2d_mux            1 v4 single                   28   432    13   147        0       0       0      0      0      0     0          3
+bh_2d_mux            1 v4 single.receiver_pass     28    32     1   568      568       1       1     99    121     86     1          2
+bh_2d_mux            1 v4 single.sender_pass       28    32     1   127      127       3       3     38     20     19     2          6
+bh_neighbor          0 v4 sender                    4   144    11   214      134      14       2     41     12     10     6         22
+bh_neighbor          1 v4 receiver                  4   144    13   524      444       3       3     80     78     63     3          8
+bh_neighbor_1erisc   1 v4 single                    4   352    13   136        0       0       0      0      0      0     0          3
+bh_neighbor_1erisc   1 v4 single.receiver_pass      4    32     1   459      459       2       2     80     96     71     1          0
+bh_neighbor_1erisc   1 v4 single.sender_pass        4    32     1   128      128       3       3     38     21     19     2          6
+bh_ring              0 v4 sender                   10   192    13   410      313      23      13     74     39     48     5         42
+bh_ring              1 v4 receiver                 10   160    13   517      397       5       5     81     69     54     4         10
+bh_ring_1erisc       1 v4 single                   10   384    13   156        0       0       0      0      0      0     0          4
+bh_ring_1erisc       1 v4 single.receiver_pass     10    48     1   539      539      10       9    107    119     78     2         19
+bh_ring_1erisc       1 v4 single.sender_pass       10    48     2   339      339       7       6     92     57     47     2         13
+bh_ring_mux          1 v4 single                   10   384    13   142        0       0       0      0      0      0     0          3
+bh_ring_mux          1 v4 single.receiver_pass     10    48     1   525      525       5       5    102    115     78     2         10
+bh_ring_mux          1 v4 single.sender_pass       10    32     1   156      156       3       3     51     23     21     2          6
+bh_torus             0 v4 sender                   12   240    12   832      709      78      32    164     94     94     6        118
+bh_torus             1 v4 receiver                 12   160    13   530      408       4       4     83     74     55     3         11
+bh_torus_1erisc      1 v4 single                   12   448    13   192        0       0       0      0      0      0     0          4
+bh_torus_1erisc      1 v4 single.receiver_pass     12    32     1   526      526       5       4    102    113     77     1          9
+bh_torus_1erisc      1 v4 single.sender_pass       12    48     2   680      680      11       8    166    117    100     2         19
+bh_vc1               0 v4 sender                   22   288    12  1202     1051     120      47    235    162    172     6        174
+bh_vc1               1 v4 receiver                 22   208    13  1244     1102      21      13    202    225    163     6         37
+
+## v3qp_O3: 224 ELFs  (medians per case / ERISC / function; 'pass' = loop depth >= 3, or the whole body of an out-of-line pass function)
+case                 E function                     n frame saved insns pass ins pass ld pass st mem ld mem st consts calls loop ld/st
+bh_1d                0 v3 sender                   10   192    13   374      245      17       5     44     41     48     2         26
+bh_1d                1 v3 receiver                 10   144    13  1248     1136       5       3    185    233    170     6          8
+bh_1d_1erisc         1 kernel_main (generic loop)  10  1120    13  2108     1736      66      35    372    384    270     6        115
+bh_1d_mux            1 kernel_main (generic loop)  10  1296    12  1936     1601      54      25    330    363    252     5         91
+bh_2d_1erisc         1 kernel_main (generic loop)  28  1376    13  2200     1632      95      58    382    374    196     3        192
+bh_2d_mux            1 kernel_main (generic loop)  28  1408    13  1582     1229      47      23    280    272    177     2         87
+bh_neighbor          0 kernel_main (generic loop)   4   528    13  1338      942      32      27    234    177    153    13         78
+bh_neighbor          1 kernel_main (generic loop)   4   384     5  1056      821      50      19    190    195    121     2         86
+bh_ring              0 v3 sender                   10   192    13   401      266      24       6     53     42     45     2         34
+bh_ring              1 kernel_main (generic loop)  10   560    12  1681     1467      28      25    261    337    219     8         53
+bh_ring_1erisc       1 kernel_main (generic loop)  10  1152    13  2086     1687      72      44    356    375    254     6        130
+bh_ring_mux          1 kernel_main (generic loop)  10  1312    13  1900     1569      54      30    326    350    240     5         95
+bh_torus             0 v3 sender                   12   256    13   727      579      56      18    118     88     97     3         81
+bh_torus             1 kernel_main (generic loop)  12   624    12  1459      838      38      29    188    187    104     2        100
+bh_torus_1erisc      1 kernel_main (generic loop)  12  1424    11  2162     1611     108      80    382    392    175     3        226
+bh_vc1               0 v3 sender                   22   352    13  1095      914      68      36    174    156    175     3        114
+bh_vc1               1 v3 receiver                 22   256    13  1414     1341      25       7    202    222    173    10         54

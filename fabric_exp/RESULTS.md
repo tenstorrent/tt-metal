@@ -8422,6 +8422,85 @@ main as shipped (kernel v1, flags 0: none of the study experiments; firmware kee
   changed, so this gap was hidden, not new. 13 one-ERISC rows trail main (NeighborExchange write +7.4%, half-ring and
   full-ring multicast, ring bidirectional, mux ring multicast: +1.7% to +4%).
 
+**Profile matrix: bound side, register pressure, phases** (2026-10-29; a09u32 jobs 172-176; `consolidation/V4_PROFILE.md`,
+`prof_delay_runs.sh`, `prof_report.py`, `prof_pcs_runs.sh`, `regpress.py`; user: capture the data before choosing
+between readability and perf). Instruments: a fixed spin after each send or each received packet (`variants/v4trmd`, at
+0 byte-identical to v4trm, 600 of 600), PC sampling (no router code), and a static scan of the ELFs. Main's on-device
+phase timers were not used (they perturbed rows 13-45%).
+- Bound side, rows per suite (TX / RX / both / neither): 2D 6/4/0/0, 1D 0/8/2/6 (the 1-hop writes run at the wire),
+  mix 21/8/1/3 (every write TX, scatter / fused / atomics RX), ring 0/13/0/1, Y-torus 5/5/2/0, one ERISC 2D 0/8/2/0, 1D
+  0/7/9/0, ring 2/6/8/0, mux 0/0/2/20 (the mux bounds 20 rows), VC1 8/1/2/2 (1-hop TX).
+- Phases on the bound side: a two-ERISC sender spends 56-73 cycles per packet on the send and 50-75 on checks, the
+  free-slots group read, credits and dispatch, as v3 does; ring receivers spend ~31 on first-level acks. On one ERISC the
+  receiving router's core also runs an idle sender pass (~35-47 per packet) and the out-of-line pass structure (~26-39).
+- Static: the bound senders have the biggest passes and spills (2D 582 instructions / 58 stack loads, Y-torus 709 / 78,
+  VC1 1051 / 120; v3 515 / 43, 579 / 56, 914 / 68); receivers 4-9 stack loads (VC1 21).
+  **WRONG as "spills"** (2026-10-29): the sender's stack loads include its ForwardingTable records (a local of
+  sender::run, memory by design); on the 2D sender ~64 of 94 in-loop stack operations are table accesses, ~30 spills.
+  **That correction is itself WRONG** (2026-10-29, DWARF of the v4trm_O3 images): without VC2 the compiler scalarizes
+  the table (location lists), so these are spills; only on VC2 routers is the table a frame object (VC2's worker
+  interface inside it escapes to out-of-line calls).
+- Hypotheses for the gaps (A/B first): one ERISC, the idle sender pass and the pass structure; VC1, the sender pass;
+  3-hop / multicast, the sender's checks and dispatch; state cutting only for the two-ERISC senders.
+
+**What a cycle of pass cost is worth** (2026-10-29; a09u32 jobs 177-179; `consolidation/V4_PROFILE.md` §6; user: optimize
+the router generically, judged on the whole matrix, not one row). A fixed spin once per sender pass or once per receiver
+pass (`variants/v4trmd`, still byte-identical to v4trm at 0) over every census suite: at the margin (16 cycles per pass)
+one cycle of sender-pass cost costs 1.2-2.1 cycles per packet on the 94 of 159 rows it binds (every two-ERISC write
+row, small writes ~2; every one-ERISC row, where it runs on the bound core even idle; VC1 1-hop ~1.9 with the receiver
+pass ~0); the receiver pass binds 108 (scatter / fused / atomics, rings, Y-torus N/S, every one-ERISC row); 27 rows
+neither (mux-bound, wire-bound). Past the slack the cost is 1.0-1.2 per cycle. The 2D sender's in-loop stack traffic
+(94 operations against 1D's 49) is loop-invariant reloads at the back edge, NoC / TX-queue / header addresses and the
+per-channel ring cursors around each send. **WRONG as first written:** ~64 of the 94 are the forwarding table's record accesses; ~30
+are reloads. **That marking is itself WRONG:** the table is scalarized there; the 94 are spills and reloads.
+
+**Sender structure cleanup, steps 1a / 1b / 2** (2026-10-29; `consolidation/V4_SENDER_SHAPE.md`; a fresh review of the
+design first, user's request). The review, confirmed in the DWARF of the images: placement is the compiler's, decided by
+escape: on two-ERISC routers without VC2 the forwarding table, the worker's counts and VC0's far ring are scalarized; on
+VC2 routers the table is a frame object (VC2's worker interface in it escapes), so VC2 already changes the sender's
+shape. (This makes the "stack traffic is table accesses" correction to the profile matrix WRONG; marked there.)
+- 1a `v4sh1` (one worker-channel credit and connection event, a constexpr credit table, RX from channel traits, dead
+  code and stale comments): 1650 of 1706 images byte-identical to v4trm (every config without VC2); VC2 images: same
+  placement, sender pass +2 instructions; validation 13/13 (job 181). Accepted.
+- 1b `v4sh1b` (dense forwarding records and upstream addresses): every sender image changes, loops unchanged but 2D
+  +6 instructions, Y-torus -2; validation 13/13; census against v4trm, two passes (jobs 183-190): every suite within
+  0.1%, largest row 0.4%. Accepted: the lead's structure moves to v4sh1b.
+- 2 `v4sh2` (one register read for every VC): VC1 1-hop -0.1% to -0.2%, forwarding rows +0.6% to +2.2% (jobs
+  191-192). Rejected; the shared group helper kept with VC1's read in place (`v4sh2b`: the same instructions as
+  v4sh1b at the same addresses, a few with commuted operands in symmetric uses). Lead: **v4sh2b**.
+- 1c `v4sh3` (user: the sender state by channel role: the worker channels' state, their interfaces apart, the
+  forwarding table with forwarding channels only, one far ring per VC): 748 of 1214 images byte-identical to v4sh2b
+  (two-ERISC configs without VC2, VC1, telemetry or express); VC1, telemetry and express senders renamed registers or an
+  init-only change; one-ERISC sender pass +2 instructions; VC2 sender pass 631 -> 730 (the table is split there now:
+  `frame` -> `split`). Validation 13/13 (job 193). Census, two passes agreeing within 0.1 (jobs 195-200): VC2 on, 2D
+  +2.1%, mix +3.6%, one ERISC +1.0% (1-hop writes 154-160 -> 170); without VC2, one ERISC 2D +1.0%, 1D +0.9%, ring
+  +0.7%; VC1 1.000. Not accepted as is. `v4sh3m` (measurement only; VC2's state in memory with its interface) isolates
+  VC0's records: split instead of in memory costs the VC2 1-hop writes ~6% (hypothesis for other configs). Side finding:
+  VC2 on doubles VC0's 3-hop write cost on any router (v4sh2b 151.9 -> 304.3); cause unknown.
+
+**Controlling placement, stage 1** (2026-10-29; `consolidation/V4_PLACEMENT.md`, `placement/`; user: find a way to
+choose what goes on the stack first; DESIGN_BRIEF rule 2 amended for documented placement primitives). A compile-only
+sender-like test at -O3/-O2/-Os: `asm volatile("" : "+m"(obj))` (and `volatile` fields) keep the named object a frame
+object at every level, with loads and stores exactly where the source writes them, no added cost (pass loop equal or
+fewer instructions), the grouped register reads undisturbed. It applies to the whole enclosing object (`in_flight` in the
+table went to memory with it). Out-of-line calls in the loop limit what can stay in registers (hypothesis for the router:
+the per-pass set competes for the 12 callee-saved registers). Stage 2 (the router) next.
+
+**Controlling placement, stage 2: `v4pl1`** (2026-10-29/30; `consolidation/V4_PLACEMENT.md`). v4sh3 + `keep_in_memory()`
+(router_common.hpp: an asm memory operand) on each forwarding record at the end of its visit + `in_flight` out of the
+table into its own local. Offline: the table is a frame object on every sender at -O3/-O2/-Os and under three benign
+edits (v4sh3: split everywhere); sender pass 2D 588 -> 500 instructions, VC1 1051 -> 894, Y-torus 707 -> 631; layout
+and declaration-order edits no longer move the pass. The stack is the ERISC's local data memory (2 cycles a load, §17),
+not L1. Device (jobs 201-211, two passes agreeing within 0.001): validation 13/13; against v4sh2b, VC1 split -6.2%
+(1-hop 158 -> 141), one ERISC 2D -2.2%, trimmed -2.4%, mix -1.6%, 2D -1.0%, Y-torus -0.7%, 1D/ring/burst/mux flat;
+VC2 on +0.5% to +1.9% (two ERISCs), one ERISC -2.1%; four rows worse by 1.2-2.6% (VC1 2-hop merge, VC1 multicast,
+one-ERISC NeighborExchange write).
+
+**Grouped local-memory loads** (2026-10-30, job 216; §17's kernel with new patterns; `consolidation/V4_STATE.md` §7):
+in a group with four stream-register reads, each local-memory (stack) load adds ~1 cycle, first or last (4 -> 5 with
+one, -> 7 with three), with no four-in-flight penalty (an L1 word: 4 -> 14). A header L1 read through a slot held in
+local memory: +1 cycle when the slot loads with the group, +2 when it loads right before.
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then

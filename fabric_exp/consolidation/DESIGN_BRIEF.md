@@ -11,9 +11,16 @@ These hold for every design and override anything older below.
    traffic). E0's worker connection/teardown check stays in every pass of the inner loop; only the rare handling it
    triggers (open, close) may be out of line.
 2. **No compiler-fragile tricks.** No register pinning, no allocation or layout steering, no branch hints, no new
-   `optimize()` attributes or pragmas added for performance, no empty-asm barriers. The source must not assume how
+   `optimize()` attributes or pragmas added for performance, no global memory clobbers. The source must not assume how
    GCC allocates, scalarizes, unrolls or peels. (One small, documented load-group primitive with an explicit contract
    remains allowed, as below; it is not a barrier.)
+   **Amended 2026-10-29 (user):** placement primitives with a documented contract are allowed: `volatile`, and an
+   inline-asm statement with a memory operand on one named object (`asm volatile("" : "+m"(obj))`: the object holds
+   its current value in memory at that point and is reloaded after it). They push named objects out of registers at
+   named points, each with its contract in a comment, behind one helper; what they guarantee is defined by the
+   language or GCC's documented asm semantics, not by optimizer heuristics. Still banned: pinning anything into a
+   register, and anything whose effect depends on heuristics (a runtime index to defeat scalarization, inlining or
+   unrolling decisions, layout games). Placement is judged by its stability under -O3/-O2/-Os and benign edits.
 3. **No rules or gates that burden other contributors or the shared toolchain** (RESULTS §96): no codegen-identity
    gates, no bans on ordinary constructs. The constant-multiply rule of §95 is withdrawn (§97); synth_mult is a
    documented gotcha with a diagnosis method (`rtlfirst.py`).
@@ -78,7 +85,8 @@ lost "in context" may fit a better shape; ideas that lost on substance stay out.
 - No branch-layout hints (`[[likely]]`, `[[unlikely]]`, `__builtin_expect`) except the one inherited from main on
   `NOC_SPARSE_MCAST_WRITE`. No register pinning, no `#pragma GCC unroll`/`optimize`/`__attribute__((optimize))`
   added to steer code generation, no layout games meant to steer scalarization or allocation. Source must not rely
-  on how a particular compiler allocates registers or splits aggregates.
+  on how a particular compiler allocates registers or splits aggregates. (Placement primitives with a documented
+  contract are allowed since 2026-10-29: rule 2 above.)
 - Hardware-ordering needs (issuing several register/L1 reads back to back so their latencies overlap, RESULTS §17)
   may be expressed through one small, documented primitive with an explicit contract (for example an inline-asm
   block that issues N loads and returns N values), or through v3a's fences. Say which and why.

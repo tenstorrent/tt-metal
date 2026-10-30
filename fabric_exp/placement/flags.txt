@@ -1,0 +1,1 @@
+-std=c++17 -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wall -mcpu=tt-bh -fno-tree-loop-distribute-patterns

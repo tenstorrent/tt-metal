@@ -24,6 +24,10 @@ using namespace erisc_load_overlap;
 
 // A word in the core's local data memory, where the stack and spills live.
 volatile uint32_t ldm_word = 7;
+// Two more local-memory words, and one holding an L1 address (a parked send cursor), for the cursor patterns.
+volatile uint32_t ldm_word2 = 9;
+volatile uint32_t ldm_word3 = 11;
+volatile uint32_t ldm_slot = 0;
 
 namespace {
 
@@ -51,6 +55,24 @@ namespace {
                    [nw] "r"(regs.niu),                                             \
                    [cb] "r"(regs.cmdbuf)                                           \
                  : "t1", "t2", "t3", "t4", "t5", "t6", "memory")
+
+// The cursor patterns' timed block: stream registers, the L1 word, three local-memory words and the parked slot.
+#define TIMED_CURSOR(BODY)                                                         \
+    asm volatile("csrr %[c0], mcycle\n li %[n], %[iters]\n .p2align 5\n 1:\n" BODY \
+                 "addi %[n], %[n], -1\n bnez %[n], 1b\n csrr %[c1], mcycle\n"      \
+                 : [c0] "=&r"(c0), [c1] "=&r"(c1), [n] "=&r"(n), [a] "+r"(acc)     \
+                 : [iters] "n"(kIterations),                                       \
+                   [k] "n"(K),                                                     \
+                   [s] "r"(s),                                                     \
+                   [s2] "r"(s2),                                                   \
+                   [s3] "r"(s3),                                                   \
+                   [s4] "r"(s4),                                                   \
+                   [l] "r"(l),                                                     \
+                   [d] "r"(d),                                                     \
+                   [d2] "r"(reinterpret_cast<uint32_t>(&ldm_word2)),               \
+                   [d3] "r"(reinterpret_cast<uint32_t>(&ldm_word3)),               \
+                   [ds] "r"(reinterpret_cast<uint32_t>(&ldm_slot))                 \
+                 : "t1", "t2", "t3", "t4", "t5", "t6", "a6", "a7", "memory")
 
 // Addresses of the non-stream MMIO registers read by the register patterns.
 struct Regs {
@@ -151,6 +173,32 @@ uint32_t time_block(
             TIMED(
                 "lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n lw t6,0(%[tc])\n"
                 " lw t6,0(%[tq])\n" FILL_K USE("t2") USE("t3") USE("t4") USE("t5") USE("t6"));
+        } else if constexpr (P == BASE7) {
+            TIMED_CURSOR(FILL_K USE("t1") USE("t1") USE("t1") USE("t1") USE("t1") USE("t1") USE("t1"));
+        } else if constexpr (P == PRE_S4_D) {
+            TIMED_CURSOR("lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n lw t6,0(%[d])\n" FILL_K
+                             USE("t2") USE("t3") USE("t4") USE("t5") USE("t6"));
+        } else if constexpr (P == PRE_D_S4) {
+            TIMED_CURSOR("lw t6,0(%[d])\n lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n" FILL_K
+                             USE("t2") USE("t3") USE("t4") USE("t5") USE("t6"));
+        } else if constexpr (P == PRE_S4_D3) {
+            TIMED_CURSOR(
+                "lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n"
+                " lw t6,0(%[d])\n lw a6,0(%[d2])\n lw a7,0(%[d3])\n" FILL_K USE("t2") USE("t3") USE("t4") USE("t5")
+                    USE("t6") USE("a6") USE("a7"));
+        } else if constexpr (P == PRE_D3_S4) {
+            TIMED_CURSOR(
+                "lw t6,0(%[d])\n lw a6,0(%[d2])\n lw a7,0(%[d3])\n"
+                " lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n" FILL_K USE("t2") USE("t3")
+                    USE("t4") USE("t5") USE("t6") USE("a6") USE("a7"));
+        } else if constexpr (P == PRE_S4_HDR) {
+            TIMED_CURSOR("lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n" FILL_K USE("t2")
+                             USE("t3") USE("t4") USE("t5") "lw t6,0(%[l])\n" USE("t6"));
+        } else if constexpr (P == PRE_S4_DS_HDR) {
+            TIMED_CURSOR("lw t2,0(%[s])\n lw t3,0(%[s2])\n lw t4,0(%[s3])\n lw t5,0(%[s4])\n lw a6,0(%[ds])\n" FILL_K
+                             USE("t2") USE("t3") USE("t4") USE("t5") "lw t6,0(a6)\n" USE("t6"));
+        } else if constexpr (P == DEP_DS_HDR) {
+            TIMED_CURSOR("lw a6,0(%[ds])\n lw t6,0(a6)\n" USE("t6") FILL_K USE("t1"));
         }
         const uint32_t t = c1 - c0;
         best = t < best ? t : best;
@@ -205,6 +253,7 @@ void kernel_main() {
     volatile uint32_t* results = reinterpret_cast<volatile uint32_t*>(base + kResultsOffset);
     *reinterpret_cast<volatile uint32_t*>(base + kL1WordOffset) = 3;
     *reinterpret_cast<volatile uint32_t*>(base + kL1Word2Offset) = 5;
+    ldm_slot = base + kL1WordOffset;
 
     uint32_t cache_csr;
     asm volatile("csrr %0, 0x7c0" : "=r"(cache_csr));
