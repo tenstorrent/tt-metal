@@ -235,8 +235,8 @@ skus:
 
   # Synthetic CPU SKUs for ttsim simulator jobs. The impl invokes
   # .github/actions/setup-ttsim gated on `startsWith(sku, 'sim_')`; that action reads
-  # ttsim_lib below to pick which simulator binary to install, and derives the soc
-  # descriptor from its wh/bh prefix. Workflows never name a libttsim binary — add or
+  # ttsim_lib below to pick which simulator binary to install, plus a soc descriptor
+  # for a qsr binary. Workflows never name a libttsim binary — add or
   # retarget a SKU here and every pipeline that uses it follows.
   #
   # Each sim SKU mirrors one HW SKU's processor count, so a test can list the sim SKU

@@ -56,7 +56,11 @@ namespace {
 inline std::string get_soc_description_file(
     const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions) {
     if (target_device == tt::TargetDevice::Simulator) {
-        return tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+        // A wh/bh ttsim image may ship no SoC descriptor; it then models the full silicon grid below.
+        std::string sim_soc_desc = tt::tt_metal::find_simulator_soc_descriptor_path(rtoptions.get_simulator_path());
+        if (!sim_soc_desc.empty()) {
+            return sim_soc_desc;
+        }
     }
     std::string path = rtoptions.get_root_dir();
     if (path.back() != '/') {
@@ -122,9 +126,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         // simulator types for that fallback, but prefer a supplied/discovered descriptor below so direct simulation
         // is classified the same way as silicon (for example, a discovered two-chip N300 remains an N300).
         if (rtoptions.get_simulator_enabled()) {
-            auto soc_desc =
-                tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-            auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+            auto arch = tt::tt_metal::get_simulator_architecture(rtoptions.get_simulator_path());
             if (arch == tt::ARCH::WORMHOLE_B0) {
                 return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
             }
@@ -435,11 +437,12 @@ void Cluster::assign_mem_channels_to_devices(
 }
 
 void Cluster::get_metal_desc_from_tt_desc() {
-    std::string silicon_dram_metadata_yaml;
-    if (this->target_type_ == TargetDevice::Silicon) {
-        // UMD uses arch-default soc descriptors without sdesc_path; device_descriptor_file_path is empty until we set
-        // it on a copy (public field on tt::umd::SocDescriptor) for metal_SocDescriptor's dram_views YAML load.
-        silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
+    // UMD uses arch-default soc descriptors on silicon, and on a ttsim image that ships no soc_descriptor.yaml, so
+    // device_descriptor_file_path is empty until we set it on a copy (public field on tt::umd::SocDescriptor) for
+    // metal_SocDescriptor's dram_views YAML load.
+    std::string default_dram_metadata_yaml;
+    if (this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) {
+        default_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     }
     // The 1x3, 2x3 and 2x3_DISPATCH emulator models back less DRAM than their soc descriptor declares.
     // They are recognised by the simulator directory name and their DRAM size is clamped to what they back.
@@ -457,8 +460,9 @@ void Cluster::get_metal_desc_from_tt_desc() {
     }
     for (const auto& id : this->driver_->get_target_device_ids()) {
         tt::umd::SocDescriptor umd_soc = this->driver_->get_soc_descriptor(id);
-        if (this->target_type_ == TargetDevice::Silicon) {
-            umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
+        if (this->target_type_ == TargetDevice::Silicon ||
+            (this->target_type_ == TargetDevice::Simulator && umd_soc.device_descriptor_file_path.empty())) {
+            umd_soc.device_descriptor_file_path = default_dram_metadata_yaml;
         }
         std::optional<uint64_t> dram_view_size_limit;
         if (emulator_model != nullptr) {

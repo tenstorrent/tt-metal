@@ -8,6 +8,7 @@
 #include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/simulation/simulation_chip.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt/get_platform_architecture.hpp"
 #include "llrt/tt_cluster.hpp"  // Full definition needed for Cluster::is_mock_or_emulated()
 
 #include <string>
@@ -37,8 +38,7 @@ inline std::string get_env_arch_name() {
 inline std::string get_umd_arch_name() {
 
     if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
-        return tt::arch_to_str(tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc));
+        return tt::arch_to_str(tt_metal::get_simulator_architecture(tt_metal::MetalContext::instance().rtoptions().get_simulator_path()));
     }
 
     // In mock/emulated mode, get arch from the already-initialized cluster

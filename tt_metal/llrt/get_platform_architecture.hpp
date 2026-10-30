@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -15,8 +16,25 @@
 #include <tt-umd/pcie/pci_device.hpp>
 #include <tt-umd/soc_descriptor.hpp>
 #include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/simulation/tt_sim_communicator.hpp>
 
 namespace tt::tt_metal {
+
+// The simulator's soc_descriptor.yaml when it ships one, else empty: a wh/bh ttsim image needs none.
+inline std::string find_simulator_soc_descriptor_path(const std::filesystem::path& simulator_path) {
+    std::string soc_desc = umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(simulator_path);
+    return std::filesystem::exists(soc_desc) ? soc_desc : "";
+}
+
+// Declared by the simulator's soc_descriptor.yaml when it ships one, else read from the PCI device id its
+// ttsim image reports. The first probe of an image must come before any simulator is brought up.
+inline tt::ARCH get_simulator_architecture(const std::filesystem::path& simulator_path) {
+    const std::string soc_desc = find_simulator_soc_descriptor_path(simulator_path);
+    if (!soc_desc.empty()) {
+        return umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+    }
+    return umd::arch_from_pci_device_id(umd::TTSimCommunicator::read_pci_device_id(simulator_path));
+}
 
 inline tt::ARCH get_physical_architecture() {
     ZoneScoped;
@@ -104,9 +122,7 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         return arch;
     }
     if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
-        auto soc_desc =
-            umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-        arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+        arch = get_simulator_architecture(rtoptions.get_simulator_path());
     } else {
         arch = get_physical_architecture();
     }
