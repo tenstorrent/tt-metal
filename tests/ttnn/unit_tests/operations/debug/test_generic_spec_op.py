@@ -461,6 +461,209 @@ def test_generic_spec_op_scratchpad(device, shard_grid):
     assert torch.equal(result, torch_input + addend)
 
 
+# Same core, two kernels: "stage" copies the input shard to the output shard, then signals "ready"; "finish" waits
+# for it and adds a constant to the output shard in place. Each kernel has its own scratchpad.
+SEMAPHORE_STAGE_SOURCE = """
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/scratchpad.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    Noc noc;
+    Scratchpad<uint32_t> pad(scratch::pad);
+    Semaphore ready(sem::ready);
+    const LocalTensorAccessor<uint32_t> src(tensor::src);
+    const LocalTensorAccessor<uint32_t> dst(tensor::dst);
+
+    noc.async_read(src, pad, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    noc.async_write(pad, dst, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_write_barrier();
+    ready.up(1);
+}
+"""
+
+SEMAPHORE_FINISH_SOURCE = """
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/scratchpad.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    constexpr uint32_t addend = get_arg(args::addend);
+
+    Noc noc;
+    Scratchpad<uint32_t> pad(scratch::pad);
+    Semaphore ready(sem::ready);
+    const LocalTensorAccessor<uint32_t> dst(tensor::dst);
+
+    ready.down(1);  // Blocks until "stage" has written the output shard.
+    noc.async_read(dst, pad, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    {
+        auto lock = pad.scoped_lock(0, pad.size());
+        for (uint32_t i = 0; i < pad.size(); ++i) {
+            pad[i] += addend;
+        }
+    }
+    noc.async_write(pad, dst, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_write_barrier();
+}
+"""
+
+
+def make_uint32_shards(device, shard_grid, shape=(1, 1, 64, 64)):
+    shard_shape = (shape[-2] // shard_grid.num_cores(), shape[-1])
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=shard_shape,
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    torch_input = torch.randint(0, 1 << 20, shape, dtype=torch.int32)
+    src = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    dst = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.uint32, ttnn.TILE_LAYOUT, device, memory_config)
+    return torch_input, src, dst, shard_shape[0] * shard_shape[1] * 4
+
+
+def test_generic_spec_op_semaphore_same_core(device):
+    addend = 5
+    core = ttnn.CoreCoord(0, 0)
+    torch_input, src, dst, shard_bytes = make_uint32_shards(device, ttnn.CoreRangeSet({ttnn.CoreRange(core, core)}))
+
+    spec = ttnn.ProgramSpec(
+        name="semaphore_same_core",
+        semaphores=[ttnn.SemaphoreSpec(unique_id="ready", target_nodes=core)],
+        scratchpads=[
+            ttnn.ScratchpadSpec(unique_id="stage_pad", size_per_node=shard_bytes),
+            ttnn.ScratchpadSpec(unique_id="finish_pad", size_per_node=shard_bytes),
+        ],
+        tensor_parameters=[
+            ttnn.TensorParameter(unique_id="src", spec=src.spec),
+            ttnn.TensorParameter(unique_id="dst", spec=dst.spec),
+        ],
+        kernels=[
+            ttnn.KernelSpec(
+                unique_id="stage",
+                source_code=SEMAPHORE_STAGE_SOURCE,
+                hw_config=ttnn.DataMovementHardwareConfig.reader(),
+                semaphore_bindings=[ttnn.SemaphoreBinding(semaphore_spec_name="ready", accessor_name="ready")],
+                scratchpad_bindings=[ttnn.ScratchpadBinding(scratchpad_spec_name="stage_pad", accessor_name="pad")],
+                tensor_bindings=[
+                    ttnn.TensorBinding(tensor_parameter_name="src", accessor_name="src"),
+                    ttnn.TensorBinding(tensor_parameter_name="dst", accessor_name="dst"),
+                ],
+            ),
+            ttnn.KernelSpec(
+                unique_id="finish",
+                source_code=SEMAPHORE_FINISH_SOURCE,
+                hw_config=ttnn.DataMovementHardwareConfig.writer(),
+                semaphore_bindings=[ttnn.SemaphoreBinding(semaphore_spec_name="ready", accessor_name="ready")],
+                scratchpad_bindings=[ttnn.ScratchpadBinding(scratchpad_spec_name="finish_pad", accessor_name="pad")],
+                tensor_bindings=[ttnn.TensorBinding(tensor_parameter_name="dst", accessor_name="dst")],
+                compile_time_args={"addend": addend},
+            ),
+        ],
+        work_units=[ttnn.WorkUnitSpec(name="main", kernels=["stage", "finish"], target_nodes=core)],
+    )
+    run_args = ttnn.ProgramSpecRunArgs(tensor_args={"src": src, "dst": dst})
+
+    result = ttnn.to_torch(ttnn.generic_op([src, dst], spec, run_args)).to(torch.int32)
+
+    assert torch.equal(result, torch_input + addend)
+
+
+# Two cores: each adds a constant to its own shard, then signals the other core over the NoC and waits for the other
+# core's signal. A semaphore that cannot reach the peer hangs the test.
+SEMAPHORE_PING_PONG_SOURCE = """
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/scratchpad.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    constexpr uint32_t addend = get_arg(args::addend);
+    const uint32_t peer_x = get_arg(args::peer_x);
+    const uint32_t peer_y = get_arg(args::peer_y);
+
+    Noc noc;
+    Scratchpad<uint32_t> pad(scratch::pad);
+    Semaphore done(sem::done);
+    const LocalTensorAccessor<uint32_t> src(tensor::src);
+    const LocalTensorAccessor<uint32_t> dst(tensor::dst);
+
+    noc.async_read(src, pad, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    {
+        auto lock = pad.scoped_lock(0, pad.size());
+        for (uint32_t i = 0; i < pad.size(); ++i) {
+            pad[i] += addend;
+        }
+    }
+    noc.async_write(pad, dst, pad.size_in_bytes(), {.offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_write_barrier();
+
+    done.up(noc, peer_x, peer_y, 1);
+    done.down(1);  // Blocks until the peer has signalled; leaves the semaphore at 0.
+}
+"""
+
+
+def test_generic_spec_op_semaphore_cross_core(device):
+    addend = 9
+    cores = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)]
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(cores[0], cores[1])})
+    torch_input, src, dst, shard_bytes = make_uint32_shards(device, grid)
+
+    spec = ttnn.ProgramSpec(
+        name="semaphore_cross_core",
+        semaphores=[ttnn.SemaphoreSpec(unique_id="done", target_nodes=grid)],
+        scratchpads=[ttnn.ScratchpadSpec(unique_id="pad", size_per_node=shard_bytes)],
+        tensor_parameters=[
+            ttnn.TensorParameter(unique_id="src", spec=src.spec),
+            ttnn.TensorParameter(unique_id="dst", spec=dst.spec),
+        ],
+        kernels=[
+            ttnn.KernelSpec(
+                unique_id="ping_pong",
+                source_code=SEMAPHORE_PING_PONG_SOURCE,
+                hw_config=ttnn.DataMovementHardwareConfig.reader(),
+                semaphore_bindings=[ttnn.SemaphoreBinding(semaphore_spec_name="done", accessor_name="done")],
+                scratchpad_bindings=[ttnn.ScratchpadBinding(scratchpad_spec_name="pad", accessor_name="pad")],
+                tensor_bindings=[
+                    ttnn.TensorBinding(tensor_parameter_name="src", accessor_name="src"),
+                    ttnn.TensorBinding(tensor_parameter_name="dst", accessor_name="dst"),
+                ],
+                compile_time_args={"addend": addend},
+                runtime_arg_names=["peer_x", "peer_y"],
+            )
+        ],
+        work_units=[ttnn.WorkUnitSpec(name="main", kernels=["ping_pong"], target_nodes=grid)],
+    )
+    ping_pong = ttnn.KernelRunArgs(kernel="ping_pong")
+    for core, peer in zip(cores, reversed(cores)):
+        peer_noc = device.worker_core_from_logical_core(peer)
+        ping_pong.add_runtime_args_for_node(core, {"peer_x": peer_noc.x, "peer_y": peer_noc.y})
+    run_args = ttnn.ProgramSpecRunArgs(kernel_run_args=[ping_pong], tensor_args={"src": src, "dst": dst})
+
+    result = ttnn.to_torch(ttnn.generic_op([src, dst], spec, run_args)).to(torch.int32)
+
+    assert torch.equal(result, torch_input + addend)
+
+
 # Negative tests: specs that tt-metal rejects must reach Python as a RuntimeError that names the problem.
 # Several are Quasar (Gen2) rules that Wormhole / Blackhole accept.
 

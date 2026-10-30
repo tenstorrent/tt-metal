@@ -267,6 +267,30 @@ void bind_resources(nb::module_& mod) {
             nb::arg("tile") = nb::none())
         .def_prop_ro("unique_id", [](const exp::ScratchpadSpec& self) { return *self.unique_id; })
         .def_rw("size_per_node", &exp::ScratchpadSpec::size_per_node);
+
+    nb::class_<exp::SemaphoreSpec>(mod, "SemaphoreSpec", R"doc(
+        A semaphore on each of a set of nodes, starting at 0.
+
+        Kernels on those nodes reach it as ``Semaphore s(sem::<accessor_name>)`` through a SemaphoreBinding, and
+        can increment another node's instance over the NoC. A non-zero initial value is not offered: it is
+        deprecated, and Quasar rejects it.
+
+        Args:
+            unique_id (str): Name the kernels' SemaphoreBindings refer to.
+            target_nodes (ttnn.CoreCoord, ttnn.CoreRange or ttnn.CoreRangeSet): Nodes that get an instance.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::SemaphoreSpec* self, const std::string& unique_id, const Nodes& target_nodes) {
+                new (self) exp::SemaphoreSpec{
+                    .unique_id = exp::SemaphoreSpecName{unique_id},
+                    .target_nodes = target_nodes,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("unique_id"),
+            nb::arg("target_nodes"))
+        .def_prop_ro("unique_id", [](const exp::SemaphoreSpec& self) { return *self.unique_id; });
 }
 
 void bind_kernel_spec(nb::module_& mod) {
@@ -314,6 +338,21 @@ void bind_kernel_spec(nb::module_& mod) {
             nb::arg("tensor_parameter_name"),
             nb::arg("accessor_name"));
 
+    nb::class_<exp::SemaphoreBinding>(mod, "SemaphoreBinding", R"doc(
+        Binds a SemaphoreSpec to a kernel. The kernel reaches it as ``sem::<accessor_name>``.
+    )doc")
+        .def(
+            "__init__",
+            [](exp::SemaphoreBinding* self, const std::string& semaphore_spec_name, const std::string& accessor_name) {
+                new (self) exp::SemaphoreBinding{
+                    .semaphore_spec_name = exp::SemaphoreSpecName{semaphore_spec_name},
+                    .accessor_name = accessor_name,
+                };
+            },
+            nb::kw_only(),
+            nb::arg("semaphore_spec_name"),
+            nb::arg("accessor_name"));
+
     nb::class_<exp::ScratchpadBinding>(mod, "ScratchpadBinding", R"doc(
         Binds a ScratchpadSpec to a kernel. The kernel reaches it as ``scratch::<accessor_name>``.
     )doc")
@@ -341,6 +380,7 @@ void bind_kernel_spec(nb::module_& mod) {
             hw_config (DataMovementHardwareConfig or ComputeHardwareConfig): Picks the kernel type.
             num_threads (int): Threads per node (Quasar runs several data movement or compute threads).
             dfb_bindings (List[DFBBinding]): Dataflow buffers the kernel uses (``dfb::<name>``).
+            semaphore_bindings (List[SemaphoreBinding]): Semaphores the kernel uses (``sem::<name>``).
             scratchpad_bindings (List[ScratchpadBinding]): Scratchpads the kernel uses (``scratch::<name>``).
             tensor_bindings (List[TensorBinding]): Tensors the kernel uses (``tensor::<name>``).
             compile_time_args (Dict[str, int]): Named compile-time args.
@@ -359,6 +399,7 @@ void bind_kernel_spec(nb::module_& mod) {
                const HwConfig& hw_config,
                uint32_t num_threads,
                const std::vector<exp::DFBBinding>& dfb_bindings,
+               const std::vector<exp::SemaphoreBinding>& semaphore_bindings,
                const std::vector<exp::ScratchpadBinding>& scratchpad_bindings,
                const std::vector<exp::TensorBinding>& tensor_bindings,
                const ArgMap& compile_time_args,
@@ -375,6 +416,7 @@ void bind_kernel_spec(nb::module_& mod) {
                     .unique_id = exp::KernelSpecName{unique_id},
                     .num_threads = num_threads,
                     .dfb_bindings = dfb_bindings,
+                    .semaphore_bindings = semaphore_bindings,
                     .scratchpad_bindings = scratchpad_bindings,
                     .tensor_bindings = tensor_bindings,
                     .runtime_arg_schema =
@@ -404,6 +446,7 @@ void bind_kernel_spec(nb::module_& mod) {
             nb::arg("hw_config"),
             nb::arg("num_threads") = 1,
             nb::arg("dfb_bindings") = std::vector<exp::DFBBinding>{},
+            nb::arg("semaphore_bindings") = std::vector<exp::SemaphoreBinding>{},
             nb::arg("scratchpad_bindings") = std::vector<exp::ScratchpadBinding>{},
             nb::arg("tensor_bindings") = std::vector<exp::TensorBinding>{},
             nb::arg("compile_time_args") = ArgMap{},
@@ -449,6 +492,7 @@ void bind_program_spec(nb::module_& mod) {
             name (str): Name of the program.
             kernels (List[KernelSpec]): The kernels.
             dataflow_buffers (List[DataflowBufferSpec]): The dataflow buffers.
+            semaphores (List[SemaphoreSpec]): The semaphores.
             scratchpads (List[ScratchpadSpec]): The scratchpads.
             tensor_parameters (List[TensorParameter]): The tensors the kernels bind.
             work_units (List[WorkUnitSpec]): Which kernels run on which nodes.
@@ -459,6 +503,7 @@ void bind_program_spec(nb::module_& mod) {
                const std::string& name,
                const std::vector<exp::KernelSpec>& kernels,
                const std::vector<exp::DataflowBufferSpec>& dataflow_buffers,
+               const std::vector<exp::SemaphoreSpec>& semaphores,
                const std::vector<exp::ScratchpadSpec>& scratchpads,
                const std::vector<exp::TensorParameter>& tensor_parameters,
                const std::vector<exp::WorkUnitSpec>& work_units) {
@@ -466,6 +511,7 @@ void bind_program_spec(nb::module_& mod) {
                     .name = name,
                     .kernels = kernels,
                     .dataflow_buffers = dataflow_buffers,
+                    .semaphores = semaphores,
                     .scratchpads = scratchpads,
                     .tensor_parameters = tensor_parameters,
                     .work_units = work_units,
@@ -475,6 +521,7 @@ void bind_program_spec(nb::module_& mod) {
             nb::arg("name"),
             nb::arg("kernels"),
             nb::arg("dataflow_buffers") = std::vector<exp::DataflowBufferSpec>{},
+            nb::arg("semaphores") = std::vector<exp::SemaphoreSpec>{},
             nb::arg("scratchpads") = std::vector<exp::ScratchpadSpec>{},
             nb::arg("tensor_parameters") = std::vector<exp::TensorParameter>{},
             nb::arg("work_units"))
