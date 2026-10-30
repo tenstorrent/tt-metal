@@ -55,12 +55,6 @@ public:
     // Deprecated: use MetalContext::build_env_manager(). Equivalent to get_instance(DEFAULT_CONTEXT_ID).
     static BuildEnvManager& get_instance();
 
-    // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
-    // build states.  This requires a live device to be available at device_id.
-    // `context_id` selects which MetalContext owns the device; required so the right context's runtime state and
-    // hardware query layer is consulted instead of implicitly initializing the silicon default.
-    void add_build_env(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id);
-
     // Add a new build environment for the corresponding device id and device configuration. Also generates the build
     // key and build states.
     void add_build_env(ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions);
@@ -99,9 +93,6 @@ public:
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
-    void add_build_env_locked(
-        ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions);
-
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
