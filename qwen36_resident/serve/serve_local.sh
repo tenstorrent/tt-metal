@@ -20,7 +20,8 @@
 # env: HF_MODEL (required; a local checkpoint dir, or a repo id the offline HF cache resolves), PORT (8000),
 #   SERVED_MODEL_NAME (Qwen/Qwen3.8-27B), MAX_MODEL_LEN (32768), VLLM_VENV (a venv with vLLM 0.26 + vllm-tt-plugin),
 #   VLLM_TT_PLUGIN_SRC (put a plugin source tree first on PYTHONPATH), TT_VISIBLE_DEVICES (0,1,2,3);
-#   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, PREFILL_GANG_TOKENS / PREFILL_GANG_IDLE_TOKENS (prefill gangs, 0 = off),
+#   multi: MAX_NUM_SEQS, PREFILL_CHUNK_TOKENS, PREFILL_GANG_TOKENS / PREFILL_GANG_IDLE_TOKENS (prefill gangs, default
+#   2048 / 0; PREFILL_GANG_TOKENS=0 = off),
 #   SAMPLE_ON_DEVICE, RESIDENT_MAX_TOKENS_ALL_USERS (KV pool tokens, default
 #   1,540,096 = 24,064 blocks), RESIDENT_ATTN_WORKERS / RESIDENT_HEAD_GROUPS (default 28 / 4 for this profile).
 set -euo pipefail
@@ -68,9 +69,12 @@ case $PROFILE in
     SAMPLING=''
     [ "${SAMPLE_ON_DEVICE:-0}" = 1 ] && SAMPLING=', "sample_on_device_mode": "decode_only"'
     # prefill gangs (plugin resident-mu-sched): waiting prompts run whole, several per prefill step, capped at
-    # PREFILL_GANG_TOKENS while others decode and PREFILL_GANG_IDLE_TOKENS (0: the step's budget) while none do
+    # PREFILL_GANG_TOKENS while others decode and PREFILL_GANG_IDLE_TOKENS (0: the step's budget) while none do.
+    # Default 2048 / 0 (lane sched, 2026-10-30): a burst prefills as one wave before its decodes start (c=16 TPOT at
+    # the decode step, TTFT ~3x the interleaved policy's); a prompt arriving while others decode stalls them about as
+    # the interleave did. PREFILL_GANG_TOKENS=0: the interleaved policy (one long prompt split between decode steps)
     GANG=''
-    [ "${PREFILL_GANG_TOKENS:-0}" != 0 ] && GANG=", \"prefill_gang_tokens\": $PREFILL_GANG_TOKENS"
+    [ "${PREFILL_GANG_TOKENS:=2048}" != 0 ] && GANG=", \"prefill_gang_tokens\": $PREFILL_GANG_TOKENS"
     [ "${PREFILL_GANG_IDLE_TOKENS:-0}" != 0 ] && GANG="$GANG, \"prefill_gang_idle_tokens\": $PREFILL_GANG_IDLE_TOKENS"
     TT_CONFIG="{\"tt\": {\"trace_region_size\": 134217728, \"prefill_chunk_tokens\": ${PREFILL_CHUNK_TOKENS:-1024}$SAMPLING$GANG}}"
     ;;
