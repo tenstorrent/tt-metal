@@ -82,18 +82,19 @@ TEST(HostTransferStatsTest, CPU_SummaryShowsRateForTimedCategoriesAndStagedBytes
     stats.begin(HostTransferCategory::BufferReadFastDispatch);
     stats.end(HostTransferCategory::BufferReadFastDispatch, t0, t0 + 2ms, 4'000'000);
     stats.add_bytes(HostTransferCategory::ProgramConfigFastDispatch, 1000);
-    stats.add_bytes(HostTransferCategory::SocketPull, 2048);
+    stats.add_bytes(HostTransferCategory::SocketPull, 1024);
+    stats.add_bytes(HostTransferCategory::SocketPull, 1024);
 
     const auto rows = stats.summary_rows();
     ASSERT_EQ(rows.size(), 4u);
     EXPECT_EQ(rows[0].first, "buffer writes, slow dispatch");
-    EXPECT_EQ(rows[0].second, "3.00 GB in 2.000 s (1.50 GB/s), 1 transfers");
+    EXPECT_EQ(rows[0].second, "3.00 GB in 2.000 s (1.50 GB/s), 1 transfer");
     EXPECT_EQ(rows[1].first, "buffer reads, fast dispatch");
-    EXPECT_EQ(rows[1].second, "4.00 MB in 2.000 ms (2.00 GB/s), 1 transfers");
+    EXPECT_EQ(rows[1].second, "4.00 MB in 2.000 ms (2.00 GB/s), 1 transfer");
     EXPECT_EQ(rows[2].first, "program config, fast dispatch");
-    EXPECT_EQ(rows[2].second, "1.00 KB staged, 1 transfers");
+    EXPECT_EQ(rows[2].second, "1.00 KB staged, 1 transfer");
     EXPECT_EQ(rows[3].first, "H2D socket writes, device pull");
-    EXPECT_EQ(rows[3].second, "2.05 KB staged, 1 transfers");
+    EXPECT_EQ(rows[3].second, "2.05 KB staged, 2 transfers");
 }
 
 TEST(HostTransferStatsTest, CPU_ResetClearsTotals) {

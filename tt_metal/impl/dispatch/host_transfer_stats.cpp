@@ -115,18 +115,19 @@ std::vector<std::pair<std::string, std::string>> HostTransferStats::summary_rows
             continue;
         }
         const double seconds = std::chrono::duration<double>(t.busy).count();
+        const std::string count = fmt::format("{} transfer{}", t.transfers, t.transfers == 1 ? "" : "s");
         std::string value;
         if (kCategories[i].staged) {
-            value = fmt::format("{} staged, {} transfers", format_bytes(t.bytes), t.transfers);
+            value = fmt::format("{} staged, {}", format_bytes(t.bytes), count);
         } else if (seconds > 0) {
             value = fmt::format(
-                "{} in {} ({:.2f} GB/s), {} transfers",
+                "{} in {} ({:.2f} GB/s), {}",
                 format_bytes(t.bytes),
                 format_seconds(seconds),
                 static_cast<double>(t.bytes) / 1e9 / seconds,
-                t.transfers);
+                count);
         } else {
-            value = fmt::format("{}, {} transfers", format_bytes(t.bytes), t.transfers);
+            value = fmt::format("{}, {}", format_bytes(t.bytes), count);
         }
         rows.emplace_back(kCategories[i].label, std::move(value));
     }
