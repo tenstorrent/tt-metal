@@ -12,14 +12,36 @@ from ttnn.operations.layer_norm import layer_norm
 WIDTH = 768
 PERF_SHAPES = [
     (32, 1, 32, WIDTH),  # R = 32
+    (16, 1, 128, WIDTH),  # R = 64
     (8, 1, 512, WIDTH),  # R = 128
     (124, 1, 33, WIDTH),  # R = 248
 ]
 
+CONFIGS = {
+    "default": None,
+    "fp32_acc_off": ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False),
+    "lofi": ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True),
+}
 
+
+def make_affine(vec, affine_form, device):
+    if affine_form == "tile_dram":
+        return ttnn.from_torch(
+            vec, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    return ttnn.from_torch(
+        vec.reshape(1, 1, WIDTH // 32, 32),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+
+@pytest.mark.parametrize("config_name", list(CONFIGS))
 @pytest.mark.parametrize("affine_form", ["tile_dram", "rm_l1"])
 @pytest.mark.parametrize("shape", PERF_SHAPES, ids=lambda s: "x".join(str(d) for d in s))
-def test_layer_norm_tile_perf(device, shape, affine_form):
+def test_layer_norm_tile_perf(device, shape, affine_form, config_name):
     torch.manual_seed(0)
     x = ttnn.from_torch(
         torch.randn(shape).to(torch.bfloat16),
@@ -28,18 +50,7 @@ def test_layer_norm_tile_perf(device, shape, affine_form):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    vec = torch.randn(WIDTH).to(torch.bfloat16)
-    if affine_form == "tile_dram":
-        g = ttnn.from_torch(
-            vec, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-    else:
-        g = ttnn.from_torch(
-            vec.reshape(1, 1, WIDTH // 32, 32),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-    out = layer_norm(x, g, g)
+    g = make_affine(torch.randn(WIDTH).to(torch.bfloat16), affine_form, device)
+    kwargs = {} if CONFIGS[config_name] is None else {"compute_kernel_config": CONFIGS[config_name]}
+    out = layer_norm(x, g, g, **kwargs)
     assert tuple(out.shape) == shape

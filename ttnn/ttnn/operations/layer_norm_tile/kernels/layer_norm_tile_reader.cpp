@@ -11,6 +11,9 @@
 
 namespace {
 
+constexpr uint32_t TILE_WIDTH = 32;
+constexpr uint32_t FACE_WIDTH = 16;
+
 // Writes row 0 of each of block_w_tiles tiles: face-0 row 0 at page offset 0, face-1 row 0 at face_bytes.
 // TILE source: one read of page j from offset 0 spanning face 0 and face-1 row 0 (read_bytes = face_bytes
 // + one NoC granule); one request instead of two, since the grid-wide fetch is bound by request count on
@@ -33,9 +36,10 @@ FORCE_INLINE void issue_affine_reads(const Accessor& accessor, uint32_t dst_base
             static_assert(read_bytes > face_bytes && read_bytes <= tile_bytes);
             noc_async_read(accessor.get_noc_addr(col), dst_addr, read_bytes);
         } else {
-            constexpr uint32_t elem_bytes = half_row_bytes / 16;
-            const uint32_t page = (32 * col) / stick_elems;
-            const uint32_t src_offset = ((32 * col) % stick_elems) * elem_bytes;
+            constexpr uint32_t elem_bytes = half_row_bytes / FACE_WIDTH;
+            const uint32_t first_elem = TILE_WIDTH * col;
+            const uint32_t page = first_elem / stick_elems;
+            const uint32_t src_offset = (first_elem % stick_elems) * elem_bytes;
             noc_async_read(accessor.get_noc_addr(page, src_offset), dst_addr, read_bytes);
             noc_async_read(accessor.get_noc_addr(page, src_offset + half_row_bytes), dst_addr + face_bytes, read_bytes);
         }

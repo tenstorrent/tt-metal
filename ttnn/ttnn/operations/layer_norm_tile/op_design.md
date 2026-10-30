@@ -295,3 +295,15 @@ Helpers considered and rejected:
 | L1-resident input/output + CBs | input/output L1-interleaved banks (up to ~190 KB/bank each at R = 248) compete with CBs | `BLOCK_ROWS_MAX = 2` keeps CBs <= ~600 KB (see ledger) |
 | Mandated import path | `ttnn.operations.layer_norm` vs package dir `layer_norm_tile` | re-export package `ttnn/ttnn/operations/layer_norm/__init__.py` |
 | Dtype rejection type | requirement says `ValueError`; registry refusals are `NotImplementedError` | dtype check (bf16 only) raises `ValueError` before `validate()` |
+
+## Post-implementation deltas (verifier)
+
+The built op departs from the tables above in these measured ways. `l1_ledger.md` is current.
+
+| Item | Design | Built | Evidence |
+|------|--------|-------|----------|
+| `BLOCK_ROWS_MAX` | 2 | 1 (overlap lamp taken) | implementer: R = 128 RM 39.3 -> ~35 us, R = 248 RM 65.6 -> ~51 us |
+| P3 `sqsum_block` | packer L1-accumulate, one chain call per tile-row | `BinaryFpu<Mul, ..., DestAccumulation::PerRow>` over the block, one chain call | correct on Blackhole (acceptance + precision baseline); the WH ELWMUL `acc_to_dest` caveat in Key Risks is unverified on WH |
+| TILE affine read | 2 x `affine_read_bytes` per tile | one read of face 0 + face-1 row 0 (576 B on BH DRAM) per tile; each core starts at column `core_idx % block_w_tiles` | implementer: R = 128 TILE-DRAM 50.4 -> ~42.5 us |
+| `output_depth_rows` | 2 | `min(2, rows per core)` | verifier: the second slot is never live on one-tile-row cores |
+| `affine-read-once-mcast` | rejected | live candidate for the TILE-DRAM form | verifier DM-only ablation: TILE-DRAM affine fetch costs ~15 us at P = 110 |

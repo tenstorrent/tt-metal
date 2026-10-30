@@ -41,6 +41,11 @@ def affine_half_row_bytes(affine):
     return FACE * affine.element_size()
 
 
+def _affine_face_bytes(affine):
+    """Bytes of one 16x16 face: face-1 row 0 sits this far into a tile page."""
+    return FACE * affine_half_row_bytes(affine)
+
+
 @dataclass(frozen=True)
 class Blocking:
     block_rows: int
@@ -63,11 +68,13 @@ def select_blocking(input_tensor):
     block_w_tiles = _div_up(shape[-1], TILE)
 
     grid = input_tensor.device().compute_with_storage_grid_size()
-    (_, all_cores, group_1, group_2, rows_g1, rows_g2) = ttnn.split_work_to_cores(grid, tensor_row_tiles, row_wise=True)
+    _, all_cores, group_1, group_2, rows_g1, rows_g2 = ttnn.split_work_to_cores(grid, tensor_row_tiles, row_wise=True)
 
     block_rows = min(rows_g1, BLOCK_ROWS_MAX)
     max_num_blocks = _div_up(rows_g1, block_rows)
+    # A second slot is only ever live when a core owns more than one block / tile-row.
     input_depth_blocks = min(INPUT_DEPTH_BLOCKS_MAX, max_num_blocks)
+    output_depth_rows = min(OUTPUT_DEPTH_ROWS, max_num_blocks * block_rows)
 
     assignment = []
     start = 0
@@ -83,7 +90,7 @@ def select_blocking(input_tensor):
         block_rows=block_rows,
         block_w_tiles=block_w_tiles,
         input_depth_blocks=input_depth_blocks,
-        output_depth_rows=OUTPUT_DEPTH_ROWS,
+        output_depth_rows=output_depth_rows,
         all_cores=all_cores,
         assignment=tuple(assignment),
     )
@@ -112,8 +119,7 @@ def _affine_reader_args(affine):
         )
         # One read from offset 0 through face-1 row 0 (rounded to the NoC granule); rows other than row 0 of
         # faces 0/1 are never read by the row broadcast.
-        face_bytes = FACE * FACE * affine.element_size()
-        read_bytes = face_bytes + max(half_row, alignment)
+        read_bytes = _affine_face_bytes(affine) + max(half_row, alignment)
         return [1, 0, read_bytes, affine.buffer_aligned_page_size()]
     return [0, list(affine.shape)[-1], half_row, affine.buffer_aligned_page_size()]
 
@@ -155,7 +161,7 @@ def create_program_descriptor(input_tensor, gamma, beta, output_tensor, blocking
         block_rows,
         block_w_tiles,
         input_tile_bytes,
-        affine_tile_bytes // 4,  # face bytes: row 0 of face 1 sits one face into the tile
+        _affine_face_bytes(gamma),
         affine_half_row_bytes(gamma),
     ]
     reader_ct_args.extend(_affine_reader_args(gamma))
