@@ -21,7 +21,8 @@
 //     Callback callback = RegisterCallback(
 //         [](const Batch<TelemetrySample>& batch) {
 //             for (const TelemetrySample& sample : batch.records<TelemetrySample>()) {
-//                 use(sample.metadata().name, sample.core(), sample.payload(), sample.published_at().time());
+//                 use(sample.metadata().name, sample.metadata().units, sample.core(), sample.payload(),
+//                     sample.published_at().time());
 //             }
 //         },
 //         "my-telemetry",

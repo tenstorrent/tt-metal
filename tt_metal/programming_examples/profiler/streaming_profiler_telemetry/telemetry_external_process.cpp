@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // An external process: a process of its own, apart from the Metal process running the workload, that logs every
-// telemetry sample the workload's kernels send with TelemetryMetadata and kSendToExternalProcess. Registering its
-// callback with external_process set makes it the external process, and a Metal process connects to it when it opens
-// its devices.
+// telemetry sample the workload's kernels send with TelemetryMetadata and kSendToExternalProcess, with its unit.
+// Registering its callback with external_process set makes it the external process, and a Metal process connects to it
+// when it opens its devices.
 //
 //   metal_example_telemetry_external_process
 
@@ -38,14 +38,16 @@ int main() {
                         sample.metadata().name,
                         streaming_profiler::kTelemetryNamePrefix);
                 }
+                const streaming_profiler::MetricUnit units = sample.metadata().units;
                 fmt::print(
-                    "{:%H:%M:%S} chip {} core ({},{}) {}: {}\n",
+                    "{:%H:%M:%S} chip {} core ({},{}) {}: {}{}\n",
                     published % std::chrono::days(1),
                     sample.core().chip_id,
                     sample.core().logical.x,
                     sample.core().logical.y,
                     sample.metadata().name,
-                    sample.payload());
+                    sample.payload(),
+                    units == streaming_profiler::MetricUnit::UNITLESS ? "" : fmt::format(" {}", units));
             }
         },
         "telemetry-external-process",

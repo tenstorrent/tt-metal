@@ -5,17 +5,24 @@ workload, with one `TelemetryPublish` call, which wraps `DevicePublish` and alwa
 
 ```cpp
 // hostdevcommon/telemetry_sample.hpp, which kernels and the external process share
+enum class MetricUnit : uint16_t { UNITLESS = 0, PERCENT = 1, /* ... */ MEGABYTES = 13 };
+
 struct TelemetryMetadata {
     String name;
+    MetricUnit units = MetricUnit::UNITLESS;
 };
 
 // the kernel
 #include "api/debug/telemetry_publish.h"
 
-TelemetryPublish("tt_bytes_processed_total", bytes);
+TelemetryPublish("tt_megabytes_processed_total", megabytes, MetricUnit::MEGABYTES);
 // expands to
-DevicePublish<TelemetryMetadata{"tt_bytes_processed_total"_s}, kSendToExternalProcess>(bytes);
+DevicePublish<TelemetryMetadata{"tt_megabytes_processed_total"_s, MetricUnit::MEGABYTES}, kSendToExternalProcess>(
+    megabytes);
 ```
+
+The third argument, the unit the value is in, is optional: without it, the metric is `MetricUnit::UNITLESS`. The macro
+brings `MetricUnit` into scope, so a kernel names a unit without its namespace.
 
 A telemetry metric's name starts with `tt_`, and its value is a `uint64_t` or a `double`. The external process receives
 it as a `TelemetrySample`, from `tt-metalium/experimental/telemetry_sample.hpp`:
@@ -27,7 +34,8 @@ using TelemetrySample = Record<TelemetryValue, TelemetryMetadata>;
 Callback callback = RegisterCallback(
     [](const Batch<TelemetrySample>& batch) {
         for (const TelemetrySample& sample : batch.records<TelemetrySample>()) {
-            use(sample.metadata().name, sample.core(), sample.payload(), sample.published_at().time());
+            use(sample.metadata().name, sample.metadata().units, sample.core(), sample.payload(),
+                sample.published_at().time());
         }
     },
     "my-telemetry",
@@ -43,10 +51,10 @@ start with `tt_`: cast the value first.
 
 This directory holds the two sides:
 
-- `kernels/publish_telemetry.cpp` sends three metrics at a fixed rate: `tt_loop_iteration`, `tt_bytes_processed_total`,
-  a running total, and `tt_progress`, a `double`.
+- `kernels/publish_telemetry.cpp` sends three metrics at a fixed rate: `tt_loop_iteration`, which has no unit,
+  `tt_megabytes_processed_total`, a running total in `MEGABYTES` (MiB), and `tt_progress`, in `PERCENT`.
 - `telemetry_metal_process.cpp` is the Metal process. It runs that kernel on four cores of device 0.
-- `telemetry_external_process.cpp` is the external process. It logs every telemetry sample it receives.
+- `telemetry_external_process.cpp` is the external process. It logs every telemetry sample it receives, with its unit.
 
 Build with `./build_metal.sh --build-programming-examples`, then start the external process in one shell:
 
@@ -66,8 +74,8 @@ The external process prints one line per sample, starting with the time of day (
 Listening for telemetry. Press Enter to stop.
 ...
 20:08:01.830463 chip 0 core (1,0) tt_loop_iteration: 0
-20:08:01.830463 chip 0 core (1,0) tt_bytes_processed_total: 16384
-20:08:01.830463 chip 0 core (1,0) tt_progress: 0.02
+20:08:01.830463 chip 0 core (1,0) tt_megabytes_processed_total: 0.015625 MEGABYTES
+20:08:01.830463 chip 0 core (1,0) tt_progress: 2 PERCENT
 ```
 
 Only one process can be the external process, so stop `metal_example_external_process` before starting this one.
