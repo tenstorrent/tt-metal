@@ -1,7 +1,5 @@
 # Matrix multiply with LoFi fidelity.
 
-# quasar_use_dvalid: true
-
 operands:
   - name: "input_A"
     tile_dims: all

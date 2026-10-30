@@ -43,10 +43,13 @@ class GlobalConfig:
     profiler_enabled: bool = False
     perf_run_type: PerfRunType = None
     loop_factor: int = 16
-    quasar_use_dvalid: bool = False
     quasar_unpack_to_dest: bool = field(default=False, init=False)
     skip_for_perf: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
+
+    @property
+    def sfpu_on_trisc3(self) -> bool:
+        return self.architecture == ChipArchitecture.QUASAR
 
     @property
     def skip_unpack_init(self) -> bool:
@@ -58,10 +61,6 @@ class GlobalConfig:
     @property
     def uses_unpack_to_dest_sync(self) -> bool:
         return self.quasar_unpack_to_dest and not self.skip_unpack_init
-
-    @property
-    def uses_unpack_to_dest_pack_sync(self) -> bool:
-        return self.uses_unpack_to_dest_sync and not self.skip_sync
 
     @property
     def skip_math_init(self) -> bool:
@@ -122,14 +121,18 @@ class FuserConfig(TestConfig):
                 for node in operation.math_nodes
             )
         )
-        if not config.quasar_unpack_to_dest:
+        if not config.sfpu_on_trisc3:
             return
-        if config.quasar_use_dvalid:
-            raise ValueError("Quasar unpack_to_dest requires quasar_use_dvalid: false")
         if len({operation.dest_sync for operation in self.pipeline}) != 1:
             raise ValueError(
-                "Quasar unpack_to_dest requires a consistent dest_sync across the pipeline"
+                "Quasar dest sync requires a consistent dest_sync across the pipeline"
             )
+        if any(
+            isinstance(node, SfpuNode)
+            for operation in self.pipeline
+            for node in operation.pack_nodes
+        ):
+            raise ValueError("Quasar runs SFPU on TRISC3 only, not on the pack thread")
 
     def _validate_pack_sfpu_formats(self):
         config = self.global_config

@@ -13,8 +13,10 @@ from typing import Dict, List
 from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
+from .base_sfpu import Sfpu
 from .fuser_config import FuserConfig
 from .pipeline_plan import PlannedBlock
+from .sfpu_node import SfpuNode
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
 
@@ -89,6 +91,8 @@ class MathKernelGenerator:
         all_headers = set()
         for op in self.config.pipeline:
             for unit in op.get_math_units():
+                if self.config.global_config.sfpu_on_trisc3 and isinstance(unit, Sfpu):
+                    continue
                 all_headers.update(unit.get_headers())
 
         if self.config.global_config.skip_math_init:
@@ -105,20 +109,24 @@ class SfpuKernelGenerator:
     def __init__(self, config: FuserConfig):
         self.config = config
 
-    def generate(self) -> str:
-        if self.config.global_config.architecture != ChipArchitecture.QUASAR:
+    def generate(self, plans: List[List[PlannedBlock]]) -> str:
+        global_config = self.config.global_config
+        if global_config.architecture != ChipArchitecture.QUASAR:
             return ""
 
-        return (
-            f"\n"
-            f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
-            f"\n"
-            f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
-            f"{{\n"
-            f"}}\n"
-            f"\n"
-            f"#endif\n"
+        all_headers = set()
+        for op in self.config.pipeline:
+            for node in op.math_nodes:
+                if isinstance(node, SfpuNode):
+                    all_headers.update(node.get_headers())
+        if global_config.skip_math_init:
+            all_headers.discard("sfpu_operations_quasar.h")
+
+        sfpu_calls = "".join(
+            op.do_sfpu(global_config, blocks)
+            for op, blocks in zip(self.config.pipeline, plans)
         )
+        return render_kernel("ISOLATE_SFPU", all_headers, sfpu_calls)
 
 
 class PackKernelGenerator:
@@ -156,7 +164,7 @@ class FusedKernelGenerator:
             "unpack": self.unpack_gen.generate(plans),
             "math": self.math_gen.generate(plans),
             "pack": self.pack_gen.generate(plans),
-            "sfpu": self.sfpu_gen.generate(),
+            "sfpu": self.sfpu_gen.generate(plans),
         }
 
     def write_kernel(self, test_name: str):
@@ -178,7 +186,7 @@ class FusedKernelGenerator:
             )
 
         quasar_include = (
-            '#include "llk_bfd_alloc.h"\n#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
+            '#include "llk_bfd_alloc.h"\n#include "llk_sync.h"\n#include "llk_dest_sync.h"\n#include "quasar_test_common.h"\n'
             if self.config.global_config.architecture == ChipArchitecture.QUASAR
             else '#include "operand.h"\n'
         )

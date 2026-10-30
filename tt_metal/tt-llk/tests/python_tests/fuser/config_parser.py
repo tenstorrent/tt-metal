@@ -206,7 +206,6 @@ class FuserConfigSchema(BaseModel):
 
     dest_acc: DestAccumulation = DestAccumulation.No
     loop_factor: Annotated[int, Field(ge=1)] = 16
-    quasar_use_dvalid: bool = False
     skip_for_perf: bool = False
     indexes: Dict[str, IndexesSchema] = {}
     operands: List[OperandDefinition] = Field(..., min_length=1)
@@ -356,7 +355,6 @@ class FuserConfigSchema(BaseModel):
                 dest_acc=self.dest_acc,
                 test_name=test_name,
                 loop_factor=self.loop_factor,
-                quasar_use_dvalid=self.quasar_use_dvalid,
                 skip_for_perf=self.skip_for_perf,
             ),
             operand_registry=operands,
