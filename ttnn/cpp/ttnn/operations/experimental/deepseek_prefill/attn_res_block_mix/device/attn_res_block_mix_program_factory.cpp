@@ -99,7 +99,8 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
                                  + num_candidates * value_tile_size               // packed exponentials
                                  + value_tiles * value_tile_size                  // the run's candidate tiles
                                  + weight_tiles * value_tile_size                 // per-site weights
-                                 + 2 * sites_per_group * value_tile_size          // partials out
+                                 + 2 * sites_per_group * value_tile_size          // even groups' partials
+                                 + sites_per_group * max_run * value_tile_size    // an odd group's partials
                                  + num_sites * stats_tile_size;                   // scalar staging
     TT_FATAL(
         l1_per_core <= device->l1_size_per_core(),
@@ -126,7 +127,11 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     cb(CBIndex::c_7, weight_tiles, value_tile_size, value_format);          // a group's weights, twice
     cb(CBIndex::c_16, 2, stats_tile_size, stats_format);                    // shift, for the writer
     cb(CBIndex::c_17, 2, stats_tile_size, stats_format);                    // mass
-    cb(CBIndex::c_18, 2 * sites_per_group, value_tile_size, value_format);  // partials
+    // The partials go out on both NoCs, even site groups from the writer and odd ones from
+    // the reader. The reader drains an odd group only between building weights, so its
+    // buffer holds a whole group: compute must be able to finish one without waiting on it.
+    cb(CBIndex::c_18, 2 * sites_per_group, value_tile_size, value_format);        // even groups
+    cb(CBIndex::c_19, sites_per_group * max_run, value_tile_size, value_format);  // odd groups
     cb(CBIndex::c_24, num_sites, stats_tile_size, stats_format);            // scalar staging, never pushed
 
     ////////////////////////////////////////////////////////////////////////////
@@ -139,6 +144,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     reader_ct_args.insert(reader_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
     TensorAccessorArgs(*stats.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(*first.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*partials.buffer()).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {num_sites, Ht, sites_per_group, num_groups};
     writer_ct_args.insert(writer_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
@@ -161,6 +167,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     // the device operation checks, so the address is all that differs between them.
     KernelDescriptor::RTArgList reader_common;
     reader_common.push_back(stats.buffer());
+    reader_common.push_back(partials.buffer());
     for (const auto& snapshot : tensor_args.sealed) {
         for (uint32_t plane = 0; plane < snapshot.padded_shape()[1]; ++plane) {
             reader_common.push_back(snapshot.buffer());

@@ -47,7 +47,8 @@ constexpr auto cb_values = tt::CBIndex::c_6;
 constexpr auto cb_weights = tt::CBIndex::c_7;
 constexpr auto cb_shift_out = tt::CBIndex::c_16;
 constexpr auto cb_mass_out = tt::CBIndex::c_17;
-constexpr auto cb_partials = tt::CBIndex::c_18;
+constexpr auto cb_partials = tt::CBIndex::c_18;      // even site groups, for the writer
+constexpr auto cb_partials_odd = tt::CBIndex::c_19;  // odd site groups, for the reader
 
 constexpr uint32_t num_candidates = get_compile_time_arg_val(0);
 constexpr uint32_t num_partials = get_compile_time_arg_val(1);
@@ -197,6 +198,7 @@ void mix_run(uint32_t num_tiles) {
     CircularBuffer cb_values_obj(cb_values);
     CircularBuffer cb_weights_obj(cb_weights);
     CircularBuffer cb_partials_obj(cb_partials);
+    CircularBuffer cb_partials_odd_obj(cb_partials_odd);
 
     // acc_to_dest turns each broadcast multiply into a MAC against its accumulator. The
     // accumulators start at zero: the packer clears a dest section on every release.
@@ -219,13 +221,17 @@ void mix_run(uint32_t num_tiles) {
                 }
             }
             tile_regs_commit();
-            cb_partials_obj.reserve_back(sites);
+            // Odd groups go out on the reader's NoC; see attn_res_block_mix_partials.hpp.
+            const bool odd = group % 2 == 1;
+            CircularBuffer& out_obj = odd ? cb_partials_odd_obj : cb_partials_obj;
+            const auto out = odd ? cb_partials_odd : cb_partials;
+            out_obj.reserve_back(sites);
             tile_regs_wait();
             for (uint32_t s = 0; s < sites; ++s) {
-                pack_tile(s, cb_partials);
+                pack_tile(s, out);
             }
             tile_regs_release();
-            cb_partials_obj.push_back(sites);
+            out_obj.push_back(sites);
         }
         cb_weights_obj.pop_front(sites * num_candidates);
     }
@@ -238,6 +244,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_stats, cb_summed, cb_scores);
     for_each_attn_res_block_mix_item<kSplitArgs>([](const AttnResBlockMixItem& item) {
         score_row();
-        mix_run(item.end - item.begin);
+        mix_run(item.num_tiles());
     });
 }

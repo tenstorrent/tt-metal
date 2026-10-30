@@ -17,6 +17,8 @@ struct AttnResBlockMixItem {
     uint32_t chunk;  // which run of the row; run 0 also writes the row's shift and mass
     uint32_t begin;  // first tile of the run along the row
     uint32_t end;    // one past its last
+
+    uint32_t num_tiles() const { return end - begin; }
 };
 
 // The split's compile-time args start at `Base`: grid width, cores, items, runs per row,
