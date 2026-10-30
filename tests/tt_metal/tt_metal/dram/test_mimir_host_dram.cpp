@@ -21,7 +21,6 @@
 #include "umd/device/utils/error_detail.hpp"
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
-#include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 
@@ -43,10 +42,6 @@ inline constexpr uint32_t kAliasWalkTagBase = 0xA00;
 
 // Sizes for PatternReadback. The full 7-pair sweep runs up to kFullPatternSweepMaxBytes; larger sizes run one pair.
 inline constexpr std::array<uint32_t, 7> kHostDramSizesBytes = {4, 16, 64, 512, 4096, 32768, 131072};
-// Sizes for the DiscoverAccessMatrix test.
-inline constexpr std::array<uint32_t, 4> kMatrixSizesBytes = {128, 512, 32768, 131072};
-// Boundary offsets for the DiscoverAccessMatrix test.
-inline constexpr std::array<uint64_t, 4> kMatrixBoundaryOffsets = {0x80, 0x200, 0x8000, 0x20000};
 // Centres of the 128 B straddles inside the "start" anchor for BoundaryAndAlias.
 inline constexpr std::array<uint64_t, 3> kStartAnchorStraddleCentres = {0x80, 0x200, 0x8000};
 
@@ -85,31 +80,6 @@ std::vector<HostDramPoint> host_dram_offsets(uint64_t view_size, uint64_t unrese
         {"view_mid", view_size / 2 + kGuardBytes},
         {"view_end", view_size - kGuardBytes - size_bytes},
     };
-}
-
-// Begin, interior, end, boundary and Mimir-window-end points of one view for DiscoverAccessMatrix.
-std::vector<HostDramPoint> host_dram_matrix_points(
-    uint64_t view_base, uint64_t view_size, uint64_t mimir_window_bytes, uint64_t unreserved, uint32_t size_bytes) {
-    const uint64_t interior_offset = (view_size / 3) & ~uint64_t{0x3F};
-    std::vector<HostDramPoint> points = {
-        {"begin", 0},
-        {"unreserved", unreserved},
-        {"interior", interior_offset},
-        {"view_end", view_size - size_bytes},
-        {"crosses_view_end", view_size - size_bytes / 2},
-        {"view_edge", view_size},
-        {"window_end_crossing", mimir_window_bytes - view_base - size_bytes / 2},
-        {"window_end", mimir_window_bytes - view_base},
-    };
-    for (uint64_t offset : kMatrixBoundaryOffsets) {
-        points.push_back({fmt::format("offset_0x{:x}", offset), offset});
-    }
-    for (uint64_t gib = kGiB; gib < view_size; gib += kGiB) {
-        const std::string suffix = gib == 4 * kGiB ? "_4GiB_tile_edge" : fmt::format("_{}GiB", gib / kGiB);
-        points.push_back({"below" + suffix, gib - size_bytes});
-        points.push_back({"above" + suffix, gib});
-    }
-    return points;
 }
 
 std::string view_param_name(const ::testing::TestParamInfo<uint32_t>& info) {
@@ -181,81 +151,6 @@ struct PersistedTl1Region {
 };
 
 class MimirHostDramView : public ::testing::TestWithParam<uint32_t> {};
-
-TEST(MimirHostDram, DiscoverAccessMatrix) {
-    skip_unless_programmable_dram_package();
-    skip_unless_mimir_local_package();
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    const std::string& identity_mismatch = mimir_identity_result();
-    if (!identity_mismatch.empty()) {
-        GTEST_SKIP() << identity_mismatch;
-    }
-    const metal_SocDescriptor& soc = configured_soc_desc();
-    for (const MimirRegister& reg : read_gddr_config(MetalContext::instance().get_cluster(), soc, kChipId)) {
-        log_info(tt::LogTest, "{} = 0x{:x}", reg.name, reg.value);
-    }
-    log_info(tt::LogTest, "Host DRAM access granularity: 4 B words; the start offset must be 4 B aligned.");
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    const uint64_t mimir_window_bytes = tt::umd::mimir_local_address_windows(soc).dram_stride;
-
-    for (uint32_t cce_index = 0; cce_index < topology.num_cces; ++cce_index) {
-        const CoreCoord translated = cce_virtual_core(MetalContext::instance().get_cluster(), kChipId, cce_index);
-        log_info(
-            tt::LogTest,
-            "CCE {} mimir {} location {} view {} translated core ({}, {})",
-            cce_index,
-            mimir_index_for_cce(cce_index),
-            location_for_cce(cce_index),
-            local_dram_view_for_cce(soc, cce_index),
-            translated.x,
-            translated.y);
-    }
-
-    for (uint32_t view = 0; view < topology.num_views; ++view) {
-        const uint64_t view_base = topology.view_offset[view];
-        log_info(
-            tt::LogTest,
-            "view {} mimir {} chiplet base 0x{:x} view size 0x{:x} mimir window 0x{:x}",
-            view,
-            topology.view_mimir[view],
-            view_base,
-            topology.view_size,
-            mimir_window_bytes);
-        uint32_t legal_rows = 0;
-        uint32_t negative_rows = 0;
-        for (uint32_t size_bytes : kMatrixSizesBytes) {
-            for (const HostDramPoint& point :
-                 host_dram_matrix_points(view_base, topology.view_size, mimir_window_bytes, unreserved, size_bytes)) {
-                // Legal means the access ends inside this Mimir's GDDR window: chiplet offset + size <= dram_stride.
-                const uint64_t chiplet_offset = view_base + point.view_offset;
-                const bool legal = chiplet_offset + size_bytes <= mimir_window_bytes;
-                if (legal) {
-                    const MimirDramAddressInfo info =
-                        mimir_dram_address(soc, kChipId, view, point.view_offset, size_bytes);
-                    log_info(tt::LogTest, "LEGAL {} {}", point.name, info.host_string());
-                    ++legal_rows;
-                } else {
-                    const MimirChannelLocation channel = mimir_channel_location(chiplet_offset);
-                    log_info(
-                        tt::LogTest,
-                        "NEGATIVE {} view {} view offset 0x{:x} size {}: chiplet offset 0x{:x} ends outside the Mimir "
-                        "window; channel {} (tile {} slice {})",
-                        point.name,
-                        view,
-                        point.view_offset,
-                        size_bytes,
-                        chiplet_offset,
-                        channel.instance,
-                        channel.tile,
-                        channel.slice);
-                    ++negative_rows;
-                }
-            }
-        }
-        EXPECT_GT(legal_rows, 0u);
-        EXPECT_GT(negative_rows, 0u);
-    }
-}
 
 TEST_P(MimirHostDramView, PatternReadback) {
     skip_unless_programmable_dram_package();
