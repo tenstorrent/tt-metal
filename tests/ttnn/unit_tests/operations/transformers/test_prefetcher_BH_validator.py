@@ -671,6 +671,57 @@ def test_stop_skips_targets_freed_mid_session(device):
         gc.collect()
 
 
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("cq_id", [0, 1], ids=["cq0", "cq1"])
+def test_pipes_carved_mid_session_wait_for_their_pages(device, cq_id):
+    """DRAM senders do not write a pipe carved while the prefetcher runs before its config pages land.
+
+    The carve writes the receivers' config pages through the calling thread's command queue, while a
+    request reaches the DRAM senders over their H2D sockets. A held pipe consumer keeps that queue busy
+    for a fixed wall-clock delay, so a request queued right after the carve gets to the senders long
+    before the pages land. The carve must make the running prefetcher wait for that queue, not for
+    another one, and must not drain the queue itself. Unfenced, the senders write into rings and credits
+    that the queued writes then clear, and the validator hangs.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    held_recv_per_bank = 2
+    K = 448
+    N = num_dram_banks * held_recv_per_bank * 2 * ttnn.TILE_SIZE
+    tt_weight_held, held_pipes, _bank_to_receivers, page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, ttnn.bfloat8_b, held_recv_per_bank, num_entries=num_dram_banks * held_recv_per_bank
+    )
+    tt_weight, bank_to_receivers, push_page_size, carved_ring_size = _krow_major_weight_and_bank_map(
+        device,
+        K,
+        num_dram_banks * 2 * ttnn.TILE_SIZE,
+        ttnn.bfloat16,
+        recv_per_bank=1,
+        row_offset=_receiver_rows(num_dram_banks, held_recv_per_bank),
+    )
+    # About 0.75 s at Blackhole's 1.35 GHz AICLK. A carve that drained the queue would block for most of
+    # that, while one that fences through the prefetcher returns in milliseconds.
+    hold_cycles = 1_000_000_000
+    max_carve_s = 0.5
+
+    with tensor_prefetcher_session(device), ttnn.command_queue(cq_id):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight_held, ring_size)], prefetcher_pipes=held_pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=held_pipes, hold_cycles=hold_cycles
+        )
+        carve_from = time.monotonic()
+        _space, pipes = _make_tensor_prefetcher_pipes(
+            device, bank_to_receivers, push_page_size * _RING_DEPTH_PAGES, single_sender=True
+        )
+        carve_s = time.monotonic() - carve_from
+        _queue_and_validate_pipes(device, tt_weight, pipes, bank_to_receivers, carved_ring_size)
+    assert carve_s < max_carve_s, (
+        f"creating the pipes took {carve_s:.3f} s while a held consumer occupied command queue {cq_id}: the carve "
+        "drained the queue instead of fencing it through the running prefetcher"
+    )
+
+
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
 @pytest.mark.parametrize("num_entries", [5, 7], ids=["ring_2.5_blocks", "ring_3.5_blocks"])
 def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_per_bank, num_entries):

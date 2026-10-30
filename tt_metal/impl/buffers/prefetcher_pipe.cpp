@@ -44,7 +44,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
-#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -346,8 +345,13 @@ void PrefetcherPipeSpaceL1::enqueue_config_pages(
 
     const PrefetcherPipeConfigPages* imaged_pages = nullptr;
     HostBuffer image;
-    auto images = DistributedHostBuffer::create(device_->get_view());
+    // Built from the shape, not the view: the view overload looks the mesh up in MetalContext 0
+    // rather than this device's context. The write only needs the local shards.
+    auto images = DistributedHostBuffer::create(device_->shape());
     for (const auto& coord : distributed::MeshCoordinateRange(device_->shape())) {
+        if (!device_->impl().is_local(coord)) {
+            continue;
+        }
         images.emplace_shard(coord, [&] {
             const PrefetcherPipeConfigPages& pages = pages_on(coord);
             if (&pages != imaged_pages) {
@@ -517,12 +521,11 @@ void PrefetcherPipeSpaceImpl::write_device_pages(
 void PrefetcherPipeSpaceImpl::order_dram_sender_pages() const {
     // A DRISC sender writes ring data and credits into receiver L1 as soon as a request reaches it,
     // and requests arrive over its H2D socket, not the command queue. A running Tensor prefetcher
-    // holds every later request until the queue gets here. One started later is launched straight
-    // from the host, so the queue has to have drained by then.
+    // holds every later request until the queue gets here. One started later, even on another thread
+    // while this runs, is launched straight from the host, so the queue has to have drained before
+    // the caller gets a pipe to name in a request.
     auto& cq = device_->mesh_command_queue();
-    if (device_->impl().is_tensor_prefetcher_active()) {
-        WaitForCqOnTensorPrefetcher(cq, std::nullopt);
-    } else {
+    if (!device_->impl().wait_for_cq_on_tensor_prefetcher_if_active(cq)) {
         distributed::Finish(cq);
     }
 }
