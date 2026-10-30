@@ -320,10 +320,10 @@ def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt
 class MATMUL_STOCH_RND(TemplateParameter):
     """Matmul unpack thread that programs the ALU stochastic rounding units (None, Fpu, Pack, All) after its hw configure, as _llk_unpack_configure_stoch_rnd_ does for the other tests."""
 
-    stochastic_rounding: StochasticRounding = StochasticRounding.No
+    matmul_stoch_rnd: StochasticRounding = StochasticRounding.No
 
     def convert_to_cpp(self) -> str:
-        return f"#define MATMUL_STOCH_RND\nconstexpr auto STOCHASTIC_RND = ckernel::{self.stochastic_rounding.value};"
+        return f"#define MATMUL_STOCH_RND\nconstexpr auto STOCHASTIC_RND = ckernel::{self.matmul_stoch_rnd.value};"
 
 
 @dataclass
