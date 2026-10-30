@@ -928,6 +928,48 @@ def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device, inp
         ttnn.deallocate(resident)
 
 
+# Rank > 4 inputs are squeezed to 4D for the device op, so output_tensor_end has to survive both the squeeze
+# and the reshape back to ND.
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, L1_INTERLEAVED], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "shape, output_end",
+    [
+        ([2, 3, 4, 64, 64], [0, 1, 2, 31, 31]),
+        ([2, 3, 4, 64, 64], [1, 2, 3, 63, 63]),
+        ([2, 3, 4, 50, 50], [1, 2, 1, 20, 37]),
+        ([1, 3, 4, 64, 64], [0, 1, 2, 33, 47]),
+        ([2, 2, 3, 2, 64, 96], [0, 1, 2, 1, 40, 70]),
+    ],
+    ids=["leading_prefix_crop", "no_crop", "unaligned_inner_crop", "leading_one", "rank6_leading_prefix_crop"],
+)
+def test_quasar_untilize_with_unpadding_rank_gt_4_uses_output_tensor_end(device, shape, output_end, memory_config):
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    result = ttnn.experimental.quasar.untilize_with_unpadding(ttnn_in, output_end, memory_config=memory_config)
+
+    assert list(result.shape) == [end + 1 for end in output_end]
+    assert_equal(x[tuple(slice(0, end + 1) for end in output_end)], ttnn.to_torch(result))
+
+
+# The device op unpads the leading rank - 3 dims as one fused dim and keeps a prefix of it, so once one of them
+# keeps several indices, cropping a later one would select the wrong batches.
+@pytest.mark.parametrize(
+    "shape, output_end",
+    [
+        ([2, 3, 4, 64, 64], [1, 1, 3, 63, 63]),
+        ([2, 2, 3, 2, 64, 96], [0, 1, 1, 1, 63, 95]),
+    ],
+    ids=["rank5", "rank6"],
+)
+def test_quasar_untilize_with_unpadding_rank_gt_4_rejects_non_prefix_crop(device, shape, output_end, expect_error):
+    ttnn_in = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "can only be cut to a prefix"):
+        ttnn.experimental.quasar.untilize_with_unpadding(ttnn_in, output_end)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
     tile_dim, out_tile_bytes = 32, 2048  # untilize emits bfloat16 for both input dtypes
