@@ -54,8 +54,8 @@ inline bool take_step() {
 // Whole-op totals (SPARSE_PROF_TOTALS, from TT_SPARSE_PROF_TOTALS=1): every zone above instead adds its cycles to a
 // per-RISC total for the whole op (no window, no zone records). SPARSE_TOTAL times any other block, SPARSE_COUNT adds
 // a count, SPARSE_TOTALS_INIT zeroes the totals at kernel start, and SPARSE_TOTALS_FLUSH writes every nonzero total
-// once at kernel end as a TS_DATA record named after it (dev/profile_summary.py reports them). The names are the
-// table below; a name not in it fails the build.
+// once at kernel end as a SPARSE_TOTALS TS_DATA record (index << 32 | value; dev/profile_summary.py decodes them with
+// the same table). The names are the table below; a name not in it fails the build.
 namespace sparse_prof {
 constexpr const char* kTotalNames[] = {
     "KERNEL",      "RING_STEP_SUM", "RING_STEP",     "ST_S1_QK",      "ST_WAIT_QK",    "ST_S2_MAX",     "ST_S2B_TEST",
@@ -126,50 +126,19 @@ struct Total {
     for (uint32_t total_i = 0; total_i < sparse_prof::kTotals; ++total_i) { \
         sparse_prof::totals[total_i] = 0;                                   \
     }
-#define SPARSE_TOTAL_EMIT(name)                                                             \
-    {                                                                                       \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                        \
-        auto constexpr emit_hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));     \
-        const uint32_t emit_value = sparse_prof::totals[sparse_prof::total_index(name)];    \
-        if (emit_value != 0) {                                                              \
-            kernel_profiler::timeStampedData<emit_hash>(static_cast<uint64_t>(emit_value)); \
-        }                                                                                   \
+// One record type for every total (a single inlined timeStampedData, in a loop: one call site per RISC keeps the
+// kernel config buffer within budget): data = index << 32 | value, the index into kTotalNames.
+#define SPARSE_TOTALS_FLUSH()                                                                                      \
+    {                                                                                                              \
+        DO_PRAGMA(message(PROFILER_MSG_NAME("SPARSE_TOTALS")));                                                    \
+        auto constexpr totals_hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME("SPARSE_TOTALS"));               \
+        for (uint32_t total_i = 0; total_i < sparse_prof::kTotals; ++total_i) {                                    \
+            if (sparse_prof::totals[total_i] != 0) {                                                               \
+                kernel_profiler::timeStampedData<totals_hash>(                                                     \
+                    (static_cast<uint64_t>(total_i) << 32) | static_cast<uint64_t>(sparse_prof::totals[total_i])); \
+            }                                                                                                      \
+        }                                                                                                          \
     }
-#define SPARSE_TOTALS_FLUSH()          \
-    SPARSE_TOTAL_EMIT("KERNEL")        \
-    SPARSE_TOTAL_EMIT("RING_STEP_SUM") \
-    SPARSE_TOTAL_EMIT("RING_STEP")     \
-    SPARSE_TOTAL_EMIT("ST_S1_QK")      \
-    SPARSE_TOTAL_EMIT("ST_WAIT_QK")    \
-    SPARSE_TOTAL_EMIT("ST_S2_MAX")     \
-    SPARSE_TOTAL_EMIT("ST_S2B_TEST")   \
-    SPARSE_TOTAL_EMIT("ST_S3_ALPHA")   \
-    SPARSE_TOTAL_EMIT("ST_S4_RESCALE") \
-    SPARSE_TOTAL_EMIT("ST_S56_EXP_PV") \
-    SPARSE_TOTAL_EMIT("ST_S6B_ROWSUM") \
-    SPARSE_TOTAL_EMIT("ST_END_SYNC")   \
-    SPARSE_TOTAL_EMIT("C_K_WAIT")      \
-    SPARSE_TOTAL_EMIT("C_POP_KV")      \
-    SPARSE_TOTAL_EMIT("C_PLAN_WAIT")   \
-    SPARSE_TOTAL_EMIT("C_V_WAIT")      \
-    SPARSE_TOTAL_EMIT("C_ITER")        \
-    SPARSE_TOTAL_EMIT("RES_NORM")      \
-    SPARSE_TOTAL_EMIT("N_STEPS")       \
-    SPARSE_TOTAL_EMIT("N_SCORE_TILES") \
-    SPARSE_TOTAL_EMIT("N_RESCALE")     \
-    SPARSE_TOTAL_EMIT("N_MEMBERS")     \
-    SPARSE_TOTAL_EMIT("RD_SYNC")       \
-    SPARSE_TOTAL_EMIT("RD_RES_Q")      \
-    SPARSE_TOTAL_EMIT("RD_RES_BITS")   \
-    SPARSE_TOTAL_EMIT("RD_RES_PLAN")   \
-    SPARSE_TOTAL_EMIT("RD_RES_PIECES") \
-    SPARSE_TOTAL_EMIT("RD_GROUP_RX")   \
-    SPARSE_TOTAL_EMIT("RD_GROUP_TX")   \
-    SPARSE_TOTAL_EMIT("RD_FETCH_K")    \
-    SPARSE_TOTAL_EMIT("RD_CHAIN_RX")   \
-    SPARSE_TOTAL_EMIT("RD_CHAIN_TX")   \
-    SPARSE_TOTAL_EMIT("RD_RES_POOLED") \
-    SPARSE_TOTAL_EMIT("WR_RES_OUT")
 
 #elif defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE) && !defined(PROFILE_STREAMING)
 
