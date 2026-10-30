@@ -550,8 +550,13 @@ class MuseGlimmerAttention:
         for t in own:
             t.deallocate(True)
 
+        # A batch that is not a multiple of 8 puts the users on two core ranges; the op then needs the grid
+        # to place its output heads (same cores as the single-range path).
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
         attn = ttnn.experimental.nlp_concat_heads_decode(
-            ttnn.to_memory_config(sdpa, heads_memcfg(sb, a.head_dim)), num_heads=a.q_heads_local
+            ttnn.to_memory_config(sdpa, heads_memcfg(sb, a.head_dim)),
+            num_heads=a.q_heads_local,
+            sub_core_grids=all_cores,
         )  # [1,1,32,ql*128] L1 width-sharded
         if attn.shape[2] != batch:  # the concat output has 32 rows; rows past the SDPA users are unused
             w = attn.shape[-1]
