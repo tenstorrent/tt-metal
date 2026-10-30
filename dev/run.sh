@@ -34,6 +34,7 @@
 #                           # (TT_SPARSE_PROF_TOTALS=1; also totals5, totals15, totals10_nopairs); log_val_totals10_summary.txt
 #   ./dev/run.sh totals     # totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered
 #   ./dev/run.sh collect    # totals (above) + k512: traced 256- vs 512-key pieces at 10 / 15 s
+#   ./dev/run.sh stack      # watcher stack usage of the compute / dataflow kernels at 5 / 10 / 15 s (stack5 ...)
 #   ./dev/run.sh passes     # traced op time at the factory's Q pass count and at one more pass, 5 / 10 / 15 s
 #
 # Knobs (dev branch only, read by the DEBUG factory code; set once per process, they are not in the op's program
@@ -56,6 +57,7 @@ case "${1:-all}" in
     review) set -- bench structures passes totals5 totals10 totals10_nopairs totals15 family ;;
     totals) set -- totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered ;;
     collect) set -- totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered k512 ;;
+    stack) set -- stack5 stack10 stack10_nopairs stack15 ;;
     night) set -- bench smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15 ;;
 esac
 if [ $# -gt 1 ]; then
@@ -81,7 +83,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 passes totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered totals collect k512 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 passes totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered totals collect k512 stack stack5 stack10 stack10_nopairs stack15 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -229,6 +231,28 @@ case "$ONLY" in
     # totals5 / totals10 / totals15: the same call with TT_SPARSE_PROF_TOTALS=1 (every zone summed over the whole op per
     # RISC, plus waits and step / score-tile counts; no windowed zones) and the engine counters; totals10_nopairs with
     # D4 pair steps off.
+    # stack5 / stack10 / stack15 (+ stack10_nopairs): the production configuration of each shape (one untraced call,
+    # factory pass split) under the watcher with only its stack-usage check on; the watcher's "Stack usage summary"
+    # (highest usage per processor: bytes free, overflow warnings) is appended to log_val_<step>.txt.
+    stack5 | stack10 | stack15 | stack10_nopairs)
+        n=${ONLY#stack}
+        n=${n%%_*}
+        shape=s$(printf '%02d' "$n")
+        pairs_env=()
+        [ "$ONLY" = stack10_nopairs ] && pairs_env=(TT_SPARSE_PAIR_STEPS=0)
+        run "$ONLY" 900 env ${pairs_env[@]+"${pairs_env[@]}"} TT_METAL_WATCHER=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 \
+            TT_METAL_WATCHER_DISABLE_PAUSE=1 TT_METAL_WATCHER_DISABLE_RING_BUFFER=1 TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1 \
+            TT_METAL_WATCHER_DISABLE_WAYPOINT=1 TT_METAL_WATCHER_DISABLE_DISPATCH=1 TT_METAL_WATCHER_DISABLE_ETH=1 \
+            pytest dev/profile_case.py -s -k "$shape and k256 and d020 and sparse_only and qauto"
+        for d in "${TT_METAL_HOME:-.}/generated/watcher" generated/watcher; do
+            if [ -f "$d/watcher.log" ]; then
+                { echo "=== watcher stack usage ($d/watcher.log)"; grep -iE "stack" "$d/watcher.log" | sort | uniq -c | tail -60; } \
+                    >> "log_val_$ONLY.txt"
+                keep "log_val_$ONLY.txt"
+                break
+            fi
+        done
+        ;;
     # totals15_band / totals15_clustered: the 15 s call on make_structured_mask's band / clustered layout at the same
     # density (DEV_PROFILE_STRUCTURE in dev/profile_case.py).
     totals5 | totals10 | totals15 | totals10_nopairs | totals15_band | totals15_clustered)
