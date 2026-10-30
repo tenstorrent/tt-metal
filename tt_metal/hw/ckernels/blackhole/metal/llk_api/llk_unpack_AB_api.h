@@ -118,5 +118,12 @@ inline void llk_unpack_AB(
         StateDiscard<std::uint32_t>(tile_index_b),
         StateDiscard<std::uint32_t>(bcast_row_idx)));
 
+    if constexpr (BType == BroadcastType::ROW) {
+        // The ROW row select in _llk_unpack_AB_ assumes 16-row faces in a 2x2 layout and has no B shape; bound it here.
+        LLK_ASSERT(
+            bcast_row_idx == 0 || (get_operand_face_r_dim(operandB_id) == FACE_R_DIM &&
+                                   get_operand_num_faces(operandB_id) == TILE_NUM_FACES),
+            "bcast_row_idx > 0 requires a 32x32 operand B");
+    }
     llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }

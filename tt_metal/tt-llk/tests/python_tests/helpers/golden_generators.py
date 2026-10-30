@@ -1708,9 +1708,15 @@ class BroadcastGolden:
         tile_cnt: int = 1,
         face_r_dim: int = 16,
         input_format: DataFormat = None,
+        row_idx: int = 0,
     ):
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
+        handler_kwargs = {"num_faces": num_faces, "face_r_dim": face_r_dim}
+        if broadcast_type == BroadcastType.Row:
+            handler_kwargs["row_idx"] = row_idx
+        elif row_idx != 0:
+            raise ValueError("row_idx applies to BroadcastType.Row only")
 
         # Hold the operand in its own format, not the output's. The hardware unpacks src_B from
         # its L1 encoding and broadcasts that, so quantizing to the output format here rounds the
@@ -1747,7 +1753,7 @@ class BroadcastGolden:
             tile_data = input_flat[tile_start:tile_end]
 
             tile_result = self.broadcast_handlers[broadcast_type](
-                tile_data, num_faces=num_faces, face_r_dim=face_r_dim
+                tile_data, **handler_kwargs
             )
             results.append(tile_result)
 
@@ -1800,9 +1806,37 @@ class BroadcastGolden:
         tile_data,
         num_faces: int,
         face_r_dim: int,
+        row_idx: int = 0,
     ):
-        """Process a single tile for row broadcast."""
+        """Process a single tile for row broadcast.
+
+        ``row_idx`` selects the tile row that is broadcast (``_llk_unpack_AB_<ROW>``'s
+        bcast_row_idx): row ``row_idx % 16`` of faces (0, 1) for ``row_idx < 16``, of faces (2, 3)
+        otherwise. A non-zero ``row_idx`` is defined for the full 32x32 tile only.
+        """
         face_size = face_r_dim * FACE_DIM
+
+        if row_idx != 0:
+            if (
+                num_faces != 4
+                or face_r_dim != FACE_DIM
+                or not 0 <= row_idx < 2 * FACE_DIM
+            ):
+                raise ValueError(
+                    "a non-zero row_idx needs a 32x32 tile and row_idx < 32"
+                )
+            first_face = 0 if row_idx < FACE_DIM else 2
+            row_start = first_face * face_size + (row_idx % FACE_DIM) * FACE_DIM
+            face_0_broadcast = tile_data[row_start : row_start + FACE_DIM].repeat(
+                face_r_dim
+            )
+            row_start += face_size
+            face_1_broadcast = tile_data[row_start : row_start + FACE_DIM].repeat(
+                face_r_dim
+            )
+            return torch.cat(
+                [face_0_broadcast, face_1_broadcast, face_0_broadcast, face_1_broadcast]
+            )
 
         # Process face 0: take first row and repeat to fill face
         face_0_row = tile_data[:FACE_DIM]
