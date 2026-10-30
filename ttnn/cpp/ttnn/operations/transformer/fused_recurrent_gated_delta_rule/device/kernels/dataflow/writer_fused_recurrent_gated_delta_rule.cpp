@@ -8,6 +8,12 @@
 // pages are 32x32 fp32 tiles (4096 bytes) whose first 2048 bytes are faces 0 and 1 = rows 0-15, so each o tile is
 // written at the start of its page; rows 16-31 of the page are padding the host never reads.
 //
+// The state tiles are written as they arrive: the compute packs state_out in (i, j) order, so the writer waits for
+// them cumulatively in groups of Vt (one i row) and issues each group's NoC writes at once, instead of waiting for all
+// Kt*Vt tiles and then writing 64 KB after the last token. The CB memory is read by the NoC asynchronously, so a group
+// is popped only after the token's single write barrier; state_out holds kv x 2 tiles, so the compute can pack the
+// next token meanwhile.
+//
 // Per-token state is written TOKEN-MAJOR: slab (t*BH + h), i.e. the [BH*T,K,V] buffer reads as
 // [T,B,HV,K,V]. Head-major would scatter token t's heads at stride T, so the host had to untilize
 // the whole state tensor, permute it and re-tilize -- per layer, per call. Token-major already IS
@@ -45,29 +51,48 @@ void kernel_main() {
     const auto st_acc = TensorAccessor(st_a, st_addr, page_tb);
 
     constexpr uint32_t kv = Kt * Vt;
+    constexpr uint32_t group = Vt;  // state tiles per wait: one i row of the compute's (i, j) pack order
 
     Noc noc;
     CircularBuffer cbout(cb::out16);
     CircularBuffer cbst(cb::state_out);
+    auto o_src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
+    auto st_src = use<CircularBuffer::AddrSelector::READ_PTR>(cbst);
 
-    // n tiles of `tile_bytes` each from the CB front, one per page starting at page `base` (page offset 0).
-    auto write_from = [&](CircularBuffer& cbuf, const auto& acc, uint32_t tile_bytes, uint32_t base, uint32_t n) {
-        cbuf.wait_front(n);
-        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbuf);
-        for (uint32_t i = 0; i < n; i++) {
-            noc.async_write(src, acc, tile_bytes, {.offset_bytes = i * tile_bytes}, {.page_id = base + i});
+    // Token t's o tiles: wait for all Vt (the vector pass pushes them together), issue the writes.
+    auto issue_o = [&](uint32_t t) {
+        cbout.wait_front(Vt);
+        for (uint32_t j = 0; j < Vt; j++) {
+            noc.async_write(o_src, o_acc, o_tb, {.offset_bytes = j * o_tb}, {.page_id = (h * T + t) * Vt + j});
         }
-        noc.async_write_barrier();
-        cbuf.pop_front(n);
+    };
+    // One state: kv tiles into pages base_page.., issued group by group as they become visible (cumulative waits; the
+    // read pointer does not move until the pop after the barrier).
+    auto issue_state = [&](uint32_t base_page) {
+        for (uint32_t g0 = 0; g0 < kv; g0 += group) {
+            const uint32_t n = (kv - g0 < group) ? (kv - g0) : group;
+            cbst.wait_front(g0 + n);
+            for (uint32_t i = 0; i < n; i++) {
+                noc.async_write(
+                    st_src, st_acc, page_tb, {.offset_bytes = (g0 + i) * page_tb}, {.page_id = base_page + g0 + i});
+            }
+        }
     };
 
     for (uint32_t t = 0; t < T; t++) {
-        write_from(cbout, o_acc, o_tb, (h * T + t) * Vt, Vt);  // o stays head-major
+        issue_o(t);  // o stays head-major
         if constexpr (per_token) {
-            write_from(cbst, st_acc, page_tb, (t * BH + h) * kv, kv);  // state is token-major
+            issue_state((t * BH + h) * kv);  // state is token-major
+        }
+        noc.async_write_barrier();
+        cbout.pop_front(Vt);
+        if constexpr (per_token) {
+            cbst.pop_front(kv);
         }
     }
     if constexpr (!per_token) {
-        write_from(cbst, st_acc, page_tb, h * kv, kv);  // final state only
+        issue_state(h * kv);  // final state only
+        noc.async_write_barrier();
+        cbst.pop_front(kv);
     }
 }
