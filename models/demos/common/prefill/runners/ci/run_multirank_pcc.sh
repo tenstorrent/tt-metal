@@ -265,6 +265,8 @@ PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
 TIMING_DIR="${MR_DIR}/timing"
 PRODUCER_LOG="${MR_DIR}/producer.log"
+# Written by the rank-crash watchdog: the rank logs that showed a traceback.
+CRASH_FLAG="${MR_DIR}/rank_crashed"
 mkdir -p "${TIMING_DIR}"
 
 SUMMARY_DONE=0
@@ -280,6 +282,9 @@ emit_summary() {
 }
 
 cleanup() {
+  if [ -n "${WATCHDOG_PID:-}" ]; then
+    kill "${WATCHDOG_PID}" 2>/dev/null || true
+  fi
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     kill -- "-${RUNNER_PID}" 2>/dev/null || true
     timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
@@ -300,9 +305,20 @@ cleanup() {
       || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
   fi
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}" "${CRASH_FLAG}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
+  # A failed request leaves the Inspector's dump (written on a dispatch timeout) on each host's
+  # local disk; pull it onto the shared evidence dir so the upload carries it.
+  if [ -n "${RUNNER_PID:-}" ] && [ "${PROD_RC:-1}" != 0 ]; then
+    IFS=, read -r -a INSPECT_HOSTS <<< "${RESOLVED_HOSTS}"
+    timeout 120 "${MPIRUN}" -np "${#INSPECT_HOSTS[@]}" --host "$(printf '%s:1,' "${INSPECT_HOSTS[@]}" | sed 's/,$//')" \
+      --map-by slot --bind-to none --allow-run-as-root \
+      bash -lc "src='${TT_METAL_HOME}/generated/inspector'; \
+        [ -d \"\${src}\" ] || exit 0; \
+        dst='${EVIDENCE_DIR}/inspector/'\$(hostname); mkdir -p \"\${dst}\" && cp -r \"\${src}/.\" \"\${dst}/\"" \
+      || echo "inspector collection failed (non-fatal)"
+  fi
   if [ -d "${RANKLOGS}" ]; then
     echo "==================== ranklog tails ===================="
     find "${RANKLOGS}" -type f | sort | while read -r f; do
@@ -437,6 +453,32 @@ setsid python3 "${TTRUN_PY}" \
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
 
+# A rank that dies leaves its peers blocked on it: mpirun waits for every rank, and a rank whose
+# device timed out can hang in teardown and never exit (run 40947298596 sat two hours after rank 1's
+# dispatch timeout until the job timeout killed the container, so the EXIT trap never copied the
+# rank logs). On the first traceback in any rank's stderr, give the other ranks a grace period to
+# write theirs, then stop both launches; the script then fails through the EXIT trap as usual.
+RANK_CRASH_GRACE_SECS="${RANK_CRASH_GRACE_SECS:-60}"
+(
+  while kill -0 "${RUNNER_PID}" 2>/dev/null; do
+    CRASHED=$(find "${RANKLOGS}" -type f \( -name stderr -o -name '*.err' \) \
+      -exec grep -l -F "Traceback (most recent call last)" {} + 2>/dev/null || true)
+    if [ -n "${CRASHED}" ]; then
+      printf '%s\n' "${CRASHED}" > "${CRASH_FLAG}"
+      echo "a rank crashed: ${CRASHED//$'\n'/ }; stopping all ranks in ${RANK_CRASH_GRACE_SECS}s" >&2
+      sleep "${RANK_CRASH_GRACE_SECS}"
+      kill -- "-${RUNNER_PID}" 2>/dev/null || true
+      # The producer may not have launched yet; keep stopping it until the EXIT trap stops us.
+      while :; do
+        pkill -f -- "--output-filename ${RANKLOGS}/producer" 2>/dev/null || true
+        sleep 10
+      done
+    fi
+    sleep 10
+  done
+) &
+WATCHDOG_PID=$!
+
 # Bounds mesh bringup + weight load + warmup compile, not the chunk loop -- the table is published
 # once the runner starts serving. Scales with model depth, so it is sized for the deepest model on
 # the rig: Kimi-K3 at 93 layers over 4 ranks measured 42.6 min from step start to _serve_request
@@ -448,12 +490,11 @@ TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
 WAITED=0
 while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
   [ -f "${TABLE_PATH}" ] && break
-  kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
-  if [ -n "${VARIANT}" ] && [ $((WAITED % 60)) -eq 0 ] && [ "${WAITED}" -gt 0 ]; then
-    CRASHED=$(find "${RANKLOGS}" -type f -name '*.err' 2>/dev/null \
-      -exec grep -l -F "Traceback (most recent call last)" {} + 2>/dev/null || true)
-    [ -z "${CRASHED}" ] || { echo "a rank crashed ${WAITED}s in, before the KV table was published: ${CRASHED}"; exit 1; }
-  fi
+  kill -0 "${RUNNER_PID}" 2>/dev/null || {
+    echo "runner exited before publishing the KV table"
+    [ -f "${CRASH_FLAG}" ] && echo "a rank crashed: $(tr '\n' ' ' < "${CRASH_FLAG}")"
+    wait "${RUNNER_PID}"; exit 1;
+  }
   sleep 5
   WAITED=$((WAITED + 5))
 done
@@ -505,6 +546,10 @@ PY
     bash -lc "cd '${TT_METAL_HOME}'; export PYTHONPATH='${TT_METAL_HOME}'; exec python3 '${CHECK_PY}' '${TABLE_PATH}'"
 fi
 
+if [ -f "${CRASH_FLAG}" ]; then
+  echo "a rank crashed before the producer launched; tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
+  exit 1
+fi
 set +e
 "${MPIRUN}" \
   --host "${HOSTS}" "${PRODUCER_PLACEMENT[@]}" --bind-to none --tag-output --allow-run-as-root \
@@ -532,6 +577,11 @@ set +e
     exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
+
+if [ "${PROD_RC}" -ne 0 ] && [ -f "${CRASH_FLAG}" ]; then
+  echo "stopped after a rank crashed (producer rc=${PROD_RC}); tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
+  exit 1
+fi
 
 if [ "${DFLASH}" = 1 ] && [ "${PROD_RC}" -eq 0 ] && ! grep -q "min_dflash_pcc=" "${PRODUCER_LOG}"; then
   echo "no rank reported a drafter KV PCC: the dflash caches were never checked" >&2
