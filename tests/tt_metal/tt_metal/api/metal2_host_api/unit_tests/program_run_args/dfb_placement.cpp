@@ -16,15 +16,6 @@
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
 namespace tt::tt_metal::experimental {
-namespace test_helpers {
-
-static uint32_t TensixIndex(const Program& program) {
-    return MetalContext::instance(program.impl().get_context_id())
-        .hal()
-        .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-}
-
-}  // namespace test_helpers
 namespace {
 
 template <typename Arch>
@@ -37,19 +28,20 @@ using Architectures = ::testing::
     Types<std::integral_constant<tt::ARCH, tt::ARCH::WORMHOLE_B0>, std::integral_constant<tt::ARCH, tt::ARCH::QUASAR>>;
 TYPED_TEST_SUITE(DFBPlacementRunArgsTest, Architectures);
 
-TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementResizePreservesNodes) {
-    // Increasing the DFB entry count preserves its disjoint reservation nodes.
+TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementResizeReservesLargerRegion) {
+    // Growing a DFB moves the next allocation beyond its new size on the selected node.
     distributed::MeshDevice& fixture_device = this->fixture_device();
-    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value);
-    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
+    auto spec = test_helpers::MakeDFBPlacementSpec(TypeParam::value, 2);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
     auto program = MakeProgramFromSpec(fixture_device, spec);
-    ProgramRunArgs args;
-    args.dfb_run_overrides = {{.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8}};
+    ProgramRunArgs args{.dfb_run_overrides = {{.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8}}};
     SetProgramRunArgs(program, args);
     program.impl().compile_and_allocate(&fixture_device, false);
-    const auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
-    EXPECT_EQ(dfb->core_ranges, CoreRangeSet(CoreRange({2, 0})));
-    EXPECT_EQ(dfb->config.num_entries, 8u);
+    const auto first = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    const auto next = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_1"));
+    EXPECT_GE(next->uniform_alloc_addr(), first->uniform_alloc_addr() + 8 * spec.dataflow_buffers[0].entry_size);
 }
 
 TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementRepeatedPreparationKeepsExcludedMaskClear) {
@@ -64,7 +56,7 @@ TYPED_TEST(DFBPlacementRunArgsTest, CPU_DFBPlacementRepeatedPreparationKeepsExcl
         program.impl().compile_and_allocate(&fixture_device, false);
         test_helpers::FinalizeMockDFBConfig(program);
     }
-    const auto* group = program.impl().kernels_on_core({1, 0}, test_helpers::TensixIndex(program));
+    const auto* group = program.impl().kernels_on_core({1, 0}, test_helpers::TensixIndexForTest(program));
     EXPECT_EQ(group->launch_msg.view().kernel_config().local_cb_mask(), 0u);
 }
 

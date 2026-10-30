@@ -32,6 +32,26 @@ inline ProgramSpec MakeDFBPlacementSpec(tt::ARCH arch, uint32_t count = 1) {
     return spec;
 }
 
+inline ProgramSpec MakeDisjointDFBPlacementsForTest(tt::ARCH arch) {
+    auto spec = MakeDFBPlacementSpec(arch, 2);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    return spec;
+}
+
+inline ProgramSpec MakeOverlappingDFBPlacementsForTest() {
+    auto spec = MakeDFBPlacementSpec(tt::ARCH::WORMHOLE_B0, 3);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {3, 0});
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
+    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}, {3, 0}));
+    spec.dataflow_buffers[2].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}, {2, 0}));
+    spec.dataflow_buffers[0].entry_size = 128;
+    spec.dataflow_buffers[1].entry_size = 384;
+    spec.dataflow_buffers[2].entry_size = 64;
+    return spec;
+}
+
 // Create two DFBs whose endpoint pairs run on separate nodes.
 inline ProgramSpec MakeSeparateDFBEndpointPairs(tt::ARCH arch) {
     auto spec = MakeDFBPlacementSpec(arch);
@@ -56,6 +76,12 @@ inline ProgramSpec MakeDFBWithTwoGen1Producers() {
     spec.kernels.push_back(second);
     spec.work_units[0].kernels.push_back(KernelSpecName{"second"});
     return spec;
+}
+
+inline uint32_t TensixIndexForTest(const Program& program) {
+    return MetalContext::instance(program.impl().get_context_id())
+        .hal()
+        .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 }
 
 // Finalize DFB configuration sizes and launch masks without requiring mock kernel binaries.

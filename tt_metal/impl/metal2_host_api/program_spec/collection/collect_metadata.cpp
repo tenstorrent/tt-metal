@@ -194,7 +194,7 @@ void DeriveNodeSets(const ProgramSpec& spec, CollectedSpecData& collected) {
     // Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.advanced_options.override_placement) {
-            collected.dfb_node_set[dfb.unique_id] = *dfb.advanced_options.override_placement;
+            collected.dfb_node_set[dfb.unique_id] = dfb.advanced_options.override_placement->merge_ranges();
             continue;
         }
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);

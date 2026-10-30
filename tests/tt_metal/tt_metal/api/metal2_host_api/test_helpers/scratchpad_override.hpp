@@ -5,6 +5,8 @@
 #pragma once
 
 #include <gtest/gtest.h>
+#include <numeric>
+#include <vector>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -16,14 +18,30 @@
 
 namespace tt::tt_metal::experimental::test_helpers {
 
-inline void CheckScratchpadPlacementOverride(distributed::MeshDevice& device, bool fast_dispatch) {
-    if (device.arch() != tt::ARCH::WORMHOLE_B0 && device.arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Requires Wormhole or Blackhole";
+inline bool SupportsScratchpadOverrideTest(const distributed::MeshDevice& device) {
+    return (device.arch() == tt::ARCH::WORMHOLE_B0 || device.arch() == tt::ARCH::BLACKHOLE) &&
+           device.compute_with_storage_grid_size().x >= 4;
+}
+
+template <typename DispatchFixture>
+class ScratchpadPlacementFixture : public DispatchFixture {
+protected:
+    distributed::MeshDevice& fixture_device() { return *this->devices_.at(0); }
+
+    void SetUp() override {
+        DispatchFixture::SetUp();
+        if (this->IsSkipped()) {
+            return;
+        }
+        if (!SupportsScratchpadOverrideTest(fixture_device())) {
+            GTEST_SKIP() << "Requires Gen1 hardware and four columns";
+        }
     }
-    if (device.compute_with_storage_grid_size().x < 4) {
-        GTEST_SKIP() << "Requires four worker columns";
-    }
-    constexpr uint32_t report_addr = 100 * 1024;
+};
+
+inline constexpr uint32_t scratchpad_report_address = 100 * 1024;
+
+inline ProgramSpec MakeGuardedScratchpadSpecForTest() {
     auto a = MakeMinimalGen1DMKernel("a");
     a.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
@@ -46,7 +64,7 @@ void kernel_main() {
     a.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
     auto b = a;
     b.unique_id = KernelSpecName{"b"};
-    ProgramSpec spec{
+    return ProgramSpec{
         .kernels = {a, b},
         .scratchpads = {ScratchpadSpec{
             .unique_id = ScratchpadSpecName{"pad"},
@@ -57,63 +75,74 @@ void kernel_main() {
         .work_units = {
             MakeMinimalWorkUnit("a", NodeRange({0, 0}, {1, 0}), {"a"}),
             MakeMinimalWorkUnit("b", NodeCoord{2, 0}, {"b"})}};
-    distributed::MeshWorkload workload;
-    const distributed::MeshCoordinateRange devices(device.shape());
-    workload.add_program(devices, MakeProgramFromSpec(device, spec));
-    auto& program = workload.get_programs().at(devices);
-    const uint32_t base =
-        program.impl().get_kernel_by_spec_name("a")->scratchpad_binding_handles()[0].allocated_address;
-    ASSERT_NE(base, 0u);
+}
 
-    for (uint32_t repeat = 0; repeat < 2; ++repeat) {
-        const uint32_t pattern = 0xC0DE0000u + repeat * 256;
-        ProgramRunArgs params;
-        ProgramRunArgs::KernelRunArgs args_a{.kernel = KernelSpecName{"a"}};
-        for (uint32_t x = 0; x < 2; ++x) {
-            AddRuntimeArgsForNode(
-                args_a.runtime_arg_values,
-                NodeCoord{x, 0},
-                {{"report_addr", report_addr}, {"enabled", x == 0}, {"pattern", pattern}});
-        }
-        params.kernel_run_args = {
-            args_a,
-            ProgramRunArgs::KernelRunArgs{
-                .kernel = KernelSpecName{"b"},
-                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-                    {2, 0}, {{"report_addr", report_addr}, {"enabled", 1}, {"pattern", pattern}})}};
-        SetProgramRunArgs(program, params);
-        std::vector<uint32_t> sentinel(16, 0xDEADBEEFu);
-        // The extra reserved node has no kernel and must remain untouched.
-        slow_dispatch::WriteToL1(device, {3, 0}, base, sentinel);
-        std::vector<uint32_t> zero_report(2, 0);
-        for (uint32_t x = 0; x < 3; ++x) {
-            slow_dispatch::WriteToL1(device, {x, 0}, report_addr, zero_report);
-        }
-        if (fast_dispatch) {
-            distributed::EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
-        } else {
-            // LaunchProgram transfers ownership into its returned workload.
-            auto completed = LaunchProgram(device, std::move(program));
-            program = std::move(completed.get_programs().at(devices));
-        }
-        for (uint32_t x = 0; x < 3; ++x) {
-            std::vector<uint32_t> report;
-            slow_dispatch::ReadFromL1(device, {x, 0}, report_addr, 8, report);
-            ASSERT_EQ(report.size(), 2u);
-            EXPECT_EQ(report[1], pattern);
-            EXPECT_EQ(report[0], x == 1 ? 0u : base);
-            if (x != 1) {
-                std::vector<uint32_t> contents;
-                slow_dispatch::ReadFromL1(device, {x, 0}, base, 64, contents);
-                ASSERT_EQ(contents.size(), 16u);
-                for (uint32_t i = 0; i < 16; ++i) {
-                    EXPECT_EQ(contents[i], pattern + i);
-                }
-            }
-        }
-        std::vector<uint32_t> untouched;
-        slow_dispatch::ReadFromL1(device, {3, 0}, base, 64, untouched);
-        EXPECT_EQ(untouched, sentinel);
+inline ProgramRunArgs MakeGuardedScratchpadArgsForTest(uint32_t pattern) {
+    ProgramRunArgs::KernelRunArgs a{.kernel = KernelSpecName{"a"}};
+    for (uint32_t x = 0; x < 2; ++x) {
+        AddRuntimeArgsForNode(
+            a.runtime_arg_values,
+            {x, 0},
+            {{"report_addr", scratchpad_report_address}, {"enabled", x == 0}, {"pattern", pattern}});
+    }
+    ProgramRunArgs args;
+    args.kernel_run_args = {
+        a,
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = KernelSpecName{"b"},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                {2, 0}, {{"report_addr", scratchpad_report_address}, {"enabled", 1}, {"pattern", pattern}})}};
+    return args;
+}
+
+inline uint32_t ScratchpadAddressForTest(const Program& program) {
+    return program.impl().get_kernel_by_spec_name("a")->scratchpad_binding_handles()[0].allocated_address;
+}
+
+inline void InitializeScratchpadReportsForTest(distributed::MeshDevice& device, const Program& program) {
+    std::vector<uint32_t> zero_report(2, 0);
+    for (uint32_t x = 0; x < 3; ++x) {
+        slow_dispatch::WriteToL1(device, {x, 0}, scratchpad_report_address, zero_report);
+    }
+    // The extra reserved node has no kernel and must remain untouched.
+    std::vector<uint32_t> sentinel(16, 0xDEADBEEFu);
+    slow_dispatch::WriteToL1(device, {3, 0}, ScratchpadAddressForTest(program), sentinel);
+}
+
+inline std::vector<std::vector<uint32_t>> ReadScratchpadResultsForTest(
+    distributed::MeshDevice& device, const Program& program) {
+    std::vector<std::vector<uint32_t>> results(6);
+    for (uint32_t x = 0; x < 3; ++x) {
+        slow_dispatch::ReadFromL1(device, {x, 0}, scratchpad_report_address, 8, results[x]);
+    }
+    const auto address = ScratchpadAddressForTest(program);
+    slow_dispatch::ReadFromL1(device, {0, 0}, address, 64, results[3]);
+    slow_dispatch::ReadFromL1(device, {2, 0}, address, 64, results[4]);
+    slow_dispatch::ReadFromL1(device, {3, 0}, address, 64, results[5]);
+    return results;
+}
+
+inline std::vector<std::vector<uint32_t>> ExpectedScratchpadResultsForTest(uint32_t address, uint32_t pattern) {
+    std::vector<uint32_t> contents(16);
+    std::iota(contents.begin(), contents.end(), pattern);
+    return {
+        {address, pattern},
+        {0, pattern},
+        {address, pattern},
+        contents,
+        contents,
+        std::vector<uint32_t>(16, 0xDEADBEEFu)};
+}
+
+inline void EnqueueScratchpadOverrideForTest(
+    distributed::MeshDevice& device, distributed::MeshWorkload& workload, bool fast_dispatch) {
+    if (fast_dispatch) {
+        distributed::EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
+    } else {
+        auto& [range, program] = *workload.get_programs().begin();
+        // LaunchProgram transfers ownership into its returned workload.
+        auto completed = LaunchProgram(device, std::move(program));
+        program = std::move(completed.get_programs().at(range));
     }
 }
 

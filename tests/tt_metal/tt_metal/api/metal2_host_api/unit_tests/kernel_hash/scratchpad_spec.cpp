@@ -89,13 +89,15 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadLlkFormatAffectsKernelHash) {
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideDoesNotChangeKernelHash) {
+    // Changing only scratchpad placement preserves the kernel hash.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
     auto spec = MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
     spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
-    auto original = MakeProgramFromSpec(*mesh_device_, spec);
+    auto original = MakeProgramFromSpec(fixture_device, spec);
     const auto hash = original.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
-    auto overridden = MakeProgramFromSpec(*mesh_device_, spec);
+    auto overridden = MakeProgramFromSpec(fixture_device, spec);
     EXPECT_EQ(hash, overridden.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
 }
 

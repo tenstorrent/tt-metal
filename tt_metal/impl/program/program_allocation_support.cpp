@@ -59,7 +59,7 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
         if (region.l1_regions.empty()) {
             region.l1_regions.emplace_back(base_address, base_address);
         } else {
-            // TODO(#62451): The following assertion assumes a bump-only allocator. A DFB recorded into an intersecting
+            // TODO(#62451): The following assertion assumes a bump-only allocator. A CB recorded into an intersecting
             // CoreRange with uneven persistent L1 can sit below that range's base. Commented out for now.
             // TT_ASSERT(
             //     base_address <= region.l1_regions.front().first,
@@ -74,7 +74,7 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
     metadata.empty_cores_high_water_mark = persistent_l1.high_water_mark(CoreRangeSet());
 }
 
-DeviceAddr allocate_dfb(
+DeviceAddr allocate_circular_buffer(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
     if (cores.empty()) {
         return metadata.empty_cores_high_water_mark;
@@ -119,7 +119,7 @@ DeviceAddr allocate_dfb(
     return computed_addr;
 }
 
-DeviceAddr allocate_scratchpad(
+DeviceAddr allocate_program_resource(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
     if (cores.empty()) {
         return metadata.empty_cores_high_water_mark;
