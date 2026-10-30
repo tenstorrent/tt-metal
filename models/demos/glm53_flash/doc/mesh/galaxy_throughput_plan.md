@@ -98,6 +98,21 @@ wave than under SP (policy (c) keeps SP for it); idle rows cost wasted expert wo
 | APC on (both switches) at 32 slots | async_r3 (async + APC 2 host entries + resident, plugin 350dac6): 4/4 hits (TTFT 30-39 s vs 69-122 s), the repeated image served, bench 14.3 tok/s/u; stage b's repeat determinism = the plain-path affinity (fixed) -> async_r4 then the catalog flips (both switches + async) | the multi-turn hit served from the snapshot, the bench within noise of APC off, stage e twice (the image hit) |
 | 32 users x 1 M | the profile admits it (32 slots, pool 33.5 M tokens); the capstone run (~4.5 h of prefill) needs the queue runner restarted with a 7 h stage budget and `SMOKE_CLIENT_TIMEOUT_S=20000` | 32 needles found under APC + resident; TTFT per arrival and the decode at 32 x ~1 M booked |
 
+## 2c. A/B method for decode-path changes (user rule 2026-10-30 01:40)
+
+Async scheduling, the resident chain, speculative decode and the decode glue are A/B'd on short-ISL bench points at
+batch 32 (the 1 M profile) and batch 128 (the 128 K profile, 192 slots), never on the 1 M prompt (that one is a
+completeness check: `needle1m_r6`). One served smoke per arm, bench stage only, minimal warm-ups (the prefix-start
+walks, the multimodal warm-up and the wave ladder beyond the 256 trace are not needed for 128-token prompts):
+
+    served_8x4_ab_<arm>|PROFILE=1m STAGES=d BENCH_POINTS=128:128:32 SMOKE_EXTRA_VLLM_ARGS=max-num-seqs=32;<async-scheduling=true | no-async-scheduling=true> SMOKE_EXTRA_ENV=GLM53_RESIDENT_DECODE=1;GLM53_VLLM_PREFIX_CACHING=1;GLM53_VLLM_APC_SNAPSHOTS=2;GLM53_VLLM_WARMUP_PREFIX_STARTS=0;GLM53_VLLM_WARMUP_MM=0;GLM53_VLLM_WAVE_TRACE_LENGTHS=256|.../test_serve_smoke_glm53.py
+    served_8x4_ab_<arm>_128|PROFILE=128k STAGES=d BENCH_POINTS=128:128:128 SMOKE_EXTRA_VLLM_ARGS=max-num-seqs=192;<...> SMOKE_EXTRA_ENV=GLM53_RESIDENT_DECODE=1;GLM53_VLLM_WARMUP_PREFIX_STARTS=0;GLM53_VLLM_WARMUP_MM=0;GLM53_VLLM_WAVE_TRACE_LENGTHS=256|...
+
+The model build (~8.5 min from the tensorbin cache) is the floor of every boot; the warm-ups above take ~10 min on
+the full profile and ~3 min minimal (to be measured by the first pair). The verdict of an arm = the bench's tok/s per
+user and TTFT next to the adapter's perf line (device step, chain count). Spec decode adds one long-ISL point at
+batch >= 8 when the acceptance depends on the context, still never the 1 M point.
+
 ## 3. Workstream B: the decode step to the roofline floor
 
 `tt/roofline.py` (`tests/test_roofline_host.py`) models the step from measured per-op rows (refreshed 2026-10-29 from the per-layer decode profiles today_8x4_dsa3 / kda4: the stream expert op 264 us, the gather glue 175 + 67 us, the padded reduce-scatter 269 us, the mHC pre-block 82 us; model 64.9 ms vs the 61.5 ms e2e step); floor 29.0 ms at 4
