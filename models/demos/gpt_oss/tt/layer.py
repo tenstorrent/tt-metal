@@ -55,6 +55,7 @@ class DecoderLayer:
             mesh_config=mesh_config,
             use_throughput_experts=use_throughput_experts,
             tokens_per_device=tokens_per_device,
+            layer_idx=layer_idx,
         )
 
         self.attention_type = hf_config.layer_types[layer_idx]

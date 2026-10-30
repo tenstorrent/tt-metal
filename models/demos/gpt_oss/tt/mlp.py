@@ -4,6 +4,10 @@
 """
 MoE MLP: Router + Experts with minimal abstraction
 """
+import os
+
+import torch
+
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
@@ -33,10 +37,25 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
+        layer_idx=None,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
         experts_state_dict = substate(state_dict, "experts")
+        # GPT_OSS_EXPERTS_GPTQ_DIR: a directory of layer_<L>.pt holding this layer's experts already rounded onto the
+        # bfloat4_b grid by GPTQ: gate_up_proj [E, H, 2I] (gate/up interleaved), gate_up_proj_bias, down_proj
+        # [E, I, H], down_proj_bias, with the intermediate channels reordered so each 16-wide bfloat4_b block holds
+        # similar-scale channels (an exact rewrite: gate, up, their bias and the down rows move together). bfloat4_b
+        # keeps these values exactly, so prefill and decode run the same bytes at the same speed with less rounding
+        # error. The experts get their own cache names, so an original-weight cache is never read for them.
+        experts_cache_name = "experts"
+        gptq_dir = os.environ.get("GPT_OSS_EXPERTS_GPTQ_DIR", "").strip()
+        if gptq_dir:
+            assert layer_idx is not None, "GPT_OSS_EXPERTS_GPTQ_DIR needs the layer index"
+            experts_cache_name = "experts_gptq_" + os.path.basename(gptq_dir.rstrip("/"))
+            if experts_state_dict:
+                rounded = torch.load(os.path.join(gptq_dir, f"layer_{int(layer_idx)}.pt"))
+                experts_state_dict = {k: v.float() for k, v in rounded.items()}
 
         # Initialize components with mesh_config
         self.router = TopKRouter(
@@ -73,7 +92,7 @@ class MLP:
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
                     num_links=ccl_manager.num_links,
-                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 )
 
             # DeepSeek prefill config: always created when throughput experts are
@@ -113,7 +132,7 @@ class MLP:
                     config=throughput_expert_config,
                     state_dict=permuted_sd,
                     weight_dtype=ttnn.bfloat4_b,
-                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts_ds_perm"),
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name + "_ds_perm"),
                 )
                 prefill_config.permuted_weights = deepseek_permuted_weights
 
@@ -125,7 +144,7 @@ class MLP:
                 weight_dtype=ttnn.bfloat4_b,
                 dispatch_cluster_axis=0,
                 decode_memory_config=ttnn.L1_MEMORY_CONFIG,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 fused_config=fused_config,
@@ -153,7 +172,7 @@ class MLP:
                 mesh_config=mesh_config,
                 program_config=program_config,
                 weight_dtype=ttnn.bfloat4_b,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, experts_cache_name),
             )
 
     def __call__(self, hidden_states, is_decode):
