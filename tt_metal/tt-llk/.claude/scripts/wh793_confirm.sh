@@ -9,7 +9,10 @@
 # Run it on a reserved Wormhole board. Put --work somewhere local: the container's home
 # is near full, so /tmp is the right place.
 #
-# Usage: wh793_confirm.sh [--work DIR] [--jobs N] [--step all|trees|nodes|measure|pack]
+# Usage: wh793_confirm.sh [--work DIR] [--jobs N]
+#          [--step all|trees|nodes|measure|probe|elfs|pack]
+#   probe: PROBE_N=<n>   tie the first n test ids to the configs they measure
+#   elfs:  ELF_NODE=<id> build that one test with both toolchains and diff the disassembly
 set -uo pipefail
 
 W=/tmp/s2-793
@@ -136,6 +139,70 @@ measure() {
     done
 }
 
+# --- one node at a time, to learn which test id carries which config -------------
+# The perf CSV names every sweep parameter but not the test that produced it. Measuring
+# one node alone ties the two together, so a config the five-position run confirmed can be
+# traced back to a test id and then to its ELF.
+probe() {
+    local n=${PROBE_N:-40} llk=$W/t_a/tt_metal/tt-llk i=0
+    : > "$W/probe.tsv"
+    while IFS= read -r node && [ "$i" -lt "$n" ]; do
+        i=$((i+1))
+        rm -rf "$llk/perf_data/runs/probe-$i"
+        ( cd "$llk/tests/python_tests" && PATH="$W/venv/bin:$PATH" CHIP_ARCH=wormhole \
+            TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_RUN_TYPES=L1_TO_L1 PERF_RUN_TAG="probe-$i" \
+            RUNNER_TEMP="$W/probe-tmp" \
+            pytest -q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=120 "$node" \
+        ) > /dev/null 2>&1
+        local csv=$llk/perf_data/runs/probe-$i/perf_math_matmul/perf_math_matmul.csv
+        if [ -f "$csv" ]; then
+            [ -s "$W/probe.header" ] || head -1 "$csv" > "$W/probe.header"
+            awk -v id="$node" 'NR>1 {print id "\t" $0}' "$csv" >> "$W/probe.tsv"
+        fi
+        rm -rf "$llk/perf_data/runs/probe-$i"
+    done < "$W/nodes.txt"
+    say "probed $i nodes, $(wc -l < "$W/probe.tsv") rows -> $W/probe.tsv"
+}
+
+# --- the ELFs of one test, from both toolchains ----------------------------------
+# Compiling a single node leaves exactly that test's kernels in the build root, so the
+# pair can be named without guessing which hash belongs to which config. Disassembly is
+# what gets compared: an ELF hash embeds the build path.
+elfs() {
+    local node=${ELF_NODE:?ELF_NODE must name a test id}
+    local out=$W/elfs; rm -rf "$out"; mkdir -p "$out"
+    for tag in a b; do
+        local llk=$W/t_$tag/tt_metal/tt-llk root=$W/elf-tmp-$tag
+        rm -rf "$root"; mkdir -p "$root"
+        say "compiling the node with tree $tag"
+        ( cd "$llk/tests/python_tests" && PATH="$W/venv/bin:$PATH" CHIP_ARCH=wormhole \
+            TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_RUN_TYPES=L1_TO_L1 RUNNER_TEMP="$root" \
+            pytest -q --override-ini=log_cli=false --compile-producer -m "perf and not accuracy" \
+            --timeout=120 "$node" ) > "$W/elf-$tag.log" 2>&1
+        local ver; ver=$(cat "$llk/tests/sfpi/sfpi.version")
+        local objdump; objdump=$(find "$llk/tests/sfpi" -name '*objdump' -type f | head -1)
+        local n=0 e
+        while IFS= read -r e; do
+            local name; name=${e#"$root"/}; name=${name//\//_}
+            cp "$e" "$out/${name%.elf}.sfpi-$ver.elf"
+            "$objdump" -d --no-show-raw-insn "$e" \
+              | sed -e '1,/Disassembly of section/d' -e 's/^[[:space:]]*[0-9a-f]*:[[:space:]]*//' \
+              > "$out/${name%.elf}.sfpi-$ver.asm"
+            n=$((n+1))
+        done < <(find "$root" -name '*.elf' | sort)
+        say "  tree $tag (sfpi $ver): $n ELF(s)"
+        find "$root" -name 'build.h' -exec cp {} "$out/build.sfpi-$ver.h" \; 2>/dev/null
+    done
+    ( cd "$out" && for f in *.sfpi-7.92.0.asm; do
+        b=${f%.sfpi-7.92.0.asm}
+        [ -f "$b.sfpi-7.93.0.asm" ] || continue
+        diff -u "$f" "$b.sfpi-7.93.0.asm" > "$b.diff" || true
+        echo "$b: $(grep -c '^[-+][^-+]' "$b.diff") changed instruction line(s)"
+      done )
+    echo "$node" > "$out/NODE.txt"
+    say "wrote $out"
+}
+
 pack() {
     rm -f "$W/results.tgz"
     ( cd "$W" && tar czf results.tgz \
@@ -149,6 +216,8 @@ mkdir -p "$W"
 case "$STEP" in
     trees)   trees ;;
     nodes)   venv && nodes ;;
+    probe)   probe ;;
+    elfs)    elfs ;;
     measure) measure ;;
     pack)    pack ;;
     all)     trees && venv && nodes && measure && pack ;;
