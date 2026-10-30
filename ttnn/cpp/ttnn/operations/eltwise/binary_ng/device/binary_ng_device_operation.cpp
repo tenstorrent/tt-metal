@@ -628,10 +628,14 @@ bool is_2d_l1_sharded(const MemoryConfig& config) {
 }
 
 // Reading one L1 shard layout and writing another in the same kernel returns a permuted or non-finite
-// result (#58467). The native path only aliases when the layouts match. Otherwise move the sharded
-// inputs to interleaved DRAM and write the requested output directly; that combination matches.
+// result (#58467). The native path only aliases when the layouts match. A mismatch moves the sharded
+// inputs to interleaved DRAM so the requested output layout is written directly. Native sharding is
+// also declined for other reasons, such as an uneven shard whose layout still matches the output;
+// those stay on the TensorAccessor path. Copying them would compile an extra program the caller did
+// not ask for.
 Tensor unshard_incompatible_l1_input(const Tensor& input, const MemoryConfig& output, bool native_path) {
-    if (native_path || !is_2d_l1_sharded(output) || !is_2d_l1_sharded(input.memory_config())) {
+    if (native_path || !is_2d_l1_sharded(output) || !is_2d_l1_sharded(input.memory_config()) ||
+        ttnn::operations::binary_ng::sharded_layout_matches(input.memory_config(), output)) {
         return input;
     }
     return ttnn::to_memory_config(input, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
