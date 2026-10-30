@@ -122,6 +122,10 @@ Results: batch 32 async ON 68.2 / 69.1 ms ITL (mean / median), TTFT 5.57 s; asyn
 (async +10 %; the remaining gap to the 48 ms device step is the blocking replay). `slot_mask_block_v1` (pass F of
 `tests/test_decode_packed_inputs_mesh.py`: `GLM53_DECODE_SLOT_MASK=1`, the interleave's model side) runs on the
 rows-4-5 block after the gate arm.
+Batch 128 (the 128 K profile, 192 slots) async ON: ITL 129.1 / 127.5 ms (P99 174), TTFT 18.65 s. The burst TTFT is
+uniform in both: one engine step prefills every arrival, and a traced wave replays the smallest captured per-row
+bucket (256 rows x 8 rows = 2048 padded tokens at the model's ~2 K tok/s prefill rate = ~1 s per wave, whether it
+carries 1 or 8 prompts); `ab_wave128_32` adds the 128-row bucket. The prefill rate itself is workstream C.
 
 ## 3. Workstream B: the decode step to the roofline floor
 
