@@ -141,6 +141,16 @@ nothing (`ab_slotmask_32_r2`: 59.4 ms); the 128-row wave bucket would cut the bu
 is wrong at 45 layers (`wave128_gate` FAIL: a wrong first token for the dump's prompt), so the default stays 256,512
 until the T=128 wave is fixed (the wave gate now captures 128 and 256).
 
+The async / replay A/B at 128 x 128 tokens (one served run per cell; ITL mean / median / P99 in ms, TTFT):
+
+| batch | async OFF, blocking replay | async ON, blocking replay | async ON, non-blocking replay |
+|---|---|---|---|
+| 32 (1 M profile, APC on) | 76.3 / 73.7 / - , 6.11 s | 68.2 / 69.1 / 75.7, 5.57 s | **59.5 / 60.0 / 66.2, 5.54 s** |
+| 128 (128 K profile, 192 slots) | 129.6 / 127.7 / 146.5, 19.9 s | 129.1 / 127.5 / 174.4, 18.65 s | **108.4 / 109.8 / 115.9, 18.54 s** |
+
+Async scheduling pays only once the model's submit returns before the device finishes (the non-blocking replay):
+with the blocking replay it hides the read alone, nothing at batch 128.
+
 ## 3. Workstream B: the decode step to the roofline floor
 
 `tt/roofline.py` (`tests/test_roofline_host.py`) models the step from measured per-op rows (refreshed 2026-10-29 from the per-layer decode profiles today_8x4_dsa3 / kda4: the stream expert op 264 us, the gather glue 175 + 67 us, the padded reduce-scatter 269 us, the mHC pre-block 82 us; model 64.9 ms vs the 61.5 ms e2e step); floor 29.0 ms at 4
