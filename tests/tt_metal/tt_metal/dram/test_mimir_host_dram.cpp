@@ -596,18 +596,18 @@ TEST(MimirHostDram, HostSideRejections) {
         make_guard(kTl1AliasGddrTag, 4),
         "GDDR at the TL1 offset untouched by the DRAM API write at the L1 tag"));
 
-    // A write of 6 bytes to an aligned address does not throw. The last word keeps its low bytes and the
-    // upper bytes read back as zero.
+    // A write of 6 bytes to an aligned address does not throw. The last word takes the 2 written bytes and keeps
+    // its other 2 bytes.
     const uint64_t partial_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t prefill_bytes = 3 * sizeof(uint32_t);
     const MimirDramAddressInfo prefill_info = mimir_dram_address(soc, kChipId, kView, partial_offset, prefill_bytes);
-    EXPECT_TRUE(mimir_host_dram_write(
+    ASSERT_TRUE(write_then_read_back(
         cluster,
         soc,
-        kChipId,
         kView,
         partial_offset,
-        make_pattern(MimirPattern::AllOnes, 3, prefill_info.flat_address, mimir_test_seed())));
+        make_pattern(MimirPattern::AllOnes, 3, prefill_info.flat_address, mimir_test_seed()),
+        "Prefill before the 6-byte write"));
 
     const std::vector<uint8_t> partial_bytes = {0x11, 0x12, 0x13, 0x14, 0x15, 0x16};
     const uint32_t partial_size = static_cast<uint32_t>(partial_bytes.size());
@@ -615,7 +615,7 @@ TEST(MimirHostDram, HostSideRejections) {
 
     std::vector<uint32_t> readback(3, 0);
     cluster.read_dram_vec(readback.data(), prefill_bytes, kChipId, kView, partial_offset);
-    const std::vector<uint32_t> expected_readback = {0x14131211u, 0x00001615u, 0xFFFFFFFFu};
+    const std::vector<uint32_t> expected_readback = {0x14131211u, 0xFFFF1615u, 0xFFFFFFFFu};
     EXPECT_TRUE(
         compare_words("6-byte write at an aligned DRAM address, readback of 12 bytes", expected_readback, readback));
 }
