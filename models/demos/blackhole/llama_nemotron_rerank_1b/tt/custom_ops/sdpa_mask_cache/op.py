@@ -355,13 +355,19 @@ def sdpa_mask_cache(
     scale=1.0,
     output_concat_heads=True,
     memory_config=None,
+    pair_index=None,
 ):
     """``ttnn.transformer.scaled_dot_product_attention`` for this model's masked call, with the mask cache.
 
     q [B, NQH, S, D] bf16 TILE, k / v [B, NKH, S, D] bf16 TILE (interleaved, L1 or DRAM); attn_mask [B, 1, S, S]
     bfp4 TILE in DRAM (added unscaled: scale must be 1); attn_mask_block_map [B, 1, S / q_chunk, S / k_chunk] int32
     ROW_MAJOR in DRAM. Returns [B, 1, S, NQH * D] (concatenated heads), bf16 TILE in ``memory_config`` (default DRAM).
-    Bit-identical to the stock op on the same inputs; raises on any configuration outside the one ported."""
+    Bit-identical to the stock op on the same inputs; raises on any configuration outside the one ported.
+
+    ``pair_index`` (optional, [B, 1, 1, S] int32 ROW_MAJOR in DRAM): the pair each token belongs to (0 = padding),
+    consistent with attn_mask (0 where query and key share a real pair, -inf elsewhere). The reader then writes
+    every mask tile whose queries and keys each lie in one pair in L1 and reads only the tiles that straddle a
+    pair boundary from attn_mask."""
     # ---- the configuration this port covers ----
     if is_causal:
         raise NotImplementedError("is_causal=True is not ported")
@@ -639,7 +645,7 @@ def sdpa_mask_cache(
             "q_in", "k_in", "v_in", "mask_in", "attention_sink", "identity_scale_in", "page_table", "col_identity",
             "chunk_start_idx_compute", "chunk_start_idx_writer", "recip_scratch", "out", "qk_im", "out_im_A",
             "out_im_B", "max_A", "max_B", "sum_A", "sum_B", "exp_max_diff", "cu_window_seqlens", "windowed_q_offset",
-            "windowed_cu_reader", "windowed_k_range", "mask_block_map", "kv_fwd_ctrl", "mask_cache",
+            "windowed_cu_reader", "windowed_k_range", "mask_block_map", "kv_fwd_ctrl", "mask_cache", "pair_row",
         ],
         INACTIVE,
     )  # fmt: skip
@@ -661,6 +667,15 @@ def sdpa_mask_cache(
             f"mask cache does not apply ({q_num_chunks}x{k_num_chunks} blocks, {mask_cache_bytes} B of mask per batch)"
         )
     cb["mask_cache"] = allocate_tile_cb(Sqt * Skt, mask_df)
+    if pair_index is not None:
+        if (
+            pair_index.dtype != ttnn.int32
+            or pair_index.layout != ttnn.ROW_MAJOR_LAYOUT
+            or list(pair_index.shape) != [B, 1, 1, Sk]
+            or pair_index.memory_config().buffer_type != ttnn.BufferType.DRAM
+        ):
+            raise ValueError(f"pair_index must be int32 ROW_MAJOR [{B}, 1, 1, {Sk}] in DRAM")
+        cb["pair_row"] = allocate_cb(int(pair_index.buffer_aligned_page_size()), 1, ttnn.int32)
     # setup_windowed_cbs (not windowed): fallback ids, and the block map's {k_lo, k_hi} ctrl CB.
     for name in ("cu_window_seqlens", "windowed_q_offset", "windowed_cu_reader", "windowed_k_range"):
         cb[name] = cb["q_in"]
@@ -686,9 +701,11 @@ def sdpa_mask_cache(
         for n in (
             "q_in", "k_in", "v_in", "mask_in", "attention_sink", "page_table", "chunk_start_idx_compute",
             "chunk_start_idx_writer", "windowed_cu_reader", "windowed_k_range", "mask_block_map", "kv_fwd_ctrl",
-            "mask_cache",
+            "mask_cache", "pair_row",
         )
     ]  # fmt: skip
+    # The pair index's accessor follows the reader's CB ids (cb_arg_offset + 14); the mask's stands in when absent.
+    reader_ct += _accessor(pair_index if pair_index is not None else attn_mask)
     writer_ct += [
         cb[n]
         for n in (
@@ -753,6 +770,8 @@ def sdpa_mask_cache(
         r += [g_start, g_count]
         r += [0, 0, 0, 0]  # windowed tail: cu_window buffer, eles, q token offset, q offset buffer
         r += [map_addr, block_map_stick_size]
+        if pair_index is not None:
+            r += [pair_index.buffer_address()]
         reader_rt.append((core, r))
         writer_rt.append((core, [out_addr, num_phases, 0, 0, write_offset, 0, 0, g_start, g_count, 0, 0, 0, 0]))
         compute_rt.append((core, [num_phases, 0, 0, 0, g_start, g_count]))
@@ -792,5 +811,6 @@ def sdpa_mask_cache(
         ),
     ]
     program = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
-    ttnn.generic_op([q, k, v, attn_mask, attn_mask_block_map, output], program)
+    io = [q, k, v, attn_mask, attn_mask_block_map] + ([pair_index] if pair_index is not None else [])
+    ttnn.generic_op(io + [output], program)
     return output

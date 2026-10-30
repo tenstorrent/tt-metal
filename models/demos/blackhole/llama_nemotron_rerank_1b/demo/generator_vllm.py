@@ -30,6 +30,7 @@ class NemotronRerankForScoring:
         model_name: str = MODEL_ID,
         vllm_config=None,
         warmup: bool = True,
+        config: RerankConfig = None,
         **kwargs,
     ):
         if vllm_config is not None and device is None:
@@ -40,7 +41,9 @@ class NemotronRerankForScoring:
         self.model_name = model_name
         self.max_seq_len = max_seq_len
         buckets = tuple(b for b in BATCH_BUCKETS if b <= max_batch_size) or (1,)
-        model = NemotronReranker(device, RerankConfig(), load_state_dict(model_name), default_cache_dir(model_name))
+        model = NemotronReranker(
+            device, config or RerankConfig(), load_state_dict(model_name), default_cache_dir(model_name)
+        )
         self.runner = TracedReranker(model, max_seq_len=max_seq_len, batch_buckets=buckets)
         if warmup:
             self.runner.warmup()

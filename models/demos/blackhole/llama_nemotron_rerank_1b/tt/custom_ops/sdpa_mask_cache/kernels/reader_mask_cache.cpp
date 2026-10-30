@@ -275,6 +275,19 @@ void kernel_main() {
     // Head-broadcast mask cache (see the program factory): Sqt x Skt tiles of the current batch's mask.
     constexpr uint32_t cb_id_mask_cache = get_compile_time_arg_val(cb_arg_offset + 12);
     constexpr bool use_mask_cache = cb_id_mask_cache != 0xFFFFFFFFu;
+    // Pair index (model-local): one row of Sk int32 per batch, the pair each token belongs to (0 = padding). With it,
+    // a mask tile whose 32 queries all belong to one pair and whose 32 keys all belong to one pair is written in L1
+    // (all zero when it is the same real pair, all -inf otherwise) instead of read from DRAM; only tiles that
+    // straddle a pair boundary are read. Scratch CB for the row; its accessor follows the CB ids.
+    constexpr uint32_t cb_id_pair_row = get_compile_time_arg_val(cb_arg_offset + 13);
+    constexpr bool use_pair_tiles = cb_id_pair_row != 0xFFFFFFFFu;
+    constexpr auto pair_args = TensorAccessorArgs<cb_arg_offset + 14>();
+    static_assert(!use_pair_tiles || (use_mask_cache && Skt <= 64), "pair tiles need the mask cache and Skt <= 64");
+    // Last runtime arg (after the feature tails parsed above).
+    uint32_t pair_addr = 0;
+    if constexpr (use_pair_tiles) {
+        pair_addr = get_arg_val<uint32_t>(argidx++);
+    }
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -293,6 +306,10 @@ void kernel_main() {
     const auto k_reader = TensorAccessor(k_args, k_addr);
     const auto v_reader = TensorAccessor(v_args, v_addr);
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
+    const auto pair_reader = TensorAccessor(pair_args, pair_addr);
+    // Per 32-token tile of the current batch: the pair all its tokens belong to, or kMixedTile.
+    constexpr uint32_t kMixedTile = 0xFFFFFFFFu;
+    uint32_t tile_pair[use_pair_tiles ? Skt : 1];
     const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
     const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr);
 
@@ -854,6 +871,29 @@ void kernel_main() {
                         if (cache_nb != mask_cache_nb) {
                             mask_cache_nb = cache_nb;
                             mask_cache_valid = 0;
+                            if constexpr (use_pair_tiles) {
+                                const uint32_t row_l1 = CircularBuffer(cb_id_pair_row).get_write_ptr();
+                                noc.async_read(
+                                    pair_reader,
+                                    CoreLocalMem<uint32_t>(row_l1),
+                                    Skt * 32 * 4,
+                                    {.page_id = cache_nb},
+                                    {});
+                                noc.async_read_barrier();
+                                volatile tt_l1_ptr uint32_t* pairs =
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_l1);
+                                for (uint32_t t = 0; t < Skt; ++t) {
+                                    const uint32_t first = pairs[t * 32];
+                                    uint32_t tp = first;
+                                    for (uint32_t i = 1; i < 32; ++i) {
+                                        if (pairs[t * 32 + i] != first) {
+                                            tp = kMixedTile;
+                                            break;
+                                        }
+                                    }
+                                    tile_pair[t] = tp;
+                                }
+                            }
                         }
                         const uint32_t block_bit = 1u << (q_chunk * k_num_chunks + k_chunk);
                         const uint32_t cache_base = CircularBuffer(cb_id_mask_cache).get_write_ptr();
@@ -868,6 +908,19 @@ void kernel_main() {
                                     const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
                                     const bool k_valid = !use_padded_mask || (global_k_tile < valid_Skt);
                                     const uint32_t cache_tile = global_q_tile * Skt + global_k_tile;
+                                    if constexpr (use_pair_tiles) {
+                                        const uint32_t qp = tile_pair[global_q_tile];
+                                        const uint32_t kp = tile_pair[global_k_tile];
+                                        if (qp != kMixedTile && kp != kMixedTile) {
+                                            if (qp == kp && kp != 0) {
+                                                fill_tile_zeros<mask_tile_bytes, false>(
+                                                    noc, cb_id_mask_cache, cache_tile);
+                                            } else {
+                                                fill_neginf_tile<mask_tile_bytes>(cb_id_mask_cache, cache_tile);
+                                            }
+                                            continue;
+                                        }
+                                    }
                                     if (q_valid && k_valid) {
                                         noc.async_read(
                                             mask_reader,
@@ -888,6 +941,9 @@ void kernel_main() {
                                 }
                             }
                             noc.async_read_barrier();
+                            if constexpr (use_pair_tiles) {
+                                noc.write_zeros_l1_barrier();
+                            }
                             mask_cache_valid |= block_bit;
                         }
                         // Cache -> mask CB: each row's Sk_chunk_t tiles are contiguous in the cache.

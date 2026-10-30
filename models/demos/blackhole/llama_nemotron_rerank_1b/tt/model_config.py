@@ -36,7 +36,15 @@ MM_CONFIGS = {
     # (4, 32, 8, 1, 4) does not fit; (2, 32, 8, 1, 4) 3690 us alone and 32x512 148.5 M cycles (75.1 % of SoL),
     # but under continuous replays the board throttles it hard: 32x512 111 ms per replay at first, 335 ms
     # after ~12 replays, against 116 -> 182-188 ms for (4, 16, 8, 1, 4) (the best K 16 block, 4042 us alone).
-    "ff13s": {512: (8, 16, 8, 1, 4), 2048: (4, 16, 8, 1, 4), 4096: (4, 16, 8, 1, 4), 16384: (4, 16, 8, 1, 4)},
+    # 5120 rows (10 x 512; sweep_mm.py --l1-reserve-mb 21): (4, 32, 8, 1, 4) HiFi2 1169 vs 1271 us, LoFi 789 vs 896.
+    "ff13s": {
+        512: (8, 16, 8, 1, 4),
+        2048: (4, 16, 8, 1, 4),
+        4096: (4, 16, 8, 1, 4),
+        5120: (4, 32, 8, 1, 4),
+        8192: (4, 16, 8, 1, 4),
+        16384: (4, 16, 8, 1, 4),
+    },
     "ff13": {512: (4, 8, 8, 1, 4), 4096: (4, 16, 16, 1, 4), 16384: (8, 16, 8, 1, 4)},
     "ff2": {
         512: (4, 16, 8, 2, 2),
@@ -149,6 +157,8 @@ class RerankConfig:
     # Matmul kinds (qkv, wo, ff13s, ff13, ff2) that run at LoFi instead of mm_fidelity, comma separated.
     # MIRACL Pearson vs fp32: ff2 0.99959 (baseline 0.99962), ff13s 0.99928, qkv+wo 0.99920, all 0.99918.
     lofi_kinds: str = "ff2"
+    # Layers (comma-separated indices, "" = all) where lofi_kinds applies; ff2 always follows lofi_kinds.
+    lofi_layers: str = ""
     # Matmul kinds that accumulate in bf16 DST (8-tile subblocks) instead of fp32 (4-tile), comma separated;
     # applies from 16384 rows (MM_CONFIGS "<kind>_bf16acc"). Off: with packed rows every pair runs at 32 x 512,
     # and ff13s in bf16 drops MIRACL Pearson to 0.99945 (fp32: 0.99959), under the 0.9995 gate. FF1+FF3
@@ -182,6 +192,9 @@ class RerankConfig:
     # that reads the [B, 1, S, S] mask from DRAM once per batch per core instead of once per Q head (bit-identical
     # output). One 32x512 call: 1253 -> 835 us (DRAM output), 1019 -> 780 us (L1 output).
     sdpa_mask_cache: bool = True
+    # sdpa_mask_cache reads the pair index and writes mask tiles that lie within one pair (all 0) or across pairs
+    # (all -inf) in L1, reading only tiles that straddle a pair boundary from the mask in DRAM.
+    sdpa_pair_tiles: bool = True
     # SDPA writes heads side by side ([B, 1, S, n_heads * head_dim]) so nlp_concat_heads is not needed.
     sdpa_concat_heads: bool = True
     # Residual add + following RMSNorm as one op (tt/custom_ops/fused_add_rmsnorm) writing both outputs.

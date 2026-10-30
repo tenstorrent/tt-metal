@@ -114,6 +114,9 @@ class NemotronReranker:
         self.mm_ckc_approx = cfg.compute_config(cfg.mm_fidelity, approx=True)
         self.mm_ckc_lofi = cfg.compute_config(ttnn.MathFidelity.LoFi)
         self.lofi_kinds = {k for k in cfg.lofi_kinds.split(",") if k}
+        self.lofi_layers = {int(k) for k in cfg.lofi_layers.split(",") if k} or None
+        self._layer_idx = None  # the layer being built, for lofi_layers
+        self._pair_idx = None  # forward's pair index input, for sdpa_mask_cache's pair tiles
         self.bf16_acc_kinds = {k for k in cfg.bf16_acc_kinds.split(",") if k}
         self.mm_ckc_lofi_bf16acc = cfg.compute_config(ttnn.MathFidelity.LoFi, fp32_acc=False)
         self.mm_ckc_bf16acc = cfg.compute_config(cfg.mm_fidelity, fp32_acc=False)
@@ -254,7 +257,7 @@ class NemotronReranker:
                 fused_activation=None if activation is None else ttnn.UnaryWithParam(activation),
                 compute_kernel_config=(
                     (self.mm_ckc_lofi_bf16acc if bf16_acc else self.mm_ckc_lofi)
-                    if kind in self.lofi_kinds
+                    if self._is_lofi(kind)
                     else self.mm_ckc_approx
                     if fuse_swiglu and self.cfg.swiglu_approx
                     else (self.mm_ckc_bf16acc if bf16_acc else self.mm_ckc)
@@ -369,7 +372,7 @@ class NemotronReranker:
                 head_dim=cfg.head_dim,
                 block=QKV_ROPE_CONFIGS[keys[-1]],
                 grid=self.grid,
-                fidelity=cfg.mm_fidelity,
+                fidelity=ttnn.MathFidelity.LoFi if self._is_lofi("qkv") else cfg.mm_fidelity,
                 rope_fidelity=QKV_ROPE_FIDELITY,
                 in1_depth=QKV_ROPE_IN1_DEPTH,
                 out_dtype=cfg.heads_out_dtype,
@@ -407,6 +410,7 @@ class NemotronReranker:
                 program_config=program_config,
                 compute_kernel_config=self.sdpa_ckc,
                 memory_config=self._mem(B * S, cfg.dim),
+                pair_index=self._pair_idx if cfg.sdpa_pair_tiles else None,
             )
         else:
             attn = ttnn.transformer.scaled_dot_product_attention(
@@ -491,6 +495,13 @@ class NemotronReranker:
         ttnn.deallocate(a)
         return out
 
+    def _is_lofi(self, kind):
+        """Whether matmul ``kind`` runs at LoFi in the layer being built (lofi_kinds, limited to lofi_layers
+        except for ff2, which is LoFi in every layer)."""
+        if kind not in self.lofi_kinds:
+            return False
+        return kind == "ff2" or self.lofi_layers is None or self._layer_idx in self.lofi_layers
+
     def _mm_add_norm(self, x, w, res, consts, kind, y_dtype=None):
         """res += x @ w (res: the L1-resident residual stream), returns rmsnorm(res) * gamma."""
         rows = x.shape[-2] * x.shape[-3]
@@ -507,7 +518,7 @@ class NemotronReranker:
             eps=self.cfg.norm_eps,
             block=(mb, kb, nb, sh, sw),
             grid=self.grid,
-            fidelity=ttnn.MathFidelity.LoFi if kind in self.lofi_kinds else self.cfg.mm_fidelity,
+            fidelity=ttnn.MathFidelity.LoFi if self._is_lofi(kind) else self.cfg.mm_fidelity,
             y_dtype=y_dtype or self.cfg.norm_out_dtype,
             memory_config=self._mem(rows, self.cfg.dim),
             y_fidelity="HiFi2" if kind in self.cfg.y_hifi2_kinds.split(",") else MM_ADD_NORM_Y_FIDELITY,
@@ -555,6 +566,7 @@ class NemotronReranker:
         1101 vs 623 us per layer (perf_tools/probe_sdpa_windowed.py --full)."""
         B, S = tokens.shape[0], tokens.shape[1]
         rope = self.rot_mats(S)
+        self._pair_idx = pair_idx
         valid = self._segments(pair_idx)
         mask = self._segment_mask(valid) if masked else None
         fused = self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows
@@ -605,6 +617,7 @@ class NemotronReranker:
                     skip_gamma=self.cfg.fold_norm_gamma,
                 )
             for i, layer in enumerate(self.layers):
+                self._layer_idx = i
                 o = self._attention(layer, xn, B, S, mask, block_map, rope, wo=False)
                 ttnn.deallocate(xn)
                 h = self._mm_add_norm(o, layer.wo, res, layer.ffn_norm_consts, "wo")
@@ -619,6 +632,7 @@ class NemotronReranker:
         elif fused:
             xn = self._norm(x, self.layers[0].attn_norm, self.cfg.norm_out_dtype)
             for i, layer in enumerate(self.layers):
+                self._layer_idx = i
                 a = self._attention(layer, xn, B, S, mask, block_map, rope)
                 ttnn.deallocate(xn)
                 x_new, h = self._add_norm(x, a, layer.ffn_norm_consts)
@@ -635,7 +649,8 @@ class NemotronReranker:
                 ttnn.deallocate(m)
             ttnn.deallocate(x)
         else:
-            for layer in self.layers:
+            for i, layer in enumerate(self.layers):
+                self._layer_idx = i
                 xn = self._norm(x, layer.attn_norm, self.cfg.norm_out_dtype)
                 a = self._attention(layer, xn, B, S, mask, block_map, rope)
                 ttnn.deallocate(xn)

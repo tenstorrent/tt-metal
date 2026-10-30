@@ -5,10 +5,9 @@
     python models/demos/blackhole/llama_nemotron_rerank_1b/perf_tools/miracl_runner.py miracl_eval.pt [key=value] [buckets]
 
 Times 40 requests of 25 documents (one score_ids call per query), then all 1000 pairs in one call, and
-reports Pearson / mean error / nDCG@10 against the eval set's HF fp32 scores. Optional: a model attribute
-override such as ``bf16_acc_kinds=ff13s`` or a RerankConfig field such as ``cfg.sdpa_k_chunk=128`` (applied
-before the traces are captured; several separated by ``;``, ``none`` = no override),
-and the batch buckets, e.g. ``1,8,32``.
+reports Pearson / mean error / nDCG@10 against the eval set's HF fp32 scores. Optional: RerankConfig overrides
+as for demo/bench.py --cfg, e.g. ``mm_fidelity=LoFi;lofi_kinds=ff2,ff13s`` (several separated by ``;``,
+``none`` = no override), and the batch buckets, e.g. ``1,8,32``.
 """
 import sys
 import time
@@ -19,23 +18,20 @@ import torch
 import ttnn
 from models.demos.blackhole.llama_nemotron_rerank_1b.demo.eval_miracl import ndcg_mrr
 from models.demos.blackhole.llama_nemotron_rerank_1b.demo.generator_vllm import NemotronRerankForScoring
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import config_from_overrides
 
 d = torch.load(sys.argv[1])
+OVERRIDES = sys.argv[2].split(";") if len(sys.argv) > 2 and "=" in sys.argv[2] else []
+print(f"config overrides {OVERRIDES}", flush=True)
 dev = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=400_000_000)
-m = NemotronRerankForScoring(device=dev, max_batch_size=32, max_seq_len=512, warmup=False)
+m = NemotronRerankForScoring(
+    device=dev, max_batch_size=32, max_seq_len=512, warmup=False, config=config_from_overrides(OVERRIDES)
+)
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.runner import TracedReranker
 
 BUCKETS = tuple(int(b) for b in (sys.argv[3] if len(sys.argv) > 3 else "1,8,32").split(","))
 m.runner = r = TracedReranker(m.runner.model, max_seq_len=512, batch_buckets=BUCKETS)
 print(f"batch buckets {BUCKETS}", flush=True)
-for item in sys.argv[2].split(";") if len(sys.argv) > 2 and "=" in sys.argv[2] else []:
-    key, val = item.split("=")
-    if key.startswith("cfg."):  # e.g. cfg.sdpa_k_chunk=128
-        setattr(r.model.cfg, key[4:], int(val))
-        print(f"{key} = {getattr(r.model.cfg, key[4:])}", flush=True)
-    else:  # e.g. bf16_acc_kinds= : fp32 accumulation everywhere
-        setattr(r.model, key, {k for k in val.split(",") if k})
-        print(f"model.{key} = {getattr(r.model, key)}", flush=True)
 r.warmup()
 
 
