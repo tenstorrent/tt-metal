@@ -18,8 +18,8 @@ arbitrary rollback into evicted tokens. Page-ID changes require live KV migratio
 import os
 
 import ttnn
-from models.demos.gemma4_31b_qb2.tt.kv_precision import selected_kv_dtypes
 from models.demos.gemma4_31b_qb2.tt.history_bank import HistoryTail
+from models.demos.gemma4_31b_qb2.tt.kv_precision import selected_kv_dtypes
 from models.demos.gemma4_31b_qb2.tt.sdpa_l1 import BLACKHOLE_L1_BYTES, full_sdpa_fp32_l1_end
 from models.demos.gpt_oss.tt.ccl import CCLManager
 
@@ -43,8 +43,8 @@ DECODE_GEOMETRY = {
     "down": (8, 2, 21),
     # Shared gate/up (GEMMA_EXPERIMENT_SHARE_BF8_GATE_UP=1): one reader per bank keeps
     # the packed matmul's per-worker work (21 N tiles, K blocks of 3) unchanged.
-    "gate": (56, 1, 3),
-    "up": (56, 1, 3),
+    "gate": (56, int(os.environ.get("GEMMA_GATE_UP_READERS", "1")), 3),
+    "up": (56, int(os.environ.get("GEMMA_GATE_UP_READERS", "1")), 3),
 }
 
 
@@ -59,7 +59,7 @@ def spec_wide_enabled():
 # Wide (64-row) decode matmul geometry overrides: (input cores, readers per bank, K block). Gate/up keep the shared
 # BF8 shard layout (21 tiles per bank = 3 readers x 7 tiles); full-attention o needs its K block to be a whole in0
 # shard (16 tiles) for per_core_M > 1.
-WIDE_GEOMETRY = {"gate": (56, 3, 3), "up": (56, 3, 3), "o_full": (8, 2, 16)}
+WIDE_GEOMETRY = {"gate": (56, 3, 3), "up": (56, 3, 3)}
 
 
 def share_gate_up_enabled():
@@ -216,13 +216,21 @@ class Decoder:
         policy = os.environ.get("GEMMA_REPETITION_PRECISION_POLICY", "bf4")
         if policy not in ("bf4", "bf8", "late12", "mlp", "attention"):
             raise ValueError(f"Unknown repetition precision policy: {policy}")
+
         def projection_dtype(name):
-            use_bf8 = policy == "bf8" or (policy == "late12" and layer_idx >= 48) or (policy == "mlp" and name.startswith("mlp.")) or (policy == "attention" and name.startswith("self_attn."))
+            use_bf8 = (
+                policy == "bf8"
+                or (policy == "late12" and layer_idx >= 48)
+                or (policy == "mlp" and name.startswith("mlp."))
+                or (policy == "attention" and name.startswith("self_attn."))
+            )
             return ttnn.bfloat8_b if use_bf8 else ttnn.bfloat4_b
 
         def linear(name):
             return tensor(
-                sd[name + ".weight"].T, projection_dtype(name), dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1
+                sd[name + ".weight"].T,
+                projection_dtype(name),
+                dim=0 if name in ("self_attn.o_proj", "mlp.down_proj") else 1,
             )
 
         q, k = (sd["self_attn.q_proj.weight"], sd["self_attn.k_proj.weight"])
@@ -248,8 +256,12 @@ class Decoder:
             # projection, built directly in its final layout (no interleaved
             # temporary). Per device the columns equal the packed gate_up halves.
             self.gate, self.up = (
-                tensor(sd["mlp." + name + "_proj.weight"].T, projection_dtype("mlp." + name + "_proj"), dim=1,
-                       decode_only=name)
+                tensor(
+                    sd["mlp." + name + "_proj.weight"].T,
+                    projection_dtype("mlp." + name + "_proj"),
+                    dim=1,
+                    decode_only=name,
+                )
                 for name in ("gate", "up")
             )
             self.down = linear("mlp.down_proj")
@@ -328,20 +340,7 @@ class Decoder:
         pool = pools[signature]
         assert pool["mesh"] is mesh_device and pool["signature"] == signature
         self.decode_ar_slots = pool["slots"]
-        self.decode_ar_slots_wide = None
-        if spec_wide_enabled():
-            wide_signature = signature + (64,)
-            if wide_signature not in pools:
-                wide_mem = self._mem(self.hidden_size * 4, 28, rows=64)
-                pools[wide_signature] = {
-                    name: {
-                        "scratch": ttnn.empty([1, 1, 64, self.hidden_size * 4], dtype=dtype, layout=ttnn.TILE_LAYOUT,
-                                              device=mesh_device, memory_config=wide_mem),
-                        "semaphore": ttnn.create_global_semaphore(mesh_device, self.ccl.ccl_cores, 0),
-                    }
-                    for name in ("o", "down")
-                }
-            self.decode_ar_slots_wide = pools[wide_signature]
+        # The 64-row verify reduces its two 32-row halves with these same slots (no extra L1 scratch).
         self.decode_weights = {}
         dg = mesh_device.dram_grid_size()
         banks = dg.x * dg.y
@@ -562,10 +561,19 @@ class Decoder:
             raise ValueError("Precise BF8 rows require actual 56-core L1 width shards [32,96]")
 
     def _decode_reduce(self, x, name, rows=32):
+        if rows > 32:
+            # Wide verify: reduce each 32-row half with the plain decode's scratch slot (row-wise identical result).
+            flat = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            halves = []
+            for h in range(rows // 32):
+                part = ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, flat.shape[3]])
+                out = self._decode_reduce(part, name, rows=32)
+                halves.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
+            return ttnn.to_memory_config(ttnn.concat(halves, dim=2), self._mem(self.hidden_size, 28, rows=rows))
         memory = self._mem(self.hidden_size, 28, rows=rows)
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, memory)
-        slot = (self.decode_ar_slots if rows == 32 else self.decode_ar_slots_wide)[name]
+        slot = self.decode_ar_slots[name]
         # Sliding rows retain the BF16 completed sum. Full-attention rows retain
         # the measured BF8 sum; both communicate and receive BF8 payloads.
         result = ttnn.experimental.all_reduce_async(
@@ -706,6 +714,18 @@ class Decoder:
         return ttnn.reshape(result, [1, 1, packed_rows, result.shape[-1]]) if native_batch else result
 
     def _dlinear(self, x, name, rows=32):
+        if rows > 32 and name == "o" and not self.sliding:
+            # Full-attention o with 2 M tiles needs a whole-shard K block (16 vs the plain 8), which changes the
+            # accumulation order; run it per 32-row half to keep the plain decode's exact numerics.
+            flat = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            parts = [
+                ttnn.to_memory_config(
+                    self._dlinear(ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, flat.shape[3]]), name),
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for h in range(rows // 32)
+            ]
+            return ttnn.concat(parts, dim=2)
         weight = self.decode_weights[name]
         kdim, ndim = weight.shape[-2], weight.shape[-1]
         cores, readers, k_block = DECODE_GEOMETRY[name]
@@ -829,8 +849,12 @@ class Decoder:
         )
 
     def _decode_finish(self, residual, attention, rows=32):
-        post = self._resnorm(self._decode_reduce(self._dlinear(attention, "o", rows=rows), "o", rows=rows),
-                             "post_attention_layernorm", True, rows=rows)
+        post = self._resnorm(
+            self._decode_reduce(self._dlinear(attention, "o", rows=rows), "o", rows=rows),
+            "post_attention_layernorm",
+            True,
+            rows=rows,
+        )
         mem = self._mem(self.hidden_size, 28, rows=rows)
         residual = ttnn.to_memory_config(residual, mem)
         x = ttnn.add(residual, post, memory_config=mem, dtype=self.residual_dtype)
@@ -845,7 +869,10 @@ class Decoder:
         product = ttnn.multiply(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.GELU_TANH])
         post = self._resnorm(
             self._decode_reduce(self._dlinear(product, "down", rows=rows), "down", rows=rows),
-            "post_feedforward_layernorm", True, rows=rows)
+            "post_feedforward_layernorm",
+            True,
+            rows=rows,
+        )
         return ttnn.add(
             x,
             post,
@@ -870,8 +897,7 @@ class Decoder:
         tile_bytes = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048, ttnn.float32: 4096}
         grid = [11, 10]
         flexible_start = self.runtime_positions is not None
-        page_bytes = (page_table.padded_shape[1] * 4 if flexible_start
-                      else page_table.buffer_aligned_page_size())
+        page_bytes = page_table.padded_shape[1] * 4 if flexible_start else page_table.buffer_aligned_page_size()
         for chunk in eligible:
             end = full_sdpa_fp32_l1_end(
                 rows=q.shape[2],
@@ -1129,8 +1155,13 @@ class Decoder:
                     )
                 else:
                     attn = self.runtime_positions.full_sdpa(
-                        self, qq, kv_cache[0], kv_cache[1], pt,
-                        position=coordinate, program_config=cfg,
+                        self,
+                        qq,
+                        kv_cache[0],
+                        kv_cache[1],
+                        pt,
+                        position=coordinate,
+                        program_config=cfg,
                     )
             del qq, pt
             if self.sliding:
@@ -1248,8 +1279,17 @@ class Decoder:
         return (result, tails) if return_history else result
 
     def prefill_forward(
-        self, x, *, page_table, kv_cache, consume_input=False, start_pos=0, history=None,
-        return_history=False, tail_descriptor=False, fill_tables=None
+        self,
+        x,
+        *,
+        page_table,
+        kv_cache,
+        consume_input=False,
+        start_pos=0,
+        history=None,
+        return_history=False,
+        tail_descriptor=False,
+        fill_tables=None,
     ):
         """Prefill a page-aligned span, optionally retaining sliding history for a continuation."""
         if start_pos < 0 or start_pos % self.PAGE_SIZE:
@@ -1308,8 +1348,11 @@ class Decoder:
                     q = ttnn.typecast(q, ttnn.bfloat8_b)
                 sdpa_config = self._prefill_sdpa_config(q, kv_cache[0], pt, start=absolute_start)
                 length = inp.shape[2]
-                fill_pt = (fill_tables[start] if fill_tables is not None else
-                           pt[:, absolute_start // self.PAGE_SIZE : (absolute_start + length) // self.PAGE_SIZE])
+                fill_pt = (
+                    fill_tables[start]
+                    if fill_tables is not None
+                    else pt[:, absolute_start // self.PAGE_SIZE : (absolute_start + length) // self.PAGE_SIZE]
+                )
                 if fill_tables is not None:
                     assert batch == 1 and tuple(fill_pt.shape) == (1, length // self.PAGE_SIZE)
                 ttnn.experimental.paged_fill_cache(
@@ -1364,8 +1407,13 @@ class Decoder:
                         )
                     else:
                         attn = self.runtime_positions.full_sdpa(
-                            self, q, kv_cache[0], kv_cache[1], pt,
-                            position=absolute_start, program_config=sdpa_config,
+                            self,
+                            q,
+                            kv_cache[0],
+                            kv_cache[1],
+                            pt,
+                            position=absolute_start,
+                            program_config=sdpa_config,
                         )
                 if self.sliding:
                     if return_history and end == seq:
@@ -1382,7 +1430,9 @@ class Decoder:
                             tails = []
                             for index, value in enumerate((k, v)):
                                 live = value[:, :, : end - start, :]
-                                joined = ttnn.concat([previous_kv[index], live], dim=2) if previous_kv is not None else live
+                                joined = (
+                                    ttnn.concat([previous_kv[index], live], dim=2) if previous_kv is not None else live
+                                )
                                 tail_start = max(0, joined.shape[2] - (self.window + self.PAGE_SIZE))
                                 tails.append(joined[:, :, tail_start:, :])
                             next_history = tuple(tails)
@@ -1483,9 +1533,16 @@ class Decoder:
         normalized = self._input_norm(x, "input_layernorm", True)
         fused = self._dlinear(normalized, "qkv")
         ttnn.deallocate(normalized)
-        joined = self._decode_attention(fused, batch, positions=positions, page_table=page_table, kv_cache=kv_cache,
-                                        rope_positions=rope_positions, cyclic_cache=cyclic_cache,
-                                        update_positions=update_positions)
+        joined = self._decode_attention(
+            fused,
+            batch,
+            positions=positions,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            rope_positions=rope_positions,
+            cyclic_cache=cyclic_cache,
+            update_positions=update_positions,
+        )
         return self._decode_finish(x, joined)
 
     def decode_forward_wide(self, x, *, halves, page_table, kv_cache, cyclic_cache=True):
@@ -1500,23 +1557,42 @@ class Decoder:
         ttnn.deallocate(normalized)
         spec = fused.memory_config().shard_spec
         half_mem = ttnn.MemoryConfig(
-            fused.memory_config().memory_layout, ttnn.BufferType.L1,
-            ttnn.ShardSpec(spec.grid, (32, spec.shape[1]), spec.orientation))
+            fused.memory_config().memory_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(spec.grid, (32, spec.shape[1]), spec.orientation),
+        )
         flat = ttnn.to_memory_config(fused, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(fused)
         joined = []
         for h, (positions, rope_positions, update_positions) in enumerate(halves):
             part = ttnn.slice(flat, [0, 0, 32 * h, 0], [1, 1, 32 * h + 32, flat.shape[3]])
             part = ttnn.to_memory_config(part, half_mem)
-            out = self._decode_attention(part, 32, positions=positions, page_table=page_table, kv_cache=kv_cache,
-                                         rope_positions=rope_positions, cyclic_cache=cyclic_cache,
-                                         update_positions=update_positions)
+            out = self._decode_attention(
+                part,
+                32,
+                positions=positions,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                rope_positions=rope_positions,
+                cyclic_cache=cyclic_cache,
+                update_positions=update_positions,
+            )
             joined.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
         attention = ttnn.concat(joined, dim=2)
         return self._decode_finish(x, attention, rows=64)
 
-    def _decode_attention(self, fused, batch, *, positions, page_table, kv_cache, rope_positions=None,
-                          cyclic_cache=True, update_positions=None):
+    def _decode_attention(
+        self,
+        fused,
+        batch,
+        *,
+        positions,
+        page_table,
+        kv_cache,
+        rope_positions=None,
+        cyclic_cache=True,
+        update_positions=None,
+    ):
         """Decode attention for up to 32 rows from the fused QKV projection; returns the concatenated heads."""
         spec = fused.memory_config().shard_spec
         assert spec.shape[1] * spec.grid.num_cores() == fused.shape[-1], "QKV head reader requires exact output shards"
