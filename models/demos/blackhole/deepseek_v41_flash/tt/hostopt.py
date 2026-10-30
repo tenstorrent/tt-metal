@@ -110,6 +110,37 @@ def warm_stop():
         os.kill(p.pid, signal.SIGSTOP)
         os.sched_setaffinity(0, _WARM["mask"])
         _WARM["stopped"] = True
+    if p is not None:
+        _release_pinned_threads()
+
+
+def _release_pinned_threads():
+    """A thread created while the round thread is pinned inherits the one-core mask (torch's intra-op pool, the prefill worker threads: every thread that was first used during a decode round) and
+    keeps it for good: their parallel work (the prefill's Engram table gather / fp8 dequant: ~0.1 s per replay on the whole host) then runs on the one pinned core (0.5-0.7 s per replay at Up=2).
+    The calling thread was restored by ``warm_stop``; give every other thread of the process that still sits on the one pinned core the full mask back (the spinner is another process).
+    """
+    cpu, mask = _WARM["cpu"], _WARM["mask"]
+    if cpu is None or not mask or len(mask) < 2:
+        return
+    me, freed = threading.get_native_id(), 0
+    try:
+        tids = [int(t) for t in os.listdir("/proc/self/task")]
+    except OSError:
+        return
+    for tid in tids:
+        if tid == me:
+            continue
+        try:
+            if os.sched_getaffinity(tid) == {cpu}:
+                os.sched_setaffinity(tid, mask)
+                freed += 1
+        except OSError:  # (the thread ended meanwhile)
+            pass
+    if freed:
+        print(
+            f"HOSTOPT_WARM: released {freed} thread(s) that inherited the pin to cpu {cpu} (prefill / torch pool threads)",
+            flush=True,
+        )
 
 
 def _set_mode(mode):
