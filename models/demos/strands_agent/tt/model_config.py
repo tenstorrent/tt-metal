@@ -15,12 +15,16 @@ from models.demos.strands_agent.tt.weight_mapping import (
 
 
 def adapter_revision(adapter_dir) -> str:
-    """HF snapshot commit hash when the adapter sits in a hub snapshot, else a hash of the adapter file's size+mtime."""
+    """HF snapshot commit hash for a hub snapshot, else a hash of the LoRA config and weight file contents."""
     adapter_dir = Path(adapter_dir)
     if adapter_dir.parent.name == "snapshots":
         return adapter_dir.name
-    st = (adapter_dir / "lora" / "adapter_model.safetensors").stat()
-    return hashlib.sha256(f"{adapter_dir.resolve()}:{st.st_size}:{st.st_mtime_ns}".encode()).hexdigest()[:16]
+    digest = hashlib.sha256()
+    for name in ("adapter_config.json", "adapter_model.safetensors"):
+        with open(adapter_dir / "lora" / name, "rb") as f:
+            while chunk := f.read(1 << 20):
+                digest.update(chunk)
+    return digest.hexdigest()[:16]
 
 
 class StrandsDeciderModelArgs(Qwen36ModelArgs):
