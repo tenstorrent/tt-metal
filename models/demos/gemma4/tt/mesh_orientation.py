@@ -128,10 +128,11 @@ DECODE_FUSION_ON = {
     # inert on the (1,4) row mesh (masked-dense experts there); GEMMA4_SMALL_ROW_MIN/MAX_TOKENS bound it (32..128)
     "GEMMA4_SMALL_ROW_EXPERTS": "1",
 }
-# The dense models (31B / 12B) on the same 4-chip Blackhole meshes default to the combined dense configuration
-# measured in the layer lab and the model-level A/B (row view, QKV heads + norms + RoPE as one program, concat heads
-# into the o_proj layout, the native norms writing the next matmul's activation layout, the sharded GeGLU, the
-# fused softcap); the fused norm family (GEMMA4_NORM_FUSED=2) stays off on dense widths (slower than the native
+# The dense models (31B / 12B) on the same 4-chip Blackhole meshes and on the 8-chip (1,8) line (the Galaxy DP
+# engine, MESH_DEVICE=P150x8: TP=8 over the columns) default to the combined dense configuration measured in the
+# layer lab and the model-level A/B (row view, QKV heads + norms + RoPE as one program, concat heads into the
+# o_proj layout, the native norms writing the next matmul's activation layout, the sharded GeGLU, the fused
+# softcap); the fused norm family (GEMMA4_NORM_FUSED=2) stays off on dense widths (slower than the native
 # width-sharded LayerNorm there). Env overrides win here as well.
 DENSE_DECODE_FUSION_ON = {
     "GEMMA4_DRAM_SHARD_ROW_VIEW": "1",
@@ -150,6 +151,15 @@ DENSE_DECODE_FUSION_ON = {
 }
 DECODE_FUSION_OFF = {name: "0" for name in {**DECODE_FUSION_ON, **DENSE_DECODE_FUSION_ON}}
 FOUR_CHIP_SHAPES = (ROW_MESH_SHAPE, COLUMN_MESH_SHAPE)
+# The dense Galaxy DP engine: 8 Blackhole chips opened as the (1,8) line, TP=8 over the columns, the same plain-TP
+# build as (1,4) (DramShardedLinear on wqkv / o_proj / gate_up / down; the decode grids derive from the per-chip
+# K / N tiles -- 31B at TP8: wqkv and o_proj 8 cores as at TP4, gate_up 56, down 42 (6x7) x 2 tiles -- and every
+# fused program plans its split from the device grid). Nothing in the dense set is shape-specific, so the line takes
+# the whole configuration. The TP-8 (2,4) / (4,8) / (8,4) builds exist only under GEMMA4_GALAXY_FRACTURE (fractured
+# weights: no DRAM-sharded matmul, so the sharded-layout fusions would be inert and the rest is unmeasured there)
+# and keep the old defaults, as do the (8,1) column line and the lane engine.
+GALAXY_LINE_SHAPE = (1, 8)
+DENSE_FUSED_SHAPES = FOUR_CHIP_SHAPES + (GALAXY_LINE_SHAPE,)
 # The Galaxy lane engine (the 26B-A4B on the (8,4) Blackhole mesh): the fused QKV norm + RoPE program on the lane
 # decode frame, the rest as before (the lane entry's catalog carries its own set). Window 13 (2026-10-25, lane layer
 # (2,4) gate fused vs composite pcc 0.999755; served): c1 32.4 -> 37.1 tok/s/user, c32 33.4 -> 36.3, c128 29.3 ->
@@ -168,9 +178,9 @@ def fused_decode_build(shape, *, blackhole: bool, moe: bool) -> bool:
 
 def dense_fused_decode_build(shape, *, blackhole: bool, moe: bool) -> bool:
     """Whether a build runs the combined dense decode configuration by default: a Blackhole dense model on the
-    4-chip (1,4) or (4,1) mesh. Wormhole, the MoE build and the other mesh shapes (one chip, the (1,8) line, the
-    Galaxy lane engine) do not."""
-    return bool(blackhole) and not moe and _shape(shape) in FOUR_CHIP_SHAPES
+    4-chip (1,4) or (4,1) mesh or on the 8-chip (1,8) line (the Galaxy DP engine). Wormhole, the MoE build and the
+    other mesh shapes (one chip, the fractured Galaxy meshes, the lane engine) do not."""
+    return bool(blackhole) and not moe and _shape(shape) in DENSE_FUSED_SHAPES
 
 
 def lane_fused_decode_build(shape, *, blackhole: bool, moe: bool) -> bool:
