@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "chunk_gdn_fused_rt_args.hpp"
 
 constexpr uint32_t cb_out = 16, cb_final = 27;
 
@@ -21,7 +22,7 @@ void kernel_main() {
     constexpr auto o_a = TensorAccessorArgs<4>();
     constexpr auto fs_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
 
-    const uint32_t h = get_arg_val<uint32_t>(0);
+    const uint32_t h = get_arg_val<uint32_t>(fused_rt::kScanWriterHeadArg);  // the output row of this head
     const uint32_t vb = get_arg_val<uint32_t>(1);
     const uint32_t NC = get_arg_val<uint32_t>(2);
     const uint32_t o_addr = get_arg_val<uint32_t>(3);

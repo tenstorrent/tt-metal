@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/channel_trimming_io.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/llrt/hal.hpp"
@@ -90,11 +91,13 @@ void FabricBuilderContext::compute_max_channel_counts() {
     // An express mesh router's VC0 is five wide, so the fabric-wide maximum has to account for it or
     // the shared router config would report fewer sender channels than a router actually maps -- the
     // variant-to-router channel lookup would then index past its end. Asked across every local mesh
-    // rather than per node, since this maximum is fabric-wide.
     const auto& control_plane = fabric_context_.get_control_plane();
-    bool any_mesh_uses_express = false;
+    ExpressAxis fabric_express_axis = ExpressAxis::NONE;
     for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
-        any_mesh_uses_express = any_mesh_uses_express || control_plane.express_routing_enabled(mesh_id);
+        const ExpressAxis mesh_express_axis = express_axis_of(control_plane, mesh_id);
+        if (mesh_express_axis != ExpressAxis::NONE) {
+            fabric_express_axis = mesh_express_axis;
+        }
     }
 
     // The families are named by the one chip fact that distinguishes them: what the Z port is for.
@@ -116,7 +119,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
         topology,
         RoutingDirection::N,
         chip_with_z(std::nullopt),
-        any_mesh_uses_express,
+        fabric_express_axis,
         intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
 
     // A Z-facing intermesh boundary introduces the boundary family (5 VC0 / 4 VC1) and mesh routers
@@ -130,14 +133,14 @@ void FabricBuilderContext::compute_max_channel_counts() {
             topology,
             RoutingDirection::Z,
             boundary_chip,
-            any_mesh_uses_express,  // inert for the boundary family, but this is the fabric's state
+            fabric_express_axis,  // inert for the boundary family, but this is the fabric's state
             &intermesh_vc_config_));
         // Mesh routers on boundary chips carry the from-Z slot.
         possible_shapes.push_back(router_vc_shape(
             topology,
             RoutingDirection::N,
             boundary_chip,
-            any_mesh_uses_express,
+            fabric_express_axis,
             intermesh_vc_config_active ? &intermesh_vc_config_ : nullptr));
     }
 
@@ -169,9 +172,11 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
         "Capture mode instruments routers to record usage; override mode applies forced channel settings. "
         "Enable only one at a time.");
     if (rtoptions.has_fabric_trimming_profile()) {
-        const auto& path = rtoptions.get_fabric_trimming_profile_path();
-        log_info(tt::LogFabric, "Loading channel trimming profile: {}", path);
-        channel_trimming_overrides_ = load_channel_trimming_overrides(path);
+        // Multi-rank: the profile path may be a directory of per-rank captures; each rank
+        // resolves and loads only its own file (override lookups are per-local-router).
+        const auto resolved_path = resolve_channel_trimming_profile_path(rtoptions.get_fabric_trimming_profile_path());
+        log_info(tt::LogFabric, "Loading channel trimming profile: {}", resolved_path);
+        channel_trimming_overrides_ = load_channel_trimming_overrides(resolved_path.string());
     }
 
     // Load global overrides from override file if specified
@@ -185,8 +190,9 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     // Log trimming report after intermesh config is known (VC1 affects expected channel counts)
     if (rtoptions.has_fabric_trimming_profile()) {
-        const auto& path = rtoptions.get_fabric_trimming_profile_path();
-        generate_and_log_channel_trimming_report(path, fabric_context.get_fabric_topology(), intermesh_vc_config_.requires_vc1);
+        const auto resolved_path = resolve_channel_trimming_profile_path(rtoptions.get_fabric_trimming_profile_path());
+        generate_and_log_channel_trimming_report(
+            resolved_path.string(), fabric_context.get_fabric_topology(), intermesh_vc_config_.requires_vc1);
     }
 
     // Compute max channel counts for this fabric instance

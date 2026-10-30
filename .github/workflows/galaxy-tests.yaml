@@ -39,6 +39,8 @@ on:
           - galaxy-fabric-multi-mesh-4x4-2x4s
           - galaxy-fabric-multi-mesh-2x8-2x4s
           - bh-galaxy-fabric-torus-stability
+          - galaxy-fabric-2x2-channel-trimming-nonz
+          - galaxy-fabric-2x2-channel-trimming-z
           - bh-galaxy-socket-pipeline
           - bh-galaxy-tensor-prefetcher
           - bh-galaxy-complete-host-tensor-dual-rank
@@ -122,7 +124,7 @@ jobs:
     outputs:
       enabled-skus: ${{ steps.skus.outputs.enabled-skus }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions/resolve-galaxy-skus

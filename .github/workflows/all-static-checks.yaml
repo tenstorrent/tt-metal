@@ -24,7 +24,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0 # Fetch all history and all branches / tags so 'origin/main' is available
@@ -71,7 +71,7 @@ jobs:
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Check SPDX licenses
         uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
@@ -81,14 +81,14 @@ jobs:
   check-metal-kernel-count:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Check kernel count in base metal is less than maximum
         run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
   check-doc:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Install ASPELL
         run: sudo apt-get install -y aspell
@@ -102,7 +102,7 @@ jobs:
     if: false # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -115,7 +115,7 @@ jobs:
   check-forbidden-imports:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Check ttnn is not used in tt_metal tests
         run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 32 )); then exit 1; fi
@@ -126,7 +126,7 @@ jobs:
   check-interleaved-addr-gen-usage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
         with:
           fetch-depth: 0 # Fetch all history for git diff comparison
@@ -197,7 +197,7 @@ jobs:
   check-sweeps-workflow:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -206,17 +206,49 @@ jobs:
         run: |
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
+  cmake-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+      - name: Look for changed CMake files
+        id: find-changes
+        uses: ./.github/actions/find-changed-files
+      - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60 # v3.30.5
+        if: steps.find-changes.outputs.cmake-changed == 'true'
+        with:
+          cmakeVersion: "~3.25.0"
+      - name: Check CMake version
+        if: steps.find-changes.outputs.cmake-changed == 'true'
+        run: cmake --version
+      - name: Install Build Dependencies
+        if: steps.find-changes.outputs.cmake-changed == 'true'
+        run: sudo ./install_dependencies.sh --docker
+      - name: Check CMake compatibility
+        if: steps.find-changes.outputs.cmake-changed == 'true'
+        env:
+          ARCH_NAME: wormhole_b0
+          CMAKE_GENERATOR: Ninja
+        # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
+        run: |
+          echo "Checking compatibility with $(cmake --version)"
+          cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .
   check-docker-bake-ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Validate Docker Bake CI overrides
         run: python .github/scripts/validate-docker-bake-ci.py
   codeowners-validator:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - uses: mszostok/codeowners-validator@7f3f5e28c6d7b8dfae5731e54ce2272ca384592f # v0.7.4
         with:
@@ -225,7 +257,7 @@ jobs:
   check-symlinks-valid:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Check for broken symlinks
         run: |

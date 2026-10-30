@@ -5,6 +5,8 @@
 #include "send_async_d2h_op_device_operation_types.hpp"
 #include "send_async_d2h_op_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "ttnn/operation.hpp"
 
@@ -27,6 +29,13 @@ void SendAsyncD2HDeviceOperation::validate_on_program_cache_miss(
         active_cores.size() == 1,
         "send_async_d2h: expected D2HSocket to have exactly one active sender core, found {}",
         active_cores.size());
+
+    // create_descriptor emits a program only on the socket's device coordinate, so that coordinate
+    // must be one the input tensor lives on.
+    const auto tensor_coords = input_tensor.device_storage().get_coords();
+    TT_FATAL(
+        std::find(tensor_coords.begin(), tensor_coords.end(), active_cores.front().device_coord) != tensor_coords.end(),
+        "send_async_d2h: D2HSocket device coordinate is not part of the input tensor's coordinate set");
 
     // The kernel pushes whole tensor pages directly into the socket FIFO, so the
     // socket page size must match the tensor's aligned page size. The D2HSocket's page
@@ -57,8 +66,18 @@ ttsl::hash::hash_t SendAsyncD2HDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SendAsyncD2HDeviceOperation::compute_program_hash is called");
     const ttnn::Tensor& input_tensor = tensor_args;
+    const auto active_cores = args.d2h_socket->get_active_cores();
+    TT_FATAL(
+        active_cores.size() == 1,
+        "send_async_d2h: expected D2HSocket to have exactly one active sender core, found {}",
+        active_cores.size());
+    // The active sender core selects the mesh coordinate that gets a program and the core the
+    // reader kernel runs on, and the config buffer address is a compile-time arg of that kernel;
+    // all of them are structural and must stay in the key. The config address is core-local, so
+    // it does not identify the socket on its own. The input tensor address is a Buffer* binding in
+    // create_descriptor and is patched by the framework on every cache hit.
     return tt::tt_metal::operation::hash_operation<SendAsyncD2HDeviceOperation>(
-        args.d2h_socket->get_config_buffer_address(), input_tensor);
+        active_cores.front(), args.d2h_socket->get_config_buffer_address(), input_tensor);
 }
 
 }  // namespace ttnn::experimental::prim

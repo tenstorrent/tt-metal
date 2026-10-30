@@ -16,6 +16,7 @@
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <numeric>
 #include <variant>
 #include <vector>
 using namespace tt::tt_metal;
@@ -337,6 +338,12 @@ bool hits_bh_col_bcast_bf16_to_fp32_hang(
     return arch == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
 }
 
+// Row broadcast: widest column group, and the tiles per core that select it. A one-column walk whose row stride
+// shares a factor with the DRAM bank count keeps each core on a few banks, so it switches earlier.
+constexpr uint32_t kMaxColGroup = 4;
+constexpr uint32_t kColGroupMinTiles = 128;
+constexpr uint32_t kColGroupFewBanksMinTiles = 48;
+
 bool is_llk_bcast(
     const tt::ARCH arch,
     const SubtileBroadcastType subtile_broadcast_type,
@@ -399,15 +406,9 @@ std::optional<AllShardVolumes> get_shard_volumes(
 
 namespace {
 
-// Per-core runtime-arg lists for every core in the worker grid (work AND noop cores), in the same
-// order create_descriptor() populates them.  Each arg list is a vector of variants: Buffer* entries
-// are buffer base addresses (bindings), uint32_t entries are plain values.
-struct BinaryNgPerCoreArgs {
-    std::vector<CoreCoord> cores;
-    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> reader;
-    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> writer;
-    std::vector<std::vector<std::variant<uint32_t, Buffer*>>> compute;
-};
+// One core's runtime-arg list for one kernel: Buffer* entries are buffer base addresses (bindings),
+// uint32_t entries are plain values.
+using RuntimeArgList = std::vector<std::variant<uint32_t, Buffer*>>;
 
 // SINGLE SOURCE OF TRUTH for binary_ng per-core runtime args.  Run by BOTH create_descriptor()
 // (cache miss) and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit).
@@ -422,15 +423,50 @@ struct BinaryNgPerCoreArgs {
 // num_cores_total cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
 // override_runtime_arguments re-applies every slot (buffer slots via their current address), so nothing
 // is left frozen regardless of how the partition shifts.
-BinaryNgPerCoreArgs build_per_core_runtime_args(
+//
+// Caches the last interleaved work split; grid and tile count rarely change between calls.
+struct InterleavedSplit {
+    tt::tt_metal::CoreRangeSet grid;
+    uint32_t tiles = 0;
+    bool row_major = true;
+    bool valid = false;
+    uint32_t num_cores = 0;
+    tt::tt_metal::CoreRangeSet all_cores, group_1, group_2;
+    uint32_t tiles_1 = 0, tiles_2 = 0;
+    std::vector<CoreCoord> cores;
+};
+
+const InterleavedSplit& interleaved_split(const tt::tt_metal::CoreRangeSet& grid, uint32_t tiles, bool row_major) {
+    thread_local InterleavedSplit split;
+    const bool same_cores = split.valid && split.row_major == row_major && split.grid == grid;
+    if (same_cores && split.tiles == tiles) {
+        return split;
+    }
+    std::tie(split.num_cores, split.all_cores, split.group_1, split.group_2, split.tiles_1, split.tiles_2) =
+        tt::tt_metal::split_work_to_cores(grid, tiles, row_major);
+    if (!same_cores) {
+        split.cores = tt::tt_metal::corerange_to_cores(grid, {}, row_major);
+        split.grid = grid;
+        split.row_major = row_major;
+        split.valid = true;
+    }
+    split.tiles = tiles;
+    return split;
+}
+
+// Calls fn(core, reader_args, writer_args, compute_args, has_work) once per core, in the order create_descriptor()
+// populates them.  The three lists are scratch buffers reused across cores (no per-core allocation on
+// the cache-hit path), so they are only valid for the duration of each call.
+template <typename Fn>
+void for_each_core_runtime_args(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
     const Tensor& a,
     const std::optional<Tensor>& b,
-    const Tensor& c) {
+    const Tensor& c,
+    const Fn& fn,
+    bool fill_noop_args = true) {
     using namespace tt;
     using namespace tt::tt_metal;
-
-    BinaryNgPerCoreArgs result;
 
     const auto& all_device_cores = operation_attributes.worker_grid;
     const auto op_type = operation_attributes.binary_op_type;
@@ -451,8 +487,16 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
         b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
     const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
-    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
+    // get_shard_specs() is nullopt unless some operand is sharded. Testing that first avoids copying
+    // b's TensorSpec into an optional when every operand is interleaved.
+    const bool any_sharded = any_memory_config_sharded(
+        {&a.memory_config(), b.has_value() ? &b->memory_config() : nullptr, &c.memory_config()});
+    const auto shard_specs = any_sharded
+                                 ? CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
+                                       a.tensor_spec(),
+                                       b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+                                       c.tensor_spec())
+                                 : std::nullopt;
     const bool rt_has_sharding = shard_specs.has_value();
     auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
@@ -481,9 +525,10 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
         zero_start_grid ? compute_with_storage_grid.x * compute_with_storage_grid.y : all_device_cores.num_cores();
 
     uint32_t num_tiles_per_core_group_1{}, num_tiles_per_core_group_2{};
-    CoreRangeSet all_cores, core_group_1, core_group_2;
+    CoreRangeSet all_cores, core_group_1_storage, core_group_2_storage;
     uint32_t num_cores;
-    std::vector<CoreCoord> cores;
+    std::vector<CoreCoord> cores_storage;
+    const InterleavedSplit* split = nullptr;
 
     const bool row_major_inputs =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
@@ -561,7 +606,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                                shard_specs->a_shard_spec == shard_specs->c_shard_spec;
 
     if (rt_has_sharding) {
-        core_group_1 = grid;
+        core_group_1_storage = grid;
         a_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->a_shard_spec, a);
         if (b.has_value()) {
             b_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->b_shard_spec, *b);
@@ -573,40 +618,92 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             shard_specs->c_shard_spec, CMAKE_UNIQUE_NAMESPACE::get_memory_layout(a, b, c));
 
         if (zero_start_grid) {
-            auto bbox = core_group_1.bounding_box();
-            cores = grid_to_cores_with_noop(
+            auto bbox = core_group_1_storage.bounding_box();
+            cores_storage = grid_to_cores_with_noop(
                 bbox.end_coord.x,
                 bbox.end_coord.y,
                 compute_with_storage_grid.x,
                 compute_with_storage_grid.y,
                 row_major);
         } else {
-            cores = grid_to_cores_with_noop(core_group_1, all_device_cores, row_major);
+            cores_storage = grid_to_cores_with_noop(core_group_1_storage, all_device_cores, row_major);
         }
     } else if (zero_start_grid) {
         std::tie(
-            num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
+            num_cores,
+            all_cores,
+            core_group_1_storage,
+            core_group_2_storage,
+            num_tiles_per_core_group_1,
+            num_tiles_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid, rt_c_num_tiles, row_major);
-        cores = grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
+        cores_storage =
+            grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
     } else {
-        std::tie(
-            num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(all_device_cores, rt_c_num_tiles, row_major);
-        cores = corerange_to_cores(all_device_cores, {}, row_major);
+        split = &interleaved_split(all_device_cores, rt_c_num_tiles, row_major);
+        num_cores = split->num_cores;
+        num_tiles_per_core_group_1 = split->tiles_1;
+        num_tiles_per_core_group_2 = split->tiles_2;
     }
+    const auto& core_group_1 = split ? split->group_1 : core_group_1_storage;
+    const auto& core_group_2 = split ? split->group_2 : core_group_2_storage;
+    const auto& cores = split ? split->cores : cores_storage;
 
-    result.cores.reserve(num_cores_total);
-    result.reader.reserve(num_cores_total);
-    result.writer.reserve(num_cores_total);
-    result.compute.reserve(num_cores_total);
+    // Core-invariant values, computed once rather than per work core.
+    const bool rt_is_quant_op = operation_attributes.is_quant_op;
+    TT_FATAL(
+        rt_is_quant_op ==
+            ((operation_attributes.post_activations.size() == 1) &&
+             (operation_attributes.post_activations[0].type() == ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+        "Quantization op needs to exactly one zero-point value as a post activation");
+    const uint32_t quantization_zero_point =
+        rt_is_quant_op
+            ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
+            : 0u;
+    uint32_t compute_scalar_value = quantization_zero_point;
+    if (b.has_value() && (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
+                          operation_attributes.binary_op_type == BinaryOpType::WHERE_TST)) {
+        // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
+        const auto value_dtype = b->dtype();
+        const bool int_fill = value_dtype == DataType::INT32 || value_dtype == DataType::UINT32;
+        compute_scalar_value = pack_scalar_runtime_arg(
+            operation_attributes.scalar.value(), int_fill ? value_dtype : DataType::FLOAT32, false);
+    }
+    // Scalar operand (no b): goes to the writer (tile path) or reader (row-major path); 0 when b is a tensor.
+    const uint32_t packed_scalar =
+        b.has_value() ? 0u : pack_scalar_runtime_arg(*operation_attributes.scalar, a.dtype(), rt_is_quant_op);
+
+    // Row broadcast column group: 1 for small shares, kMaxColGroup for large; 0 = page order.
+    const uint32_t col_group = [&] {
+        if (!b.has_value() || row_major_inputs || rt_has_sharding || cHt < 2 ||
+            operation_attributes.subtile_broadcast_type != SubtileBroadcastType::ROW_B) {
+            return 0u;
+        }
+        const uint32_t tiles_per_core = tt::div_up(rt_c_num_tiles, std::max(num_cores, 1u));
+        const uint32_t dram_banks = a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+        const uint32_t min_tiles = std::gcd(cWt, dram_banks) > 1 ? CMAKE_UNIQUE_NAMESPACE::kColGroupFewBanksMinTiles
+                                                                 : CMAKE_UNIQUE_NAMESPACE::kColGroupMinTiles;
+        return tiles_per_core >= min_tiles ? CMAKE_UNIQUE_NAMESPACE::kMaxColGroup : 1u;
+    }();
+
+    // Noop cores get zero-filled runtime args, sized to match the active kernel variant so unused cores
+    // neither inflate the per-kernel max runtime-arg allocation nor change slot count when a core flips
+    // between noop and work across differently-shaped cache hits.
+    const size_t noop_reader_len = row_major_inputs ? 26 : 24;
+    const size_t noop_writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
+    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE || op_type == BinaryOpType::REQUANT) ? 5 : 4;
+
+    // Scratch lists reused for every core; each core below reassigns all three in full before fn().
+    RuntimeArgList reader_runtime_args;
+    RuntimeArgList writer_runtime_args;
+    RuntimeArgList compute_runtime_args;
+    reader_runtime_args.reserve(noop_reader_len);
+    writer_runtime_args.reserve(noop_writer_len);
+    compute_runtime_args.reserve(noop_compute_len);
 
     uint32_t current_block = 0;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
-
-        std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args;
-        std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args;
-        std::vector<std::variant<uint32_t, Buffer*>> compute_runtime_args;
 
         uint32_t a_num_tiles = 0;
         uint32_t b_num_tiles = 0;
@@ -616,19 +713,12 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
         } else if (core_group_2.contains(core)) {
             c_num_tiles_core = num_tiles_per_core_group_2;
         } else {
-            // Noop core: zero-filled runtime args, sized to match the active kernel variant so unused
-            // cores neither inflate the per-kernel max runtime-arg allocation nor change slot count when a
-            // core flips between noop and work across differently-shaped cache hits.
-            const size_t reader_len = row_major_inputs ? 26 : 23;
-            const size_t writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
-            const size_t compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
-            reader_runtime_args.assign(reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
-            writer_runtime_args.assign(writer_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
-            compute_runtime_args.assign(compute_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
-            result.cores.push_back(core);
-            result.reader.push_back(std::move(reader_runtime_args));
-            result.writer.push_back(std::move(writer_runtime_args));
-            result.compute.push_back(std::move(compute_runtime_args));
+            if (fill_noop_args) {
+                reader_runtime_args.assign(noop_reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+                writer_runtime_args.assign(noop_writer_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+                compute_runtime_args.assign(noop_compute_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+            }
+            fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/false);
             continue;
         }
 
@@ -652,21 +742,8 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
             c_start_id = start_tile_id;
         }
 
-        const bool rt_is_quant_op = operation_attributes.is_quant_op;
-        TT_FATAL(
-            rt_is_quant_op ==
-                ((operation_attributes.post_activations.size() == 1) &&
-                 (operation_attributes.post_activations[0].type() == ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
-            "Quantization op needs to exactly one zero-point value as a post activation");
-        const uint32_t quantization_zero_point =
-            rt_is_quant_op ? std::bit_cast<uint32_t>(
-                                 operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
-                           : 0u;
-        uint32_t compute_scalar_value = quantization_zero_point;
-
         uint32_t compute_tiles = row_major_inputs ? (c_num_tiles_core * tiles_per_row_width) : c_num_tiles_core;
 
-        uint32_t packed_scalar_for_reader = 0u;
         if (b.has_value()) {
             if (rt_has_sharding) {
                 if (all_same_shard_spec) {
@@ -694,19 +771,21 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                     writer_stride_size_bytes};
             } else {
                 writer_runtime_args = {
-                    c.buffer(), c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
+                    c.buffer(),
+                    c_start_id,
+                    c_num_tiles_core,
+                    c_current_shard_width,
+                    cD,
+                    cN,
+                    cC,
+                    cHt,
+                    cWt,
+                    cND,
+                    col_group};
             }
 
             auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
                 operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
-                operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
-                // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
-                const auto value_dtype = b.has_value() ? b->dtype() : a.dtype();
-                const bool int_fill = value_dtype == DataType::INT32 || value_dtype == DataType::UINT32;
-                compute_scalar_value = pack_scalar_runtime_arg(
-                    operation_attributes.scalar.value(), int_fill ? value_dtype : DataType::FLOAT32, false);
-            }
             if (row_major_inputs) {
                 freq = 1;
                 counter = 0;
@@ -723,9 +802,6 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 compute_runtime_args = {compute_tiles, freq, counter, compute_scalar_value};
             }
         } else {
-            const auto scalar = *operation_attributes.scalar;
-            const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
-            packed_scalar_for_reader = packed_scalar;
             if (row_major_inputs) {
                 writer_runtime_args = {
                     c.buffer(),
@@ -796,7 +872,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 b_alignment,
                 tiles_per_row_width,
                 reader_stride_size_bytes,
-                packed_scalar_for_reader};
+                packed_scalar};
         } else {
             reader_runtime_args = {
                 a.buffer(),
@@ -822,21 +898,22 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
                 b_num_tiles,
                 aWt,
                 bWt,
+                col_group,
             };
         }
 
-        result.cores.push_back(core);
-        result.reader.push_back(std::move(reader_runtime_args));
-        result.writer.push_back(std::move(writer_runtime_args));
-        result.compute.push_back(std::move(compute_runtime_args));
+        if (op_type == BinaryOpType::REQUANT) {
+            compute_runtime_args.push_back(std::bit_cast<uint32_t>(
+                operation_attributes.post_activations[0].get_param_if<float>(1).value_or(0.0f)));
+        }
+
+        fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/true);
 
         start_tile_id += c_num_tiles_core;
         if (row_major_inputs) {
             current_block += c_num_tiles_core;
         }
     }
-
-    return result;
 }
 
 }  // namespace
@@ -909,38 +986,44 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
-    // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
-    // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
+    // Quant/requant round to nearest even for every output dtype. The init picks the clamp range:
+    // [0, 255] for uint8 and [-128, 127] otherwise. The packer narrows the int32 SFPU result to uint8.
     // For int8 output, the SFPU crafts an offset-128 byte and stores through the UInt8 packer path.
     const char* quant_zp_arg = "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // Requant also takes the output zero point, added after rounding.
+    const char* requant_zp_args =
+        "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX), "
+        "get_arg_val<uint32_t>(QUANT_OUT_ZERO_POINT_RT_ARGS_IDX));";
     const bool int8_in = is_quant_op && a_dtype == DataType::INT8;
-    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn) {
-        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + quant_zp_arg;
+    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn, const char* zp_args) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + zp_args;
         compute_kernel_defines["BINARY_SFPU_OP"] = op_fn;
     };
     if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
         if (c_dtype == DataType::UINT8) {
             compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
         } else if (c_dtype == DataType::INT8) {
-            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
+            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::DEQUANT) {
         if (int8_in) {
-            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile");
+            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
         if (c_dtype == DataType::INT8) {
             set_sfpu_op(
                 int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
-                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
+                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile",
+                requant_zp_args);
         } else if (c_dtype == DataType::UINT8) {
-            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
-            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8). It reuses
+            // the int32-output op body; only the init differs, to select the [0, 255] clamp.
             set_sfpu_op(
                 int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
-                int8_in ? "requant_int8_in_tile" : "requant_tile");
+                int8_in ? "requant_int8_in_tile" : "requant_tile",
+                requant_zp_args);
         } else if (int8_in) {
-            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
+            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile", requant_zp_args);
         }
     }
 
@@ -1037,6 +1120,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                // Requant also passes its output zero point as the 5th run-time kernel argument
+                compute_kernel_defines["QUANT_OUT_ZERO_POINT_RT_ARGS_IDX"] = "4";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
                 add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
@@ -1232,6 +1317,33 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         writer_kernel = KernelName::WriterNoBcastNg;
     }
 
+    // Interleaved row broadcast: walk C in column groups and hold one B tile per column in L1 (c_7), so each B tile
+    // is read once per core. Flat 32x32 tiles hold only row 0 (two face rows); block-float tiles are held whole.
+    if (!inputs_row_major && !has_sharding && b.has_value() &&
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        const auto& b_tile = b->tensor_spec().tile();
+        const bool b_flat = b_tile.get_height() == tt::constants::TILE_HEIGHT &&
+                            b_tile.get_width() == tt::constants::TILE_WIDTH &&
+                            (b_dtype == DataType::BFLOAT16 || b_dtype == DataType::FLOAT32 ||
+                             b_dtype == DataType::INT32 || b_dtype == DataType::UINT32);
+        const uint32_t row_bytes = 2 * 16 * (b_single_tile_size / tt::constants::TILE_HW);
+        const uint32_t slot_bytes = b_flat ? row_bytes : b_single_tile_size;
+        if (b_flat) {
+            reader_defines["B_ROW_WORDS"] = std::to_string(row_bytes / 2 / sizeof(uint32_t));
+        }
+        reader_defines["COL_GROUP_B"] = std::to_string(CMAKE_UNIQUE_NAMESPACE::kMaxColGroup);
+        writer_defines["COL_GROUP_B"] = std::to_string(CMAKE_UNIQUE_NAMESPACE::kMaxColGroup);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = slot_bytes * CMAKE_UNIQUE_NAMESPACE::kMaxColGroup,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+                .data_format = b_data_format,
+                .page_size = slot_bytes,
+            }}},
+        });
+    }
+
     // WRITER KERNEL DESCRIPTOR
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
@@ -1256,7 +1368,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
 
     if (is_sfpu_op) {
         if (op_type != BinaryOpType::POWER) {
@@ -1267,18 +1380,24 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[tt::CBIndex::c_6] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         } else {
-            unpack_to_dest_mode[src0_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src0interim_cb_index] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[src1interim_cb_index] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_5] =
-                (a_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_6] =
-                (b_dtype == DataType::FLOAT32) ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32 : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                     ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                     : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0interim_cb_index] = (a_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1interim_cb_index] = (b_dtype == DataType::FLOAT32)
+                                                            ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                            : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_5] = (a_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_6] = (b_dtype == DataType::FLOAT32)
+                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
+                                                        : tt::tt_metal::UnpackToDestMode::Default;
         }
     }
 
@@ -1416,14 +1535,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // === Per-core runtime arguments ===
     // Built via the shared single-source-of-truth builder so create_descriptor() (cache miss, here)
     // and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit) stay byte-identical.
-    {
-        auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
-        for (size_t i = 0; i < per_core.cores.size(); ++i) {
-            reader_desc.emplace_runtime_args(per_core.cores[i], per_core.reader[i]);
-            writer_desc.emplace_runtime_args(per_core.cores[i], per_core.writer[i]);
-            compute_desc.emplace_runtime_args(per_core.cores[i], per_core.compute[i]);
-        }
-    }
+    for_each_core_runtime_args(
+        operation_attributes,
+        a,
+        b,
+        c,
+        [&](const CoreCoord& core,
+            const RuntimeArgList& reader_args,
+            const RuntimeArgList& writer_args,
+            const RuntimeArgList& compute_args,
+            bool /*has_work*/) {
+            reader_desc.emplace_runtime_args(core, reader_args);
+            writer_desc.emplace_runtime_args(core, writer_args);
+            compute_desc.emplace_runtime_args(core, compute_args);
+        });
 
     // Push kernel descriptors: reader (index 0), writer (index 1), compute (index 2)
     desc.kernels.push_back(std::move(reader_desc));
@@ -1456,30 +1581,64 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
-    auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
-
     constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
 
-    auto apply = [&](uint32_t kernel_idx,
-                     const CoreCoord& core,
-                     const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
-        auto& data = tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core);
-        for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
-            const auto& slot = args[arg_idx];
-            data[arg_idx] = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
-                                ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
-                                : std::get<uint32_t>(slot);
-        }
+    // One table per kernel, addressed by logical core. The table is sized to the kernel core box;
+    // a slot inside that box can still be empty when the core is outside the kernel's core set.
+    auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    auto& compute_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx);
+
+    auto core_args = [](std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>& table,
+                        const CoreCoord& core) -> tt::tt_metal::RuntimeArgsData& {
+        TT_FATAL(
+            core.x < table.size() && core.y < table[core.x].size(),
+            "binary_ng runtime-arg table has no entry for core ({}, {})",
+            core.x,
+            core.y);
+        return table[core.x][core.y];
     };
 
-    for (size_t i = 0; i < per_core.cores.size(); ++i) {
-        const auto& core = per_core.cores[i];
-        apply(kReaderKernelIdx, core, per_core.reader[i]);
-        apply(kWriterKernelIdx, core, per_core.writer[i]);
-        apply(kComputeKernelIdx, core, per_core.compute[i]);
-    }
+    // One size check, then raw writes: runs for every core on every call.
+    auto apply = [](tt::tt_metal::RuntimeArgsData& data, const RuntimeArgList& args) {
+        TT_FATAL(
+            args.size() <= data.size(),
+            "binary_ng runtime-arg override writes {} args into a slot of {}",
+            args.size(),
+            data.size());
+        uint32_t* dst = data.data();
+        for (const auto& slot : args) {
+            *dst++ = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
+                         ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
+                         : std::get<uint32_t>(slot);
+        }
+    };
+    for_each_core_runtime_args(
+        operation_attributes,
+        a,
+        b,
+        c,
+        [&](const CoreCoord& core,
+            const RuntimeArgList& reader_args,
+            const RuntimeArgList& writer_args,
+            const RuntimeArgList& compute_args,
+            bool has_work) {
+            // Idle cores only need zeroed args.
+            const auto write = [&](auto& table, const RuntimeArgList& args) {
+                auto& data = core_args(table, core);
+                if (has_work) {
+                    apply(data, args);
+                } else {
+                    std::fill_n(data.data(), data.size(), 0u);
+                }
+            };
+            write(reader_args_by_core, reader_args);
+            write(writer_args_by_core, writer_args);
+            write(compute_args_by_core, compute_args);
+        },
+        /*fill_noop_args=*/false);
 
     // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
     // binary_ng convention: c_0 = input_a, c_1 = input_b, c_2 = output.  Addressing by CBIndex (not by

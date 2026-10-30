@@ -81,6 +81,14 @@ void kernel_main() {
     // core pushes the counter CB once after counter_ready_sem fires, so cb_wait_front here
     // doubles as the gate for "counter data is live in L1".  The CB is never popped — both
     // this kernel and writer_untilize rely on the data staying resident.
+    // cb_experts_tok_counter is not used as a typical CB. It's intended to be a scratchpad that is setup
+    // once, remote-written-to once, then read by multiple consumers. The order of operations is
+    // - sender core remote-writes to this CB's data region, then bumps the untilizer core's semaphore
+    // - untilizer's reader kernel waits on the semaphore and reserves + pushes to the CB, thus making the data
+    //   available
+    // - untilizer's reader, writer and compute kernels wait_front on the CB, then read from it.
+    // These kernels must not pop_front because it can happen that pop lands before some other kernel got to its
+    // wait_front step, which would cause it to wait forever (a.k.a. hang)
     cb_experts_tok_counter.wait_front(cb_counter_total_pages);
 
     // Snapshot per-expert token counts.  read_tile_value has UNPACK read from L1 and broadcast

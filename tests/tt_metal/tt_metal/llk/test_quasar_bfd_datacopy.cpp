@@ -16,6 +16,7 @@
 // descriptor is caught.
 
 #include "llk_device_fixture.hpp"
+#include "single_node_dfb_program.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -46,135 +47,8 @@ constexpr std::uint32_t TOTAL_TILES = NUM_CYCLES * NUM_LOOPS;
 }  // namespace
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device = this->devices_.at(0);
-    auto& cq = mesh_device->mesh_command_queue();
-    const experimental::NodeCoord node{0, 0};
-
+    namespace single_node_dfb = tt::tt_metal::unit_tests::llk::single_node_dfb;
     const std::uint32_t single_tile_size = 2 * 1024;  // Float16_b 32x32 tile
-
-    // The direct reader/writer kernels address a single DRAM bank (bank_id
-    // 0). Use page_size = whole buffer so the allocator places each buffer in
-    // one bank, and advance the DRAM pointer by the native tile size.
-    distributed::ReplicatedBufferConfig src_global_config{.size = single_tile_size * TILES_STREAMED_PER_INPUT};
-    distributed::DeviceLocalBufferConfig src_local_config{
-        .page_size = single_tile_size * TILES_STREAMED_PER_INPUT, .buffer_type = BufferType::DRAM};
-    auto src0_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
-    auto src1_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
-    auto src2_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
-
-    auto dst_dram_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = single_tile_size * TOTAL_TILES},
-        {.page_size = single_tile_size * TOTAL_TILES, .buffer_type = BufferType::DRAM},
-        mesh_device.get());
-
-    const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
-    const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
-    const experimental::DFBSpecName IN2_DFB{"in2_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER0{"reader0"};
-    const experimental::KernelSpecName READER1{"reader1"};
-    const experimental::KernelSpecName READER2{"reader2"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-
-    experimental::DataflowBufferSpec in0_dfb_spec{
-        .unique_id = IN0_DFB,
-        .entry_size = single_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-    };
-    experimental::DataflowBufferSpec in1_dfb_spec{
-        .unique_id = IN1_DFB,
-        .entry_size = single_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-    };
-    experimental::DataflowBufferSpec in2_dfb_spec{
-        .unique_id = IN2_DFB,
-        .entry_size = single_tile_size,
-        .num_entries = 2,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-    };
-    experimental::DataflowBufferSpec out_dfb_spec{
-        .unique_id = OUT_DFB,
-        .entry_size = single_tile_size,
-        .num_entries = 4,
-        .data_format_metadata = tt::DataFormat::Float16_b,
-    };
-
-    auto make_reader_spec = [](const experimental::DFBSpecName& dfb) {
-        return experimental::KernelSpec{
-            .unique_id = experimental::KernelSpecName{""},  // patched by caller
-            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
-            .num_threads = 1,
-            .dfb_bindings = {experimental::ProducerOf(dfb, "out")},
-            .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
-        };
-    };
-    experimental::KernelSpec reader0_spec = make_reader_spec(IN0_DFB);
-    reader0_spec.unique_id = READER0;
-    experimental::KernelSpec reader1_spec = make_reader_spec(IN1_DFB);
-    reader1_spec.unique_id = READER1;
-    experimental::KernelSpec reader2_spec = make_reader_spec(IN2_DFB);
-    reader2_spec.unique_id = READER2;
-
-    experimental::KernelSpec writer_spec{
-        .unique_id = WRITER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
-        .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
-        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
-    };
-
-    experimental::KernelSpec compute_spec{
-        .unique_id = COMPUTE,
-        .source = "tests/tt_metal/tt_metal/test_kernels/compute/bfd_datacopy_quasar.cpp",
-        .num_threads = 1,
-        .dfb_bindings =
-            {{
-                 .dfb_spec_name = IN0_DFB,
-                 .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = IN1_DFB,
-                 .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = IN2_DFB,
-                 .accessor_name = "in2",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             },
-             {
-                 .dfb_spec_name = OUT_DFB,
-                 .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
-             }},
-        .compile_time_args = {{"num_cycles", NUM_CYCLES}, {"num_loops", NUM_LOOPS}},
-        .hw_config = experimental::ComputeHardwareConfig{},
-    };
-
-    experimental::WorkUnitSpec wu{
-        .name = "main",
-        .kernels = {READER0, READER1, READER2, WRITER, COMPUTE},
-        .target_nodes = node,
-    };
-
-    experimental::ProgramSpec spec{
-        .name = "bfd_datacopy",
-        .kernels = {reader0_spec, reader1_spec, reader2_spec, writer_spec, compute_spec},
-        .dataflow_buffers = {in0_dfb_spec, in1_dfb_spec, in2_dfb_spec, out_dfb_spec},
-        .work_units = {wu},
-    };
-
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Stimulus: TILES_PER_INPUT distinct random tiles per input, repeated NUM_LOOPS times in DRAM so the
     // readers stream (and the compute copies) the SAME tiles over and over.
@@ -191,43 +65,22 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     std::vector<std::uint32_t> src0_vec = make_streamed(0xC0FFEE);
     std::vector<std::uint32_t> src1_vec = make_streamed(0xDEAD01);
     std::vector<std::uint32_t> src2_vec = make_streamed(0xBEEF02);
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/true);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/true);
-    distributed::EnqueueWriteMeshBuffer(cq, src2_dram_buffer, src2_vec, /*blocking=*/true);
 
-    auto reader_run_args = [&](const std::shared_ptr<distributed::MeshBuffer>& buf) {
-        return experimental::MakeRuntimeArgsForSingleNode(
-            node,
-            {{"src_addr", buf->address()},
-             {"src_bank_id", 0u},
-             {"num_tiles", TILES_STREAMED_PER_INPUT},
-             {"dram_page_stride", single_tile_size}});
+    auto input = [](const std::vector<std::uint32_t>& data, const char* accessor) {
+        return single_node_dfb::Input{
+            .data = data,
+            .format = tt::DataFormat::Float16_b,
+            .num_tiles = TILES_STREAMED_PER_INPUT,
+            .accessor = accessor,
+            .num_entries = 2};
     };
-
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER0, .runtime_arg_values = reader_run_args(src0_dram_buffer)},
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER1, .runtime_arg_values = reader_run_args(src1_dram_buffer)},
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = READER2, .runtime_arg_values = reader_run_args(src2_dram_buffer)},
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node,
-                {{"dst_addr", dst_dram_buffer->address()},
-                 {"dst_bank_id", 0u},
-                 {"num_tiles", TOTAL_TILES},
-                 {"dram_page_stride", single_tile_size}}),
-        },
-    };
-    experimental::SetProgramRunArgs(program, params);
-
-    LaunchProgram(*mesh_device, std::move(program));
-
-    std::vector<std::uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+    std::vector<std::uint32_t> result_vec = single_node_dfb::run(
+        *this->devices_.at(0),
+        {.name = "bfd_datacopy",
+         .inputs = {input(src0_vec, "in0"), input(src1_vec, "in1"), input(src2_vec, "in2")},
+         .output = {.format = tt::DataFormat::Float16_b, .num_tiles = TOTAL_TILES, .accessor = "out", .num_entries = 4},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/bfd_datacopy_quasar.cpp",
+         .compile_time_args = {{"num_cycles", NUM_CYCLES}, {"num_loops", NUM_LOOPS}}});
 
     // Output order = pack order: per outer loop, in0's whole block, then in1's, then in2's (blocked).
     // Within a loop, cycle i copies tile (i % TILES_PER_INPUT) of input (i / TILES_PER_INPUT), taken from

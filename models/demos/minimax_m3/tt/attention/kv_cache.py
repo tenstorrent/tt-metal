@@ -7,12 +7,15 @@ from typing import Optional
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.runners.kv_bank_alignment import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    check_kv_bank_aligned,
+)
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # DRAM ND-shard geometry for the packed prefill KV cache — M3-local (decoupled from the DeepSeek substrate
 # so they can diverge). The sequence is tiled into NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token blocks that
 # round-robin across BH_NUM_DRAM_BANKS DRAM banks. The address-table builder must match both values.
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 
 
@@ -31,7 +34,7 @@ class MiniMaxKVCache(KvCaches):
                          ``[n*chunk + s*chunk_local + t*chunk_local/tp, +chunk_local/tp)`` of every chunk n,
                          so its per-chip shape is ``[.., 1, seq_local/tp, ..]``.
 
-    Batch dim is user-major (``slot = user_id * num_layers + layer_idx``) so each user's layers stay
+    Batch dim is slot-major (``cache_row = slot_id * num_layers + layer_idx``) so each slot's layers stay
     contiguous, matching ``update_padded_kv_cache``'s indexing. The adapter allocates this once and the
     engine holds it as an opaque handle, passing it back into every runtime call that touches it.
     """
@@ -62,6 +65,7 @@ def allocate_kv_caches(
     head_dim=128,
     cache_dtype=ttnn.bfloat8_b,
     index_k_tp_shard=None,
+    bank_aligned=False,
 ) -> MiniMaxKVCache:
     """Allocate the three external prefill KV caches (K, V, index_k). See :class:`MiniMaxKVCache`.
 
@@ -117,6 +121,8 @@ def allocate_kv_caches(
     )
 
     def _alloc(dtype=cache_dtype, rows=seq_local):
+        if bank_aligned:
+            check_kv_bank_aligned(max_seq_len, rows, BH_NUM_DRAM_BANKS)
         # Per-chip cache is one head ([.., 1, ..]); WHICH head a chip holds (or whether index_k is
         # replicated across cols) is decided at write time by how the input chunk is mesh-mapped, not
         # here. Every chip gets the same zeroed buffer, allocated and zeroed on device: a host tensor of
@@ -162,7 +168,7 @@ def allocate_kv_caches(
     )
 
 
-def _write_one(cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_axis, tp_axis=None):
+def _write_one(cache, tensor, *, slot_id, layer_idx, num_layers, kv_actual, sp_axis, tp_axis=None):
     """Write one SP-sharded chunk tensor into a packed cache via update_padded_kv_cache.
 
     ``tp_axis`` (KV dedup): ``tensor`` is TP-replicated and each chip persists only its own 1/tp window
@@ -176,7 +182,7 @@ def _write_one(cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_
     ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
         cache,
         src,
-        slot_idx=slot_idx,
+        slot_idx=slot_id,
         layer_idx=layer_idx,
         num_layers=num_layers,
         kv_actual_global=kv_actual,
@@ -187,7 +193,7 @@ def _write_one(cache, tensor, *, slot_idx, layer_idx, num_layers, kv_actual, sp_
         src.deallocate(True)
 
 
-def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_idx, layer_idx, kv_actual, sp_axis):
+def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_id, layer_idx, kv_actual, sp_axis):
     """Write this chunk's post-RoPE K and raw V into the packed cache (every layer type).
 
     tt_k / tt_v are the per-device SP shards [1, n_kv_local, s_local, head_dim] (heads TP-sharded on the
@@ -197,7 +203,7 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_idx, layer_idx,
     _write_one(
         kv_cache.k,
         tt_k,
-        slot_idx=slot_idx,
+        slot_id=slot_id,
         layer_idx=layer_idx,
         num_layers=kv_cache.num_layers,
         kv_actual=kv_actual,
@@ -206,7 +212,7 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_idx, layer_idx,
     _write_one(
         kv_cache.v,
         tt_v,
-        slot_idx=slot_idx,
+        slot_id=slot_id,
         layer_idx=layer_idx,
         num_layers=kv_cache.num_layers,
         kv_actual=kv_actual,
@@ -214,7 +220,7 @@ def write_kv_chunk(kv_cache: MiniMaxKVCache, tt_k, tt_v, *, slot_idx, layer_idx,
     )
 
 
-def write_index_k_chunk(kv_cache: MiniMaxKVCache, tt_index_k, *, slot_idx, layer_idx, kv_actual, sp_axis):
+def write_index_k_chunk(kv_cache: MiniMaxKVCache, tt_index_k, *, slot_id, layer_idx, kv_actual, sp_axis):
     """Write this chunk's post-norm/post-RoPE MSA index_k (MSA layers only).
 
     tt_index_k is the single shared index head [1, 1, s_local, head_dim], SP-sharded on the rows and
@@ -224,7 +230,7 @@ def write_index_k_chunk(kv_cache: MiniMaxKVCache, tt_index_k, *, slot_idx, layer
     _write_one(
         kv_cache.index_k,
         tt_index_k,
-        slot_idx=slot_idx,
+        slot_id=slot_id,
         layer_idx=layer_idx,
         num_layers=kv_cache.num_layers,
         kv_actual=kv_actual,

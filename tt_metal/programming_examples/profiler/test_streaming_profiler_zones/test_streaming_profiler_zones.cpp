@@ -12,13 +12,13 @@
 // Each RISC times bursts against its wall clock and the host prints cycles per marker; the K = 0 run with the
 // same --benchdelay is the loop's own cost to subtract. Measure on a 1x1 grid with a paced --benchdelay (20 is
 // enough) and no "profiler stalls" or "FAILED TO START" in the log, or the number is the stall.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -32,6 +32,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <internal/mesh_device.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -67,18 +68,26 @@ int main(int argc, char** argv) {
         }
     }
 
-    // A counting subscriber: the capture is decoded and totalled even with no sink armed.
+    // A counting callback, so the capture is decoded and totalled even with no sink armed.
     struct Totals {
         std::atomic<uint64_t> zones{0}, points{0}, stalls{0};
     } totals;
     using experimental::streaming_profiler::Batch;
-    using experimental::streaming_profiler::RecordType;
-    const auto sub =
-        experimental::streaming_profiler::RegisterCallback("zones-example", [&](const Batch<RecordType::All>& b) {
-            totals.zones += b.zones().size();
-            totals.points += b.events().size() + std::ranges::distance(b.timestamped_data());
-            totals.stalls += b.stall_count();
-        });
+    using experimental::streaming_profiler::Event;
+    using experimental::streaming_profiler::Processor;
+    using experimental::streaming_profiler::TimestampedData;
+    using experimental::streaming_profiler::Zone;
+    auto callback = experimental::streaming_profiler::RegisterCallback(
+        [&](const Batch<Zone, TimestampedData, Event>& batch) {
+            // Counts only the Tensix grid's zones, which are the workload's. Whether an eth core's last firmware zone
+            // ships depends on teardown timing.
+            totals.zones += std::ranges::count_if(batch.records<Zone>(), [](const Zone& zone) {
+                return zone.core().processor != Processor::ERISC0 && zone.core().processor != Processor::ERISC1;
+            });
+            totals.points += batch.records<Event>().size() + batch.records<TimestampedData>().size();
+            totals.stalls += batch.stall_count();
+        },
+        "zones-example");
 
     int device_id = 0;
     // TT_METAL_STREAMING_PROFILER_FULL_MESH=RxC opens the whole mesh in one process: N devices, one profiler boot.
@@ -176,7 +185,8 @@ int main(int argc, char** argv) {
         static const char* const kRisc[5] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
         std::vector<uint32_t> slots(10, 0);
         detail::ReadFromDeviceL1(
-            mesh_device->get_device(distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims())),
+            internal::get_device(
+                *mesh_device, distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims())),
             CoreCoord{0, 0},
             kBenchAddr,
             static_cast<uint32_t>(slots.size() * sizeof(uint32_t)),
@@ -195,7 +205,7 @@ int main(int argc, char** argv) {
         }
     }
     mesh_device->close();
-    experimental::streaming_profiler::UnregisterCallback(sub);
+    callback.reset();
     printf(
         "[streaming profiler zones] subscriber saw %llu zones, %llu points, %llu stalls\n",
         (unsigned long long)totals.zones.load(),

@@ -40,9 +40,10 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "test_host_kernel_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -87,7 +88,8 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         GTEST_SKIP() << "Test requires at least 2 devices, found " << NUM_DEVICES;
     }
 
-    std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
+    std::vector<tt::tt_metal::Program> programs;
+    programs.reserve(NUM_DEVICES);
     std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> result_buffers(NUM_DEVICES);
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -101,7 +103,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         std::vector<uint32_t> result_buffer_data(NUM_DEVICES, 0);
         tt::tt_metal::CoreRangeSet core_range = {logical_core};
         result_buffers[src_idx] = PrepareBuffer(src_device, result_size, core_range, result_buffer_data);
-        programs[src_idx] = tt::tt_metal::CreateProgram();
+        programs.push_back(tt::tt_metal::CreateProgram(*src_device));
 
         uint32_t result_addr = result_buffers[src_idx]->address();
         std::vector<uint32_t> runtime_args = {
@@ -180,7 +182,7 @@ void RunSetUnicastRouteTest(
     std::vector<tt::tt_metal::CoreCoord> logical_cores(NUM_DEVICES);
     for (size_t dev_idx = 0; dev_idx < NUM_DEVICES; dev_idx++) {
         if (core_type == HalProgrammableCoreType::IDLE_ETH) {
-            auto idle_eth_cores = devices[dev_idx]->get_devices()[0]->get_inactive_ethernet_cores();
+            auto idle_eth_cores = devices[dev_idx]->impl().get_devices()[0]->get_inactive_ethernet_cores();
             if (idle_eth_cores.empty()) {
                 GTEST_SKIP() << "No IDLE_ETH cores available on device " << dev_idx;
             }
@@ -193,7 +195,8 @@ void RunSetUnicastRouteTest(
         }
     }
 
-    std::vector<tt::tt_metal::Program> programs(NUM_DEVICES);
+    std::vector<tt::tt_metal::Program> programs;
+    programs.reserve(NUM_DEVICES);
     std::vector<uint32_t> result_addrs(NUM_DEVICES);
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
@@ -223,7 +226,7 @@ void RunSetUnicastRouteTest(
         uint32_t result_addr = FABRIC_TEST_BUFFER_BASE_ADDR;
         result_addrs[src_idx] = result_addr;
 
-        programs[src_idx] = tt::tt_metal::CreateProgram();
+        programs.push_back(tt::tt_metal::CreateProgram(*src_device));
 
         std::vector<uint32_t> runtime_args = {
             *src_fabric_node_id.mesh_id,         // src_mesh_id

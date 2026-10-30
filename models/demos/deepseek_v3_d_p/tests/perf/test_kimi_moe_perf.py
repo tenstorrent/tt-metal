@@ -32,12 +32,14 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import routed_expert_combine_overlap_arg
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.perf_utils import adjust_margin_for_ddr_speed
-from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 # 640 tokens/chip: the 5k production prefill chunk on SP=8.
@@ -67,7 +69,7 @@ class _MoEPerfCase:
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=3_751_000,
+    expected_ns=3_103_000,
     margin=0.03,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -75,6 +77,8 @@ _K2_7 = _MoEPerfCase(
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
+    # K3 does not opt into the routed expert / combine overlap; 6.31 ms is its Oct 16 baseline, from before
+    # the overlap existed (#60928's runs: 6.304 / 6.316 / 6.308 ms).
     expected_ns=6_310_000,
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
@@ -136,11 +140,8 @@ def _replay_ns(mesh_device, copy_tid, controller):
 def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, num_links, request):
     """Traced E2E of one MoE forward at the 5k production chunk, per Kimi generation."""
     is_galaxy = tuple(mesh_device.shape) == (8, 4)
-    if is_galaxy and not (is_high_power() or _IGNORE_POWER):
-        pytest.skip(
-            "perf job requires a high-power (>=130W TDP) galaxy (exabox.tenstorrent.com/power=14kw); "
-            "KIMI_MOE_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only"
-        )
+    if is_galaxy and not _IGNORE_POWER:
+        require_high_power(f"{case.label} MoE perf")
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_tag = "8x4 torus-xy" if is_galaxy else f"{mesh_device.shape[0]}x{mesh_device.shape[1]} fabric2d"
 
@@ -203,6 +204,7 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         request,
         **case.extra,
         measure=measure,
+        overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(case.config),
     )
 
     assert replays_ns, f"no traced replay was timed for the {case.label} MoE forward"
@@ -217,11 +219,26 @@ def test_kimi_moe_perf(variant, case, config_only, mesh_device, device_params, n
         logger.info(f"{tag}: replays (ms) " + " ".join(f"{ns / 1e6:.3f}" for ns in replays_ns))
 
     expected_ns = case.expected_ns if is_galaxy else None
+    margin = None if expected_ns is None else adjust_margin_for_ddr_speed(case.margin)
+    emit_perf_metrics(
+        f"{case.label.replace('.', '_')}_moe_{mesh_tag.replace(' ', '_')}",
+        f"{tag} perf",
+        {
+            "mesh": mesh_tag,
+            "measured_ns": total_ns,
+            "measured_ms": total_ns / 1e6,
+            "replays_ns": replays_ns,
+            "expected_ns": expected_ns,
+            "perf_margin_pct": None if margin is None else margin * 100.0,
+            "within_band": None
+            if expected_ns is None
+            else expected_ns * (1 - margin) <= total_ns <= expected_ns * (1 + margin),
+        },
+    )
     if expected_ns is None:
         logger.warning(f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) -- REPORT ONLY, not gated")
         return
 
-    margin = adjust_margin_for_ddr_speed(case.margin)
     lower, upper = expected_ns * (1 - margin), expected_ns * (1 + margin)
     logger.info(
         f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), expected {expected_ns:,} ns, "

@@ -65,6 +65,10 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
+    // Zero would divide the dense region by nothing. Any value >= 1 is legal -- the movement-class split
+    // means no size can deadlock the ring -- and the page floor catches a factor large enough to round a
+    // channel away, so this only rejects the one value that has no meaning.
+    TT_FATAL(args.fwd_reduction >= 1, "combine_fabric2d: fwd_reduction must be >= 1 (got {})", args.fwd_reduction);
     TT_FATAL(
         !args.output_mem_config.is_sharded(),
         "combine_fabric2d: output memory config must be interleaved, not sharded");
@@ -94,8 +98,9 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         args.seq_len_per_chip >= 1, "combine_fabric2d: seq_len_per_chip must be >= 1 (got {})", args.seq_len_per_chip);
 
-    // ---- Token data. Page = one token, so the last dim is the embedding and the rest is the flat slot
-    // index. BFLOAT16 only: the fp8 and TILE paths both need the untilize stage this op does not have.
+    // ---- Token data. The last dim is the embedding and the rest is the flat slot index. BFLOAT16 in either
+    // layout, or BFLOAT8_B TILE, which the untilizer cores unpack to BFLOAT16 rows. Tokens move as BFLOAT16
+    // from there on, so the output is BFLOAT16 whatever the input.
     // The id table is what the overlapped fork needs and the standalone op never passes, and unlike the
     // routed-expert fields it is already set by the time validation runs -- those are filled in later,
     // by the program factory.
@@ -106,8 +111,16 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         buf.layout() == tt::tt_metal::Layout::ROW_MAJOR || buf.layout() == tt::tt_metal::Layout::TILE,
         "combine_fabric2d: dispatched_buffer must be ROW_MAJOR or TILE, got {}",
         buf.layout());
+    TT_FATAL(
+        buf.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+            (buf.dtype() == tt::tt_metal::DataType::BFLOAT8_B && buf.layout() == tt::tt_metal::Layout::TILE),
+        "combine_fabric2d: dispatched_buffer must be BFLOAT16 (ROW_MAJOR or TILE) or BFLOAT8_B (TILE), got {} "
+        "{}. A BFLOAT8_B buffer is dequantised by the untilize, which only the TILE path has.",
+        buf.dtype(),
+        buf.layout());
     // The op does not take a token size, it reads it off the tensor the caller staged. A ROW_MAJOR buffer
-    // pages by exactly one token; a TILE one is untilized into tokens on the way through.
+    // pages by exactly one token; a TILE one pages by one tile, which the untilizer reads and strides its input
+    // CB by.
     const uint32_t token_page = token_size_bytes(tensor_args);
     TT_FATAL(
         buf.layout() == tt::tt_metal::Layout::TILE ||
@@ -142,16 +155,17 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         last_packet,
         cmbf2d::FORWARDING_METADATA_SIZE,
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
-    TT_FATAL(
-        buf.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            (overlapped && buf.dtype() == tt::tt_metal::DataType::BFLOAT8_B &&
-             buf.layout() == tt::tt_metal::Layout::TILE),
-        "combine_fabric2d: dispatched_buffer must be BFLOAT16, or BFLOAT8_B TILE for the untilizers to "
-        "dequantise, which only the overlapped op asks for; got {} {}",
-        buf.dtype(),
-        buf.layout());
     const auto buf_shape = buf.logical_shape();
     TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");
+    // A token's slot is its index along dim -2, which is also where the kernels clamp to the buffer's end, so any
+    // dim before it would put slots the kernels never see.
+    for (uint32_t d = 0; d + 2 < buf_shape.rank(); d++) {
+        TT_FATAL(
+            buf_shape[d] == 1,
+            "combine_fabric2d: dispatched_buffer must be 1 in every dim before the last two, as dispatch leaves it; "
+            "got {}",
+            buf_shape);
+    }
 
     const auto& meta = tensor_args.dispatched_metadata;
     validate_dram_row_major(meta, "dispatched_metadata");
@@ -165,6 +179,13 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "combine_fabric2d: dispatched_metadata last dim is {}, expected 3 (linearized_coord, token_idx, "
         "topk_idx). The fp8 scale tail is not supported.",
         meta_shape[-1]);
+    for (uint32_t d = 0; d + 2 < meta_shape.rank(); d++) {
+        TT_FATAL(
+            meta_shape[d] == 1,
+            "combine_fabric2d: dispatched_metadata must be 1 in every dim before the last two, as dispatch leaves it; "
+            "got {}",
+            meta_shape);
+    }
     TT_FATAL(
         meta_shape[-2] == buf_shape[-2],
         "combine_fabric2d: dispatched_metadata holds {} slots but dispatched_buffer holds {}; they index the "
@@ -236,9 +257,7 @@ CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperati
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            args.output_mem_config));
+            TOKEN_DTYPE, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), args.output_mem_config));
 }
 
 CombineFabric2dDeviceOperation::tensor_return_value_t CombineFabric2dDeviceOperation::create_output_tensors(
@@ -261,6 +280,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    uint32_t fwd_reduction,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
     using OperationType =
@@ -273,6 +293,7 @@ ttnn::Tensor combine_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
+            .fwd_reduction = fwd_reduction,
             .topology = topology,
             .output_mem_config = memory_config},
         OperationType::tensor_args_t{

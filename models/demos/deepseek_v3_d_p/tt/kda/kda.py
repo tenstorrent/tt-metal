@@ -46,6 +46,22 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
     )
 
 
+def reduce_scatter_tp_partials(
+    partials: ttnn.Tensor, tt_ccl: TT_CCL, cluster_axis: int | None, topology: ttnn.Topology
+) -> ttnn.Tensor:
+    """Reduce-scatter the output projection's TP partial sums over the hidden dimension into DRAM."""
+    return ttnn.experimental.reduce_scatter_minimal_async(
+        partials,
+        dim=-1,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+        num_links=tt_ccl.get_num_links(cluster_axis),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=topology,
+        cluster_axis=cluster_axis,
+    )
+
+
 @dataclass(frozen=True)
 class _ProjectedInputs:
     # The fused input projection. The QKV columns, the decay's low-rank activations, the output gate and beta's
@@ -185,6 +201,7 @@ class ttKDA:
                 weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.kda",
                 tensor_parallel_axis=tp_axis,
+                projection_dtype=program_config.projection_dtype,
             )
         expected_tp_size = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         if weights.tensor_parallel_size != expected_tp_size or weights.tensor_parallel_axis != tp_axis:
@@ -450,17 +467,7 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
-            cluster_axis = self._tp_cluster_axis
-            output = ttnn.experimental.reduce_scatter_minimal_async(
-                output,
-                dim=-1,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                num_links=self.tt_ccl.get_num_links(cluster_axis),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.tp_ccl_topology,
-                cluster_axis=cluster_axis,
-            )
+            output = reduce_scatter_tp_partials(output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology)
         return output
 
     def forward(

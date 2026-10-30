@@ -23,7 +23,7 @@
 #include "llrt/tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -194,7 +194,7 @@ RouterChannelCounts compute_router_channel_counts(
         topology,
         direction,
         chip_capabilities,
-        control_plane.express_routing_enabled(fabric_node_id.mesh_id),
+        express_axis_of(control_plane, fabric_node_id.mesh_id),
         &intermesh_config);
 
     RouterChannelCounts counts;
@@ -273,9 +273,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // Inter-mesh routers never enable deadlock avoidance, whichever direction (both ends must agree on
     // Deadlock avoidance polarity, and the far end may be a plain Mesh rank). Intra-mesh keeps the existing policy.
     const bool is_inter_mesh = (local_node.mesh_id != location.remote_node.mesh_id);
-    // Express enablement is resolved once per router and reused below (the MUX guard, the
-    // archetype, the injection-flag derivation); the query itself is a cached lazy derivation.
-    const bool express_enabled = control_plane.express_routing_enabled(local_node.mesh_id);
+    // The express axis is resolved once per router and reused below (the MUX guard, the archetype,
+    // the injection-flag derivation); the queries behind it are cached lazy derivations.
+    const ExpressAxis express_axis = express_axis_of(control_plane, local_node.mesh_id);
+    const bool express_enabled = express_axis != ExpressAxis::NONE;
 
     // Get SOC descriptor for eth core lookup
     const auto& cluster = fabric_context.get_cluster();
@@ -308,7 +309,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
     // The facts behind this router's mappings are resolved once, each at its own scope: topology
-    // and the intermesh VC config (fabric), express_routing_enabled (mesh), the chip's edge
+    // and the intermesh VC config (fabric), the express axis (mesh), the chip's edge
     // capabilities and Z port role (chip, classified once at discovery and threaded in), facing
     // (router); the eth channel enters only at establishment. Both mappings are pure functions of
     // those facts, so routers with an identical fact tuple are byte-identical archetypes -- and
@@ -338,7 +339,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // the intermesh Z router and leak same-mesh traffic onto the boundary link.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto archetype = router_archetype(
-        topology, location.direction, chip_facts.per_direction_capabilities, express_enabled, &intermesh_config);
+        topology, location.direction, chip_facts.per_direction_capabilities, express_axis, &intermesh_config);
     const auto& vc_shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -437,59 +438,43 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
                   builder_context.get_channel_trimming_global_overrides())
             : std::nullopt;
 
-    // Inspect the exact peer router on this physical link whenever this local
-    // router can use a speedy VC0 path. Its captured sender packet size controls
-    // this router's receiver-credit cadence. The terminal speedy-RX decision is
-    // separately constrained to the existing non-UDM Fabric2D configuration.
-    auto maybe_finalize_vc0_fast_path_pair = [&]() {
-        if (!local_vc0_fast_path_info.has_value()) {
-            return;
-        }
-
-        // A terminal may become speedy only after its exact peer is resolved;
-        // all other conditions use the same predicate as the ERISC builder.
-        const bool local_can_use_speedy_vc0 =
-            vc0_speedy_path_enabled(
-                actual_sender_channels_per_vc[0],
-                is_inter_mesh ? false : fabric_context.need_deadlock_avoidance_support(control_plane, local_node, eth_direction),
-                *local_vc0_fast_path_info) ||
-            local_vc0_fast_path_info->terminal_only_nonforwarding;
-        if (!local_can_use_speedy_vc0) {
-            return;
-        }
-
+    // Resolve the exact peer router on this physical link. Its row and ours together decide the
+    // link-level protocol choices (deadlock avoidance / first-level ack, speedy receiver), and its
+    // captured sender packet size controls this router's receiver-credit cadence. The terminal
+    // speedy-RX decision is separately constrained to the existing non-UDM Fabric2D configuration.
+    auto resolve_peer_vc0_fast_path_info = [&]() -> std::optional<Vc0TrimFastPathInfo> {
         const auto connected_peer = control_plane.try_get_connected_mesh_chip_chan_ids(local_node, location.eth_chan);
         if (!connected_peer.has_value()) {
             log_debug(
                 tt::LogFabric,
-                "Channel trimming: unable to resolve peer for chip {} channel {}; using conservative receiver credit "
-                "amortization",
+                "Channel trimming: unable to resolve peer for chip {} channel {}; using conservative fast-path "
+                "settings",
                 device->id(),
                 location.eth_chan);
-            return;
+            return std::nullopt;
         }
         const auto [connected_peer_node, connected_peer_chan] = *connected_peer;
         if (connected_peer_node != location.remote_node) {
             log_debug(
                 tt::LogFabric,
                 "Channel trimming: resolved peer {} for chip {} channel {} does not match router peer {}; using "
-                "conservative receiver credit amortization",
+                "conservative fast-path settings",
                 connected_peer_node,
                 device->id(),
                 location.eth_chan,
                 location.remote_node);
-            return;
+            return std::nullopt;
         }
 
         auto peer_direction = control_plane.get_forwarding_direction(connected_peer_node, local_node);
         if (!peer_direction.has_value()) {
             log_debug(
                 tt::LogFabric,
-                "Channel trimming: unable to determine the peer forwarding direction from {} to {}; using conservative "
-                "receiver credit amortization",
+                "Channel trimming: unable to determine the peer forwarding direction from {} to {}; using "
+                "conservative fast-path settings",
                 connected_peer_node,
                 local_node);
-            return;
+            return std::nullopt;
         }
 
         // Logical-to-physical mapping membership guarantees that routing-channel metadata was seeded for this node.
@@ -498,10 +483,10 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         if (!peer_physical_chip_id.has_value()) {
             log_debug(
                 tt::LogFabric,
-                "Channel trimming: peer {} is not mapped to a local physical chip; using conservative receiver "
-                "credit amortization",
+                "Channel trimming: peer {} is not mapped to a local physical chip; using conservative fast-path "
+                "settings",
                 connected_peer_node);
-            return;
+            return std::nullopt;
         }
         const auto peer_channel_counts =
             compute_router_channel_counts(fabric_context, control_plane, connected_peer_node, *peer_direction);
@@ -510,20 +495,56 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         if (!peer_vc0_fast_path_info.has_value()) {
             log_debug(
                 tt::LogFabric,
-                "Channel trimming: no peer capture entry for chip {} channel {}; using conservative receiver credit "
-                "amortization",
+                "Channel trimming: no peer capture entry for chip {} channel {}; using conservative fast-path "
+                "settings",
                 *peer_physical_chip_id,
                 connected_peer_chan);
-            return;
         }
+        return peer_vc0_fast_path_info;
+    };
 
-        apply_vc0_trim_fast_path_peer_info(
-            *local_vc0_fast_path_info,
-            *peer_vc0_fast_path_info,
+    if (local_vc0_fast_path_info.has_value()) {
+        const auto peer_vc0_fast_path_info = resolve_peer_vc0_fast_path_info();
+        const auto row_only_info = *local_vc0_fast_path_info;
+        const bool base_deadlock_avoidance =
+            is_inter_mesh ? false
+                          : fabric_context.need_deadlock_avoidance_support(control_plane, local_node, eth_direction);
+        const auto resolution = resolve_vc0_link_trim(
+            row_only_info,
+            peer_vc0_fast_path_info,
+            actual_sender_channels_per_vc[0],
+            base_deadlock_avoidance,
             fabric_context.is_2D_routing_enabled() && local_node.mesh_id == location.remote_node.mesh_id &&
                 !fabric_tensix_extension_udm_mode && !location.is_dispatch_link);
-    };
-    maybe_finalize_vc0_fast_path_pair();
+        *local_vc0_fast_path_info = resolution.info;
+
+        const bool speedy = resolution.speedy;
+        const bool changed_by_peer =
+            local_vc0_fast_path_info->terminal_or_source_only != row_only_info.terminal_or_source_only ||
+            local_vc0_fast_path_info->worker_only_nonforwarding != row_only_info.worker_only_nonforwarding;
+        // Info only where the peer changed the row's own answer; the full per-router table is debug.
+        const std::string decision = fmt::format(
+            "Channel trimming fast path: chip {} eth {} {} peer {}: sender_mask {:#x} rx0 {} -> "
+            "terminal_or_source_only {} (row alone {}), worker_only_nonforwarding {} (row alone {}), "
+            "terminal_speedy_rx {}, speedy_vc0 {}",
+            device->id(),
+            location.eth_chan,
+            eth_direction,
+            peer_vc0_fast_path_info.has_value() ? "resolved" : "unresolved",
+            row_only_info.vc0_sender_used_mask,
+            row_only_info.vc0_receiver_observed_traffic,
+            local_vc0_fast_path_info->terminal_or_source_only,
+            row_only_info.terminal_or_source_only,
+            local_vc0_fast_path_info->worker_only_nonforwarding,
+            row_only_info.worker_only_nonforwarding,
+            local_vc0_fast_path_info->enable_terminal_speedy_rx,
+            speedy);
+        if (changed_by_peer) {
+            log_debug(tt::LogFabric, "{}", decision);
+        } else {
+            log_debug(tt::LogFabric, "{}", decision);
+        }
+    }
 
     // The stream-register assignment is fabric-scoped (shared per mesh) and lives in
     // FabricBuilderContext; the erisc and tensix builders read it from there, so every router in
@@ -891,8 +912,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         // VC1 is serviced when:
         // - Intra-mesh router with full mesh VC1, or
         // - Inter-mesh router with pass-through VC1
-        bool vc1_serviced = (!is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh) ||
-                            (is_inter_mesh_ && intermesh_config.requires_vc1_mesh_pass_through);
+        bool vc1_serviced = intermesh_config.vc1_serviced_for(is_inter_mesh_);
 
         if (vc1_serviced) {
             defines["FABRIC_2D_VC1_SERVICED"] = "";
@@ -906,14 +926,15 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
         // FABRIC_2D_VC0_CROSSOVER_TO_VC1: Set for inter-mesh routers that perform VC0→VC1 crossover
         // Inter-mesh routers crossover incoming VC0 traffic to downstream intra-mesh VC1
-        bool vc0_crossover_to_vc1 = is_inter_mesh_ && intermesh_config.requires_vc1_full_mesh;
+        bool vc0_crossover_to_vc1 = intermesh_config.vc0_crossover_to_vc1_for(is_inter_mesh_);
         if (vc0_crossover_to_vc1) {
             defines["FABRIC_2D_VC0_CROSSOVER_TO_VC1"] = "";
         }
 
-        // FABRIC_2D selects action-map decode for every 2D router. Express capacity is injected
-        // configuration-wide when any local mesh uses express routing; router behavior does not
-        // otherwise specialize on FABRIC_EXPRESS_ENABLED.
+        // FABRIC_2D selects action-map decode for every 2D router. FABRIC_EXPRESS_AXIS is injected
+        // configuration-wide by CreateKernel when any local mesh uses express routing (see
+        // FabricContext::get_fabric_kernel_defines), so it is not added here. The router reads it
+        // through Fabric2DRoutingConfig: a Z-facing router decodes the axis its chord runs along.
     }
 
     // Get SOC descriptor for eth core lookup

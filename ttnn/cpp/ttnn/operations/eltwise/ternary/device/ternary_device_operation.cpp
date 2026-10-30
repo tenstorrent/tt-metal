@@ -184,7 +184,9 @@ static MemoryConfig resolve_mem_config_actual(
     const ttnn::Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    if (optional_output_tensor.has_value() && !memory_config.has_value()) {
+    // A preallocated output buffer's config describes where the writer stores and it takes precedence over any
+    // memory_config, keeping this value in step with compute_output_specs.
+    if (optional_output_tensor.has_value()) {
         log_debug(tt::LogOp, "TernaryDeviceOperation: Using memory config from output tensor since it is provided");
         return optional_output_tensor->memory_config();
     }
@@ -194,7 +196,7 @@ static MemoryConfig resolve_mem_config_actual(
         mem_config_actual = compute_mem_config_actual(input_a, output_shape);
     }
 
-    if (!memory_config.has_value() && !optional_output_tensor.has_value()) {
+    if (!memory_config.has_value()) {
         // Resolve from inputs: pick the input (A, B, or C) with the largest shard grid
         const Tensor* best_input = nullptr;
         uint32_t best_num_cores = 0;
@@ -301,7 +303,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        input_a.buffer() != nullptr,
+        input_a.is_allocated(),
         "Operands to eltwise ternary operation need to be allocated in buffers on the device. Buffer is null.");
 
     // Validate each tensor individually
@@ -369,16 +371,26 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
 
     if (!input_a.is_sharded()) {
         TT_FATAL(
-            input_a.layout() == Layout::TILE,
-            "Ternary operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
-            "tensor layout: {}",
-            static_cast<int>(input_a.layout()));
-
-        TT_FATAL(
             input_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Ternary operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
             "memory layout: `{}`",
             static_cast<int>(input_a.memory_config().memory_layout()));
+    }
+
+    const auto require_tile = [](const Tensor& tensor, const char* name) {
+        TT_FATAL(
+            tensor.layout() == Layout::TILE,
+            "Ternary operation requires {} to be in Tile layout. {} layout: {}",
+            name,
+            name,
+            tensor.layout());
+    };
+    require_tile(input_a, "input_a");
+    if (input_b.has_value()) {
+        require_tile(*input_b, "input_b");
+    }
+    if (input_c.has_value()) {
+        require_tile(*input_c, "input_c");
     }
 
     if (optional_output_tensor.has_value()) {
@@ -391,11 +403,7 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             optional_output_tensor_shape);
 
-        if (!input_a.is_sharded()) {
-            TT_FATAL(
-                (optional_output_tensor.value().layout() == Layout::TILE),
-                "Ternary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
-        }
+        require_tile(*optional_output_tensor, "the output tensor");
     }
 
     // SNAKE_BETA-specific validation
@@ -622,7 +630,10 @@ ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
         sharded_tensor_shape_in_pages(input_a),
         input_b.has_value() ? sharded_tensor_shape_in_pages(*input_b) : std::nullopt,
         input_c.has_value() ? sharded_tensor_shape_in_pages(*input_c) : std::nullopt,
-        sharded_tensor_shape_in_pages(output_spec));
+        sharded_tensor_shape_in_pages(output_spec),
+        output_spec.data_type(),
+        output_spec.tensor_layout().get_alignment(),
+        output_spec.tile());
 }
 
 bool TernaryDeviceOperation::skip_launch(

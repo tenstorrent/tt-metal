@@ -69,19 +69,9 @@ def _is_fsdp_wrapped_module(module: Any) -> bool:
     return getattr(module, "_fsdp_state", False) and module._fsdp_state is not None
 
 
-def _get_placements(autograd_tensor: Any) -> Optional[List[Any]]:
-    """Best-effort read of ``tensor_topology().placements()`` from the ttnn tensor.
-
-    Returns ``None`` if the topology is unavailable (e.g. unit mesh, older ttnn
-    builds, or an edge case where ``placements()`` throws). Callers must treat
-    a ``None`` return as "no useful placement info; assume replicated".
-    """
-    try:
-        tensor = autograd_tensor.get_value()
-        topology = tensor.tensor_topology()
-        return list(topology.placements())
-    except Exception:
-        return None
+def _get_placements(autograd_tensor: Any) -> List[Any]:
+    """Return the tensor's placement on each mesh axis; see :attr:`ttml.Sharding.placements`."""
+    return ttml.Sharding.from_tensor(autograd_tensor).placements
 
 
 def _is_shard(placement: Any) -> bool:
@@ -96,7 +86,8 @@ def _sharded_tensor_dims(placements: Optional[List[Any]]) -> set:
 
 
 def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int) -> bool:
-    """True if the param's placement on the FSDP axis is already a Shard."""
+    """True if the param's placement on the FSDP axis is already a Shard. ``None``, a lazy
+    param without a mapper (see :func:`_param_placements`), is replicated."""
     if placements is None or axis_index >= len(placements):
         return False
     return _is_shard(placements[axis_index])
@@ -348,21 +339,17 @@ def _pick_shard_dim_from_shape(
 
 
 def _placements_from_mapper(mapper: Any) -> Optional[List[Any]]:
-    """Best-effort read of the placements list backing a ``CppTensorToMesh``.
+    """The placements backing a ``CppTensorToMesh``, or ``None`` for no mapper (replicated).
 
     The mapper is the ``ttnn.CppTensorToMesh`` returned by
     ``ttml.mesh().axis_mapper(...)`` / ``ttnn.create_mesh_mapper(...)``. C++
     binds ``TensorToMesh::config()`` so we can introspect the original
     ``MeshMapperConfig.placements`` without a side channel on
-    :class:`TensorMetadata`. Returns ``None`` if ``mapper`` is ``None`` or the
-    accessor isn't available (older ttnn build before ``config()`` was bound).
+    :class:`TensorMetadata`.
     """
     if mapper is None:
         return None
-    try:
-        return list(mapper.config().placements)
-    except Exception:
-        return None
+    return list(mapper.config().placements)
 
 
 def _param_shape(parameter: Parameter) -> List[int]:
@@ -502,10 +489,9 @@ def _shard_replicated_param(
     n_axes = len(mesh_shape)
 
     placements = _get_placements(autograd_tensor)
-    if placements is None or len(placements) != n_axes:
-        # Tensor has no usable topology metadata (or it's stale). Default-
-        # initialised tensors from ttml.init.* are fully replicated, so this
-        # is the right fallback for the common path.
+    if len(placements) != n_axes:
+        # A tensor replicated by the default topology (e.g. one from ttml.init.*)
+        # flattens to a single Replicate; spell that out per axis.
         placements = [ttnn.PlacementReplicate()] * n_axes
 
     # Build a multi-axis composer that gathers the tensor onto host:
@@ -565,12 +551,10 @@ def _shard_replicated_param(
     new_placements[axis_index] = ttnn.PlacementShard(shard_dim)
     new_mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(new_placements))
 
-    # Redistribute. Target dtype = the parameter's half-precision dtype
-    # (typically bfloat16); to_numpy returned float32 because the autograd
-    # FULL view is fp32, but from_numpy will convert during host→device.
-    target_dtype = autograd_tensor.get_value().dtype
-    new_at = ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, target_dtype, new_mapper)
-    return new_at.get_value()
+    # Redistribute in the dtype the parameter is stored in. to_numpy gave a
+    # float32 array; from_numpy converts it back during host→device.
+    new_at = ttml.autograd.Tensor.from_numpy(full_np, ttnn.Layout.TILE, autograd_tensor.dtype(), new_mapper)
+    return new_at.get_value(ttml.autograd.PreferredPrecision.NATIVE)
 
 
 def _shard_lazy_param(

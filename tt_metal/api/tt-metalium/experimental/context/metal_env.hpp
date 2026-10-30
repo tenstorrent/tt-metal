@@ -4,21 +4,13 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <tt-umd/types/arch.hpp>
-#include <tt_stl/span.hpp>
-#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include <hostdevcommon/common_values.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/mesh_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -46,18 +38,6 @@ struct MetalEnvDescriptor {
     std::optional<std::string> mock_cluster_desc_path = std::nullopt;
 
     bool is_mock_device() const { return mock_cluster_desc_path.has_value() && !mock_cluster_desc_path->empty(); }
-};
-
-// Options for creating a MeshDevice from a MetalEnv.
-//
-// num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
-// from it is open, other create_* calls must pass the same values.
-struct CreateMeshDeviceOptions {
-    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
-    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
-    uint8_t num_command_queues = 1;
-    DispatchCoreConfig dispatch_core_config;
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
 };
 
 class MetalEnvImpl;
@@ -111,9 +91,10 @@ public:
 // It exposes several query functions for the hardware capabilities and cluster configuration.
 //
 // Fabric configuration describes the topology of the devices — how they are interconnected and how traffic is
-// routed between them. Set it with configure_fabric() before the first get_system_mesh() or create_* call; those
-// calls materialize the topology and freeze the configuration. From this topology the MetalEnv constructs the
-// system mesh, which virtualizes and partitions the physical hardware for placement queries.
+// routed between them. Set it with configure_fabric() before the first get_system_mesh() or MeshDevice factory
+// call bound to this environment; those calls materialize the topology and freeze the configuration. From this
+// topology the MetalEnv constructs the system mesh, which virtualizes and partitions the physical hardware for
+// placement queries.
 //
 // Note, MetalEnv is a RAII object. As such, it must outlive every object that uses it (e.g. MeshDevice).
 // The MetalEnv should be destroyed before forking to avoid undefined behavior.
@@ -132,8 +113,9 @@ public:
     const MetalEnvDescriptor& get_descriptor() const;
 
     // Configure fabric for this environment. May be called repeatedly (last call wins) until the topology is
-    // materialized by get_system_mesh() or a create_* call; afterwards it throws. Never calling it leaves fabric
-    // disabled. num_routing_planes must be greater than 0 when set; leaving it unset uses every available plane.
+    // materialized by get_system_mesh() or a MeshDevice factory call bound to this environment; afterwards it throws.
+    // Never calling it leaves fabric disabled. num_routing_planes must be greater than 0 when set; leaving it unset
+    // uses every available plane.
     void configure_fabric(const FabricConfigDescriptor& fabric);
 
     /// @return The fabric configuration requested via configure_fabric. Disabled by default. This is the requested
@@ -154,18 +136,6 @@ public:
     /// The system mesh provides a virtualized coordinate system over the physical devices, allowing
     /// MeshDevice instances to map logical coordinates to physical device IDs.
     distributed::SystemMesh& get_system_mesh();
-
-    // Create a MeshDevice which will use this MetalEnv
-    std::shared_ptr<distributed::MeshDevice> create_mesh_device(
-        const distributed::MeshDeviceConfig& config, const CreateMeshDeviceOptions& options = {});
-
-    // Create a unit mesh for the physical device ID which will use this MetalEnv
-    std::shared_ptr<distributed::MeshDevice> create_unit_mesh(
-        ChipId device_id, const CreateMeshDeviceOptions& options = {});
-
-    // Create a unit mesh for each physical device ID in the list which will use this MetalEnv
-    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
-        ttsl::Span<const ChipId> device_ids, const CreateMeshDeviceOptions& options = {});
 
 private:
     friend class MetalEnvAccessor;

@@ -184,6 +184,10 @@ class DecoderLayer:
         self.is_last_layer = is_last_layer
         self.lm_head_fused = lm_head_fused
 
+    # DFlash (models/demos/gpt_oss/tt/dflash/capture.py): callable(tensor) receiving this layer's prefill input residual
+    # (the previous layer's output).
+    capture_input = None
+
     def _consumer_input(self, pending):
         """The input of a boundary's consumer op: the pending boundary itself when it runs fused into that op
         (fused_decode.config.DECODE_BOUNDARY_FUSE_CONSUMER), else its normed output after running it on its own."""
@@ -260,6 +264,8 @@ class DecoderLayer:
 
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
+        if self.capture_input is not None:  # DFlash: the previous layer's output, one row per token
+            self.capture_input(hidden_states)
         residual = hidden_states
         hidden_states_post_norm = self.input_layernorm(hidden_states)
 
