@@ -31,8 +31,8 @@
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST.
 // The SplitAcc layouts accumulate the second k-face apart and the last call finalizes, merging
 // it back; the others need no finalization pass, so DEST holds the plain accumulated product
-// either way. The result is packed as ct_dim output tiles; inside each tile
-// the two 16-col faces (M x 16, row-major) sit contiguously, then pad out to a full tile.
+// either way. The result is packed as ct_dim output tiles; inside each tile its 16-col faces
+// (M x 16, row-major: two, or one for [M,16] tiles) sit contiguously, then pad out to a full tile.
 //
 // The Python golden is exactly torch A[M,K] @ B[K,N] (MatmulGolden, LoFi), and it asserts
 // ONLY the M defined rows of each output tile against that product (the rest of each 32-row
@@ -42,7 +42,7 @@
 // Buffer layout the driver assumes (matches helpers/compressed_utils.run_compressed, which
 // is the established layout for this exact tile geometry):
 //   buffer_A (SrcB, in0/A): kt*2 faces of [M,16], face-column order along K, contiguous.
-//   buffer_B (SrcA, in1/B): kt*ct full [32,32] tiles, k-major / c-minor (the order the
+//   buffer_B (SrcA, in1/B): kt*ct [32,32] or [32,16] tiles, k-major / c-minor (the order the
 //                           SrcA CFGSHIFTMASK walk reads them with read_transposed=false,
 //                           block_increment = inner_increment = tile_size).
 //
@@ -120,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // instruction sequence (post1 only for Bfp4_b). transpose=false.
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM, params.num_faces_B);
 
-    // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
+    // SrcA=buffer_B (B matrix, [32,32] or [32,16] tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
     // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
     // and an in0 tile is 4 * in0_face_r_dim 16-byte words (TILE_SIZE_UNPACK_A is a full tile here).
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
@@ -206,8 +206,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    // Pack with the in0 face geometry (M rows, 2 faces) that lands in DEST, and the strides of the layout's tile
-    // spacing, as custom_mm_block_init sets them.
+    // Pack with the output face geometry that lands in DEST (M rows, 2 faces, or 1 for [M, 16] tiles), and the
+    // strides of the layout's tile spacing, as custom_mm_block_init sets them.
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     // Output tiles are [M, 32], or [M, 16] (a single face) when in1 is a [32, 16] tile
     const std::uint32_t out_tile_c_dim = params.num_faces * FACE_C_DIM;

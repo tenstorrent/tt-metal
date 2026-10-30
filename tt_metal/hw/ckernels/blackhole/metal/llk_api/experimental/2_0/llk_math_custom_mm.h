@@ -24,8 +24,8 @@ template <
 inline void llk_math_custom_mm(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1,
-    const std::uint32_t in1_num_faces = TILE_NUM_FACES) {
+    const std::uint32_t ct_dim,
+    const std::uint32_t in1_num_faces) {
     SAN_HOOK(unsupported());
     llk_math_custom_mm_impl<layout, finalize>(IN0_DESC.shape.face_r_dim, dst_index, kt_dim, ct_dim, in1_num_faces);
 }

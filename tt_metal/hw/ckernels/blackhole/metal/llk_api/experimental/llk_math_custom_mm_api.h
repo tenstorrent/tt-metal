@@ -33,19 +33,22 @@ inline void llk_math_custom_mm_init(
     const std::uint32_t operandA_id = get_operand_id(operand1);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
     const std::uint32_t operandA_num_faces = get_operand_num_faces(operandA_id);
+    LLK_ASSERT(
+        (custom_mm_legal_in1_shape<transpose>(get_operand_tensor_shape(operandA_id))),
+        "custom_mm: in1 must be a [32, 32] tile, or [32, 16] ([16, 32] with transpose)");
 
     _llk_math_custom_mm_init_<transpose, layout>(operandB_face_r_dim, ct_dim, operandA_num_faces);
 }
 
 // Shared by the CB-id execute below and the LLKOperand one (experimental/2_0/llk_math_custom_mm.h), which
-// differ only in where operandB_face_r_dim comes from.
+// differ only in where operandB_face_r_dim and in1_num_faces come from.
 template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
 inline void llk_math_custom_mm_impl(
     const std::uint32_t operandB_face_r_dim,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1,
-    const std::uint32_t in1_num_faces = TILE_NUM_FACES) {
+    const std::uint32_t ct_dim,
+    const std::uint32_t in1_num_faces) {
     LLK_ASSERT(
         (custom_mm_fits_dest<DST_SYNC_MODE, layout>(dst_index, ct_dim)),
         "custom_mm: dst_index + ct_dim output tiles overrun the DEST sync region");

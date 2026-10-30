@@ -33,15 +33,6 @@
 
 namespace ckernel {
 
-// in1 is a full [32, 32] tile, or a 2-face tile whose faces run along k: [32, 16], or [16, 32] when transposed.
-template <bool transpose>
-constexpr bool custom_mm_legal_in1_shape(const TensorShape s) {
-    const bool full = s.num_faces_r_dim == 2 && s.num_faces_c_dim == 2;
-    const bool narrow = transpose ? (s.num_faces_r_dim == 1 && s.num_faces_c_dim == 2)
-                                  : (s.num_faces_r_dim == 2 && s.num_faces_c_dim == 1);
-    return s.face_r_dim == 16 && s.face_c_dim == 16 && (full || narrow);
-}
-
 template <
     bool transpose = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,

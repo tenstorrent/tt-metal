@@ -112,7 +112,7 @@ class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 
 
 class CustomMMStimuliConfig(StimuliConfig):
-    """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct full tiles).
+    """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct [32,32] or [32,16] tiles).
 
     Mirrors compressed_utils.CompressedStimuliConfig but has no meta / buffer_C. The
     focused odd-K cases also use a uniform BFP4_b or BFP8_b stream for B.
@@ -726,6 +726,8 @@ def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
 # the output face 1 slot left unused.
 N16 = 16
 N16_CT_DIMS_16BIT = [1, 3, 16]
+# Odd and above 1, so the Compact cases accumulate over several k-tiles.
+N16_COMPACT_KT = 3
 
 
 @blackhole_only
@@ -783,42 +785,21 @@ def test_custom_mm_n16_split_acc_multi_call(layout, ct):
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b], same=True),
     M=[1, 8],
-    kt=[3],
     ct=[1, 25, 32],
 )
-def test_custom_mm_n16_compact(formats, M, kt, ct):
-    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.No, tile_c=N16)
+def test_custom_mm_n16_compact(formats, M, ct):
+    _run_compact_against_default(
+        M, N16_COMPACT_KT, ct, formats, DestAccumulation.No, tile_c=N16
+    )
 
 
 # Long K and the BFP weight paths with half-size [32,16] in1 tiles: the post1 unpack tuning (Bfp4_b) and a Bfp8_b B
 # split over several TT_MOPs.
+N16_BFP_LONG_K_CASE_IDS = ("k256-ct1", "k130-ct4-bfp8", "k9-ct2-bfp4-post1")
 N16_BFP_LONG_K_CASES = [
-    pytest.param(
-        1,
-        256,
-        1,
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        id="k256-ct1",
-    ),
-    pytest.param(
-        8,
-        130,
-        4,
-        InputOutputFormat(
-            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
-        ),
-        id="k130-ct4-bfp8",
-    ),
-    pytest.param(
-        1,
-        9,
-        2,
-        InputOutputFormat(
-            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
-        ),
-        id="k9-ct2-bfp4-post1",
-    ),
+    case for case in LONG_K_CASES + ODD_K_CASES if case.id in N16_BFP_LONG_K_CASE_IDS
 ]
+assert len(N16_BFP_LONG_K_CASES) == len(N16_BFP_LONG_K_CASE_IDS)
 
 
 @blackhole_only

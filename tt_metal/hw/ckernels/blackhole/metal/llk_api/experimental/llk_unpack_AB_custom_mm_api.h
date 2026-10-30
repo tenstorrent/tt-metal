@@ -46,6 +46,9 @@ inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
     const std::uint32_t operandA_unpack_dst_format = unpack_dst_format[operandA_id];
     const std::uint32_t operandA_num_faces = get_operand_num_faces(operandA_id);
+    LLK_ASSERT(
+        (custom_mm_legal_in1_shape<transpose>(get_operand_tensor_shape(operandA_id))),
+        "custom_mm: in1 must be a [32, 32] tile, or [32, 16] ([16, 32] with transpose)");
 
     _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
         operandB_face_r_dim, operandA_unpack_dst_format, ct_dim, operandA_num_faces);

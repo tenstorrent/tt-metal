@@ -17,6 +17,7 @@ namespace tt::tt_metal {
 namespace {
 
 constexpr std::uint32_t FACE = 16;
+constexpr std::uint32_t TILE_DIM = 32;
 
 // custom_mm through the CB API with N = 16: [32, 16] weight tiles, or [16, 32] ones holding B^T when transposed, and
 // [rows, 16] output tiles. api picks the compute overloads: CB ids, LLKOperand in0 and in1, or CB in0 with
@@ -31,10 +32,10 @@ void run_custom_mm_n16(
     bool split_acc,
     std::uint32_t api) {
     const std::uint32_t input_tiles = kt * ct;  // in0 is padded to the reader's shared tile count
-    const std::uint32_t K = kt * 32;
+    const std::uint32_t K = kt * TILE_DIM;
     const std::uint32_t N = ct * FACE;
-    const Tile activation_tile({rows, 32});
-    const Tile weight_tile = transpose ? Tile({FACE, 32}) : Tile({32, FACE});
+    const Tile activation_tile({rows, TILE_DIM});
+    const Tile weight_tile = transpose ? Tile({FACE, TILE_DIM}) : Tile({TILE_DIM, FACE});
     const Tile output_tile({rows, FACE});
     const auto format = tt::DataFormat::Float16_b;
     const auto a_bytes = activation_tile.get_tile_size(format);
@@ -90,26 +91,27 @@ void run_custom_mm_n16(
     auto b_value = [](std::uint32_t k, std::uint32_t n) { return static_cast<float>((k * 5 + n * 7) % 3) - 1.0f; };
 
     // in0: kt [rows, 32] tiles, each two dense [rows, 16] faces along K.
-    std::vector<bfloat16> activations(input_tiles * rows * 32, bfloat16(0.0f));
+    std::vector<bfloat16> activations(input_tiles * rows * TILE_DIM, bfloat16(0.0f));
     for (std::uint32_t t = 0; t < kt; ++t) {
         for (std::uint32_t m = 0; m < rows; ++m) {
-            for (std::uint32_t col = 0; col < 32; ++col) {
-                const auto index = t * rows * 32 + (col / FACE) * rows * FACE + m * FACE + col % FACE;
-                activations[index] = bfloat16(a_value(m, t * 32 + col));
+            for (std::uint32_t col = 0; col < TILE_DIM; ++col) {
+                const auto index = t * rows * TILE_DIM + (col / FACE) * rows * FACE + m * FACE + col % FACE;
+                activations[index] = bfloat16(a_value(m, t * TILE_DIM + col));
             }
         }
     }
     // in1: kt * ct tiles, k-major / c-minor. Each holds two 16x16 faces along K; a face is B[k][n] row-major, or
     // B^T[n][k] when transposed (the unpacker transposes each face back).
-    std::vector<bfloat16> weights(input_tiles * 32 * FACE);
+    std::vector<bfloat16> weights(input_tiles * TILE_DIM * FACE);
     for (std::uint32_t r = 0; r < kt; ++r) {
         for (std::uint32_t c = 0; c < ct; ++c) {
             for (std::uint32_t face = 0; face < 2; ++face) {
                 for (std::uint32_t i = 0; i < FACE; ++i) {
                     for (std::uint32_t j = 0; j < FACE; ++j) {
-                        const auto k = r * 32 + face * FACE + (transpose ? j : i);
+                        const auto k = r * TILE_DIM + face * FACE + (transpose ? j : i);
                         const auto n = c * FACE + (transpose ? i : j);
-                        weights[(r * ct + c) * 32 * FACE + face * FACE * FACE + i * FACE + j] = bfloat16(b_value(k, n));
+                        weights[(r * ct + c) * TILE_DIM * FACE + face * FACE * FACE + i * FACE + j] =
+                            bfloat16(b_value(k, n));
                     }
                 }
             }
