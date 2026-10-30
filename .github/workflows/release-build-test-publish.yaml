@@ -55,7 +55,7 @@ jobs:
       distro: ${{ steps.parse.outputs.distro }}
       version: ${{ steps.parse.outputs.version }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
@@ -191,7 +191,7 @@ jobs:
     if: ${{ !cancelled() && needs.release-demo-tests.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+      - uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
         timeout-minutes: 20
       - name: Merge single-host and multihost expected jobs
         id: merge
@@ -263,7 +263,7 @@ jobs:
     steps:
       # jira_client.py needs .github/actions.
       - name: Checkout
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -389,7 +389,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -557,7 +557,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@73f53fe5d7091229a6d0203ccd7c85fcfda52d8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@9c7ebad4495387ab94a0d2c8fe6823183ea2fc19 # cachew checkout
         timeout-minutes: 20
       - name: Push dev docker image to GHCR with release tag
         uses: ./.github/actions/push-latest-image-to-ghcr
