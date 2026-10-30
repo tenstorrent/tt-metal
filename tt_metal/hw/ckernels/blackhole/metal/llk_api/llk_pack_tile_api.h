@@ -184,7 +184,13 @@ constexpr bool llk_matmul_block_pack() {
         constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
                                     pack_partial_face[output] != 0;
         constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
-        return math_fidelity == MathFidelity::LoFi && !(small_tile && float32_out);
+#ifdef PACKER_L1_ACC
+        constexpr bool l1_acc = true;
+#else
+        constexpr bool l1_acc = false;
+#endif
+        // The packer's L1 accumulate of a Float32 output reads and writes 64 byte rows; a block run of it reads slower than per-tile packs.
+        return math_fidelity == MathFidelity::LoFi && !(small_tile && float32_out) && !(l1_acc && float32_out);
     }
 }
 
