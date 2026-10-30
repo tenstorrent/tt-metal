@@ -30,7 +30,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "mimir_contract.hpp"
-#include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
+#include "tt_metal/tt_metal/dram/mimir_idma_copy.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
 #include "umd/device/types/arch.hpp"
 #include "umd/device/types/core_coordinates.hpp"
@@ -286,8 +286,7 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
 // MIM-407 request VC of an own-TL1 -> GDDR iDMA copy: the destination tile's column.
 uint32_t idma_gddr_write_backend(const GddrTarget& target, uint32_t dram_offset) {
     const uint64_t chiplet_offset = static_cast<uint64_t>(target.slot_base) * target.slot_stride + dram_offset;
-    return mimir_test::mimir_channel_location(chiplet_offset).tile == 0 ? cce_idma_copy_abi::kBackendGddr0
-                                                                        : cce_idma_copy_abi::kBackendGddr1;
+    return mimir_test::gddr_backend_for(chiplet_offset);
 }
 
 // The CopiesGddrWithCompileTimeArgs round trip on the local Mimir, moved by iDMA instead of hart loads and stores.
@@ -370,8 +369,6 @@ TEST_P(IdmaCopiesGddrWithCompileTimeArgs, RoundTrip) {
     }
 }
 
-// cce_idma_copy, which the dram/ suites also run; their host helpers are not in this target.
-constexpr const char* kIdmaCopyKernelPath = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
 // Rdcycle cycles per kernel poll, as kPollBudgetCycles in dram/mimir_dm_common.hpp.
 constexpr uint64_t kIdmaPollBudgetCycles = 1ull << 22;
 // The status line sits past the largest staging block (kEmuGddrBackingPage) at L1 UNRESERVED.
@@ -399,30 +396,22 @@ uint32_t idma_command_bytes(const IdmaStagingCopy& copy) {
 std::vector<uint32_t> idma_staging_copy_args(const IdmaStagingCopy& copy, uint32_t staging_dev_addr) {
     namespace abi = cce_idma_copy_abi;
     const uint32_t len_bytes = idma_command_bytes(copy);
-    const uint64_t source_offset = copy.reads_gddr ? copy.chiplet_offset : staging_dev_addr;
-    const uint64_t destination_offset = copy.reads_gddr ? staging_dev_addr : copy.chiplet_offset;
-    std::vector<uint32_t> args(abi::kNumArgs, 0);
-    args[abi::kArgMode] = abi::kModeTridBatch;
-    args[abi::kArgBackendVc] = copy.backend_vc;
-    args[abi::kArgStatusOffset] = staging_dev_addr + kIdmaStatusOffsetFromStaging;
-    args[abi::kArgLenBytes] = len_bytes;
-    args[abi::kArgPollBudgetLo] = static_cast<uint32_t>(kIdmaPollBudgetCycles);
-    args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kIdmaPollBudgetCycles >> 32);
-    args[abi::kArgSrcKind] = copy.reads_gddr ? abi::kKindGddr : abi::kKindOwnTl1;
-    args[abi::kArgSrcSelector] = copy.reads_gddr ? copy.mimir_index : copy.cce_index;
-    args[abi::kArgSrcOffsetLo] = static_cast<uint32_t>(source_offset);
-    args[abi::kArgSrcOffsetHi] = static_cast<uint32_t>(source_offset >> 32);
-    args[abi::kArgDstKind] = copy.reads_gddr ? abi::kKindOwnTl1 : abi::kKindGddr;
-    args[abi::kArgDstSelector] = copy.reads_gddr ? copy.cce_index : copy.mimir_index;
-    args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(destination_offset);
-    args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(destination_offset >> 32);
-    args[abi::kArgExpectedXor] = copy.expected_xor;
-    args[abi::kArgNumElements] = copy.num_bytes / len_bytes;
-    args[abi::kArgSourceStrideBytes] = len_bytes;
-    args[abi::kArgTrid] = copy.cce_index;
-    args[abi::kArgDestinationStrideBytes] = len_bytes;
-    args[abi::kArgHostVerified] = copy.reads_gddr ? 1 : 0;
-    return args;
+    const mimir_test::IdmaOperand gddr{abi::kKindGddr, copy.mimir_index, copy.chiplet_offset};
+    const mimir_test::IdmaOperand staging{abi::kKindOwnTl1, copy.cce_index, staging_dev_addr};
+    return mimir_test::idma_copy_args(
+        {.mode = abi::kModeTridBatch,
+         .backend_vc = copy.backend_vc,
+         .status_offset = staging_dev_addr + kIdmaStatusOffsetFromStaging,
+         .len_bytes = len_bytes,
+         .poll_budget_cycles = kIdmaPollBudgetCycles,
+         .source = copy.reads_gddr ? gddr : staging,
+         .destination = copy.reads_gddr ? staging : gddr,
+         .expected_xor = copy.expected_xor,
+         .num_elements = copy.num_bytes / len_bytes,
+         .source_stride_bytes = len_bytes,
+         .trid = copy.cce_index,
+         .destination_stride_bytes = len_bytes,
+         .host_verified = copy.reads_gddr});
 }
 
 // Runs every copy in one blocking Program and returns their status lines in copy order. Every kernel poll is bounded,
@@ -441,7 +430,7 @@ std::vector<std::vector<uint32_t>> run_idma_staging_copies(
         const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), copy.cce_index);
         write_cce_sram(device, logical_dram_core, status_noc_addr, status_poison.data(), status_bytes);
         const KernelHandle kernel =
-            CreateKernel(program, kIdmaCopyKernelPath, logical_dram_core, DramConfig{.noc = NOC::NOC_0});
+            CreateKernel(program, mimir_test::kIdmaCopyKernel, logical_dram_core, DramConfig{.noc = NOC::NOC_0});
         SetRuntimeArgs(program, kernel, logical_dram_core, idma_staging_copy_args(copy, staging_dev_addr));
     }
 

@@ -50,8 +50,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_dm_common.hpp"
-#include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
+#include "tt_metal/tt_metal/dram/mimir_idma_copy.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_prefetcher_common.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
@@ -62,7 +62,6 @@ namespace tt::tt_metal::mimir_test::trid {
 
 namespace abi = cce_idma_copy_abi;
 
-inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
 // The MM4x modes share one poll budget across every wait of a launch, so one budget plus launch.
 inline constexpr std::chrono::seconds kHostDeadline{300};
 // Offsets of a CCE's GDDR target in its local DRAM view, above DRAM UNRESERVED, clear of MM-8's 0x10000.
@@ -167,21 +166,13 @@ std::string cce_skip_reason(uint32_t cce_index) {
 
 uint64_t gddr_view_offset() { return dram_unreserved_base() + kGddrTargetOffset; }
 
-// MIM-407: GDDR0 is the low 4 GiB tile of a Mimir, GDDR1 the high one.
-uint32_t gddr_backend_for(const metal_SocDescriptor& soc, uint32_t view, uint64_t view_offset) {
-    return mimir_channel_location(chiplet_offset_of(soc, view, view_offset)).tile == 0 ? abi::kBackendGddr0
-                                                                                       : abi::kBackendGddr1;
-}
-
 std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid, uint64_t peer_flag_offset) {
-    std::vector<uint32_t> args(abi::kNumArgs, 0);
-    args[abi::kArgMode] = abi::kModeTridScopeObserver;
-    args[abi::kArgStatusOffset] = static_cast<uint32_t>(tl1_done_block(hart));
-    args[abi::kArgPollBudgetLo] = static_cast<uint32_t>(kPollBudgetCycles);
-    args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kPollBudgetCycles >> 32);
-    args[abi::kArgTrid] = trid;
-    args[abi::kArgPeerFlagOffset] = static_cast<uint32_t>(peer_flag_offset);
-    return args;
+    return idma_copy_args(
+        {.mode = abi::kModeTridScopeObserver,
+         .status_offset = tl1_done_block(hart),
+         .poll_budget_cycles = kPollBudgetCycles,
+         .trid = trid,
+         .peer_flag_offset = peer_flag_offset});
 }
 
 // Poisons every launch's status line, runs them all in one Program and returns their status lines in launch order;
@@ -254,22 +245,12 @@ uint32_t backend_for(Target source, Target destination) {
 // The view of `mimir_index`'s GDDR tile that MIM-407 serves on `backend` (kBackendGddr0 or kBackendGddr1).
 uint32_t gddr_view_for_backend(const metal_SocDescriptor& soc, uint32_t mimir_index, uint32_t backend) {
     for (const uint32_t view : dram_views_for_channel(soc, mimir_index)) {
-        if (gddr_backend_for(soc, view, gddr_view_offset()) == backend) {
+        if (gddr_backend_for(chiplet_offset_of(soc, view, gddr_view_offset())) == backend) {
             return view;
         }
     }
     TT_THROW("Mimir {} has no GDDR view on backend {}", mimir_index, backend);
 }
-
-// Where a region lives. Tl1 kinds name the owning CCE and a TL1 offset; Gddr names a DRAM view and an offset in it.
-enum class EndpointKind { OwnTl1, SramSpa, Gddr };
-
-struct Endpoint {
-    EndpointKind kind = EndpointKind::OwnTl1;
-    uint32_t cce_index = 0;
-    uint32_t view = 0;
-    uint64_t offset = 0;
-};
 
 Endpoint region_base(const metal_SocDescriptor& soc, uint32_t cce_index, uint32_t hart, Target target) {
     const uint64_t gddr_offset = dram_unreserved_base() + kGddrRegionBase + cce_index * kGddrRegionCceStride +
@@ -334,12 +315,6 @@ Endpoint offset_endpoint(const Endpoint& endpoint, uint64_t byte_offset) {
     return moved;
 }
 
-Endpoint guard_before(const Endpoint& endpoint) {
-    Endpoint guard = endpoint;
-    guard.offset -= kGuardBytes;
-    return guard;
-}
-
 void write_endpoint(
     distributed::MeshDevice& unit_mesh, IDevice* device, const Endpoint& endpoint, const std::vector<uint32_t>& words) {
     if (endpoint.kind == EndpointKind::Gddr) {
@@ -364,13 +339,7 @@ std::vector<uint32_t> read_endpoint(
     return words;
 }
 
-struct KernelOperand {
-    uint32_t kind = 0;
-    uint32_t selector = 0;
-    uint64_t offset = 0;
-};
-
-KernelOperand kernel_operand(const metal_SocDescriptor& soc, uint32_t issuing_cce, const Endpoint& endpoint) {
+IdmaOperand kernel_operand(const metal_SocDescriptor& soc, uint32_t issuing_cce, const Endpoint& endpoint) {
     switch (endpoint.kind) {
         case EndpointKind::OwnTl1:
             TT_FATAL(endpoint.cce_index == issuing_cce, "own-TL1 operand names CCE {}", endpoint.cce_index);
@@ -536,7 +505,7 @@ public:
     void write(distributed::MeshDevice& unit_mesh, IDevice* device) const {
         for (const auto& [target, region] : regions_) {
             write_endpoint(unit_mesh, device, region.base, region.words);
-            write_endpoint(unit_mesh, device, guard_before(region.base), leading_guard(target));
+            write_endpoint(unit_mesh, device, leading_guard_of(region.base), leading_guard(target));
             write_endpoint(
                 unit_mesh, device, offset_endpoint(region.base, region.words.size() * 4), trailing_guard(target));
         }
@@ -566,39 +535,30 @@ public:
 
     std::vector<uint32_t> batch_args(size_t index) const {
         const Transfer& batch = transfers_.at(index);
-        std::vector<uint32_t> args = common_args(abi::kModeTridBatch);
-        const KernelOperand source = kernel_operand(soc_, cce_index_, slot_endpoint(batch.source, batch.source_slot));
-        const KernelOperand destination =
-            kernel_operand(soc_, cce_index_, slot_endpoint(batch.destination, batch.destination_slot));
-        args[abi::kArgBackendVc] = backend_for(batch.source, batch.destination);
-        args[abi::kArgLenBytes] = batch.len_bytes;
-        args[abi::kArgSrcKind] = source.kind;
-        args[abi::kArgSrcSelector] = source.selector;
-        args[abi::kArgSrcOffsetLo] = static_cast<uint32_t>(source.offset);
-        args[abi::kArgSrcOffsetHi] = static_cast<uint32_t>(source.offset >> 32);
-        args[abi::kArgDstKind] = destination.kind;
-        args[abi::kArgDstSelector] = destination.selector;
-        args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(destination.offset);
-        args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(destination.offset >> 32);
-        args[abi::kArgExpectedXor] = xor_of(copied_words(index));
+        IdmaCopyArgs args = common_args(abi::kModeTridBatch);
+        args.source = kernel_operand(soc_, cce_index_, slot_endpoint(batch.source, batch.source_slot));
+        args.destination = kernel_operand(soc_, cce_index_, slot_endpoint(batch.destination, batch.destination_slot));
+        args.backend_vc = backend_for(batch.source, batch.destination);
+        args.len_bytes = batch.len_bytes;
+        args.expected_xor = xor_of(copied_words(index));
         TT_FATAL(
             !(batch.shared_slots && batch.host_verified && batch.destination == Target::OwnDestination),
             "the kernel's XOR poll covers num_commands * len_bytes, not one shared slot");
-        args[abi::kArgNumElements] = batch.num_commands;
-        args[abi::kArgSourceStrideBytes] = batch.shared_slots ? 0 : batch.len_bytes;
-        args[abi::kArgDestinationStrideBytes] = batch.shared_slots ? 0 : batch.len_bytes;
-        args[abi::kArgTrid] = batch.first_trid;
-        args[abi::kArgTridStride] = batch.trid_stride;
-        args[abi::kArgHostVerified] = batch.host_verified ? 1 : 0;
-        args[abi::kArgCheckAtAck] = batch.check_at_ack ? 1 : 0;
-        return args;
+        args.num_elements = batch.num_commands;
+        args.source_stride_bytes = batch.shared_slots ? 0 : batch.len_bytes;
+        args.destination_stride_bytes = batch.shared_slots ? 0 : batch.len_bytes;
+        args.trid = batch.first_trid;
+        args.trid_stride = batch.trid_stride;
+        args.host_verified = batch.host_verified;
+        args.check_at_ack = batch.check_at_ack;
+        return idma_copy_args(args);
     }
 
     std::vector<uint32_t> table_args() const {
-        std::vector<uint32_t> args = common_args(abi::kModeTridTable);
-        args[abi::kArgNumElements] = static_cast<uint32_t>(transfers_.size());
-        args[abi::kArgCmdTableOffset] = static_cast<uint32_t>(tl1_data(hart_) + kTableOffsetFromData);
-        return args;
+        IdmaCopyArgs args = common_args(abi::kModeTridTable);
+        args.num_elements = static_cast<uint32_t>(transfers_.size());
+        args.command_table_offset = tl1_data(hart_) + kTableOffsetFromData;
+        return idma_copy_args(args);
     }
 
     void write_table(IDevice* device) const {
@@ -606,9 +566,8 @@ public:
         for (size_t index = 0; index < transfers_.size(); ++index) {
             const Transfer& entry = transfers_[index];
             TT_FATAL(entry.num_commands == 1, "table entry {} has {} commands", index, entry.num_commands);
-            const KernelOperand source =
-                kernel_operand(soc_, cce_index_, slot_endpoint(entry.source, entry.source_slot));
-            const KernelOperand destination =
+            const IdmaOperand source = kernel_operand(soc_, cce_index_, slot_endpoint(entry.source, entry.source_slot));
+            const IdmaOperand destination =
                 kernel_operand(soc_, cce_index_, slot_endpoint(entry.destination, entry.destination_slot));
             uint32_t* words = table.data() + index * abi::kTableWords;
             words[abi::kTableSrcKind] = source.kind;
@@ -667,7 +626,8 @@ public:
         EXPECT_EQ(
             read_endpoint(unit_mesh, device, region.base, region.words.size() * 4, kGuardBytes), trailing_guard(target))
             << label << ": guard after " << target_name(target) << " overwritten";
-        EXPECT_EQ(read_endpoint(unit_mesh, device, guard_before(region.base), 0, kGuardBytes), leading_guard(target))
+        EXPECT_EQ(
+            read_endpoint(unit_mesh, device, leading_guard_of(region.base), 0, kGuardBytes), leading_guard(target))
             << label << ": guard before " << target_name(target) << " overwritten";
     }
 
@@ -726,14 +686,12 @@ private:
         return model;
     }
 
-    std::vector<uint32_t> common_args(uint32_t mode) const {
-        std::vector<uint32_t> args(abi::kNumArgs, 0);
-        args[abi::kArgMode] = mode;
-        args[abi::kArgStatusOffset] = static_cast<uint32_t>(tl1_done_block(hart_));
-        args[abi::kArgPollBudgetLo] = static_cast<uint32_t>(kPollBudgetCycles);
-        args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kPollBudgetCycles >> 32);
-        args[abi::kArgTraceOffset] = static_cast<uint32_t>(tl1_data(hart_) + kTraceOffsetFromData);
-        return args;
+    IdmaCopyArgs common_args(uint32_t mode) const {
+        return {
+            .mode = mode,
+            .status_offset = tl1_done_block(hart_),
+            .poll_budget_cycles = kPollBudgetCycles,
+            .trace_offset = tl1_data(hart_) + kTraceOffsetFromData};
     }
 
     const metal_SocDescriptor& soc_;

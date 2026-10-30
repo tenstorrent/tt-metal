@@ -21,7 +21,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_dm_common.hpp"
-#include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
+#include "tt_metal/tt_metal/dram/mimir_idma_copy.hpp"
 #include "tt_metal/tt_metal/dram/mimir_patterns.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
 #include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
@@ -41,7 +41,6 @@ constexpr uint32_t kMaxSlotRegionBytes = 4096;
 constexpr uint64_t kSlotStrideBytes = kMaxSlotRegionBytes + 2 * kGuardBytes;
 constexpr uint32_t kDestinationPoisonWord = 0xDEADBEEFu;
 constexpr uint64_t kCopyTestBytes = 4 * kKiB;
-constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
 // A launch shares one poll budget across its waits, so the host deadline covers one budget plus the launch.
 constexpr std::chrono::seconds kHostDeadline{300};
 // Own-TL1 destinations of a launch in which every hart copies into TL1 sit back to back from here, in hart 0's data
@@ -259,39 +258,30 @@ uint32_t backend_for(const HartCopy& copy) {
     if (copy.reads_gddr) {
         return abi::kBackendFromRemote;
     }
-    return mimir_channel_location(copy.chiplet_offset).tile == 0 ? abi::kBackendGddr0 : abi::kBackendGddr1;
+    return gddr_backend_for(copy.chiplet_offset);
 }
 
 std::vector<uint32_t> copy_args(uint32_t cce_index, const HartCopy& copy, const PollRegion& poll_region) {
     const uint32_t len_bytes = command_bytes(copy);
     TT_FATAL(copy.num_bytes % len_bytes == 0, "{} B is not a whole number of {} B commands", copy.num_bytes, len_bytes);
-    const uint32_t local_mimir = mimir_index_for_cce(cce_index);
-    const uint64_t source_offset = copy.reads_gddr ? copy.chiplet_offset : copy.tl1_offset;
-    const uint64_t destination_offset = copy.reads_gddr ? copy.tl1_offset : copy.chiplet_offset;
-    std::vector<uint32_t> args(abi::kNumArgs, 0);
-    args[abi::kArgMode] = abi::kModeTridBatch;
-    args[abi::kArgBackendVc] = backend_for(copy);
-    args[abi::kArgStatusOffset] = static_cast<uint32_t>(tl1_done_block(copy.hart));
-    args[abi::kArgLenBytes] = len_bytes;
-    args[abi::kArgPollBudgetLo] = static_cast<uint32_t>(kPollBudgetCycles);
-    args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kPollBudgetCycles >> 32);
-    args[abi::kArgSrcKind] = copy.reads_gddr ? abi::kKindGddr : abi::kKindOwnTl1;
-    args[abi::kArgSrcSelector] = copy.reads_gddr ? local_mimir : cce_index;
-    args[abi::kArgSrcOffsetLo] = static_cast<uint32_t>(source_offset);
-    args[abi::kArgSrcOffsetHi] = static_cast<uint32_t>(source_offset >> 32);
-    args[abi::kArgDstKind] = copy.reads_gddr ? abi::kKindOwnTl1 : abi::kKindGddr;
-    args[abi::kArgDstSelector] = copy.reads_gddr ? cce_index : local_mimir;
-    args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(destination_offset);
-    args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(destination_offset >> 32);
-    args[abi::kArgExpectedXor] = poll_region.expected_xor;
-    args[abi::kArgNumElements] = copy.num_bytes / len_bytes;
-    args[abi::kArgSourceStrideBytes] = len_bytes;
-    args[abi::kArgTrid] = copy.hart;
-    args[abi::kArgDestinationStrideBytes] = len_bytes;
-    args[abi::kArgHostVerified] = is_host_verified(copy) ? 1 : 0;
-    args[abi::kArgPollRegionOffset] = static_cast<uint32_t>(poll_region.tl1_offset);
-    args[abi::kArgPollRegionBytes] = poll_region.num_bytes;
-    return args;
+    const IdmaOperand gddr{abi::kKindGddr, mimir_index_for_cce(cce_index), copy.chiplet_offset};
+    const IdmaOperand own_tl1{abi::kKindOwnTl1, cce_index, copy.tl1_offset};
+    return idma_copy_args(
+        {.mode = abi::kModeTridBatch,
+         .backend_vc = backend_for(copy),
+         .status_offset = tl1_done_block(copy.hart),
+         .len_bytes = len_bytes,
+         .poll_budget_cycles = kPollBudgetCycles,
+         .source = copy.reads_gddr ? gddr : own_tl1,
+         .destination = copy.reads_gddr ? own_tl1 : gddr,
+         .expected_xor = poll_region.expected_xor,
+         .num_elements = copy.num_bytes / len_bytes,
+         .source_stride_bytes = len_bytes,
+         .trid = copy.hart,
+         .destination_stride_bytes = len_bytes,
+         .host_verified = is_host_verified(copy),
+         .poll_region_offset = poll_region.tl1_offset,
+         .poll_region_bytes = poll_region.num_bytes});
 }
 
 // Poisons every copy's status line, runs them all on `cce_index` in one Program and returns their status lines in copy
