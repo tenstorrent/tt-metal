@@ -53,6 +53,7 @@ private:
     void terminate_active_ethernet_cores_on_all_chips();
     void assert_active_ethernet_cores_to_reset(tt::ChipId device_id);
     void assert_tensix_workers_impl(tt::ChipId device_id);
+    void disable_noc_cmd_buf_fifo(tt::ChipId device_id, const CoreCoord& virtual_core);
     void assert_inactive_ethernet_cores(tt::ChipId device_id);
     void assert_dram_cores(tt::ChipId device_id);
     void assert_dispatch_cores(tt::ChipId device_id);

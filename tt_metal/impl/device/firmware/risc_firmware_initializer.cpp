@@ -417,6 +417,26 @@ void RiscFirmwareInitializer::assert_tensix_workers_impl(tt::ChipId device_id) {
             CoreCoord worker_core =
                 cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+            if (cluster_.arch() == ARCH::BLACKHOLE) {
+                disable_noc_cmd_buf_fifo(device_id, worker_core);
+            }
+        }
+    }
+}
+
+void RiscFirmwareInitializer::disable_noc_cmd_buf_fifo(tt::ChipId device_id, const CoreCoord& virtual_core) {
+    const tt_cxy_pair core(device_id, virtual_core);
+    // BH firmware enables the NIU command buffer FIFO and nothing resets it short of a chip reset. Turn it off once
+    // the core is held in reset, so a stack whose NoC API polls NOC_CMD_CTRL (older firmware, syseng tools) does not
+    // run with it on and drop requests (SYS-838).
+    constexpr uint64_t niu_cfg_0_addr[] = {0xFFB20100, 0xFFB30100};
+    constexpr uint32_t cmd_buffer_fifo_en = 1u << 16;
+    for (uint64_t addr : niu_cfg_0_addr) {
+        uint32_t niu_cfg_0 = 0;
+        cluster_.read_reg(&niu_cfg_0, core, addr);
+        if (niu_cfg_0 & cmd_buffer_fifo_en) {
+            niu_cfg_0 &= ~cmd_buffer_fifo_en;
+            cluster_.write_reg(&niu_cfg_0, core, addr);
         }
     }
 }
