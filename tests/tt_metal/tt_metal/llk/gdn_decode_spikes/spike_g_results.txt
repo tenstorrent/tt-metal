@@ -1,0 +1,36 @@
+
+== 64 tokens, HV 12, K = V = 128, decay g in [-2, 0]: PCC and max rel error vs fp64 after 1 / 8 / 32 / 64 tokens
+form               pcc o (1/8/32/64)                            pcc S                                        max rel S (1/8/32/64)
+direct             0.9999997 0.9999996 0.9999995 0.9999995      0.9999998 0.9999995 0.9999995 0.9999995      1.8e-03 3.6e-03 2.6e-03 3.0e-03
+two_row            0.9999999 0.9999998 0.9999997 0.9999997      0.9999998 0.9999999 0.9999999 0.9999999      1.3e-03 1.8e-03 1.7e-03 1.8e-03
+two_row_sfpu_dot   0.9999999 0.9999996 0.9999994 0.9999994      0.9999998 0.9999999 0.9999999 0.9999999      1.3e-03 1.8e-03 1.7e-03 1.8e-03
+two_row_S10        0.9999999 1.0000000 0.9999999 0.9999999      0.9999999 1.0000000 1.0000000 0.9999999      6.3e-04 1.0e-03 1.0e-03 1.2e-03
+lazy_persist       0.9999999 0.9999998 0.9999997 0.9999998      0.9999998 0.9999999 0.9999999 0.9999999      1.4e-03 1.6e-03 1.7e-03 2.0e-03
+lazy_fold          0.9999999 0.9999998 0.9999997 0.9999998      0.9999998 0.9999999 0.9999999 0.9999999      1.4e-03 1.6e-03 1.7e-03 2.0e-03
+
+-- call-shape identity, decay g in [-2, 0]: one T = 8 call vs 8 chained T = 1 calls (torch.equal on o and the state)
+direct             o equal: True   state equal: True   max |dS| 0.00e+00
+two_row            o equal: True   state equal: True   max |dS| 0.00e+00
+two_row_sfpu_dot   o equal: True   state equal: True   max |dS| 0.00e+00
+two_row_S10        o equal: True   state equal: True   max |dS| 0.00e+00
+lazy_persist       o equal: True   state equal: True   max |dS| 0.00e+00
+lazy_fold          o equal: False  state equal: False  max |dS| 9.37e-04
+
+== 64 tokens, HV 12, K = V = 128, heavy decay g in [-6, -4]: PCC and max rel error vs fp64 after 1 / 8 / 32 / 64 tokens
+form               pcc o (1/8/32/64)                            pcc S                                        max rel S (1/8/32/64)
+direct             0.9999997 0.9999997 0.9999997 0.9999997      0.9999998 0.9999998 0.9999998 0.9999998      2.1e-03 2.4e-03 2.4e-03 2.7e-03
+two_row            0.9999999 1.0000000 1.0000000 0.9999999      0.9999999 0.9999999 0.9999999 0.9999999      1.5e-03 1.6e-03 1.9e-03 1.5e-03
+two_row_sfpu_dot   1.0000000 1.0000000 1.0000000 1.0000000      0.9999999 0.9999999 0.9999999 0.9999999      1.5e-03 1.6e-03 1.9e-03 1.5e-03
+two_row_S10        0.9999999 1.0000000 1.0000000 0.9999999      1.0000000 1.0000000 1.0000000 1.0000000      7.8e-04 8.9e-04 1.1e-03 1.2e-03
+lazy_persist       0.9999999 1.0000000 1.0000000 0.9999999      0.9999999 0.9999999 0.9999999 0.9999999      1.3e-03 1.9e-03 1.7e-03 2.0e-03
+lazy_fold          0.9999999 1.0000000 1.0000000 0.9999999      0.9999999 0.9999999 0.9999999 0.9999999      1.3e-03 1.9e-03 1.7e-03 2.0e-03
+
+-- call-shape identity, heavy decay g in [-6, -4]: one T = 8 call vs 8 chained T = 1 calls (torch.equal on o and the state)
+direct             o equal: True   state equal: True   max |dS| 0.00e+00
+two_row            o equal: True   state equal: True   max |dS| 0.00e+00
+two_row_sfpu_dot   o equal: True   state equal: True   max |dS| 0.00e+00
+two_row_S10        o equal: True   state equal: True   max |dS| 0.00e+00
+lazy_persist       o equal: True   state equal: True   max |dS| 0.00e+00
+lazy_fold          o equal: False  state equal: False  max |dS| 6.99e-04
+
+-- lazy scale: tokens until c < 2^-60 at mean g of -1, -3, -5: [42, 14, 8]

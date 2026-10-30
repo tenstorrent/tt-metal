@@ -1,0 +1,2 @@
+2026-10-30 13:50:40.531 | info     |            Test | conv update T 4, D 256, W 4: y max bf16 ulp vs host 0 (1024 of 1024 words exact; the rest is the device's exp polynomial), slot shifted by T true, other slots untouched true (test_gdn_conv_update.cpp:215)
+2026-10-30 13:50:40.538 | info     |            Test | conv update: one call of T 4 vs 4 chained T 1 calls: y bit-equal true, state bit-equal true (test_gdn_conv_update.cpp:252)

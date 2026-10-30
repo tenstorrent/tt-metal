@@ -1,0 +1,4 @@
+one step: state equal True, o equal True, returned the pool itself True
+cache hit, pool moved True (0x170000 -> 0x160000): equal True; program cache entries 13; call 0.7 ms
+100 chained steps in place vs fresh: mismatching checkpoints none
+trace: 100 replays vs 100 eager in-place steps: state equal True, o equal True; replay result is the pool True

@@ -1,0 +1,927 @@
+2026-10-30 12:59:26.074 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-10-30 12:59:26.074 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-10-30 12:59:26.074 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:140)
+2026-10-30 12:59:26.074 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:159)
+2026-10-30 12:59:26.088 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:711)
+2026-10-30 12:59:26.088 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:164)
+2026-10-30 12:59:26.251 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:174)
+2026-10-30 12:59:26.251 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-10-30 12:59:26.251 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:151)
+2026-10-30 12:59:26.251 | info     |             UMD | Cluster constructor completed. (cluster.cpp:890)
+2026-10-30 12:59:26.256 | info     |             UMD | Starting devices in cluster (cluster.cpp:1479)
+2026-10-30 12:59:26.503 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1488)
+2026-10-30T12:59:26+00:00
+Running build_Release/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch
+Run on (32 X 2450 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x16)
+  L1 Instruction 32 KiB (x16)
+  L2 Unified 1024 KiB (x16)
+  L3 Unified 16384 KiB (x4)
+Load Average: 2.61, 0.79, 0.40
+2026-10-30 12:59:26.571 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_trace (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:26.571 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:26.571 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:26.571 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:26.571 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:26.571 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:26.571 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:26.571 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:26.571 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:26.571 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:26.571 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:26.571 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:26.571 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:26.571 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:537)
+2026-10-30 12:59:26.571 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:599)
+2026-10-30 12:59:27.494 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1323562559419048847/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1323562559419048847/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1323562559419048847/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccEd2Ljk.s: Assembler messages:
+/tmp/ccEd2Ljk.s:102: Warning: ignoring changed section attributes for .text
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12958756316215569609/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12958756316215569609/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12958756316215569609/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccH6sNyr.s: Assembler messages:
+/tmp/ccH6sNyr.s:105: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccS57qCA.s: Assembler messages:
+/tmp/ccS57qCA.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/cc9HJb2P.s: Assembler messages:
+/tmp/cc9HJb2P.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1583488985333421437/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccTHwlhx.s: Assembler messages:
+/tmp/ccTHwlhx.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:30.260 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:30.260 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_trace (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:30.260 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:30.260 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:30.260 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:30.260 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:30.260 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:30.260 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:30.260 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:30.260 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:30.260 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:30.260 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:30.260 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:30.260 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:30.349 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:30.554 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:30.554 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_trace (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:30.554 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:30.554 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:30.554 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:30.554 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:30.554 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:30.554 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:30.554 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:30.554 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:30.554 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:30.554 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:30.554 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:30.554 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:30.643 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:31.452 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+-------------------------------------------------------------------------------------------------------------------------------------
+Benchmark                                                                  Time             CPU   Iterations      Clock IterationTime
+-------------------------------------------------------------------------------------------------------------------------------------
+BM_pgm_dispatch/all_processors_all_cores_trace/256/manual_time          9451 us         42.4 us           74      1.35k     945.149ns
+2026-10-30 12:59:31.452 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_trace (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:31.452 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:31.452 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:31.452 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:31.452 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:31.452 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:31.452 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:31.452 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:31.452 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:31.452 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:31.452 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:31.452 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:31.452 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:31.540 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5461572341905854651/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5461572341905854651/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5461572341905854651/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccJI21pb.s: Assembler messages:
+/tmp/ccJI21pb.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8930512143215062062/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8930512143215062062/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8930512143215062062/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccZWeOLs.s: Assembler messages:
+/tmp/ccZWeOLs.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccU7Saam.s: Assembler messages:
+/tmp/ccU7Saam.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccoFHnsc.s: Assembler messages:
+/tmp/ccoFHnsc.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/11301122707486245002/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccLQWQKg.s: Assembler messages:
+/tmp/ccLQWQKg.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:31.992 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:31.992 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_trace (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:31.992 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:31.992 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:31.992 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:31.992 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:31.992 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:31.992 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:31.992 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:31.992 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:31.992 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:31.992 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:31.992 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:31.992 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:32.081 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:32.283 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:32.283 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_trace (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:32.283 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:32.283 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:32.283 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:32.283 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:32.283 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:32.283 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:32.283 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:32.283 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:32.283 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:32.283 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:32.283 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:32.283 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:32.371 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:33.179 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_trace/2048/manual_time         9454 us         42.8 us           74      1.35k     945.379ns
+2026-10-30 12:59:33.179 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1cb (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:33.179 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:33.179 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:33.179 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:33.179 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:33.179 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:33.179 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:33.179 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:33.179 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:33.179 | info     |            Test | DFBs: 1 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:33.179 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:33.179 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:33.179 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:33.266 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4497205652905362634/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4497205652905362634/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4497205652905362634/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccauk9tH.s: Assembler messages:
+/tmp/ccauk9tH.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/110710957344946041/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/110710957344946041/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/110710957344946041/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccLVfnQF.s: Assembler messages:
+/tmp/ccLVfnQF.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccbxjG6L.s: Assembler messages:
+/tmp/ccbxjG6L.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccv2EV0Q.s: Assembler messages:
+/tmp/ccv2EV0Q.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8341764975613951355/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccEgUfTl.s: Assembler messages:
+/tmp/ccEgUfTl.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:33.731 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:33.731 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1cb (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:33.731 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:33.731 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:33.731 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:33.731 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:33.731 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:33.731 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:33.731 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:33.731 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:33.731 | info     |            Test | DFBs: 1 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:33.731 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:33.731 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:33.731 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:33.819 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:34.089 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:34.089 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1cb (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:34.089 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:34.089 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:34.089 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:34.089 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:34.089 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:34.089 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:34.089 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:34.089 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:34.089 | info     |            Test | DFBs: 1 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:34.089 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:34.089 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:34.089 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:34.176 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:34.996 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_1cb/256/manual_time           16387 us         49.9 us           43      1.35k     1.63868us
+2026-10-30 12:59:34.996 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1cb (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:34.996 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:34.996 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:34.996 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:34.996 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:34.996 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:34.996 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:34.996 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:34.996 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:34.996 | info     |            Test | DFBs: 1 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:34.996 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:34.996 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:34.996 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:35.084 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10432460165403948660/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10432460165403948660/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10432460165403948660/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/cccTpI0C.s: Assembler messages:
+/tmp/cccTpI0C.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15953470335539692681/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15953470335539692681/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15953470335539692681/brisc/brisc.2339473936434887877_757431.elf
+/tmp/cc2Zp1wh.s: Assembler messages:
+/tmp/cc2Zp1wh.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/cc0CZ9O8.s: Assembler messages:
+/tmp/cc0CZ9O8.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccX0xuR8.s: Assembler messages:
+/tmp/ccX0xuR8.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2484819714268354907/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccKGNn4K.s: Assembler messages:
+/tmp/ccKGNn4K.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:35.555 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:35.555 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1cb (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:35.555 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:35.555 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:35.555 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:35.555 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:35.555 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:35.555 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:35.555 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:35.555 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:35.555 | info     |            Test | DFBs: 1 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:35.555 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:35.556 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:35.556 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:35.645 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:35.922 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:35.923 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1cb (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:35.923 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:35.923 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:35.923 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:35.923 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:35.923 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:35.923 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:35.923 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:35.923 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:35.923 | info     |            Test | DFBs: 1 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:35.923 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:35.923 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:35.923 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:36.011 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:36.831 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_1cb/2048/manual_time          16361 us         22.3 us           43      1.35k      1.6361us
+2026-10-30 12:59:36.831 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:36.831 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:36.831 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:36.831 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:36.831 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:36.831 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:36.831 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:36.831 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:36.831 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:36.831 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:36.831 | info     |            Test | UniqueRTArgs: 1 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:36.831 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:36.831 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:36.920 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/16314475248126695570/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/16314475248126695570/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/16314475248126695570/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/cchrAkEx.s: Assembler messages:
+/tmp/cchrAkEx.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4107221353441154276/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4107221353441154276/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4107221353441154276/brisc/brisc.2339473936434887877_757431.elf
+/tmp/cc9bP1wL.s: Assembler messages:
+/tmp/cc9bP1wL.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccGYS0Kq.s: Assembler messages:
+/tmp/ccGYS0Kq.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccRkfNml.s: Assembler messages:
+/tmp/ccRkfNml.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14780050976524969821/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/cc9aFhRr.s: Assembler messages:
+/tmp/cc9aFhRr.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:37.679 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:37.679 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:37.679 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:37.679 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:37.679 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:37.679 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:37.679 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:37.679 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:37.679 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:37.679 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:37.679 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:37.679 | info     |            Test | UniqueRTArgs: 1 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:37.679 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:37.679 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:37.768 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:38.482 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:38.482 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:38.482 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:38.482 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:38.482 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:38.482 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:38.482 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:38.482 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:38.482 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:38.482 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:38.482 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:38.482 | info     |            Test | UniqueRTArgs: 1 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:38.482 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:38.482 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:38.571 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:39.587 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_1_rta/256/manual_time         41764 us         65.7 us           17      1.35k     4.17642us
+2026-10-30 12:59:39.587 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:39.587 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:39.587 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:39.587 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:39.587 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:39.587 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:39.587 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:39.587 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:39.587 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:39.587 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:39.587 | info     |            Test | UniqueRTArgs: 1 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:39.587 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:39.587 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:39.676 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4054672240721202306/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4054672240721202306/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/4054672240721202306/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccoHqMde.s: Assembler messages:
+/tmp/ccoHqMde.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/16601277286548488297/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/16601277286548488297/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/16601277286548488297/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccWBFkoM.s: Assembler messages:
+/tmp/ccWBFkoM.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccXd2oU7.s: Assembler messages:
+/tmp/ccXd2oU7.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccMrW02N.s: Assembler messages:
+/tmp/ccMrW02N.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14385343479834251401/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccbkNN6M.s: Assembler messages:
+/tmp/ccbkNN6M.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:40.357 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:40.357 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:40.357 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:40.357 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:40.357 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:40.357 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:40.357 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:40.357 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:40.357 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:40.357 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:40.357 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:40.357 | info     |            Test | UniqueRTArgs: 1 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:40.357 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:40.357 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:40.446 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:41.169 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:41.169 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:41.169 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:41.169 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:41.169 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:41.169 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:41.169 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:41.169 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:41.169 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:41.169 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:41.169 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:41.169 | info     |            Test | UniqueRTArgs: 1 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:41.169 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:41.169 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:41.259 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:42.271 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_1_rta/2048/manual_time        41752 us         65.2 us           17      1.35k     4.17516us
+2026-10-30 12:59:42.271 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:42.271 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:42.271 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:42.271 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:42.271 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:42.271 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:42.271 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:42.271 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:42.271 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:42.271 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:42.271 | info     |            Test | UniqueRTArgs: 32 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:42.271 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:42.271 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:42.358 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17309564722316889427/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17309564722316889427/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17309564722316889427/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/cc6nPbfO.s: Assembler messages:
+/tmp/cc6nPbfO.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12982501907498018922/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12982501907498018922/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12982501907498018922/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccD6f6eT.s: Assembler messages:
+/tmp/ccD6f6eT.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/cc27BCSA.s: Assembler messages:
+/tmp/cc27BCSA.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/cciVaYZN.s: Assembler messages:
+/tmp/cciVaYZN.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/863190244081512790/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/cctMjzCB.s: Assembler messages:
+/tmp/cctMjzCB.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:44.333 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:44.333 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:44.333 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:44.333 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:44.333 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:44.333 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:44.333 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:44.333 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:44.333 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:44.333 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:44.333 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:44.333 | info     |            Test | UniqueRTArgs: 32 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:44.333 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:44.333 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:44.421 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:46.281 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:46.281 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:46.281 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:46.281 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:46.281 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:46.281 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:46.281 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:46.281 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:46.281 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:46.281 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:46.281 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:46.281 | info     |            Test | UniqueRTArgs: 32 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:46.281 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:46.281 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:46.369 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:48.490 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_32_rta/256/manual_time        43856 us         66.7 us           16      1.35k     4.38558us
+2026-10-30 12:59:48.490 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:48.490 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:48.490 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:48.490 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:48.490 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:48.490 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:48.490 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:48.490 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:48.490 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:48.490 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:48.490 | info     |            Test | UniqueRTArgs: 32 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:48.490 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:48.490 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:48.577 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2687377344817666201/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2687377344817666201/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2687377344817666201/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccvj7PQA.s: Assembler messages:
+/tmp/ccvj7PQA.s:102: Warning: ignoring changed section attributes for .text
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15296378666204295947/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15296378666204295947/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15296378666204295947/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccN8tUUJ.s: Assembler messages:
+/tmp/ccN8tUUJ.s:105: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccOemovc.s: Assembler messages:
+/tmp/ccOemovc.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccGpdedt.s: Assembler messages:
+/tmp/ccGpdedt.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5184074282821821634/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccUex4H8.s: Assembler messages:
+/tmp/ccUex4H8.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 12:59:50.366 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:50.366 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:50.366 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:50.366 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:50.366 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:50.366 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:50.366 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:50.366 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:50.366 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:50.366 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:50.366 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:50.366 | info     |            Test | UniqueRTArgs: 32 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:50.366 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:50.366 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:50.453 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:52.299 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 12:59:52.299 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:52.299 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:52.299 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:52.299 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:52.299 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:52.299 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:52.299 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:52.299 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:52.299 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:52.299 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:52.299 | info     |            Test | UniqueRTArgs: 32 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:52.299 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:52.299 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:52.386 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 12:59:54.516 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_32_rta/2048/manual_time       43859 us         67.6 us           16      1.35k     4.38594us
+2026-10-30 12:59:54.516 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_128_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 12:59:54.516 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 12:59:54.516 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 12:59:54.516 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 12:59:54.516 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 12:59:54.516 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 12:59:54.516 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 12:59:54.516 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 12:59:54.516 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 12:59:54.516 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 12:59:54.516 | info     |            Test | UniqueRTArgs: 128 (test_pgm_dispatch.cpp:643)
+2026-10-30 12:59:54.516 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 12:59:54.516 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 12:59:54.605 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14782538972437778098/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14782538972437778098/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/14782538972437778098/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccZPnfEG.s: Assembler messages:
+/tmp/ccZPnfEG.s:102: Warning: ignoring changed section attributes for .text
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/9202293238576590378/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/9202293238576590378/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/9202293238576590378/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccvtvRnK.s: Assembler messages:
+/tmp/ccvtvRnK.s:105: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/cccNVbih.s: Assembler messages:
+/tmp/cccNVbih.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccUw48Xh.s: Assembler messages:
+/tmp/ccUw48Xh.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/2712915534780759235/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccvyFcE8.s: Assembler messages:
+/tmp/ccvyFcE8.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 13:00:00.766 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:00.766 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_128_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:00.766 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:00.766 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:00.766 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:00.766 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:00.766 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:00.766 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:00.766 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:00.766 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:00.766 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:00.766 | info     |            Test | UniqueRTArgs: 128 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:00.766 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:00.766 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:00.856 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:06.822 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_128_rta/256/manual_time       51192 us         70.5 us           14      1.35k     5.11915us
+2026-10-30 13:00:06.822 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_128_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:06.822 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:06.822 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:06.822 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:06.822 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:06.822 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:06.822 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:06.822 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:06.822 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:06.822 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:06.822 | info     |            Test | UniqueRTArgs: 128 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:06.822 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:06.822 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:06.911 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1548263375480440680/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1548263375480440680/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/1548263375480440680/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/cc0LTlj6.s: Assembler messages:
+/tmp/cc0LTlj6.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15892058788671917679/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15892058788671917679/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/15892058788671917679/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccbP6psG.s: Assembler messages:
+/tmp/ccbP6psG.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/cc4IuAo8.s: Assembler messages:
+/tmp/cc4IuAo8.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/cccBTdyB.s: Assembler messages:
+/tmp/cccBTdyB.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/457086283597441140/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccgqzBuk.s: Assembler messages:
+/tmp/ccgqzBuk.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 13:00:12.545 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:12.545 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_128_rta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:12.545 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:12.545 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:12.545 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:12.545 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:12.545 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:12.545 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:12.545 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:12.545 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:12.545 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:12.545 | info     |            Test | UniqueRTArgs: 128 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:12.545 | info     |            Test | CommonRTArgs: 0 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:12.545 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:12.634 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:18.637 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_128_rta/2048/manual_time      51191 us         70.1 us           14      1.35k     5.11909us
+2026-10-30 13:00:18.637 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:18.637 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:18.637 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:18.637 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:18.637 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:18.637 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:18.637 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:18.637 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:18.637 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:18.637 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:18.637 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:18.637 | info     |            Test | CommonRTArgs: 1 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:18.637 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:18.725 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/7822067318707637606/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/7822067318707637606/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/7822067318707637606/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/cc5kzEtO.s: Assembler messages:
+/tmp/cc5kzEtO.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13873185631608922166/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13873185631608922166/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13873185631608922166/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccSmZjGK.s: Assembler messages:
+/tmp/ccSmZjGK.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccs5mE19.s: Assembler messages:
+/tmp/ccs5mE19.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccafweFa.s: Assembler messages:
+/tmp/ccafweFa.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17362206084824888088/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccP1gPoW.s: Assembler messages:
+/tmp/ccP1gPoW.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 13:00:19.175 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:19.175 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:19.175 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:19.175 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:19.175 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:19.175 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:19.175 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:19.175 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:19.175 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:19.175 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:19.175 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:19.175 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:19.175 | info     |            Test | CommonRTArgs: 1 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:19.175 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:19.262 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:19.529 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:19.529 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:19.529 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:19.529 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:19.529 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:19.529 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:19.529 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:19.529 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:19.529 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:19.529 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:19.529 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:19.529 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:19.529 | info     |            Test | CommonRTArgs: 1 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:19.529 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:19.617 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:20.426 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_1_crta/256/manual_time        16423 us         47.8 us           43      1.35k     1.64232us
+2026-10-30 13:00:20.426 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:20.426 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:20.426 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:20.426 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:20.426 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:20.426 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:20.426 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:20.426 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:20.426 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:20.426 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:20.426 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:20.426 | info     |            Test | CommonRTArgs: 1 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:20.426 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:20.514 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8214501977832632171/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8214501977832632171/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8214501977832632171/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccuJZfs8.s: Assembler messages:
+/tmp/ccuJZfs8.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5334567486942634270/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5334567486942634270/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/5334567486942634270/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccK6j4VG.s: Assembler messages:
+/tmp/ccK6j4VG.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/cciFMlHS.s: Assembler messages:
+/tmp/cciFMlHS.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccgNqPCR.s: Assembler messages:
+/tmp/ccgNqPCR.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/13000101794859577291/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccWycnUn.s: Assembler messages:
+/tmp/ccWycnUn.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 13:00:20.968 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:20.968 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:20.968 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:20.968 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:20.968 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:20.968 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:20.968 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:20.968 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:20.968 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:20.968 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:20.968 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:20.968 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:20.968 | info     |            Test | CommonRTArgs: 1 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:20.968 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:21.057 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:21.323 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:21.323 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_1_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:21.323 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:21.323 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:21.323 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:21.323 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:21.323 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:21.323 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:21.323 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:21.323 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:21.323 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:21.323 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:21.323 | info     |            Test | CommonRTArgs: 1 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:21.323 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:21.411 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:22.219 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_1_crta/2048/manual_time       16425 us         49.5 us           43      1.35k     1.64248us
+2026-10-30 13:00:22.219 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:22.219 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:22.219 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:22.219 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:22.219 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:22.219 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:22.219 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:22.219 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:22.219 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:22.219 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:22.219 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:22.219 | info     |            Test | CommonRTArgs: 32 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:22.219 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:22.308 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/6783068983094235991/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/6783068983094235991/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/6783068983094235991/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccjg8tFX.s: Assembler messages:
+/tmp/ccjg8tFX.s:102: Warning: ignoring changed section attributes for .text
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17468195538332701412/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17468195538332701412/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/17468195538332701412/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/ccxTpE4K.s: Assembler messages:
+/tmp/ccxTpE4K.s:105: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/cc7XTxla.s: Assembler messages:
+/tmp/cc7XTxla.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/cchX4lb1.s: Assembler messages:
+/tmp/cchX4lb1.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/12045457398886097307/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/ccRop0F5.s: Assembler messages:
+/tmp/ccRop0F5.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 13:00:22.759 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:22.759 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:22.759 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:22.759 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:22.759 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:22.759 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:22.759 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:22.759 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:22.759 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:22.759 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:22.759 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:22.759 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:22.759 | info     |            Test | CommonRTArgs: 32 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:22.759 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:22.846 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:23.114 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:23.114 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:23.114 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:23.114 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:23.114 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:23.114 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:23.114 | info     |            Test | Kernel size: 256 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:23.114 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:23.114 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:23.114 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:23.114 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:23.114 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:23.114 | info     |            Test | CommonRTArgs: 32 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:23.114 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:23.201 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:24.018 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_32_crta/256/manual_time       16455 us         49.4 us           43      1.35k     1.64548us
+2026-10-30 13:00:24.018 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:24.018 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:24.018 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:24.018 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:24.018 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:24.018 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:24.018 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:24.018 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:24.018 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:24.018 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:24.018 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:24.018 | info     |            Test | CommonRTArgs: 32 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:24.018 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:24.106 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+Building ncrisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/3796675330346940858/ncrisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/ncrisc/ncrisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_ncrisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/3796675330346940858/ncrisc/ncrisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/3796675330346940858/ncrisc/ncrisc.2339473936434887877_757431.elf
+/tmp/cc5XszFy.s: Assembler messages:
+/tmp/cc5XszFy.s:105: Warning: ignoring changed section attributes for .text
+Building brisc, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8134896021698975734/brisc/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/brisc/brisc_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_brisc.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/noc.o /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8134896021698975734/brisc/brisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/8134896021698975734/brisc/brisc.2339473936434887877_757431.elf
+/tmp/ccAsEch1.s: Assembler messages:
+/tmp/ccAsEch1.s:102: Warning: ignoring changed section attributes for .text
+Building trisc0, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc0/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc0/trisc0_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc0.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc0/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc0/trisc0.2339473936434887877_757431.elf
+/tmp/ccGLledc.s: Assembler messages:
+/tmp/ccGLledc.s:103: Warning: ignoring changed section attributes for .text
+Building trisc2, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc2/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc2/trisc2_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc2.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc2/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc2/trisc2.2339473936434887877_757431.elf
+/tmp/ccSC65lI.s: Assembler messages:
+/tmp/ccSC65lI.s:103: Warning: ignoring changed section attributes for .text
+Building trisc1, link step:
+cd /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc1/ && /localdev/iwrosz/tt-metal-gdn-n052/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -Wl,--just-symbols=/home/iwrosz/.cache/tt-metal-cache/313451542053886217/firmware/trisc1/trisc1_weakened.elf -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -mcpu=tt-bh-tensix -Wno-stringop-overflow -T/localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/toolchain/blackhole/kernel_trisc1.ld -Wl,--emit-relocs /localdev/iwrosz/tt-metal-gdn-n052/runtime/hw/lib/blackhole/substitutes.o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc1/trisck.2339473936434887877_757431.o -o /home/iwrosz/.cache/tt-metal-cache/313451542053886217/kernels/pgm_dispatch_perf/10205470442955946752/trisc1/trisc1.2339473936434887877_757431.elf
+/tmp/cciN7CCu.s: Assembler messages:
+/tmp/cciN7CCu.s:103: Warning: ignoring changed section attributes for .text
+2026-10-30 13:00:24.559 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:24.559 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:24.559 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:24.559 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:24.559 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:24.559 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:24.559 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:24.559 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:24.559 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:24.559 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:24.559 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:24.559 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:24.559 | info     |            Test | CommonRTArgs: 32 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:24.559 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:24.647 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:24.914 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+2026-10-30 13:00:24.914 | info     |            Test | Running BM_pgm_dispatch/all_processors_all_cores_32_crta (test_pgm_dispatch.cpp:655)
+2026-10-30 13:00:24.914 | info     |            Test | Running with trace enabled (test_pgm_dispatch.cpp:620)
+2026-10-30 13:00:24.914 | info     |            Test | Warmup iterations: 5000 (test_pgm_dispatch.cpp:622)
+2026-10-30 13:00:24.914 | info     |            Test | Iterations: 10000 (test_pgm_dispatch.cpp:623)
+2026-10-30 13:00:24.914 | info     |            Test | Grid: (0-0-10-8) (99 cores) (test_pgm_dispatch.cpp:629)
+2026-10-30 13:00:24.914 | info     |            Test | Kernel size: 2048 (test_pgm_dispatch.cpp:630)
+2026-10-30 13:00:24.914 | info     |            Test | Kernel cycles: 0 (test_pgm_dispatch.cpp:637)
+2026-10-30 13:00:24.914 | info     |            Test | KGs: 1 (test_pgm_dispatch.cpp:640)
+2026-10-30 13:00:24.914 | info     |            Test | Subdevice core ranges: 1 (test_pgm_dispatch.cpp:641)
+2026-10-30 13:00:24.914 | info     |            Test | DFBs: 0 (test_pgm_dispatch.cpp:642)
+2026-10-30 13:00:24.914 | info     |            Test | UniqueRTArgs: 0 (test_pgm_dispatch.cpp:643)
+2026-10-30 13:00:24.914 | info     |            Test | CommonRTArgs: 32 (test_pgm_dispatch.cpp:644)
+2026-10-30 13:00:24.914 | info     |            Test | Sems: 0 (test_pgm_dispatch.cpp:645)
+2026-10-30 13:00:25.002 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:266)
+2026-10-30 13:00:25.813 | info     |            Test | Test Passed (test_pgm_dispatch.cpp:765)
+BM_pgm_dispatch/all_processors_all_cores_32_crta/2048/manual_time      16450 us         43.4 us           43      1.35k     1.64499us
+2026-10-30 13:00:25.813 | info     |    BuildKernels | JIT cache stats: 0/86 hits (0.0%) [0 cached, 1785 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-30 13:00:25.813 | info     |    BuildKernels | JIT telemetry: 57 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-30 13:00:25.839 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:592)
+2026-10-30 13:00:25.839 | info     |             UMD | Closing devices in cluster (cluster.cpp:1493)
+2026-10-30 13:00:26.146 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1503)
+2026-10-30 13:00:26.146 | info     |             UMD | Cluster destructor started. (cluster.cpp:1224)
+2026-10-30 13:00:26.146 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1237)
