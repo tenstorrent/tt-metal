@@ -25,7 +25,7 @@
 // unpacker's per-source tile geometry (which only compute_kernel_hw_startup and reconfig_full_operand program, not
 // matmul_init: #49266) by reconfig_full_operand before every FPU op whose operand shapes differ from the previous one.
 // Every pass waits for its inputs and never pops them; decode_token pops the CBs internal to the token (ecol32,
-// ccol32, r16, u16) and, with pop_inputs, the per-token inputs and S_cur (never ones32).
+// ebc16, r16, u16) and, with pop_inputs, the per-token inputs and S_cur (never ones32).
 //
 // The SFPU helpers are K1's fused_recurrent_gdn_sfpu.hpp (namespace gdn_decode_sfpu); nothing else touches the SFPU.
 
@@ -61,10 +61,12 @@ struct TokenCbs {
     uint32_t ecol32;     // 32x32: column 0 = e (compute, utd; only column 0 of faces 0 and 2 is ever read)
     uint32_t r16;        // Vt x 16x32: row 0 = r_k, row 2 = r_q (compute, utd)
     uint32_t craw16;     // 16x32: [0,0] = c (compute)
-    uint32_t ccol32;     // 32x32, every element = c (compute, utd)
+    uint32_t ccol32;     // 32x32 of c: allocated by the factory but not produced or read by these passes (c goes from
+                         // DEST straight into ebc16); kept so the factory's CB plan needs no change
     uint32_t u16;        // Vt x 16x32: row 0 = u, rows 1-15 exactly 0 (compute)
     uint32_t out16;      // Vt x 16x32: row 0 = o, rows 1-15 0 (compute -> writer)
     uint32_t state_out;  // Kt*Vt x 32x32 (compute -> writer, when emit_state)
+    uint32_t ebc16;      // 16x32: column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c, else 0 (compute, utd)
 };
 
 // One state CB (Kt*Vt x 32x32) under its two ids: `utd` (UnpackToDestFp32, read by copy_tile for the exact seed)
@@ -75,32 +77,35 @@ struct StateCbs {
     uint32_t mm;
 };
 
-// Constants pass (three acquires): ecol32 <- exp(gcol32) on faces 0 and 2 (column 0 of all 32 rows; the other
-// columns are never read); craw16 <- sum_ki qk16[ki] x qcol32[ki] (c at [0,0]); ccol32 <- ones32 * craw16[0,0].
-// Waits gcol32 (1), qk16 (Kt), qcol32 (Kt), ones32 (1); pushes ecol32 (1) and ccol32 (1); craw16 is produced,
-// consumed and popped here.
+// Constants pass (three acquires): ecol32 <- exp(gcol32) on the column-0 vectors (column 0 of all 32 rows; the other
+// columns are never read); craw16 <- sum_ki qk16[ki] x qcol32[ki] (c at [0,0]); then one acquire with the FPU scalar
+// broadcast of craw16[0,0] onto ones32 (c in every element of slot 0), copies of ecol32 and bcol16, and build_ebc16
+// -> ebc16 (column 0 rows 0-3 = e, 4-7 = beta, 8-11 = c). Waits gcol32 (1), qk16 (Kt), qcol32 (Kt), ones32 (1),
+// bcol16 (1); pushes ecol32 (1) and ebc16 (1); craw16 is produced, consumed and popped here.
 template <uint32_t Kt>
 void constants_pass(
     uint32_t cb_gcol32,
     uint32_t cb_qk16,
     uint32_t cb_qcol32,
     uint32_t cb_ones32,
+    uint32_t cb_bcol16,
     uint32_t cb_ecol32,
     uint32_t cb_craw16,
-    uint32_t cb_ccol32) {
-    CircularBuffer gcol(cb_gcol32), qk(cb_qk16), qcol(cb_qcol32), ones(cb_ones32);
-    CircularBuffer ecol(cb_ecol32), craw(cb_craw16), ccol(cb_ccol32);
+    uint32_t cb_ebc16) {
+    CircularBuffer gcol(cb_gcol32), qk(cb_qk16), qcol(cb_qcol32), ones(cb_ones32), bcol(cb_bcol16);
+    CircularBuffer ecol(cb_ecol32), craw(cb_craw16), ebc(cb_ebc16);
     gcol.wait_front(1);
     qk.wait_front(Kt);
     qcol.wait_front(Kt);
     ones.wait_front(1);
+    bcol.wait_front(1);
 
-    // 1. e = exp(g), exact, on the column faces.
+    // 1. e = exp(g), exact, on column 0.
     ecol.reserve_back(1);
     tile_regs_acquire();
     copy_init(cb_gcol32);
     copy_tile(cb_gcol32, 0, 0);
-    gdn_decode_sfpu::exp_tile_exact<ckernel::VectorMode::C>(0);
+    gdn_decode_sfpu::exp_col0_exact(0);
     tile_regs_commit();
     tile_regs_wait();
     pack_init(cb_ecol32);
@@ -123,19 +128,26 @@ void constants_pass(
     tile_regs_release();
     craw.push_back(1);
 
-    // 3. ccol32 = c everywhere (FPU scalar broadcast of craw16[0,0] onto the ones tile).
+    // 3. slot 0 = c everywhere (FPU scalar broadcast of craw16[0,0] onto the ones tile), slot 1 = ecol32, slot 2 =
+    //    bcol16; ebc16 built in slot 3 from column 0 rows 0-3 of each.
     craw.wait_front(1);
-    ccol.reserve_back(1);
+    ecol.wait_front(1);
+    ebc.reserve_back(1);
     tile_regs_acquire();
     reconfig_full_operand(cb_ones32, cb_craw16);
     mul_bcast_scalar_init(cb_ones32, cb_craw16);
     mul_tiles_bcast_scalar(cb_ones32, cb_craw16, 0, 0, 0);
+    copy_init(cb_ecol32);  // 32x32
+    copy_tile(cb_ecol32, 0, 1);
+    copy_init(cb_bcol16);  // 16x32
+    copy_tile(cb_bcol16, 0, 2);
+    gdn_decode_sfpu::build_ebc16(1, 2, 0, 3);
     tile_regs_commit();
     tile_regs_wait();
-    pack_init(cb_ccol32);
-    pack_tile<true>(0, cb_ccol32, 0);
+    pack_init(cb_ebc16);
+    pack_tile<true>(3, cb_ebc16, 0);
     tile_regs_release();
-    ccol.push_back(1);
+    ebc.push_back(1);
     craw.pop_front(1);
 }
 
@@ -169,50 +181,38 @@ void read_pass(uint32_t cb_qk16, uint32_t cb_s_cur, uint32_t cb_r16) {
 }
 
 // Vector pass, one acquire per V tile j. The live data of the 16x32 tiles is in rows 0 and 2 and rows 4-15 are zero
-// paddings, so the SFPU ops run on rows 0..3 only (ROWS = 4: one 4-row band of faces 0 and 1):
-//   slot 0 = r16[j], 1 = v16[j], 2 = ecol32, 3 = bcol16
-//   0 <- 0 * col(2)             e r           (row 0 = e r_k, row 2 = e r_q)
+// paddings, so the SFPU ops run on rows 0..3 only (one 4-row band of faces 0 and 1); the constants come from ebc16's
+// column 0 (band 0 = e, 1 = beta, 2 = c):
+//   slot 0 = r16[j], 1 = v16[j], 2 = ebc16
+//   0 <- 0 * e                  e r           (row 0 = e r_k, row 2 = e r_q)
 //   1 <- 1 - 0                  v - e r
-//   1 <- 1 * col(3)             beta (v - e r_k) in row 0; rows 1-15 then zeroed  -> u
-//   2 <- ccol32                 c (column 0 = c)
-//   3 <- 1; 3 <- 3 * col(2)     c u  (u copied inside DEST: a slot cannot be reloaded after its pack)
+//   1 <- 1 * beta               beta (v - e r_k) in row 0; rows 1-15 then zeroed  -> u
 //   0 <- row 2 of 0 in row 0    e r_q, rows 1-15 zero
+//   3 <- 1; 3 <- 3 * c          c u  (u copied inside DEST: a slot cannot be reloaded after its pack)
 //   0 <- 0 + 3                  o
 //   pack 1 -> u16[j], 0 -> out16[j]
-// Waits r16 (Vt), v16 (Vt), ecol32 (1), bcol16 (1), ccol32 (1); pushes u16 (Vt) and out16 (Vt).
+// Waits r16 (Vt), v16 (Vt), ebc16 (1); pushes u16 (Vt) and out16 (Vt).
 template <uint32_t Vt>
-void vector_pass(
-    uint32_t cb_r16,
-    uint32_t cb_v16,
-    uint32_t cb_ecol32,
-    uint32_t cb_bcol16,
-    uint32_t cb_ccol32,
-    uint32_t cb_u16,
-    uint32_t cb_out16) {
-    CircularBuffer r(cb_r16), v(cb_v16), ecol(cb_ecol32), bcol(cb_bcol16), ccol(cb_ccol32), u(cb_u16), out(cb_out16);
+void vector_pass(uint32_t cb_r16, uint32_t cb_v16, uint32_t cb_ebc16, uint32_t cb_u16, uint32_t cb_out16) {
+    CircularBuffer r(cb_r16), v(cb_v16), ebc(cb_ebc16), u(cb_u16), out(cb_out16);
     r.wait_front(Vt);
     v.wait_front(Vt);
-    ecol.wait_front(1);
-    bcol.wait_front(1);
-    ccol.wait_front(1);
+    ebc.wait_front(1);
     u.reserve_back(Vt);
     out.reserve_back(Vt);
     for (uint32_t j = 0; j < Vt; j++) {
         tile_regs_acquire();
-        copy_init(cb_r16);  // 16x32 tiles
+        copy_init(cb_r16);  // 16x32 tiles throughout
         copy_tile(cb_r16, j, 0);
         copy_tile(cb_v16, j, 1);
-        copy_tile(cb_bcol16, 0, 3);
-        copy_init(cb_ecol32);  // 32x32 tiles
-        copy_tile(cb_ecol32, 0, 2);
-        gdn_decode_sfpu::mul_col_bcast<4>(0, 2);
+        copy_tile(cb_ebc16, 0, 2);
+        gdn_decode_sfpu::mul_col_bcast_band0(0, 2, 0);
         gdn_decode_sfpu::sub_dst<4>(1, 0);
-        gdn_decode_sfpu::mul_col_bcast<4>(1, 3);
+        gdn_decode_sfpu::mul_col_bcast_band0(1, 2, 1);
         gdn_decode_sfpu::zero_rows_from_1(1);
-        copy_tile(cb_ccol32, 0, 2);
-        gdn_decode_sfpu::copy_dst<4>(3, 1);
-        gdn_decode_sfpu::mul_col_bcast<4>(3, 2);
         gdn_decode_sfpu::move_row2_to_row0(0);
+        gdn_decode_sfpu::copy_dst<4>(3, 1);
+        gdn_decode_sfpu::mul_col_bcast_band0(3, 2, 2);
         gdn_decode_sfpu::add_dst<4>(0, 3);
         tile_regs_commit();
         tile_regs_wait();
@@ -312,16 +312,16 @@ void decode_token(
     bool pop_inputs = true,
     Hook&& hook = Hook{}) {
     constexpr uint32_t kv = Kt * Vt;
-    constants_pass<Kt>(cb.gcol32, cb.qk16, cb.qcol32, cb.ones32, cb.ecol32, cb.craw16, cb.ccol32);
+    constants_pass<Kt>(cb.gcol32, cb.qk16, cb.qcol32, cb.ones32, cb.bcol16, cb.ecol32, cb.craw16, cb.ebc16);
     hook(0);
     read_pass<Kt, Vt>(cb.qk16, s_cur.mm, cb.r16);
     hook(1);
-    vector_pass<Vt>(cb.r16, cb.v16, cb.ecol32, cb.bcol16, cb.ccol32, cb.u16, cb.out16);
+    vector_pass<Vt>(cb.r16, cb.v16, cb.ebc16, cb.u16, cb.out16);
     hook(2);
     update_pass<Kt, Vt>(cb.kT16, cb.u16, s_cur.utd, cb.ecol32, s_next, cb.state_out, emit_state);
     hook(3);
     CircularBuffer(cb.ecol32).pop_front(1);
-    CircularBuffer(cb.ccol32).pop_front(1);
+    CircularBuffer(cb.ebc16).pop_front(1);
     CircularBuffer(cb.r16).pop_front(Vt);
     CircularBuffer(cb.u16).pop_front(Vt);
     if (pop_inputs) {

@@ -54,8 +54,9 @@ namespace cb {
 constexpr uint32_t qk16 = 0, kT16 = 1, qcol32 = 2, v16 = 3, gcol32 = 4, bcol16 = 5, S = 6, ones32 = 7, zero32 = 8;
 constexpr uint32_t ecol32 = 9, r16 = 10, craw16 = 11, ccol32 = 12, u16 = 13, s2 = 14, s3 = 15, out16 = 16;
 constexpr uint32_t state_out = 17;
-// Plain (non-utd) aliases of S and s2 over the same L1 memory, for the read-pass matmul (test-local ids).
-constexpr uint32_t S_mm = 19, s2_mm = 20;
+// The vector pass's constants tile, and the plain (non-utd) aliases of S and s2 over the same L1 memory for the
+// read-pass matmul (the ids of the op's fused_recurrent_gdn_cb.hpp).
+constexpr uint32_t ebc16 = 19, S_mm = 20, s2_mm = 21;
 }  // namespace cb
 
 #ifdef TRISC_MATH
@@ -95,7 +96,7 @@ void kernel_main() {
 #endif
 
     if constexpr (VARIANT == 1 || VARIANT == 17) {
-        // 17: S arrives utd under c_6 and the matmul reads it through the plain alias c_19 (the token's form).
+        // 17: S arrives utd under c_6 and the matmul reads it through the plain alias c_20 (the token's form).
         constexpr uint32_t s_mm = (VARIANT == 17) ? cb::S_mm : cb::S;
         startup<cb::qk16, s_mm, cb::out16>();
         stamp(0);
@@ -118,11 +119,15 @@ void kernel_main() {
         }
         stamp(1);
     } else if constexpr (VARIANT == 3) {
+        // ecol32 (c_9) is internal (the pass reads it back for ebc16); ebc16 goes to the output CB c_16.
         startup<cb::qk16, cb::qcol32, cb::out16>();
+        CircularBuffer ecol(cb::ecol32);
         stamp(0);
         for (uint32_t r = 0; r < REPS; r++) {
             gdn_decode::constants_pass<KT>(
-                cb::gcol32, cb::qk16, cb::qcol32, cb::ones32, cb::out16, cb::craw16, cb::state_out);
+                cb::gcol32, cb::qk16, cb::qcol32, cb::ones32, cb::bcol16, cb::ecol32, cb::craw16, cb::out16);
+            ecol.wait_front(1);
+            ecol.pop_front(1);
         }
         stamp(1);
     } else if constexpr (VARIANT == 4) {
@@ -141,7 +146,8 @@ void kernel_main() {
             .ccol32 = cb::ccol32,
             .u16 = cb::u16,
             .out16 = cb::out16,
-            .state_out = cb::state_out};
+            .state_out = cb::state_out,
+            .ebc16 = cb::ebc16};
         constexpr gdn_decode::StateCbs s_cur{cb::S, cb::S_mm}, s_next{cb::s2, cb::s2_mm};
         CircularBuffer sn(cb::s2), sn_mm(cb::s2_mm);
         stamp(0);
