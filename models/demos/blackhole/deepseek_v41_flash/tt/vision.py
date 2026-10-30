@@ -517,8 +517,13 @@ class DSV41Vision:
         for n_pad in [b for b in VIT_BUCKETS if b <= TRACE_MAX]:
             self._upload_wave(self._synthetic_wave(n_pad), n_pad, self.warm_pairs(n_pad)[0])
             ttnn.synchronize_device(self.md)
+            from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
+
             tid = ttnn.begin_trace_capture(self.md, cq_id=0)
-            xr = self._trunk(n_pad)
+            with corruptible(
+                self.md
+            ):  # (the trunk output stays allocated and is rewritten by its own replay before every read: a later capture's output may sit on an earlier trace's temporaries by design)
+                xr = self._trunk(n_pad)
             ttnn.end_trace_capture(self.md, tid, cq_id=0)
             ttnn.synchronize_device(self.md)
             self.traces[n_pad] = (tid, xr)
