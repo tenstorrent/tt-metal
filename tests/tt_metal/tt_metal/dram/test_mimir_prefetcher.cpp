@@ -36,6 +36,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
@@ -127,7 +128,8 @@ TEST(MimirPrefetcher, MM7GatePreconditionsHold) {
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     for (uint32_t view = 0; view < soc_desc.get_num_dram_views(); ++view) {
         const std::vector<CoreCoord> senders = mesh->impl().dram_sender_logical_cores(device, view);
-        ASSERT_EQ(senders, std::vector<CoreCoord>{CoreCoord(view, 0)}) << "DRAM view " << view;
+        ASSERT_EQ(senders, std::vector<CoreCoord>{soc_desc.get_logical_core_for_dram_view(view)})
+            << "DRAM view " << view;
         const CoreCoord sender_translated = soc_desc.get_physical_dram_core_from_logical(senders.front());
         log_info(
             tt::LogTest,
@@ -210,8 +212,7 @@ experimental::GlobalCircularBuffer expect_dram_receiver_gcb_layout(
     IDevice* device = mesh.get_devices().front();
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const DriscL1Arena& arena = mesh.impl().drisc_l1_arena();
-    const uint64_t unreserved_base =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t unreserved_base = tl1_test_base();
     EXPECT_EQ(arena.sender_state_zone_size(), DriscL1Arena::kQuasarSenderStateZoneSize);
     EXPECT_EQ(arena.receiver_zone_base(), unreserved_base + DriscL1Arena::kQuasarSenderStateZoneSize);
     EXPECT_EQ(arena.receiver_zone_size(), DriscL1Arena::kQuasarReceiverZoneSize);
@@ -1585,7 +1586,7 @@ TEST(MimirPrefetcher, MM7LifecycleDrainAtStop) {
 // T1: one PREFETCH route per test. A sender CCE streams one 4 KiB page of a tensor on its own DRAM view into a
 // validator receiver, then a second session in the same mesh streams another tensor's page into the same GCB.
 
-inline constexpr uint32_t kUint32TileWords = 32 * 32;
+inline constexpr uint32_t kUint32TileWords = tt::constants::TILE_HW;
 inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
 inline constexpr uint32_t kT1Sessions = 2;
 // One PREFETCH page, then Stop's DRAIN and STOP.
@@ -1646,7 +1647,8 @@ struct SlabTensorGeometry {
 };
 
 TensorSpec single_bank_tensor_spec(uint32_t bank, const SlabTensorGeometry& geometry) {
-    const CoreRangeSet bank_cores(CoreRange(CoreCoord{bank, 0}, CoreCoord{bank, 0}));
+    const CoreCoord bank_core = configured_soc_desc().get_logical_core_for_dram_view(bank);
+    const CoreRangeSet bank_cores(CoreRange(bank_core, bank_core));
     const Shape shard_shape{32 * geometry.slab_tiles(), 32};
     const Shape tensor_shape{32 * geometry.slab_tiles() * geometry.num_slabs, 32};
     const MemoryConfig memory_config(

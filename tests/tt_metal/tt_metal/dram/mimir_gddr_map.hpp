@@ -8,8 +8,6 @@
 
 namespace tt::tt_metal::mimir_test {
 
-inline constexpr uint64_t kEmuPageBytes = 32 * 1024;
-
 // instance is the GDDR channel, tile * 4 + slice.
 struct MimirChannelLocation {
     uint32_t tile = 0;

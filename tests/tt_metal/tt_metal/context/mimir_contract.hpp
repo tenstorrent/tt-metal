@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <span>
@@ -476,7 +477,7 @@ inline CceSpaRoutes read_cce_spa_routes(IDevice* device, uint32_t cce_index) {
 inline uint64_t cce_gddr_address(const CceSpaRoutes& routes, uint32_t mimir_index, uint64_t offset) {
     TT_FATAL(mimir_index < CCE_SPA_ROUTES_MAX_INSTANCES, "Mimir {} has no SPA route", mimir_index);
     const uint32_t port = routes.gddr_d2d[mimir_index];
-    TT_FATAL(port < 2, "Mimir {} route names D2D port {}", mimir_index, port);
+    TT_FATAL(port < std::size(routes.gddr_d2d_base), "Mimir {} route names D2D port {}", mimir_index, port);
     return routes.gddr_d2d_base[port] + static_cast<uint64_t>(mimir_index) * routes.gddr_instance_stride + offset;
 }
 

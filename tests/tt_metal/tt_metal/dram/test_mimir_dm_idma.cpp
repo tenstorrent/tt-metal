@@ -37,7 +37,7 @@ namespace tt::tt_metal::mimir_test::dm_idma {
 namespace abi = cce_idma_copy_abi;
 
 inline constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
-inline constexpr uint32_t kCopyHart = 0;
+inline constexpr uint32_t kCopyHart = kCceKernelHart;
 inline constexpr uint32_t kCopyBytes = 1024;
 // Three polls at most, plus launch.
 inline constexpr std::chrono::seconds kHostDeadline{400};
@@ -48,7 +48,7 @@ inline constexpr uint64_t kReadbackOffset = 0x10000;
 inline constexpr uint64_t kGddrDataOffset = 0x10000;
 inline constexpr uint32_t kLeadingGuardTag = 0x800;
 // Strided cases: line-sized elements, every other line of the source.
-inline constexpr uint32_t kStridedElementBytes = 64;
+inline constexpr uint32_t kStridedElementBytes = abi::kLineBytes;
 inline constexpr uint32_t kStridedElements = 10;
 inline constexpr uint32_t kStridedSourceStrideBytes = 128;
 // Sub-line strided cases: upstream IDMA_1D_Strided's every other 8 B element.
@@ -254,7 +254,7 @@ std::vector<IdmaLeg> write_and_read_legs(
 }
 
 std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc) {
-    const uint64_t dram_unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t dram_unreserved = dram_unreserved_base();
     const Endpoint own_source = own_tl1_endpoint(0, tl1_data(kCopyHart));
     const Endpoint own_destination = own_tl1_endpoint(0, tl1_data(kCopyHart) + kDestinationOffset);
     switch (idma_case) {
@@ -536,7 +536,7 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
             return read_endpoint(unit_mesh, device, leg.destination, byte_offset, bytes);
         }))
         << detail;
-    EXPECT_EQ(read_endpoint(unit_mesh, device, leg.destination, num_words * sizeof(uint32_t), abi::kLineBytes), guard)
+    EXPECT_EQ(read_endpoint(unit_mesh, device, leg.destination, num_words * sizeof(uint32_t), kGuardBytes), guard)
         << label << ": guard after the destination was overwritten";
     EXPECT_EQ(read_endpoint(unit_mesh, device, leading_guard_of(leg.destination), 0, kGuardBytes), leading_guard)
         << label << ": guard before the destination was overwritten";

@@ -33,10 +33,15 @@
 
 namespace tt::tt_metal::mimir_test {
 
+namespace {
+constexpr uint32_t kDmProcessorClass = ttsl::as_underlying_type<HalProcessorClassType>(HalProcessorClassType::DM);
+}  // namespace
+
 void poison_cce_reset_vectors(const Cluster& cluster, ChipId chip, uint32_t cce_index) {
     const Hal& hal = MetalContext::instance().hal();
     const uint64_t fw_launch_addr =
-        hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, 0)
+        hal.get_jit_build_config(
+               hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), kDmProcessorClass, 0)
             .fw_launch_addr;
     const tt_cxy_pair core(chip, cce_virtual_core(cluster, chip, cce_index));
     std::vector<uint32_t> poisons(cce_hart_count());
@@ -56,7 +61,7 @@ std::vector<CceFwSpan> cce_fw_spans(const std::string& binary_path) {
     const Hal& hal = MetalContext::instance().hal();
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
     const ll_api::memory& binary = tt::llrt::get_risc_binary(binary_path);
-    const HalJitBuildConfig& jit_build_config = hal.get_jit_build_config(dram_core_type_index, 0, 0);
+    const HalJitBuildConfig& jit_build_config = hal.get_jit_build_config(dram_core_type_index, kDmProcessorClass, 0);
 
     std::vector<CceFwSpan> spans;
     // Same relocation as llrt::test_load_write_read_risc_binary, minus the l1_noc_offset.
@@ -90,9 +95,9 @@ const CceFwManifest& build_cce_fw_manifest(MetalContext& context, ChipId chip) {
     BuildEnvManager::get_instance(context_id).build_firmware(chip);
 
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
-    const std::string binary_path =
-        BuildEnvManager::get_instance(context_id).get_firmware_binary_path(chip, dram_core_type_index, 0, 0);
-    const HalJitBuildConfig& jit_build_config = hal.get_jit_build_config(dram_core_type_index, 0, 0);
+    const std::string binary_path = BuildEnvManager::get_instance(context_id)
+                                        .get_firmware_binary_path(chip, dram_core_type_index, kDmProcessorClass, 0);
+    const HalJitBuildConfig& jit_build_config = hal.get_jit_build_config(dram_core_type_index, kDmProcessorClass, 0);
 
     CceFwManifest manifest;
     manifest.binary_path = binary_path;

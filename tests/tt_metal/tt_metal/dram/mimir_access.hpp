@@ -70,6 +70,10 @@ inline uint64_t tl1_test_base() {
     return MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 }
 
+inline uint64_t dram_unreserved_base() {
+    return MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+}
+
 inline uint64_t tl1_test_end() {
     return tl1_test_base() +
            MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);

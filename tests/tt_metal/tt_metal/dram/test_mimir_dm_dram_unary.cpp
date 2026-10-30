@@ -86,7 +86,7 @@ struct DramUnaryLayout {
 };
 
 DramUnaryLayout layout_for(const metal_SocDescriptor& soc, uint32_t cce_index) {
-    const uint64_t dram_unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t dram_unreserved = dram_unreserved_base();
     DramUnaryLayout layout;
     layout.cce_index = cce_index;
     layout.local_mimir = mimir_index_for_cce(cce_index);
@@ -389,7 +389,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
             return read_destination(device_closer.mesh(), layout, byte_offset, bytes);
         }))
         << writer_detail;
-    EXPECT_EQ(read_destination(device_closer.mesh(), layout, kTotalBytes, abi::kLineBytes), destination_guard)
+    EXPECT_EQ(read_destination(device_closer.mesh(), layout, kTotalBytes, kGuardBytes), destination_guard)
         << label << ": guard after the destination was overwritten";
     std::vector<uint32_t> destination_leading;
     mimir_contract::read_gddr_view(
@@ -402,7 +402,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
         << label << ": guard before the destination was overwritten";
     const std::vector<uint32_t> staging = read_cce_tl1(device, cce_index, layout.staging_offset, kStagingBytes);
     EXPECT_TRUE(compare_words(label + " staging ring", expected_staging(source), staging)) << reader_detail;
-    EXPECT_EQ(read_cce_tl1(device, cce_index, layout.staging_offset + kStagingBytes, abi::kLineBytes), staging_guard)
+    EXPECT_EQ(read_cce_tl1(device, cce_index, layout.staging_offset + kStagingBytes, kGuardBytes), staging_guard)
         << label << ": guard after the staging ring was overwritten";
     EXPECT_EQ(read_cce_tl1(device, cce_index, layout.staging_offset - kGuardBytes, kGuardBytes), staging_leading_guard)
         << label << ": guard before the staging ring was overwritten";

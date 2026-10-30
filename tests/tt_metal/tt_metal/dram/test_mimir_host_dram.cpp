@@ -158,7 +158,7 @@ TEST_P(MimirHostDramView, PatternReadback) {
     const metal_SocDescriptor& soc = cluster.get_soc_desc(kChipId);
     MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, false);
 
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
     uint32_t tag = 0;
     for (uint32_t size_bytes : kHostDramSizesBytes) {
         const uint32_t word_count = size_bytes / sizeof(uint32_t);
@@ -226,7 +226,7 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
     MIMIR_HOST_ONLY_GUARD(cluster, soc, kChipId, false);
 
     const size_t boundary_words = kBoundaryTransferBytes / sizeof(uint32_t);
-    const uint64_t unique_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unique_offset = dram_unreserved_base();
     for (uint32_t other_view = 0; other_view < topology.num_views; ++other_view) {
         mimir_host_dram_write(cluster, soc, kChipId, other_view, unique_offset, make_guard(other_view, boundary_words));
     }
@@ -312,7 +312,7 @@ TEST(MimirHostDram, ReconnectPersists) {
     MIMIR_HOST_ONLY_GUARD(metal_cluster, metal_soc, kChipId, true);
 
     const MimirTopology topology = topology_from(metal_soc);
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
     std::vector<MimirAnchor> persisted_anchors;
     std::vector<uint32_t> persisted_cces = {kTl1CceIndex};
     if (topology.num_mimirs > 1) {
@@ -479,7 +479,7 @@ TEST(MimirHostDram, HostSideRejections) {
 
     // A write of 6 bytes to an aligned address does not throw. The last word takes the 2 written bytes and keeps
     // its other 2 bytes.
-    const uint64_t partial_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t partial_offset = dram_unreserved_base();
     const uint32_t prefill_bytes = 3 * sizeof(uint32_t);
     const MimirDramAddressInfo prefill_info = mimir_dram_address(soc, kChipId, kView, partial_offset, prefill_bytes);
     ASSERT_TRUE(write_then_read_back(

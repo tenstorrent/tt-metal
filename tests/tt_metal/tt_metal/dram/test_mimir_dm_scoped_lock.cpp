@@ -328,12 +328,12 @@ TEST_P(MimirDmScopedLockClm, CacheOps) {
     record_leg("consumer", "status", consumer_detail);
 
     const std::vector<uint32_t> result_words =
-        read_cce_tl1(device, kLockCce, layout.result_offset, kResultBytes + abi::kLineBytes);
+        read_cce_tl1(device, kLockCce, layout.result_offset, kResultBytes + kGuardBytes);
     const std::vector<uint32_t> warm = result_values(result_words, abi::kResultWarm);
     const std::vector<uint32_t> cached_after = result_values(result_words, abi::kResultCached);
     const std::vector<uint32_t> uncached_after = result_values(result_words, abi::kResultUncached);
     const std::vector<uint32_t> region_words =
-        read_cce_tl1(device, kLockCce, layout.region_offset, abi::kRegionBytes + abi::kLineBytes);
+        read_cce_tl1(device, kLockCce, layout.region_offset, abi::kRegionBytes + kGuardBytes);
     std::vector<uint32_t> host_probe(abi::kNumLines);
     for (uint32_t line = 0; line < abi::kNumLines; ++line) {
         host_probe[line] = region_words[line * abi::kWordsPerLine];
@@ -415,7 +415,7 @@ std::string mm41_cce_skip_reason(uint32_t cce_index) {
 // One kernel of an MM41 scoped-lock Program.
 struct LockKernel {
     uint32_t cce_index = 0;
-    uint32_t hart = 0;
+    uint32_t hart = kCceKernelHart;
     const char* kernel_path = kProducerKernel;
     std::vector<uint32_t> args;
     uint32_t done_magic = abi::kProducerDoneMagic;
@@ -590,7 +590,7 @@ TEST_P(MimirCacheScopedLock, MultiConsumer) {
         }
     }
     const std::vector<uint32_t> region_words =
-        read_cce_tl1(device, cce_index, region_offset, abi::kRegionBytes + abi::kLineBytes);
+        read_cce_tl1(device, cce_index, region_offset, abi::kRegionBytes + kGuardBytes);
     for (uint32_t line = 0; line < abi::kNumLines; ++line) {
         EXPECT_EQ(region_words[line * abi::kWordsPerLine], tl1_values[line])
             << label << ": host probe word of line " << line;

@@ -154,7 +154,7 @@ TEST_P(AllHartsRunDramKernel, WritesMagic) {
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     const auto& hal = MetalContext::instance().hal();
     const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
-    ASSERT_EQ(num_harts, 8u);
+    ASSERT_EQ(num_harts, static_cast<uint32_t>(MEM_CCE_LOCAL_HARTS));
 
     const uint32_t echo_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     const uint64_t echo_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
@@ -1101,7 +1101,7 @@ TEST_P(AllHartsWriteGddr, WritesMagic) {
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
-    ASSERT_EQ(num_harts, 8u);
+    ASSERT_EQ(num_harts, static_cast<uint32_t>(MEM_CCE_LOCAL_HARTS));
 
     const uint32_t dst_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t staging_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
@@ -1175,7 +1175,7 @@ TEST_P(AllHartsIdmaWriteGddr, WritesMagic) {
 
     const auto& hal = MetalContext::instance().hal();
     const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
-    ASSERT_EQ(num_harts, 8u);
+    ASSERT_EQ(num_harts, static_cast<uint32_t>(MEM_CCE_LOCAL_HARTS));
 
     const uint32_t dst_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
     const uint32_t staging_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);

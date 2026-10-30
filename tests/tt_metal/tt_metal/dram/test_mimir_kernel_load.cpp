@@ -195,7 +195,7 @@ TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
 
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
     ASSERT_TRUE(check_logical_core_is_cce(device, logical_core, cce_index));
-    constexpr uint32_t hart = 0;
+    constexpr uint32_t hart = kCceKernelHart;
 
     Program null_program = CreateProgram();
     CreateKernel(
@@ -307,7 +307,7 @@ TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
 
-    constexpr uint32_t hart = 0;
+    constexpr uint32_t hart = kCceKernelHart;
     constexpr uint32_t launches_per_session = 4;
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
@@ -397,7 +397,7 @@ TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
     IDevice* device = device_closer.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    constexpr uint32_t hart = 0;
+    constexpr uint32_t hart = kCceKernelHart;
     constexpr uint32_t first_set_count = 100;
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
     const uint32_t ceiling = dram_runtime_args_ceiling();
@@ -459,7 +459,7 @@ TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
     IDevice* device = device_closer.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    constexpr uint32_t hart = 0;
+    constexpr uint32_t hart = kCceKernelHart;
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
     const EchoArguments arguments = make_echo_arguments(cce_index, kEchoCtMarkerBase + cce_index);
     Program program = CreateProgram();

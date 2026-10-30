@@ -34,6 +34,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
@@ -94,7 +95,7 @@ inline constexpr uint64_t kGddrRegionHartStride = 0x20000;
 inline constexpr uint32_t kGddrRegionCapacity = static_cast<uint32_t>(kGddrRegionHartStride) - 2 * kGuardBytes;
 inline constexpr uint32_t kRegionLeadingGuardTag = 0x800;
 // The hart of every single-hart case.
-inline constexpr uint32_t kTridHart = 0;
+inline constexpr uint32_t kTridHart = kCceKernelHart;
 
 std::string code_name(uint32_t code) {
     switch (code) {
@@ -165,9 +166,7 @@ std::string cce_skip_reason(uint32_t cce_index) {
     return "";
 }
 
-uint64_t gddr_view_offset() {
-    return MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED) + kGddrTargetOffset;
-}
+uint64_t gddr_view_offset() { return dram_unreserved_base() + kGddrTargetOffset; }
 
 // MIM-407: GDDR0 is the low 4 GiB tile of a Mimir, GDDR1 the high one.
 uint32_t gddr_backend_for(const metal_SocDescriptor& soc, uint32_t view, uint64_t view_offset) {
@@ -274,9 +273,8 @@ struct Endpoint {
 };
 
 Endpoint region_base(const metal_SocDescriptor& soc, uint32_t cce_index, uint32_t hart, Target target) {
-    const uint64_t gddr_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED) +
-                                 kGddrRegionBase + cce_index * kGddrRegionCceStride + hart * kGddrRegionHartStride +
-                                 kGuardBytes;
+    const uint64_t gddr_offset = dram_unreserved_base() + kGddrRegionBase + cce_index * kGddrRegionCceStride +
+                                 hart * kGddrRegionHartStride + kGuardBytes;
     const uint32_t mimir_index = mimir_index_for_cce(cce_index);
     switch (target) {
         case Target::OwnSource:
@@ -897,7 +895,7 @@ protected:
     void TearDown() override { close_device(); }
 };
 
-inline constexpr uint32_t kUniqueIdsCommands = 16;
+inline constexpr uint32_t kUniqueIdsCommands = abi::kNumTrids;
 inline constexpr uint32_t kUniqueIdsCommandBytes = 512;
 
 // One kModeTridBatch launch per leg, each from its own scenario: kUniqueIdsCommands commands on trids 0-15. False once
@@ -1331,7 +1329,7 @@ TEST_P(MimirTridIdma, MultiHart) {
 }
 
 inline constexpr uint32_t kFairnessHeavyCommandBytes = 512;
-inline constexpr uint32_t kFairnessTableEntries = 16;
+inline constexpr uint32_t kFairnessTableEntries = abi::kNumTrids;
 
 // The parameter CCE keeps 16 trids outstanding with 64 GDDR0 writes while every other CCE runs a table of GDDR reads
 // and writes and, on 2x, D2D writes to the remote GDDR, all in one Program. Every source must finish; each one's VC
@@ -1616,7 +1614,7 @@ namespace gcb_abi = cce_gcb_receiver_abi;
 
 inline constexpr const char* kGcbDiscardReceiverKernel =
     "tests/tt_metal/tt_metal/test_kernels/cce/cce_gcb_discard_receiver.cpp";
-inline constexpr uint32_t kUint32TileWords = 32 * 32;
+inline constexpr uint32_t kUint32TileWords = tt::constants::TILE_HW;
 inline constexpr uint32_t kUint32TilePageBytes = kUint32TileWords * sizeof(uint32_t);
 // The prefetched tensor: one-tile pages through a one-tile FIFO, so every page waits for the receiver's credit.
 inline constexpr uint32_t kPrefetchTiles = 16;
@@ -1656,7 +1654,8 @@ std::optional<uint32_t> bank_with_sender_cce(distributed::MeshDevice& mesh, uint
 
 // A UINT32 TILE tensor of kPrefetchTiles tiles on DRAM bank `bank` alone, seeded.
 MeshTensor write_prefetch_tensor(distributed::MeshDevice& mesh, uint32_t bank) {
-    const CoreRangeSet bank_cores(CoreRange(CoreCoord{bank, 0}, CoreCoord{bank, 0}));
+    const CoreCoord bank_core = soc_desc_of(mesh.get_devices().front()).get_logical_core_for_dram_view(bank);
+    const CoreRangeSet bank_cores(CoreRange(bank_core, bank_core));
     const Shape shape{32 * kPrefetchTiles, 32};
     const MemoryConfig memory_config(BufferType::DRAM, NdShardSpec{shape, bank_cores, ShardOrientation::ROW_MAJOR});
     const TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::TILE, memory_config));

@@ -50,7 +50,8 @@ inline constexpr uint32_t kSliceStraddleBytes = 8;
 inline constexpr uint32_t kSliceStraddleOffsetBytes = 124;
 inline constexpr uint32_t kSliceStraddleSlice = 1;
 inline constexpr std::array<uint32_t, 6> kTrafficSizeBytes = {4, 64, 124, 512, 4 * 1024, 32 * 1024};
-inline constexpr std::array<uint32_t, 5> kTrafficAlignments = {0, 4, 60, 124, static_cast<uint32_t>(kEmuPageBytes - 4)};
+inline constexpr std::array<uint32_t, 5> kTrafficAlignments = {
+    0, 4, 60, 124, static_cast<uint32_t>(mimir_contract::kEmuGddrBackingPage - 4)};
 // Test kinds salt the seeds and the pre-fill tags. AddressDerived and the constant patterns ignore the seed, so data
 // another test left in DRAM can match; the decoys from add_transfer_guards catch a read that lands there.
 inline constexpr uint32_t kTestKindWriteFromTl1 = 1;
@@ -166,7 +167,7 @@ RemoteDramRun make_run(
     uint32_t source_location,
     uint32_t dest_view) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
     return RemoteDramRun{
         unit_mesh,
         device,
@@ -963,13 +964,12 @@ std::vector<MixedTransfer> plan_mixed_transfers(
     const metal_SocDescriptor& soc,
     const std::vector<CceSpaRoutes>& routes_by_cce,
     uint64_t unreserved,
-    uint32_t num_mimirs,
     uint32_t num_cces) {
     std::vector<MixedTransfer> transfers;
     for (uint32_t cce = 0; cce < num_cces; ++cce) {
         const uint32_t source_mimir = mimir_index_for_cce(cce);
         const uint32_t location = location_for_cce(cce);
-        const uint32_t dest_mimir = (source_mimir + 1) % num_mimirs;
+        const uint32_t dest_mimir = next_mimir(source_mimir);
         const uint32_t dest_cce = cce_index_for(dest_mimir, location);
         const uint32_t local_view = local_dram_view_for_cce(soc, cce);
         const uint32_t remote_view = base_dram_view_for_mimir(soc, dest_mimir);
@@ -1055,13 +1055,12 @@ TEST(MimirRemoteMixed, Concurrent) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
     Cluster& cluster = MetalContext::instance().get_cluster();
     const ChipId chip = device->id();
-    const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint64_t unreserved = dram_unreserved_base();
     std::vector<CceSpaRoutes> routes_by_cce;
     for (uint32_t cce = 0; cce < topology.num_cces; ++cce) {
         routes_by_cce.push_back(mimir_contract::read_cce_spa_routes(device, cce));
     }
-    std::vector<MixedTransfer> transfers =
-        plan_mixed_transfers(soc, routes_by_cce, unreserved, topology.num_mimirs, topology.num_cces);
+    std::vector<MixedTransfer> transfers = plan_mixed_transfers(soc, routes_by_cce, unreserved, topology.num_cces);
 
     uint32_t next_guard_tag = 1;
     std::vector<GuardRegion> decoys;

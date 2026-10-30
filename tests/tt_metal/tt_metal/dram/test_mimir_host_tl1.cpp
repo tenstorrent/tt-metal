@@ -29,6 +29,7 @@
 
 namespace tt::tt_metal::mimir_test::host_tl1 {
 
+constexpr uint32_t kDramDmProcessorClass = static_cast<uint32_t>(HalProcessorClassType::DM);
 constexpr std::array<uint32_t, 5> kVisibilitySizes = {4, 16, 64, 4096, 32768};
 constexpr uint32_t kVisibilityPoisonWord = 0xBADC0DE5;
 constexpr uint32_t kBoundaryWindowBytes = 16;
@@ -64,8 +65,8 @@ struct HalDramL1Region {
 std::vector<Tl1Region> cce_tl1_regions() {
     const Hal& hal = MetalContext::instance().hal();
     const uint32_t harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
-    const HalJitBuildConfig& jit_build_config =
-        hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, 0);
+    const HalJitBuildConfig& jit_build_config = hal.get_jit_build_config(
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), kDramDmProcessorClass, 0);
     return {
         {"reserved (cached soft semaphores)", cce_tl1_begin(), MEM_CCE_RESERVED_SIZE},
         {"mailbox",
@@ -632,7 +633,8 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
         ASSERT_NO_FATAL_FAILURE(poison_cce_reset_vectors(cluster, chip, cce_index));
         const Hal& hal = MetalContext::instance().hal();
         const uint32_t fw_launch_addr_value =
-            hal.get_jit_build_config(hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), 0, 0)
+            hal.get_jit_build_config(
+                   hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM), kDramDmProcessorClass, 0)
                 .fw_launch_addr_value;
         cluster.write_reg(
             &fw_launch_addr_value,

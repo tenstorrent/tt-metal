@@ -22,6 +22,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "noc/noc_parameters.h"
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
 #include "tt_metal/tt_metal/dram/mimir_dm_common.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
@@ -60,12 +61,13 @@ inline constexpr bool kTwoHartAmoPassed = true;
 // MimirCacheProbe.EightHartLaunch: harts 0-7 of one CCE ran a kernel and posted status. Gates every 8-hart case.
 inline constexpr bool kEightHartLaunchPassed = true;
 
-// L1 accumulate formats (Quasar noc_parameters.h:379-385, cce-dv software/lib/include/cce_dv.hpp:396-401) and the
-// one operation the emulator reference runs (emu_l1_atomic.cpp:230,239). INT32 and INT8 are sign-magnitude.
-inline constexpr uint32_t kFormatFp32 = 0, kFormatFp16A = 1, kFormatFp16B = 2, kFormatInt32 = 0b011,
-                          kFormatInt32Complement = 0b100, kFormatUint32 = 0b101, kFormatInt8 = 0b110,
-                          kFormatUint8 = 0b111;
-inline constexpr uint32_t kAccumulateAdd = 0x9;
+// L1 accumulate formats (cce-dv software/lib/include/cce_dv.hpp:396-401; Quasar noc_parameters.h defines no UINT8) and
+// the one operation the emulator reference runs (emu_l1_atomic.cpp:230,239). INT32 and INT8 are sign-magnitude.
+inline constexpr uint32_t kFormatFp32 = NOC_AT_ACC_FP32, kFormatFp16A = NOC_AT_ACC_FP16_A,
+                          kFormatFp16B = NOC_AT_ACC_FP16_B, kFormatInt32 = NOC_AT_ACC_INT32,
+                          kFormatInt32Complement = NOC_AT_ACC_INT32_COMPL, kFormatUint32 = NOC_AT_ACC_INT32_UNS,
+                          kFormatInt8 = NOC_AT_ACC_INT8, kFormatUint8 = 0b111;
+inline constexpr uint32_t kAccumulateAdd = NOC_AT_INS_ACC;
 
 std::string code_name(uint32_t code) {
     switch (code) {
@@ -263,7 +265,7 @@ struct AmoLayout {
 };
 
 AmoLayout amo_layout() {
-    const uint64_t target = tl1_data(0);
+    const uint64_t target = tl1_data(kCceKernelHart);
     return {
         .target = target,
         .flags = target + kModeFlagsFromTarget,
@@ -273,7 +275,7 @@ AmoLayout amo_layout() {
 
 struct AmoLaunch {
     uint32_t cce_index = 0;
-    uint32_t hart = 0;
+    uint32_t hart = kCceKernelHart;
     uint32_t mode = 0;
     uint64_t target_offset = 0;
     uint64_t flag_offset = 0;
@@ -335,7 +337,7 @@ std::vector<AmoLaunch> participant_launches(
 
 struct IdmaBatch {
     uint32_t cce_index = 0;
-    uint32_t hart = 0;
+    uint32_t hart = kCceKernelHart;
     uint32_t mode = idma_abi::kModeAccumulate;
     uint32_t backend_vc = idma_abi::kBackendLocalSram;
     uint32_t source_kind = idma_abi::kKindOwnTl1;
@@ -692,7 +694,7 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
 
-    const uint64_t target_offset = tl1_data(0);
+    const uint64_t target_offset = tl1_data(kCceKernelHart);
     const uint64_t flag_offset = target_offset + kFlagOffsetFromTarget;
     const uint32_t seed = mimir_test_seed();
     const uint32_t amo_initial = seed * 0x9E3779B9u;
@@ -1355,7 +1357,7 @@ TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
     const std::vector<uint32_t> new_line = seeded_words(line_words, seed ^ 0x00FF00FFu);
     const std::vector<uint32_t> new_control = seeded_words(line_words, seed ^ 0xFF00FF00u);
     write_cce_tl1(device, cce_index, layout.target, old_lines);
-    write_cce_tl1(device, writer_cce, tl1_data(0), new_line);
+    write_cce_tl1(device, writer_cce, tl1_data(kCceKernelHart), new_line);
     const std::vector<uint32_t> warm = run_line_state(device, cce_index, abi::kLegWarm, 0, seed, label + " warm");
     ASSERT_FALSE(warm.empty());
 
@@ -1364,7 +1366,7 @@ TEST_P(MimirAtomicLocal, CleanDirtyLineSnoopedWrite) {
         .mode = idma_abi::kModeTridBatch,
         .backend_vc = idma_abi::kBackendRemoteSram,
         .source_selector = writer_cce,
-        .source_offset = tl1_data(0),
+        .source_offset = tl1_data(kCceKernelHart),
         .destination_kind = idma_abi::kKindSramSpa,
         .destination_selector = cce_index,
         .destination_offset = layout.target,
@@ -1992,7 +1994,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsShared) {
     std::vector<uint32_t> expected;
     for (uint32_t hart = 0; hart < harts; ++hart) {
         IdmaBatch batch = own_accumulate(cce_index, hart);
-        batch.destination_offset = tl1_data(0) + kAccumulateDestinationFromData;
+        batch.destination_offset = tl1_data(kCceKernelHart) + kAccumulateDestinationFromData;
         batch.len_bytes = 256;
         batch.num_commands = 4;
         batch.source_stride_bytes = 256;
@@ -2034,7 +2036,7 @@ TEST_P(MimirAtomicIdmaAccum, AllHartsDisjoint) {
     record_descriptor_properties(soc_desc_of(device));
     const uint32_t harts = multi_hart_count();
     const uint32_t seed = leg_seed(1);
-    const uint64_t region_offset = tl1_data(0) + kAccumulateDestinationFromData;
+    const uint64_t region_offset = tl1_data(kCceKernelHart) + kAccumulateDestinationFromData;
     const uint32_t block_words = kBlockBytes / sizeof(uint32_t);
     const std::vector<uint32_t> initial = seeded_words(harts * block_words, seed ^ 0x0D0D0D0Du, kAccumulateValueMask);
     std::vector<uint32_t> expected = initial;
