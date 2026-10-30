@@ -36,6 +36,7 @@ import torch
 import ttnn
 
 from . import host_alloc
+from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS
 from .settings import settings
@@ -231,7 +232,10 @@ class PairPerm:
         """t [..., R, 2 half] bf16 TILE -> its columns permuted by ``p`` (``to_inter`` / ``to_de``), in ``dtype``
         (bf16 or fp32: exact either way). Does not consume ``t``."""
         assert t.dtype == ttnn.bfloat16 and t.shape[-1] == 2 * self.half, (t.dtype, t.shape)
-        return ttnn.matmul(t, p, dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM)
+        # through mm_configs (P.19): no config under MATMUL_CONFIG=tuned (as before), the GALAXY entry under galaxy
+        return mm.matmul(
+            t, p, site="rope.pairs", dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM, rule=False
+        )
 
 
 def deinterleave_perm(width: int, rope_dim: int) -> torch.Tensor:
