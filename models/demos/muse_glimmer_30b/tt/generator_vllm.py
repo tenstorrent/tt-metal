@@ -311,7 +311,8 @@ class MuseGlimmerForConditionalGeneration:
             # Decode reloads the whole batch's parameters on its next step.
             self._sampling_key = None
             return torch.cat(out).reshape(n, 1), None
-        return torch.cat(out).reshape(n, -1), None
+        # Host-sampled rows: the plugin reads logits as [rows, position, vocab] and samples the last position.
+        return torch.cat(out).reshape(n, 1, -1), None
 
     @staticmethod
     def _slot_bucket(start_pos: torch.Tensor) -> int:
