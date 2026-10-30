@@ -30,13 +30,16 @@ TABLE = {
         "[6144, 12800]: 2.48 ms HiFi2 (rel 0.0041 vs float64, bias -0.28 %, K-25)",
     ),
     "MATMUL_CONFIG": Setting(
-        "tuned",
-        ("tuned", "auto"),
+        "galaxy",
+        ("galaxy", "tuned", "auto"),
         "the program config of the model's dense ttnn.linear / ttnn.matmul calls (tt/mm_configs.py, P.23, owner "
         "comparison): auto = none passed, ttnn picks it (the path before P.23); tuned = the config a rule derives "
         "from the call's M, K, N, dtypes, fp32 DEST and the compute grid (swept per call site by "
-        "tests/perf/test_matmul_sweep.py), auto where the rule has no entry. Dtypes, compute kernel configs, memory "
-        "configs and the op sequence are the same either way",
+        "tests/perf/test_matmul_sweep.py on the 2x2), auto where the rule has no entry (the rope pair permutation "
+        "stays auto under tuned, as before P.19); galaxy (galaxy_8x4 P.19) = the best config of the 8x4 sweep of "
+        "every distinct call (tt/mm_configs.GALAXY, keyed as program_config caches: shape, weight shape, dtypes, fp32 "
+        "DEST, grid), tuned's rule for any call not in it. Dtypes, compute kernel configs, memory configs and the op "
+        "sequence are the same either way",
     ),
     "WO_A_CONFIG": Setting(
         "tuned",

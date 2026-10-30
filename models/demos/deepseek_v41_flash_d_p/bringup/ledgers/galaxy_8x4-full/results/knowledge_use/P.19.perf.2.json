@@ -1,0 +1,79 @@
+{
+ "used": [
+  {
+   "id": "DS41-114",
+   "how": "the sweep's L1 view: free-for-CBs from the capture (1358 KiB), the filler holds each single-card candidate to it",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-112",
+   "how": "the current (tuned) rule is the baseline each galaxy entry must beat by > 1 %; fp32 outputs kept on 2D mcast",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-113",
+   "how": "wo_a candidates limited to 2D mcast fuse_batch=False; the table keeps it (bit-identical to auto)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-139",
+   "how": "the 160-row projections' current 1D-mcast-in0 configs re-checked on 12x10: still best within 1 % (wq_b, wo_b, indexer.wq_b)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the fabric cannot be opened on a single chip (TT_FATAL devices_.size() > 1); a single-card sweep must drop the fabric keys (added as DS41-175)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "only program configs change; no padding or inflated work"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; matmul / linear / minimal_matmul are C++ ops"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suites run; only the sweep harness and measure --part quick"
+  },
+  {
+   "id": "OV-27",
+   "answer": "done",
+   "evidence": "capture at 51200 (kept from attempt 1) and 512000 (new BRINGUP_POS option): identical 187 calls / 12 distinct; sweep on single cards, P23_SHARD=i/12, 12 parallel --device auto processes, merge_shards; candidates held to the capture's 12x10 grid and L1; full 5120-token chunk calls only, others take the rule"
+  },
+  {
+   "id": "OV-28",
+   "answer": "done",
+   "evidence": "reused generated/ds41_p23/calls_tuned.json from attempt 1; no mesh sweep"
+  }
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.19",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T15:22:57",
+  "head": "22528347b03",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.19.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py"
+  ]
+ },
+ "cited_only": [
+  "DS41-175"
+ ]
+}
