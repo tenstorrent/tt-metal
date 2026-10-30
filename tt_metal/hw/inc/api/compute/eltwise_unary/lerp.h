@@ -54,6 +54,6 @@ ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t ods
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void lerp_tile_init() { MATH((SFPU_TERNARY_INIT(lerp))); }
+ALWI void lerp_tile_init() { MATH((SFPU_TERNARY_INIT_FN(lerp, sfpu::lerp_init, (APPROX)))); }
 
 }  // namespace ckernel

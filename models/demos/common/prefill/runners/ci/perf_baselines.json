@@ -12,11 +12,6 @@
           "throughput_tok_s": 6848,
           "ttft_s": 23.0,
           "chunk_time_ms": 2883
-        },
-        "14kw": {
-          "throughput_tok_s": 9184,
-          "ttft_s": 16.85,
-          "chunk_time_ms": 2185
         }
       },
       "sc1": {
@@ -35,11 +30,6 @@
           "throughput_tok_s": 21358,
           "ttft_s": 37.79,
           "chunk_time_ms": 1036
-        },
-        "14kw": {
-          "throughput_tok_s": 21942,
-          "ttft_s": 36.92,
-          "chunk_time_ms": 1294
         }
       },
       "sc1": {
@@ -53,24 +43,133 @@
     },
     "kimi_k3": {
       "sc4": {
-        "probe": "@1M",
-        "8kw": {
-          "throughput_tok_s": 2776,
-          "ttft_s": 222.78,
-          "chunk_time_ms": 8663
+        "margin": {
+          "@5k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@50k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@100k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@255k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@510k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@1M": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          }
         },
-        "14kw": {
-          "throughput_tok_s": 3449,
-          "ttft_s": 182.79,
-          "chunk_time_ms": 7082
+        "8kw": {
+          "@5k": {
+            "throughput_tok_s": 13915,
+            "chunk_time_ms": 1346
+          },
+          "@50k": {
+            "throughput_tok_s": 12571,
+            "ttft_s": 4.67,
+            "chunk_time_ms": 1607
+          },
+          "@100k": {
+            "throughput_tok_s": 11255,
+            "ttft_s": 9.03,
+            "chunk_time_ms": 1919
+          },
+          "@255k": {
+            "throughput_tok_s": 6885,
+            "ttft_s": 27.93,
+            "chunk_time_ms": 3441
+          },
+          "@510k": {
+            "throughput_tok_s": 4519,
+            "ttft_s": 76.14,
+            "chunk_time_ms": 5936
+          },
+          "@1M": {
+            "throughput_tok_s": 2731,
+            "ttft_s": 232.97,
+            "chunk_time_ms": 10437
+          }
         }
       },
       "sc1": {
-        "probe": "@1M",
+        "margin": {
+          "@5k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@50k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@100k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@255k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@510k": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          },
+          "@1M": {
+            "throughput_tok_s": 0.05,
+            "ttft_s": 0.05,
+            "chunk_time_ms": 0.05
+          }
+        },
         "14kw": {
-          "throughput_tok_s": 4235,
-          "ttft_s": 146.42,
-          "chunk_time_ms": 1195
+          "@5k": {
+            "throughput_tok_s": 17978,
+            "chunk_time_ms": 293
+          },
+          "@50k": {
+            "throughput_tok_s": 16817,
+            "ttft_s": 2.85,
+            "chunk_time_ms": 284
+          },
+          "@100k": {
+            "throughput_tok_s": 15654,
+            "ttft_s": 6.08,
+            "chunk_time_ms": 339
+          },
+          "@255k": {
+            "throughput_tok_s": 11536,
+            "ttft_s": 17.59,
+            "chunk_time_ms": 437
+          },
+          "@510k": {
+            "throughput_tok_s": 7280,
+            "ttft_s": 46.88,
+            "chunk_time_ms": 696
+          },
+          "@1M": {
+            "throughput_tok_s": 4237,
+            "ttft_s": 146.25,
+            "chunk_time_ms": 1214
+          }
         }
       }
     }

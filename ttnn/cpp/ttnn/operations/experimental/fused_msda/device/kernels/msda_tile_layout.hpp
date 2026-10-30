@@ -50,6 +50,10 @@ inline uint32_t tile_col0_offset(uint32_t r) {
     return face_base + face_row * WITHIN_FACE_ROW_STRIDE;
 }
 
+// Byte offset for col 16 of tile row r: col 0 of the face to the right, which
+// the SFPU sees in the same lane as col 0.
+inline uint32_t tile_col16_offset(uint32_t r) { return tile_col0_offset(r) + FACE_NBYTES; }
+
 // float32 32x32 tile, same four-face order. Each element is 4 bytes, so a face
 // is 1024 B and a face-row is 64 B. geom_x/geom_y use this when the reference
 // point is float32: the SFPU multiplies that point, and a bf16 tile would have
@@ -62,6 +66,14 @@ inline uint32_t tile_col0_offset_fp32(uint32_t r) {
     const uint32_t face_base = (r < 16) ? 0u : (2u * FP32_FACE_NBYTES);
     const uint32_t face_row = (r < 16) ? r : (r - 16);
     return face_base + face_row * FP32_WITHIN_FACE_ROW_STRIDE;
+}
+
+inline uint32_t tile_col16_offset_fp32(uint32_t r) { return tile_col0_offset_fp32(r) + FP32_FACE_NBYTES; }
+
+// Byte offset of element (r, c) of a bf16 tile.
+inline uint32_t tile_elem_offset(uint32_t r, uint32_t c) {
+    const auto off = tile_row_offsets(r);
+    return (c < 16 ? off.lo : off.hi) + (c % 16) * 2;
 }
 
 }  // namespace fused_msda_tile_layout

@@ -8,8 +8,9 @@ from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
-    MathFidelity,
     PerfRunType,
     Transpose,
     format_dict,
@@ -18,7 +19,7 @@ from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -55,10 +56,10 @@ def generate_format_aware_matmul_combinations(
     combinations = []
 
     for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
-
         for dest_acc in dest_acc_modes:
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+            max_tiles = max_dest_tiles(
+                dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
+            )
             dimensions_list = generate_matmul_dimension_combinations(max_tiles)
             combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
 
@@ -70,19 +71,13 @@ MATMUL_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]
 )
 
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
     MATMUL_FORMATS, DEST_ACC_MODES
 )
 
 
 @parametrize(
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself

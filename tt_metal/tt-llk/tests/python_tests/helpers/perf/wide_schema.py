@@ -129,6 +129,7 @@ DB_SCHEMA = [
     Column("num_faces_r_dim_A", "int64", True, "configuration"),
     Column("num_faces_r_dim_B", "int64", True, "configuration"),
     Column("num_tiles_in_block", "int64", True, "configuration"),
+    Column("out_zero_point_bits", "int64", True, "configuration"),
     Column("output_format", "string", True, "configuration"),
     Column("output_num_blocks", "int64", True, "configuration"),
     Column("output_num_tiles_in_block", "int64", True, "configuration"),

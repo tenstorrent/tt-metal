@@ -526,8 +526,6 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device.get());
         ASSERT_GT(buffer->address(), 0);
         ASSERT_TRUE(buffer->is_allocated());
-        buffer->deallocate();
-        ASSERT_FALSE(buffer->is_allocated());
 
         // Test command queue operations. Source vector is sized to fill the entire buffer so
         // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
@@ -541,6 +539,10 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
+
+        // Deallocate only after the transfers, since per-device buffer lookups on a deallocated MeshBuffer are fatal.
+        buffer->deallocate();
+        ASSERT_FALSE(buffer->is_allocated());
 
         auto program = CreateProgram(*mock_device);
         EXPECT_EQ(program.impl().get_context_id(), context_id);

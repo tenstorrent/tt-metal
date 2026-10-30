@@ -18,6 +18,8 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "ttnn/core.hpp"
+
 namespace ttnn::global_circular_buffer {
 
 GlobalCircularBuffer create_global_circular_buffer(
@@ -26,7 +28,12 @@ GlobalCircularBuffer create_global_circular_buffer(
     uint32_t size,
     BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
-    return tt::tt_metal::experimental::GlobalCircularBuffer(*device, sender_receiver_core_mapping, size, buffer_type);
+    return tt::tt_metal::experimental::GlobalCircularBuffer(
+        *device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        ttnn::core::get_current_command_queue_id_for_thread().get());
 }
 
 namespace {
@@ -43,7 +50,7 @@ namespace {
 // receiver per bank the prefetcher reads a WIDTH_SHARDED weight as receiver-contiguous while this
 // checks it as K-row-major; the two layouts name the same bytes there, so the checks agree.
 bool is_receiver_contiguous_weight(const ttnn::Tensor& weight) {
-    TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "prefetcher weight must live in DRAM");
+    TT_FATAL(weight.is_allocated() && weight.buffer()->is_dram(), "prefetcher weight must live in DRAM");
     if (weight.buffer()->has_shard_spec()) {
         return false;  // legacy K-row-major (WIDTH_SHARDED)
     }
@@ -107,7 +114,7 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
     // The receiver-contiguous weight is an NdShardSpec DRAM tensor: num_shards == receiver_count,
     // each shard (full K, N/receiver_count). This is also exactly what the manager's
     // detect_layout_mode keys on.
-    TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "weight must live in DRAM");
+    TT_FATAL(weight.is_allocated() && weight.buffer()->is_dram(), "weight must live in DRAM");
     const auto& nd_opt = weight.nd_shard_spec();
     TT_FATAL(
         nd_opt.has_value(),
@@ -224,7 +231,7 @@ uint32_t validate_krow_major_weight_for_matmul_1d(
         recv_per_bank);
     const uint32_t num_senders = receiver_count / recv_per_bank;
 
-    TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "weight must live in DRAM");
+    TT_FATAL(weight.is_allocated() && weight.buffer()->is_dram(), "weight must live in DRAM");
     TT_FATAL(
         weight.buffer()->has_shard_spec(),
         "weight must be WIDTH_SHARDED across the DRAM banks (ttnn.MemoryConfig(TensorMemoryLayout.WIDTH_SHARDED, "

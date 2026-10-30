@@ -80,7 +80,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from helpers.ulp import FLUSH_SUBNORMAL_OUTPUTS
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 SUPPORTED_FAST_MODE_OPS = [
     MathOperation.Rsqrt,
@@ -422,8 +422,9 @@ def _assert_signed_zero_partition_valid():
             "reclassified -- an entry here means the kernel regressed."
         ),
         MathOperation.Heaviside: (
-            "heaviside(-0.0) returns the scalar now. Same sfpi::abs(v) guard and the same "
-            "SFPSETCC reasoning as Sign."
+            "heaviside(-0.0) returns the scalar now. Its zero arm ignores the sign bit, as Sign's "
+            "does (SFPLZ NOSGN on Wormhole, sfpi::abs(v) on Blackhole), for the same SFPSETCC "
+            "reasoning."
         ),
         MathOperation.Signbit: (
             "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
@@ -974,6 +975,37 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
+# Negative two's-complement operands, which the positive-only sweep above never shifts: they pin that
+# `vInt >> n` is the arithmetic SFPSHFT. Amounts 32 and 63 clamp to 31 (-1 for every negative lane).
+_RIGHT_SHIFT_SIGNED_VALUES = [
+    -1, -2, -3, -255, -256, -65536, -(2**30), -(2**31 - 2**7), 0, 1, 7, 2**30
+]  # fmt: skip
+_RIGHT_SHIFT_SIGNED_AMOUNTS = [0, 1, 7, 31, 32, 63]
+
+
+@parametrize(
+    mathop=[MathOperation.RightShift],
+    shift_amount=_RIGHT_SHIFT_SIGNED_AMOUNTS,
+)
+def test_eltwise_unary_sfpu_int_right_shift_signed(
+    mathop: MathOperation, shift_amount: int
+):
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Int32, DataFormat.Int32),
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec.custom(
+            values=[float(v) for v in _RIGHT_SHIFT_SIGNED_VALUES], seed=0
+        ),
+        shift_amount=shift_amount,
+        twos_complement=True,
+    )
+
+
 # Every polygamma order ttnn accepts. psi^(n)(x) ~ (n-1)! / x^n for large x, so each order is
 # swept from 0.5 up to where the result is 2^-125, just inside the normal range. The bottom of
 # that range is where the unscaled partial sums sit n! below the result, and atol is 0 because
@@ -1468,12 +1500,7 @@ def eltwise_unary_sfpu(
     if not check_golden:
         return res_from_L1
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Gate on the op's tolerance only: its step budgets were measured over the whole
     # format, so only callers whose stimuli they were measured on opt into them.
@@ -1649,12 +1676,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         check_golden=False,
     )
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # clamp_negative=False: require inputs < -88 to be negative (not necessarily
     # correct) and exclude them from the isclose check.

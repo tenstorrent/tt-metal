@@ -24,7 +24,7 @@ prim::QkvCausalConv1dSiluParams make_params(
     uint32_t input_column_offset,
     uint32_t segment_length) {
     TT_FATAL(
-        input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr && input.logical_shape().rank() == 3,
+        input.storage_type() == StorageType::DEVICE && input.is_allocated() && input.logical_shape().rank() == 3,
         "qkv_causal_conv1d_silu: input must be an allocated device tensor of rank 3");
     return {
         .sequence = static_cast<uint32_t>(input.logical_shape()[1]),
