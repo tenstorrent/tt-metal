@@ -1581,6 +1581,23 @@ row is x1.46. The sweep continues over (users per row, K) for the `k_by_rows` ta
 - The dump prompt's first token through a 128-row traced wave differed from the SP path's (98319 vs 102647): the
   45-layer wave gate validated 256 rows, to which a shorter prompt now pads (the smallest captured wave length).
 
+### 2026-10-30 19:40: the placement is settled (waves of 8 for bursts, SP for lone prompts); the wave wall moved to 477 K
+
+`needle64k_8_adaptive_r3`: 8/8 needles, TTFT 246 s against the SP-first run's 332 s: one SP chunk for the lone first
+arrival, then one wave of 8 from the second step (the young prompt counts in the burst; 24 waves of 8, then 8 of 7 as
+the first arrival finished a chunk earlier). A 2048-row wave of 8 and a 16 K SP chunk both cost ~7.5 s at 45 layers
+(~2.2 K tok/s), so waves buy occupancy beyond four resident long prompts and parity on burst TTFT, not throughput;
+every member of a wave finishes together, while sequential SP would stagger the first tokens but cannot run once the
+slot indices are taken. `needle1m_8_direct_r1` (8 x 1 M through waves of 8) died at 477 K per row: the 512 MiB copy of
+the 131072-row prefix bucket (393216 -> 524288 rows, 64 MiB per bank) met a largest free block of 63.7 MiB per bank,
+131 MiB free where the warm-up left 253 (largest 250): the copy's size walks up bucket by bucket (each new size needs a
+new hole) and ~120 MiB per bank went to something else over 190 waves. `needle1m_8_direct_r2` runs with a constant
+copy size (`GLM53_PREFIX_BUCKET=1048576`: 1 GiB from the first chunk, one hole reused every layer) and the allocator
+logged after every wave step (`GLM53_VLLM_MEM_LOG=1`, e87b44d4568). Fallback if the hole still fragments: a boot-time
+ROW_MAJOR scratch filled piecewise (`slice` with a pre-allocated output exists, `untilize_with_unpadding` has none, so
+slice -> untilize -> `slice_write`, ~3x the copy traffic, ~6 % of a 1 M wave step); the clean fix is a paged-kv
+`sparse_sdpa` (outside this folder).
+
 ### 2026-10-30 18:30: the served straggle shape is one arrival, then seven; the lone 1 M needle keeps its TTFT
 
 `needle1m_1_adaptive`: the lone 1 038 673-token prompt took the SP path (burst 1), TTFT 494.8 s, needle found: the
