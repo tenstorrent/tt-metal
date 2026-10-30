@@ -182,10 +182,6 @@ class MimirKernelLoad : public ::testing::TestWithParam<uint32_t> {};
 TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
     skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
-    }
 
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
@@ -217,9 +213,6 @@ TEST_P(MimirKernelLoad, EachHartAlone) {
     skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
     const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
-    }
 
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
@@ -252,10 +245,6 @@ TEST_P(MimirKernelLoad, EachHartAlone) {
 TEST_P(MimirKernelLoad, ArgsReplaceStale) {
     skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
-    }
 
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
@@ -300,10 +289,6 @@ TEST_P(MimirKernelLoad, ArgsReplaceStale) {
 TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
     skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
-    }
 
     constexpr uint32_t hart = kCceKernelHart;
     constexpr uint32_t launches_per_session = 4;

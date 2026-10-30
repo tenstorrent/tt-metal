@@ -68,10 +68,6 @@ TEST_P(CceSramRoundTripThroughUnitMesh, RoundTrip) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t cce_index = GetParam();
-    const uint32_t num_cces = num_cces_on(device);
-    if (cce_index >= num_cces) {
-        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
-    }
 
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     const uint64_t address = cce_sram_noc_addr(kCceSramTestOffset);
@@ -103,10 +99,6 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t cce_index = GetParam();
-    const uint32_t num_cces = num_cces_on(device);
-    if (cce_index >= num_cces) {
-        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
-    }
 
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     const uint32_t magic = 0xC0FFEE04 + cce_index;
@@ -146,10 +138,6 @@ TEST_P(AllHartsRunDramKernel, WritesMagic) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t cce_index = GetParam();
-    const uint32_t num_cces = num_cces_on(device);
-    if (cce_index >= num_cces) {
-        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
-    }
 
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
     const auto& hal = MetalContext::instance().hal();
@@ -659,9 +647,6 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t dram_partition = GetParam();
-    if (dram_partition >= device->num_dram_channels()) {
-        GTEST_SKIP() << "Configured descriptor does not expose partition " << dram_partition << ".";
-    }
     GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
@@ -721,9 +706,6 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
 
     const uint32_t cce_index = GetParam();
     const uint32_t num_mimirs = num_mimirs_on(device);
-    if (cce_index >= num_cces_on(device) || num_mimirs == 0) {
-        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
-    }
     GddrBackingScope gddr_backing;
 
     const auto& hal = MetalContext::instance().hal();
@@ -939,7 +921,7 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
 
     const uint32_t src_cce = GetParam();
     const uint32_t num_cces = num_cces_on(device);
-    if (src_cce >= num_cces || num_mimirs_on(device) < 2) {
+    if (num_mimirs_on(device) < 2) {
         GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
     }
 
@@ -996,7 +978,7 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
     const uint32_t src_cce = GetParam();
     const uint32_t num_cces = num_cces_on(device);
     const uint32_t local_mimir = mimir_index_for_cce(src_cce);
-    if (src_cce >= num_cces || num_mimirs_on(device) < 2) {
+    if (num_mimirs_on(device) < 2) {
         GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
     }
 
@@ -1295,9 +1277,6 @@ TEST_P(DramChannelsDoNotAliasThroughPublicDeviceApi, RoundTrip) {
     const uint32_t num_partitions = device->num_dram_channels();
     if (num_partitions < 2) {
         GTEST_SKIP() << "Alias check needs at least two DRAM channels; descriptor exposes " << num_partitions << ".";
-    }
-    if (dram_partition >= num_partitions) {
-        GTEST_SKIP() << "Configured descriptor does not expose partition " << dram_partition << ".";
     }
     GddrBackingScope gddr_backing;
     const uint32_t other_partition = (dram_partition + num_partitions / 2) % num_partitions;

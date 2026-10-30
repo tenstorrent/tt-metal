@@ -401,17 +401,6 @@ inline constexpr uint32_t kRingSlotLines = 2;
 inline constexpr uint32_t kRingRounds = 3 * kRingSlots;
 static_assert(kRingSlots * kRingSlotLines <= abi::kNumLines);
 
-std::string mm41_cce_skip_reason(uint32_t cce_index) {
-    if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
-        return watcher_reason;
-    }
-    const MimirTopology topology = topology_from(configured_soc_desc());
-    if (cce_index >= topology.num_cces) {
-        return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
-    }
-    return "";
-}
-
 // One kernel of an MM41 scoped-lock Program.
 struct LockKernel {
     uint32_t cce_index = 0;
@@ -494,7 +483,7 @@ class MimirCacheScopedLock : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
         skip_unless_programmable_dram_package();
-        if (const std::string skip_reason = mm41_cce_skip_reason(GetParam()); !skip_reason.empty()) {
+        if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
     }

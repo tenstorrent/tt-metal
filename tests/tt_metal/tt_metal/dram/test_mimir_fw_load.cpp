@@ -320,9 +320,6 @@ TEST_P(MimirFwLaunch, NoOpLaunchCompletes) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    if (cce_index >= emu_cce_count()) {
-        GTEST_SKIP() << "Configured descriptor exposes only " << emu_cce_count() << " CCEs.";
-    }
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
 

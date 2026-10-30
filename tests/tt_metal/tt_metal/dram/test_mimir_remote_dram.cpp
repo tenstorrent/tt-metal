@@ -122,10 +122,6 @@ std::string source_skip_reason(const MimirTopology& topology, uint32_t source_mi
     if (source_mimir >= topology.num_mimirs) {
         return fmt::format("Descriptor has no Mimir {}.", source_mimir);
     }
-    const uint32_t source_cce = cce_index_for(source_mimir, source_location);
-    if (source_cce >= topology.num_cces) {
-        return fmt::format("Descriptor does not expose CCE {}.", source_cce);
-    }
     return "";
 }
 
@@ -133,9 +129,6 @@ std::string view_skip_reason(const MimirTopology& topology, const RemoteDramView
     const std::string source_reason = source_skip_reason(topology, param.source_mimir, param.source_location);
     if (!source_reason.empty()) {
         return source_reason;
-    }
-    if (param.view >= topology.num_views) {
-        return fmt::format("Descriptor has no DRAM view {}.", param.view);
     }
     if (topology.view_mimir[param.view] == param.source_mimir) {
         return fmt::format("DRAM view {} is on the source Mimir, not a remote view.", param.view);

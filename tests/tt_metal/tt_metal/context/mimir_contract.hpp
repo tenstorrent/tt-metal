@@ -325,9 +325,6 @@ inline uint32_t dram_view_location(const metal_SocDescriptor& soc_desc, uint32_t
 }
 
 inline bool partition_in_case(const metal_SocDescriptor& soc_desc, uint32_t cce_index, uint32_t partition, bool cross) {
-    if (partition >= soc_desc.get_num_dram_views()) {
-        return false;
-    }
     const bool local =
         soc_desc.get_channel_for_dram_view(static_cast<int>(partition)) == mimir_index_for_cce(soc_desc, cce_index);
     return cross ? !local : local;
@@ -335,9 +332,6 @@ inline bool partition_in_case(const metal_SocDescriptor& soc_desc, uint32_t cce_
 
 inline bool cce_partition_case_applies(const CcePartition& param, bool cross) {
     const metal_SocDescriptor& soc_desc = configured_soc_desc();
-    if (param.cce_index >= num_cces_from_soc(soc_desc) || soc_desc.get_num_dram_channels() == 0) {
-        return false;
-    }
     if (cross && soc_desc.get_num_dram_channels() < 2) {
         return false;
     }
