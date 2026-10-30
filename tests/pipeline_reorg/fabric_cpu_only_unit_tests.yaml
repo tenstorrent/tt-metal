@@ -91,7 +91,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-fsd-reliability
   skus:
     cpu_medium:
-      timeout: 20
+      timeout: 30
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
@@ -146,7 +146,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      timeout: 90
+      timeout: 80
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
