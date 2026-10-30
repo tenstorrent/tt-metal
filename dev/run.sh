@@ -26,6 +26,8 @@
 #   ./dev/run.sh perf_pairs # the 5 s perf subset with D4 pair steps forced off, then at the factory default
 #   ./dev/run.sh perf_rescale  # the 5 s perf subset with TT_SPARSE_FAST_RESCALE=0, then 1 (fewer rescale drains)
 #   ./dev/run.sh check_rescale # the check step with TT_SPARSE_FAST_RESCALE=1
+#   ./dev/run.sh structures # correctness over the mask family (random, band, clustered, uneven; also in check)
+#   ./dev/run.sh family     # traced op time over the mask family at 5 / 10 / 15 s (family5: 5 s only)
 #
 # Knobs (dev branch only, read by the DEBUG factory code; set once per process, they are not in the op's program
 # hash): TT_SPARSE_PROF_PASS / _ITER / _SKIP / _STEPS pick the profile window (defaults 0 / 1 / 0 / 100; ITER=-1 =
@@ -69,7 +71,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -120,6 +122,11 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 [ "$ONLY" = perf ] && run perf 2400 pytest "$PERF" -s -k "$PERF5_K"
 # perf_all: every shape, piece size, density and mode (long; 15 s builds ~1.5 GB host tensors per input).
 [ "$ONLY" = perf_all ] && run perf_all 10800 pytest "$PERF" -s
+# structures: test_mask_structures alone. family: test_mask_family_perf (dense + gather baselines, then every
+# structure x density at k 256, pooled); the per-case records go to the results.jsonl the log names.
+[ "$ONLY" = structures ] && run structures 1800 pytest "$SPARSE" -s -k "test_mask_structures"
+[ "$ONLY" = family ] && run family 7200 pytest "$PERF" -s -k "dense_and_gather or mask_family"
+[ "$ONLY" = family5 ] && run family5 2400 pytest "$PERF" -s -k "5s and not 15s and (dense_and_gather or mask_family)"
 [ "$ONLY" = profile ] && ONLY=profile5  # one sparse call only: the summary treats the longest run as the op
 # profile5 / profile10 / profile15: one untraced sparse call at 5 / 10 / 15 s from dev/profile_case.py (inputs made on
 # device, setup in seconds), 256-key pieces, density 0.2; PROFILE_K overrides the -k filter (see profile_case.py ids).
