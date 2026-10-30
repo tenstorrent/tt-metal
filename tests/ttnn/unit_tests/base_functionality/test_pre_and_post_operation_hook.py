@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
+
 import pytest
 
 import torch
@@ -62,3 +64,39 @@ def test_pre_operaiton_hook_for_storing_input_activations(device, batch_size, h,
 
     # TODO(arakhmati): only store activations for top-level ops
     assert len(activations) == 3
+
+
+def test_pre_operation_hook_runs_for_concurrent_top_level_operations(device):
+    torch_input_tensor = torch_random((1, 32, 32), -1, 1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    worker_in_hook = threading.Event()
+    main_op_done = threading.Event()
+    hooked_threads = []
+
+    def pre_hook(operation, args, kwargs):
+        hooked_threads.append(threading.current_thread().name)
+        if threading.current_thread().name == "worker":
+            worker_in_hook.set()
+            main_op_done.wait(timeout=30)
+
+    worker_errors = []
+
+    def worker():
+        try:
+            ttnn.exp(input_tensor)
+        except Exception as e:
+            worker_errors.append(e)
+
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.register_pre_operation_hook(pre_hook):
+        thread = threading.Thread(target=worker, name="worker")
+        thread.start()
+        try:
+            assert worker_in_hook.wait(timeout=30), "worker operation never reached its pre-operation hook"
+            ttnn.exp(input_tensor)
+        finally:
+            main_op_done.set()
+            thread.join()
+
+    assert not worker_errors, worker_errors
+    assert sorted(hooked_threads) == sorted(["worker", threading.current_thread().name])

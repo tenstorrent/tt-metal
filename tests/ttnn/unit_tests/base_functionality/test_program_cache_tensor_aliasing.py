@@ -78,3 +78,33 @@ def test_program_cache_aliased_then_distinct_tensor_args(device):
         f"by the cache-hit path"
     )
     assert distinct_out == pytest.approx(expected, abs=0.05), f"call 2 returned {distinct_out}, expected {expected}"
+
+
+def test_workload_descriptor_cache_hit_after_aliased_inputs_is_rejected(device, expect_error):
+    """ring_distributed_sdpa(X, X, X) caches a WorkloadDescriptor program whose buffer bindings could not be
+    resolved; a later same-spec call with distinct tensors must not silently reuse its stale addresses."""
+    shape = (1, 1, 1024, 128)
+    ring_size = 4
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+    )
+
+    def to_device(value):
+        return ttnn.from_torch(torch.full(shape, value), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def ring_sdpa(q, k, v):
+        return ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+            q, k, v, ring_size=ring_size, ring_id=0, program_config=program_config
+        )
+
+    device.clear_program_cache()
+    x = to_device(1.0)
+    ttnn.to_torch(ring_sdpa(x, x, x))
+    ttnn.to_torch(ring_sdpa(x, x, x))
+
+    q, k, v = to_device(1.0), to_device(1.0), to_device(1.0)
+    with expect_error(RuntimeError, "cannot be re-patched"):
+        ttnn.to_torch(ring_sdpa(q, k, v))
+    device.clear_program_cache()

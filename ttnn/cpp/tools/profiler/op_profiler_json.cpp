@@ -172,13 +172,16 @@ std::string assemble_device_op_json(
     j["performance_model"]["input_bws"] = data.perf_input_bws;
     j["performance_model"]["output_bws"] = data.perf_output_bws;
 
-    std::string short_str = fmt::format(
-        "`TT_DNN_DEVICE_OP: {}, {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id, program_cache_hit);
+    // program_cache_hit varies per call, so it must stay out of the cached prefix.
+    std::string cached_prefix =
+        fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
+    std::string short_str = fmt::format("{}{}, ", cached_prefix, program_cache_hit);
 
     if (cached_ops.find(device_id) == cached_ops.end()) {
-        cached_ops.emplace(device_id, (std::unordered_map<ttsl::hash::hash_t, std::string>){{program_hash, short_str}});
+        cached_ops.emplace(
+            device_id, (std::unordered_map<ttsl::hash::hash_t, std::string>){{program_hash, cached_prefix}});
     } else {
-        cached_ops.at(device_id).emplace(program_hash, short_str);
+        cached_ops.at(device_id).emplace(program_hash, cached_prefix);
     }
 
     // Tracy hard limit is uint16_t::max bytes including null terminator.

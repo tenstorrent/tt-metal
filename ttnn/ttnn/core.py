@@ -345,14 +345,14 @@ def create_sharded_memory_config_(
             else:
                 raise RuntimeError("Invalid shard orientation")
         elif tensor_memory_layout == TensorMemoryLayout.HEIGHT_SHARDED:
-            tensor_height_padded = roundup(tensor_height, total_num_cores) if tile_layout else tensor_height
+            tensor_height_padded = roundup(tensor_height, total_num_cores * 32) if tile_layout else tensor_height
             shard_shape = divup(tensor_height_padded, total_num_cores), tensor_width
         elif tensor_memory_layout == TensorMemoryLayout.WIDTH_SHARDED:
             shard_shape = tensor_height, divup(tensor_width, total_num_cores)
         else:
             raise RuntimeError("Invalid sharding scheme")
 
-    if tile_layout and shard_shape[0] % 32 != 0 and shard_shape[1] % 32 != 0:
+    if tile_layout and (shard_shape[0] % 32 != 0 or shard_shape[1] % 32 != 0):
         raise RuntimeError("Incorrect tensor shape")
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)

@@ -55,6 +55,11 @@ uint32_t per_device_seed(
                             : device->id());
 }
 
+// Every core's SFPU PRNG starts from its own seed, so cores sharing a seed would emit identical masks.
+// Keyed on the core's first tile (not its index) so it composes with per_device_seed's device-id offset.
+// Shared by the cache-miss build and override_runtime_arguments, which must agree bit-for-bit.
+uint32_t per_core_seed(uint32_t seed, uint32_t tile_offset) { return seed + (tile_offset * 0x9E3779B9u); }
+
 }  // namespace
 
 using namespace tt::constants;
@@ -260,11 +265,12 @@ inline void assign_per_core_runtime_args(DropoutKernelRunArgs& run_args, const D
 
     for_each_dropout_core(split, [&](const DropoutCoreWork& work) {
         // Compute kernel: (seed)
+        const uint32_t core_seed = per_core_seed(seed, work.tile_offset);
         if (work.in_group_1) {
-            AddRuntimeArgsForNode(run_args.compute_group_1.runtime_arg_values, work.core, {{"seed", seed}});
+            AddRuntimeArgsForNode(run_args.compute_group_1.runtime_arg_values, work.core, {{"seed", core_seed}});
         } else {
             TT_FATAL(run_args.compute_group_2.has_value(), "Core group 2 descriptor should be present");
-            AddRuntimeArgsForNode(run_args.compute_group_2->runtime_arg_values, work.core, {{"seed", seed}});
+            AddRuntimeArgsForNode(run_args.compute_group_2->runtime_arg_values, work.core, {{"seed", core_seed}});
         }
 
         // Reader kernel: (number_of_tiles, offset_in_tiles).  src/dst reach the kernels as the input /
@@ -500,7 +506,8 @@ tt::tt_metal::experimental::ProgramRunArgs DropoutProgramFactory::override_runti
 
         TT_FATAL(work.in_group_1 || has_compute_group_2, "Core group 2 kernel should be present");
         auto& compute_run_args = work.in_group_1 ? compute_group_1_run_args : compute_group_2_run_args;
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, work.core, {{"seed", seed}});
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values, work.core, {{"seed", per_core_seed(seed, work.tile_offset)}});
     });
 
     run_args.kernel_run_args = {

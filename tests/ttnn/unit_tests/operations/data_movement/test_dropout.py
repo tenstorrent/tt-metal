@@ -153,3 +153,26 @@ def test_dropout_cache_hit_rederives_buffer_address(device):
     ), "kept outputs must be 3.0*scale -- proves the hit re-derived the new input buffer address"
 
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("use_per_device_seed", [False, True])
+def test_dropout_mask_differs_across_cores(device, use_per_device_seed):
+    """Each tile lands on its own core; every core must draw its own mask on both the cache miss and hit."""
+    num_tiles = 8
+    t = torch.ones((1, 1, num_tiles * 32, 32))
+    tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    for _ in range(2):
+        out = ttnn.experimental.dropout(
+            tensor, probability=0.5, scale=2.0, seed=1234, use_per_device_seed=use_per_device_seed
+        )
+        masks = (ttnn.to_torch(out).float().reshape(num_tiles, 32, 32) == 0).reshape(num_tiles, -1)
+        for i in range(num_tiles):
+            for j in range(i + 1, num_tiles):
+                assert not torch.equal(masks[i], masks[j]), f"tiles {i} and {j} share an identical dropout mask"
+
+    assert device.num_program_cache_entries() == 1
+    device.disable_and_clear_program_cache()

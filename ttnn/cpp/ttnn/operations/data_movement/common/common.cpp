@@ -773,7 +773,8 @@ std::array<uint32_t, 2> compute_height_sharded_shard_shape(
     const uint32_t total_num_cores) {
     auto [tensor_height, tensor_width] = squeezed_tensor_hw;
     auto squeezed_height_padded_to_tile =
-        layout == tt::tt_metal::Layout::TILE ? tt::round_up(tensor_height, total_num_cores) : tensor_height;
+        layout == tt::tt_metal::Layout::TILE ? tt::round_up(tensor_height, total_num_cores * tt::constants::TILE_HEIGHT)
+                                             : tensor_height;
     return {tt::div_up(squeezed_height_padded_to_tile, total_num_cores), tensor_width};
 }
 

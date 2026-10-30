@@ -89,7 +89,12 @@ void close_device(MeshDevice& device) { device.close(); }
 
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
-void deallocate_buffers(MeshDevice* device) { device->allocator()->deallocate_buffers(); }
+void deallocate_buffers(MeshDevice* device) {
+    // Cached programs own their kernel-binary buffers; drop them while the allocator still tracks those
+    // addresses, or a later program could be loaded over a binary the cache still dispatches.
+    device->clear_program_cache();
+    device->allocator()->deallocate_buffers();
+}
 
 // Device management for auto-formatting
 // Note: This functionality is planned for deprecation in the future.

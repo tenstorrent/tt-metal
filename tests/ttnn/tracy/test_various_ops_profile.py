@@ -53,3 +53,17 @@ def test_various_ops_profile(device):
         ttnn.synchronize_device(device)
     finally:
         _teardown_sub_devices(device, sub_device_manager)
+
+
+def test_repeated_op_profile(device):
+    """Run the same TTNN op several times so later calls are program-cache hits."""
+
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 32]
+    a = ttnn.from_torch(torch.randn(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    for _ in range(3):
+        ttnn.add(a, b)
+
+    ttnn.synchronize_device(device)

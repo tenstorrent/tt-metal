@@ -17,6 +17,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -383,6 +384,9 @@ public:
             // Non-empty when the factory used emplace_runtime_args() with
             // Buffer* args (or, for the WorkloadDescriptor variant, declared any CB buffer binding).
             tt::tt_metal::ResolvedBindings resolved_bindings;
+            // WorkloadDescriptor variant only, when resolve_bindings bailed: the tensor buffer addresses
+            // baked into the cached program, which a cache hit can only reuse if they are unchanged.
+            std::vector<uint32_t> unpatchable_buffer_addresses;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -420,6 +424,15 @@ public:
                 buffers.push_back(wb.buffer);
             }
             return collected;
+        }
+
+        static std::vector<uint32_t> buffer_addresses(std::span<tt::tt_metal::Buffer* const> buffers) {
+            std::vector<uint32_t> addresses;
+            addresses.reserve(buffers.size());
+            for (const auto* buffer : buffers) {
+                addresses.push_back(buffer != nullptr ? buffer->address() : 0);
+            }
+            return addresses;
         }
 
         // Whether create_descriptor (the ProgramDescriptor variant) wants the per-coord MeshCoordinate.
@@ -571,9 +584,15 @@ public:
                         collected.buffers,
                         collected.num_input_buffers,
                         /*allow_inplace_output_tensor_alias=*/true);
+                    std::vector<uint32_t> unpatchable_buffer_addresses;
+                    if (bindings.bailed_on_alias) {
+                        unpatchable_buffer_addresses = buffer_addresses(collected.buffers);
+                    }
                     mesh_workload.add_program(device_range, std::move(program));
                     shared_variables[device_range] = shared_variables_t{
-                        .workload_descriptor = workload_descriptor, .resolved_bindings = std::move(bindings)};
+                        .workload_descriptor = workload_descriptor,
+                        .resolved_bindings = std::move(bindings),
+                        .unpatchable_buffer_addresses = std::move(unpatchable_buffer_addresses)};
                 }
                 return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
             } else {
@@ -661,6 +680,15 @@ public:
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                    } else if (!has_override_runtime_arguments() && sv.resolved_bindings.bailed_on_alias) {
+                        auto collected =
+                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        TT_FATAL(
+                            buffer_addresses(collected.buffers) == sv.unpatchable_buffer_addresses,
+                            "{}: program cache hit on an entry built from a call that passed the same buffer in more "
+                            "than one tensor slot, so its buffer addresses cannot be re-patched for the current "
+                            "tensors. Pass distinct tensors or disable the program cache for this op.",
+                            ttsl::get_type_name<DeviceOperation>());
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
                     if constexpr (has_override_runtime_arguments()) {

@@ -2841,3 +2841,17 @@ def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
         assert_equal(torch_input, ttnn.to_torch(output_tensor))
     finally:
         ttnn.deallocate(resident)
+
+
+def test_create_sharded_memory_config_height_sharded_tile_layout_pads_to_tiles(device):
+    shape = (1, 1, 96, 64)
+    memory_config = ttnn.create_sharded_memory_config_(
+        shape, ttnn.CoreGrid(x=2, y=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR, tile_layout=True
+    )
+    assert tuple(memory_config.shard_spec.shape) == (64, 64)
+
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    assert_equal(torch_input, ttnn.to_torch(tensor))
