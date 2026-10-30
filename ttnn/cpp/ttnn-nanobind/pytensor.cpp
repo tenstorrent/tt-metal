@@ -1639,11 +1639,7 @@ void pytensor_module(nb::module_& mod) {
                     !self.device_storage().is_root_allocated()) {
                     return std::nullopt;
                 }
-                auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
-                if (!backing) {
-                    return std::nullopt;
-                }
-                return backing->unique_id();
+                return self.device_storage().get_root_mesh_buffer().unique_id();
             },
             R"doc(
             Get the unique ID of this tensor's root backing device buffer, or

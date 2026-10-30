@@ -547,10 +547,46 @@ std::shared_ptr<Buffer> BufferImpl::create(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+    return create_owning(
+        device,
+        size,
+        page_size,
+        buffer_type,
+        sharding_args,
+        bottom_up,
+        sub_device_id,
+        /*unique_id=*/std::nullopt);
+}
+
+std::shared_ptr<Buffer> BufferImpl::create_for_mesh_buffer(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id,
+    const size_t unique_id) {
+    return create_owning(device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, unique_id);
+}
+
+std::shared_ptr<Buffer> BufferImpl::create_owning(
+    IDevice* device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const BufferShardingArgs& sharding_args,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id,
+    const std::optional<size_t> unique_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
     auto buffer = std::make_shared<Buffer>(BufferImpl(
         device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */));
+    // Set before allocating: the allocator records the allocation under the buffer's ID.
+    if (unique_id.has_value()) {
+        buffer->impl().unique_id_ = *unique_id;
+    }
 
     if (buffer->impl().size_ == 0) {
         buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
@@ -769,6 +805,13 @@ void BufferImpl::deallocate_impl(Buffer& self) {
 Buffer::~Buffer() {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
+#if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
+    // Capture keys Buffers by address, which a later Buffer may reuse. Forget this one even if a nested call didn't
+    // capture its deletion. Its deallocation below is then not captured either: replay deletes the Buffer already.
+    if (auto& capture = LightMetalCaptureContext::get(); capture.is_tracing() && capture.is_in_map(this)) {
+        capture.remove_from_map(this);
+    }
+#endif
     if (impl_ && impl_->allocation_status_ != BufferImpl::AllocationStatus::DEALLOCATED) {
         impl_->deallocate(*this);
     }
