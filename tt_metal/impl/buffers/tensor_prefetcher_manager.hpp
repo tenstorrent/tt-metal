@@ -43,23 +43,15 @@ namespace distributed {
 class H2DSocketTransport;
 class MeshCommandQueue;
 class MeshDevice;
+class PrefetcherSenderBackend;
 class RequestTransport;
+class TensorPrefetcherManagerTestAccess;
 
 struct TensorPrefetcherPreconditions {
     bool ok = false;
     // Empty when ok; otherwise the first precondition that failed.
     std::string reason;
 };
-
-// What StartTensorPrefetcher requires of `mesh_device`; IsTensorPrefetcherSupported is this. On
-// Quasar CCE senders the firmware term requires every sender CCE's
-// GO_MSG to hold RUN_MSG_DONE or RUN_MSG_GO: it checks that firmware is present, not that the CCE is
-// idle, so it holds while receiver Programs and prefetcher sessions run.
-TensorPrefetcherPreconditions tensor_prefetcher_preconditions(const MeshDevice& mesh_device);
-
-// TL1 offset of every Quasar CCE sender's control block (tensor_prefetcher_cce_abi.hpp). It depends only on
-// the mesh's DRISC L1 arena, so it holds before Start and after Stop.
-uint32_t cce_sender_control_base(const MeshDevice& mesh_device);
 
 // Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
 // per-device Programs, the request transport (an H2D socket per (device, sender) on
@@ -72,17 +64,17 @@ uint32_t cce_sender_control_base(const MeshDevice& mesh_device);
 // Single-prefetcher-at-a-time invariant: start() asserts is_active() is false.
 //
 // Lifecycle:
-//   * start(config) builds one Program per IDevice in the mesh, with a DRISC
-//     kernel on every DRAM sender core. Allocates one H2D socket per (device,
-//     sender). Launches the programs (non-blocking — kernels park on
-//     socket_wait_for_pages) and spawns the host worker thread.
+//   * start(config) builds one Program per IDevice in the mesh, with a sender
+//     kernel on every provisioned DRAM sender core, and the request transport.
+//     Launches the programs (non-blocking — kernels park waiting for their first
+//     request page) and spawns the host worker thread.
 //   * queue(pipes, subset, tensors) serializes the request into one or more
 //     fixed-size request pages (splitting when the tensor list overflows a page)
 //     and pushes them onto the internal queue in order. The host worker thread
-//     fans each page out to every socket whose mesh coord is in `subset` via
-//     non-blocking try_stage / publish_staged so one slow socket can't starve
-//     the others. The caller is responsible for keeping tensors and the pipes
-//     alive until stop() (see the public tensor_prefetcher.hpp note).
+//     fans each page out to every sender whose mesh coord is in `subset` via
+//     non-blocking writes so one slow sender can't starve the others. The caller
+//     is responsible for keeping tensors and the pipes alive until stop() (see the
+//     public tensor_prefetcher.hpp note).
 //   * stop() pushes DRAIN requests naming every target still in memory, then an
 //     all-zero STOP page to the full mesh, joins the worker thread, WaitProgramDone
 //     on each device, and releases per-cycle resources.
@@ -103,11 +95,9 @@ public:
     TensorPrefetcherManager(TensorPrefetcherManager&&) = delete;
     TensorPrefetcherManager& operator=(TensorPrefetcherManager&&) = delete;
 
-    // FIFO depth — how many in-flight requests a single socket can hold before
-    // back-pressuring. kSocketFifoPages × align_up(kRequestPageBytes, pcie) per socket.
-    // Scaled inversely with kRequestPageBytes (128 × 128 B == the previous 16 × 1024 B) so
-    // shrinking the page to one-matmul granularity keeps the per-socket DRISC L1 FIFO at the
-    // same footprint while allowing 8× more small in-flight requests.
+    // FIFO depth — how many in-flight requests a single Blackhole socket can hold before
+    // back-pressuring. kSocketFifoPages × tt::align(kRequestPageBytes, pcie) per socket: 128 pages
+    // of 128 B is a 16 KiB DRISC L1 FIFO that holds many small one-matmul requests in flight.
     static constexpr uint32_t kSocketFifoPages = 128;
 
     void start(const experimental::TensorPrefetcherConfig& config);
@@ -205,44 +195,10 @@ public:
     // joined on every path.
     void stop_without_throwing();
 
-    // Records `prefetcher_pipes` on their senders for Stop's DRAIN, as queueing a request to them would, without
-    // sending a request. For tests that drain live PrefetcherPipes without the PREFETCH path. Same pipe
-    // preconditions as queue().
-    void register_drain_target(
-        const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes);
-
-    // A CQ fence wait the dispatcher never satisfies: the local DRISC L1 address of the CQ signal slot, the same on
-    // every provisioned sender, and the value the senders wait for there.
-    struct UnsignaledCqWait {
-        uint32_t slot_address = 0;
-        uint32_t value = 0;
-    };
-
-    // enqueue_cq_signal_and_wait for command queue 0 on every device, without the dispatcher write: it bumps the
-    // counter and queues the WAIT_SIGNAL on CQ fence slot 0, so the senders wait until the caller writes `value` into
-    // the slot. For tests of the fence, which slow dispatch otherwise satisfies before the wait is queued.
-    UnsignaledCqWait queue_cq_wait_without_signal();
-
     bool is_active() const { return active_; }
 
 private:
-    // ---- Constants shared with the kernel side ----
-    // The request page wire format (header + entry table + deduplicated layout table)
-    // and the fixed payload size kRequestPageBytes live in
-    // impl/buffers/tensor_prefetcher_request.hpp so the host and the kernel agree on
-    // both the byte layout and the payload size. A Queue call whose tensors overflow one
-    // page is split across multiple pages.
-
-    struct MpfeWeights {
-        uint32_t free_sender;
-        uint32_t noc1_sender;
-        uint32_t ordinary;
-    };
-
-    struct MpfePolicy {
-        MpfeWeights active;
-        bool dynamic;
-    };
+    friend class TensorPrefetcherManagerTestAccess;
 
     // Everything the request path needs to know about a delivery target, built by target_for() from
     // the DRAM-sender PrefetcherPipes of one factory call. Owns its mapping by value: the pipes'
@@ -281,11 +237,10 @@ private:
         const std::vector<experimental::TensorPrefetcherInput>& tensors);
     // The host worker for H2D-socket senders: batches each socket's pages and publishes them together.
     void worker_loop(H2DSocketTransport& sockets);
-    // The host worker for CCE senders: one request at a time into each sender's TL1 request ring, dropping pages
-    // to a sender that has exited or whose ring took no page for request_ring_no_progress_limit_.
+    // The host worker for CCE senders: one request at a time into each sender's TL1 request ring through
+    // transport_, dropping pages to a sender that has exited or that the transport gave up on.
     void worker_loop_request_ring();
-    // Whether the senders are Quasar CCEs on their own DRAM cores. prefetcher_traits_for is keyed on arch
-    // only, and Quasar's dispatch-engine senders are not CCEs.
+    // Whether the senders are Quasar CCEs on their own DRAM cores. Quasar's dispatch-engine senders are not CCEs.
     bool uses_cce_senders() const;
     // The body of enqueue_cq_signal_and_wait. The caller holds the API lock and has checked active_.
     void enqueue_cq_signal_and_wait_locked(
@@ -307,7 +262,6 @@ private:
         uint32_t config_page_addr,
         const std::weak_ptr<DriscL1Allocation>& allocation,
         const std::weak_ptr<DriscL1Allocation>& receivers);
-    // record_drain_target for each sender `target` maps to.
     void record_drain_targets(const RequestTarget& target, const std::vector<uint32_t>& target_sender_indices);
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
     // of STOP.
@@ -319,27 +273,14 @@ private:
     // Queues one WAIT_SIGNAL page on CQ fence slot `cq_id` for every provisioned sender of `target_devices`: wait
     // until that slot reaches `signal_value`.
     void queue_wait_cq_request(uint32_t cq_id, uint32_t signal_value, std::vector<MeshCoordinate> target_devices);
-    // Provisions the senders of `sender_banks` (empty = every bank).
-    void enumerate_dram_senders(const std::vector<uint32_t>& sender_banks);
+    // Provisions the senders of `sender_banks` (empty = every bank), `roles_per_bank` on each, on every device of
+    // the mesh.
+    void enumerate_dram_senders(const std::vector<uint32_t>& sender_banks, size_t roles_per_bank);
     RequestTarget target_for(
         const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes) const;
     std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
-    // A CCE runs one launch at a time, so a receiver on a provisioned sender CCE could never run.
-    void require_receivers_off_sender_cces(const RequestTarget& target) const;
-    void build_and_launch_programs(
-        const H2DSocketTransport& sockets,
-        uint32_t stage_ring_base,
-        uint32_t stage_ring_size,
-        const std::optional<MpfePolicy>& mpfe_policy);
-    // A launch onto a CCE still running a kernel is lost, so every provisioned sender CCE must be idle.
-    void require_idle_sender_cces() const;
-    // Zeroes each sender's CQ signal slots, ring meta and status, which the CCE kernel never does.
-    void zero_cce_sender_control_blocks() const;
-    void build_cce_sender_programs(uint64_t wait_budget_cycles);
-    void log_cce_sender_statuses() const;
-    // One line per sender that ended Failed or whose status cannot be read, after log_cce_sender_statuses when
-    // there is any. Empty off Quasar. Never throws.
-    std::vector<std::string> failed_cce_senders() const;
+    // Throws on a device without DRAM-core senders.
+    PrefetcherSenderBackend& backend() const;
     // Tells the worker to finish and joins it, if it is still running.
     void join_worker();
     // Serialize a Queue call's tensors into one or more request pages, deduplicating
@@ -386,29 +327,19 @@ private:
     MeshDevice* mesh_device_;
     // Grabs the owning MeshDevice's api_mutex_ for the duration of an API call.
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
+    // What differs between the kinds of DRAM-core sender, chosen by start(); none on the dispatch engine, or on a
+    // device without DRAM-sender endpoints.
+    std::unique_ptr<PrefetcherSenderBackend> backend_;
     bool active_ = false;
     // Incremented by each start(), so requests captured for a CommandList can tell which run they belong to.
     uint64_t run_id_ = 0;
-    uint32_t stage_ring_base_ = 0;
     uint32_t stage_ring_size_ = 0;
     uint32_t ring_half_ = 0;
     uint32_t stage_third_ = 0;
-    // Per-DRAM-core L1 layout (uniform across all sender cores on all devices).
-    // socket_config / socket_data are local L1 addresses; host writes add the
-    // DRAM_L1_NOC_OFFSET (passed into H2DSocket's DRAM-recv ctor) before going
-    // over NOC.
-    uint32_t socket_config_l1_addr_ = 0;
-    uint32_t socket_data_l1_addr_ = 0;
     // Base (local L1) of this prefetcher's signal slot table: kNumCqSignalSlots CQ fence slots, then
     // kNumOpSignalSlots op signal slots. Uniform across all sender cores of every device, carved at the front of
     // the DRISC kernel working region, or the table in the dispatch engine's region.
     uint32_t signal_slots_l1_addr_ = 0;
-    // Base (local DRISC L1) of the kTensorPrefetcherSelectorScratchBytes a selector page is read into;
-    // uniform across all sender cores.
-    uint32_t selector_scratch_l1_addr_ = 0;
-    // TL1 base of each Quasar CCE sender's control block; uniform across sender cores. Its first lines are
-    // the CQ fence slots, so signal_slots_l1_addr_ points into it on the CCE path.
-    uint32_t cce_control_base_ = 0;
     // Distance between consecutive signal slots. The slots hold one uint32 each but are
     // spaced a full L1 alignment apart: each CQ fence slot is the destination of its own dispatcher
     // write, and a dispatch write only lands on an L1-aligned address. Packed 4 bytes
@@ -474,15 +405,6 @@ private:
     // worker_loop fan-out is O(targets) instead of O(targets * devices).
     std::unordered_map<MeshCoordinate, uint32_t> device_index_by_coord_;
 
-    // How long the worker waits on a TL1 request ring that takes no page before it gives up on that sender. Set by
-    // start() before the worker runs.
-    std::chrono::steady_clock::duration request_ring_no_progress_limit_{};
-    // Whether the worker also gives up at that limit on a sender that still runs. Only when
-    // TT_METAL_OPERATION_TIMEOUT_SECONDS is set, so stop() reaches WaitProgramDone and that times out. Otherwise
-    // only a sender that never started is given up on.
-    bool give_up_on_running_senders_ = false;
-    // Set by the worker when it gives up on a sender, so stop() reports the requests it dropped.
-    std::atomic<bool> worker_gave_up_on_sender_{false};
     // Request pages the worker dropped because their sender had exited, so stop() can report them.
     std::atomic<uint32_t> dropped_request_pages_{0};
 

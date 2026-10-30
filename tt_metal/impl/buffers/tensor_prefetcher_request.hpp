@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Wire format of one Tensor prefetcher request page, shared by the host
-// (TensorPrefetcherManager composes the bytes) and the DRISC kernel (reads them
-// out of its H2D socket page via the same structs). Keep all structs packed so the
-// L1 byte layout matches on both sides.
+// (TensorPrefetcherManager composes the bytes) and the sender kernels (read them out
+// of their H2D socket page on Blackhole, their TL1 request ring on Quasar, via the
+// same structs). Keep all structs packed so the L1 byte layout matches on both sides.
 //
 // Every page starts with a TensorPrefetcherRequestHeader: a one-byte command id
 // (TensorPrefetcherBaseCmd) followed by a union of the per-command payloads,
@@ -24,7 +24,7 @@
 // entry and geometry bytes are identical across senders, but the header carries that
 // sender's pipe config page address, every layout slot carries that sender's bank-local slab
 // base, and a streaming page carries only that sender's slice of the per-receiver rotation
-// table (see below) -- so worker_loop sends sender s's page to that sender's socket rather
+// table (see below) -- so worker_loop sends sender s's page to that sender alone rather
 // than broadcasting one page to all.
 //
 // For a PREFETCH page the payload region (kRequestPageBytes) has two halves that grow
@@ -72,15 +72,13 @@ namespace tt::tt_metal {
 
 // Fixed usable payload size of one request page, in bytes. Both the host (layout/entry
 // placement) and the kernel (backward layout indexing) must agree on this exact value —
-// it is the *unaligned* payload size, distinct from the pcie-aligned socket page size.
+// it is the *unaligned* payload size, distinct from the pcie-aligned Blackhole socket page size.
 // Larger packs more tensors per page but grows the per-socket DRISC L1 FIFO by
 // kSocketFifoPages × this.
 //
 // Sized for fine-grained queueing (one matmul per request → one entry per page): a single
 // tensor needs header + one layout + one entry = 96 B, so 128 B holds one with room for one
-// more entry that shares its layout, or a rotation table for up to 8 receivers. The per-socket
-// L1 FIFO is held constant by scaling kSocketFifoPages inversely (see
-// tensor_prefetcher_manager.hpp).
+// more entry that shares its layout, or a rotation table for up to 8 receivers.
 inline constexpr uint32_t kRequestPageBytes = 128;
 
 // Every DRAM sender core keeps one table of signal slots, each a uint32 counter that only grows, and a

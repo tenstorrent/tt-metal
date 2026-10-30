@@ -86,8 +86,8 @@ struct TensorPrefetcherConfig {
 //   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
 //     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
 //     that DRISC's NIUs in stream mode, so the two cannot coexist.
-// On Quasar with CCE senders (programmable DRAM views), slow dispatch must be on and every sender CCE must have
-// initialized firmware.
+// On Quasar with CCE senders (programmable DRAM views), every DRAM view must also have its own
+// programmable sender CCE, slow dispatch must be on, and every sender CCE must have initialized firmware.
 // When this returns false, StartTensorPrefetcher TT_FATALs, so callers (e.g. tests) can
 // use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
