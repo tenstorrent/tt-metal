@@ -32,6 +32,8 @@
 #                           # totals5 / totals10 / totals10_nopairs / totals15, family (longest, last)
 #   ./dev/run.sh totals10   # whole-op totals of every stage and wait plus engine counters, one untraced call at 10 s
 #                           # (TT_SPARSE_PROF_TOTALS=1; also totals5, totals15, totals10_nopairs); log_val_totals10_summary.txt
+#   ./dev/run.sh totals     # totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered
+#   ./dev/run.sh collect    # totals (above) + k512: traced 256- vs 512-key pieces at 10 / 15 s
 #   ./dev/run.sh passes     # traced op time at the factory's Q pass count and at one more pass, 5 / 10 / 15 s
 #
 # Knobs (dev branch only, read by the DEBUG factory code; set once per process, they are not in the op's program
@@ -52,6 +54,8 @@ case "${1:-all}" in
     diag10) set -- sum10 sum10_nopairs profile10 profile10_dense ;;
     stages) set -- stages5 stages10 stages15 ;;
     review) set -- bench structures passes totals5 totals10 totals10_nopairs totals15 family ;;
+    totals) set -- totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered ;;
+    collect) set -- totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered k512 ;;
     night) set -- bench smoke check prod dense perf_pairs perf_rescale profile5 profile5_nopairs sum10 sum15 ;;
 esac
 if [ $# -gt 1 ]; then
@@ -77,7 +81,7 @@ run() {
     return $rc
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
-STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 passes totals5 totals10 totals10_nopairs totals15 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
+STEPS=" all stages stages5 stages10 stages15 diag10 sum10_nopairs profile10_dense bench bench5 bench_ab hang_ok hang_2p hang_2p19 structures family family5 passes totals5 totals10 totals10_nopairs totals15 totals15_band totals15_clustered totals collect k512 smoke check check_rescale prod dense perf perf_all profile profile5_nopairs profile5 profile10 profile15 sum5 sum10 sum15 perf_pairs perf_rescale "
 case "$STEPS" in *" $ONLY "*) ;; *) echo "unknown step '$ONLY'; one of:$STEPS" >&2; exit 2 ;; esac
 # DEV_LOG_COPY=<dir>: copy every log there as soon as its step ends (survives a job that dies later).
 keep() { [ -n "${DEV_LOG_COPY:-}" ] && mkdir -p "$DEV_LOG_COPY" && cp -f "$@" "$DEV_LOG_COPY"/; return 0; }
@@ -130,6 +134,8 @@ want dense && run dense 1200 pytest "$DENSE" -s -k "logical_tensor_accuracy"
 [ "$ONLY" = perf_all ] && run perf_all 10800 pytest "$PERF" -s
 # structures: test_mask_structures alone. family: test_mask_family_perf (dense + gather baselines, then every
 # structure x density at k 256, pooled); the per-case records go to the results.jsonl the log names.
+# k512: traced 256- vs 512-key pieces at 10 / 15 s on the perf test's random d=0.2 mask (stderr in the log).
+[ "$ONLY" = k512 ] && run k512 1800 pytest "$PERF" -s -k "(10s or 15s) and (k256 or k512) and d0.2 and not kept"
 [ "$ONLY" = passes ] && run passes 3600 pytest dev/passes_case.py -s
 [ "$ONLY" = structures ] && run structures 1800 pytest "$SPARSE" -s -k "test_mask_structures"
 [ "$ONLY" = family ] && run family 7200 pytest "$PERF" -s -k "dense_and_gather or mask_family"
@@ -223,12 +229,15 @@ case "$ONLY" in
     # totals5 / totals10 / totals15: the same call with TT_SPARSE_PROF_TOTALS=1 (every zone summed over the whole op per
     # RISC, plus waits and step / score-tile counts; no windowed zones) and the engine counters; totals10_nopairs with
     # D4 pair steps off.
-    totals5 | totals10 | totals15 | totals10_nopairs)
+    # totals15_band / totals15_clustered: the 15 s call on make_structured_mask's band / clustered layout at the same
+    # density (DEV_PROFILE_STRUCTURE in dev/profile_case.py).
+    totals5 | totals10 | totals15 | totals10_nopairs | totals15_band | totals15_clustered)
         n=${ONLY#totals}
-        n=${n%_nopairs}
+        n=${n%%_*}
         shape=s$(printf '%02d' "$n")
         pairs_env=()
         [ "$ONLY" = totals10_nopairs ] && pairs_env=(TT_SPARSE_PAIR_STEPS=0)
+        case "$ONLY" in *_band) pairs_env+=(DEV_PROFILE_STRUCTURE=band) ;; *_clustered) pairs_env+=(DEV_PROFILE_STRUCTURE=clustered) ;; esac
         run "$ONLY" 1800 env ${pairs_env[@]+"${pairs_env[@]}"} TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILE_PERF_COUNTERS=39 \
             TT_SPARSE_PROF_TOTALS=1 \
             pytest dev/profile_case.py -s -k "${PROFILE_K:-$shape and k256 and d020 and sparse_only and qauto}"

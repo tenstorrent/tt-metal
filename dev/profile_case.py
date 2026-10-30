@@ -16,6 +16,8 @@ sparse_only / plus_dense (plus_dense also runs one dense ring-joint call; dev/pr
 device's longest run as the attention op, which is then the dense one).
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -27,7 +29,13 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
     close_ring_joint_sdpa_runtime,
     open_ring_joint_sdpa_runtime,
 )
-from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import BLOCK, D, HEADS_PER_DEVICE, Geometry
+from tests.nightly.blackhole.sdpa.test_sparse_ring_sdpa import (
+    BLOCK,
+    D,
+    HEADS_PER_DEVICE,
+    Geometry,
+    make_structured_mask,
+)
 
 SHAPES = {"s05": (4736, (320, 384)), "s10": (9184, (256, 512)), "s15": (13664, (256, 512))}  # rows, dense chunks
 DENSITIES = {"d010": 0.1, "d020": 0.2, "d050": 0.5, "d100": 1.0}
@@ -86,7 +94,13 @@ def test_profile(runtime, shape_id, k_chunk, density_id, with_dense, q_blocks_pe
         )
         for _ in range(2)
     )
-    mask = block_mask(geo, S, Hd, DENSITIES[density_id])
+    # DEV_PROFILE_STRUCTURE=band|clustered|uneven|random: make_structured_mask's layouts at the same density (default:
+    # this file's random mask with the +-1 band).
+    structure = os.environ.get("DEV_PROFILE_STRUCTURE")
+    if structure:
+        mask = make_structured_mask(geo, S, Hd, structure=structure, density=DENSITIES[density_id]).to(torch.int32)
+    else:
+        mask = block_mask(geo, S, Hd, DENSITIES[density_id])
     d = [None, None]
     d[rt.sp_axis] = 0  # shard s's rows on SP device s; the same heads' mask on every TP row
     t_mask = ttnn.from_torch(
@@ -97,7 +111,9 @@ def test_profile(runtime, shape_id, k_chunk, density_id, with_dense, q_blocks_pe
         mesh_mapper=ttnn.ShardTensor2dMesh(dev, mesh_shape=tuple(dev.shape), dims=d),
     )
     kept = mask[:, :, : geo.nb()].float().mean().item()
-    logger.info(f"[profile {shape_id} k{k_chunk} {density_id}] rows {rows}, nb {geo.nb()}, mask mean {kept:.3f}")
+    logger.info(
+        f"[profile {shape_id} k{k_chunk} {density_id} {structure or 'random+band'}] rows {rows}, nb {geo.nb()}, mask mean {kept:.3f}"
+    )
     ttnn.synchronize_device(dev)  # inputs in place on every device before the op starts
 
     out = ttnn.transformer.sparse_ring_sdpa(

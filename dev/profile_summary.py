@@ -52,8 +52,9 @@ STAGE_ZONES = [
     "ST_END_SYNC",
 ]
 WANTED = set([COMPUTE_ZONE] + READER_ZONES + OTHER_ZONES + KERNEL_ZONES + STAGE_ZONES)
-# Whole-op totals (TT_SPARSE_PROF_TOTALS=1, sparse_prof_window.hpp kTotalNames): one TS_DATA record per RISC and name,
-# cycles for the timed names and plain counts for the N_* names.
+# Whole-op totals (TT_SPARSE_PROF_TOTALS=1): SPARSE_TOTALS TS_DATA records, data = index << 32 | value, the index into
+# this list, which must equal sparse_prof::kTotalNames in sparse_prof_window.hpp (checked at startup); cycles for the
+# timed names and plain counts for the N_* names.
 TOTAL_NAMES = [
     "KERNEL",
     "RING_STEP_SUM",
@@ -107,7 +108,26 @@ def stats(vals):
     )
 
 
+def check_total_names():
+    """TOTAL_NAMES must equal the kernel's kTotalNames: the records carry an index into it."""
+    import os
+
+    hdr = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "../ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_prof_window.hpp",
+    )
+    try:
+        text = open(hdr).read()
+    except OSError:
+        return
+    table = text[text.index("kTotalNames[] = {") : text.index("};", text.index("kTotalNames[] = {"))]
+    names = re.findall(r'"([A-Z0-9_]+)"', table)
+    if names != TOTAL_NAMES:
+        sys.exit("profile_summary.py TOTAL_NAMES differs from kTotalNames in sparse_prof_window.hpp")
+
+
 def main(path):
+    check_total_names()
     freq_mhz = 1350.0
     open_starts = collections.defaultdict(list)  # (run, dev, x, y, risc, zone) -> start stack
     total = collections.defaultdict(int)  # same key -> summed cycles
@@ -141,8 +161,13 @@ def main(path):
                     counters[(c[7], c[0], c[1], c[2])][mt.group(1)] = (int(mv.group(1)), int(mr.group(1)))
                 continue
             if len(c) >= 12 and c[11].startswith("TS_DATA"):
-                if c[10] in TOTAL_NAMES:
-                    totals[(c[7], c[0], c[1], c[2], c[3], c[10])] = int(c[6])
+                if c[10] == "SPARSE_TOTALS":  # data = index into TOTAL_NAMES << 32 | value
+                    data = int(c[6])
+                    idx, value = data >> 32, data & 0xFFFFFFFF
+                    if idx < len(TOTAL_NAMES):
+                        totals[(c[7], c[0], c[1], c[2], c[3], TOTAL_NAMES[idx])] = value
+                    else:
+                        unknown_ts["SPARSE_TOTALS index %d" % idx] += 1
                 else:
                     unknown_ts[c[10]] += 1
                 continue
