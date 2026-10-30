@@ -206,6 +206,7 @@ inline __attribute__((always_inline)) void NOC_CFG_WRITE_REG(uint32_t noc, uint3
 #if defined(NOC_CMD_BUF_FIFO_ENABLED)
 constexpr uint32_t NOC_CMD_BUF_FIFO_DEPTH = 16;
 constexpr uint32_t NOC_CMD_BUF_FIFO_AVAIL_MASK = 0x1F;
+constexpr uint32_t NOC_CMD_BUF_FIFO_ALL_EMPTY = NOC_CMD_BUF_FIFO_DEPTH * 0x01010101;
 
 inline __attribute__((always_inline)) constexpr uint32_t noc_cmd_buf_fifo_avail_field(uint32_t cmd_buf) {
     return NOC_CMD_BUF_FIFO_AVAIL_MASK << (cmd_buf << 3);
@@ -238,13 +239,21 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
     // The FIFOs drain round-robin, so a request could overtake older requests queued in another buffer, while the NoC
     // API promises that same-VC requests leave in NOC_CMD_CTRL order. Issuing only once this RISC's other buffers are
     // empty keeps that order; back-to-back requests on one buffer still queue up to the FIFO depth.
-    constexpr uint32_t all_empty = NOC_CMD_BUF_FIFO_DEPTH * 0x01010101;
     uint32_t avail = NOC_CMD_BUF_READ_REG(noc, 0, CMD_BUF_AVAIL);
     uint32_t own_field = noc_cmd_buf_fifo_avail_field(cmd_buf);
     uint32_t other_fields = noc_cmd_buf_fifo_owned_fields() & ~own_field;
-    return (avail & own_field) != 0 && (avail & other_fields) == (all_empty & other_fields);
+    return (avail & own_field) != 0 && (avail & other_fields) == (NOC_CMD_BUF_FIFO_ALL_EMPTY & other_fields);
 #else
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
+#endif
+}
+
+// The per-transaction-ID counters do not count requests still queued in a command buffer FIFO. Wait for this RISC's
+// FIFOs to drain before reading them, or a barrier passes, and a throttle issues, while requests are still queued.
+inline __attribute__((always_inline)) void noc_cmd_buf_fifos_drain(uint32_t noc) {
+#if defined(NOC_CMD_BUF_FIFO_ENABLED)
+    constexpr uint32_t owned = noc_cmd_buf_fifo_owned_fields();
+    while ((NOC_CMD_BUF_READ_REG(noc, 0, CMD_BUF_AVAIL) & owned) != (NOC_CMD_BUF_FIFO_ALL_EMPTY & owned));
 #endif
 }
 
@@ -649,10 +658,12 @@ inline __attribute__((always_inline)) bool ncrisc_noc_reads_flushed(uint32_t noc
 
 inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
+    noc_cmd_buf_fifos_drain(noc);
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
 inline __attribute__((always_inline)) uint32_t noc_available_transactions(uint32_t noc, uint32_t trid) {
+    noc_cmd_buf_fifos_drain(noc);
     return NOC_MAX_TRANSACTION_ID_COUNT - NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid));
 }
 
@@ -800,11 +811,13 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(u
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
     uint32_t noc, uint32_t transcation_id) {
+    noc_cmd_buf_fifos_drain(noc);
     return (NOC_STATUS_READ_REG(noc, NIU_MST_WRITE_REQS_OUTGOING_ID(transcation_id)) == 0);
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(
     uint32_t noc, uint32_t transcation_id) {
+    noc_cmd_buf_fifos_drain(noc);
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
@@ -1427,6 +1440,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     } else {
         ASSERT(noc_cmd_buf_ready(noc, cmd_buf));
     }
+    noc_cmd_buf_fifos_drain(noc);
     while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
