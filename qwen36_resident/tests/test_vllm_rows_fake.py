@@ -31,6 +31,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from qwen36_resident.model import ResidentModel
 from qwen36_resident.vllm_rows import BLOCK, ROWS, ResidentRowsAdapter, RowsEngine, SlotMap
 
 model_runner = pytest.importorskip("vllm_tt_plugin.model_runner")
@@ -141,6 +142,10 @@ class FakeModel:
 
     def set_sampling(self, rows):
         assert len(rows) == self.S
+        # every row through the real model's host encoder of the hub's sampling words: a row it cannot encode fails
+        # here as it failed the server (a per-row seed None crashed the first served WP8 decode; fixed in 69243329f64)
+        for row in rows:
+            ResidentModel.sampling_words(*row)
         self.params = list(rows)
 
 
@@ -400,7 +405,8 @@ class Sim:
         sp = None
         if self.sample:
             temp = [r.sampled[0] if r.sampled else 0.0 for r in rs] + [0.0] * (pad - len(rs))
-            seed = [r.sampled[1] if r.sampled else 0 for r in rs] + [0] * (pad - len(rs))
+            # the plugin's per-row seed: None for a request without one (and a pad row), as vLLM sends it
+            seed = [r.sampled[1] if r.sampled else None for r in rs] + [None] * (pad - len(rs))
             sp = SimpleNamespace(temperature=temp, top_k=[20] * pad, top_p=[0.95] * pad, seed=seed)
         # the runner's page-table-only refresh: a steady step whose block allocation changed
         refresh = steady and not torch.equal(table, self.last_table)
