@@ -32,6 +32,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.tile_constants import MAX_TILE_ELEMENTS
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test, result_tensor
 
@@ -66,7 +67,7 @@ def test_unp_bcast_sub_sdpa(
 ):
 
     # Precompute constants
-    input_tiles = input_dimensions[0] * input_dimensions[1] // 1024
+    input_tiles = input_dimensions[0] * input_dimensions[1] // MAX_TILE_ELEMENTS
     reuse_factor = input_tiles // srca_reuse_count
 
     if input_tiles % srca_reuse_count != 0:
@@ -75,18 +76,21 @@ def test_unp_bcast_sub_sdpa(
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
 
-    src_A = src_A[: 1024 * reuse_factor]
+    src_A = src_A[: MAX_TILE_ELEMENTS * reuse_factor]
 
     reshaped_a = src_A.reshape(64 * reuse_factor, 16)
 
-    b_tiles = [src_B[i : i + 1024].tolist() for i in range(0, len(src_B), 1024)]
+    b_tiles = [
+        src_B[i : i + MAX_TILE_ELEMENTS].tolist()
+        for i in range(0, len(src_B), MAX_TILE_ELEMENTS)
+    ]
     b_tiles = b_tiles[:]
 
     take = []
@@ -163,7 +167,7 @@ def run_unpack_a_bcast_eltwise(
     perf_report=None,
     run_types=None,
 ):
-    tile_count = input_dimensions[0] * input_dimensions[1] // 1024
+    tile_count = input_dimensions[0] * input_dimensions[1] // MAX_TILE_ELEMENTS
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )

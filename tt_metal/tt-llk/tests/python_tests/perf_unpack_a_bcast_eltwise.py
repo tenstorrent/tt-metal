@@ -13,6 +13,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from test_unpack_a_bcast_eltwise import run_unpack_a_bcast_eltwise
 
+# Custom unpack dvalid signaling supports only end-to-end and pack-isolated runs.
 _PERF_RUN_TYPES = [PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE]
 
 

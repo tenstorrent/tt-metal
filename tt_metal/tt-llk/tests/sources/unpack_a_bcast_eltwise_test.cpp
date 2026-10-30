@@ -10,6 +10,7 @@
 #include "ckernel_debug.h"
 #include "counters.h"
 #include "llk_defs.h"
+#include "params.h"
 #include "perf.h"
 #include "profiler.h"
 
@@ -17,6 +18,10 @@
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+static_assert(
+    PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE,
+    "Only L1_TO_L1 and PACK_ISOLATE are supported because unpack_A_bcast uses custom dvalid signaling");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -31,7 +36,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const int SRCA_REUSE_COUNT             = params.SRCA_REUSE_COUNT;
-    const std::uint32_t TILE_CNT           = params.TILE_CNT;
     const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const Operand& buffer_A                = params.buffer_A;
@@ -56,10 +60,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-            _perf_unpack_loop_set_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
         }
         else
         {
@@ -93,7 +93,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const int SRCA_REUSE_COUNT             = params.SRCA_REUSE_COUNT;
-    const std::uint32_t TILE_CNT           = params.TILE_CNT;
     const std::uint32_t NUM_BLOCKS         = params.NUM_BLOCKS;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
@@ -109,11 +108,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
         }
         else
         {
@@ -161,18 +155,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            _llk_packer_wait_for_math_done_();
             for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
             {
                 LLK_ASSERT((tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile exceeds max dest tiles");
                 _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
             }
-            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
         else
         {
