@@ -97,9 +97,19 @@ Deployments that pin hosts instead of running discovery launch from
 `topology_configuration/glm53_4rank.yaml`. Rank N runs mesh N of `ci/sc4_mgd.textproto`,
 the same descriptor CI uses.
 
+Pick the variant by its manifest name:
+
+| `GLM53_VARIANT` | KV cache | MTP | Users |
+|---|---|---|---|
+| `glm53` | scaled FP8 | none | 54 |
+| `glm53_mtp_kv_share` | scaled FP8 | 1 level | 53 |
+| `glm53_bf16` | BF16 | none | 34 |
+| `glm53_mtp_kv_share_bf16` | BF16 | 1 level | 31 |
+
 ```bash
 cd $TT_METAL_HOME && source python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
+export GLM53_VARIANT=glm53
 python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface ens5f0np0 \
   --rank-binding models/demos/common/prefill/runners/topology_configuration/glm53_4rank.yaml \
@@ -110,8 +120,8 @@ python3 ttnn/ttnn/distributed/ttrun.py \
 Run it on `host0`. The `--host` order is the pipeline order from the prerequisites:
 rank 0 first, each next host one cable further along the ring.
 
-`glm53.json` is the configuration: fabric mode, shared-expert overlap, trace,
-layer acks, sequence length, user count, chunk timeout. The runner applies it
+The manifest is the configuration: fabric mode, shared-expert overlap, KV cache
+format, MTP, trace, layer acks, sequence length, user count, chunk timeout. The runner applies it
 with `setdefault`, so any of those variables already set in the environment
 silently wins over the manifest. Leave them unset. The torus fabric with
 `PREFILL_OVERLAP_SHARED_EXPERT=0`, and the `2d` fabric, are not what CI runs.
@@ -120,7 +130,7 @@ Set only what is specific to the deployment, in the binding's `global_env`.
 `ttrun` does not forward `PREFILL_*` variables from the launching shell, so an
 export there reaches rank 0 only.
 
-- `PREFILL_NUM_USERS`, when the decode side caps slots below the manifest's 54.
+- `PREFILL_NUM_USERS`, when the decode side caps slots below the variant's count.
 - `PREFILL_H2D_SERVICE_ID`, matching the producer.
 - Migration: `PREFILL_ENABLE_MIGRATION=1`, `PREFILL_MIGRATION_EXPORT_TO_FILE=1`,
   `PREFILL_MIGRATION_TABLE_PATH` on storage all hosts share, and

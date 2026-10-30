@@ -5,6 +5,6 @@ rank_bindings:
   - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {}}
 mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/ci/sc4_mgd.textproto
 global_env:
-  PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/glm53.json"
+  PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/${GLM53_VARIANT}.json"
   TT_METAL_SHM_TRACKING_DISABLED: "1"
   LOGURU_LEVEL: "ERROR"
