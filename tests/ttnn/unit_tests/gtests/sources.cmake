@@ -50,6 +50,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp
     test_tanh_fw_ulp.cpp
+    test_pack_scalar_into_uint32.cpp
     test_work_split_tilize.cpp
     test_unary_program_hash.cpp
     test_unary_dram_read_plan.cpp

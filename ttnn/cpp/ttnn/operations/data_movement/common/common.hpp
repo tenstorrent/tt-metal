@@ -282,6 +282,10 @@ uint16_t float_to_uint16(float f);
 
 uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
 
+// Packs `value` as `dtype` into a 32-bit word; 16-bit types fill both halves, 32-bit integers truncate,
+// integer types saturate.
+uint32_t pack_scalar_into_uint32(DataType dtype, float value);
+
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {
     using OwnedArgsType = std::tuple<std::decay_t<OpInputTypes>...>;
