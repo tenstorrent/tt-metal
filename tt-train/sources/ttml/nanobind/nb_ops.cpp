@@ -23,6 +23,7 @@
 #include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "metal/ops/rmsnorm_bw_allcore/rmsnorm_bw_allcore.hpp"
 #include "metal/ops/rmsnorm_fw/rmsnorm_fw.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_kv_reduce_device_operation.hpp"
 #include "metal/ops/skinny_matmul/skinny_matmul.hpp"
 #include "metal/ops/swiglu_packed_bw/swiglu_packed_bw.hpp"
 #include "metal/ops/swiglu_packed_fw/swiglu_packed_fw.hpp"
@@ -786,6 +787,23 @@ void py_module(nb::module_& m) {
             "x [.., M, K] @ W for a skinny W (N <= 64; w is [N, K] with transpose_b, else [K, N]) -> [.., M, N] bf16, "
             "K split over the cores (fp32 partials per K slice, then summed) instead of one core per output tile. "
             "HiFi4, fp32 accumulation.");
+        py_metal.def(
+            "sdpa_kv_bw_reduce",
+            [](const ttnn::Tensor& gk,
+               const ttnn::Tensor& gv,
+               const ttnn::Tensor& key,
+               const ttnn::Tensor& value,
+               uint32_t heads_per_group) {
+                auto [k, v] = ttnn::prim::ttml_sdpa_kv_bw_reduce(gk, gv, key, value, heads_per_group);
+                return std::vector<ttnn::Tensor>{k, v};
+            },
+            nb::arg("grad_key_partial"),
+            nb::arg("grad_value_partial"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("heads_per_group"),
+            "Sums fp32 per-query-head dK / dV partials (B, q_heads, S, D) over each group of heads_per_group "
+            "consecutive heads into bf16 (B, kv_heads, S, D); the second phase of the head-split SDPA KV backward.");
         py_metal.def(
             "write_tile_block",
             &ttml::metal::write_tile_block,

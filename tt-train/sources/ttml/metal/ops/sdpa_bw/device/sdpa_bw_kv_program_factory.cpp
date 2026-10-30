@@ -60,6 +60,8 @@ constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per 
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+const std::string kWorkListDefKey = "WORK_LIST";
+const std::string kHeadSplitDefKey = "HEAD_SPLIT";
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA backward KV.
@@ -216,8 +218,16 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // -------------------------------------------------------------------------
     const uint32_t pairs_per_seq = St / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
-    const bool use_balanced_parallelism = (args.mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
-                                          (total_rows_to_process > num_available_cores) && (St > 0);
+    // Work-list mode (causal): one item per (K/V row, query head of its group), LPT-scheduled on the host and
+    // passed as per-core lists. With head_split every item writes its own fp32 partial; without it (MHA) an
+    // item is the whole row. Row k of a sequence processes St - k Q tiles per head.
+    const bool use_work_list = (args.mask_type == AttentionMaskType::Causal) && (St > 0);
+    const bool head_split = args.head_split;
+    TT_FATAL(!head_split || use_work_list, "head_split needs the causal work-list mode");
+    const uint32_t items_per_row = head_split ? heads_per_group : 1U;
+    const uint32_t total_items = total_rows_to_process * items_per_row;
+    const bool use_balanced_parallelism = !use_work_list && (args.mask_type == AttentionMaskType::Causal) &&
+                                          (St % 2 == 0) && (total_rows_to_process > num_available_cores) && (St > 0);
 
     uint32_t num_cores = 0;
     tt::tt_metal::CoreRangeSet all_cores{};
@@ -226,8 +236,20 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     uint32_t num_rows_per_core_group_1 = 0;
     uint32_t num_rows_per_core_group_2 = 0;
     std::vector<std::pair<uint32_t, uint32_t>> pair_distribution;
+    LptSchedule work_list;
 
-    if (use_balanced_parallelism) {
+    if (use_work_list) {
+        num_cores = std::min(num_available_cores, total_items);
+        all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
+        core_group_1 = all_cores;
+        std::vector<uint32_t> weights(total_items);
+        for (uint32_t item = 0; item < total_items; ++item) {
+            const uint32_t k_row_tile = (item / items_per_row) % St;
+            weights[item] = (St - k_row_tile) * (head_split ? 1U : heads_per_group) + 1U;
+        }
+        work_list = lpt_schedule(weights, num_cores);
+        num_rows_per_core_group_1 = work_list.max_items;
+    } else if (use_balanced_parallelism) {
         num_cores = std::min(num_available_cores, total_pairs);
         all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
         core_group_1 = all_cores;
@@ -337,12 +359,14 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    // Output gradient buffers (grad_query is computed by Q kernel, not KV kernel)
-    [[maybe_unused]] auto cb_grad_key = create_circular_buffer(
-        program, all_cores, kGradKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+    // Output gradient buffers (grad_query is computed by Q kernel, not KV kernel); fp32 partials with head_split.
+    const auto out_data_format = head_split ? precise_data_format : data_format;
+    const uint32_t out_tile_size_bytes = head_split ? float32_single_tile_size_bytes : bfloat16_single_tile_size_bytes;
+    [[maybe_unused]] auto cb_grad_key =
+        create_circular_buffer(program, all_cores, kGradKeyCbIndex, out_data_format, out_tile_size_bytes, 2 * kWt);
 
-    [[maybe_unused]] auto cb_grad_value = create_circular_buffer(
-        program, all_cores, kGradValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+    [[maybe_unused]] auto cb_grad_value =
+        create_circular_buffer(program, all_cores, kGradValueCbIndex, out_data_format, out_tile_size_bytes, 2 * vWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -384,6 +408,16 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         reader_defines[kBalancedParallelismDefKey] = "1";
         writer_defines[kBalancedParallelismDefKey] = "1";
         compute_defines[kBalancedParallelismDefKey] = "1";
+    }
+    if (use_work_list) {
+        reader_defines[kWorkListDefKey] = "1";
+        writer_defines[kWorkListDefKey] = "1";
+        compute_defines[kWorkListDefKey] = "1";
+    }
+    if (head_split) {
+        reader_defines[kHeadSplitDefKey] = "1";
+        writer_defines[kHeadSplitDefKey] = "1";
+        compute_defines[kHeadSplitDefKey] = "1";
     }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
@@ -528,7 +562,31 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    if (use_balanced_parallelism) {
+    if (use_work_list) {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            const auto& items = work_list.items_per_core[i];
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                work_list_runtime_args(
+                    {grad_output_buffer->address(),
+                     query_buffer->address(),
+                     key_buffer->address(),
+                     value_buffer->address(),
+                     0U,  // mask generated on chip
+                     intermediates_buffer->address(),
+                     u_scaler_buffer->address()},
+                    items));
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                work_list_runtime_args({grad_key_buffer->address(), grad_value_buffer->address()}, items));
+            SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, items));
+        }
+    } else if (use_balanced_parallelism) {
         assign_per_core_runtime_args_balanced(
             program,
             kernels,

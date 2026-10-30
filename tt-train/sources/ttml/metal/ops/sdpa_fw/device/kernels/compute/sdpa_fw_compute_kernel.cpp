@@ -368,7 +368,12 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, kCausalMaskTilesFronted);
 #endif
 
-#ifdef BALANCED_PARALLELISM
+#ifdef WORK_LIST
+    // Work-list mode: arg0 = number of rows of this core, args 1.. = their global row indices (heaviest first).
+    for (uint32_t i = 0; i < start_idx; ++i) {
+        process_single_row(get_arg_val<uint32_t>(1U + i));
+    }
+#elif defined(BALANCED_PARALLELISM)
     // Balanced parallelism mode: process pairs of rows (light + heavy)
     // Each pair consists of:
     //   - light_row: early in sequence (less work: row_in_seq + 1 K/V tiles)

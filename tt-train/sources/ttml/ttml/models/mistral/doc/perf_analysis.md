@@ -31,8 +31,9 @@ Full model, TP=4, 40 layers, random init after a cool-down unless marked "warm" 
 | review 3 | graph-free frozen paths | 545.7 (542.5) | 29.73 % | `O/review3_tp_mfu_tp4.log` |
 | review 3 | real weights, warm | 560.4 | - | `O/review3_full_tp4_real.log` |
 | 9 | residual add fused into all-core RMSNorm | 537.4 (533.9) | 30.19 % | `O/iter9_tp_mfu_tp4.log` |
-| 10 | K-split `skinny_matmul` for the LoRA products | **536.1 (531.2)** | **30.27 %** | `O/iter10_tp_mfu_tp4.log` |
+| 10 | K-split `skinny_matmul` for the LoRA products | 536.1 (531.2) | 30.27 % | `O/iter10_tp_mfu_tp4.log` |
 | 10 | real weights, warm | 543.0 | - | `O/iter10_full_tp4_real.log` |
+| 11 | SDPA work lists (LPT rows; head-split KV backward) | **524.7 (520.2)** | **30.92 %** | `O/iter11_tp_mfu_tp4.log` |
 
 Per-chip effective clocks and temperatures of each run: `D`, "MFU history". tt-smi per chip alongside every run: `O/<run>_tt-smi.txt`.
 
@@ -57,14 +58,14 @@ Baseline depth fit `device ms = 48.83 + 40.245 L` (residuals ≤ 0.6 %), wall fi
 
 - Source: TP=4 after iteration 6, chip 2 of `O/iter6_tp_ranked_ops.txt`; cycle-time, per-layer rows scaled 4 -> 40 layers, fixed rows as measured (57.0 ms of kernels per 4-layer step per chip).
 - State per row and the next rung: `D`, "Ranked cost table".
-- Order after iterations 9 and 10 unchanged: matmuls ~208, collectives ~56, layout ~48, SDPA ~39, norms ~32 (adds folded in), adapters ~19, adds ~13, SwiGLU ~15, fixed ~11.
+- Order after iterations 9-11: matmuls ~208, collectives ~56, layout ~48, norms ~32 (adds folded in), SDPA ~30 (was ~39), adapters ~19, adds ~13, SwiGLU ~15, fixed ~11.
 
 | ms/step/chip | class | item | sub-items (ms) |
 |---|---|---|---|
 | ~208 | math | base matmuls at TP-local shapes | gate_up fwd 61.5 (76 %) / dX 55.2 (85 %), w2 fwd 36.9 (63 %) / dX 28.0 (83 %), qkv 7.6 + 7.8, out 5.9 + 4.8 |
 | ~56 | collectives | 18 reduce-scatter `[1024, 5120]` + 18 all-gather per 4 layers | 35 + 21; 17 + 17 after review 3 |
 | ~48 | layout | heads create / concat, fused-route concat / slice / transposes, LoRA-grad stack / unstack | ~28 + ~14 + ~6 |
-| ~39 | math | SDPA, 8 heads per chip | bwd KV 18.3, bwd Q 10.5, fwd 10.4 |
+| ~39 | math | SDPA, 8 heads per chip | bwd KV 18.3, bwd Q 10.5, fwd 10.4; after iteration 11: bwd KV 11.5 + reduce 1.1, bwd Q 8.6, fwd 9.2 = ~30, all three near the DRAM-bandwidth bound of single-row K/V and Q/dO re-reads |
 | ~31 | math | RMSNorm | fwd 13.8 (32 cores) + bwd 17.5 (96 cores); fwd fused with the adds in iteration 9 |
 | ~25 | math + glue | composite LoRA adapters of qkv / out at TP | skinny matmuls, scale, add; ~19 after iteration 10 |
 | ~18 | glue | residual and gradient adds `[1024, 5120]` | 31 per 4 layers; ~13 after iteration 9 |
@@ -176,6 +177,14 @@ Earlier tables, kept in full: composite baseline at 40 layers (31 rows, single c
 - **Attribution**: chip 0, per 4 layers: `x @ A^T` K=5120 0.614 -> 0.365 (77 -> 46 us), K=8192 0.487 -> 0.260 (122 -> 65 us), `g @ B` 0.304 -> 0.180 (76 -> 45 us); routed rows 1.405 -> 0.805 (-0.60, ~-6 ms per 40 layers); math 40.78 -> 40.11; kernels 54.87 -> 54.19 (steady 48.92 -> 48.12); ops 508 -> 524 per step.
 - **Verification**: standalone vs `ttnn.matmul` PCC 0.999999, rel 1.4-1.5e-3 at five shapes (78 -> 48 us wall at K=5120, 123 -> 68 at K=8192); harness 20 passed (32 with review 6's 12 `test_skinny_matmul_matches_torch` cases); TP gradient check PASS; loss match max |diff| 0.0273 (tol 0.10, mean +0.0056) PASS, TP=4 real-weight trajectory 0.4414 -> 0.1406 -> 0.4473 as the baseline's.
 - **Evidence**: `O/iter10_skinny_check.{py,log}`, `O/iter10_harness.log`, `O/iter10_tp_grad_check_tp4.log`, `O/iter10_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/review6_skinny_tests.log`, `O/iter10_loss.log`, `O/iter10_loss_comparison.txt`, `O/iter10_full_tp4_real.log`; `D`, "Iteration 10" and "Loss match after iterations 9 and 10".
+
+## Iteration 11 (2026-10-30): SDPA work distribution
+
+- **Change**: math, rung extend, kernels we own: `WORK_LIST` mode in `sdpa_fw` and `sdpa_bw_q` (host LPT schedule of the causal rows, `lpt_schedule` in `metal/common/program_utils.hpp`, per-core row lists as runtime args; the pair scheme had 18 of 110 cores doing two pairs) and `HEAD_SPLIT` in `sdpa_bw_kv` (one item per (K/V row, query head), 256 items on 110 cores instead of 64 rows on 64 cores with a 32:1 work spread; fp32 per-head partials summed by the new `ttml_sdpa_kv_bw_reduce` op).
+- **Result**: TP=4 524.7 ms / 30.92 % vs 536.1 (-2.1 %) at 1.149-1.273 GHz effective (iteration 10's run 1.148-1.210), chips 50-75 C.
+- **Attribution**: chip 0, per 4 layers, cycle-time: SDPA forward 1.072 -> 0.915 (268 -> 229 us per call), backward Q 1.084 -> 0.862 (271 -> 216), backward KV 1.839 -> 1.154 + reduce 0.113 (460 -> 289 + 28); SDPA 3.995 -> 3.044 (-0.95 ms, ~-9.5 ms per 40 layers per chip); other rows unchanged within 1 %. Smaller than the core-balance arithmetic (1.7x / 3.3x) because all three kernels re-read K/V (forward, Q backward: 67 MB per call) or Q/dO/lse/u (KV backward: ~100 MB) per single Q tile-row and now run at 280-350 GB/s: bandwidth-bound; the next rung is Q-chunking (several Q rows per item sharing the K/V reads), `D`, "Iteration 11".
+- **Verification**: standalone vs the previous kernels at six shapes (`O/iter11_sdpa_check.log` vs `O/iter11_baseline.log`): forward and dQ bit-identical, dK / dV PCC 0.999999, max |diff| one bf16 ulp (fp32 partials summed in a different order); harness 35 passed (new `test_sdpa_causal_gqa_forward_and_gradients` at three shapes vs torch fp64); TP gradient check PASS. Bug found on the way: the KV kernel's 2-arg `pack_reconfig_data_format(cb_grad_key, cb_attention_weights)` skips the reprogram when both CBs are fp32 and left the packer in its start-up bf16 state; unconditional reconfig under `HEAD_SPLIT`.
+- **Evidence**: `O/iter11_baseline.{sh,log}`, `O/iter11_build_check.{sh,log}`, `O/iter11_sdpa_check.{py,log}`, `O/iter11.{sh,log}`, `O/iter11_harness.log`, `O/iter11_tp_grad_check_tp4.log`, `O/iter11_tp_{mfu_tp4,analysis,ranked_ops}.*`, `O/iter11_tp_mfu_tp4_tt-smi.txt`.
 
 ## Loop exit (2026-10-29, after iteration 3) and resumed state
 

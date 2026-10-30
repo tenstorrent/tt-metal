@@ -91,21 +91,23 @@ constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;  // Recomputed atte
 constexpr uint32_t cb_grad_attn_weights = tt::CBIndex::c_11;  // Gradient w.r.t. attention: dL/dP
 constexpr uint32_t cb_grad_scores_transposed = tt::CBIndex::c_12;   // dS^T, packed directly from DST
 constexpr uint32_t cb_attn_weights_transposed = tt::CBIndex::c_13;  // P^T, packed directly from DST
-constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;       // u_scalar per row (precomputed by Q kernel)
-constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;           // Output: grad_K
-constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;         // Output: grad_V
+constexpr uint32_t cb_u_scalar_row = tt::CBIndex::c_14;             // u_scalar per row (precomputed by Q kernel)
+constexpr uint32_t cb_grad_key = tt::CBIndex::c_15;                 // Output: grad_K
+constexpr uint32_t cb_grad_value = tt::CBIndex::c_16;               // Output: grad_V
 
 const uint32_t qk_tiles = qWt;            // Q/K inner dim tiles
 const uint32_t v_tiles = vWt;             // V/dO/O inner dim tiles
 const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q row
 
 /**
- * Process a single K/V row of the SDPA backward KV computation.
- * For each K/V row k, streams through Q, dO, O rows and accumulates dK and dV.
+ * Process one K/V row of the SDPA backward KV computation for `num_heads` query heads of its group (the
+ * reader streams the heads' Q, dO, lse and u rows in order): accumulates dK and dV over them and packs
+ * the result to the output CBs.
  *
  * @param global_row_idx The global row index (across all batches/groups/sequences)
+ * @param num_heads Query heads accumulated into this output (heads_per_group, or 1 with HEAD_SPLIT)
  */
-FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
+FORCE_INLINE void process_row_heads(uint32_t global_row_idx, uint32_t num_heads) {
     cb_wait_front(cb_key, qk_tiles);
     cb_wait_front(cb_value, v_tiles);
 
@@ -113,7 +115,13 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     // while every PACK target inside the loop below is Float32. Reconfigure once per row here
     // so the 2-arg (conditional) pack_reconfig calls in the loop can skip the reprogram — the
     // 1-arg form would pay an unconditional reprogram (and implicit SFPU drain) every iteration.
+#ifdef HEAD_SPLIT
+    // The outputs are fp32 here, so the 2-arg skip below would see "fp32 -> fp32" and leave the packer in
+    // whatever state it is in (bf16 after compute_kernel_hw_startup on the first item): reprogram unconditionally.
+    pack_reconfig_data_format(cb_attention_weights);
+#else
     pack_reconfig_data_format(cb_grad_key, cb_attention_weights);
+#endif
 
 #ifdef CAUSAL_MASK
     const uint32_t k_row_tile = global_row_idx % Ht;
@@ -125,7 +133,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     const uint32_t num_q_tiles_to_process = Ht;
 #endif
 
-    for (uint32_t head_idx = 0; head_idx < heads_per_group; ++head_idx) {
+    for (uint32_t head_idx = 0; head_idx < num_heads; ++head_idx) {
         const uint32_t matmul_accum_reg = 0;
 
         for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_process; ++q_idx) {
@@ -228,6 +236,10 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_pop_front(cb_value, v_tiles);
 }
 
+FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
+    process_row_heads(global_row_idx, heads_per_group);
+}
+
 void kernel_main() {
     // Runtime args
     // For standard mode: arg0 = start_row
@@ -251,7 +263,21 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, onetile);
 #endif
 
-#ifdef BALANCED_PARALLELISM
+#ifdef WORK_LIST
+    // Work-list mode: arg0 = item count, args 1.. = items (heaviest first); an item is a K/V row (times the
+    // heads of its group with HEAD_SPLIT, one head per item).
+#ifdef HEAD_SPLIT
+    constexpr uint32_t items_per_row = heads_per_group;
+    constexpr uint32_t heads_per_item = 1U;
+#else
+    constexpr uint32_t items_per_row = 1U;
+    constexpr uint32_t heads_per_item = heads_per_group;
+#endif
+    for (uint32_t i = 0; i < start_idx; ++i) {
+        const uint32_t item = get_arg_val<uint32_t>(1U + i);
+        process_row_heads(item / items_per_row, heads_per_item);
+    }
+#elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     for (uint32_t p = 0; p < num_pairs; ++p) {

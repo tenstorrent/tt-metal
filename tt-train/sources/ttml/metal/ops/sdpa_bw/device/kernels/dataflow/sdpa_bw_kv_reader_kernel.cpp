@@ -66,7 +66,59 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-#ifdef BALANCED_PARALLELISM
+#ifdef WORK_LIST
+    // Work-list mode: an item is (K/V row, first query head, head count); with HEAD_SPLIT one head per item.
+#ifdef HEAD_SPLIT
+    constexpr uint32_t items_per_row = heads_per_group;
+    constexpr uint32_t heads_per_item = 1U;
+#else
+    constexpr uint32_t items_per_row = 1U;
+    constexpr uint32_t heads_per_item = heads_per_group;
+#endif
+    const uint32_t list_base = runtime_args_counter - 1U;
+    for (uint32_t i = 0; i < num_rows_to_process; ++i) {
+        const uint32_t item = get_arg_val<uint32_t>(list_base + i);
+        const uint32_t global_row_idx = item / items_per_row;
+        const uint32_t head_begin = (item % items_per_row) * heads_per_item;
+
+        read_tiles_by_row(cb_key, key_address_generator, global_row_idx * kWt, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_value, value_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
+
+        const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
+        const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
+        const uint32_t first_q_head_idx = group_idx * heads_per_group + head_begin;
+        const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
+        const uint32_t vo_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * vWt;
+        const uint32_t k_row_tile = global_row_idx % Ht;
+        const uint32_t num_q_tiles_to_read = Ht - k_row_tile;  // causal
+        uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
+
+        for (uint32_t q_head_idx = 0; q_head_idx < heads_per_item; ++q_head_idx) {
+            const uint32_t u_scaler_head_offset = (batch_idx * q_heads + first_q_head_idx + q_head_idx) * Ht;
+            for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_read; ++q_idx) {
+                const uint32_t h = k_row_tile + q_idx;
+                read_tiles_by_row(
+                    cb_query, query_address_generator, q_offset + (q_head_idx * Ht + h) * qWt, qWt, tile_bytes, qWt);
+                read_tiles_by_row(
+                    cb_intermediates,
+                    intermediates_address_generator,
+                    intermediates_offset + h * num_of_interm_tiles,
+                    num_of_interm_tiles,
+                    interm_tile_bytes,
+                    num_of_interm_tiles);
+                read_tiles_by_row(
+                    cb_grad_output,
+                    grad_output_address_generator,
+                    vo_offset + (q_head_idx * Ht + h) * vWt,
+                    vWt,
+                    tile_bytes,
+                    vWt);
+                read_one_tile(cb_u_scalar_row, u_scaler_address_generator, u_scaler_head_offset + h);
+            }
+            intermediates_offset += Ht * num_of_interm_tiles;
+        }
+    }
+#elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     auto read_row = [&](const uint32_t global_row_idx) {

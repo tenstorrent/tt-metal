@@ -1,0 +1,51 @@
+[0/2] Re-checking globbed directories...
+[1/51] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.43.0")
+[2/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/select_target_logit/device/select_target_logit_program_factory.cpp.o
+[3/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp.o
+[4/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp.o
+[5/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp.o
+[6/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/layernorm_bw/device/layernorm_bw_program_factory.cpp.o
+[7/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/layernorm_fw/device/layernorm_fw_program_factory.cpp.o
+[8/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/cross_entropy_fw/device/cross_entropy_fw_program_factory.cpp.o
+[9/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/rmsnorm_bw_allcore/device/rmsnorm_bw_allcore_program_factory.cpp.o
+[10/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp.o
+[11/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/cross_entropy_bw/device/cross_entropy_bw_program_factory.cpp.o
+[12/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/softmax/device/softmax_program_factory.cpp.o
+[13/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.cpp.o
+[14/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/add_rmsnorm_fw_allcore/device/add_rmsnorm_fw_allcore_program_factory.cpp.o
+[15/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/skinny_matmul/device/skinny_matmul_program_factory.cpp.o
+[16/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/write_tile_block/device/write_tile_block_program_factory.cpp.o
+[17/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/silu_bw/device/silu_bw_program_factory.cpp.o
+[18/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp.o
+[19/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_program_factory.cpp.o
+[20/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/moe_group/device/moe_group_program_factory.cpp.o
+[21/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_device_operation.cpp.o
+[22/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/moe_ungroup/device/moe_ungroup_program_factory.cpp.o
+[23/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp.o
+[24/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_fw/device/swiglu_packed_fw_program_factory.cpp.o
+[25/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_device_operation.cpp.o
+[26/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/swiglu_packed_bw/device/swiglu_packed_bw_program_factory.cpp.o
+[27/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/sdpa_bw.cpp.o
+[28/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/qkv_causal_conv1d_silu_bw/qkv_causal_conv1d_silu_bw.cpp.o
+[29/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/mla_kv_assemble_fw/device/mla_kv_assemble_fw_program_factory.cpp.o
+[30/49] Building CXX object tt-train/sources/ttml/CMakeFiles/_ttml.dir/nanobind/nb_ops.cpp.o
+[31/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp.o
+[32/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/polynorm_bw/device/polynorm_bw_program_factory.cpp.o
+[33/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/device/sdpa_bw_kv_reduce_program_factory.cpp.o
+[34/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/optimizers/adamw/device/adamw_program_factory.cpp.o
+[35/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/mla_kv_assemble_bw/device/mla_kv_assemble_bw_program_factory.cpp.o
+[36/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp.o
+[37/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/polynorm_fw/device/polynorm_fw_program_factory.cpp.o
+[38/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/optimizers/sgd/device/sgd_program_factory.cpp.o
+[39/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp.o
+[40/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp.o
+[41/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp.o
+[42/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/mla_q_rope/device/mla_q_rope_program_factory.cpp.o
+[43/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/device/sdpa_bw_kv_reduce_device_operation.cpp.o
+[44/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/qkv_causal_conv1d_silu_bw/device/qkv_causal_conv1d_silu_bw_program_factory.cpp.o
+[45/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp.o
+[46/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/gumbel_sample/device/gumbel_sample_program_factory.cpp.o
+[47/49] Building CXX object tt-train/sources/ttml/CMakeFiles/ttml.dir/metal/ops/qkv_causal_conv1d_silu_bw/device/qkv_causal_conv1d_silu_bw_device_operation.cpp.o
+[48/49] Linking CXX static library tt-train/sources/ttml/libttml.a
+[49/49] Linking CXX shared module tt-train/sources/ttml/_ttml.abi3.so

@@ -64,7 +64,7 @@ void kernel_main() {
     const uint32_t tiles_per_head = vWt;
     constexpr uint32_t kIntermediateTilesPerRow = 1U;
 
-#ifdef BALANCED_PARALLELISM
+#if defined(BALANCED_PARALLELISM) || defined(WORK_LIST)
     // Balanced parallelism mode: write outputs for pairs of rows (light + heavy).
     // Each pair combines an early-sequence row (few attention tiles) with a late-sequence row (many tiles),
     // so every core writes roughly the same amount of data.
@@ -89,6 +89,13 @@ void kernel_main() {
 #endif
     };
 
+#ifdef WORK_LIST
+    // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
+    const uint32_t list_base = runtime_args_counter - 1U;
+    for (uint32_t i = 0; i < num_rows_to_process; ++i) {
+        write_row(get_arg_val<uint32_t>(list_base + i));
+    }
+#else
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {
         const uint32_t global_pair_idx = start_row + p;
 
@@ -106,6 +113,7 @@ void kernel_main() {
         write_row(heavy_global_row);
         write_row(light_global_row);
     }
+#endif
 #else
     // Standard mode: write outputs sequentially
     const uint32_t end_row = start_row + num_rows_to_process;

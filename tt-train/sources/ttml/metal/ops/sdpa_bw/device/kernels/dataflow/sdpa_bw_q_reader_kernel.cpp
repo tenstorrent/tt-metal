@@ -73,7 +73,7 @@ void kernel_main() {
     const uint32_t num_of_groups = q_heads / heads_per_group;
     const uint32_t num_of_interm_tiles = 1U;
 
-#ifdef BALANCED_PARALLELISM
+#if defined(BALANCED_PARALLELISM) || defined(WORK_LIST)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     auto read_row = [&](const uint32_t global_row_idx) {
@@ -112,6 +112,13 @@ void kernel_main() {
         }
     };
 
+#ifdef WORK_LIST
+    // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
+    const uint32_t list_base = runtime_args_counter - 1U;
+    for (uint32_t i = 0; i < num_rows_to_process; ++i) {
+        read_row(get_arg_val<uint32_t>(list_base + i));
+    }
+#else
     // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {
         const uint32_t global_pair_idx = start_row + p;
@@ -128,6 +135,7 @@ void kernel_main() {
         read_row(heavy_global_row);
         read_row(light_global_row);
     }
+#endif
 #else
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         const uint32_t global_row_idx = start_row + i;

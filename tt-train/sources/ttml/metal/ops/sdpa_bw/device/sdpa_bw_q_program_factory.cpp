@@ -66,6 +66,7 @@ constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per 
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+const std::string kWorkListDefKey = "WORK_LIST";
 const std::string kHasGateDefKey = "HAS_GATE";
 
 /**
@@ -235,8 +236,10 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // -------------------------------------------------------------------------
     const uint32_t pairs_per_seq = St / 2;
     const uint32_t total_pairs = NC * pairs_per_seq;
-    const bool use_balanced_parallelism = (args.mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
-                                          (total_rows_to_process > num_available_cores) && (St > 0);
+    // Work-list mode (causal): host LPT schedule of the rows, per-core row lists as runtime args (see sdpa_fw).
+    const bool use_work_list = (args.mask_type == AttentionMaskType::Causal) && (St > 0);
+    const bool use_balanced_parallelism = !use_work_list && (args.mask_type == AttentionMaskType::Causal) &&
+                                          (St % 2 == 0) && (total_rows_to_process > num_available_cores) && (St > 0);
 
     uint32_t num_cores = 0;
     tt::tt_metal::CoreRangeSet all_cores{};
@@ -245,8 +248,20 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     uint32_t num_rows_per_core_group_1 = 0;
     uint32_t num_rows_per_core_group_2 = 0;
     std::vector<std::pair<uint32_t, uint32_t>> pair_distribution;
+    LptSchedule work_list;
 
-    if (use_balanced_parallelism) {
+    if (use_work_list) {
+        num_cores = std::min(num_available_cores, total_rows_to_process);
+        all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
+        core_group_1 = all_cores;
+        // Row r of a sequence processes r + 1 K/V tiles plus a constant (its Q/dO/O reads, u_scalar, dQ write).
+        std::vector<uint32_t> weights(total_rows_to_process);
+        for (uint32_t row = 0; row < total_rows_to_process; ++row) {
+            weights[row] = (row % St) + 2U;
+        }
+        work_list = lpt_schedule(weights, num_cores);
+        num_rows_per_core_group_1 = work_list.max_items;
+    } else if (use_balanced_parallelism) {
         num_cores = std::min(num_available_cores, total_pairs);
         all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
         core_group_1 = all_cores;
@@ -288,8 +303,13 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         bfloat16_single_tile_size_bytes,
         2 * vWt);
 
-    [[maybe_unused]] auto cb_query = create_circular_buffer( // CBIndex::c_2
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+    [[maybe_unused]] auto cb_query = create_circular_buffer(  // CBIndex::c_2
+        program,
+        all_cores,
+        kQueryCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        2 * qWt);
 
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
@@ -445,6 +465,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         writer_defines[kBalancedParallelismDefKey] = "1";
         compute_defines[kBalancedParallelismDefKey] = "1";
     }
+    if (use_work_list) {
+        reader_defines[kWorkListDefKey] = "1";
+        writer_defines[kWorkListDefKey] = "1";
+        compute_defines[kWorkListDefKey] = "1";
+    }
 
     // Gate: reader streams G, compute produces grad_gate + gated dO, writer flushes both
     if (args.has_gate) {
@@ -583,7 +608,37 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    if (use_balanced_parallelism) {
+    if (use_work_list) {
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            const auto& rows = work_list.items_per_core[i];
+            SetRuntimeArgs(
+                program,
+                kernels.reader,
+                core,
+                work_list_runtime_args(
+                    {grad_output_buffer->address(),
+                     attn_output_buffer->address(),
+                     query_buffer->address(),
+                     key_buffer->address(),
+                     value_buffer->address(),
+                     0U,  // mask generated on chip
+                     intermediates_buffer->address(),
+                     gate_buffer != nullptr ? gate_buffer->address() : 0U},
+                    rows));
+            SetRuntimeArgs(
+                program,
+                kernels.writer,
+                core,
+                work_list_runtime_args(
+                    {grad_query_buffer->address(),
+                     u_scaler_buffer->address(),
+                     grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,
+                     gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U},
+                    rows));
+            SetRuntimeArgs(program, kernels.compute_group_1, core, work_list_runtime_args({}, rows));
+        }
+    } else if (use_balanced_parallelism) {
         assign_per_core_runtime_args_balanced(
             program,
             kernels,

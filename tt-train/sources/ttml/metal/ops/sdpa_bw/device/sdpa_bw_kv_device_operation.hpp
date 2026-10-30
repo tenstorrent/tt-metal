@@ -40,6 +40,7 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const ttnn::Tensor& u_scaler,
     const float dropout_probability = 0.0F,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
+    bool head_split = false);
 
 }  // namespace ttnn::prim

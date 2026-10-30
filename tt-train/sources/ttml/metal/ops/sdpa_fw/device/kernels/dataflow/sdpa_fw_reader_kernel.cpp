@@ -65,7 +65,7 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-#ifdef BALANCED_PARALLELISM
+#if defined(BALANCED_PARALLELISM) || defined(WORK_LIST)
     // Balanced parallelism mode: read Q/K/V for pairs of rows (light + heavy).
     // Each pair combines an early-sequence row (few K/V tiles) with a late-sequence row (many tiles),
     // so every core reads roughly the same amount of data.
@@ -105,6 +105,13 @@ void kernel_main() {
 #endif
     };
 
+#ifdef WORK_LIST
+    // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
+    const uint32_t list_base = runtime_args_counter - 1U;
+    for (uint32_t i = 0; i < num_rows_to_process; ++i) {
+        read_row(get_arg_val<uint32_t>(list_base + i));
+    }
+#else
     for (uint32_t p = 0; p < num_rows_to_process; ++p) {
         const uint32_t global_pair_idx = start_row + p;
 
@@ -122,6 +129,7 @@ void kernel_main() {
         read_row(heavy_global_row);
         read_row(light_global_row);
     }
+#endif
 #else
     // Standard mode: process rows sequentially.
     // Reads K, V and (USE_ATTN_MASK) mask in Sk_chunk_t-tile chunks. Causal K-count is

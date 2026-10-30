@@ -195,10 +195,31 @@ void SDPABackwardKVDeviceOperation::validate_on_program_cache_miss(
         "Mask tensor provided but mask_type is not Arbitrary. "
         "Use AttentionMaskType::Arbitrary to apply a custom mask, "
         "or remove the mask tensor for None/Causal modes.");
+
+    TT_FATAL(
+        !operation_attributes.head_split || operation_attributes.mask_type == AttentionMaskType::Causal,
+        "head_split is only implemented for the causal mask");
+    TT_FATAL(
+        !operation_attributes.head_split ||
+            (!tensor_args.preallocated_grad_key.has_value() && !tensor_args.preallocated_grad_value.has_value()),
+        "head_split writes fp32 per-head partials; preallocated outputs are not supported with it");
 }
 
 SDPABackwardKVDeviceOperation::spec_return_value_t SDPABackwardKVDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (operation_attributes.head_split) {
+        // fp32 partials, one per query head: (B, q_heads, S, kE) and (B, q_heads, S, vE).
+        const auto q_shape = tensor_args.query.logical_shape();
+        auto partial_spec = [&](const ttnn::Tensor& like) {
+            auto shape = like.logical_shape();
+            shape[1] = q_shape[1];
+            return tt::tt_metal::TensorSpec(
+                shape,
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, like.memory_config()));
+        };
+        return {partial_spec(tensor_args.key), partial_spec(tensor_args.value)};
+    }
     // Handle grad_key spec
     tt::tt_metal::TensorSpec grad_key_spec =
         tensor_args.preallocated_grad_key.has_value()
@@ -252,11 +273,12 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const ttnn::Tensor& u_scaler,
     const float dropout_probability,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_value,
+    const bool head_split) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.mask_type = mask_type, .dropout_probability = dropout_probability};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .mask_type = mask_type, .dropout_probability = dropout_probability, .head_split = head_split};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

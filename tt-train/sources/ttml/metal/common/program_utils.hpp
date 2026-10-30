@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <numeric>
 #include <tt-metalium/allocator.hpp>
 #include <type_traits>
+#include <vector>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -18,6 +21,46 @@ inline uint32_t get_block_size(uint32_t num_inner, const uint32_t max_block_size
         }
     }
     return 1U;
+}
+
+/**
+ *   Longest-processing-time-first schedule: every item goes to the least loaded core so far, heaviest item first.
+ *   Used by the causal SDPA kernels, whose per-row work is triangular; the per-core lists are passed as runtime
+ *   arguments (WORK_LIST mode) so no two cores differ by more than one item's weight.
+ */
+struct LptSchedule {
+    std::vector<std::vector<uint32_t>> items_per_core;  // item indices per core, heaviest first
+    uint32_t max_items{};                               // longest list
+    uint64_t max_load{};                                // heaviest core's summed weight
+};
+
+inline LptSchedule lpt_schedule(const std::vector<uint32_t>& weights, const uint32_t num_cores) {
+    TT_FATAL(num_cores > 0, "lpt_schedule: num_cores must be > 0");
+    LptSchedule schedule;
+    schedule.items_per_core.resize(num_cores);
+    std::vector<uint32_t> order(weights.size());
+    std::iota(order.begin(), order.end(), 0U);
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return weights[a] > weights[b]; });
+    std::vector<uint64_t> load(num_cores, 0U);
+    for (const uint32_t item : order) {
+        const auto core = static_cast<uint32_t>(std::min_element(load.begin(), load.end()) - load.begin());
+        schedule.items_per_core[core].push_back(item);
+        load[core] += weights[item];
+    }
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        schedule.max_items = std::max<uint32_t>(schedule.max_items, schedule.items_per_core[core].size());
+        schedule.max_load = std::max(schedule.max_load, load[core]);
+    }
+    return schedule;
+}
+
+/**
+ *   Runtime arguments of a WORK_LIST kernel: the fixed prefix, then the item count, then the items.
+ */
+inline std::vector<uint32_t> work_list_runtime_args(std::vector<uint32_t> prefix, const std::vector<uint32_t>& items) {
+    prefix.push_back(static_cast<uint32_t>(items.size()));
+    prefix.insert(prefix.end(), items.begin(), items.end());
+    return prefix;
 }
 
 /**

@@ -110,6 +110,13 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 - Chain `O/iter10.sh` -> `O/iter10.log`: harness `O/iter10_harness.log` 20 passed, gradient check `O/iter10_tp_grad_check_tp4.{log,npz}` PASS, `tp_measure.sh iter10_tp` after 600 s: `O/iter10_tp_mfu_tp4.log` **536.1 ms / 30.27 %**, tt-smi, profile `O/iter10_tp_tracy_tp4_4layers` -> `O/iter10_tp_analysis.txt`, `O/iter10_tp_ranked_ops.txt`.
 - The iteration-9 commit was made while this chain ran (its files only; the shared registration files were committed with the skinny lines stripped and restored afterwards).
 
+### Iteration 11: SDPA work distribution
+
+- Baseline of the old kernels at six shapes: `O/iter11_baseline.sh` -> `O/iter11_baseline.log` (outputs saved to the scratchpad `.npz`); build + standalone comparison + attention tests: `O/iter11_build_check.sh` -> `O/iter11_build_check.log` (`SKIP_BUILD=1` reruns without the build; kernels compile at runtime).
+- First comparison: forward and dQ bit-identical, dK / dV garbage under `HEAD_SPLIT`; the reduce alone checked against numpy through a new binding `ttml.ops.metal.sdpa_kv_bw_reduce` (PCC 0.999997) -> the fault was the KV kernel's conditional packer reconfig (fixed, see `../perf_analysis.md`, "Iteration 11").
+- Chain `O/iter11.sh` -> `O/iter11.log`: harness 35 passed, TP=4 gradient check PASS, cooled TP=4 MFU 524.7 ms / 30.92 % (`O/iter11_tp_mfu_tp4.*`), 4-layer TP profile `O/iter11_tp_tracy_tp4_4layers` (`O/iter11_tp_analysis.txt`, `O/iter11_tp_ranked_ops.txt`; chips 1.149-1.273 GHz, matmul rows equal on all four).
+- Code: `metal/common/program_utils.hpp` (`lpt_schedule`, `work_list_runtime_args`), `metal/ops/sdpa_fw/`, `metal/ops/sdpa_bw/` (work-list modes, head split, `sdpa_bw_kv_reduce_*` op and kernels), `nanobind/nb_ops.cpp`, `tests/python/test_mistral.py` (`test_sdpa_causal_gqa_forward_and_gradients`).
+
 ### Loss match and review round 6
 
 - Loss match after iterations 9 and 10: `O/iter10_loss.sh` -> `O/iter10_loss.log`: 8-layer real-weight host loss `O/iter10_train_8layers_hostloss.log` + `O/iter10_loss_8layers_hostloss.json` -> `O/iter10_loss_comparison.txt` (max |diff| 0.0273, PASS); TP=4 40 layers real weights `O/iter10_full_tp4_real.{log,json}` (baseline trajectory, 543.0 ms warm). Produced after commit `53ec655a9f9`, committed with the review-round-6 items.
@@ -142,6 +149,7 @@ Model `mistralai/Mistral-Small-24B-Base-2501` @ `b0a2e4e`, LoRA r16/a32 on all b
 | 10 | `53ec655a9f9` | K-split `skinny_matmul` op for the rank-wide LoRA products, routing in `lora.py` / `fused_lora.py`, iteration-10 evidence |
 | review 6 | `a492accb3a6` | review round 6 items: iteration-9 attribution restated, loss match after 9 and 10, `skinny_matmul` harness cases, README / work-log corrections |
 | review 6 close | `5084c423f54` | round-6 re-check clean-pass recorded, steady-step wording |
-| docs restructure | (uncommitted) | skimmable format for `perf_analysis.md`, README and this log; `O/perf_analysis_details.md` |
+| docs restructure | `884e0eedff6` | skimmable format for `perf_analysis.md`, README and this log; `O/perf_analysis_details.md` |
+| 11 | (this commit) | SDPA work lists (LPT) in the forward and Q backward, head-split KV backward with the `sdpa_bw_kv_reduce` op, harness cases, iteration-11 evidence |
 
 - Note on `O/iter1_loraapply_mfu_tp4_hot.json`: renamed after the fact from `iter1_loraapply_mfu_tp4.json` (its `args.loss_log` field still carries the old name); it is the hot-chip run of `perf_analysis.md`, "Iteration 1" / Ledger.

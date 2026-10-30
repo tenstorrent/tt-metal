@@ -476,6 +476,40 @@ def test_attention_forward_and_gradients():
     rep.done()
 
 
+@pytest.mark.parametrize(
+    "q_heads, kv_heads, seq",
+    [(8, 2, 1024), (8, 2, 2048), (4, 1, 1024)],
+    ids=["tp4-shard", "two-rows-per-core", "one-group"],
+)
+def test_sdpa_causal_gqa_forward_and_gradients(q_heads, kv_heads, seq):
+    """The SDPA kernels alone (LPT row lists; head-split KV backward with the per-head reduce) against torch
+    fp64 causal GQA attention: the TP=4 shard shape, a shape with several rows per core, a one-group shape."""
+    rng = seeded(11)
+    q_np = bf16(rng.normal(0, 1, (1, q_heads, seq, HEAD_DIM)))
+    k_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+    v_np = bf16(rng.normal(0, 1, (1, kv_heads, seq, HEAD_DIM)))
+    dout_np = bf16(rng.normal(0, 0.01, (1, q_heads, seq, HEAD_DIM)))
+    q, k, v = (to_device(a, requires_grad=True) for a in (q_np, k_np, v_np))
+    out = ttml.ops.attention.scaled_dot_product_attention(q, k, v)
+    out_val = to_host(out)
+    _backward(out, dout_np)
+
+    qr, kr, vr = t(q_np, True), t(k_np, True), t(v_np, True)
+    group = q_heads // kv_heads
+    kk, vv = kr.repeat_interleave(group, dim=1), vr.repeat_interleave(group, dim=1)
+    scores = (qr @ kk.transpose(-1, -2)) / math.sqrt(HEAD_DIM)
+    mask = torch.triu(torch.ones(seq, seq, dtype=torch.bool), diagonal=1)
+    ref = torch.softmax(scores.masked_fill(mask, float("-inf")), dim=-1) @ vv
+    ref.backward(t(dout_np))
+
+    rep = Report(f"sdpa causal GQA q{q_heads} kv{kv_heads} S{seq}")
+    rep.check("out", out_val, ref.detach().numpy(), FWD_PCC, FWD_REL)
+    rep.check("dQ", grad_of(q), qr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.check("dK", grad_of(k), kr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.check("dV", grad_of(v), vr.grad.numpy(), GRAD_PCC, GRAD_REL)
+    rep.done()
+
+
 def test_mlp_forward_and_gradients():
     rng = seeded(4)
     x_np = rand_x(rng)

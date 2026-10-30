@@ -44,7 +44,30 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-#ifdef BALANCED_PARALLELISM
+#ifdef WORK_LIST
+#ifdef HEAD_SPLIT
+    constexpr uint32_t items_per_row = heads_per_group;
+#else
+    constexpr uint32_t items_per_row = 1U;
+#endif
+    const uint32_t list_base = runtime_args_counter - 1U;
+    for (uint32_t i = 0; i < num_rows_to_process; ++i) {
+        const uint32_t item = get_arg_val<uint32_t>(list_base + i);
+        const uint32_t global_row_idx = item / items_per_row;
+        const uint32_t batch_idx = global_row_idx / (num_of_groups * Ht);
+        const uint32_t s_tile_idx = global_row_idx % Ht;
+        const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
+#ifdef HEAD_SPLIT
+        // fp32 partial of query head (group, item % heads_per_group): (B, q_heads, S, D) layout.
+        const uint32_t head_idx = item % items_per_row;
+        const uint32_t out_row = (batch_idx * q_heads + group_idx * heads_per_group + head_idx) * Ht + s_tile_idx;
+#else
+        const uint32_t out_row = (batch_idx * num_of_groups + group_idx) * Ht + s_tile_idx;
+#endif
+        write_tiles_by_row(cb_grad_value, grad_value_addr_generator, out_row * vWt, vWt, tile_bytes_v, vWt);
+        write_tiles_by_row(cb_grad_key, grad_key_addr_generator, out_row * kWt, kWt, tile_bytes_k, kWt);
+    }
+#elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     auto write_row = [&](const uint32_t global_row_idx) {

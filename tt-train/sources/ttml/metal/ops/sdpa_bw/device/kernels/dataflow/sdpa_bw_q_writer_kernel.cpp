@@ -75,7 +75,18 @@ void kernel_main() {
     };
 #endif
 
-#ifdef BALANCED_PARALLELISM
+#ifdef WORK_LIST
+    // Work-list mode: the runtime args from `start_row` on are this core's rows (heaviest first).
+    const uint32_t list_base = runtime_args_counter - 1U;
+    for (uint32_t i = 0; i < num_rows_to_process; ++i) {
+        const uint32_t r = get_arg_val<uint32_t>(list_base + i);
+        write_tiles_by_row(cb_grad_query, grad_query_addr_generator, r * qWt, qWt, tile_bytes, qWt);
+        write_u_scaler_for_row(r);
+#ifdef HAS_GATE
+        write_gate_outputs_for_row(r);
+#endif
+    }
+#elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx

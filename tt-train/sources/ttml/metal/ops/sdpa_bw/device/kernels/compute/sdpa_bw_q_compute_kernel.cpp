@@ -257,7 +257,12 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, onetile);
 #endif
 
-#ifdef BALANCED_PARALLELISM
+#ifdef WORK_LIST
+    // Work-list mode: arg0 = number of rows of this core, args 1.. = their global row indices (heaviest first).
+    for (uint32_t i = 0; i < start_idx; ++i) {
+        process_single_row(get_arg_val<uint32_t>(1U + i));
+    }
+#elif defined(BALANCED_PARALLELISM)
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     for (uint32_t p = 0; p < num_pairs; ++p) {
