@@ -78,9 +78,6 @@ enum class CceSenderStatusCode : uint32_t {
     // A PREFETCH layout or entry this sender cannot deliver: not receiver-contiguous, streaming, a selector, or other
     // than one group.
     BadLayout = 5,
-    // Unused: the sender checks no address, and Queue rejects a request that reads past its tensor or the sender's
-    // DRAM view.
-    AddrRange = 6,
 };
 
 // Written by the kernel at every state change; state is stored last, behind a fence.
