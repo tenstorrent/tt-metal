@@ -232,6 +232,11 @@ Two consequences follow automatically. Depth stops being synthetic — a slot pu
 `mid_end_prob` are bypassed. And a prompt longer than the per-user cache is clamped to
 `MAX_SEQ_LEN / CHUNK_SIZE` chunks with a warning, so distinct full-length traces still fit the KV budget.
 
+`PREFILL_PRODUCER_SLOT_LENGTHS="n0,n1,..."` keeps the one shared prompt but gives slot *i* a prompt of its
+first n_i tokens, so a test can mix lengths (a long prompt, a lone chunk, a partial last chunk) with a golden for
+every slot. Slots past the list keep random lengths. Each length must fit in whole chunks within
+`MAX_SEQ_LEN`, and it can't be combined with `PREFILL_PRODUCER_SLOT_TRACES`, whose traces set each slot's length.
+
 This is the discriminating multi-prompt check: with one shared prompt every slot's KV is identical, so
 crossed slot→prompt wiring or a slot-index bug in the address table still passes. Note that
 `slot_lengths` is keyed by slot, so with `max_requests > num_users` a recycled slot replays the *same*
