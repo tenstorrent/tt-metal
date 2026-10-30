@@ -19,6 +19,7 @@
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
+#include "program_builder.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
@@ -592,9 +593,6 @@ public:
     // The ProgramDescriptor path is something of a hack; it will eventually be deprecated in favor of Metal 2.0.
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
-    void validate_semaphore_id(const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const;
-
     bool runs_on_noc_multicast_only_cores();
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
@@ -702,19 +700,13 @@ private:
     ContextId context_id_{DEFAULT_CONTEXT_ID};
     uint32_t programmable_core_count_;
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
+    // Metal 1.0 construction state: kernels, circular buffers and semaphores
+    Metal1ProgramBuilder builder_;
     uint64_t id;        // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
     static std::atomic<uint64_t> program_counter;
-    // Programmable core type index -> KernelHandle -> Kernel
-    std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<CoreCoord> grid_extent_;
 
-    std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_;
-    std::unordered_map<CBHandle, std::shared_ptr<CircularBufferImpl>> circular_buffer_by_id_;
-    // Tracks which circular buffer indices are being used
-    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
-    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
-    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
     std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
     EphemeralAllocationMetadata cb_allocation_metadata_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
@@ -772,9 +764,6 @@ private:
     // rejects an is_metal2_kernel() kernel added to any other Program (e.g. the
     // ProgramDescriptor ctor path or a legacy CreateKernel program).
     bool created_from_spec_ = false;
-
-    // Semaphores
-    std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_{false};
