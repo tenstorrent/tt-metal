@@ -56,6 +56,13 @@ uint32_t remote_cb_pack(uint32_t num_receivers, uint32_t remote_pages_sent_ptr) 
            (remote_pages_sent_ptr & dev_msgs::REMOTE_CB_PACKED_ADDR_MASK);
 }
 
+// Bytes of one DRAM sender's pages_sent/pages_acked counters for `max_num_receivers_per_sender` receivers: packed
+// uint32 pairs for worker receivers, one line per counter for DRAM receivers (dram_receiver_config_page.hpp).
+uint32_t sender_counters_bytes(bool dram_receivers, uint32_t max_num_receivers_per_sender) {
+    return dram_receivers ? dram_receiver_sender_counters_bytes(max_num_receivers_per_sender)
+                          : 2 * sizeof(uint32_t) * max_num_receivers_per_sender;
+}
+
 // Body shared by the public Worker ctor and the private DRAM-sender ctor (with tag).
 // Populates the core sets and reports the per-sender max receiver count.
 void initialize_global_circular_buffer(
@@ -226,9 +233,7 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
     const uint32_t counters_alignment = has_dram_receivers()
                                             ? kDramReceiverLineBytes
                                             : MetalContext::instance(context_id).hal().get_alignment(HalMemType::L1);
-    const uint32_t pages_sent_bytes = has_dram_receivers()
-                                          ? dram_receiver_sender_counters_bytes(max_num_receivers_per_sender)
-                                          : 2 * sizeof(uint32_t) * max_num_receivers_per_sender;
+    const uint32_t pages_sent_bytes = sender_counters_bytes(has_dram_receivers(), max_num_receivers_per_sender);
     const uint32_t pages_sent_region = tt::align(pages_sent_bytes, counters_alignment);
     const uint32_t state_block_size = dram_sender_state_block_size(max_num_receivers_per_sender);
     drisc_sender_state_alloc_ =
@@ -295,9 +300,7 @@ void GlobalCircularBufferImpl::initialize_dram_sender_state_block(uint32_t max_n
     const auto& devices = device_->impl().get_devices();
     const Cluster& cluster = MetalContext::instance(extract_context_id(device_)).get_cluster();
     const std::vector<uint8_t> pages_sent_zero_bytes(
-        has_dram_receivers() ? dram_receiver_sender_counters_bytes(max_num_receivers_per_sender)
-                             : 2 * sizeof(uint32_t) * max_num_receivers_per_sender,
-        0);
+        sender_counters_bytes(has_dram_receivers(), max_num_receivers_per_sender), 0);
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
         const CoreCoord& sender_logical = sender_receiver_core_mapping_[s].first;
         const std::vector<CoreCoord>& receivers_vec = receiver_logical_cores_per_sender_[s];
