@@ -59,7 +59,8 @@ struct AttEndpointPrediction {
 };
 AttEndpointPrediction att_endpoint_for_remote_sram(uint32_t dest_cce);  // entry 64 + destination CCE
 // Entry for a GDDR copy from source_channel over d2d_port, the port the source CCE's CceSpaRoutes picks for the
-// destination. nullopt when that (Mimir, port) pair is not in the MMK table (0 over D2D1 -> 113, 1 over D2D0 -> 96).
+// destination. nullopt when that (Mimir, port) pair is not in the expected table (0 over D2D1 -> 113, 1 over D2D0 ->
+// 96).
 std::optional<AttEndpointPrediction> att_endpoint_for_remote_gddr(uint32_t source_channel, uint32_t d2d_port);
 struct D2dErrorSnapshot {
     std::vector<MimirRegister> debug_misc;
@@ -83,7 +84,7 @@ void dump_debug_last(const Cluster& cluster, const metal_SocDescriptor& soc, Chi
 // Host suites. Cached per process. "" = identity, setup and CCE remap match the Chippy values; otherwise the mismatch.
 // Uses MetalContext::instance().get_cluster(), so no initialize(). Call through MIMIR_REQUIRE_IDENTITY.
 const std::string& mimir_identity_result();
-// Remote suites, before CreateDevice. Cached per process.
+// Remote suites, before the device is opened. Cached per process.
 // "" = identity, SS_BAR, ATT and interleave match; otherwise the mismatch. No DMRISC registers. Call through
 // MIMIR_REQUIRE_REMOTE_PREFLIGHT.
 const std::string& mimir_remote_preflight_result();
@@ -103,9 +104,9 @@ const std::string& mimir_remote_preflight_result();
     }                                                                                                     \
     ASSERT_TRUE(::tt::tt_metal::mimir_test::mimir_remote_preflight_result().empty())                      \
         << ::tt::tt_metal::mimir_test::mimir_remote_preflight_result()
-// Remote suites, after CreateDevice. Chippy bring-up programs the DMRISC remap entries and nothing rewrites them.
-// Cached per process. Only valid after CreateDevice; call it once mimir_remote_preflight_result() is empty. "" = remap
-// start, end, remap_start and valid bit match UMD's values.
+// Remote suites, after the device is opened. Chippy bring-up programs the DMRISC remap entries and nothing rewrites
+// them. Cached per process. Only valid after the device is opened; call it once mimir_remote_preflight_result() is
+// empty. "" = remap start, end, remap_start and valid bit match UMD's values.
 const std::string& mimir_remote_remap_result();
 
 }  // namespace tt::tt_metal::mimir_test

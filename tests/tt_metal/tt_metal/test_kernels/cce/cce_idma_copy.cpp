@@ -253,7 +253,6 @@ static bool issue_one(
     return true;
 }
 
-// Issues command `command` of the batch on `trid`.
 template <CmdBuf CMDBUF>
 static bool issue_command(
     const BatchArgs& batch,

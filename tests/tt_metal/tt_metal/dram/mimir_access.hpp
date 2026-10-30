@@ -40,7 +40,6 @@
 
 namespace tt::tt_metal::mimir_test {
 
-// Host mirror of tt_metal/hw/inc/experimental/cce_gddr.h (device-only header).
 inline constexpr uint64_t kKiB = 1024;
 inline constexpr uint64_t kMiB = 1024 * kKiB;
 inline constexpr uint64_t kGiB = 1024 * kMiB;
@@ -372,7 +371,6 @@ private:
     std::shared_ptr<distributed::MeshDevice> mesh_;
 };
 
-// Launches `program` through slow dispatch and waits until its cores are idle.
 inline void launch_program_and_wait(IDevice* device, Program& program) {
     slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
     slow_dispatch::WaitProgramDone(*device, program);
@@ -400,7 +398,6 @@ inline uint64_t go_message_tl1_offset() {
     return MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG);
 }
 
-// The whole GO_MSG word of one CCE.
 inline uint32_t read_go_word(IDevice* device, uint32_t cce_index) {
     uint32_t go_word = 0;
     mimir_contract::read_cce_sram(
@@ -450,7 +447,6 @@ inline void require_idle_cces(IDevice* device, const std::vector<CceKernelLaunch
     }
 }
 
-// Adds one kernel per launch to `program`, with its runtime args.
 inline void add_cce_kernels(IDevice* device, Program& program, const std::vector<CceKernelLaunch>& launches) {
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     for (const CceKernelLaunch& launch : launches) {

@@ -314,7 +314,6 @@ std::vector<uint32_t> amo_args(const AmoLaunch& launch) {
     return args;
 }
 
-// One launch per participant, participant p on hart p of `cce_index`, all at `layout`.
 std::vector<AmoLaunch> participant_launches(
     uint32_t cce_index, uint32_t mode, uint32_t num_participants, const AmoLayout& layout) {
     std::vector<AmoLaunch> launches;
@@ -397,7 +396,6 @@ std::vector<uint32_t> idma_args(const IdmaBatch& batch) {
     return args;
 }
 
-// An accumulate batch on `hart` of `cce_index` from the start of the hart's data area into its destination area.
 IdmaBatch own_accumulate(uint32_t cce_index, uint32_t hart) {
     return IdmaBatch{
         .cce_index = cce_index,
@@ -408,7 +406,6 @@ IdmaBatch own_accumulate(uint32_t cce_index, uint32_t hart) {
         .destination_offset = tl1_data(hart) + kAccumulateDestinationFromData};
 }
 
-// Every kernel of one Program and the done magic of its status line.
 struct ProgramLaunches {
     std::vector<CceKernelLaunch> kernels;
     std::vector<uint32_t> done_magics;

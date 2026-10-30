@@ -37,14 +37,14 @@ namespace tt::tt_metal::mimir_test::local_dram {
 
 namespace abi = cce_idma_copy_abi;
 
-// Destination slots hold [guard | region | guard]. A slot is one 4 KiB region plus both guards, so slots
-// never overlap and every slot offset is 64-byte aligned.
+// Destination slots hold [guard | region | guard]. A slot is one 4 KiB region plus both guards, so slots never
+// overlap and every slot offset is 64-byte aligned.
 constexpr uint32_t kMaxSlotRegionBytes = 4096;
 constexpr uint64_t kSlotStrideBytes = kMaxSlotRegionBytes + 2 * kGuardBytes;
 constexpr uint32_t kDestinationPoisonWord = 0xDEADBEEFu;
 constexpr uint64_t kCopyTestBytes = 4 * kKiB;
 constexpr const char* kIdmaCopyKernel = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
-// A launch shares one poll budget across its waits, so one budget plus launch.
+// A launch shares one poll budget across its waits, so the host deadline covers one budget plus the launch.
 constexpr std::chrono::seconds kHostDeadline{300};
 // Own-TL1 destinations of a launch in which every hart copies into TL1 sit back to back from here, in hart 0's data
 // area above every hart's sources. Status lines (tl1_done_block) sit below every data area.
@@ -69,7 +69,6 @@ uint64_t window_begin_of(const MimirAnchor& anchor, uint64_t unreserved) {
 
 uint64_t window_end_of(const MimirAnchor& anchor) { return anchor.view_offset + kAnchorBytes; }
 
-// True when the anchor window, inside the view and at or above UNRESERVED, holds `bytes` contiguous bytes.
 bool window_holds_bytes(
     const metal_SocDescriptor& soc, const MimirAnchor& anchor, uint64_t unreserved, uint64_t bytes) {
     const uint64_t window_begin = window_begin_of(anchor, unreserved);
@@ -103,7 +102,6 @@ uint64_t slot_block_begin(const MimirAnchor& anchor, uint64_t unreserved, uint32
     return window_begin_of(anchor, unreserved) + slot * kSlotStrideBytes;
 }
 
-// View offset of the region in slot `slot` of `slot_count` slots; the slot's guard before starts at its block.
 uint64_t slot_data_offset(const MimirAnchor& anchor, uint64_t unreserved, uint32_t slot, uint32_t slot_count) {
     return slot_block_begin(anchor, unreserved, slot, slot_count) + kGuardBytes;
 }
@@ -243,7 +241,6 @@ struct PollRegion {
     uint32_t expected_xor = 0;
 };
 
-// The poll region of back-to-back guarded blocks from `tl1_offset`, which must end up holding `final_blocks`.
 PollRegion poll_region_over(uint64_t tl1_offset, const std::vector<std::vector<uint32_t>>& final_blocks) {
     PollRegion region{.tl1_offset = tl1_offset};
     for (const std::vector<uint32_t>& block : final_blocks) {
@@ -433,7 +430,7 @@ struct HostCopyModel {
 
 class MimirLocalDram : public ::testing::TestWithParam<uint32_t> {};
 
-// CCE c writes its own TL1 to every local DRAM view, from all 8 harts, at every anchor.
+// CCE c writes its own TL1 to every local DRAM view, from every hart, at every anchor.
 TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();
@@ -550,7 +547,6 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
                     local_mimir,
                     view);
                 mimir_contract::write_gddr_view(session.mesh(), view, data_offset, source);
-                // The TL1 destination is the payload of a guarded block.
                 write_cce_tl1(device, cce_index, block_offset, with_guards(hart, poison_payload(region_words)));
                 expected_blocks.push_back(with_guards(hart, source));
                 copies.push_back(HartCopy{
@@ -582,9 +578,9 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
     }
 }
 
-// DRAM -> TL1 -> a different DRAM slot, per hart. The second slot of each hart sits 8 slots up in the same anchor.
-// The two copies are separate launches (no kernel mode waits on one copy before issuing the next), so the host orders
-// them and checks the intermediate TL1 in between; the CCE's own ordering is not tested.
+// DRAM -> TL1 -> a different DRAM slot, per hart. The second slot of each hart sits cce_hart_count() slots up in the
+// same anchor. The two copies are separate launches (no kernel mode waits on one copy before issuing the next), so the
+// host orders them and checks the intermediate TL1 in between; the CCE's own ordering is not tested.
 TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
     skip_unless_programmable_dram_package();
     skip_unless_mimir_local_package();

@@ -628,7 +628,7 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
             }
         }
 
-        // The runtime writes the reset vector once, to hart 0's register, and relies on it reaching all eight harts.
+        // The runtime writes the reset vector once, to hart 0's register, and relies on it reaching every hart.
         ASSERT_NO_FATAL_FAILURE(poison_cce_reset_vectors(cluster, chip, cce_index));
         const Hal& hal = MetalContext::instance().hal();
         const uint32_t fw_launch_addr_value =

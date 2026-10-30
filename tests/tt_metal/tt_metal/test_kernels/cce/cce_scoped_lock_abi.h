@@ -70,9 +70,9 @@ inline constexpr uint32_t kMaxConsumers = 7;
 constexpr uint32_t ring_word(uint32_t round, uint32_t word) { return (kNewBase << 16) | (round << 8) | word; }
 
 // Consumer result lines, written through the uncached alias: word l of a line is line l's probe word.
-// kResultWarm: the cached reads before the lock (kModeInvalidateOnAcquire). kResultCached: the cached reads after the
-// lock (kModeInvalidateOnAcquire). kResultUncached: the uncached reads after the producer published (both modes).
-// Lines a mode does not write keep the host's fill.
+// kResultWarm: the cached reads before the lock. kResultCached: the cached reads after the lock. Both are written by
+// every mode except kModeFlushOnRelease and kModeRingWrap. kResultUncached: the uncached reads after the producer
+// published, written by every mode except kModeRingWrap. Lines a mode does not write keep the host's fill.
 inline constexpr uint32_t kResultWarm = 0, kResultCached = 1, kResultUncached = 2, kNumResultLines = 3;
 
 // Status line, one per hart, written once at exit: every field, `fence w, w`, then the magic. kStatusFlags holds the

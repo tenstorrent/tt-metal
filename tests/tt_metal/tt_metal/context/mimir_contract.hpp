@@ -91,7 +91,7 @@ inline bool device_transport_configured() {
 inline bool slow_dispatch_requested() { return std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
 
 // The package file, not the transport. Opening the device is what makes a skipped case slow, so
-// callers decide from this before CreateDevice.
+// callers decide from this before opening it.
 inline const metal_SocDescriptor& configured_soc_desc() {
     static const metal_SocDescriptor desc = [] {
         const char* path = selected_soc_desc_path();
@@ -461,7 +461,7 @@ inline uint64_t cce_sram_noc_addr(uint64_t offset) {
            offset;
 }
 
-// The SPA routes CreateDevice wrote to one CCE, right after its bank-to-NOC staging range.
+// The SPA routes device initialization wrote to one CCE, right after its bank-to-NOC staging range.
 inline CceSpaRoutes read_cce_spa_routes(IDevice* device, uint32_t cce_index) {
     const Hal& hal = MetalContext::instance().hal();
     const uint64_t routes_noc_addr =

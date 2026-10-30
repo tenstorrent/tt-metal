@@ -295,9 +295,9 @@ TEST_P(MimirKernelLoad, ArgsReplaceStale) {
     }
 }
 
-// CloseDevice then CreateDevice in one process reloads and resets nothing: MetalContext::initialize returns early
-// on unchanged parameters (metal_context.cpp:203-205) and CCE harts are reset only at MetalContext teardown. So the
-// launch after the reopen runs on the firmware loaded by the first open. Reset and reload on every open is
+// Closing the device and opening it again in one process reloads and resets nothing: MetalContext::initialize returns
+// early on unchanged parameters (metal_context.cpp:203-205) and CCE harts are reset only at MetalContext teardown. So
+// the launch after the reopen runs on the firmware loaded by the first open. Reset and reload on every open is
 // MimirFwReinit (TT_METAL_FORCE_REINIT).
 TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
     skip_unless_programmable_dram_package();

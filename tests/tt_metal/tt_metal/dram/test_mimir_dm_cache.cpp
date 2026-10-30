@@ -138,7 +138,6 @@ std::string status_detail(const std::vector<uint32_t>& status) {
         status[abi::kStatusCycles]);
 }
 
-// Writes the old pattern and a guard line after it.
 void prefill(IDevice* device, uint64_t data_offset, uint32_t num_words, uint32_t tag) {
     std::vector<uint32_t> words = pattern_words(kOldValue, num_words);
     const std::vector<uint32_t> guard = make_guard(tag);
@@ -146,7 +145,6 @@ void prefill(IDevice* device, uint64_t data_offset, uint32_t num_words, uint32_t
     write_cce_tl1(device, kCce, data_offset, words);
 }
 
-// Checks the host's view of the data and the guard after it.
 void expect_host_data(
     IDevice* device,
     uint64_t data_offset,
@@ -396,7 +394,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 // MM41 probes (plan increment 1). Each runs on every CCE of the descriptor.
 
-// Null kernels on all eight harts: well under one poll budget.
+// Null kernels on every hart: well under one poll budget.
 inline constexpr std::chrono::seconds kProbeHostDeadline{300};
 inline constexpr uint32_t kSnoopMasterDefault = 0x6;
 
@@ -828,7 +826,6 @@ uint32_t idma_success_code(const IdmaWriter& writer) {
     return writer.host_verified ? idma_abi::kCodeAcked : idma_abi::kCodeLanded;
 }
 
-// Writes `words` and a guard after them to a CCE's TL1.
 void prefill_on_cce(
     IDevice* device, uint32_t cce_index, uint64_t offset, const std::vector<uint32_t>& words, uint32_t tag) {
     std::vector<uint32_t> filled = words;
@@ -1218,9 +1215,9 @@ protected:
     // nothing has shown). The writer then runs cflush.d.l1 per line, with no L2 flush, and sets a third flag; the
     // reader discards the region from its L1 D$ only and must read the writer's words new through the shared L2. The
     // writer then range-flushes and drains its words and sets a second flag; the reader invalidates the region and
-    // must read the writer's words new, every other word old. EightWriters: every hart
-    // stores its words for kSharedPasses passes at once, then flushes them; TL1 must hold every hart's last values
-    // (SameLineSameOffset: each word is some hart's last value).
+    // must read the writer's words new, every other word old. EightWriters: every hart stores its words for
+    // kSharedPasses passes at once, then flushes them; TL1 must hold every hart's last values (SameLineSameOffset: each
+    // word is some hart's last value).
     void run_layout(const SharedLayout& layout) {
         const uint32_t cce_index = std::get<0>(GetParam());
         const SharedForm form = std::get<1>(GetParam());
@@ -1559,11 +1556,10 @@ protected:
 // writer's TL1 writes reach the reader's cached copy, separating L2 from L1 D$ with a per-line discard. Gates on the
 // warm read seeing the old values, on the invalidated read being fresh (SnoopOffInvalidate, InvalidateOnly), on a
 // snooped writer refreshing the cached copy with no invalidate (SnoopOn, SiblingSpa only: R2's RegionAttrs cmd_snoop
-// per GRENSV-2290), and on the data in TL1. Every writer waits for
-// the reader's warmed flag; a same-CCE iDMA writer starts with the reader in one Program and polls the flag before it
-// issues. The iDMA writer writes 56 KiB of which the reader's lines are the end, so the reader also waits for the
-// writer's done magic, which the writer stores only after its whole destination has landed, before any store of its own
-// (MIM-560).
+// per GRENSV-2290), and on the data in TL1. Every writer waits for the reader's warmed flag; a same-CCE iDMA writer
+// starts with the reader in one Program and polls the flag before it issues. The iDMA writer writes 56 KiB of which
+// the reader's lines are the end, so the reader also waits for the writer's done magic, which the writer stores only
+// after its whole destination has landed, before any store of its own (MIM-560).
 TEST_P(MimirCacheWriterProbe, ExternalWriters) {
     const uint32_t cce_index = std::get<0>(GetParam());
     const ExternalWriter writer = std::get<1>(GetParam());
@@ -2008,9 +2004,8 @@ protected:
 // packet tag applies to the sibling's writes (GRENSV-3774, GRENSV-1577). The external words must survive under every
 // configuration. On the Neighbour legs the hart's words must survive too under the configurations with inline writes
 // enabled (bit 0 clear) unless the action is INVALIDATE64 (which may drop them); under the others they are recorded.
-// The configuration is restored when the case ends. A leg whose
-// hart ran out of budget before it read the external words stops the case: the iDMA may still be in flight
-// (MIM-601).
+// The configuration is restored when the case ends. A leg whose hart ran out of budget before it read the external
+// words stops the case: the iDMA may still be in flight (MIM-601).
 TEST_P(MimirCacheCoherenceRace, DirtyLineRace) {
     const uint32_t cce_index = std::get<0>(GetParam());
     const uint32_t config = std::get<1>(GetParam());
@@ -2456,7 +2451,7 @@ TEST_P(MimirCacheStress, PerfSweep) {
 
 INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheStress, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
-// MM4x compile-only row: every MM4x kernel JIT-compiles for all eight harts of CCE 0, with nothing launched.
+// MM4x compile-only row: every MM4x kernel JIT-compiles for every hart of CCE 0, with nothing launched.
 inline constexpr const char* kMm4xKernels[] = {
     "tests/tt_metal/tt_metal/test_kernels/cce/cce_cache_ops.cpp",
     "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp",
