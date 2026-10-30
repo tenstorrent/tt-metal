@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <optional>
 #include <set>
@@ -259,6 +260,26 @@ std::vector<tt::tt_metal::CoreCoord> build_matmul_ring_cores(
     ttnn::MeshDevice* mesh_device, uint32_t ring_size, const CoreCoordPairSet& mux_pairs) {
     auto cores = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
     const uint32_t num_banks = static_cast<uint32_t>(cores.size());
+
+    // MOE_COMPUTE_PIN_EAST_X=<x> (experiment, default off): the "optimal" bank -> worker assignment differs per chip
+    // with harvesting (east column at logical x=7 on some chips, x=6 on others). With x=6 the east-bank read responses
+    // wrap the NOC0 torus along the row of the west core of the same row (y=11 virtual) and the two cores read ~1.5x
+    // slower, stalling the whole ring. Pin every east bank core to x.
+    if (const char* pe = std::getenv("MOE_COMPUTE_PIN_EAST_X");
+        pe != nullptr && std::atoi(pe) > 0 && mesh_device->arch() == tt::ARCH::BLACKHOLE) {
+        const uint32_t px = static_cast<uint32_t>(std::atoi(pe));
+        uint32_t min_x = 1u << 30, max_x = 0;
+        for (const auto& c : cores) {
+            min_x = std::min<uint32_t>(min_x, c.x);
+            max_x = std::max<uint32_t>(max_x, c.x);
+        }
+        const uint32_t mid = (min_x + max_x) / 2;
+        for (auto& c : cores) {
+            if (c.x > mid) {
+                c.x = px;
+            }
+        }
+    }
 
     if (num_banks >= ring_size) {
         cores.resize(ring_size);
