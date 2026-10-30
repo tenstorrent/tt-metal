@@ -39,6 +39,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_manifest/test_fabric_manifest.cpp
     fabric_manifest/test_fabric_manifest_docs.cpp
     fabric_manifest/test_fabric_manifest_writer.cpp
+    fabric_manifest/test_fabric_manifest_type_registry.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
     fabric_data_movement/test_mesh_multicast_source_inject.cpp
