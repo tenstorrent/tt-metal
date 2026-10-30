@@ -716,14 +716,10 @@ class GLM53FlashForCausalLM:
         # Written and consumed on the read path only (the reads of a chain land in submission order), never by the
         # staging thread, which under vLLM's async scheduling stages step N + 1 before step N's read landed
         self._last_sampled: dict[tuple[int, int], int] = {}
-        # GLM53_DECODE_REPLAY_BLOCKING=0: the decode replay returns at enqueue and the plugin's async read event (or a
-        # blocking read) completes the step, so the engine thread builds step N + 1 while the device runs step N
-        self._replay_blocking = os.environ.get(REPLAY_BLOCKING_ENV, "1").strip().lower() not in (
-            "0",
-            "false",
-            "no",
-            "off",
-        )
+        # the decode replay returns at enqueue and the plugin's async read event (or a blocking read) completes the
+        # step, so the engine thread builds step N + 1 while the device runs step N; GLM53_DECODE_REPLAY_BLOCKING=1
+        # restores the blocking replay (the A/B control: 68.2 vs 59.5 ms ITL at 32 users, 129 vs 108 at 128, 2026-10-30)
+        self._replay_blocking = os.environ.get(REPLAY_BLOCKING_ENV, "0").strip().lower() in ("1", "true", "yes", "on")
         if self.resident:
             if self.spec is not None:
                 raise NotImplementedError(

@@ -890,13 +890,13 @@ def test_decode_reload_contract_is_enforced(monkeypatch):
     out2b = a.decode_forward(torch.zeros_like(tokens), torch.tensor([41, -1, -1, -1]), reload_inputs=False, **kw)
     assert int(out2b[0, 0]) == _next_token(_next_token(t1, 41), 42) and a.slots.physical(0).position == 43
     assert a._perf_stale_positions == 1
-    assert ("replay", True) in m.calls and ("replay", False) not in m.calls
-    # GLM53_DECODE_REPLAY_BLOCKING=0: the served replay returns at enqueue (the plugin's read event completes the step)
-    monkeypatch.setenv(REPLAY_BLOCKING_ENV, "0")
+    assert ("replay", False) in m.calls and ("replay", True) not in m.calls  # the default: non-blocking
+    # GLM53_DECODE_REPLAY_BLOCKING=1: the blocking replay (the A/B control)
+    monkeypatch.setenv(REPLAY_BLOCKING_ENV, "1")
     b, mb = _adapter()
     b.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
     b.decode_forward(tokens, positions, reload_inputs=True, **kw)
-    assert not b._replay_blocking and ("replay", False) in mb.calls
+    assert b._replay_blocking and ("replay", True) in mb.calls
     monkeypatch.delenv(REPLAY_BLOCKING_ENV)
     with expect_error(RuntimeError, "diverged"):
         a.decode_forward(tokens, torch.tensor([50, -1, -1, -1]), reload_inputs=False, **kw)
