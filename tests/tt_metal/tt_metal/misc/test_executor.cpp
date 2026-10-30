@@ -10,6 +10,7 @@
 #include <future>
 #include <stdexcept>
 #include <thread>
+#include <vector>
 #include <unistd.h>
 #include <vector>
 
@@ -22,6 +23,71 @@ TEST(ExecutorTest, AsyncRunsInline) {
     auto fut = detail::async([&value] { value.store(42); });
     fut.get();
     EXPECT_EQ(value.load(), 42);
+}
+
+// Holds every executor worker in a job until release() is called.
+class BusyWorkers {
+public:
+    BusyWorkers() {
+        const size_t workers = detail::GetExecutor().num_workers();
+        for (size_t i = 0; i < workers; ++i) {
+            jobs_.push_back(detail::async([this] {
+                started_.fetch_add(1);
+                released_.wait();
+            }));
+        }
+        while (started_.load() < workers) {
+            std::this_thread::yield();
+        }
+    }
+    void release() {
+        gate_.set_value();
+        for (auto& job : jobs_) {
+            job.get();
+        }
+    }
+
+private:
+    std::promise<void> gate_;
+    std::shared_future<void> released_ = gate_.get_future().share();
+    std::atomic<size_t> started_{0};
+    std::vector<std::shared_future<void>> jobs_;
+};
+
+TEST(ExecutorTest, AsyncQueuesFromNonWorkerWhenWorkersBusy) {
+    BusyWorkers busy;
+    std::atomic<bool> ran{false};
+    std::atomic<int> ran_on_worker{-1};
+    auto fut = detail::async([&] {
+        ran_on_worker.store(detail::GetExecutor().this_worker_id());
+        ran.store(true);
+    });
+    // Run inline, the job would have finished on this thread before async returned.
+    EXPECT_FALSE(ran.load());
+    busy.release();
+    fut.get();
+    EXPECT_GE(ran_on_worker.load(), 0);
+}
+
+TEST(ExecutorTest, AsyncRunsInlineOnWorkerWhenWorkersBusy) {
+    const size_t workers = detail::GetExecutor().num_workers();
+    std::atomic<size_t> started{0};
+    std::atomic<size_t> inner_done{0};
+    std::vector<std::shared_future<void>> outer;
+    for (size_t i = 0; i < workers; ++i) {
+        outer.push_back(detail::async([&] {
+            started.fetch_add(1);
+            while (started.load() < workers) {
+                std::this_thread::yield();
+            }
+            // Every worker waits here, so a queued job would never run.
+            detail::async([&] { inner_done.fetch_add(1); }).get();
+        }));
+    }
+    for (auto& f : outer) {
+        f.get();
+    }
+    EXPECT_EQ(inner_done.load(), workers);
 }
 
 TEST(ExecutorTest, RunAllLetsWorkersThatFreeUpTakeQueuedJobs) {
