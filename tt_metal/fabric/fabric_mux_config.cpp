@@ -8,7 +8,10 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt_stl/assert.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_mux_program_local_l1.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -243,7 +246,10 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
         static_cast<uint32_t>(num_full_size_channel_iters_),
         static_cast<uint32_t>(num_iters_between_teardown_checks_),
         core_type_index_,
-        (uint32_t)wait_for_fabric_endpoint_ready_};
+        (uint32_t)wait_for_fabric_endpoint_ready_,
+        static_cast<uint32_t>(in_program_local_l1_),
+        program_local_l1_cb_index_,
+        l1_base_semaphore_id_};
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
@@ -443,6 +449,45 @@ void FabricMuxConfig::validate_channel_id(FabricMuxChannelType channel_type, uin
 uint8_t FabricMuxConfig::get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const {
     return (channel_type == FabricMuxChannelType::HEADER_ONLY_CHANNEL) ? num_full_size_channels_ + channel_id
                                                                        : channel_id;
+}
+
+uint32_t FabricMuxConfig::validate_program_local_l1_placement() const {
+    TT_FATAL(!in_program_local_l1_, "Fabric mux config is already placed in program-local L1");
+    TT_FATAL(
+        core_type_ == CoreType::WORKER,
+        "Only a worker-core fabric mux can be placed in program-local L1, not a {} mux",
+        enchantum::to_string(core_type_));
+    TT_FATAL(
+        status_region_.base_address == 0,
+        "A fabric mux placed in program-local L1 must be configured with base_l1_address = 0 so its addresses are "
+        "offsets into the map, but base_l1_address is {}",
+        status_region_.base_address);
+    return static_cast<uint32_t>(tt::align(memory_map_end_address_, noc_aligned_address_size_bytes_));
+}
+
+void FabricMuxConfig::place_in_program_local_l1(
+    tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores) {
+    const uint32_t map_size = validate_program_local_l1_placement();
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(desc, mux_cores, map_size);
+    in_program_local_l1_ = true;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+}
+
+void FabricMuxConfig::place_in_program_local_l1(
+    tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores) {
+    const uint32_t map_size = validate_program_local_l1_placement();
+    const auto placement = detail::reserve_fabric_mux_program_local_l1(program, mux_cores, map_size);
+    in_program_local_l1_ = true;
+    program_local_l1_cb_index_ = placement.cb_index;
+    l1_base_semaphore_id_ = placement.l1_base_semaphore_id;
+}
+
+bool FabricMuxConfig::is_in_program_local_l1() const { return in_program_local_l1_; }
+
+uint32_t FabricMuxConfig::get_l1_base_semaphore_id() const {
+    TT_FATAL(in_program_local_l1_, "Fabric mux config is not placed in program-local L1, so it has no base semaphore");
+    return l1_base_semaphore_id_;
 }
 
 std::vector<std::pair<size_t, size_t>> FabricMuxConfig::get_memory_regions_to_clear() const {

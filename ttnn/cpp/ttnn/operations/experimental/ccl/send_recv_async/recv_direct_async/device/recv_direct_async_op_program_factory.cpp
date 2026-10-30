@@ -16,6 +16,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
@@ -39,7 +40,8 @@ ReceiverConnections collect_receiver_connections(
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     ReceiverConnections connections;
     for (const auto& connection : mesh_socket.get_config().socket_connection_config) {
-        if (socket_mesh_device->get_device(connection.receiver_core.device_coord)->id() == target_device->id()) {
+        if (tt::tt_metal::internal::get_device(*socket_mesh_device, connection.receiver_core.device_coord)->id() ==
+            target_device->id()) {
             connections.core_coords.push_back(connection.receiver_core.core_coord);
             connections.receiver_fabric_node_ids.push_back(
                 output_tensor.device()->get_fabric_node_id(connection.receiver_core.device_coord));

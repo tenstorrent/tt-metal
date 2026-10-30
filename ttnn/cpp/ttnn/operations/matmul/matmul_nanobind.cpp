@@ -523,8 +523,8 @@ void py_module(nb::module_& mod) {
             compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
         )doc")
         .def_rw("stream_in1", &MatmulMultiCoreReuseMultiCast1DProgramConfig::stream_in1, R"doc(
-            Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB or with
-            PrefetcherPipes. The weight MUST be queued with the ``(weight, block_count, rotation)``
+            Select ring-rotated FIFO delivery for gather_in0 over PrefetcherPipes. The weight MUST
+            be queued with the ``(weight, block_count, rotation)``
             request form. Without it, gather_in0 over PrefetcherPipes takes its K-blocks in K order,
             into a pipe ring that holds the whole layer.
             mcast_in0 consumes natural FIFO order and requires this flag to remain false. Defaults
@@ -789,7 +789,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
-            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): GlobalCircularBuffer the worker-core prefetcher (``ttnn.dram_prefetcher``) streams in1 K-blocks through. Defaults to `None`.
             prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
 
         Returns:
@@ -919,7 +919,7 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
-            global_cb (ttnn.GlobalCircularBuffer, optional): DRAM-sender GlobalCircularBuffer the Tensor prefetcher streams in1 K-blocks through. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): GlobalCircularBuffer the worker-core prefetcher (``ttnn.dram_prefetcher``) streams in1 K-blocks through. Defaults to `None`.
             prefetcher_pipes (List[ttnn.experimental.PrefetcherPipe], optional): PrefetcherPipes that deliver in1 K-blocks into the workers, as an alternative to :attr:`global_cb`: every pipe of one ``create_prefetcher_pipes_for_tensor_prefetcher`` call, or worker-sender pipes whose producer delivers the receiver at row-major position ``i`` the K-blocks of output column block ``i``, in K order. Supported for ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` with ``mcast_in0=True`` or ``gather_in0=True``. For ``gather_in0`` the producer delivers each worker its K-blocks one in0 shard deep, in ring order starting with the K-block of its own in0 shard when ``stream_in1=True``, in K order otherwise, into a pipe ring that holds them all. Keep the pipes alive for as long as the program cache may hold a program built against them. Defaults to an empty list (none).
             in0_column_offset (int, optional): read input_tensor_a's K columns starting at this tile-aligned column of a wider interleaved input_tensor_a, whose width only needs to hold ``in0_column_offset + K`` columns, instead of all of its columns. Requires a ``MatmulMultiCoreReuseMultiCastProgramConfig``, an interleaved (DRAM or L1) input_tensor_a and no ``transpose_a``. Defaults to `None`.
 

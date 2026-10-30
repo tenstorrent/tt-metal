@@ -290,7 +290,30 @@ public:
     // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
+    // Places the mux's L1 map in program-local L1, where the program's circular buffers go, instead of at the fixed
+    // base_l1_address: adds a circular buffer on `mux_cores`, at the lowest index free on all of them, to hold the
+    // map, and a semaphore on `mux_cores` in which the mux publishes the map's address once it is ready for traffic.
+    // A circular buffer added later on a mux core must use another index. Persistent L1 on those
+    // cores, such as a PrefetcherPipe ring, then stays below the map instead of under it.
+    //
+    // The config must be built with base_l1_address = 0, so every address getter returns an offset into the map.
+    // A client passes those offsets and get_l1_base_semaphore_id(), in place of get_status_address(), to
+    // build_connection_to_program_local_fabric_mux() (tt_fabric_mux_interface.hpp), which waits for the map's address
+    // and adds it to them.
+    // Worker muxes only. Call before get_fabric_mux_compile_time_args().
+    void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
+    void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);
+
+    bool is_in_program_local_l1() const;
+
+    // Semaphore, the same id on every mux core, in which a mux placed in program-local L1 publishes the L1 address of
+    // its map. Requires is_in_program_local_l1().
+    uint32_t get_l1_base_semaphore_id() const;
+
 private:
+    // Checks that this config can move to program-local L1 and returns the size of the circular buffer that holds it.
+    uint32_t validate_program_local_l1_placement() const;
+
     // Returns the base compile time args without stream IDs
     std::vector<uint32_t> get_fabric_mux_compile_time_main_args(
         const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
@@ -349,6 +372,11 @@ private:
     MemoryRegion header_only_channels_region_{};
 
     size_t memory_map_end_address_;
+
+    // Set by place_in_program_local_l1.
+    bool in_program_local_l1_ = false;
+    uint8_t program_local_l1_cb_index_ = 0;
+    uint32_t l1_base_semaphore_id_ = 0;
 };
 
 /*
@@ -393,6 +421,17 @@ public:
     // Exclusive end of the mux L1 map (for host-side L1 budgeting / placement).
     size_t get_memory_map_end_address() const;
 
+    // Places the mux's L1 map in program-local L1, where the program's circular buffers go, instead of at the fixed
+    // base_l1_address: adds a circular buffer on `mux_cores`, at the lowest index free on all of them, to hold the
+    // map, and a semaphore on `mux_cores` in which the mux publishes the map's address when it starts. A circular
+    // buffer added later on a mux core must use another index. Persistent L1 on those cores, such as
+    // a PrefetcherPipe ring, then stays below the map instead of under it. The config must be built with
+    // base_l1_address = 0. Clients need no change: append_client_connection_rt_args passes the semaphore, and
+    // FabricMuxV2Sender adds the published address before it opens. Call before add_fabric_mux_v2_to_program for
+    // any of `mux_cores`.
+    void place_in_program_local_l1(tt::tt_metal::ProgramDescriptor& desc, const tt::tt_metal::CoreRangeSet& mux_cores);
+    void place_in_program_local_l1(tt::tt_metal::Program& program, const tt::tt_metal::CoreRangeSet& mux_cores);
+
 private:
     friend void add_fabric_mux_v2_to_program(
         tt::tt_metal::Program& program,
@@ -425,6 +464,8 @@ private:
 
     std::unordered_map<std::string, uint32_t> get_fabric_mux_v2_named_compile_time_args() const;
     void validate_logical_channel_id(uint8_t logical_channel_id) const;
+    // Checks that this config can move to program-local L1 and returns the size of the circular buffer that holds it.
+    uint32_t validate_program_local_l1_placement() const;
 
     struct MemoryRegion {
         size_t base_address = 0;
@@ -455,6 +496,11 @@ private:
     MemoryRegion credit_notify_scratch_region_;
 
     size_t memory_map_end_address_ = 0;
+
+    // Set by place_in_program_local_l1.
+    bool in_program_local_l1_ = false;
+    uint8_t program_local_l1_cb_index_ = 0;
+    uint32_t l1_base_semaphore_id_ = 0;
 };
 
 void add_fabric_mux_v2_to_program(

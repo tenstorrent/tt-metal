@@ -22,6 +22,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <internal/mesh_device.hpp>
 
 using namespace tt::constants;
 
@@ -58,7 +59,7 @@ tt::tt_metal::Program create_send_async_program(
     tt::tt_fabric::FabricNodeId upstream_fabric_node_id = recv_socket.get_fabric_node_id(
         tt::tt_metal::distributed::SocketEndpoint::SENDER, recv_conn.sender_core.device_coord);
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     // Use mesh_device allocator - in practice all devices in a mesh share the same allocator configuration
     auto max_alignment = std::max(
@@ -193,7 +194,7 @@ void send_async(
 
     const auto& device_coord = socket_connections[0].sender_core.device_coord;
     TT_FATAL(
-        mesh_device->get_device(device_coord) != nullptr,
+        internal::get_device(*mesh_device, device_coord) != nullptr,
         "Sender device for socket connection is not local to this mesh device");
 
     distributed::MeshWorkload workload;

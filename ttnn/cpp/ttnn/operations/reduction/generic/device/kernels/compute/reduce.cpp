@@ -57,7 +57,7 @@ void kernel_main() {
             // is read from the JIT descriptor array indexed by the DFB handle rather than off a
             // DataflowBuffer object: DataflowBuffer's constructor is not constexpr, so no such object
             // is usable in a constant expression.
-            constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
+            constexpr auto reduce_format = static_cast<DataFormat>(unpack_src_format[dfb::in0]);
             compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(dst_idx, post_mul_scaler_bits);
         }
 #else

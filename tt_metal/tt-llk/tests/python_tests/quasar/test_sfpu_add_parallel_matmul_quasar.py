@@ -77,7 +77,6 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 SFPU_ADD_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ]
     # The MX pair is on the input side: these operands reach the SFPU through UNP_S

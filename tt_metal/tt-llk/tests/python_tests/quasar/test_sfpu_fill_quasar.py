@@ -86,7 +86,6 @@ def generate_sfpu_fill_combinations(
 
 _FILL_FLOAT_INPUTS = [
     DataFormat.Float16_b,
-    DataFormat.Float16,
     DataFormat.Float32,
 ]
 SFPU_FILL_FLOAT_FORMATS = input_output_formats(_FILL_FLOAT_INPUTS)

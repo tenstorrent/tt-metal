@@ -160,8 +160,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int NUM_BLOCKS                   = params.NUM_BLOCKS;
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t TILE_CNT           = params.TILE_CNT;
-    // --speed-of-light emits ZERO_POINT as a constexpr and leaves RuntimeParams empty.
-    const std::uint32_t ZERO_POINT = params.ZERO_POINT;
+    // --speed-of-light emits ZERO_POINT and OUT_ZERO_POINT as constexprs and leaves RuntimeParams empty.
+    const std::uint32_t ZERO_POINT     = params.ZERO_POINT;
+    const std::uint32_t OUT_ZERO_POINT = params.OUT_ZERO_POINT;
 #endif
     const bool is_int_fpu_en         = false;
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
@@ -183,7 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
             num_faces, formats.math);
         test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS, formats.math, SFPU_SIGN_MAGNITUDE>(
-            ZERO_POINT);
+            ZERO_POINT, OUT_ZERO_POINT);
         PROFILER_SYNC();
     }
     {

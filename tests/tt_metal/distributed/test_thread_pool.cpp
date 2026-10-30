@@ -5,8 +5,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -224,6 +226,83 @@ TEST(ThreadPoolTest, ParallelForWithEnqueue) {
     }
     thread_pool->wait();
     EXPECT_EQ(enqueued_runs.load(), 1000u);
+}
+
+// Several threads fanning out on one pool at once: every call of every fan-out still runs exactly once.
+TEST(ThreadPoolTest, ParallelForConcurrentCallers) {
+    auto thread_pool = create_pool_per_device();
+    auto device_ids = one_call_per_device(2);
+    constexpr uint32_t NUM_CALLERS = 4;
+    constexpr uint32_t NUM_FAN_OUTS = 2000;
+    std::vector<std::vector<std::atomic<uint32_t>>> runs;
+    runs.reserve(NUM_CALLERS);
+    for (uint32_t caller = 0; caller < NUM_CALLERS; caller++) {
+        runs.emplace_back(device_ids.size());
+    }
+    std::vector<std::thread> callers;
+    callers.reserve(NUM_CALLERS);
+    for (uint32_t caller = 0; caller < NUM_CALLERS; caller++) {
+        callers.emplace_back([&, caller] {
+            for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
+                thread_pool->parallel_for(device_ids, [&runs, caller](size_t call) { runs[caller][call]++; });
+            }
+        });
+    }
+    for (auto& caller : callers) {
+        caller.join();
+    }
+    for (const auto& caller_runs : runs) {
+        for (const auto& count : caller_runs) {
+            EXPECT_EQ(count.load(), NUM_FAN_OUTS);
+        }
+    }
+}
+
+// Back-to-back fan-outs over different device lists of the same length each follow their own list: calls for one
+// device never overlap and run in index order.
+TEST(ThreadPoolTest, ParallelForChangingDevices) {
+    auto thread_pool = create_pool_per_device();
+    const auto forward = one_call_per_device(2);
+    const std::vector<uint32_t> backward(forward.rbegin(), forward.rend());
+    const std::vector<uint32_t> first_device(forward.size(), 0);
+    const std::array<const std::vector<uint32_t>*, 3> device_lists = {&forward, &backward, &first_device};
+    uint32_t num_devices = forward.size() / 2;
+    std::vector<std::atomic<bool>> busy(num_devices);
+    std::atomic<uint32_t> violations = 0;
+    std::atomic<uint32_t> runs = 0;
+    constexpr uint32_t NUM_FAN_OUTS = 3000;
+    for (uint32_t iter = 0; iter < NUM_FAN_OUTS; iter++) {
+        const auto& device_ids = *device_lists[iter % device_lists.size()];
+        std::vector<int64_t> last_call(num_devices, -1);
+        thread_pool->parallel_for(device_ids, [&](size_t call) {
+            uint32_t device = device_ids[call];
+            if (busy[device].exchange(true) || last_call[device] >= static_cast<int64_t>(call)) {
+                violations++;
+            }
+            last_call[device] = static_cast<int64_t>(call);
+            runs++;
+            busy[device] = false;
+        });
+    }
+    EXPECT_EQ(violations.load(), 0u);
+    EXPECT_EQ(runs.load(), NUM_FAN_OUTS * forward.size());
+}
+
+// parallel_for nested in its own callbacks, deeper than the pool keeps jobs for, still runs every call.
+TEST(ThreadPoolTest, ParallelForNested) {
+    auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
+    const std::vector<uint32_t> device_ids = {0, 1};
+    constexpr uint32_t DEPTH = 8;
+    std::atomic<uint32_t> leaves = 0;
+    std::function<void(uint32_t)> nest = [&](uint32_t depth) {
+        if (depth == 0) {
+            leaves++;
+            return;
+        }
+        thread_pool->parallel_for(device_ids, [&nest, depth](size_t) { nest(depth - 1); });
+    };
+    nest(DEPTH);
+    EXPECT_EQ(leaves.load(), 1u << DEPTH);
 }
 
 // Destroying the pool right after a fan-out, while workers may still hold the job, is safe.

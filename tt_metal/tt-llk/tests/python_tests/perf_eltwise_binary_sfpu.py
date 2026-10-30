@@ -614,3 +614,25 @@ def test_perf_eltwise_binary_sfpu_quant(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
     )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.QUANT_BYTE_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_quant_byte(
+    perf_report,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_quant_byte(
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )

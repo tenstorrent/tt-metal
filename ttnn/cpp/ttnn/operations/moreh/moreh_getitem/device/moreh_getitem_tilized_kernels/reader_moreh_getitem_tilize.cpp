@@ -110,11 +110,14 @@ void kernel_main() {
         input_stick_idx_stride_w,
     };
 
-#define NOC_MINIMUM_READ_SIZE (32)
+#define NOC_MINIMUM_READ_SIZE (NOC_DRAM_READ_ALIGNMENT_BYTES)
 #define INDEX_SIZE (4)
 
     Noc noc;
     DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_scratch_obj(dfb::scratch);
+    dfb_scratch_obj.reserve_back(1);
+    const uint32_t scratch_l1_addr = dfb_scratch_obj.get_write_ptr();
 #ifdef HAS_INDEX0
     DataflowBuffer dfb_in1_obj(dfb::in1);
 #endif
@@ -294,8 +297,30 @@ void kernel_main() {
 
         uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
-        noc.async_read(
-            s0, dfb_in0_obj, stick_size, {.page_id = noc_id, .offset_bytes = noc_offset}, {.offset_bytes = 0});
+        const uint32_t offset_in_granule = noc_offset % NOC_MINIMUM_READ_SIZE;
+        if (offset_in_granule == 0 && stick_size % NOC_MINIMUM_READ_SIZE == 0) {
+            noc.async_read(
+                s0, dfb_in0_obj, stick_size, {.page_id = noc_id, .offset_bytes = noc_offset}, {.offset_bytes = 0});
+        } else {
+            const uint32_t span = (offset_in_granule + stick_size + NOC_MINIMUM_READ_SIZE - 1) / NOC_MINIMUM_READ_SIZE *
+                                  NOC_MINIMUM_READ_SIZE;
+            noc.async_read(
+                s0,
+                dfb_scratch_obj,
+                span,
+                {.page_id = noc_id, .offset_bytes = noc_offset - offset_in_granule},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            UnicastEndpoint scratch_src{};
+            noc.async_read(
+                scratch_src,
+                dfb_in0_obj,
+                stick_size,
+                {.noc_x = static_cast<uint32_t>(my_x[noc.get_noc_id()]),
+                 .noc_y = static_cast<uint32_t>(my_y[noc.get_noc_id()]),
+                 .addr = scratch_l1_addr + offset_in_granule},
+                {.offset_bytes = 0});
+        }
         noc.async_read_barrier();
         dfb_in0_obj.push_back(1);
     }

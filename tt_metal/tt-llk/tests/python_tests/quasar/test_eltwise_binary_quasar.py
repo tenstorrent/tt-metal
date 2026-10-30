@@ -4,7 +4,6 @@
 import pytest
 import torch
 from helpers.constraints import get_valid_math_fidelities
-from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -64,9 +63,10 @@ def _eltwise_dest_acc_sync(dest_acc_modes, *, is_perf=False):
 
 
 def eltwise_binary_dest_sync_dest_acc(formats, *, is_perf=False):
+    # Int8 -> Int32 and Float32 need the 32-bit Dest.
     dest_acc_modes = (
         (DestAccumulation.Yes,)
-        if formats.input_format == DataFormat.Int8
+        if formats.input_format in (DataFormat.Int8, DataFormat.Float32)
         else (DestAccumulation.No,)
     )
     return _eltwise_dest_acc_sync(dest_acc_modes, is_perf=is_perf)
@@ -101,10 +101,10 @@ def runs_tile_shape_paths(
     if dest_sync_dest_acc[0] != DestSync.Half:
         return False
     if math_fidelity == MathFidelity.HiFi4:
-        # Float16 is the only input format that keeps HiFi fidelities on Quasar.
+        # Float32 is the only swept input format that keeps HiFi fidelities on Quasar.
         return (
             mathop == MathOperation.Elwmul
-            and formats.input_format == DataFormat.Float16
+            and formats.input_format == DataFormat.Float32
         )
     lofi_formats = (
         (DataFormat.Float16_b,)
@@ -185,10 +185,13 @@ ELTWISE_FORMATS = (
     input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
         ],
     )
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + [
+        # The HiFi carrier: Float16_b, Int8 and MX are capped at LoFi on Quasar.
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+    ]
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
 
@@ -341,7 +344,8 @@ def test_eltwise_binary(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc),
+        # Both operands go through SrcA/SrcB, so a 32-bit input does not unpack to Dest.
+        "unpack_to_dest": False,
         "dest_acc": dest_acc,
     }
 

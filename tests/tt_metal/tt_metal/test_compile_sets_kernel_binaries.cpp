@@ -24,7 +24,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 using std::vector;
 using namespace tt;
@@ -111,7 +111,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
     for (size_t i = 0; i < num_devices; i++) {
         auto* device = devices_[i].get();
 
-        programs.push_back(Program());
+        programs.push_back(CreateProgram(*device));
         Program& program = programs.back();
 
         construct_program(program, *device, core);
@@ -167,7 +167,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         std::vector<Program> new_programs;
         for (size_t i = 0; i < num_devices; i++) {
             auto* device = devices_[i].get();
-            new_programs.push_back(Program());
+            new_programs.push_back(CreateProgram(*device));
             Program& program = new_programs.back();
             construct_program(program, *device, core);
         }

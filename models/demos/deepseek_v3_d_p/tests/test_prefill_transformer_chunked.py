@@ -50,6 +50,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     moe_fabric_payload,
     torus_xy_device_params,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -64,7 +66,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology, sparse_mla_overlap_gather_rows
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -1961,6 +1963,10 @@ def run_chunked_transformer_updated(
         tp_shard_kv=tp_shard_kv,
         **({"sparse_kv_cache_format": cache_format} if has_indexer else {}),
     )
+    # Kimi-K3's KDA carries live only in the engine's slabs, which the runner hands the model at compile();
+    # this harness builds the model itself, so it attaches them here, once: a reused model keeps its slabs.
+    if isinstance(transformer, TtKimiK3Transformer) and transformer.kda_states is None:
+        attach_kda_states(mesh_device, transformer, sp_axis=sp_axis, tp_axis=tp_axis)
 
     # Production overlap qualification asks this full-model harness to prove that the requested profile
     # reached every eligible indexer layer. This is opt-in so ordinary model/perf sweeps keep their existing
@@ -1997,8 +2003,7 @@ def run_chunked_transformer_updated(
             topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
             gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
             assert profiles == {expected_overlap_profile}, profiles
-            # Per-profile, so this holds for either row count.
-            gather_rows = sparse_mla_overlap_gather_rows(next(iter(profiles)))
+            gather_rows = _SPARSE_MLA_OVERLAP_GATHER_ROWS  # the worker rows below the Ethernet row
             assert topk_cores == {worker_grid.x * (worker_grid.y - gather_rows)}, topk_cores
             assert gather_cores == {worker_grid.x * gather_rows}, gather_cores
             observed_profile = next(iter(profiles))
@@ -2173,7 +2178,7 @@ def run_chunked_transformer_updated(
         if kda_states is None:
             return
         for slot in range(kda_states.num_slots):
-            kda_states.reset(slot)
+            kda_states.zero_slot(slot)
         ttnn.synchronize_device(mesh_device)
         logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
 

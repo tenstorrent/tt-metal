@@ -22,7 +22,15 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.logger import logger
-from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
+from helpers.matmul_sweep import (
+    ODD_REUSE_KT_DIMS,
+    ODD_REUSE_RT_CT,
+    MatmulConfig,
+    generate_face_layout_config_sweep,
+    generate_tile_dims,
+    sweep_matmul,
+    sweep_tiny_tiles_matmul,
+)
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
@@ -116,6 +124,50 @@ TINY_TILE_LOW_THROTTLE = 1
 # in tt_metal/hw/inc/api/compute/matmul.h is 5, so cover 5 rather than 4.
 TINY_TILE_HIGH_THROTTLE = 5
 
+# One run per tile (LoFi and HiFi4 at throttle 0) and one run per fidelity phase (HiFi4 at 5).
+ODD_REUSE_FIDELITY_THROTTLE = (
+    (MathFidelity.LoFi, 0),
+    (MathFidelity.HiFi4, 0),
+    (MathFidelity.HiFi4, TINY_TILE_HIGH_THROTTLE),
+)
+
+
+def odd_reuse_matmul_params():
+    fmt = next(
+        f
+        for f in MATMUL_FORMATS
+        if f.input_format == DataFormat.Float16_b
+        and f.output_format == DataFormat.Float16_b
+    )
+    face_layout = generate_face_layout_config_sweep(math_matmul=True)[0]
+    params = []
+    for rt_dim, ct_dim in ODD_REUSE_RT_CT:
+        for kt_dim in ODD_REUSE_KT_DIMS:
+            config = MatmulConfig(
+                tile_dimensions=generate_tile_dims(
+                    (
+                        [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+                        [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+                    )
+                ),
+                face_layout_config=face_layout,
+                formats=fmt,
+                stochastic_rnd=StochasticRounding.No,
+                dst_index=0,
+                dest_sync=DestSync.Full,
+                dest_acc=DestAccumulation.No,
+            )
+            for fidelity, throttle in ODD_REUSE_FIDELITY_THROTTLE:
+                params.append(
+                    pytest.param(
+                        fidelity,
+                        config,
+                        throttle,
+                        id=f"odd_reuse-rt{rt_dim}-ct{ct_dim}-kt{kt_dim}-{fidelity.name}-throttle{throttle}",
+                    )
+                )
+    return params
+
 
 ALL_TEST_PARAMS = list(
     chain(
@@ -151,6 +203,8 @@ ALL_TEST_PARAMS = list(
             (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
         ),
+        # Odd t_dim on the full-dest blocks the sweep cannot reach.
+        odd_reuse_matmul_params(),
     )
 )
 

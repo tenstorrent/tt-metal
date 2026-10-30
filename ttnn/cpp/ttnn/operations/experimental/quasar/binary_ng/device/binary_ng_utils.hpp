@@ -13,44 +13,6 @@
 
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
-enum class KernelName {
-    ReaderNoBcast,
-    WriterScalar,
-    ComputeNoBcast,
-    ComputeBcast,
-    ComputeScalar,
-    ReaderNoBcastNg,
-    WriterNoBcastNg,
-    ReaderRowBcastNg,
-    ReaderColBcastNg,
-    ReaderRowBColABcastNg,
-    ReaderScalarBcastNg,
-    ReaderRmNoBcastNg,
-    ReaderRmRowBcastNg,
-    ReaderRmColBcastNg,
-    ReaderRmRowBColABcastNg,
-    ReaderRmScalarBcastNg,
-    ReaderRmScalarOpNg,
-    WriterRmNoBcastNg,
-    ComputeRowBcastNg,
-    ComputeColBcastNg,
-    ComputeScalarBcastNg,
-    ComputeRowColBcastNg,
-};
-
-struct BinaryNgKernelConfig {
-    BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type);
-
-    std::string bcast_input_str() const;
-
-    KernelName reader_kernel;
-    KernelName compute_kernel;
-    KernelName writer_kernel;
-    std::optional<uint32_t> bcast_input;
-};
-
-std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op);
-
 struct OpConfig {
     enum class FpuBinaryOp { ADD, SUB, MUL };
     enum class SfpuBinaryOp {

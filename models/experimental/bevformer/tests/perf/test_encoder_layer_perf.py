@@ -29,17 +29,17 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config.encoder_config import get_preset_config
-from models.experimental.bevformer.tests.camera_rig import img_metas_for_dataset
+from models.experimental.bevformer.model_config import FEEDFORWARD_CHANNELS
+from models.experimental.bevformer.tests.common import PRESETS, img_metas_for_dataset
 from models.experimental.bevformer.reference.encoder import BEVFormerLayer
 from models.experimental.bevformer.reference.point_sampling_3d_2d import (
+    bev_reference_points as reference_bev_points,
     generate_reference_points,
     point_sampling_3d_to_2d,
 )
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
-from models.experimental.bevformer.tt.model_preprocessing import preprocess_bevformer_layer_parameters
+from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_layer_parameters
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerLayer
-from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import build_rebatch_plan
 
 DEVICE_PERF_ITERS = 1
@@ -76,21 +76,15 @@ def test_bevformer_layer_perf(
 ):
     logger.info(f"device-perf run of commit {_head_sha()}")
 
-    config = get_preset_config(config_name)
-    assert config is not None, f"Configuration '{config_name}' not found"
-
-    dataset_config = config.dataset_config
-    model_config = config.model_config
-    encoder_kwargs = config.get_encoder_kwargs()
+    config = PRESETS[config_name]
 
     bev_h, bev_w = bev_size
     num_queries = bev_h * bev_w
-    embed_dims = model_config.embed_dims
-    num_cams = dataset_config.num_cams
-    num_levels = model_config.num_levels
+    embed_dims = config.embed_dims
+    num_cams = config.num_cams
+    num_levels = config.num_levels
 
-    spatial_shapes = torch.tensor(dataset_config.spatial_shapes[:num_levels], dtype=torch.long)
-    level_start_index = config.get_level_start_index()[:num_levels]
+    spatial_shapes = torch.tensor(config.spatial_shapes[:num_levels], dtype=torch.long)
     bev_shape = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
 
     bev_query = torch.randn(batch_size, num_queries, embed_dims, dtype=torch.float32)
@@ -98,72 +92,66 @@ def test_bevformer_layer_perf(
     key_length = sum(h * w for h, w in spatial_shapes.tolist())
     camera_features = torch.randn(num_cams, key_length, batch_size, embed_dims, dtype=torch.float32)
 
-    img_metas = img_metas_for_dataset(dataset_config, batch_size)
+    img_metas = img_metas_for_dataset(config, batch_size)
     lidar2img = torch.stack([torch.tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
 
     reference_points_3d = generate_reference_points(
         bev_h=bev_h,
         bev_w=bev_w,
-        z_cfg=encoder_kwargs["z_cfg"],
+        z_cfg=config.z_cfg,
         batch_size=batch_size,
         dtype=torch.float32,
     )
     ref_points_cam, ref_bev_mask = point_sampling_3d_to_2d(
         reference_points=reference_points_3d,
-        pc_range=encoder_kwargs["pc_range"],
+        pc_range=list(config.pc_range),
         lidar2img=lidar2img,
         img_metas=img_metas,
     )
-    tt_points_cam, tt_bev_mask = point_sampling_3d_to_2d_ttnn(
-        reference_points=reference_points_3d,
-        pc_range=encoder_kwargs["pc_range"],
-        lidar2img=lidar2img,
-        img_metas=img_metas,
-        device=device,
+    # Uploaded as the encoder uploads them.
+    tt_points_cam = ttnn.from_torch(ref_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_bev_mask = ttnn.from_torch(
+        ref_bev_mask.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
     bev_reference_points = ttnn.from_torch(
         reference_points_3d[:, :, 0, :2].unsqueeze(2),
         device=device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
     )
 
-    layer_kwargs = {
-        key: encoder_kwargs[key]
-        for key in (
-            "embed_dims",
-            "num_heads",
-            "num_levels",
-            "num_points",
-            "num_cams",
-            "feedforward_channels",
-            "batch_first",
-        )
-        if key in encoder_kwargs
-    }
-    layer_kwargs["batch_first"] = True
+    layer_kwargs = dict(
+        embed_dims=embed_dims,
+        num_heads=config.num_heads,
+        num_levels=num_levels,
+        num_points=config.num_points,
+        num_cams=num_cams,
+        feedforward_channels=FEEDFORWARD_CHANNELS,
+    )
 
-    ref_model = BEVFormerLayer(**layer_kwargs)
+    ref_model = BEVFormerLayer(**layer_kwargs, tsa_num_points=config.tsa_num_points)
     ref_model.eval()
+    # Without a previous BEV, upstream's encoder hands the self-attention each sample's grid twice.
+    ref_2d = reference_bev_points(bev_h, bev_w, batch_size)
     ref_output = ref_model(
-        bev_query=bev_query,
-        key=camera_features,
+        bev_query,
         value=camera_features,
         bev_pos=bev_pos,
-        spatial_shapes=spatial_shapes,
+        ref_2d=torch.stack([ref_2d, ref_2d], 1).flatten(0, 1),
         bev_shape=bev_shape,
-        level_start_index=level_start_index,
-        prev_bev=None,
-        reference_points_3d=reference_points_3d,
+        spatial_shapes=spatial_shapes,
         reference_points_cam=ref_points_cam,
         bev_mask=ref_bev_mask,
+        prev_bev=None,
     )
 
     tt_model = TTBEVFormerLayer(
         device=device,
-        params=preprocess_bevformer_layer_parameters(ref_model, device=device, dtype=ttnn.bfloat16),
+        params=create_bevformer_layer_parameters(ref_model, device, dtype=ttnn.bfloat16),
         spatial_shapes=spatial_shapes,
         bev_shape=bev_shape,
+        batch_first=True,
+        temporal_num_points=config.tsa_num_points,
         **layer_kwargs,
     )
 

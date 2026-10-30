@@ -18,6 +18,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
+#include <internal/mesh_device.hpp>
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 using namespace tt::constants;
@@ -53,7 +54,8 @@ SendAsyncConnections collect_send_async_connections(
 
     for (size_t conn_idx = 0; conn_idx < socket_connection_config.size(); ++conn_idx) {
         const auto& connection = socket_connection_config[conn_idx];
-        if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
+        if (tt::tt_metal::internal::get_device(*socket_mesh_device, connection.sender_core.device_coord)->id() ==
+            target_device->id()) {
             connections.sender_core_coords.push_back(connection.sender_core.core_coord);
             connections.receiver_core_coords.push_back(connection.receiver_core.core_coord);
             connections.sender_fabric_node_ids.push_back(
@@ -263,7 +265,8 @@ tt::tt_metal::ProgramDescriptor SendAsyncProgramFactory::create_descriptor(
         uint32_t bank_id = 0;
         if (!socket_storage_in_dram) {
             const auto& connection = socket_connection_config[connection_indices[core_idx]];
-            auto* receiver_device = socket_mesh_device->get_device(connection.receiver_core.device_coord);
+            auto* receiver_device =
+                tt::tt_metal::internal::get_device(*socket_mesh_device, connection.receiver_core.device_coord);
             bank_id = receiver_device->allocator()->get_bank_ids_from_logical_core(
                 mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
         } else {

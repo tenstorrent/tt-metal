@@ -6,14 +6,21 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
-from models.experimental.bevformer.config.head_config import MAX_NUM, NUM_CLASSES, POST_CENTER_RANGE
-from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.decoder_common import NUM_LAYERS, NUM_QUERY
-from models.experimental.bevformer.tests.head_common import assert_boxes_close
-from models.experimental.bevformer.tt.tt_head import BOX_DTYPE, SCORE_DTYPE
-from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
+from models.experimental.bevformer.model_config import (
+    BOX_DTYPE,
+    CODE_SIZE,
+    CODE_XY,
+    CODE_Z,
+    DECODER_NUM_LAYERS,
+    MAX_NUM,
+    NUM_CLASSES,
+    NUM_QUERY,
+    POST_CENTER_RANGE,
+    SCORE_DTYPE,
+)
+from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, bottom_center
+from models.experimental.bevformer.tests.common import assert_boxes_close, assert_pcc, tt_coder_detections
+from models.experimental.bevformer.tt.tt_nms_free_coder import TTNMSFreeCoder
 
 NUM_SCORES = NUM_QUERY * NUM_CLASSES
 NUM_FOREGROUND = 50
@@ -24,7 +31,7 @@ SCORE_RTOL = 4 * torch.finfo(torch.float32).eps
 LOGITS = {
     # Spread evenly over [-4, 4].
     "spread": torch.linspace(-4.0, 4.0, NUM_SCORES),
-    # A trained head's shape: a few confident (query, class) pairs and a dense band of
+    # A detection head's shape: a few confident (query, class) pairs and a dense band of
     # background ones the top-k boundary falls into. The whole band rounds to one bfloat16
     # value, -7.96875, so bfloat16 ties it unless the coder shifts it by its pivot first.
     "background": torch.cat(
@@ -47,9 +54,9 @@ def _head_outputs(logits, batch_size, generator):
     """Head-like ``(L, bs, num_query, *)`` class logits, ``logits`` shuffled apart per layer and
     sample, so decoding the wrong layer shows, and box predictions whose centers spread past
     ``POST_CENTER_RANGE`` on every axis, so the range filter drops some of the top-k boxes."""
-    shape = (NUM_LAYERS, batch_size, NUM_QUERY)
+    shape = (DECODER_NUM_LAYERS, batch_size, NUM_QUERY)
     cls_scores = torch.stack(
-        [logits[torch.randperm(NUM_SCORES, generator=generator)] for _ in range(NUM_LAYERS * batch_size)]
+        [logits[torch.randperm(NUM_SCORES, generator=generator)] for _ in range(DECODER_NUM_LAYERS * batch_size)]
     ).view(*shape, NUM_CLASSES)
 
     bbox_preds = torch.randn(*shape, CODE_SIZE, generator=generator)
@@ -88,7 +95,7 @@ def _head_outputs(logits, batch_size, generator):
 def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold):
     cls_scores, bbox_preds = _head_outputs(LOGITS[logits], batch_size, torch.Generator().manual_seed(0))
     reference = NMSFreeCoder(score_threshold=score_threshold)
-    tt_coder = TtNMSFreeCoder(device, score_threshold=score_threshold)
+    tt_coder = TTNMSFreeCoder(device, score_threshold=score_threshold)
     # The dtypes the head emits.
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
     tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
@@ -106,10 +113,10 @@ def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold
         assert_boxes_close(boxes, tt_boxes[i].float())
 
     expected = reference.decode(cls_scores, bbox_preds)
-    # The first decode compiles the validity mask; a second one must only hit the program cache.
-    tt_coder.decode(tt_cls_scores, tt_bbox_preds)
+    # The first decode compiles the range test; a second one must only hit the program cache.
+    tt_coder_detections(tt_coder, tt_cls_scores, tt_bbox_preds)
     num_programs = device.num_program_cache_entries()
-    actual = tt_coder.decode(tt_cls_scores, tt_bbox_preds)
+    actual = tt_coder_detections(tt_coder, tt_cls_scores, tt_bbox_preds)
     assert device.num_program_cache_entries() == num_programs
     for i, (e, a) in enumerate(zip(expected, actual, strict=True)):
         assert 0 < len(e["bboxes"]) < reference.max_num, "the filters must drop some boxes and keep some"
@@ -122,17 +129,18 @@ def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold
 @pytest.mark.parametrize("score_threshold", [None, 0.99], ids=["no-threshold", "threshold-fallback"])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 8 * 1024 * 1024}], indirect=True)
 def test_nms_free_coder_traced(device, reset_seeds, score_threshold):
-    """The coder's device part, the top-k and the validity mask, as a trace: capture fails on any
-    host read or write, so the score threshold's fallback runs on device."""
+    """The coder's device part, the top-k and ``finalize``, as a trace: capture fails on any host
+    read or write, so the score threshold's fallback runs on device. The replay's boxes, kept by
+    the validity mask, are upstream ``get_bboxes``' boxes."""
     cls_scores, bbox_preds = _head_outputs(LOGITS["background"], 2, torch.Generator().manual_seed(0))
     reference = NMSFreeCoder(score_threshold=score_threshold)
-    tt_coder = TtNMSFreeCoder(device, score_threshold=score_threshold)
+    tt_coder = TTNMSFreeCoder(device, score_threshold=score_threshold)
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
     tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
 
     def run():
         scores, labels, _, boxes = tt_coder.topk(tt_cls_scores[-1], tt_bbox_preds[-1])
-        return scores, labels, boxes, tt_coder.valid(scores, boxes)
+        return (scores, labels, *tt_coder.finalize(scores, boxes))
 
     # Compiles the programs before the capture.
     run()
@@ -149,4 +157,4 @@ def test_nms_free_coder_traced(device, reset_seeds, score_threshold):
         assert 0 < len(e["bboxes"]) < reference.max_num, "the filters must drop some boxes and keep some"
         assert torch.equal(a["labels"], e["labels"]), f"sample {i}: kept labels differ"
         torch.testing.assert_close(a["scores"], e["scores"], rtol=SCORE_RTOL, atol=0)
-        assert_boxes_close(e["bboxes"], a["bboxes"])
+        assert_boxes_close(bottom_center(e["bboxes"]), a["bboxes"])

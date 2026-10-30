@@ -670,6 +670,9 @@ def test_explicit_trace_reloads_select_mode_and_gemma4_bucket_buffers(monkeypatc
             trace_output_decode={k: object() for k in keys},
         )
         fake._decode_trace_key = cls._decode_trace_key.__get__(fake)
+        # The Gemma4 mixin checks its decode-trace allocation guard before each replay (#60857); the guard has
+        # its own host tests (gemma4/tests/unit/test_trace_rules_host.py). Nothing grew here, so no re-capture.
+        fake._g4_trace_guard_should_recapture = lambda decode_trace_key: False
         # The plugin commands a full reload on mode/layout transitions. Switch
         # back to an existing bucket too, where stale resident inputs matter.
         for mode, batch in [(True, 1), (False, 1), (True, buckets[-1]), (True, 1)]:

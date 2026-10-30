@@ -80,6 +80,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
@@ -365,7 +366,7 @@ MeshWorkload make_relay_like_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
         CoreCoord down_svc_phys{0, 0};
         uint32_t down_counter_addr = 0;
@@ -454,7 +455,7 @@ MeshWorkload make_d2h_relay_workload(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
 
         const auto d2h_svc_phys = device->worker_core_from_logical_core(d2h_service->get_service_core(coord));
@@ -547,7 +548,7 @@ MeshWorkload make_stress_compute_workload(
                 .compile_args = ct_args,
                 .defines = {{"STRESS_MODE", "0"}}});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
         // Outbound D2D sender's metadata buffer (service-core L1) + its physical NoC —
         // the propagate target, producing stages only.
@@ -647,7 +648,7 @@ MeshWorkload make_stress_d2h_compute_workload(
                 .compile_args = ct_args,
                 .defines = {{"STRESS_MODE", "0"}}});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto up_svc_phys = device->worker_core_from_logical_core(inbound->get_service_core(coord));
         const auto d2h_svc_phys = device->worker_core_from_logical_core(d2h_service->get_service_core(coord));
         const uint32_t write_ack_addr = static_cast<uint32_t>(d2h_service->get_write_ack_counter_addr(coord));
@@ -697,7 +698,7 @@ MeshWorkload make_stress_signal_workload(D2DStreamServiceSender* outbound, const
                 .noc = NOC::RISCV_0_default,
                 .defines = {{"STRESS_MODE", "1"}}});
 
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto down_svc_phys = device->worker_core_from_logical_core(outbound->get_service_core(coord));
         const uint32_t down_counter_addr = static_cast<uint32_t>(outbound->get_data_ready_counter_addr(coord));
         for (const auto& wc : worker_cores) {
@@ -803,7 +804,7 @@ MeshWorkload make_stress_fabric_workload(
     MeshWorkload workload;
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
         auto program = CreateProgram();
-        auto* device = mesh->get_device(coord);
+        auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto fabric_core_phys = device->worker_core_from_logical_core(fabric_core);
 

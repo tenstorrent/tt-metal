@@ -180,7 +180,6 @@ def generate_qsr_pack_combinations(
 PACK_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
