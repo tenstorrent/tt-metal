@@ -91,16 +91,31 @@ def balanced(text, open_at):
 
 
 def params_of(signature):
-    """Parameter names declared in a function signature, template params excluded."""
+    """(function parameter names, template parameter names) from a signature.
+
+    The template clause leads the signature, so it is matched from the front and
+    its angle brackets are balanced; anchoring at the end misses every function
+    that has a body after it.
+    """
     tmpl = set()
-    m = re.search(r"template\s*<(.*?)>\s*$", signature, flags=re.S)
     head = signature
+    m = re.search(r"\btemplate\s*<", signature)
     if m:
-        for piece in split_args(m.group(1)):
-            names = IDENT.findall(piece)
-            if names:
-                tmpl.add(names[-1])
-        head = signature[: m.start()]
+        depth, close = 0, None
+        for i in range(m.end() - 1, len(signature)):
+            if signature[i] == "<":
+                depth += 1
+            elif signature[i] == ">":
+                depth -= 1
+                if depth == 0:
+                    close = i
+                    break
+        if close is not None:
+            for piece in split_args(signature[m.end() : close]):
+                names = IDENT.findall(piece)
+                if names:
+                    tmpl.add(names[-1])
+            head = signature[close + 1 :]
     open_at = head.rfind("(")
     if open_at == -1:
         return set(), tmpl
@@ -111,7 +126,9 @@ def params_of(signature):
     for piece in split_args(head[open_at + 1 : close]):
         piece = piece.split("=")[0].strip()
         found = [n for n in IDENT.findall(piece) if n not in KEYWORDS]
-        if len(found) >= 2:  # a type and a name
+        # Two or more names means a type and a name; a name already declared as a
+        # template parameter is the type's argument, not the parameter's name.
+        if len(found) >= 2 and found[-1] not in tmpl:
             names.add(found[-1])
     return names, tmpl
 
@@ -154,21 +171,51 @@ def functions(text):
     return out
 
 
-DECL = r"(?:^|[;{}\n])\s*(?P<quals>(?:(?:static|inline|volatile|constexpr|const)\s+)*)[\w:<>,\s\*&]*?\b%s\s*(?:=|\{|\[)"
+ASSIGN = re.compile(r"\b(?P<name>[A-Za-z_]\w*)(?:\.\w+)*\s*(?:=[^=]|\+=|-=|\|=|&=)")
+COND = re.compile(r"\b(?:if|while|for|switch)\s*\(")
 
 
-def classify(name, body, params, tmpl):
-    """How constant is this name at the call site?"""
-    if name in tmpl:
-        return None  # compile-time by definition
-    if name in params:
-        return "parameter"
-    import re as _re
+def _block_after(body, at):
+    """The brace-delimited block that follows position `at`, if there is one."""
+    brace = body.find("{", at)
+    if brace == -1 or body[at:brace].strip() not in ("", ")"):
+        nl = body.find("\n", at)
+        return body[at : nl if nl != -1 else len(body)]
+    depth = 0
+    for i in range(brace, len(body)):
+        if body[i] == "{":
+            depth += 1
+        elif body[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return body[brace : i + 1]
+    return body[brace:]
 
-    m = _re.search(DECL % _re.escape(name), body, flags=_re.M)
-    if m is None:
-        return None  # declared elsewhere; assume a constant
-    return "local" if "constexpr" not in m.group("quals") else None
+
+def tainted_names(body, params):
+    """Names whose value follows a function parameter, by data or by control flow.
+
+    A local assigned a literal is still tainted when the branch that assigns it is
+    chosen by a parameter: that is how face_r_dim reaches row_set_mapping_1.
+    """
+    tainted = set(params)
+    for _ in range(6):  # a fixed point; the bodies are shallow
+        before = len(tainted)
+        for m in ASSIGN.finditer(body):
+            rhs = body[m.end() - 1 : body.find(";", m.end())]
+            if {n for n in IDENT.findall(rhs)} & tainted:
+                tainted.add(m.group("name"))
+        for m in COND.finditer(body):
+            close = balanced(body, m.end() - 1)
+            if close == -1:
+                continue
+            if not ({n for n in IDENT.findall(body[m.end() : close])} & tainted):
+                continue
+            block = _block_after(body, close + 1)
+            tainted |= {a.group("name") for a in ASSIGN.finditer(block)}
+        if len(tainted) == before:
+            break
+    return tainted
 
 
 def scan(root, arch):
@@ -189,6 +236,7 @@ def scan(root, arch):
                 continue
             params, tmpl = params_of(fn[2])
             body = text[fn[0] : fn[1]]
+            tainted = tainted_names(body, params)
             for pos, arg in enumerate(args):
                 scoped = set(re.findall(r"\w+\s*::\s*(\w+)|(\w+)\s*::", arg))
                 scoped = {x for pair in scoped for x in pair if x}
@@ -196,9 +244,11 @@ def scan(root, arch):
                 for n in IDENT.findall(arg):
                     if n in KEYWORDS or n in scoped or n.isupper():
                         continue
-                    kind = classify(n, body, params, tmpl)
-                    if kind:
-                        found.append(f"{n} ({kind})")
+                    if n in tmpl or n not in tainted:
+                        continue
+                    found.append(
+                        f"{n} ({'parameter' if n in params else 'follows a parameter'})"
+                    )
                 if found:
                     hits.append(
                         (
