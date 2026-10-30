@@ -27,7 +27,6 @@ void kernel_main() {
         1,
         true,
         separate_v,
-        true,
         v_offset,
         qk_tiles>(
         tt::CBIndex::c_0,

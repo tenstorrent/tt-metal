@@ -85,7 +85,25 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef SDPA_PRESERVE_SRC_ZERO_FLAG
 #define SDPA_PRESERVE_SRC_ZERO_FLAG false
 #endif
-constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_REENTRY ? 2 : 1;
+// DEST row the result tiles start at (dst_index of the math LLK); the pack reads the matching
+// result slots. One [M,32] result occupies two 8-row faces = FACE_R_DIM DEST rows (the Z/W
+// strides the pack programs below).
+#ifndef SDPA_DST_INDEX
+#define SDPA_DST_INDEX 0
+#endif
+constexpr std::uint32_t SDPA_RESULT_SLOT_ROWS = ckernel::FACE_R_DIM;
+static_assert(SDPA_DST_INDEX % SDPA_RESULT_SLOT_ROWS == 0, "SDPA_DST_INDEX must start a result slot");
+static_assert(SDPA_DST_INDEX + CT_DIM * SDPA_RESULT_SLOT_ROWS <= DEST_REGISTER_HALF_SIZE, "the result slots must fit the 16-bit DEST half");
+// Leading passes that seed DEST from the mask; one unmasked pass follows them.
+#ifndef SDPA_MASK_PASSES
+#define SDPA_MASK_PASSES (SDPA_MASK_REENTRY ? 1 : 0)
+#endif
+// Pack-side clear on release. false leaves DEST as the previous section left it, as the fused
+// SDPA kernel does between chunks, so the math-side clear alone has to prepare the slot.
+#ifndef SDPA_PACK_CLEAR_DEST
+#define SDPA_PACK_CLEAR_DEST true
+#endif
+constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_PASSES + 1;
 #ifdef SDPA_ROW_STRIDE
 constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = READ_TRANSPOSED && SDPA_ROW_STRIDE != 0 ? SDPA_ROW_STRIDE : KT_DIM;
 #else
@@ -125,11 +143,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
-    // The re-entry variant appends a mask to in1 and uses it only on the first pass.
+    // The re-entry variants append a mask to in1 and unpack it on the leading SDPA_MASK_PASSES passes.
     // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
-        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
+        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED>(
             L1_ADDRESS(params.buffer_A[0]),                                            // base_address_a : in1 (SrcA, rhs)
             L1_ADDRESS(params.buffer_B[0]),                                            // base_address_b : in0 (SrcB, lhs)
             SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[SDPA_MASK_TILE_INDEX]) : 0, // base_address_mask
@@ -139,8 +157,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
             KT_DIM,
             CT_DIM,
-            SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only
-            params.in0_face_r_dim           // operandB_face_r_dim : in0 row count (M)
+            pass < SDPA_MASK_PASSES, // mask_chunk: leading passes only
+            params.in0_face_r_dim    // operandB_face_r_dim : in0 row count (M)
 #ifdef SDPA_ROW_STRIDE
             ,
             SDPA_ROW_STRIDE
@@ -188,10 +206,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-        // Seed DEST from the mask on the first re-entry pass, otherwise zero it,
+        // Seed DEST from the mask on the leading SDPA_MASK_PASSES passes, otherwise zero it,
         // then accumulate the whole kt walk into ct_dim tiles.
-        _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(
-            params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, SDPA_MASK_REENTRY && pass == 0 /* mask_chunk */);
+        _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(params.in0_face_r_dim, SDPA_DST_INDEX, KT_DIM, CT_DIM, pass < SDPA_MASK_PASSES /* mask_chunk */);
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
 }
@@ -238,9 +255,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         for (std::uint32_t i = 0; i < CT_DIM; ++i)
         {
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
+            // The pack tile index is the result slot number (SDPA_RESULT_SLOT_ROWS rows per slot).
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                SDPA_DST_INDEX / SDPA_RESULT_SLOT_ROWS + i /*tile_index*/, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
         }
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en, SDPA_PACK_CLEAR_DEST>();
     }
 
     // sdpa_custom_mm_block_uninit(): restore the default tile Z/W strides.

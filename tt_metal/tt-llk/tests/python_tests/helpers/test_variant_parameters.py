@@ -2374,6 +2374,8 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
     preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
                          copy_tile_init does.
+    sdpa_dst_index     : DEST row the result tiles start at (the math LLK's dst_index); a
+                         multiple of 16, the [M,32] result slot height.
     """
 
     signal_granularity: int = 1
@@ -2382,6 +2384,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
     sdpa_row_stride: int | None = None
     sdpa_input_tile_offset: int = 0
     preserve_src_zero_flag: bool = False
+    sdpa_dst_index: int = 0
 
     def convert_to_cpp(self) -> str:
         lines = [
@@ -2390,6 +2393,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
             f"#define MM_TRANSPOSE {str(self.mm_transpose).lower()}",
             f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
             f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {str(self.preserve_src_zero_flag).lower()}",
+            f"#define SDPA_DST_INDEX {self.sdpa_dst_index}",
         ]
         if self.sdpa_row_stride is not None:
             lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")

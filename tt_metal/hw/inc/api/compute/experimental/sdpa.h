@@ -317,7 +317,6 @@ template <
     // separate_v=true:  two-CB (GQA) layout — V is read from its own cb_v at stride num_tiles_v
     //                   (V tiles contiguous in cb_v), and cb_v is waited on / popped separately.
     bool separate_v = false,
-    bool configure_mask_extent = false,
     // Offset of V within each single-CB row; separate V buffers require zero.
     std::uint32_t v_tile_offset = 0,
     // QK contraction width; zero uses the full num_tiles_k row.
@@ -382,7 +381,7 @@ void compute_sdpa_chunk(
     // Q @ K (FPU)
     // Make sure SFPU of previous chunk is done (sem is zero)
     MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
-    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, configure_mask_extent, num_tiles_k>(
+    sdpa_custom_mm_block<transpose_k, qk_signal_granularity, num_tiles_k>(
         cb_q, cb_k, cb_mask, 0, 0, mm1_dst_offset, qk_kt, chunk_size, mask_chunk);
 
     // Reduce Max (SFPU)

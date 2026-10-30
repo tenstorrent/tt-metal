@@ -61,7 +61,6 @@ void kernel_main() {
                     v_tiles,
                     false,
                     false,
-                    false,
                     v_offset,
                     qk_tiles,
                     corr_fidelity>(
