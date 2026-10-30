@@ -176,13 +176,6 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    attention, CCL workers. An op that defaults to the full device grid gets an explicit sub-grid. Take the limit from
    the model's settings (one value, `MAX_WORKER_CORES`), never a literal in a module, so other boxes keep their grid.
    When you add or change an op, report how many cores it runs on.
-18. Galaxy power limit (owner, 2026-10-30): on a Galaxy (any box whose chips sit in a Galaxy chassis, e.g. galaxy_8x4)
-   no op may run on more than 110 Tensix cores of a chip. The chassis' power supply trips when a chip's current
-   rises too fast (di/dt), and a full 12 x 10 = 120-core grid can do it. This holds for every op you add, configure or
-   fork: matmul program configs (cap the grid, e.g. 11 x 10 = 110), the core grids of fork kernels, the MoE engines,
-   attention, CCL workers. An op that defaults to the full device grid gets an explicit sub-grid. Take the limit from
-   the model's settings (one value, `MAX_WORKER_CORES`), never a literal in a module, so other boxes keep their grid.
-   When you add or change an op, report how many cores it runs on.
 
 ## Roles
 
