@@ -47,7 +47,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
-from . import ccl
+from . import ccl, host_alloc
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights
 from .ccl import dealloc
 from .collapse import TtHcCollapse
@@ -746,6 +746,7 @@ class TtDS41Model:
             self.memo_last = {}
             for slot, i in last.items():
                 self.memo_last.setdefault(i, []).append(slot)
+        host_alloc.reserve_sites(self)  # HOST_ALLOC=on (P.15): the in-step gathers' outputs, at load time (DS41-146)
         self.load_seconds = time.time() - t0
 
     def next_hc(self, i: int):
