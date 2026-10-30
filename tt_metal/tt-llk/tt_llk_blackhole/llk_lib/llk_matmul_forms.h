@@ -665,12 +665,53 @@ constexpr bool matmul_unfused_post(const MathFidelity fidelity, const bool half_
     return false;
 }
 
+// Tiny tile cells (in0 height under 32) where the keyed forms and the tiny module's extra keys read slower than main's: they keep main's unpack and math form.
+struct matmul_tiny_main_cell
+{
+    MathFidelity fidelity;
+    bool half_sync;
+    bool fp32_acc;
+    DataFormat in1;
+    DataFormat in0;
+    DataFormat out;
+    std::uint8_t r0, c1, rt, ct, kt;
+};
+inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 8, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Bfp4_b, 4, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 4, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 16, 32, 1, 8, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp4_b, 4, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 8, 32, 1, 4, 1},
+    {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 32, 1, 8, 1},
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 4, 32, 2, 2, 4},
+};
+
+constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                     const std::uint32_t r0, const std::uint32_t c1, const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt)
+{
+    for (const matmul_tiny_main_cell& c : matmul_tiny_main_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.r0 == r0 && c.c1 == c1 && c.rt == rt &&
+            c.ct == ct && c.kt == kt)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The k key a block runs its forms by: 0, main's form, where the block is one of the grid cells above; the caller's k steps per section otherwise.
 template <MathFidelity math_fidelity, int sync, bool dest_acc, std::uint32_t kt_per_section, std::uint32_t kt_dim, DataFormat in0, DataFormat in1, DataFormat out_format,
-          std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t throttle = 0, bool l1_acc = false, std::uint32_t nb = 1>
+          std::uint32_t ct_dim, std::uint32_t rt_dim, std::uint32_t throttle = 0, bool l1_acc = false, std::uint32_t nb = 1, std::uint32_t in0_r_dim = 32, std::uint32_t in1_c_dim = 32>
 constexpr std::uint32_t matmul_form_k()
 {
-    return matmul_grid_main_form(math_fidelity, sync == 0, dest_acc, in1, in0, out_format, rt_dim, ct_dim, kt_dim, throttle, l1_acc, nb) ? 0 : kt_per_section;
+    return (matmul_grid_main_form(math_fidelity, sync == 0, dest_acc, in1, in0, out_format, rt_dim, ct_dim, kt_dim, throttle, l1_acc, nb) ||
+            matmul_tiny_main_form(math_fidelity, sync == 0, dest_acc, in1, in0, out_format, in0_r_dim, in1_c_dim, rt_dim, ct_dim, kt_dim))
+               ? 0
+               : kt_per_section;
 }
 
 // Cells that take a form of their own whatever the table says, keyed on the input format and the block shape (the table keys the output

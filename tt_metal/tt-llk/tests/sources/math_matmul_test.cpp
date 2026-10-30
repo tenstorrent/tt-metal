@@ -33,6 +33,22 @@ constexpr std::uint32_t matmul_reuse_dir_k = MATMUL_REUSE_DIR;
 constexpr std::uint32_t matmul_reuse_dir_k = 0;
 #endif
 
+#ifndef MATMUL_KEY_IN0
+#define MATMUL_KEY_IN0 DataFormat::Invalid
+#define MATMUL_KEY_IN1 DataFormat::Invalid
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+#include "llk_matmul_forms.h"
+#ifdef MATMUL_BLOCK
+// the forms table key: main's form (0) for the blocks llk_matmul_forms.h keeps on it
+constexpr std::uint32_t matmul_kt_key = ckernel::matmul_form_k<
+    MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf ? 0 : 1, MATMUL_BLOCK_ACC, MATMUL_KT_PER_SECTION, MATMUL_BLOCK_KT, MATMUL_KEY_IN0, MATMUL_KEY_IN1, MATMUL_OUT_FORMAT,
+    MATMUL_BLOCK_CT, MATMUL_BLOCK_RT, MATMUL_BLOCK_THROTTLE, MATMUL_BLOCK_L1_ACC, MATMUL_BLOCK_NB, MATMUL_BLOCK_R0, MATMUL_BLOCK_C1>();
+#else
+constexpr std::uint32_t matmul_kt_key = MATMUL_KT_PER_SECTION;
+#endif
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
@@ -44,7 +60,7 @@ constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
 constexpr bool matmul_hoist_rows = MATMUL_FORCE_FORM_CHAR == 'h' || MATMUL_FORCE_FORM_CHAR == 'R';
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
 #endif
@@ -216,7 +232,7 @@ constexpr bool matmul_row_end_fold_k = false;
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
 constexpr bool matmul_tile_mop = !(MATMUL_FORCE_FORM_CHAR == 'r' || MATMUL_FORCE_FORM_CHAR == 'R');
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
 #else
 constexpr bool matmul_tile_mop = false;
 #endif
@@ -225,7 +241,7 @@ constexpr bool matmul_tile_mop = false;
 #define MATMUL_KEY_IN1 DataFormat::Invalid
 #endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && !defined(MATMUL_FORCE_FORM_CHAR)
-constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT, MATMUL_KEY_IN0, MATMUL_KEY_IN1>();
+constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT, MATMUL_KEY_IN0, MATMUL_KEY_IN1>();
 #else
 constexpr bool matmul_half_end_fold_k = false;
 #endif

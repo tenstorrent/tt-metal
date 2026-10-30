@@ -96,11 +96,43 @@ def test_perf_matmul_grid2_tiny(case, perf_report):
     )
 
 
+    from helpers.matmul_prod_keys import tiny_main_cell
+
+    td = matmul_config.tile_dimensions
+    main_form = tiny_main_cell(
+        math_fidelity, matmul_config.dest_sync == DestSync.Half, matmul_config.dest_acc == DestAccumulation.Yes, formats.input_format, formats.input_format_B, formats.output_format,
+        td.in0_tile_r_dim, td.in1_tile_c_dim, td.rt_dim, td.ct_dim, td.kt_dim,
+    )
+    form_keys = [
+        k.with_block(td.ct_dim, td.rt_dim, td.kt_dim, matmul_config.dest_acc, throttle, False, num_blocks, td.in0_tile_r_dim, td.in1_tile_c_dim)
+        for k in MATMUL_FORM_KEYS.for_block(
+            formats,
+            td.kt_dim,
+            td.ct_dim,
+            td.rt_dim,
+            math_fidelity=math_fidelity,
+            dest_sync=matmul_config.dest_sync,
+            in0_r_dim=td.in0_tile_r_dim,
+            unfuse_cells=True,
+            dest_acc=matmul_config.dest_acc,
+            throttle=throttle,
+            sections=num_blocks,
+        )
+    ]
+    if main_form:
+        for k in form_keys:
+            k.keep_flip = False
+            k.unfused_post = False
+            k.force_form = ""
+            k.pack_src_from_output = False
+    # a cell that keeps main's form runs main's unpack and math bodies (llk_matmul_forms.h resolves the form key to 0)
+    main_templates = [MATH_FIDELITY(math_fidelity), MATMUL_OPERAND_SIZES(), DEST_SYNC(matmul_config.dest_sync), THROTTLE_LEVEL(throttle), *form_keys]
+
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
         run_types,
-        templates=[
+        templates=main_templates if main_form else [
             MATH_FIDELITY(math_fidelity),
             MATMUL_OPERAND_SIZES(),
             *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces, MATMUL_PHASE_ELIDE.keeps_requested(matmul_config.tile_dimensions, matmul_config.dest_sync, math_fidelity)),
@@ -164,19 +196,7 @@ def test_perf_matmul_grid2_tiny(case, perf_report):
                 if math_fidelity == MathFidelity.LoFi and matmul_config.dest_sync == DestSync.Full
                 else []
             ),
-            *MATMUL_FORM_KEYS.for_block(
-                formats,
-                matmul_config.tile_dimensions.kt_dim,
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                math_fidelity=math_fidelity,
-                dest_sync=matmul_config.dest_sync,
-                in0_r_dim=matmul_config.tile_dimensions.in0_tile_r_dim,
-                unfuse_cells=True,
-                dest_acc=matmul_config.dest_acc,
-                throttle=throttle,
-                sections=num_blocks,
-            ),
+            *form_keys,
             *MATMUL_IN1_ALT.for_tiles(
                 formats,
                 matmul_config.dest_acc,

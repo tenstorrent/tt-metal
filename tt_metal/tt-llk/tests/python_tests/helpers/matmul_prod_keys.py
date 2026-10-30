@@ -620,3 +620,28 @@ def grid_unfused_post_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct,
     except KeyError:
         return False
     return key in _UNFUSED_POST
+
+
+# Tiny tile cells (in0 height under 32) where the keyed forms and the tiny module's extra keys read slower than main's: they keep main's unpack and math
+# (fidelity, half sync, accumulate, in1, in0, output, in0 tile height, in1 tile width, rt, ct, k steps)
+_TINY_MAIN_ROWS = (
+    ('LoFi', True, True, 'F32', 'F16b', 'B4', 4, 32, 1, 4, 1),
+    ('LoFi', True, True, 'F32', 'F32', 'B4', 4, 32, 1, 4, 1),
+    ('LoFi', True, True, 'F32', 'F16b', 'B4', 8, 32, 1, 4, 4),
+    ('HiFi2', True, True, 'F32', 'F32', 'B4', 4, 32, 1, 4, 4),
+    ('HiFi2', True, True, 'F32', 'B4', 'B4', 4, 32, 1, 4, 1),
+    ('HiFi2', True, False, 'F32', 'B8', 'B4', 16, 32, 1, 8, 1),
+    ('LoFi', True, True, 'F32', 'B8', 'B4', 4, 32, 2, 2, 4),
+    ('HiFi2', True, True, 'F32', 'F16b', 'B4', 8, 32, 1, 4, 1),
+    ('HiFi2', True, False, 'F32', 'B4', 'B4', 16, 32, 1, 8, 1),
+    ('LoFi', True, True, 'F32', 'B4', 'B4', 4, 32, 2, 2, 4),
+)
+_TINY_MAIN = frozenset(_TINY_MAIN_ROWS)
+
+
+def tiny_main_cell(fidelity, half_sync, fp32_acc, in1, in0, out, r0, c1, rt, ct, kb) -> bool:
+    try:
+        key = (fidelity.name, half_sync, fp32_acc, _SHORT[in1], _SHORT[in0], _SHORT[out], r0, c1, rt, ct, kb)
+    except KeyError:
+        return False
+    return key in _TINY_MAIN
