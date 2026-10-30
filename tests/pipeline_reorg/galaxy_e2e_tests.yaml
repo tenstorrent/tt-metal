@@ -155,7 +155,7 @@
   cmd: pytest models/demos/deepseek_v3_d_p/tests/test_d2d_socket_sync.py -k "fabric2d-8x4" -vvv --tb=short
   skus:
     bh_galaxy:
-      timeout: 10
+      timeout: 3 # measured 54 s on a BH galaxy with a cold kernel cache
   owner_id: U06LRK6JDGB # Saad Jameel
   team: models
   budget_type: e2e
