@@ -623,6 +623,22 @@ def grid_unfused_post_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct,
     return key in _UNFUSED_POST
 
 
+# Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write
+_MAIN_FLIP_ROWS = (
+    ('LoFi', True, False, 'F32', 'B4', 'B4', 1, 7, 8, 0, False, 1),
+    ('LoFi', True, False, 'F32', 'B4', 'F16b', 1, 7, 3, 0, False, 1),
+)
+_MAIN_FLIP = frozenset(_MAIN_FLIP_ROWS)
+
+
+def grid_main_flip_cell(fidelity, half_sync, fp32_acc, in1, in0, out, rt, ct, kb, throttle=0, l1_acc=False, nb=1) -> bool:
+    try:
+        key = (fidelity.name, half_sync, fp32_acc, _SHORT[in1], _SHORT[in0], _SHORT[out], rt, ct, kb, throttle, bool(l1_acc), nb)
+    except KeyError:
+        return False
+    return key in _MAIN_FLIP
+
+
 # Tiny tile cells (in0 height under 32) where the keyed forms and the tiny module's extra keys read slower than main's: they keep main's unpack and math
 # (fidelity, half sync, accumulate, in1, in0, output, in0 tile height, in1 tile width, rt, ct, k steps)
 _TINY_MAIN_ROWS = (
@@ -636,6 +652,9 @@ _TINY_MAIN_ROWS = (
     ('HiFi2', True, True, 'F32', 'F16b', 'B4', 8, 32, 1, 4, 1),
     ('HiFi2', True, False, 'F32', 'B4', 'B4', 16, 32, 1, 8, 1),
     ('LoFi', True, True, 'F32', 'B4', 'B4', 4, 32, 2, 2, 4),
+    ('HiFi2', True, True, 'F32', 'F16b', 'F32', 8, 32, 2, 2, 4),
+    ('HiFi2', True, True, 'F32', 'F16b', 'F32', 4, 32, 1, 4, 4),
+    ('HiFi2', True, True, 'F32', 'F32', 'F32', 2, 32, 2, 2, 4),
 )
 _TINY_MAIN = frozenset(_TINY_MAIN_ROWS)
 

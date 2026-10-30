@@ -106,7 +106,7 @@ constexpr char matmul_default_form()
     }
 }
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against
-// Float16_b in1 into Float32, both when the operand formats are given; HiFi2 with a 16-bit DEST and one k step per section, Float16_b or Bfp8_b output.
+// Float16_b in1 into Float32 and, on main's form (unknown k), a Bfp4_b in1 into Float32, both when the operand formats are given; HiFi2 with a 16-bit DEST and one k step per section, Float16_b or Bfp8_b output.
 // At LoFi, at HiFi3 with a 32-bit DEST and elsewhere at HiFi2 the earlier release of the held source read slower.
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0 = DataFormat::Invalid, DataFormat in1 = DataFormat::Invalid>
 constexpr bool matmul_half_end_fold()
@@ -116,7 +116,8 @@ constexpr bool matmul_half_end_fold()
            ((math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 && (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b)) ||
             (known_operands && math_fidelity == MathFidelity::HiFi4) ||
             (known_operands && math_fidelity == MathFidelity::HiFi3 && !fp32_dest &&
-             !(in0 == DataFormat::Bfp8_b && in1 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
+             !(in0 == DataFormat::Bfp8_b && in1 == DataFormat::Float16_b && out_format == DataFormat::Float32) &&
+             !(kt_per_section == 0 && in1 == DataFormat::Bfp4_b && out_format == DataFormat::Float32)));
 }
 // Cells where the keys of the ttnn matmul kernels (the format each DEST section is packed to, the row MOP rule) pick a form that reads
 // slower than main's tile MOP and per-row unpack on the tt-llk sweep (perf_matmul_forms: every form of every perf_matmul Half cell,
@@ -651,6 +652,27 @@ inline constexpr matmul_grid_main_cell matmul_unfused_post_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::Bfp4_b, DataFormat::Bfp8_b, DataFormat::Float32, 1, 1, 1, 0, false, 1},
 };
 
+// Half sync cells that keep main's whole section end: the separate post and the DEST flip with its base write (the fused post and the skipped base write read slower).
+inline constexpr matmul_grid_main_cell matmul_main_flip_cells[] = {
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 1, 7, 8, 0, false, 1},
+    {MathFidelity::LoFi, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Float16_b, 1, 7, 3, 0, false, 1},
+};
+
+constexpr bool matmul_main_flip(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
+                                const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false,
+                                const std::uint32_t nb = 1)
+{
+    for (const matmul_grid_main_cell& c : matmul_main_flip_cells)
+    {
+        if (c.fidelity == fidelity && c.half_sync == half_sync && c.fp32_acc == fp32_acc && c.in1 == in1 && c.in0 == in0 && c.out == out && c.rt == rt && c.ct == ct && c.kt == kt &&
+            c.throttle == throttle && c.l1_acc == l1_acc && c.nb == nb)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 constexpr bool matmul_unfused_post(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,
                                    const std::uint32_t rt, const std::uint32_t ct, const std::uint32_t kt, const std::uint32_t throttle = 0, const bool l1_acc = false,
                                    const std::uint32_t nb = 1)
@@ -688,6 +710,9 @@ inline constexpr matmul_tiny_main_cell matmul_tiny_main_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Bfp4_b, 8, 32, 1, 4, 1},
     {MathFidelity::HiFi2, true, false, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 16, 32, 1, 8, 1},
     {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp4_b, DataFormat::Bfp4_b, 4, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 8, 32, 2, 2, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, 4, 32, 1, 4, 4},
+    {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, 2, 32, 2, 2, 4},
 };
 
 constexpr bool matmul_tiny_main_form(const MathFidelity fidelity, const bool half_sync, const bool fp32_acc, const DataFormat in1, const DataFormat in0, const DataFormat out,

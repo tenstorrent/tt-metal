@@ -126,6 +126,15 @@ def matmul_pack_form(
         return 0
     if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full):
         return 0
+    # the 1x2 block of one K tile at LoFi from a Float32 in0 and a Bfp8_b in1 to Float16_b: the per-tile pack reads 0.7 cycles ahead of the block run
+    if (
+        dest_sync == DestSync.Half
+        and throttle == 0
+        and math_fidelity == MathFidelity.LoFi
+        and (rt_dim, ct_dim, kt_dim) == (1, 2, 1)
+        and (formats.input_format, formats.input_format_B, formats.output_format) == (DataFormat.Float32, DataFormat.Bfp8_b, DataFormat.Float16_b)
+    ):
+        return 0
     if (
         dest_sync == DestSync.Half
         and throttle == 0
