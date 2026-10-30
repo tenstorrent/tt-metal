@@ -16,13 +16,16 @@ from helpers.test_config import TestConfig
 THREADS = ["unpack", "math", "pack"]
 
 
+LAUNCH_DONE = 0x1000
+
+
 class _Core:
-    """Records the device calls run_elf_files makes and fails the loads and BRISC commands it is told to."""
+    """Records the device calls run_elf_files makes and fails the loads and writes it is told to."""
 
     def __init__(self):
         self.events = []
         self.fail_loads = set()
-        self.fail_commands = set()
+        self.fail_writes = set()
 
     def load_elf(self, elf_file, risc_name, **kwargs):
         path = Path(elf_file)
@@ -33,28 +36,36 @@ class _Core:
         self.events.append(("load", risc_name, path.parent.parent.name))
         return 0
 
-    def brisc_command(self, location, command, **kwargs):
-        self.events.append(("brisc", command.name))
-        if command.name in self.fail_commands:
-            raise TimeoutError(f"BRISC command {command.name} timed out")
+    def write_words(self, location, addr, values, **kwargs):
+        if addr in self.fail_writes:
+            raise TimeoutError(f"write to {addr:#x} timed out")
+        self.events.append(("write", addr, tuple(values)))
+
+    def release(self, value, cores, location=None, **kwargs):
+        if value == 0:
+            self.events.append(("release", tuple(core.name for core in cores)))
 
     def loads(self):
         return [event for event in self.events if event[0] == "load"]
 
     def starts(self):
-        return [event[1] for event in self.events if event[0] == "brisc"]
+        return [event[1] for event in self.events if event[0] == "release"]
+
+    def start_address_writes(self):
+        return [event for event in self.events if event[0] == "write" and event[1] == 0]
 
 
 @pytest.fixture(params=[ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE])
 def core(request, monkeypatch, tmp_path):
     core = _Core()
     monkeypatch.setattr(test_config_module, "load_elf", core.load_elf)
-    monkeypatch.setattr(test_config_module, "commit_brisc_command", core.brisc_command)
+    monkeypatch.setattr(test_config_module, "set_tensix_soft_reset", core.release)
     monkeypatch.setattr(
         test_config_module, "commit_tensix_soft_reset", lambda *a, **k: None
     )
+    monkeypatch.setattr(test_config_module, "write_words_to_device", core.write_words)
     monkeypatch.setattr(
-        test_config_module, "write_words_to_device", lambda *a, **k: None
+        test_config_module.device_module, "launch_done_address", lambda: LAUNCH_DONE
     )
     monkeypatch.setattr(TestConfig, "CHIP_ARCH", request.param, raising=False)
     monkeypatch.setattr(TestConfig, "ARTEFACTS_DIR", tmp_path, raising=False)
@@ -75,12 +86,14 @@ def _variant(core, variant_id, threads=THREADS):
     elf_dir.mkdir(parents=True)
     for thread in threads:
         (elf_dir / f"{thread}.elf").write_bytes(b"\x7fELF")
-    return SimpleNamespace(
+    variant = SimpleNamespace(
         boot_mode=BootMode.DEFAULT,
         requires_device_print=False,
         test_name="test",
         variant_id=variant_id,
     )
+    variant.resolved_boot_mode = lambda: TestConfig.resolved_boot_mode(variant)
+    return variant
 
 
 def _run(variant):
@@ -97,7 +110,7 @@ def test_complete_variant_is_loaded_once_and_started_every_run(core):
         ("load", "trisc1", "a"),
         ("load", "trisc2", "a"),
     ]
-    assert core.starts()[-1] == "START_TRISCS"
+    assert core.starts() == [("BRISC",), ("BRISC",)]
     assert TestConfig.LAST_LOADED_ELFS == core.root / "test" / "a" / "elf"
 
 
@@ -161,18 +174,19 @@ def test_failed_load_of_another_variant_reloads_the_first(core):
 
 
 @pytest.mark.parametrize("core", [ChipArchitecture.WORMHOLE], indirect=True)
-def test_timed_out_start_address_update_makes_the_next_run_load_again(core):
-    # Only Wormhole's BRISC caches the TRISC entry addresses
+def test_failed_start_address_write_keeps_the_variant_loaded(core):
+    # Wormhole TRISCs clear their start addresses after reading them, so the host writes them for every launch
     variant = _variant(core, "a")
-    core.fail_commands = {"UPDATE_START_ADDR_CACHE_AND_START"}
+    core.fail_writes = {0}
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         TimeoutError
     ):
         _run(variant)
-    assert TestConfig.LAST_LOADED_ELFS == Path()
+    assert TestConfig.LAST_LOADED_ELFS == core.root / "test" / "a" / "elf"
 
-    core.fail_commands = set()
+    core.fail_writes = set()
     core.events.clear()
     _run(variant)
-    assert [event[1] for event in core.loads()] == ["trisc0", "trisc1", "trisc2"]
-    assert core.starts() == ["RESET_TRISCS", "UPDATE_START_ADDR_CACHE_AND_START"]
+    assert core.loads() == []
+    assert len(core.start_address_writes()) == 1
+    assert core.starts() == [("BRISC",)]
