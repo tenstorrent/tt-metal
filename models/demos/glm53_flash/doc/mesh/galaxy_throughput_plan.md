@@ -118,6 +118,11 @@ Arms queued 2026-10-30 (runner budget 5400 s each, ~14 min per bench arm): `ab_a
 `ab_async_nb_32` / `ab_async_nb_128` (`GLM53_DECODE_REPLAY_BLOCKING=0`: the replay no longer blocks the engine
 thread, doc/mesh/resident_decode.md), `nb_gate_32` (the a-e gate under the knob); the capstone follows.
 
+Results: batch 32 async ON 68.2 / 69.1 ms ITL (mean / median), TTFT 5.57 s; async OFF 76.3 / 73.7 ms, TTFT 6.11 s
+(async +10 %; the remaining gap to the 48 ms device step is the blocking replay). `slot_mask_block_v1` (pass F of
+`tests/test_decode_packed_inputs_mesh.py`: `GLM53_DECODE_SLOT_MASK=1`, the interleave's model side) runs on the
+rows-4-5 block after the gate arm.
+
 ## 3. Workstream B: the decode step to the roofline floor
 
 `tt/roofline.py` (`tests/test_roofline_host.py`) models the step from measured per-op rows (refreshed 2026-10-29 from the per-layer decode profiles today_8x4_dsa3 / kda4: the stream expert op 264 us, the gather glue 175 + 67 us, the padded reduce-scatter 269 us, the mHC pre-block 82 us; model 64.9 ms vs the 61.5 ms e2e step); floor 29.0 ms at 4
