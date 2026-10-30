@@ -9,10 +9,13 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <cstdlib>
 #include <memory>
+#include <numeric>
 #include <set>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -27,6 +30,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "mimir_contract.hpp"
+#include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
+#include "tt_metal/tt_metal/test_kernels/cce/cce_idma_copy_abi.h"
 #include "umd/device/types/arch.hpp"
 #include "umd/device/types/core_coordinates.hpp"
 
@@ -278,6 +283,299 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
     }
 }
 
+// MIM-407 request VC of an own-TL1 -> GDDR iDMA copy: the destination tile's column.
+uint32_t idma_gddr_write_backend(const GddrTarget& target, uint32_t dram_offset) {
+    const uint64_t chiplet_offset = static_cast<uint64_t>(target.slot_base) * target.slot_stride + dram_offset;
+    return mimir_test::mimir_channel_location(chiplet_offset).tile == 0 ? cce_idma_copy_abi::kBackendGddr0
+                                                                        : cce_idma_copy_abi::kBackendGddr1;
+}
+
+// The CopiesGddrWithCompileTimeArgs round trip on the local Mimir, moved by iDMA instead of hart loads and stores.
+class IdmaCopiesGddrWithCompileTimeArgs : public ::testing::TestWithParam<CcePartition> {};
+
+TEST_P(IdmaCopiesGddrWithCompileTimeArgs, RoundTrip) {
+    skip_unless_programmable_dram_package();
+    const CcePartition param = GetParam();
+    const uint32_t cce_index = param.cce_index;
+    if (!cce_partition_case_applies(param, /*cross=*/false)) {
+        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
+                     << " as a local partition.";
+    }
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const GddrSweep sweep = gddr_sweep_from_soc(device);
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
+    const GddrTarget target = gddr_target_for_view(soc_desc, param.partition, sweep);
+    GddrBackingScope gddr_backing;
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
+    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const CoreCoord logical_dram_core = logical_cce_core(soc_desc, cce_index);
+    const std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
+    // TL1 and GDDR keep their contents across processes and the inputs are the same every run, so without the poison a
+    // read that never lands would leave the last run's staging for the write to copy.
+    const std::vector<uint32_t> staging_poison(transfer_size / sizeof(uint32_t), 0xDEADBEEFu);
+
+    std::vector<std::vector<uint32_t>> inputs(
+        target.num_slots, std::vector<uint32_t>(transfer_size / sizeof(uint32_t)));
+    for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
+        for (std::size_t i = 0; i < inputs[slot].size(); ++i) {
+            inputs[slot][i] = 0xC0FF0000u | (cce_index << 12) | (target.mimir_index << 8) | (target.location << 4) |
+                              static_cast<uint32_t>(i);
+        }
+        const uint64_t slot_offset = host_slot_offset(target, slot);
+        write_gddr_view(*mesh_device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
+        write_gddr_view(*mesh_device, target.host_view, dst_dram_offset + slot_offset, cleared);
+    }
+    write_cce_sram(device, logical_dram_core, staging_noc_addr, staging_poison.data(), transfer_size);
+
+    Program program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_gddr_round_trip.cpp",
+        logical_dram_core,
+        DramConfig{
+            .noc = NOC::NOC_0,
+            .compile_args = {
+                src_dram_offset,
+                dst_dram_offset,
+                target.mimir_index,
+                staging_dev_addr,
+                static_cast<uint32_t>(cleared.size()),
+                target.num_slots,
+                target.slot_stride,
+                target.slot_base,
+                cce_index,
+                idma_gddr_write_backend(target, dst_dram_offset)}});
+
+    LaunchProgram(*mesh_device, program);
+
+    std::vector<uint32_t> staged(cleared.size(), 0);
+    read_cce_sram(device, logical_dram_core, staging_noc_addr, staged.data(), transfer_size);
+    EXPECT_EQ(staged, inputs.back()) << "mimir " << target.mimir_index << " location " << target.location;
+
+    for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
+        std::vector<uint32_t> output;
+        read_gddr_view(
+            *mesh_device, target.host_view, dst_dram_offset + host_slot_offset(target, slot), transfer_size, output);
+        EXPECT_EQ(output, inputs[slot]) << "mimir " << target.mimir_index << " location " << target.location << " slot "
+                                        << slot;
+    }
+}
+
+// cce_idma_copy, which the dram/ suites also run; their host helpers are not in this target.
+constexpr const char* kIdmaCopyKernelPath = "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_copy.cpp";
+// Rdcycle cycles per kernel poll, as kPollBudgetCycles in dram/mimir_dm_common.hpp.
+constexpr uint64_t kIdmaPollBudgetCycles = 1ull << 22;
+// The status line sits past the largest staging block (kEmuGddrBackingPage) at L1 UNRESERVED.
+constexpr uint32_t kIdmaStatusOffsetFromStaging = static_cast<uint32_t>(kEmuGddrBackingPage);
+
+// One cce_idma_copy kModeTridBatch copy on hart 0 of a CCE, between its TL1 staging block at L1 UNRESERVED and a GDDR
+// chiplet offset of its local Mimir, in commands of at most kMaxBytesInPacket. A read into the staging is
+// host-verified: the hart polls the XOR of the staging against expected_xor. A write to GDDR is kernel-verified: the
+// hart polls the destination against the staging.
+struct IdmaStagingCopy {
+    uint32_t cce_index = 0;
+    uint32_t mimir_index = 0;
+    bool reads_gddr = false;
+    uint64_t chiplet_offset = 0;
+    uint32_t num_bytes = 0;
+    uint32_t backend_vc = 0;
+    uint32_t expected_xor = 0;
+};
+
+uint32_t idma_command_bytes(const IdmaStagingCopy& copy) {
+    return std::min(copy.num_bytes, cce_idma_copy_abi::kMaxBytesInPacket);
+}
+
+// The trid is the CCE index: whether CCEs share pending counters is not known.
+std::vector<uint32_t> idma_staging_copy_args(const IdmaStagingCopy& copy, uint32_t staging_dev_addr) {
+    namespace abi = cce_idma_copy_abi;
+    const uint32_t len_bytes = idma_command_bytes(copy);
+    const uint64_t source_offset = copy.reads_gddr ? copy.chiplet_offset : staging_dev_addr;
+    const uint64_t destination_offset = copy.reads_gddr ? staging_dev_addr : copy.chiplet_offset;
+    std::vector<uint32_t> args(abi::kNumArgs, 0);
+    args[abi::kArgMode] = abi::kModeTridBatch;
+    args[abi::kArgBackendVc] = copy.backend_vc;
+    args[abi::kArgStatusOffset] = staging_dev_addr + kIdmaStatusOffsetFromStaging;
+    args[abi::kArgLenBytes] = len_bytes;
+    args[abi::kArgPollBudgetLo] = static_cast<uint32_t>(kIdmaPollBudgetCycles);
+    args[abi::kArgPollBudgetHi] = static_cast<uint32_t>(kIdmaPollBudgetCycles >> 32);
+    args[abi::kArgSrcKind] = copy.reads_gddr ? abi::kKindGddr : abi::kKindOwnTl1;
+    args[abi::kArgSrcSelector] = copy.reads_gddr ? copy.mimir_index : copy.cce_index;
+    args[abi::kArgSrcOffsetLo] = static_cast<uint32_t>(source_offset);
+    args[abi::kArgSrcOffsetHi] = static_cast<uint32_t>(source_offset >> 32);
+    args[abi::kArgDstKind] = copy.reads_gddr ? abi::kKindOwnTl1 : abi::kKindGddr;
+    args[abi::kArgDstSelector] = copy.reads_gddr ? copy.cce_index : copy.mimir_index;
+    args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(destination_offset);
+    args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(destination_offset >> 32);
+    args[abi::kArgExpectedXor] = copy.expected_xor;
+    args[abi::kArgNumElements] = copy.num_bytes / len_bytes;
+    args[abi::kArgSourceStrideBytes] = len_bytes;
+    args[abi::kArgTrid] = copy.cce_index;
+    args[abi::kArgDestinationStrideBytes] = len_bytes;
+    args[abi::kArgHostVerified] = copy.reads_gddr ? 1 : 0;
+    return args;
+}
+
+// Runs every copy in one blocking Program and returns their status lines in copy order. Every kernel poll is bounded,
+// so a copy that never completes ends with a timeout code instead of holding the launch.
+std::vector<std::vector<uint32_t>> run_idma_staging_copies(
+    distributed::MeshDevice& mesh, IDevice* device, const std::vector<IdmaStagingCopy>& copies) {
+    namespace abi = cce_idma_copy_abi;
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t status_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED) +
+                                     kIdmaStatusOffsetFromStaging;
+    const uint32_t status_bytes = abi::kStatusWords * static_cast<uint32_t>(sizeof(uint32_t));
+    const std::vector<uint32_t> status_poison(abi::kStatusWords, abi::kStatusPoison);
+    Program program = CreateProgram();
+    for (const IdmaStagingCopy& copy : copies) {
+        const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), copy.cce_index);
+        write_cce_sram(device, logical_dram_core, status_noc_addr, status_poison.data(), status_bytes);
+        const KernelHandle kernel =
+            CreateKernel(program, kIdmaCopyKernelPath, logical_dram_core, DramConfig{.noc = NOC::NOC_0});
+        SetRuntimeArgs(program, kernel, logical_dram_core, idma_staging_copy_args(copy, staging_dev_addr));
+    }
+
+    LaunchProgram(mesh, program);
+
+    std::vector<std::vector<uint32_t>> statuses;
+    for (const IdmaStagingCopy& copy : copies) {
+        std::vector<uint32_t> status(abi::kStatusWords, 0);
+        read_cce_sram(
+            device,
+            logical_cce_core(soc_desc_of(device), copy.cce_index),
+            status_noc_addr,
+            status.data(),
+            status_bytes);
+        statuses.push_back(status);
+    }
+    return statuses;
+}
+
+// Every copy wrote its status line with its success code after issuing every command.
+::testing::AssertionResult idma_copies_completed(
+    const std::vector<IdmaStagingCopy>& copies, const std::vector<std::vector<uint32_t>>& statuses) {
+    namespace abi = cce_idma_copy_abi;
+    std::string failures;
+    for (std::size_t index = 0; index < copies.size(); ++index) {
+        const IdmaStagingCopy& copy = copies[index];
+        const std::vector<uint32_t>& status = statuses[index];
+        const uint32_t expected_code = copy.reads_gddr ? abi::kCodeAcked : abi::kCodeLanded;
+        const uint32_t expected_commands = copy.num_bytes / idma_command_bytes(copy);
+        if (status[abi::kStatusMagic] != abi::kDoneMagic || status[abi::kStatusCode] != expected_code ||
+            status[abi::kStatusElementsIssued] != expected_commands) {
+            failures += fmt::format(
+                "cce {} {}: magic 0x{:08x}, code {} (expected {}), {} of {} commands issued, last poll {} ready {}, "
+                "pending high water {}, kernel mismatches {} (first word {} observed 0x{:08x} expected 0x{:08x})\n",
+                copy.cce_index,
+                copy.reads_gddr ? "GDDR to staging" : "staging to GDDR",
+                status[abi::kStatusMagic],
+                status[abi::kStatusCode],
+                expected_code,
+                status[abi::kStatusElementsIssued],
+                expected_commands,
+                status[abi::kStatusLastPoll],
+                status[abi::kStatusLastPollReady],
+                status[abi::kStatusPendingHighWater],
+                status[abi::kStatusMismatchedWords],
+                status[abi::kStatusFirstMismatchWord],
+                status[abi::kStatusObserved],
+                status[abi::kStatusExpected]);
+        }
+    }
+    if (failures.empty()) {
+        return ::testing::AssertionSuccess();
+    }
+    return ::testing::AssertionFailure()
+           << failures
+           << "A timeout code may leave a command in flight; start a fresh emulator session before the next run "
+              "(MIM-601).";
+}
+
+// GDDR -> own TL1 staging -> GDDR on the local Mimir by iDMA, one slot at a time, `pages_per_copy` DRAM alignments per
+// copy (at most kEmuGddrBackingPage). Each word holds `value_tag`, the CCE, Mimir, location and slot in its high half
+// and its index in its low half, so no two words of a run are equal.
+void idma_round_trip_through_staging(const CcePartition& param, uint32_t pages_per_copy, uint32_t value_tag) {
+    skip_unless_programmable_dram_package();
+    const uint32_t cce_index = param.cce_index;
+    if (!cce_partition_case_applies(param, /*cross=*/false)) {
+        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
+                     << " as a local partition.";
+    }
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const GddrSweep sweep = gddr_sweep_from_soc(device);
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
+    const GddrTarget target = gddr_target_for_view(soc_desc, param.partition, sweep);
+    GddrBackingScope gddr_backing;
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t transfer_size =
+        std::min(hal.get_alignment(HalMemType::DRAM) * pages_per_copy, static_cast<uint32_t>(kEmuGddrBackingPage));
+    const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
+    const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const CoreCoord logical_dram_core = logical_cce_core(soc_desc, cce_index);
+    const std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
+    // TL1 and GDDR keep their contents across processes and the inputs are the same every run, so without the poison a
+    // read that never lands would leave the last run's staging for the write to copy.
+    const std::vector<uint32_t> staging_poison(transfer_size / sizeof(uint32_t), 0xDEADBEEFu);
+
+    for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
+        const uint32_t location_tag =
+            (cce_index << 12) | (target.mimir_index << 8) | (target.location << 4) | (slot & 0xFu);
+        std::vector<uint32_t> input(transfer_size / sizeof(uint32_t));
+        for (std::size_t i = 0; i < input.size(); ++i) {
+            input[i] = value_tag ^ (location_tag << 16) ^ static_cast<uint32_t>(i);
+        }
+        const uint64_t slot_offset = host_slot_offset(target, slot);
+        const uint64_t slot_chiplet_offset = static_cast<uint64_t>(target.slot_base + slot) * target.slot_stride;
+        write_gddr_view(*mesh_device, target.host_view, src_dram_offset + slot_offset, input);
+        write_gddr_view(*mesh_device, target.host_view, dst_dram_offset + slot_offset, cleared);
+        write_cce_sram(device, logical_dram_core, staging_noc_addr, staging_poison.data(), transfer_size);
+        const std::string label =
+            fmt::format("mimir {} location {} slot {}", target.mimir_index, target.location, slot);
+
+        const std::vector<IdmaStagingCopy> reads = {IdmaStagingCopy{
+            .cce_index = cce_index,
+            .mimir_index = target.mimir_index,
+            .reads_gddr = true,
+            .chiplet_offset = slot_chiplet_offset + src_dram_offset,
+            .num_bytes = transfer_size,
+            .backend_vc = cce_idma_copy_abi::kBackendFromRemote,
+            .expected_xor = std::accumulate(input.begin(), input.end(), 0u, std::bit_xor<uint32_t>())}};
+        const std::vector<std::vector<uint32_t>> read_statuses = run_idma_staging_copies(*mesh_device, device, reads);
+        std::vector<uint32_t> staged(input.size(), 0);
+        read_cce_sram(device, logical_dram_core, staging_noc_addr, staged.data(), transfer_size);
+        EXPECT_EQ(staged, input) << label << " staging";
+        ASSERT_TRUE(idma_copies_completed(reads, read_statuses)) << label;
+
+        const std::vector<IdmaStagingCopy> writes = {IdmaStagingCopy{
+            .cce_index = cce_index,
+            .mimir_index = target.mimir_index,
+            .chiplet_offset = slot_chiplet_offset + dst_dram_offset,
+            .num_bytes = transfer_size,
+            .backend_vc = idma_gddr_write_backend(target, static_cast<uint32_t>(slot_offset) + dst_dram_offset)}};
+        const std::vector<std::vector<uint32_t>> write_statuses = run_idma_staging_copies(*mesh_device, device, writes);
+        std::vector<uint32_t> output;
+        read_gddr_view(*mesh_device, target.host_view, dst_dram_offset + slot_offset, transfer_size, output);
+        EXPECT_EQ(output, input) << label;
+        ASSERT_TRUE(idma_copies_completed(writes, write_statuses)) << label;
+    }
+}
+
 class CopiesGddrWithRuntimeArgs : public ::testing::TestWithParam<CcePartition> {};
 
 TEST_P(CopiesGddrWithRuntimeArgs, RoundTrip) {
@@ -353,6 +651,13 @@ TEST_P(CopiesGddrWithRuntimeArgs, RoundTrip) {
                 << "mimir " << target.mimir_index << " location " << target.location << " slot " << slot;
         }
     }
+}
+
+// CopiesGddrWithRuntimeArgs on the local Mimir through cce_idma_copy, whose operands all arrive as runtime args.
+class IdmaCopiesGddrWithRuntimeArgs : public ::testing::TestWithParam<CcePartition> {};
+
+TEST_P(IdmaCopiesGddrWithRuntimeArgs, RoundTrip) {
+    idma_round_trip_through_staging(GetParam(), /*pages_per_copy=*/1, 0xD15C0000u);
 }
 
 class AllocatedDramBufferHostLoopback : public ::testing::TestWithParam<uint32_t> {};
@@ -549,6 +854,15 @@ TEST_P(CopiesGddrLargerThanAlignment, RoundTrip) {
     }
 }
 
+// CopiesGddrLargerThanAlignment on the local Mimir through cce_idma_copy.
+class IdmaCopiesGddrLargerThanAlignment : public ::testing::TestWithParam<CcePartition> {};
+
+TEST_P(IdmaCopiesGddrLargerThanAlignment, RoundTrip) {
+    constexpr uint32_t kPagesPerBank = 16;
+    idma_round_trip_through_staging(GetParam(), kPagesPerBank, 0x1A6E0000u);
+}
+
+// Every CCE copies one block of its local view through its TL1 staging by iDMA, all CCEs in one Program per direction.
 TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     skip_unless_programmable_dram_package();
     auto mesh_device = open_unit_mesh();
@@ -566,12 +880,16 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     const auto& hal = MetalContext::instance().hal();
     const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
     const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t staging_noc_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
 
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     std::vector<std::vector<uint32_t>> inputs(num_cces, std::vector<uint32_t>(transfer_size / sizeof(uint32_t)));
     std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
-    Program program = CreateProgram();
+    // TL1 and GDDR keep their contents across processes and the inputs are the same every run, so without the poison a
+    // read that never lands would leave the last run's staging for the write to copy.
+    const std::vector<uint32_t> staging_poison(transfer_size / sizeof(uint32_t), 0xDEADBEEFu);
+    std::vector<IdmaStagingCopy> reads;
+    std::vector<IdmaStagingCopy> writes;
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         const GddrTarget local = gddr_target_for_view(soc_desc, local_dram_view_for_cce(soc_desc, cce_index), sweep);
         for (std::size_t i = 0; i < inputs[cce_index].size(); ++i) {
@@ -581,35 +899,43 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
         const uint32_t cce_dst = cce_src + transfer_size;
         write_gddr_view(*mesh_device, local.host_view, cce_src, inputs[cce_index]);
         write_gddr_view(*mesh_device, local.host_view, cce_dst, cleared);
+        write_cce_sram(
+            device, logical_cce_core(soc_desc, cce_index), staging_noc_addr, staging_poison.data(), transfer_size);
 
-        const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
-        const KernelHandle kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/cce_dram_buffer_round_trip.cpp",
-            logical_dram_core,
-            DramConfig{.noc = NOC::NOC_0});
-        SetRuntimeArgs(
-            program,
-            kernel,
-            logical_dram_core,
-            {cce_src,
-             cce_dst,
-             local.mimir_index,
-             staging_dev_addr,
-             static_cast<uint32_t>(cleared.size()),
-             1u,
-             sweep.slot_stride,
-             local.slot_base});
+        const uint64_t view_chiplet_offset = static_cast<uint64_t>(local.slot_base) * local.slot_stride;
+        reads.push_back(IdmaStagingCopy{
+            .cce_index = cce_index,
+            .mimir_index = local.mimir_index,
+            .reads_gddr = true,
+            .chiplet_offset = view_chiplet_offset + cce_src,
+            .num_bytes = transfer_size,
+            .backend_vc = cce_idma_copy_abi::kBackendFromRemote,
+            .expected_xor =
+                std::accumulate(inputs[cce_index].begin(), inputs[cce_index].end(), 0u, std::bit_xor<uint32_t>())});
+        writes.push_back(IdmaStagingCopy{
+            .cce_index = cce_index,
+            .mimir_index = local.mimir_index,
+            .chiplet_offset = view_chiplet_offset + cce_dst,
+            .num_bytes = transfer_size,
+            .backend_vc = idma_gddr_write_backend(local, cce_dst)});
     }
 
-    LaunchProgram(*mesh_device, program);
+    const std::vector<std::vector<uint32_t>> read_statuses = run_idma_staging_copies(*mesh_device, device, reads);
+    for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
+        std::vector<uint32_t> staged(cleared.size(), 0);
+        read_cce_sram(device, logical_cce_core(soc_desc, cce_index), staging_noc_addr, staged.data(), transfer_size);
+        EXPECT_EQ(staged, inputs[cce_index]) << "cce " << cce_index << " staging";
+    }
+    ASSERT_TRUE(idma_copies_completed(reads, read_statuses));
 
+    const std::vector<std::vector<uint32_t>> write_statuses = run_idma_staging_copies(*mesh_device, device, writes);
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         std::vector<uint32_t> output;
         const uint32_t cce_dst = src_dram_offset + cce_index * 2 * transfer_size + transfer_size;
         read_gddr_view(*mesh_device, local_dram_view_for_cce(soc_desc, cce_index), cce_dst, transfer_size, output);
         EXPECT_EQ(output, inputs[cce_index]) << "cce " << cce_index;
     }
+    EXPECT_TRUE(idma_copies_completed(writes, write_statuses));
 }
 
 class WritesCrossMimirCceSram : public ::testing::TestWithParam<uint32_t> {};
@@ -825,6 +1151,91 @@ TEST_P(AllHartsWriteGddr, WritesMagic) {
     }
 }
 
+// AllHartsWriteGddr on the local Mimir, with each hart's word copied by iDMA instead of a hart store. The value still
+// reaches the hart only as a compile-time arg.
+class AllHartsIdmaWriteGddr : public ::testing::TestWithParam<CcePartition> {};
+
+TEST_P(AllHartsIdmaWriteGddr, WritesMagic) {
+    skip_unless_programmable_dram_package();
+    const CcePartition param = GetParam();
+    const uint32_t cce_index = param.cce_index;
+    if (!cce_partition_case_applies(param, /*cross=*/false)) {
+        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
+                     << " as a local partition.";
+    }
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    const GddrSweep sweep = gddr_sweep_from_soc(device);
+    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
+    const GddrTarget target = gddr_target_for_view(soc_desc, param.partition, sweep);
+    GddrBackingScope gddr_backing;
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
+    ASSERT_EQ(num_harts, 8u);
+
+    const uint32_t dst_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t staging_dev_base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t staging_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const CoreCoord logical_dram_core = logical_cce_core(soc_desc, cce_index);
+    const uint32_t backend_vc = idma_gddr_write_backend(target, dst_dram_offset);
+    const std::vector<uint32_t> cleared(num_harts, 0);
+    // The values are the same every run and TL1 keeps its contents across processes, so without the poison an iDMA that
+    // read the staging word before the hart's store landed would copy the last run's value.
+    const std::vector<uint32_t> staging_poison(num_harts, 0xDEADBEEFu);
+
+    for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
+        write_gddr_view(*mesh_device, target.host_view, dst_dram_offset + host_slot_offset(target, slot), cleared);
+    }
+    write_cce_sram(
+        device,
+        logical_dram_core,
+        staging_noc_base,
+        staging_poison.data(),
+        static_cast<uint32_t>(num_harts * sizeof(uint32_t)));
+
+    Program program = CreateProgram();
+    std::vector<uint32_t> expected(num_harts, 0);
+    for (uint32_t hart = 0; hart < num_harts; hart++) {
+        expected[hart] = 0xA11B0000u | (cce_index << 12) | (target.mimir_index << 8) | (target.location << 4) | hart;
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/cce/cce_idma_gddr_write_one_uint32.cpp",
+            logical_dram_core,
+            DramConfig{
+                .processor = static_cast<DataMovementProcessor>(hart),
+                .noc = NOC::NOC_0,
+                .compile_args = {
+                    dst_dram_offset + hart * static_cast<uint32_t>(sizeof(uint32_t)),
+                    target.mimir_index,
+                    expected[hart],
+                    staging_dev_base + hart * static_cast<uint32_t>(sizeof(uint32_t)),
+                    target.num_slots,
+                    target.slot_stride,
+                    target.slot_base,
+                    cce_index,
+                    backend_vc,
+                    hart}});
+    }
+
+    LaunchProgram(*mesh_device, program);
+
+    for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
+        std::vector<uint32_t> output;
+        read_gddr_view(
+            *mesh_device,
+            target.host_view,
+            dst_dram_offset + host_slot_offset(target, slot),
+            static_cast<uint32_t>(num_harts * sizeof(uint32_t)),
+            output);
+        EXPECT_EQ(output, expected) << "mimir " << target.mimir_index << " location " << target.location << " slot "
+                                    << slot;
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(MimirEmu, CceSramRoundTripThroughUnitMesh, ::testing::ValuesIn(cce_indices()), cce_param_name);
 
 INSTANTIATE_TEST_SUITE_P(MimirEmu, HartZeroRunsDramKernel, ::testing::ValuesIn(cce_indices()), cce_param_name);
@@ -838,7 +1249,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuSameMimirDirect,
-    CopiesGddrWithCompileTimeArgs,
+    IdmaCopiesGddrWithCompileTimeArgs,
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
@@ -856,7 +1267,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuSameMimirDirect,
-    CopiesGddrWithRuntimeArgs,
+    IdmaCopiesGddrWithRuntimeArgs,
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
@@ -867,7 +1278,7 @@ INSTANTIATE_TEST_SUITE_P(MimirEmu, CopiesEveryMimirBlock, ::testing::ValuesIn(cc
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuSameMimirDirect,
-    CopiesGddrLargerThanAlignment,
+    IdmaCopiesGddrLargerThanAlignment,
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
@@ -878,7 +1289,7 @@ INSTANTIATE_TEST_SUITE_P(
     cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(
-    MimirEmuSameMimirDirect, AllHartsWriteGddr, ::testing::ValuesIn(cce_partition_params()), cce_partition_name);
+    MimirEmuSameMimirDirect, AllHartsIdmaWriteGddr, ::testing::ValuesIn(cce_partition_params()), cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuCrossMimirNoc, AllHartsWriteGddr, ::testing::ValuesIn(cce_partition_params()), cce_partition_name);
