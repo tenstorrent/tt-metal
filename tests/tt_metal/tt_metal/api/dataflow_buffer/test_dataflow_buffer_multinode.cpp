@@ -546,6 +546,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S) {
     // kernel is TRISC-only and can't carry tensor bindings.
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
+    program.impl().prepare_ephemeral_allocation(this->device().impl().get_devices()[0]);
     program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     std::vector<std::vector<uint32_t>> inputs(num_dfbs);

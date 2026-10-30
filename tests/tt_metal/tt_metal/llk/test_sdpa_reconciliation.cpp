@@ -274,13 +274,13 @@ void run_sdpa_tail(
 // Run the chunk API through its partial-output path, including online softmax
 // across chunks. Layout 0 preserves the original shared K/V defaults; layout 1
 // preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
-template <bool test_correction_fidelity = false>
+// chunk_tiles is the K-chunk length in tiles, which is also the OV matmul's kt_dim.
+template <bool test_correction_fidelity = false, std::uint32_t chunk_tiles = 2>
 void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
     constexpr std::uint32_t rounds = 3;
     constexpr std::uint32_t chunks = test_correction_fidelity ? 3 : 2;
-    constexpr std::uint32_t chunk_tiles = 2;
     constexpr std::uint32_t qk_tiles = 2;
     constexpr std::uint32_t v_tiles = 2;
     constexpr std::uint32_t width = qk_tiles * 32;
@@ -319,7 +319,8 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
             CircularBufferConfig(tiles * full_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
                 .set_page_size(cb, full_tile_bytes));
     }
-    const std::vector<std::uint32_t> args{rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity};
+    const std::vector<std::uint32_t> args{
+        rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity, chunk_tiles};
     const auto reader = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_sdpa_merged_kv.cpp",
@@ -553,6 +554,32 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvAndDefaultLayouts) {
     }
 }
 
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkOddChunkSize) {
+    // The OV matmul's kt_dim is the chunk length. Its reuse-dest unpack covers K tiles
+    // in pairs and then replays an odd last tile, so a 3-tile chunk runs both paths.
+    for (const auto layout : {0u, 1u, 2u}) {
+        for (const bool full_sync : {false, true}) {
+            SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
+            run_sdpa_merged_kv<false, 3>(*devices_.at(0), layout, full_sync);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSizeCompileLimits) {
+    // This is a compile-time contract test; these programs are never launched.
+    // Odd chunks of at least two tiles compile. A 1-tile chunk must be rejected: it
+    // gets the running max wrong on device (not the OV matmul, which supports kt_dim 1).
+    for (const auto chunk : {1u, 2u, 3u, 5u}) {
+        SCOPED_TRACE(::testing::Message() << "chunk=" << chunk);
+        auto program = make_sdpa_chunk_compile_program({chunk, 1, 1, 2, 2, 0, 0, 0});
+        if (chunk >= 2) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+}
+
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkCorrectionFidelityOverride) {
     // QK and OV remain LoFi; only the previous-output correction uses HiFi4.
     // BF16(exp(-2.5)) is 21/256, and corr - 1 is exactly representable too.
@@ -578,6 +605,19 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
         auto compile_args = args;
         compile_args.insert(compile_args.end(), {2, 2, 0, 0, 0});
         auto program = make_sdpa_chunk_compile_program(compile_args);
+        if (fits) {
+            EXPECT_NO_THROW(program.impl().compile(&this->device()));
+        } else {
+            EXPECT_THROW(program.impl().compile(&this->device()), std::runtime_error);
+        }
+    }
+    // The output posts share the semaphore with the chunk's still-outstanding bcast-mul/dummy
+    // post, so (num_tiles_v / output_granularity) + 1 must fit as well: with unit grouping
+    // 14 output tiles fit and 15 must be rejected.
+    for (const auto num_tiles_v : {14u, 15u}) {
+        SCOPED_TRACE(::testing::Message() << "num_tiles_v=" << num_tiles_v << ", output_granularity=1");
+        const bool fits = num_tiles_v / 1 + 1 <= 15;
+        auto program = make_sdpa_chunk_compile_program({2, 1, 1, num_tiles_v, num_tiles_v, 0, 2, 0});
         if (fits) {
             EXPECT_NO_THROW(program.impl().compile(&this->device()));
         } else {

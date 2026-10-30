@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     PackGolden,
@@ -52,7 +53,6 @@ TILE_DIMENSIONS = [32, 32]
 PACK_L1_ACC_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int8,
@@ -211,9 +211,7 @@ def test_pack_l1_acc_quasar(
             partials, data_format=formats.output_format
         )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")

@@ -18,7 +18,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include <array>
 #include <cmath>

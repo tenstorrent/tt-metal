@@ -46,14 +46,12 @@ struct CopyDest;
 template <uint32_t InDF, uint32_t OutDF, Dst Slot = Dst::D0>
 struct Typecast;
 
-// Mask / MaskPosInf. mask_tile LLK is BH/WH-only (ckernel_sfpu_mask.h not ported to Quasar).
-#ifndef ARCH_QUASAR
+// Mask / MaskPosInf.
 template <DataFormat DF = DataFormat::Float16_b, Dst DataSlot = Dst::D0>
 struct Mask;
 
 template <Dst DataSlot = Dst::D0>
 struct MaskPosInf;
-#endif
 
 }  // namespace compute_kernel_lib
 

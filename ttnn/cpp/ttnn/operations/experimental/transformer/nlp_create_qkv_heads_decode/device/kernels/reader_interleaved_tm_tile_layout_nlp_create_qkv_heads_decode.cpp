@@ -11,7 +11,7 @@
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "internal/local_mem/address_access.h"
 

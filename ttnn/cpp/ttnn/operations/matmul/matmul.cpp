@@ -331,8 +331,17 @@ static ttnn::Tensor bound_matmul(
         parameters.user_fused_activation = std::nullopt;
     }
 
+    std::optional<Tensor> matmul_output_tensor = optional_output_tensor;
+    if (post_process_bias && optional_output_tensor.has_value() &&
+        optional_output_tensor->logical_shape().volume() !=
+            utilities::compute_matmul_output_shape(
+                input_tensor_a_adjusted, input_tensor_b_adjusted, parameters.transpose_a, parameters.transpose_b)
+                .volume()) {
+        matmul_output_tensor = std::nullopt;
+    }
+
     auto attributes = ttnn::prim::create_matmul_attributes(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {matmul_output_tensor});
 
     // Opt-in (ttnn.CONFIG.matmul_model_config): the matmul config model chooses the program config, once per matmul,
     // for the inputs, bias and attributes the device op gets. The compute kernel config stays the one resolved above
@@ -343,7 +352,7 @@ static ttnn::Tensor bound_matmul(
             input_tensor_a_adjusted,
             input_tensor_b_adjusted,
             post_process_bias ? std::nullopt : bias,
-            optional_output_tensor,
+            matmul_output_tensor,
             attributes);
     }
 
@@ -351,7 +360,7 @@ static ttnn::Tensor bound_matmul(
                              input_tensor_a_adjusted,
                              input_tensor_b_adjusted,
                              post_process_bias ? std::nullopt : bias,
-                             optional_output_tensor,
+                             matmul_output_tensor,
                              attributes)
                              .at(0);
 
@@ -368,7 +377,8 @@ static ttnn::Tensor bound_matmul(
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
-            output_tensor.memory_config(),
+            optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
+                                               : output_tensor.memory_config(),
             optional_output_tensor);
     }
 
@@ -657,7 +667,8 @@ Tensor sparse_matmul(
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<Tensor>& indices,
-    const std::optional<Tensor>& bias) {
+    const std::optional<Tensor>& bias,
+    const PrefetcherPipeList& prefetcher_pipes) {
     std::optional<CoreCoord> user_core_coord =
         core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
 
@@ -678,7 +689,8 @@ Tensor sparse_matmul(
                global_cb,
                sub_device_id,
                indices,
-               bias)
+               bias,
+               prefetcher_pipes)
         .at(0);
 }
 

@@ -252,6 +252,28 @@ def test_block_float_output_keeps_precision(device, model_on):
     assert_with_pcc(ttnn.to_torch(ta).float() @ ttnn.to_torch(tb).float(), ttnn.to_torch(out), 0.99)
 
 
+def test_broadcast_bias_with_preallocated_output(device, model_on):
+    """A bias that broadcasts the matmul to a larger final output is added after the matmul, and the preallocated
+    output is the final one, not the matmul's: the model must choose for the matmul's own output, as the device op
+    gets it (review of #62197). Same result as with the flag off."""
+    torch.manual_seed(0)
+    a = torch.randn(1, 1, 32, 64).bfloat16()
+    b = torch.randn(1, 1, 64, 64).bfloat16()
+    bias = torch.randn(2, 1, 32, 64).bfloat16()
+
+    def run():
+        tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        out = tt(torch.zeros(2, 1, 32, 64).bfloat16())
+        return ttnn.to_torch(ttnn.linear(tt(a), tt(b), bias=tt(bias), optional_output_tensor=out))
+
+    with ttnn.manage_config("matmul_model_config", False):
+        default = run()
+    got = run()
+    assert last_pick().startswith("model: "), last_pick()
+    assert torch.equal(got, default)
+    assert_with_pcc(a.float() @ b.float() + bias.float(), got, 0.999)
+
+
 def test_preallocated_l1_output_is_not_counted_twice(device, model_on):
     """A preallocated L1 output is already outside the free L1 the pick's budget starts from. Here it fills about 55%
     of every L1 bank, so counting it a second time would leave no L1 for any candidate and keep the default."""
