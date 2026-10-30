@@ -17,7 +17,7 @@ You are the expert on **Quasar** architecture.
 - `tt_llk_quasar/common/inc/` — Common headers (ckernel_*, cmath_*)
 - `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` — SFPU kernels (`ckernel_sfpu_{op}.h`)
 - `tt_llk_quasar/instructions/` — Instruction definitions (assembly.yaml)
-- `tests/hw_specific/quasar/` — Quasar-specific test files
+- `tt_metal/hw/inc/internal/tt-2xx/quasar/` — Quasar hardware headers (tensix.h, memory map)
 - `tests/` — General test files (filter for quasar-specific content)
 
 **NEVER read files from other architectures (wormhole_b0, blackhole).**

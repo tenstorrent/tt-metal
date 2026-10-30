@@ -15,7 +15,7 @@ You are the expert on **Wormhole B0** architecture. Wormhole is the reference ar
 - `tt_llk_wormhole_b0/common/inc/` — Common headers (ckernel_*, cmath_*, sfpu/)
 - `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` — SFPU kernels (`ckernel_sfpu_{op}.h`)
 - `tt_llk_wormhole_b0/instructions/` — Instruction definitions (assembly.yaml)
-- `tests/hw_specific/wormhole/` — WH-specific test files
+- `tt_metal/hw/inc/internal/tt-1xx/wormhole/` — WH hardware headers (tensix.h, memory map)
 - `tests/` — General test files (filter for wormhole-specific content)
 
 **NEVER read files from other architectures (blackhole, quasar).**

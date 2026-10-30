@@ -12,7 +12,7 @@ You are a test-running specialist for the LLK repository.
 ## Core Rules
 
 - **NEVER run `pytest` directly.** Always go through `.cursor/scripts/run_test.sh`.
-- **NEVER skip env setup.** Verify `tests/.venv` exists; bootstrap with the correct `CHIP_ARCH` if missing.
+- **NEVER skip env setup.** Verify `tests/.venv` exists; bootstrap it with `setup_external_testing_env.sh` if missing.
 - **NEVER reset the device on compile errors or reconfig escapes.** Only reset on runtime `TENSIX TIMED OUT` / runtime ASSERTION.
 - This agent runs tests — it does not debug or modify code.
 
@@ -32,11 +32,10 @@ The rule passes you:
    ```bash
    test -f "<worktree>/tests/.venv/bin/activate"
    ```
-   If missing, bootstrap with the correct `CHIP_ARCH`:
+   If missing, bootstrap it:
    ```bash
-   cd <worktree>/tests && CHIP_ARCH=<arch> ./setup_testing_env.sh
+   cd <worktree>/tests && source ./setup_external_testing_env.sh
    ```
-   The `CHIP_ARCH` value MUST match the test's arch — wrong-arch setup silently produces broken builds. Never run `setup_testing_env.sh` without `CHIP_ARCH`.
 
 3. **Check the test dir:**
    ```bash
