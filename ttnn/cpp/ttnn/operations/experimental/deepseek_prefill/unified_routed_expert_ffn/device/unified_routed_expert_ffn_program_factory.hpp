@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
+#include <utility>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -15,6 +17,11 @@
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
 struct UnifiedRoutedExpertFfnProgramFactory {
+    // The L1-fitted (per_core_M, in0_block_w_gu) create_descriptor would build with now: the
+    // circular buffers are sized to the free L1, so the program-cache key includes this plan.
+    static std::pair<uint32_t, uint32_t> select_l1_plan(
+        const UnifiedRoutedExpertFfnParams& operation_attributes, const UnifiedRoutedExpertFfnInputs& tensor_args);
+
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const UnifiedRoutedExpertFfnParams& operation_attributes,
         const UnifiedRoutedExpertFfnInputs& tensor_args,
