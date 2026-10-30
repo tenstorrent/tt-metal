@@ -1864,26 +1864,26 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::REQUANT_UINT8)
     {
-        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::UInt8), zero_point);
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::UInt8), zero_point, out_zero_point);
     }
     else if constexpr (BINOP == BinaryOp::REQUANT_INT8)
     {
-        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int8), zero_point);
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int8), zero_point, out_zero_point);
     }
     else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN)
     {
         SFPU_BINARY_INIT_FN_ARGS(
-            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int32, true /*INT8_INPUT*/), zero_point);
+            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int32, true /*INT8_INPUT*/), zero_point, out_zero_point);
     }
     else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN_UINT8_OUT)
     {
         SFPU_BINARY_INIT_FN_ARGS(
-            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::UInt8, true /*INT8_INPUT*/), zero_point);
+            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::UInt8, true /*INT8_INPUT*/), zero_point, out_zero_point);
     }
     else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN_INT8_OUT)
     {
         SFPU_BINARY_INIT_FN_ARGS(
-            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int8, true /*INT8_INPUT*/), zero_point);
+            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int8, true /*INT8_INPUT*/), zero_point, out_zero_point);
     }
     else if constexpr (BINOP == BinaryOp::DEQUANT_INT8)
     {
