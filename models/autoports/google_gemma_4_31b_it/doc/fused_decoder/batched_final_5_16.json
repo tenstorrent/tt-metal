@@ -1,0 +1,20 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tt.fused_decoder.FusedDecoder",
+  "layer_type": "full_attention",
+  "batch": 16,
+  "prefill_tokens": 33,
+  "decode_position": 33,
+  "prefill_pcc": 0.9999830058174791,
+  "decode_pcc": 0.999990366078313,
+  "real_weights": true,
+  "reference_scope": "all_rows",
+  "trace_replays": 4,
+  "interleaved_prefill_cases": 0,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9999906556361463,
+  "deterministic": true,
+  "resume_pcc": null,
+  "boundaries": [],
+  "maximum_prefill_pcc": null
+}

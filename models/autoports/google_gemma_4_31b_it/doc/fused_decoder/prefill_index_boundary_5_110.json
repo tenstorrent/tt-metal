@@ -1,0 +1,14 @@
+{
+  "layer_type": "full_attention",
+  "batch": 110,
+  "seq": 33,
+  "prefill_pcc": 0.9999939611430664,
+  "decode_pcc": null,
+  "prefill_only": true,
+  "cache_pcc": [
+    0.9999946490260944,
+    1.0
+  ],
+  "real_weights": true,
+  "reference": "FunctionalDecoder"
+}

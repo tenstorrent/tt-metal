@@ -1,0 +1,10 @@
+{
+  "production_source": "models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py",
+  "sha256": "cc1b358f90a2fadab24cbb3dd9826ffe32015fab46ccefac25c0c6c11c658149",
+  "no_functional_import_or_delegation": true,
+  "host_conversion_and_arange_only_during_setup": true,
+  "no_explicit_tilize_untilize": true,
+  "required_movement": "Decode HF RoPE requires height sharding; RMSNorm rejects height sharding; full-attention long-context SDPA requires DRAM Q to avoid proven static-L1 collision. B16/B32 split transfers are included in measured winning candidates.",
+  "runtime_guards": "run_fused_decoder patches from_torch/to_torch/as_tensor to fail inside every prefill/decode call.",
+  "large_batch_required_movement": "Full B>=34 relocates K through DRAM with explicit deallocation before resharding to avoid proved low-L1 placement collision; B<=32 graph unchanged. See AUTOFIX.md."
+}

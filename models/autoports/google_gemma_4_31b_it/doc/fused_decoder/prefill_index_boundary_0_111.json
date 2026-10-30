@@ -1,0 +1,14 @@
+{
+  "layer_type": "sliding_attention",
+  "batch": 111,
+  "seq": 33,
+  "prefill_pcc": 0.9999856383848451,
+  "decode_pcc": null,
+  "prefill_only": true,
+  "cache_pcc": [
+    0.9999988950823591,
+    0.9999999999999999
+  ],
+  "real_weights": true,
+  "reference": "FunctionalDecoder"
+}

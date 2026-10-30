@@ -1,0 +1,336 @@
+{
+  "files": [
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml",
+      "bytes": 1084,
+      "sha256": "9c938653449aab6c9fd881859ed6cabfa74c8902e74a9067523d71ba282caad2",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/fabric/intermesh_port_assignment_rank_1_of_1.yaml",
+      "bytes": 32,
+      "sha256": "c53352de3078a7152d0c9cb5dd14d00bb687066f36725ef89d44dee61e06cc11",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/fabric/physical_chip_mesh_coordinate_mapping_1_of_1.yaml",
+      "bytes": 54,
+      "sha256": "b718ac8729d6fd0aaf5a62a98d5cbd7a355f4f3c1414e62a246475fd862a83a8",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/inspector/kernels.yaml",
+      "bytes": 98721,
+      "sha256": "8f7f8331345960ea554d62bee9743f0202841b23c3b21ddd0309d613f1eec0b5",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/inspector/mesh_devices_log.yaml",
+      "bytes": 269,
+      "sha256": "19c4ba4fcd08bf74a690819cfa50d7a1ce26e7efea1bb4613cfb6b960cc4acb6",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/inspector/mesh_workloads_log.yaml",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/inspector/programs_log.yaml",
+      "bytes": 165914,
+      "sha256": "6c66872acc75b69c6b129cc619a9d8f2d960db2df33106cab3f31c6b3918acc0",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/inspector/startup.yaml",
+      "bytes": 144,
+      "sha256": "36368798f8bbeefcb03f7d3c507154196d44ebe8905be011eec216d7c9c0930d",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/watcher/kernel_elf_paths.txt",
+      "bytes": 53641,
+      "sha256": "8ad8efe69bad528befc82becf50c59bdb16a2423236728cb9f45de117242f4bf",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/watcher/kernel_names.txt",
+      "bytes": 31483,
+      "sha256": "1c212b436d3adc423724973aa79f5ba15404a7aed6d87b281d6a3c3cd3e2a38d",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/full_attention_final/generated/watcher/watcher.log",
+      "bytes": 159646,
+      "sha256": "6e08a926177ab372375768ac30db3d16054afaff3df29b0210552bcb08c12f4c",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml",
+      "bytes": 1084,
+      "sha256": "9c938653449aab6c9fd881859ed6cabfa74c8902e74a9067523d71ba282caad2",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/fabric/intermesh_port_assignment_rank_1_of_1.yaml",
+      "bytes": 32,
+      "sha256": "c53352de3078a7152d0c9cb5dd14d00bb687066f36725ef89d44dee61e06cc11",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/fabric/physical_chip_mesh_coordinate_mapping_1_of_1.yaml",
+      "bytes": 54,
+      "sha256": "b718ac8729d6fd0aaf5a62a98d5cbd7a355f4f3c1414e62a246475fd862a83a8",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/inspector/kernels.yaml",
+      "bytes": 103559,
+      "sha256": "a5f00353e86043cf55529a70d23969a3e1481e974a088edae6696e294cf29471",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/inspector/mesh_devices_log.yaml",
+      "bytes": 269,
+      "sha256": "cc2bfd30b12e1ba2963b426b08162b250d796947a2d9d77ac778e05afddd857f",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/inspector/mesh_workloads_log.yaml",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/inspector/programs_log.yaml",
+      "bytes": 170883,
+      "sha256": "62ab725566251609a17a18e376e4ca156da0fa3a540f3f55e4f5679353cb056c",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/inspector/startup.yaml",
+      "bytes": 144,
+      "sha256": "06beaa67ce3041386b8acadd5c490530399e0a38a5c2ede1e477b5bd6acb7ab3",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/watcher/kernel_elf_paths.txt",
+      "bytes": 57557,
+      "sha256": "72cf0f95b47418d7bed4df9e27f2d5d855e6113f4948796e90cf646f8db45265",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/watcher/kernel_names.txt",
+      "bytes": 32872,
+      "sha256": "d6019489ddc78259182890386d219f8d3a34f0420c134566b00f105c529c74ad",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher/sliding_attention_final/generated/watcher/watcher.log",
+      "bytes": 79561,
+      "sha256": "f67c3888c86984f3ab048fb3e6588246700e2a8680ef1884197d17c0ee8bc7d1",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml",
+      "bytes": 1084,
+      "sha256": "9c938653449aab6c9fd881859ed6cabfa74c8902e74a9067523d71ba282caad2",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/fabric/intermesh_port_assignment_rank_1_of_1.yaml",
+      "bytes": 32,
+      "sha256": "c53352de3078a7152d0c9cb5dd14d00bb687066f36725ef89d44dee61e06cc11",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/fabric/physical_chip_mesh_coordinate_mapping_1_of_1.yaml",
+      "bytes": 54,
+      "sha256": "b718ac8729d6fd0aaf5a62a98d5cbd7a355f4f3c1414e62a246475fd862a83a8",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/inspector/kernels.yaml",
+      "bytes": 105450,
+      "sha256": "19e5199b2b0a82ce5582fad35dc47dd52f143b34ff88b87d4f389f44007fc452",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/inspector/mesh_devices_log.yaml",
+      "bytes": 269,
+      "sha256": "e55be8002129c3d82bb13928ac99aea0a2b056a572f6c1f3ef98c3bc84d6539f",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/inspector/mesh_workloads_log.yaml",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/inspector/programs_log.yaml",
+      "bytes": 175886,
+      "sha256": "de5e346940ba737b55a6a0685b9fd4819caee0a5dc2412c0f454296789e0a572",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/inspector/startup.yaml",
+      "bytes": 144,
+      "sha256": "6946c7b630f3cc2e7dd4315bca8c00862d053f8942da679d2f1c0fd150d48c67",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/watcher/kernel_elf_paths.txt",
+      "bytes": 58159,
+      "sha256": "29807e4e31edf7a92d9fa224ecfa57531228d277e090555e94331332f05bf36e",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/watcher/kernel_names.txt",
+      "bytes": 33774,
+      "sha256": "90889917181f66e77e2ce5b7a9449b99e5cd397ceea32bd96cc953d2ea7e6e0e",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0/generated/watcher/watcher.log",
+      "bytes": 561273,
+      "sha256": "1b31a22de16b8fb0ae10e42cb04286c83bf649016fe8039e0d71f589eed9fabb",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml",
+      "bytes": 1084,
+      "sha256": "9c938653449aab6c9fd881859ed6cabfa74c8902e74a9067523d71ba282caad2",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/fabric/intermesh_port_assignment_rank_1_of_1.yaml",
+      "bytes": 32,
+      "sha256": "c53352de3078a7152d0c9cb5dd14d00bb687066f36725ef89d44dee61e06cc11",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/fabric/physical_chip_mesh_coordinate_mapping_1_of_1.yaml",
+      "bytes": 54,
+      "sha256": "b718ac8729d6fd0aaf5a62a98d5cbd7a355f4f3c1414e62a246475fd862a83a8",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/inspector/kernels.yaml",
+      "bytes": 108976,
+      "sha256": "cc6cc7a2b2f53525d712f1c6d73e4f9c452758d79cc8cf3a56c5ed9825798c96",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/inspector/mesh_devices_log.yaml",
+      "bytes": 269,
+      "sha256": "62618c6db4b885604eada4d2b5d37e7d06a17c409c83c55522696d042544bf32",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/inspector/mesh_workloads_log.yaml",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/inspector/programs_log.yaml",
+      "bytes": 183372,
+      "sha256": "0dbb1aff4f69ee5c70e93ec625f5cee76c9e6061a01435336c3bbe26014335e5",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/inspector/startup.yaml",
+      "bytes": 144,
+      "sha256": "dbb55747575a2967416f71c8ccb54949929d901bfcc374641881efb1a9a27f18",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/watcher/kernel_elf_paths.txt",
+      "bytes": 58599,
+      "sha256": "8c6ac21441d409c854fd6762caa0e398dbaf4f71ed405ec0be128bee35e3971e",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/watcher/kernel_names.txt",
+      "bytes": 34904,
+      "sha256": "fcf2f6a11d7f51b8bec9f60ea776ddc5be8e8e81d01b3ef2c0f732ed9e65d5f6",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer5/generated/watcher/watcher.log",
+      "bytes": 562143,
+      "sha256": "919fee6b2fb8414561e261a16e0ec1b617dffa1d1522984fdfcdc5416d92955b",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/fabric/asic_to_fabric_node_mapping_rank_1_of_1.yaml",
+      "bytes": 1084,
+      "sha256": "9c938653449aab6c9fd881859ed6cabfa74c8902e74a9067523d71ba282caad2",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/fabric/intermesh_port_assignment_rank_1_of_1.yaml",
+      "bytes": 32,
+      "sha256": "c53352de3078a7152d0c9cb5dd14d00bb687066f36725ef89d44dee61e06cc11",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/fabric/physical_chip_mesh_coordinate_mapping_1_of_1.yaml",
+      "bytes": 54,
+      "sha256": "b718ac8729d6fd0aaf5a62a98d5cbd7a355f4f3c1414e62a246475fd862a83a8",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/inspector/kernels.yaml",
+      "bytes": 49747,
+      "sha256": "e676050b46b4e30c69a30a906f947d9d3a88e34572dfa7e71f01d480a2975c13",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/inspector/mesh_devices_log.yaml",
+      "bytes": 269,
+      "sha256": "cd69963def9822c7c5f307a7b9af7adf9a9588c5b661217fee6f733b7e8d1189",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/inspector/mesh_workloads_log.yaml",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/inspector/programs_log.yaml",
+      "bytes": 83730,
+      "sha256": "40db4bcda7288c7b88aa5eb3a074e144d6bad8392502430df5a3d1831a0f6983",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/inspector/startup.yaml",
+      "bytes": 144,
+      "sha256": "0a287cae3b6c1f97524e33006399efe5c6598e0a843040b53db3f257eda6c68a",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/watcher/kernel_elf_paths.txt",
+      "bytes": 27739,
+      "sha256": "0033b71660fedf6fdb5b78f70129a445d37cbc896906d6dc2e6035cc05542529",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/watcher/kernel_names.txt",
+      "bytes": 15855,
+      "sha256": "c2261b566062c5756f8b84173d38b35b62d4ebc5928bae083131fba22af49dbd",
+      "failure_keyword_matches": 0
+    },
+    {
+      "path": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_l1_relocation/generated/watcher/watcher.log",
+      "bytes": 79561,
+      "sha256": "3a23464e293a21bf088888d06115a4a0ca34771c3dc4b63e4b8c429f83ca2c11",
+      "failure_keyword_matches": 0
+    }
+  ],
+  "search": "fatal|error|corrupt|overflow|illegal (case-insensitive)",
+  "clean": true
+}

@@ -1,0 +1,48 @@
+{
+  "layer_type": "full_attention",
+  "batch": 8,
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "concurrency": 8
+  },
+  "prefill_device_us": 802679.9248502422,
+  "decode_device_us": 3948.4244757168153,
+  "prefill_useful_flops": 39394513780736,
+  "decode_dram_bytes": 1373528416.0,
+  "peak_flops_per_s": 165888000000000.0,
+  "peak_dram_bytes_per_s": 512000000000.0,
+  "prefill_flops_pct": 29.58546313200426,
+  "decode_dram_pct": 67.94286440069175,
+  "peak_basis": "One p300c ASIC: 120 cores, 4096 ops/cycle, 1.35GHz, HiFi4 /4; 512GB/s. Official p300/QuietBox2 specs and tt-perf-report ArchitectureSpec.",
+  "source": "warmed_layer_tracy",
+  "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_final/full_attention/batch8/ops.csv",
+  "device_window_basis": "FW end minus FW start across ALL layer ops, including gaps. Decode is mean of 128 complete per-replay windows; gaps between separate replays excluded.",
+  "ns_per_cycle": 0.7407407438495495,
+  "prefill_device_ops": 257,
+  "decode_replay_count": 128,
+  "captured_body_op_count": 30,
+  "replay_op_ids_match_capture": true,
+  "decode_ops_per_replay": 30,
+  "decode_min_device_us": 3939.253553635189,
+  "decode_max_device_us": 3956.964819080593,
+  "assumptions": "BF16 weights/activations/cache, HiFi4; dense active work. Useful FLOPs count all linear projections and causal QK/PV, omit small elementwise work. Estimated DRAM: physical operand/output bytes for every ordinary DRAM op once, active KV once, tile cache updates and page metadata; L1 operands excluded. Includes tile padding, excludes redundant per-core reads and cache reuse. BinaryNg hash-cached prefill shapes are replaced by actual decode B<=32 residual/MLP and KV-norm geometry. Weight reference bytes are informational and not added twice. Percentages are estimates, not counters.",
+  "dram_components": {
+    "weight_parameter_bytes_reference_only": 1068019712,
+    "active_kv": 272662528.0,
+    "ordinary_op_physical_io": 1096667296,
+    "ordinary_io_by_op": {
+      "InterleavedToShardedDeviceOperation": 1310720,
+      "LayerNormDeviceOperation": 5210112,
+      "MatmulDeviceOperation": 1076051968,
+      "SliceDeviceOperation": 3538944,
+      "ReshapeViewDeviceOperation": 3014656,
+      "RotaryEmbeddingHfDeviceOperation": 0,
+      "BinaryNgDeviceOperation": 6750208,
+      "ShardedToInterleavedDeviceOperation": 262144,
+      "SdpaDecodeDeviceOperation": 528544
+    },
+    "cache_tile_update": 4194304,
+    "page_table": 4288
+  }
+}

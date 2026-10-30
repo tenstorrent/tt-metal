@@ -1,0 +1,992 @@
+[
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_base_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_base_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_base_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_base_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_cache_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_cache_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_cache_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b1_cache_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_base_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_base_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_base_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_base_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_cache_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_cache_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_cache_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_cache_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_norm_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_norm_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_norm_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_packed_cache_norm_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm,split_heads",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_split_decode_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_split_decode_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "1",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm,split_heads",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_split_decode_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b1_split_decode_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_base_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_base_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_base_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_base_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_cache_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_cache_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_cache_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_cache_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "c14db34b182aea7cdf03fa8c19a6a84713cad862bbfeacf4b4841fcdd2f9389d",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "edafb1010d2520fa14b8223bb5fcb12be8733da2314f464cea6ca296f61851a5",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache,pack_mlp",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_packed_mlp_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_packed_mlp_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache,pack_mlp",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_packed_mlp_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/0_b32_packed_mlp_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_base_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_base_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_base_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_base_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_cache_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_cache_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_cache_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_cache_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "e2745541d65ad5348a26303dee209f876338b4263201565ded795529d45a2436",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "b7ad289de32af8bacd62c77db0d86f8a42230056a24dac27914c743e1b677b25",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_norm_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_norm_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "b7ad289de32af8bacd62c77db0d86f8a42230056a24dac27914c743e1b677b25",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_norm_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_cache_norm_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "b7ad289de32af8bacd62c77db0d86f8a42230056a24dac27914c743e1b677b25",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm,split_heads",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_split_decode_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_split_decode_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "b7ad289de32af8bacd62c77db0d86f8a42230056a24dac27914c743e1b677b25",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,pack_qkv,fused_cache,shared_kv_norm,split_heads",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_split_decode_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_split_decode_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "b7ad289de32af8bacd62c77db0d86f8a42230056a24dac27914c743e1b677b25",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache,pack_mlp,pack_qkv,shared_kv_norm",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_mlp_correctness.json"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_mlp_correctness.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "b7ad289de32af8bacd62c77db0d86f8a42230056a24dac27914c743e1b677b25",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fusion_candidate",
+      "--extended-candidate",
+      "--layer",
+      "5",
+      "--batch",
+      "32",
+      "--options",
+      "keep_rope_sharded,concat_heads,scalar_merge,split_unpacked,fused_cache,pack_mlp,pack_qkv,shared_kv_norm",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_mlp_timing.json",
+      "--timing"
+    ],
+    "exit_code": 0,
+    "log": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/candidates_combined/5_b32_packed_mlp_timing.log",
+    "sources": {
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_candidates.py": "6aa81b859685ae47f273abc906e957a6d6f955162f98bd698905b30240a5c42a",
+      "models/autoports/google_gemma_4_31b_it/tests/time_fusion_candidate.py": "b7ad289de32af8bacd62c77db0d86f8a42230056a24dac27914c743e1b677b25",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion.py": "ea21cb43368d9fbef2e6a57c69a9b954930009b74821ea7f4a3d45045361b4ad",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_adapted.py": "89b1cf9d6ee173396722149012f50acbddd5054f60d5d4d98f172fe99957ce17",
+      "models/autoports/google_gemma_4_31b_it/tests/sweep_fusion_combined.py": "ad852a6b2f7f46a602ce0f428cbf79014ca5944f6e50ab79e936c992550498f8",
+      "models/autoports/google_gemma_4_31b_it/tests/run_fusion_candidate.py": "3d82fa52a8c98681f111c06f0c21bbc7d5bf09bf71d652d2cef2a28504b5aa88",
+      "models/autoports/google_gemma_4_31b_it/tests/fusion_baseline.py": "0474e4e539be59be2ca7963c43fcddc177371ad4625e3fb68df9bbc1f3dab230"
+    }
+  }
+]

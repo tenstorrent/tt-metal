@@ -1,0 +1,194 @@
+[
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "15",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_0_15.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "17",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_0_17.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "31",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_0_31.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "33",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_0_33.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "55",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_0_55.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "56",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_0_56.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "5",
+      "--batch",
+      "15",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_5_15.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "5",
+      "--batch",
+      "17",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_5_17.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "5",
+      "--batch",
+      "31",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_5_31.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "5",
+      "--batch",
+      "33",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_5_33.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "5",
+      "--batch",
+      "34",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_5_34.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "5",
+      "--batch",
+      "36",
+      "--seq",
+      "33",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batch_boundary_5_36.json"
+    ],
+    "exit_code": 0
+  }
+]

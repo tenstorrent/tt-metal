@@ -1,0 +1,76 @@
+[
+  {
+    "name": "batched_final_0_8",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "8",
+      "--seq",
+      "33",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batched_final_0_8.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "edf1983e6ed082fdf2bbc7e8d8ef535a4a791458adc74c10da91ec21a3b0dde9",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_fused_decoder.py": "a34dc60870d15bb4b6de91fab095ff048557bd76091c5aad0e1979e0cec44177"
+    },
+    "tracking": true,
+    "extra_environment": {}
+  },
+  {
+    "name": "batched_final_0_16",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "16",
+      "--seq",
+      "33",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batched_final_0_16.json"
+    ],
+    "exit_code": 0,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "edf1983e6ed082fdf2bbc7e8d8ef535a4a791458adc74c10da91ec21a3b0dde9",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_fused_decoder.py": "a34dc60870d15bb4b6de91fab095ff048557bd76091c5aad0e1979e0cec44177"
+    },
+    "tracking": true,
+    "extra_environment": {}
+  },
+  {
+    "name": "batched_final_0_32",
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.run_fused_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--seq",
+      "1025",
+      "--result",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/batched_final_0_32.json",
+      "--extended",
+      "--new-bucket-case"
+    ],
+    "exit_code": 1,
+    "source_hashes": {
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tt/fused_decoder.py": "edf1983e6ed082fdf2bbc7e8d8ef535a4a791458adc74c10da91ec21a3b0dde9",
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/tests/run_fused_decoder.py": "a34dc60870d15bb4b6de91fab095ff048557bd76091c5aad0e1979e0cec44177"
+    },
+    "tracking": true,
+    "extra_environment": {
+      "TT_METAL_WATCHER": "10",
+      "TT_METAL_LOGS_PATH": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/watcher_batched_fill/layer0"
+    }
+  }
+]

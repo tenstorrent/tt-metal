@@ -1,0 +1,74 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "final_host_traced_decode_us": 2992.1418698298417,
+    "best_candidate_host_us": 2992.680515641647,
+    "candidate": "candidates_batches/0_b1_separate_timing.json",
+    "final": "final_timing_0_1.json",
+    "delta_pct": -0.01799877430919139
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 16,
+    "final_host_traced_decode_us": 3627.435140667027,
+    "best_candidate_host_us": 3627.5308204191483,
+    "candidate": "candidates_batches/0_b16_split_timing.json",
+    "final": "final_timing_0_16.json",
+    "delta_pct": -0.0026375999779948422
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "final_host_traced_decode_us": 4387.380348968388,
+    "best_candidate_host_us": 4387.061724022108,
+    "candidate": "candidates_batches/0_b32_split_timing.json",
+    "final": "final_timing_0_32.json",
+    "delta_pct": 0.00726283253629223
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 8,
+    "final_host_traced_decode_us": 3214.9098334836403,
+    "best_candidate_host_us": 3214.6041354887225,
+    "candidate": "candidates_batches/0_b8_separate_timing.json",
+    "final": "final_timing_0_8.json",
+    "delta_pct": 0.009509662217599413
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "final_host_traced_decode_us": 3257.57966159775,
+    "best_candidate_host_us": 3257.8502735608104,
+    "candidate": "candidates_batches/5_b1_separate_timing.json",
+    "final": "final_timing_5_1.json",
+    "delta_pct": -0.00830645795040219
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 16,
+    "final_host_traced_decode_us": 4751.34308332296,
+    "best_candidate_host_us": 4754.421096398194,
+    "candidate": "candidates_batches/5_b16_split_timing.json",
+    "final": "final_timing_5_16.json",
+    "delta_pct": -0.06474001803428164
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "final_host_traced_decode_us": 6364.844028515411,
+    "best_candidate_host_us": 6370.3318490600695,
+    "candidate": "candidates_batches/5_b32_split_timing.json",
+    "final": "final_timing_5_32.json",
+    "delta_pct": -0.08614654110159492
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 8,
+    "final_host_traced_decode_us": 3944.6061146009015,
+    "best_candidate_host_us": 3945.1167135666765,
+    "candidate": "candidates_batches/5_b8_separate_timing.json",
+    "final": "final_timing_5_8.json",
+    "delta_pct": -0.012942556655404225
+  }
+]

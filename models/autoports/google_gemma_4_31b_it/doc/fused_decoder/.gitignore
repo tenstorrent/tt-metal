@@ -1,0 +1,9 @@
+# Runtime evidence is retained locally; checkpoint only compact stage evidence.
+*.log
+tracy/
+tracy_final/
+watcher/
+__pycache__/
+tracy_batched_fill/
+watcher_batched_fill/
+watcher_l1_relocation/

@@ -1,0 +1,82 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "prefill_device_ops": 117,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "prefill_device_ops": 625,
+    "decode_ops_per_replay": 32,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 16,
+    "prefill_device_ops": 381,
+    "decode_ops_per_replay": 32,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 8,
+    "prefill_device_ops": 253,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "prefill_device_ops": 121,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "prefill_device_ops": 641,
+    "decode_ops_per_replay": 31,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 16,
+    "prefill_device_ops": 385,
+    "decode_ops_per_replay": 31,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 8,
+    "prefill_device_ops": 257,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true
+  }
+]

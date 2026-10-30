@@ -1,0 +1,34 @@
+{
+  "layer_type": "full_attention",
+  "batch": 8,
+  "input_tokens": 4096,
+  "host_prefill_ms": {
+    "per_row": [
+      855.6107860058546,
+      857.7371209976263,
+      856.1689769849181,
+      856.473507010378
+    ],
+    "batched": [
+      856.7149469745345,
+      854.3702840106562,
+      855.2155529614538,
+      854.9133069464006
+    ]
+  },
+  "median_ms": {
+    "per_row": 856.321241997648,
+    "batched": 855.0644299539272
+  },
+  "order": [
+    "per_row",
+    "batched",
+    "batched",
+    "per_row",
+    "per_row",
+    "batched",
+    "batched",
+    "per_row"
+  ],
+  "scope": "Host-wall candidate comparison; same allocations and warmed programs; not device telemetry"
+}

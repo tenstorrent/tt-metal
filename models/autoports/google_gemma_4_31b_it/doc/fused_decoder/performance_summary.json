@@ -1,0 +1,98 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_sliding_attention_batch1.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_sliding_attention_batch1.json",
+    "functional_prefill_device_us": 97224.35684920107,
+    "fused_prefill_device_us": 70874.04626873744,
+    "prefill_reduction_pct": 27.102581528344828,
+    "functional_decode_device_us": 3039.4615654584472,
+    "fused_decode_device_us": 2996.8148189081644,
+    "decode_reduction_pct": 1.4031020176381248
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 8,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_sliding_attention_batch8.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_sliding_attention_batch8.json",
+    "functional_prefill_device_us": 768889.8422222222,
+    "fused_prefill_device_us": 566412.6719793618,
+    "prefill_reduction_pct": 26.33370336349704,
+    "functional_decode_device_us": 3248.8096463500706,
+    "fused_decode_device_us": 3213.683613327509,
+    "decode_reduction_pct": 1.0811970181763164
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 16,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_sliding_attention_batch16.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_sliding_attention_batch16.json",
+    "functional_prefill_device_us": 1537798.5254153304,
+    "fused_prefill_device_us": 1131258.8130795544,
+    "prefill_reduction_pct": 26.436474324617876,
+    "functional_decode_device_us": 3664.534178058286,
+    "fused_decode_device_us": 3628.3116463442493,
+    "decode_reduction_pct": 0.988462106068555
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_sliding_attention_batch32.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_sliding_attention_batch32.json",
+    "functional_prefill_device_us": 3060012.662222222,
+    "fused_prefill_device_us": 2201642.519259259,
+    "prefill_reduction_pct": 28.05119578621622,
+    "functional_decode_device_us": 4518.439798107886,
+    "fused_decode_device_us": 4380.0697007844865,
+    "decode_reduction_pct": 3.062342390427397
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_full_attention_batch1.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_full_attention_batch1.json",
+    "functional_prefill_device_us": 136683.89957387192,
+    "fused_prefill_device_us": 99991.38296296296,
+    "prefill_reduction_pct": 26.844797906192454,
+    "functional_decode_device_us": 3343.519078722279,
+    "fused_decode_device_us": 3263.9539152155903,
+    "decode_reduction_pct": 2.379683250890696
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 8,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_full_attention_batch8.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_full_attention_batch8.json",
+    "functional_prefill_device_us": 1089629.103043345,
+    "fused_prefill_device_us": 801013.608125914,
+    "prefill_reduction_pct": 26.487498737994887,
+    "functional_decode_device_us": 4029.4361916340094,
+    "fused_decode_device_us": 3947.9069840864486,
+    "decode_reduction_pct": 2.0233403302634123
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 16,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_full_attention_batch16.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_full_attention_batch16.json",
+    "functional_prefill_device_us": 2176647.231851852,
+    "fused_prefill_device_us": 1600111.0009845428,
+    "prefill_reduction_pct": 26.487352770379914,
+    "functional_decode_device_us": 4869.854192643933,
+    "fused_decode_device_us": 4750.464982620386,
+    "decode_reduction_pct": 2.451597220382662
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/performance_full_attention_batch32.json",
+    "functional_evidence": "models/autoports/google_gemma_4_31b_it/doc/functional_decoder/performance_full_attention_batch32.json",
+    "functional_prefill_device_us": 4338213.557037037,
+    "fused_prefill_device_us": 3198766.479609853,
+    "prefill_reduction_pct": 26.26535237249631,
+    "functional_decode_device_us": 6602.3563719437225,
+    "fused_decode_device_us": 6361.7507969416665,
+    "decode_reduction_pct": 3.6442379273026404
+  }
+]

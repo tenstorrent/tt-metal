@@ -1,0 +1,57 @@
+{
+  "implementation": "models.autoports.google_gemma_4_31b_it.tt.fused_decoder.FusedDecoder",
+  "layer_type": "full_attention",
+  "batch": 32,
+  "prefill_tokens": 2049,
+  "decode_position": 2049,
+  "prefill_pcc": 0.999983311189999,
+  "decode_pcc": 0.9999899113622621,
+  "real_weights": true,
+  "reference_scope": "all_rows",
+  "trace_replays": 10,
+  "interleaved_prefill_cases": 6,
+  "trace_captures": 1,
+  "request_time_trace_releases": 0,
+  "updated_inputs_pcc": 0.9999898164828412,
+  "deterministic": true,
+  "resume_pcc": 1.0,
+  "boundaries": [
+    {
+      "length": 1,
+      "pcc": 0.9999925457321984
+    },
+    {
+      "length": 31,
+      "pcc": 0.9999836786567773
+    },
+    {
+      "length": 32,
+      "pcc": 0.99998354240559
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999831016460615
+    },
+    {
+      "length": 1023,
+      "pcc": 0.9999848880142478
+    },
+    {
+      "length": 1024,
+      "pcc": 0.999984979019662
+    },
+    {
+      "length": 1025,
+      "pcc": 0.9999848720588125
+    },
+    {
+      "length": 2049,
+      "pcc": 0.9999849494416179
+    },
+    {
+      "length": 33,
+      "pcc": 0.9999831611627013
+    }
+  ],
+  "maximum_prefill_pcc": null
+}

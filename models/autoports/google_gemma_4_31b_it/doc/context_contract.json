@@ -10,6 +10,41 @@
   "layer_types": {
     "sliding_attention": {
       "prefill_tokens": 262144,
+      "prefill_pcc": 0.9999328251648368,
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_prefill_pcc": 0.9999234496913295,
+      "decode_context_tokens": 262144,
+      "decode_position": 262143,
+      "decode_pcc": 0.9999088945906923,
+      "evidence": [
+        "fused_decoder/sliding_context_final.json"
+      ]
+    },
+    "full_attention": {
+      "prefill_tokens": 262144,
+      "prefill_pcc": 0.9981916975512795,
+      "non_aligned_prefill_tokens": 262143,
+      "non_aligned_prefill_pcc": 0.9986198158792086,
+      "decode_context_tokens": 262144,
+      "decode_position": 262143,
+      "decode_pcc": 0.9999882945194171,
+      "evidence": [
+        "fused_decoder/full_context_final.json"
+      ]
+    }
+  },
+  "reference_scope": "TTNN executes all prompt rows; long HF comparison uses last32 prefill rows, one exact-maximum row and final decode row, with all required prefix KV. Independent long eager/FP32 control: functional_decoder/long_reference_control.json.",
+  "cache_bytes_per_token": {
+    "sliding_attention": 16384,
+    "full_attention": 8192
+  },
+  "batch1_cache_bytes_at_full_context": {
+    "sliding_attention": 4294967296,
+    "full_attention": 2147483648
+  },
+  "functional_layer_types": {
+    "sliding_attention": {
+      "prefill_tokens": 262144,
       "prefill_pcc": 0.9999331201826811,
       "non_aligned_prefill_tokens": 262143,
       "non_aligned_prefill_pcc": 0.9999272740321555,
@@ -35,13 +70,16 @@
       ]
     }
   },
-  "reference_scope": "TTNN executes all prompt rows; long HF comparison uses last32 prefill rows, one exact-maximum row and final decode row, with all required prefix KV. Independent long eager/FP32 control: functional_decoder/long_reference_control.json.",
-  "cache_bytes_per_token": {
-    "sliding_attention": 16384,
-    "full_attention": 8192
+  "validated_stage": "02-fused-decoder",
+  "fused_persistent_weight_copies": {
+    "sliding_attention": {
+      "extra_bytes": 176160768,
+      "copy_reason": "Separate projections are faster for decode; packed QKV is faster for B32 prefill. Maximum-context validation includes the additional copy."
+    },
+    "full_attention": {
+      "extra_bytes": 0,
+      "copy_reason": "Packed Q/K replaces, rather than duplicates, original weights."
+    }
   },
-  "batch1_cache_bytes_at_full_context": {
-    "sliding_attention": 4294967296,
-    "full_attention": 2147483648
-  }
+  "fused_setup_index_payload_bytes": 440
 }

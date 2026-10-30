@@ -1,0 +1,90 @@
+[
+  {
+    "layer_type": "sliding_attention",
+    "batch": 1,
+    "prefill_device_ops": 117,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_final/sliding_attention/batch1"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 8,
+    "prefill_device_ops": 134,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_batched_fill/sliding_attention/batch8"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 16,
+    "prefill_device_ops": 134,
+    "decode_ops_per_replay": 32,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_batched_fill/sliding_attention/batch16"
+  },
+  {
+    "layer_type": "sliding_attention",
+    "batch": 32,
+    "prefill_device_ops": 122,
+    "decode_ops_per_replay": 32,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_batched_fill/sliding_attention/batch32"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 1,
+    "prefill_device_ops": 121,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_final/full_attention/batch1"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 8,
+    "prefill_device_ops": 138,
+    "decode_ops_per_replay": 30,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_batched_fill/full_attention/batch8"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 16,
+    "prefill_device_ops": 138,
+    "decode_ops_per_replay": 31,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_batched_fill/full_attention/batch16"
+  },
+  {
+    "layer_type": "full_attention",
+    "batch": 32,
+    "prefill_device_ops": 138,
+    "decode_ops_per_replay": 31,
+    "decode_replay_count": 128,
+    "replay_op_ids_match_capture": true,
+    "dropped_markers": false,
+    "tt_perf_report_tables_and_csv": true,
+    "evidence": "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/models/autoports/google_gemma_4_31b_it/doc/fused_decoder/tracy_batched_fill/full_attention/batch32"
+  }
+]

@@ -1,0 +1,70 @@
+[
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.test_fused_equivalence",
+      "--layer",
+      "0",
+      "--batch",
+      "110",
+      "--seq",
+      "33",
+      "--prefill-only",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/prefill_index_boundary_0_110.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.test_fused_equivalence",
+      "--layer",
+      "0",
+      "--batch",
+      "111",
+      "--seq",
+      "33",
+      "--prefill-only",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/prefill_index_boundary_0_111.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.test_fused_equivalence",
+      "--layer",
+      "5",
+      "--batch",
+      "110",
+      "--seq",
+      "33",
+      "--prefill-only",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/prefill_index_boundary_5_110.json"
+    ],
+    "exit_code": 0
+  },
+  {
+    "command": [
+      "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+      "-m",
+      "models.autoports.google_gemma_4_31b_it.tests.test_fused_equivalence",
+      "--layer",
+      "5",
+      "--batch",
+      "111",
+      "--seq",
+      "33",
+      "--prefill-only",
+      "--result",
+      "models/autoports/google_gemma_4_31b_it/doc/fused_decoder/prefill_index_boundary_5_111.json"
+    ],
+    "exit_code": 0
+  }
+]
