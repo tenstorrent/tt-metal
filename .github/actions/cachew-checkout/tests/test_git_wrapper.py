@@ -15,13 +15,13 @@ import time
 import unittest
 import urllib.parse
 
-import test_prefetch as fixture
+import test_checkout as fixture
 
 
 @unittest.skipUnless(shutil.which("cmake"), "CMake is required for downstream dependency integration tests")
 class DownstreamGitTests(unittest.TestCase):
     def setUp(self):
-        self.git_fixture = fixture.PrefetchTests()
+        self.git_fixture = fixture.CheckoutTests()
         self.git_fixture.setUp()
         self.addCleanup(self.git_fixture.doCleanups)
         self.root = self.git_fixture.root

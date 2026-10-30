@@ -23,7 +23,7 @@ import uuid
 
 ACTION = Path(__file__).resolve().parent
 TRUSTED_CACHES = tuple(json.loads((ACTION / "trusted_caches.json").read_text())["origins"])
-STAGE_PREFIX = ".cachew-prefetch-"
+STAGE_PREFIX = ".cachew-checkout-"
 # Git messages that mean the cache endpoint itself is unusable, as opposed to a
 # per-repository or per-ref answer. Only these turn caching off for the job.
 TRANSPORT_ERRORS = re.compile(
@@ -127,7 +127,7 @@ def remove_stale_stages(target):
             shutil.rmtree(entry, ignore_errors=True)
 
 
-class Prefetch:
+class Checkout:
     def __init__(self, environ):
         self.git_executable = environ.get("CACHEW_REAL_GIT", "git")
         for key in ("SSH_KEY", "SSH_KEY_SET", "LFS", "SPARSE_CHECKOUT"):
@@ -595,7 +595,7 @@ class Prefetch:
 
 
 def main():
-    prefetched = False
+    checked_out = False
     outputs = {}
     # unknown: no probe happened, so activation probes for itself.
     # true: a trusted cache answered; later per-command failures fall back individually.
@@ -607,13 +607,13 @@ def main():
         if session and (Path(session) / "cache-disabled").exists():
             available = "false"
             raise Bypass("cache disabled after an earlier failure")
-        attempt = Prefetch(os.environ)
+        attempt = Checkout(os.environ)
         available = "false"
         attempt.probe()
         available = "true"
         selected = attempt.cache
         commit = attempt.run()
-        prefetched = True
+        checked_out = True
         # The same outputs as actions/checkout, which does not run.
         outputs = {"ref": attempt.ref, "commit": commit}
         print(f"Checked out {commit} from cachew; upstream checkout is not needed.")
@@ -626,7 +626,7 @@ def main():
         print("Cachew checkout unavailable. Continuing immediately with upstream checkout.")
     if output := os.environ.get("GITHUB_OUTPUT"):
         with open(output, "a") as stream:
-            stream.write(f"prefetched={str(prefetched).lower()}\n")
+            stream.write(f"checked-out={str(checked_out).lower()}\n")
             stream.write(f"available={available}\n")
             stream.write(f"cache-url={selected}\n")
             for key, value in outputs.items():

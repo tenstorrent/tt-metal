@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 import urllib.parse
 
-import test_prefetch as fixtures
+import test_checkout as fixtures
 
 
 HELPER = fixtures.ACTION / "session" / "index.js"
@@ -22,7 +22,7 @@ NODE = shutil.which("node")
 @unittest.skipUnless(fixtures.CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout bundle")
 class SessionTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = fixtures.PrefetchTests()
+        self.fixture = fixtures.CheckoutTests()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.env = self.fixture.env
@@ -389,10 +389,10 @@ class SessionTests(unittest.TestCase):
         self.finish()
         self.assertEqual(include.read_bytes(), original_include)
 
-    def plain_checkout_without_cache(self, env, prefetch=True):
-        """The official checkout (and prefetch, if given a rejected cache) without a session."""
+    def plain_checkout_without_cache(self, env, cachew=True):
+        """The official checkout (and the cachew step, if given a rejected cache) without a session."""
         self.fixture.env = env
-        if prefetch:
+        if cachew:
             self.assertFalse(self.fixture.attempt())
         self.assertEqual(self.fixture.cache.requests, [])
         state = self.fixture.root / "plain-checkout-state"
@@ -448,7 +448,7 @@ class SessionTests(unittest.TestCase):
         self.assertNotIn("${{ env.CACHEW_TEST_ALLOW_LOOPBACK_HTTP", action)
         cleared = action.count("CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''")
         self.assertEqual(cleared, action.count("CACHEW_TEST_ALLOW_LOOPBACK_HTTP"))
-        self.assertEqual(cleared, 3, "session, prefetch and configure steps each clear it")
+        self.assertEqual(cleared, 3, "session, cachew and configure steps each clear it")
 
     def test_original_explicit_global_file_is_restored_for_earlier_post_actions(self):
         custom = self.fixture.root / "caller-global.config"
@@ -498,7 +498,7 @@ class SessionTests(unittest.TestCase):
             GIT_CONFIG_GLOBAL=str(outer_global),
             PATH=str(shim) + os.pathsep + os.environ["PATH"],
         ):
-            nested = fixtures.PrefetchTests()
+            nested = fixtures.CheckoutTests()
             try:
                 nested.setUp()
                 self.assertNotIn("CACHEW_SESSION_DIR", nested.env)
@@ -589,8 +589,8 @@ class SessionTests(unittest.TestCase):
         env = dict(self.env, PATH=self.node_free_path())
         result = self.run_prepare_expecting_fallback(env)
         self.assertIn("Node.js 18+ unavailable", result.stdout)
-        # action.yml skips prefetch and configure when the session is not ready.
-        self.plain_checkout_without_cache(self.env, prefetch=False)
+        # action.yml skips the cachew and configure steps when the session is not ready.
+        self.plain_checkout_without_cache(self.env, cachew=False)
 
     def test_runner_externals_node_is_used_when_node_is_not_on_path(self):
         # tt CI VMs: runner in /opt/runner, RUNNER_TEMP=/opt/runner/_work/_temp,

@@ -88,8 +88,8 @@ class RunnerGateTests(unittest.TestCase):
                 # A skipped step publishes no outputs.
                 if step["id"] == "session":
                     local["steps.session.outputs.ready"] = "true"
-                elif step["id"] == "prefetch":
-                    local["steps.prefetch.outputs.prefetched"] = str(cloned).lower()
+                elif step["id"] == "cachew":
+                    local["steps.cachew.outputs.checked-out"] = str(cloned).lower()
         return started
 
     def test_github_hosted_runners_only_run_the_official_checkout(self):
@@ -99,10 +99,10 @@ class RunnerGateTests(unittest.TestCase):
                 self.assertEqual(self.active_steps(runner(environment), cloned=True), ["checkout"])
 
     def test_self_hosted_linux_runs_cachew_by_default(self):
-        self.assertEqual(self.active_steps(runner("self-hosted")), ["session", "prefetch", "checkout", "configure"])
+        self.assertEqual(self.active_steps(runner("self-hosted")), ["session", "cachew", "checkout", "configure"])
 
     def test_official_checkout_runs_only_when_cachew_did_not_check_out(self):
-        self.assertEqual(self.active_steps(runner("self-hosted"), cloned=True), ["session", "prefetch", "configure"])
+        self.assertEqual(self.active_steps(runner("self-hosted"), cloned=True), ["session", "cachew", "configure"])
 
     def test_opt_out_and_unsupported_platforms_are_no_ops(self):
         for context in (
@@ -117,27 +117,27 @@ class RunnerGateTests(unittest.TestCase):
 
     def test_explicit_opt_in_on_other_linux_runners(self):
         self.assertEqual(
-            self.active_steps(runner("github-hosted", cachew="true")), ["session", "prefetch", "checkout", "configure"]
+            self.active_steps(runner("github-hosted", cachew="true")), ["session", "cachew", "checkout", "configure"]
         )
 
     def test_official_checkout_is_unmodified(self):
-        self.assertEqual(self.checkout["if"], "steps.prefetch.outputs.prefetched != 'true'")
+        self.assertEqual(self.checkout["if"], "steps.cachew.outputs.checked-out != 'true'")
         self.assertNotIn("\n      env:", self.checkout["raw"])
         self.assertIn("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd", self.checkout["uses"])
 
     def test_outputs_default_to_false_when_cachew_is_skipped(self):
         self.assertEqual(output("cachew-configured"), "${{ steps.configure.outputs.configured || 'false' }}")
-        self.assertEqual(output("cachew-prefetched"), "${{ steps.prefetch.outputs.prefetched || 'false' }}")
+        self.assertEqual(output("cachew-checked-out"), "${{ steps.cachew.outputs.checked-out || 'false' }}")
 
     def test_ref_and_commit_come_from_whichever_step_checked_out(self):
         for name in ("ref", "commit"):
             cachew = {
-                "steps.prefetch.outputs.prefetched": "true",
-                f"steps.prefetch.outputs.{name}": "from-cachew",
+                "steps.cachew.outputs.checked-out": "true",
+                f"steps.cachew.outputs.{name}": "from-cachew",
             }
             fallback = {
-                "steps.prefetch.outputs.prefetched": "false",
-                f"steps.prefetch.outputs.{name}": "unused",
+                "steps.cachew.outputs.checked-out": "false",
+                f"steps.cachew.outputs.{name}": "unused",
                 f"steps.checkout.outputs.{name}": "from-checkout",
             }
             with self.subTest(name=name):
@@ -145,7 +145,7 @@ class RunnerGateTests(unittest.TestCase):
                 self.assertEqual(value(output(name), fallback), "from-checkout")
                 self.assertEqual(value(output(name), {f"steps.checkout.outputs.{name}": "hosted"}), "hosted")
         # SHA input: checkout reports an empty ref, and so does cachew.
-        self.assertEqual(value(output("ref"), {"steps.prefetch.outputs.prefetched": "true"}), "")
+        self.assertEqual(value(output("ref"), {"steps.cachew.outputs.checked-out": "true"}), "")
 
     def test_action_needs_no_pin_besides_the_consumers_pin(self):
         # Everything runs from the action's own directory; the only remote
@@ -156,9 +156,9 @@ class RunnerGateTests(unittest.TestCase):
         self.assertIn('run: bash "$GITHUB_ACTION_PATH/session/prepare.sh"', self.session["raw"])
         self.assertFalse((ACTION.parent / "session" / "action.yml").exists())
 
-    def test_ssh_key_is_not_exposed_to_the_prefetch_process(self):
-        prefetch = next(step for step in self.steps if step.get("id") == "prefetch")
-        self.assertNotIn("inputs.ssh-key }}", prefetch["raw"])
+    def test_ssh_key_is_not_exposed_to_the_cachew_checkout(self):
+        cachew = next(step for step in self.steps if step.get("id") == "cachew")
+        self.assertNotIn("inputs.ssh-key }}", cachew["raw"])
 
 
 if __name__ == "__main__":

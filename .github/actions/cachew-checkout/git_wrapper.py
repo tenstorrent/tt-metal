@@ -21,7 +21,7 @@ import tempfile
 import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from prefetch import TRANSPORT_ERRORS  # noqa: E402
+from checkout import TRANSPORT_ERRORS  # noqa: E402
 
 
 OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}

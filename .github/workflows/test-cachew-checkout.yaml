@@ -71,10 +71,10 @@ jobs:
       - name: Verify no cachew state on a GitHub-hosted runner
         env:
           CONFIGURED: ${{ steps.hosted.outputs.cachew-configured }}
-          PREFETCHED: ${{ steps.hosted.outputs.cachew-prefetched }}
+          CHECKED_OUT: ${{ steps.hosted.outputs.cachew-checked-out }}
         run: |
           test "$CONFIGURED" = false
-          test "$PREFETCHED" = false
+          test "$CHECKED_OUT" = false
           test -z "${CACHEW_SESSION_DIR:-}"
           test -z "${GIT_CONFIG_GLOBAL:-}"
           if ls "$RUNNER_TEMP"/cachew-* >/dev/null 2>&1; then echo "::error::cachew session on a hosted runner"; exit 1; fi
@@ -123,14 +123,14 @@ jobs:
         env:
           EXPECTED_SHA: ${{ github.sha }}
           ACTUAL_SHA: ${{ steps.checkout.outputs.commit }}
-          CACHEW_PREFETCHED: ${{ steps.checkout.outputs.cachew-prefetched }}
+          CACHEW_CHECKED_OUT: ${{ steps.checkout.outputs.cachew-checked-out }}
           CACHEW_CONFIGURED: ${{ steps.checkout.outputs.cachew-configured }}
         run: |
           test "$ACTUAL_SHA" = "$EXPECTED_SHA"
-          test "$CACHEW_PREFETCHED" = "true"
+          test "$CACHEW_CHECKED_OUT" = "true"
           test "$CACHEW_CONFIGURED" = "true"
           git -C cachew-smoke submodule status --recursive
-          echo "cachew-prefetched=$CACHEW_PREFETCHED"
+          echo "cachew-checked-out=$CACHEW_CHECKED_OUT"
           # Later dependency reads go through the job-global rewrite and wrapper.
           test -n "$CACHEW_SESSION_DIR"
           git ls-remote https://github.com/tenstorrent/tt-metal refs/heads/main

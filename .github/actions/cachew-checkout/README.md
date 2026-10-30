@@ -51,7 +51,7 @@ step. An untrusted or non-HTTPS `cachew-url` (including the in-cluster
 `cachew.cachew.svc.cluster.local`) leaves the plain checkout: no session, token,
 wrapper or configuration change.
 
-`cachew-prefetched` reports whether cachew produced the complete checkout, in
+`cachew-checked-out` reports whether cachew produced the complete checkout, in
 which case `actions/checkout` did not run. `cachew-configured` reports whether
 global caching was enabled for later Git operations when the action finished.
 

@@ -24,9 +24,9 @@ import urllib.parse
 
 
 ACTION = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("prefetch", ACTION / "prefetch.py")
-prefetch = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(prefetch)
+spec = importlib.util.spec_from_file_location("checkout", ACTION / "checkout.py")
+cachew_checkout = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cachew_checkout)
 CHECKOUT_JS = os.environ.get("CHECKOUT_ACTION_JS")
 TOKEN = "cachew-test-token-do-not-persist"
 
@@ -190,7 +190,7 @@ class GitServer:
         return [path for method, path, _ in self.requests if method == "GET" and path.endswith("/info/refs")]
 
 
-class PrefetchTests(unittest.TestCase):
+class CheckoutTests(unittest.TestCase):
     def setUp(self):
         inherited = dict(os.environ)
         real_git = inherited.get("CACHEW_REAL_GIT") or shutil.which("git")
@@ -283,10 +283,10 @@ class PrefetchTests(unittest.TestCase):
     def attempt(self):
         capture = io.StringIO()
         with patch.dict(os.environ, self.env, clear=True), redirect_stdout(capture):
-            prefetch.main()
+            cachew_checkout.main()
         self.assertNotIn(TOKEN, capture.getvalue())
         self.assertNotIn(base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode(), capture.getvalue())
-        return runner_file(self.root / "output")["prefetched"] == "true"
+        return runner_file(self.root / "output")["checked-out"] == "true"
 
     def assert_single_cache_attempts(self, repositories):
         paths = self.cache.discoveries()
@@ -326,7 +326,7 @@ class PrefetchTests(unittest.TestCase):
             **inputs,
         }
 
-    def checkout(self, **inputs):
+    def official_checkout(self, **inputs):
         env = dict(self.env)
         for name, value in self.checkout_inputs(**inputs).items():
             env["INPUT_" + name.upper()] = value
@@ -540,7 +540,7 @@ class PrefetchTests(unittest.TestCase):
         self.assertFalse(self.attempt())
         self.assert_single_cache_attempts([])
         self.assertFalse(self.target.exists())
-        self.checkout()
+        self.official_checkout()
 
     def test_health_redirect_is_not_followed(self):
         self.cache.health = 302
@@ -600,7 +600,7 @@ class PrefetchTests(unittest.TestCase):
         self.assertFalse(self.attempt())
         self.assert_single_cache_attempts(["main"])
         self.assertEqual(list(self.target.iterdir()), [])
-        self.checkout()
+        self.official_checkout()
 
     @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
     def test_nested_failure_stops_cache_traversal_and_uses_upstream(self):
@@ -617,7 +617,7 @@ class PrefetchTests(unittest.TestCase):
         self.assertFalse(self.attempt())
         self.assert_single_cache_attempts(["main", "child", "grand"])
         self.assertEqual(list(self.target.iterdir()), [])
-        self.checkout()
+        self.official_checkout()
         self.assertEqual((self.target / "deps/sibling/content.txt").read_text(), "grand")
 
     def test_mid_fetch_disconnect_is_not_retried(self):
@@ -758,7 +758,7 @@ class PrefetchTests(unittest.TestCase):
 
     def test_missing_submodule_object_fails_offline_and_discards(self):
         # Without the seeded submodule repository, `submodule update` would clone it upstream.
-        with patch.object(prefetch.Prefetch, "seed_children", lambda *_: None):
+        with patch.object(cachew_checkout.Checkout, "seed_children", lambda *_: None):
             self.assertFalse(self.attempt())
         self.assertEqual(self.upstream.requests, [])
         self.assertEqual(list(self.target.iterdir()), [])
@@ -766,17 +766,17 @@ class PrefetchTests(unittest.TestCase):
 
     @unittest.skipUnless(CHECKOUT_JS, "set CHECKOUT_ACTION_JS to the pinned checkout dist/index.js")
     def test_late_failure_discards_everything_for_the_fallback_checkout(self):
-        finish = prefetch.Prefetch.finish
+        finish = cachew_checkout.Checkout.finish
 
         def failing(attempt):
             finish(attempt)
-            raise prefetch.Bypass("injected")
+            raise cachew_checkout.Bypass("injected")
 
-        with patch.object(prefetch.Prefetch, "finish", failing):
+        with patch.object(cachew_checkout.Checkout, "finish", failing):
             self.assertFalse(self.attempt())
         self.assertEqual(list(self.target.iterdir()), [])
         self.assertEqual(list(self.runtime.iterdir()), [])
-        self.checkout()
+        self.official_checkout()
 
     def test_safe_directory_is_written_to_the_checkout_global_config(self):
         global_config = self.root / "checkout.config"
@@ -819,7 +819,7 @@ class PrefetchTests(unittest.TestCase):
     def test_stale_staging_directory_from_cancelled_run_is_removed(self):
         # M4: a cancelled attempt must not block later seeding or leak into the worktree.
         self.target.mkdir()
-        stale = self.target / ".cachew-prefetch-cancelled"
+        stale = self.target / ".cachew-checkout-cancelled"
         (stale / ".git").mkdir(parents=True)
         self.assertTrue(self.attempt())
         self.assertFalse(stale.exists())
@@ -835,10 +835,14 @@ class PrefetchTests(unittest.TestCase):
         self.assertEqual(self.output()["available"], "unknown")
 
     def test_auto_url_selects_first_healthy_trusted_origin(self):
-        self.assertEqual(prefetch.cache_candidates("auto", "https://github.com", {}), list(prefetch.TRUSTED_CACHES))
-        self.assertEqual(prefetch.cache_candidates("", "https://github.com", {}), list(prefetch.TRUSTED_CACHES))
+        self.assertEqual(
+            cachew_checkout.cache_candidates("auto", "https://github.com", {}), list(cachew_checkout.TRUSTED_CACHES)
+        )
+        self.assertEqual(
+            cachew_checkout.cache_candidates("", "https://github.com", {}), list(cachew_checkout.TRUSTED_CACHES)
+        )
         with patch.dict(os.environ, self.env, clear=True):
-            attempt = prefetch.Prefetch(self.env)
+            attempt = cachew_checkout.Checkout(self.env)
         attempt.caches = ["http://127.0.0.1:1", self.cache.url]
         attempt.probe()
         self.assertEqual(attempt.cache, self.cache.url)
@@ -871,16 +875,16 @@ class PrefetchTests(unittest.TestCase):
                 self.assertEqual(self.cache.requests, [])
                 self.assertFalse(self.target.exists())
         for value in ("http://127.0.0.1:1", "http://localhost:1", "http://[::1]:1"):
-            with self.assertRaises(prefetch.Bypass):
-                prefetch.origin(value, {})
-            self.assertEqual(prefetch.origin(value, {"CACHEW_TEST_ALLOW_LOOPBACK_HTTP": "1"}), value)
-        with self.assertRaises(prefetch.Bypass):
-            prefetch.origin("http://127.0.0.1:1", {"CACHEW_TEST_ALLOW_LOOPBACK_HTTP": "true"})
+            with self.assertRaises(cachew_checkout.Bypass):
+                cachew_checkout.origin(value, {})
+            self.assertEqual(cachew_checkout.origin(value, {"CACHEW_TEST_ALLOW_LOOPBACK_HTTP": "1"}), value)
+        with self.assertRaises(cachew_checkout.Bypass):
+            cachew_checkout.origin("http://127.0.0.1:1", {"CACHEW_TEST_ALLOW_LOOPBACK_HTTP": "true"})
 
     def test_trusted_origins_match_deployment(self):
         # tt-flux apps/cachew/README.md: one public name per cluster.
         self.assertEqual(
-            set(prefetch.TRUSTED_CACHES),
+            set(cachew_checkout.TRUSTED_CACHES),
             {
                 "https://cachew.ci.tenstorrent.net",
                 "https://cachew.yyz2.ci.tenstorrent.net",
@@ -898,7 +902,7 @@ class PrefetchTests(unittest.TestCase):
         self.assertIn("continue-on-error: true", action)
         for name in ("ref", "commit"):
             self.assertIn(
-                f"value: ${{{{ steps.prefetch.outputs.prefetched == 'true' && steps.prefetch.outputs.{name} "
+                f"value: ${{{{ steps.cachew.outputs.checked-out == 'true' && steps.cachew.outputs.{name} "
                 f"|| steps.checkout.outputs.{name} }}}}",
                 action,
             )

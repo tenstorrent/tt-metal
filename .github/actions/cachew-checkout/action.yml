@@ -80,16 +80,16 @@ inputs:
 outputs:
   ref:
     description: The branch, tag or SHA checked out, as actions/checkout reports it.
-    value: ${{ steps.prefetch.outputs.prefetched == 'true' && steps.prefetch.outputs.ref || steps.checkout.outputs.ref }}
+    value: ${{ steps.cachew.outputs.checked-out == 'true' && steps.cachew.outputs.ref || steps.checkout.outputs.ref }}
   commit:
     description: The checked out commit SHA.
-    value: ${{ steps.prefetch.outputs.prefetched == 'true' && steps.prefetch.outputs.commit || steps.checkout.outputs.commit }}
+    value: ${{ steps.cachew.outputs.checked-out == 'true' && steps.cachew.outputs.commit || steps.checkout.outputs.commit }}
   cachew-configured:
     description: Whether job-global caching is active for later dependency fetches.
     value: ${{ steps.configure.outputs.configured || 'false' }}
-  cachew-prefetched:
+  cachew-checked-out:
     description: Whether cachew produced the complete checkout, so actions/checkout did not run.
-    value: ${{ steps.prefetch.outputs.prefetched || 'false' }}
+    value: ${{ steps.cachew.outputs.checked-out || 'false' }}
 runs:
   using: composite
   steps:
@@ -114,7 +114,7 @@ runs:
       # and with it the session, when the job completes.
       run: bash "$GITHUB_ACTION_PATH/session/prepare.sh"
     - name: Checkout from cachew
-      id: prefetch
+      id: cachew
       if: steps.session.outputs.ready == 'true'
       continue-on-error: true
       shell: bash
@@ -146,7 +146,7 @@ runs:
         CACHEW_CACHEW_FETCH_TIMEOUT: ${{ inputs.cachew-fetch-timeout }}
       run: |
         if command -v python3 >/dev/null 2>&1; then
-          python3 "$CACHEW_ACTION_PATH/prefetch.py" || echo "Cachew checkout unavailable; continuing with upstream checkout."
+          python3 "$CACHEW_ACTION_PATH/checkout.py" || echo "Cachew checkout unavailable; continuing with upstream checkout."
         else
           echo "python3 unavailable; continuing with upstream checkout."
         fi
@@ -154,7 +154,7 @@ runs:
     # unsupported mode, existing checkout, or any cache or local failure.
     - name: Checkout from upstream
       id: checkout
-      if: steps.prefetch.outputs.prefetched != 'true'
+      if: steps.cachew.outputs.checked-out != 'true'
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         repository: ${{ inputs.repository }}
@@ -183,8 +183,8 @@ runs:
       shell: bash
       env:
         CACHEW_ACTION_PATH: ${{ github.action_path }}
-        CACHEW_AVAILABLE: ${{ steps.prefetch.outputs.available || 'unknown' }}
-        CACHEW_SELECTED_URL: ${{ steps.prefetch.outputs.cache-url }}
+        CACHEW_AVAILABLE: ${{ steps.cachew.outputs.available || 'unknown' }}
+        CACHEW_SELECTED_URL: ${{ steps.cachew.outputs.cache-url }}
         CACHEW_CACHEW_URL: ${{ inputs.cachew-url }}
         CACHEW_TEST_ALLOW_LOOPBACK_HTTP: ''
         CACHEW_CACHEW_HEALTH_TIMEOUT: ${{ inputs.cachew-health-timeout }}
