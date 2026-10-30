@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from helpers.format_config import DataFormat
 from helpers.llk_params import MathFidelity
-from helpers.matmul_prod_keys import grid_main_cell
+from helpers.matmul_prod_keys import grid_main_cell, grid_unfused_post_cell
 import perf_matmul_grid as grid
 import perf_matmul_grid2 as grid2
 
@@ -39,18 +39,16 @@ def main() -> int:
         )
         (Path(d) / "t.cpp").write_text(
             '#include <cstdio>\n#include "llk_matmul_forms.h"\nusing namespace ckernel;\nstruct R{MathFidelity f;bool h,a;DataFormat i1,i0,o;int rt,ct,kt,th;bool l1;int nb;};\n'
-            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows)putchar(matmul_grid_main_form(r.f,r.h,r.a,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.th,r.l1,r.nb)?'1':'0');}}\n"
+            f"static const R rows[]={{{body}}};\nint main(){{for(const R& r:rows){{putchar(matmul_grid_main_form(r.f,r.h,r.a,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.th,r.l1,r.nb)?'1':'0');putchar(matmul_unfused_post(r.f,r.h,r.a,r.i1,r.i0,r.o,r.rt,r.ct,r.kt,r.th,r.l1,r.nb)?'1':'0');}}}}\n"
         )
         subprocess.run(["g++", "-std=c++20", "-O1", f"-I{d}", str(Path(d) / "t.cpp"), "-o", str(Path(d) / "t")], check=True)
         cpp = subprocess.run([str(Path(d) / "t")], check=True, capture_output=True, text=True).stdout
-    py = "".join(
-        "1"
-        if grid_main_cell(getattr(MathFidelity, fi), sy == "H", acc == "Y", getattr(DataFormat, NAME[a]), getattr(DataFormat, NAME[b]), getattr(DataFormat, NAME[o]), h, w, kt, thr, l1, nb)
-        else "0"
-        for a, b, o, acc, sy, fi, h, w, kt, thr, l1, nb in rows
-    )
+    py = ""
+    for a, b, o, acc, sy, fi, h, w, kt, thr, l1, nb in rows:
+        args = (getattr(MathFidelity, fi), sy == "H", acc == "Y", getattr(DataFormat, NAME[a]), getattr(DataFormat, NAME[b]), getattr(DataFormat, NAME[o]), h, w, kt, thr, l1, nb)
+        py += ("1" if grid_main_cell(*args) else "0") + ("1" if grid_unfused_post_cell(*args) else "0")
     bad = sum(x != y for x, y in zip(cpp, py))
-    print(f"{len(rows)} grid rows, C++ keeps main's form on {cpp.count('1')}, python on {py.count('1')}, {bad} differ")
+    print(f"{len(rows)} grid rows, main's form: C++ {cpp[0::2].count('1')} python {py[0::2].count('1')}; separate post: C++ {cpp[1::2].count('1')} python {py[1::2].count('1')}; {bad} differ")
     return 1 if bad or len(cpp) != len(py) else 0
 
 
