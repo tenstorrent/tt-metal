@@ -42,7 +42,8 @@ hit from a pull-through miss. A later cache failure disables caching for the job
 The action first creates an owned job-global Git configuration under
 `RUNNER_TEMP`. It preserves the caller's global settings and included files while
 excluding inherited cachew rewrites during upstream checkout. The original global
-files remain untouched.
+files remain untouched. Checkout's `safe.directory` entries survive activation
+and repeated checkouts, including upstream fallback.
 
 One unauthenticated `GET /_liveness` request must return HTTP 200 before using
 cachew. The cache phase fetches main repository objects once, then fetches each
