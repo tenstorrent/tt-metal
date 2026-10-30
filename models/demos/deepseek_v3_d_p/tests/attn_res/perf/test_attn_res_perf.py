@@ -218,7 +218,8 @@ def test_attn_res_layer_perf(mesh_device, device_params, mode):
             pre_ffn = residual.read()
             residual.write(module(pre_ffn))
             residual.release(pre_ffn)
-        for tensor in residual.handoff():
+        live, sealed = residual.handoff()
+        for tensor in (live, *sealed):
             ttnn.deallocate(tensor)
 
     def baseline(num_layers):

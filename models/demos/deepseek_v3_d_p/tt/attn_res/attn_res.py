@@ -72,6 +72,14 @@ ONE_PASS_SQUARES_MAX_WIDTH = 177 * ttnn.TILE_SIZE
 FOLD_MIN_CANDIDATES = 4
 
 
+def as_sealed_list(sealed):
+    """A sealed set as the list of snapshot tensors it was sealed as: None is the empty set,
+    and a single `[1, S, N, d]` tensor is a one-element list."""
+    if sealed is None:
+        return []
+    return list(sealed) if isinstance(sealed, (list, tuple)) else [sealed]
+
+
 class TtAttnRes(LightweightModule):
     """The AttnRes read, composed from ttnn primitives.
 
@@ -522,7 +530,7 @@ class TtAttnRes(LightweightModule):
         """
         return self.one_pass_squares and self.stats_dtype == ttnn.float32 and len(queries) < ttnn.TILE_SIZE
 
-    def _inter_block_fused(self, block_residual, queries):
+    def _inter_block_fused(self, sealed, queries):
         """`inter_block` as three dispatches: both statistics in one pass over the sealed set,
         one collective, and the scoring and the mixture in a second pass.
 
@@ -534,7 +542,7 @@ class TtAttnRes(LightweightModule):
         composed chain narrowed the reduced statistics to bf16.
         """
         local = ttnn.experimental.deepseek_prefill.attn_res_block_stats(
-            [block_residual], self._score_columns(queries), compute_kernel_config=STATS_FIDELITY
+            sealed, self._score_columns(queries), compute_kernel_config=STATS_FIDELITY
         )
         # Gathered rather than reduced: the mixture sums the ranks' partials in fp32 dest, so
         # the collective only has to move them.
@@ -542,7 +550,7 @@ class TtAttnRes(LightweightModule):
         ttnn.deallocate(local)
 
         partials, site_shifts, site_masses = ttnn.experimental.deepseek_prefill.attn_res_block_mix(
-            [block_residual], stats, num_sites=len(queries), inv_hidden_size=1.0 / self.hidden_size, eps=self.eps
+            sealed, stats, num_sites=len(queries), inv_hidden_size=1.0 / self.hidden_size, eps=self.eps
         )
         ttnn.deallocate(stats)
         return partials, site_shifts, site_masses
@@ -653,7 +661,7 @@ class TtAttnRes(LightweightModule):
         the score chain's output to hand it over."""
         return ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(v, weights, dim=1)
 
-    def inter_block(self, block_residual, queries):
+    def inter_block(self, sealed, queries):
         """Sealed-snapshot half of the mixture, for every read site in a block.
 
         Everything that does not depend on the read site runs once for the whole
@@ -668,8 +676,10 @@ class TtAttnRes(LightweightModule):
         one site already paid for.
 
         Args:
-            block_residual: `[1, S, N, d/tp_factor]`. Not None — the walk places no
-                read site before the first seal, so every executed read has one.
+            sealed: the sealed set, one `[1, S, N, d/tp_factor]` tensor or the list of
+                them it was sealed as, whose planes in order are the candidates. Not
+                empty — the walk places no read site before the first seal, so every
+                executed read has one.
             queries: sequence of `[1, 1, 1, d/tp_factor]` folded queries.
 
         Returns:
@@ -679,9 +689,20 @@ class TtAttnRes(LightweightModule):
             batches whole and names the site; keep them alive until the block's last
             read.
         """
+        sealed = as_sealed_list(sealed)
+        assert sealed, "inter_block needs a sealed snapshot to score against"
         if self._fuses_scores(queries):
-            return self._inter_block_fused(block_residual, queries)
+            return self._inter_block_fused(sealed, queries)
+        if len(sealed) == 1:
+            return self._inter_block_composed(sealed[0], queries)
+        # The composed chain takes the set as one tensor.
+        whole = ttnn.concat(sealed, dim=1)
+        batches = self._inter_block_composed(whole, queries)
+        ttnn.deallocate(whole)
+        return batches
 
+    def _inter_block_composed(self, block_residual, queries):
+        """`inter_block` from ttnn primitives, for configurations the fused ops do not take."""
         reciprocal_rms = self._reciprocal_rms(block_residual)
         dots = self._dots_by_site(block_residual, queries)
         scores = ttnn.mul(dots, reciprocal_rms)
