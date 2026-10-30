@@ -1588,6 +1588,58 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 434
       device_ms_total: <= 230
+- id: P.17
+  title: 'MOE_DROP: take the MoE block drop of dnijemcevic/model_bringup_lowbit @ 5e86f048ad4 (before / after at 50k and 500k)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.16
+  paths:
+  - models/demos/moe_block
+  - models/demos/deepseek_v3_d_p
+  - models/demos/glm53_flash_d_p_lb
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup/combine_rf
+  - ttnn/ttnn/bringup/flat_routed_expert_ttnn
+  - ttnn/ttnn/bringup/prepared_program
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn
+  - tt_metal/impl/allocator
+  - tt_metal/impl/buffers
+  - tools/triage/dump_l1_diff.py
+  brief:
+    details: 'OWNER 2026-10-30: take the new MoE block drop and measure its effect, device and host, at 50k -> 55k and
+      500k -> 505k. The drop is the 5 commits of origin/dnijemcevic/model_bringup_lowbit after 8deddc500ea (6f7fc85f27b
+      Sync with Marko @ 5dd83d14d7e: fused head host launch cost, persistent words in L1_SMALL, allocator shard-grid
+      cache, combine fp32 sums to DEST, prepared_program / sparse_all_gather_2d keys, se_engine3 speed-ups; 847723943b1
+      routing_stream SE-RPWAIT; 26f61977390 routing exchange forwarding slots in DRAM (GLM-5.3 hang); a99234c84e0
+      combine per-chip accumulator roles SPC_ACC_PERCHIP default on; 5e86f048ad4 flat DRISC NoC high address clear).
+      Do: `git fetch origin dnijemcevic/model_bringup_lowbit` and apply exactly those commits to the tree, uncommitted
+      (e.g. `git merge --squash --no-commit origin/dnijemcevic/model_bringup_lowbit`; the overseer checked: no conflicts
+      with HEAD; then `git reset -q` so nothing is staged), change nothing else, rebuild (./build_metal.sh, C++ in
+      tt_metal allocator / buffer, the hybrid combine factory, flat_routed_expert, prepared_program), check `import
+      ttnn` and that the model still runs its shipped configuration (MOE_IMPL=block, MOE_HEAD=fused, torus). If a
+      shipped DS41 path breaks, fix it in the DS41 adapter (tt/moe_block_adapter.py) and say so; do not change the
+      drop. No fork regression or unit suites (task F.1). The orchestrator measured ''before'' already and measures
+      ''after'' itself (quick A/B plus one chunk at 51200 and 512000: device per section, warm wall, host cProfile):
+      do not profile. Report the drop''s new switches and their defaults as the DS41 run uses them.'
+  ab:
+    before: true
+    env:
+      DS41_ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  - 512000
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 434
+      device_ms_total: <= 230
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
@@ -1598,6 +1650,7 @@ tasks:
   - P.14
   - P.15
   - P.16
+  - P.17
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh

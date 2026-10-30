@@ -2433,3 +2433,25 @@ only when `ab_finished(result)`: it passed, or it recorded a measurement or a fa
 test ran is measured again, the finished side stays reused. (The 09:55 "F229" was not a bug: the second resume
 correctly waited, the rerun decision having been consumed by the first.) Selftest: test_perf_ab.py::
 test_a_side_killed_before_any_test_is_measured_again_on_rerun.
+
+## F230: a perf pick without a switch (a branch merge) measures 'before' first; profiles at positions in the ledger (DeepSeek-V4.1, owner 2026-10-30)
+
+The overseer took a MoE block drop (another branch) by merging it itself and profiled 50k / 500k with scripts outside
+the tree (posprof plugins); none of it reached the ledger. Owner: the overseer queues, agents change code, and a branch
+merge runs "before" before merging and "after" after. Fix:
+- `ab: {before: true[, env: {...}]}` (orchestrator.ab_before): before the agent starts, perf_step measures the 'off'
+  side on the tree as it is (ab_measure_before; `ab.env` is what both sides run with); then the agent merges, then
+  'on'. The 'before' runs are kept whatever code the tree holds later (stamp without the code key), never re-measured on
+  the changed tree; missing 'before' runs on a tree already changed under the task's paths wait for a person.
+- `ab_positions: [<start>, ...]`: per position one item (test_profile.py at BRINGUP_POS with BRINGUP_PROFILE_HOST=1,
+  plus the clean-wall split): device time per section, warm wall, host cProfile, on and off, in rec.positions and the
+  table ("One chunk at position ...", with on - off).
+- testing/profile.py: BRINGUP_POS = one chunk at that start, every layer, zero prefix and random tokens (timing only,
+  nothing compared; the plugin's logic, now in the tree); BRINGUP_PROFILE_HOST=1 adds HOST_RUNS warm runs under cProfile
+  after the timed wall runs (host_cprofile_ms, host_launch_ms / _calls, <task>_host<sfx>.json top functions, .pstats).
+  core/metrics: BRINGUP_METRIC_SUFFIX (set to _p<pos> by a position run) names every metric, so one gate holds several.
+- skill: "The overseer queues; it never does the work".
+Selftests: test_perf_ab.py::test_a_merge_pick_measures_before_then_lets_the_agent_change_the_tree,
+test_a_merge_picks_before_side_is_never_measured_on_the_changed_tree,
+test_a_merge_pick_without_its_before_side_on_a_changed_tree_waits; test_e2e_runtime.py::
+test_a_profile_at_a_position_records_timing_with_its_suffix_and_the_host_profile.

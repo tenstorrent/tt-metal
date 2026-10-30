@@ -1122,3 +1122,18 @@ Skill updated (both copies): no fork regression suites on large boxes; on a kill
   PASS; wall 315.1 on / 327.3 off (off from 09:32, under host-RAM pressure), spread 14.9 / 43.8. Committed 3e42e5211db.
   Host RAM during the on side: MemAvailable >= ~300 GiB, unaccounted 3.9 GiB (no leak seen).
 - 11:53 profile P16 (tmux prof: series_tag.sh, POSITIONS 51200 512000): device, warm wall, host cProfile.
+- 12:18 P16 profile done (posprof P16, 3e42e5211db): device 207.7 / 245.7 ms, warm wall 311.7 / 320.7 ms at 50k / 500k;
+  host cProfile 338 / 334 ms (op launches 222 ms over 2,543 calls, fused head 28, CCL dealloc 17, all_gather 41 cum).
+- 12:18 OWNER: take the MoE drop (straightforward). Merged origin/dnijemcevic/model_bringup_lowbit @ 5e86f048ad4 as
+  5363593ad08 (no conflicts), rebuilt, box test PASS, build_ok = HEAD. Accuracy: core.verify --tasks P.16 (ladder last +
+  profile with every accuracy limit) -> /scratch/dnijemcevic/verify_moedrop.log; then posprof MOE at 51200 / 512000.
+- 12:20 OWNER: "it is not the overseer's job to merge; queue runs so they stay in the ledger"; "if it is a branch merge,
+  run 'before' before merging, then 'after'"; the merge is the bring-up engineer's. My hand merge 5363593ad08 undone
+  (git reset --keep to 3b7908a45b4, never pushed), hand verify stopped, ttnn rebuilt back to HEAD. The P16 posprof
+  profile above was by hand too (kept as information; future profiles are ledger tasks).
+- F230 (framework): perf pick `ab: {before: true}` measures 'off' on the tree before the agent, then the agent merges,
+  then 'on'; `ab_positions` adds device / wall / host cProfile at token positions (test_profile.py BRINGUP_POS +
+  BRINGUP_PROFILE_HOST, metrics _p<pos>). Skill (both copies): "The overseer queues; it never does the work". Selftests:
+  658 pass, 1 pre-existing failure (xing40 contract test_no_runner_contract_test_takes_a_fixed_threshold).
+- Queued P.17 MOE_DROP (perf, ab.before, ab_positions 51200 / 512000, DS41_ENGRAM_TABLE=resident both sides; X.3 deps
+  += P.17). Launch: resume --until P.17.

@@ -30,6 +30,8 @@ import re
 import time
 from collections import defaultdict
 
+import torch
+
 from models.demos.common.bringup.core import metrics
 from models.demos.common.bringup.reference.golden import Golden
 from models.demos.common.bringup.testing import accuracy_guard, cpu_bridge
@@ -120,6 +122,70 @@ def profile_rung(s) -> str:
         return name
     cands = [r["name"] for r in s.data["ladder"] if r.get("prefix_from_golden")]
     return cands[-1] if cands else s.data["ladder"][-1]["name"]
+
+
+POS_ENV = "BRINGUP_POS"  # F230: profile one chunk starting at this token position (timing only)
+HOST_ENV = "BRINGUP_PROFILE_HOST"  # F230: the wall run adds HOST_RUNS chunk runs under cProfile
+HOST_RUNS = 5
+
+
+def position() -> int | None:
+    v = os.environ.get(POS_ENV, "").strip()
+    return int(v) if v else None
+
+
+class PositionGolden:
+    """F230 (owner 2026-10-27 / 10-30: device and host time of one chunk at 0, 50k, 500k): one chunk at start ``pos``,
+    every layer, timing only, as testing/positions.py: the KV prefix is the fresh state's zeros and the tokens random
+    ids (the work does not depend on the values). Nothing is compared: no golden exists at such a position."""
+
+    def __init__(self, s, pos: int, chunk: int):
+        self.layers = list(s.layers())
+        self.n_chunks = (pos + chunk) // chunk
+        self.dir = None
+        vocab = int(s.get("checkpoint.config.vocab_size", 32000) or 32000)
+        self._tokens = torch.randint(0, vocab, (pos + chunk,), generator=torch.Generator().manual_seed(0))
+
+    def tokens(self):
+        return self._tokens
+
+    def state(self, i, at):
+        return None
+
+
+def host_profile(one_run) -> None:
+    """F230: HOST_RUNS warm chunk runs under cProfile: the per-chunk host time by function, recorded as metrics
+    (host_cprofile_ms, host_launch_ms / host_launch_calls: the ttnn op launches) and a side record with the top
+    functions; the raw stats beside the results (<task>_host<suffix>.pstats)."""
+    import cProfile
+    import pstats
+
+    pr, walls = cProfile.Profile(), []
+    for _ in range(HOST_RUNS):
+        pr.enable()
+        walls.append(one_run())
+        pr.disable()
+    out = metrics.results_dir() / f"{metrics.record_task()}_host{os.environ.get(metrics.SUFFIX_ENV, '')}.pstats"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pr.dump_stats(str(out))
+    st = pstats.Stats(str(out)).stats
+    n = HOST_RUNS
+    launch = [v for (f, _, name), v in st.items() if name == "__call__" and f.endswith("decorators.py")]
+    metrics.record("host_cprofile_ms", round(sum(walls) / n, 1))
+    metrics.record("host_launch_ms", round(sum(v[3] for v in launch) * 1e3 / n, 1))
+    metrics.record("host_launch_calls", round(sum(v[1] for v in launch) / n))
+    top = sorted(st.items(), key=lambda kv: -kv[1][2])[:25]
+    rows = [
+        {
+            "fn": f"{f.split('/')[-1]}:{ln} {name}",
+            "self_ms": round(v[2] * 1e3 / n, 2),
+            "cum_ms": round(v[3] * 1e3 / n, 2),
+            "calls": round(v[1] / n),
+        }
+        for (f, ln, name), v in top
+    ]
+    metrics.record_json(f"host{os.environ.get(metrics.SUFFIX_ENV, '')}", {"runs_ms": walls, "top": rows})
+    print(f"PROFILE host: {n} runs under cProfile {walls} ms -> {out}")
 
 
 def full_prefill(s, model, state, layers, rung, tokens) -> dict | None:
@@ -346,10 +412,18 @@ def rt_ops(prof: dict, sel: list[int] | None) -> dict:
 def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     accuracy_guard.check(s)  # accuracy first: a perf pick whose frozen test failed in this attempt is not profiled
     backend = profiler.backend(s)  # F155: "rt" unless the spec / BRINGUP_PROFILER asks for the device profiler
-    rung_name = rung_name or profile_rung(s)
-    rung = s.rung(rung_name)
+    pos = position()
+    if pos is not None:  # F230: one chunk at a position, timing only; every metric carries _p<pos>
+        os.environ[metrics.SUFFIX_ENV] = f"_p{pos}"
+        chunk = int(s.get("target.chunk"))
+        rung_name, rung = f"pos{pos}", {"name": f"pos{pos}", "seq": pos + chunk, "chunk": chunk}
+        g = PositionGolden(s, pos, chunk)
+        s.data["target"]["seq"] = max(int(s.data["target"]["seq"]), pos + chunk)  # position tables, in memory
+    else:
+        rung_name = rung_name or profile_rung(s)
+        rung = s.rung(rung_name)
+        g = Golden.for_rung(s, rung_name)
     metrics.record("scaled_run", int(getattr(s, "scaled", False)))  # F64: the reduced model of a scaled run
-    g = Golden.for_rung(s, rung_name)
     layers = [i for i in s.layers() if i in g.layers]
     chunk = rung["chunk"]
     start = rung["seq"] - chunk
@@ -358,6 +432,8 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     prefix = {i: g.state(i, at=start) for i in layers}
 
     def load_prefix():
+        if pos is not None:  # F230: the fresh state's zeros
+            return
         for i in layers:
             state.load_prefix(i, prefix[i], start)
 
@@ -400,7 +476,7 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             h = h2
         model.sync()
         if (
-            count and only is None
+            count and only is None and pos is None
         ):  # the counting run is untimed: also check this chunk is still right (cheap accuracy for perf work)
             got = model.to_host(h).float()
             metrics.record("pcc_chunk_out", metrics.pcc(got, g.layer(g.n_chunks - 1, layers[-1])["out"].float()))
@@ -459,7 +535,15 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             f"{len(walls)} timed runs, cache misses refused: {walls} ms, median {med}; gap uploads "
             f"{sorted(gaps)[len(gaps) // 2]} ms"
         )
-        if os.environ.get("BRINGUP_QUICK") == "1":  # F122: the quick A/B also checks every layer against the golden
+        if os.environ.get(HOST_ENV) == "1":  # F230: warm, after the timed runs
+            misses_allowed(mesh, False)
+            try:
+                host_profile(one_run)
+            finally:
+                misses_allowed(mesh, True)
+        if (
+            os.environ.get("BRINGUP_QUICK") == "1" and pos is None
+        ):  # F122: the quick A/B also checks every layer against the golden
             reload()
             pcc = run(count=True, per_layer=True)
             drift, failed = (
@@ -563,10 +647,11 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
     for c, ns in sorted(per_chip.items()):
         metrics.record(f"device_ms_chip{c}", round(ns / 1e6, 2))
     # F114: with a clean wall run first (gate_command adds it), the profiled run's wall is only for reference
-    clean = os.environ.get("BRINGUP_WALL_CLEAN") == "1" and metrics.load(metrics.record_task()).get("chunk_wall_clean")
+    kept = metrics.load(metrics.record_task())
+    clean = os.environ.get("BRINGUP_WALL_CLEAN") == "1" and kept.get(metrics.suffixed("chunk_wall_clean"))
     metrics.record("chunk_wall_ms_profiled", round(wall * 1e3, 1))
     if clean:
-        wall = metrics.load(metrics.record_task())["chunk_wall_ms"]["value"] / 1e3
+        wall = kept[metrics.suffixed("chunk_wall_ms")]["value"] / 1e3
     else:
         metrics.record("chunk_wall_ms", round(wall * 1e3, 1))
         metrics.record("chunk_wall_clean", 0)
