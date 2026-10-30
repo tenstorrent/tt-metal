@@ -50,7 +50,7 @@ way.
 | `RouterKernelInputs` | Defined in `fabric_router_builder.hpp`; filled by `ComputeMeshRouterBuilder::create_kernel` | What the router passed to `CreateKernel`: the defines every RISC shares, and each RISC's processor and named compile-time arguments |
 | The kept `KernelCreationContext` | `FabricBuilder::create_kernels` | The chip-wide values every router's kernel was given: the master router's channel, the router count and the router channel mask. The manifest records them as the chip's `local_sync` |
 | `collect_manifest_router(chip_facts)` | Pure virtual on `FabricRouterBuilder`; implemented by `ComputeMeshRouterBuilder` | One `manifest::Router`. The builder gathers what only it can see into a `ManifestRouterInputs` and hands it to the router pass (`fabric_manifest_router_pass.cpp`) |
-| `publish_manifest_chip()` | `FabricBuilder` | The chip: its Z port role, its local sync, and every router, sorted by Ethernet channel |
+| `publish_manifest_chip()` | `FabricBuilder` | The chip: its Z port role, its local sync, every router sorted by Ethernet channel, and the router pairs it connected (`get_router_connection_pairs`), which the topology pass finds each edge's sibling in |
 | `get_manifest_chips()` | `FabricBuilderContext` | The `PublishedChips` (`fabric_manifest_router_pass.hpp`) that holds each chip by physical chip id. The builder context lives in `FabricContext`, so it outlives the builders, and the topology pass reads it at write time |
 | `remove_stale_fabric_manifest`, `write_fabric_manifest` | Called from `FabricFirmwareInitializer::init`; defined in `fabric_manifest.cpp` | Nothing: they delete last run's file and write this one |
 
