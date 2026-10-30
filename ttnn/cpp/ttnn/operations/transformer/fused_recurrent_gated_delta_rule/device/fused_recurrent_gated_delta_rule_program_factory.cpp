@@ -132,7 +132,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     TensorAccessorArgs(*in.q.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.k.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*in.v.buffer()).append_to(reader_ct);
-    TensorAccessorArgs(*in.decay.buffer()).append_to(reader_ct);  // g (log decay); the kernel takes exp(g)
+    TensorAccessorArgs(*in.g.buffer()).append_to(reader_ct);  // the log decay; the kernel takes exp(g)
     TensorAccessorArgs(*in.beta.buffer()).append_to(reader_ct);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
     TensorAccessorArgs(blk_buf).append_to(reader_ct);
@@ -188,7 +188,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     auto* q_buf = in.q.buffer();
     auto* k_buf = in.k.buffer();
     auto* v_buf = in.v.buffer();
-    auto* g_buf = in.decay.buffer();
+    auto* g_buf = in.g.buffer();
     auto* beta_buf = in.beta.buffer();
     auto* s0_buf = in.initial_state.has_value() ? in.initial_state->buffer() : nullptr;
     auto* o_buf = outputs[0].buffer();
