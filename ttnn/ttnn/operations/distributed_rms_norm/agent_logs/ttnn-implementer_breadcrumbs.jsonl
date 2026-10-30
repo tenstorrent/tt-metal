@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"test_linear -k 1x1x32x32 and bf16","note":"first end-to-end pass, both cluster axes on 2x2","ts":"2026-10-30T18:10:00+00:00"}
