@@ -1113,6 +1113,8 @@ inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
 void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
     uint8_t noc_id,
     uint64_t noc_addr,
+    uint32_t l1_addr,
+    uint32_t len,
     uint32_t x_start,
     uint32_t y_start,
     uint32_t x_end,
@@ -1179,18 +1181,18 @@ void __attribute__((noinline)) debug_sanitize_noc_multicast_rect_in_node_set(
         debug_sanitize_post_addr_and_hang(
             noc_id,
             noc_addr,
-            0,
-            0,
+            l1_addr,
+            len,
             DEBUG_SANITIZE_NOC_MULTICAST,
             DEBUG_SANITIZE_NOC_WRITE,
             DEBUG_SANITIZE_NOC_TARGET,
             DebugSanitizeNocMulticastOutsideNodeSet);
     }
 }
-#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(                         \
-    noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n, includes_sender) \
-    debug_sanitize_noc_multicast_rect_in_node_set(                             \
-        noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n, includes_sender)
+#define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(                                      \
+    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender) \
+    debug_sanitize_noc_multicast_rect_in_node_set(                                          \
+        noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender)
 
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
@@ -1245,6 +1247,6 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l)
 #define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
 #define DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET( \
-    noc_id, noc_a, x_start, y_start, x_end, y_end, coords, n, includes_sender)
+    noc_id, noc_a, worker_a, l, x_start, y_start, x_end, y_end, coords, n, includes_sender)
 
 #endif  // WATCHER_ENABLED

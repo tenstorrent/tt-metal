@@ -209,10 +209,14 @@ struct noc_traits_t<TensorAccessor<DSpecT>> : tensor_accessor::detail::PushIssue
         const Noc& noc,
         const dst_args_mcast_type& args,
         uint64_t noc_addr,
+        uint32_t src_addr,
+        uint32_t size_bytes,
         bool includes_sender) {
         DEBUG_SANITIZE_NOC_MULTICAST_RECT_IN_NODE_SET(
             noc.get_noc_id(),
             noc_addr,
+            src_addr,
+            size_bytes,
             args.noc_x_start,
             args.noc_y_start,
             args.noc_x_end,
