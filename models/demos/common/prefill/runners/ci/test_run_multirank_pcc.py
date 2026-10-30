@@ -433,6 +433,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
         producer = self.one_record(records, "producer")["env"]
         self.assertEqual((producer["PREFILL_SP"], producer["PREFILL_TP"]), ("4", "4"))
+        # Half the 8x4 chunk on both sides (640 tokens per chip), and the 1M request in those chunks.
+        self.assertEqual((runner["PREFILL_CHUNK_SIZE"], producer["PREFILL_CHUNK_SIZE"]), ("2560", "2560"))
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1049600 // 2560))
         self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
         self.assertIn("PCC GATE PASS", result.stdout)
 
