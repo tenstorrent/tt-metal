@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from models.experimental.mimo_v2_6_flash.tt.device_sampler import MAX_USERS
+from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import DeferredDecode, MiMoV2ForCausalLM
 
 DP, PER_LANE, VOCAB = 4, 4, 152576
@@ -36,23 +37,38 @@ class FakeSampler:
         self.grammar.append(None if mask is None else (mask.clone(), rows.clone()))
 
 
+class FakeTokens:
+    """A lane's device token row; ``cpu`` reads it (host: a tensor)."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def cpu(self, blocking=True):
+        return self.values
+
+
 class FakeLane:
-    def __init__(self):
+    def __init__(self, index=0):
+        self.index = index
         self.max_batch = 32
         self.sampler = FakeSampler()
         self.decode_trace = object()
         self.enqueued = []
+
+    def _handle(self):
+        """The step's tokens: 1000 + the decode row."""
+        return {"next_tokens": FakeTokens(torch.arange(self.max_batch) + 1000 + self.index * PER_LANE)}
 
     def set_vllm_page_tables(self, rows):
         pass
 
     def decode_enqueue(self, tok, pos, sample):
         self.enqueued.append(("reload", sample))
-        return "handle"
+        return self._handle()
 
     def decode_enqueue_resident(self, pos, sample):
         self.enqueued.append(("steady", sample))
-        return "handle"
+        return self._handle()
 
 
 def params(rows=ROWS, temperature=1.0, top_k=-1, top_p=0.95, logprobs=False):
@@ -77,7 +93,10 @@ def bitmask(constrained):
 @pytest.fixture
 def adapter():
     gen = SimpleNamespace(
-        models=[FakeLane() for _ in range(DP)], dp=DP, users_per_replica=PER_LANE, cfg=SimpleNamespace(vocab_size=VOCAB)
+        models=[FakeLane(i) for i in range(DP)],
+        dp=DP,
+        users_per_replica=PER_LANE,
+        cfg=SimpleNamespace(vocab_size=VOCAB),
     )
     model = MiMoV2ForCausalLM(gen, 4096)
     model.layer_groups = [0]
@@ -269,3 +288,17 @@ def test_steady_mask_without_reload_lifts_the_flags(adapter):
     adapter.sample_deferred_decode(payload, params(), grammar_bitmask=bitmask([]))
     assert lane1.grammar[-1] is None and lane1.params == 1
     assert adapter.models[1].enqueued[-1] == ("steady", True)
+
+
+def test_finalizing_the_deferred_output_reads_it(adapter, monkeypatch):
+    """The plugin finalizes ``sample_deferred_decode``'s return with ``process_decode_output_host`` alone, without
+    ``read_decode_output`` (DEVICE_GRAMMAR_CONTRACT.md): the adapter reads the lanes' tokens itself."""
+    monkeypatch.setattr(generator_vllm, "ttnn", SimpleNamespace(get_device_tensors=lambda t: [t], to_torch=lambda t: t))
+    positions = torch.arange(ROWS, dtype=torch.int32) + 100
+    positions[7] = -1
+    out = adapter.sample_deferred_decode(submit(adapter, positions), params(), grammar_bitmask=bitmask([5]))
+    tokens = adapter.process_decode_output_host(out, is_tokens=True)
+    assert tokens.dtype == torch.int32 and tokens.tolist() == [1000 + r for r in range(ROWS)]
+    assert (
+        adapter.process_decode_output_host(adapter.read_decode_output(out), is_tokens=True).tolist() == tokens.tolist()
+    )

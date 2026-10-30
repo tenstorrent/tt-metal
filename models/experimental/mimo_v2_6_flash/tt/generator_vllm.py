@@ -2084,13 +2084,16 @@ class MiMoV2ForCausalLM:
 
     def process_decode_output_host(self, out, is_tokens=False, **kwargs):
         """Host output of ``read_decode_output``: greedy tokens int32 [B] in slot order (``is_tokens``; idle slots
-        0), else the logits it read."""
+        0), else the logits it read. A device-sampled step's output that nobody read (``sample_deferred_decode``'s:
+        the plugin finalizes it without ``read_decode_output``) is read here, blocking."""
         if kwargs.get("sample_rows") is not None:
             raise ValueError("MiMo declares no compact host logits; got sample_rows")
         if not is_tokens:
             if not isinstance(out, torch.Tensor):
                 raise ValueError("host sampling: read_decode_output returns the logits")
             return out
+        if isinstance(out, dict) and "handles" in out and out["tokens"]:
+            out = self.read_decode_output(out)
         if isinstance(out, torch.Tensor) or "reads" not in out:
             raise ValueError("device sampling: expected the token reads of read_decode_output")
         tokens = torch.zeros(out["rows"], dtype=torch.int32)
