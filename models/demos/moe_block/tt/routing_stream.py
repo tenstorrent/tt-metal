@@ -179,7 +179,10 @@ def _plan_fn(subs):
 # core 0 (x, y), calls (global: this core's call count), ready (global), mesh, then the destinations' chip ids [nd]
 RA_SEND = r"""
 // one packet's way on: to the next hop (kind 0: the destination's DRAM slot page par N + src, its arrival counter on
-// planner core 0; kind 1: the next forwarding port's slot, its flag), chunks of MAXP, the last with the increment
+// planner core 0; kind 1: the next forwarding port's DRAM slot page (fbase: the forward slots tensor, slot | page << 8),
+// its flag on that port), chunks of MAXP, the last with the increment. (A forward slot in DRAM, not the port's L1: a
+// packet can land before that chip's head runs - in L1 the program still running there overwrote it, and the forwarder
+// then sent a garbage-sized packet past its L1's end into the next hop's L1)
 template <typename C, typename H>
 FORCE_INLINE void ra_hop(C& conn, H hdr, uint32_t src_l1, uint32_t bytes, uint32_t a, uint32_t par, uint32_t srcid,
                          uint32_t PCAP, uint32_t sl, uint32_t c0, uint32_t c1, uint32_t px, uint32_t py, uint32_t mesh,
@@ -192,8 +195,9 @@ FORCE_INLINE void ra_hop(C& conn, H hdr, uint32_t src_l1, uint32_t bytes, uint32
         dst = get_noc_addr(par * RA_N + srcid, slg);
         inc = get_noc_addr(px, py, par ? c1 : c0);
     } else {
-        dst = get_noc_addr(nx, ny, fbase + slot * PCAP);
-        inc = get_noc_addr(nx, ny, flags + 16 * slot);
+        const InterleavedAddrGen<true> fg = {.bank_base_address = fbase, .page_size = PCAP};
+        dst = get_noc_addr(slot >> 8, fg);
+        inc = get_noc_addr(nx, ny, flags + 16 * (slot & 0xFF));
     }
     for (uint32_t off = 0; off < bytes; off += MAXP) {
         const uint32_t sz = bytes - off < MAXP ? bytes - off : MAXP;
@@ -209,7 +213,7 @@ FORCE_INLINE void ra_hop(C& conn, H hdr, uint32_t src_l1, uint32_t bytes, uint32
     }
     if (kind == 1) {  // (+1 on the next forwarder's landed count, behind the packet: its poll reads one word)
         noc_async_writes_flushed();
-        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(nx, ny, flags + 16 * 16), 1, true});
+        hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(nx, ny, flags + 16 * 16), 1, true});  // (slot unused)
         conn.wait_for_empty_write_slot();
         conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
     }
@@ -270,11 +274,12 @@ struct RASend {
         done = 1;
     }
 };
-// a forwarding port's slots: each packet (of another chip, on its way) landed with its flag set - sent on to its next
-// hop once there (any order), the flag re-armed. args at r0: n, buffer base, flags, PCAP, slot tensor, c0, c1, planner
-// core 0 (x, y), mesh, then per slot (next chip, kind, x, y, slot)
+// a forwarding port's slots: each packet (of another chip, on its way) landed in its DRAM slot page with its flag set -
+// read into the scratch slot (L1, this program's) and sent on to its next hop (any order), the flag re-armed. args at r0:
+// n, scratch base, flags, PCAP, slot tensor, c0, c1, planner core 0 (x, y), mesh, the forward slots tensor, this port's
+// first page, then per slot (next chip, kind, x, y, slot | page << 8)
 struct RAFwd {
-    uint32_t r0, n, fb, fl, PCAP, sl, c0, c1, px, py, mesh, left, lastc;
+    uint32_t r0, n, fb, fl, PCAP, sl, c0, c1, px, py, mesh, fd, pg0, left, lastc;
     uint32_t sent[16];
     void init(uint32_t a) {
         r0 = a; n = get_arg_val<uint32_t>(a); left = n; lastc = 0;
@@ -282,9 +287,10 @@ struct RAFwd {
         fb = get_arg_val<uint32_t>(a + 1); fl = get_arg_val<uint32_t>(a + 2); PCAP = get_arg_val<uint32_t>(a + 3);
         sl = get_arg_val<uint32_t>(a + 4); c0 = get_arg_val<uint32_t>(a + 5); c1 = get_arg_val<uint32_t>(a + 6);
         px = get_arg_val<uint32_t>(a + 7); py = get_arg_val<uint32_t>(a + 8); mesh = get_arg_val<uint32_t>(a + 9);
+        fd = get_arg_val<uint32_t>(a + 10); pg0 = get_arg_val<uint32_t>(a + 11);
         for (uint32_t k = 0; k < 16; ++k) sent[k] = 0;
     }
-    static uint32_t len(uint32_t a) { const uint32_t n = get_arg_val<uint32_t>(a); return n ? 10 + 5 * n : 1; }
+    static uint32_t len(uint32_t a) { const uint32_t n = get_arg_val<uint32_t>(a); return n ? 12 + 5 * n : 1; }
     template <typename C, typename H>
     void poll(C& conn, H hdr, bool blocking, uint32_t RA_N, uint32_t RA_M, uint32_t RA_HBP, uint32_t MAXP) {
         // (the landed count - one increment a packet, behind its data and flag - says when a scan of the flags can find
@@ -304,9 +310,23 @@ struct RAFwd {
                 if (sent[k] || *f == 0) continue;
                 DeviceZoneScopedN("SE-RAFWD");
                 const uint32_t pb = fb + k * PCAP;
+                {
+                    const InterleavedAddrGen<true> fg = {.bank_base_address = fd, .page_size = PCAP};
+                    noc_async_read(get_noc_addr(pg0 + k, fg), pb, PCAP);
+                    noc_async_read_barrier();
+                    invalidate_l1_cache();
+                }
                 const uint32_t par = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[14];
                 const uint32_t src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pb)[15];
-                ra_hop(conn, hdr, pb, ra_bytes(pb, RA_M, RA_HBP), r0 + 10 + 5 * k, par, src, PCAP, sl, c0, c1, px, py, mesh, fb, fl, RA_N, MAXP);
+                uint32_t bytes = ra_bytes(pb, RA_M, RA_HBP);
+                if (bytes > PCAP) {  // (debug: a slot whose counts say more than a slot holds - not this call's
+                                     // packet: recorded in the flag's spare words (bytes, how often), sent clamped)
+                    f[1] = bytes;
+                    f[2] = f[2] + 1;
+                    f[3] = src;
+                    bytes = PCAP;
+                }
+                ra_hop(conn, hdr, pb, bytes, r0 + 12 + 5 * k, par, src, PCAP, sl, c0, c1, px, py, mesh, fd, fl, RA_N, MAXP);
                 *f = 0;  // (re-arm: one packet a slot a call)
                 sent[k] = 1;
                 --left;
@@ -469,6 +489,13 @@ class RoutingStream:
         )
         assert 2 * ny * self.PCAP <= abytes, "the watcher core: no L1 for the Y senders' buffers"
         self.ny = ny
+        from loguru import logger as _lg
+
+        _lg.info(
+            f"RoutingStream: PCAP {self.PCAP} MAXP {self.MAXP} HBP {self.HBP} arena base {base:#x} bytes {abytes} xbase "
+            f"{self.xbase:#x} nx {nx} fbase {self.fbase:#x} nf {nf} (slots end {self.fbase + nf * self.PCAP:#x}) "
+            f"flags {self.flags:#x}"
+        )
 
         sh = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
 
@@ -492,6 +519,9 @@ class RoutingStream:
             plan=dev(z(1, PLAN_WORDS)),
         )
         self.slots = dev(z(2 * self.N, self.PCAP // 4))
+        # the forwarding ports' slots: a DRAM page each (PCAP), per forwarding port key 16 - the same on every chip
+        self.fkeys = sorted({k for (_, k) in self.fwd_plan()[0]})
+        self.fslots = dev(z(max(1, len(self.fkeys)) * 16, self.PCAP // 4))
         import os
 
         self.dbg = dev(z(16, 32)) if os.environ.get("RA_DBG") else None  # (the planner's phase stamps, a page a core)
@@ -604,7 +634,8 @@ class RoutingStream:
         if i + 1 < len(steps):
             ci, key = steps[i + 1]
             core = virt(self._core_of((ci // self.C, ci % self.C), key))
-            return [int(node(ci).chip_id), 1, core.x, core.y, self.fwd_plan()[1][(s, d, i + 1)]]
+            slot = self.fwd_plan()[1][(s, d, i + 1)]
+            return [int(node(ci).chip_id), 1, core.x, core.y, slot | (self.fkeys.index(key) * 16 + slot) << 8]
         return [int(node(d).chip_id), 0, 0, 0, 0]
 
     def fwd_block(self, coord, key):
@@ -618,6 +649,7 @@ class RoutingStream:
         assert len(lst) <= 16
         out = [len(lst), self.fbase, self.flags, self.PCAP, int(self.slots.buffer_address()), self.addr["c0"]]
         out += [self.addr["c1"], p0.x, p0.y, int(node.mesh_id)]
+        out += [int(self.fslots.buffer_address()), self.fkeys.index(key) * 16]
         for s_, d, i in lst:
             out += self.next_hop(s_, d, i)
         return out
@@ -748,7 +780,7 @@ class RoutingStream:
             self.addr[self._sem(sv, key)[0]],
             self.addr[self._sem(sv, key)[1]],
             int(node(me).mesh_id),
-            self.fbase,
+            int(self.fslots.buffer_address()),  # (ra_hop's kind 1: the next forwarder's DRAM slot page)
             self.flags,
         ] + [w for d in dests for w in (self.next_hop(me, d, 0) if d != me else [0, 0, 0, 0, 0])]
 
