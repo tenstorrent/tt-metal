@@ -1,10 +1,9 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from .layer_norm_tile import (
     EXCLUSIONS,
     INPUT_TAGGERS,
-    PROPERTIES,
     SUPPORTED,
     default_compute_kernel_config,
     layer_norm,
@@ -12,11 +11,10 @@ from .layer_norm_tile import (
 )
 
 __all__ = [
-    "layer_norm",
-    "default_compute_kernel_config",
-    "validate",
+    "EXCLUSIONS",
     "INPUT_TAGGERS",
     "SUPPORTED",
-    "EXCLUSIONS",
-    "PROPERTIES",
+    "default_compute_kernel_config",
+    "layer_norm",
+    "validate",
 ]

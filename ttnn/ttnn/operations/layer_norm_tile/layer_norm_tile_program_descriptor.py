@@ -1,11 +1,10 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""layer_norm ProgramDescriptor: regime row-split-resident-w (tile-rows split across the grid, whole W resident)."""
+"""layer_norm_tile ProgramDescriptor: regime row_resident, tile-rows split across the compute grid."""
 
 from __future__ import annotations
 
-import math
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,89 +14,115 @@ import ttnn
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 TILE = 32
-FACE = 16
 
-# Blocking-model host knobs (op_design.md, Blocking Model).
-BLOCK_ROWS_MAX = 1
-INPUT_DEPTH_BLOCKS_MAX = 2
-OUTPUT_DEPTH_ROWS = 2
-W_TILES_RESIDENT_MAX = 32
+# Blocking-model host constants (op_design.md, Blocking Model). Each is defined once.
+CB_L1_BUDGET_BYTES = 768 * 1024
+INPUT_DEPTH_MAX = 2
+OUTPUT_DEPTH = 2
 
 CB_INPUT_TILES = 0
-CB_GAMMA_ROWS = 1
-CB_BETA_ROWS = 2
-CB_ROW_STAT = 3
-CB_RSTD = 4
+CB_RESIDUAL_TILES = 1
+CB_GAMMA_ROWS = 2
+CB_BETA_ROWS = 3
+# Alias group `work`: one allocation, lockstep ids (op_design.md, Circular Buffers).
+CB_XSUM = 4
 CB_CENTERED = 5
-CB_OUTPUT_TILES = 6
+CB_NORMED = 6
+CB_SCALED = 7
+# Alias group `stats`.
+CB_MEAN = 8
+CB_SUMSQ = 9
+CB_RSTD = 10
+CB_OUTPUT_TILES = 16
 
-
-def _div_up(a, b):
-    return -(-a // b)
-
-
-def affine_half_row_bytes(affine):
-    """Bytes of one face-row (16 elements): the unit a tile's row 0 is split into."""
-    return FACE * affine.element_size()
-
-
-def _affine_face_bytes(affine):
-    """Bytes of one 16x16 face: face-1 row 0 sits this far into a tile page."""
-    return FACE * affine_half_row_bytes(affine)
+WORK_GROUP = (CB_XSUM, CB_CENTERED, CB_NORMED, CB_SCALED)
+STATS_GROUP = (CB_MEAN, CB_SUMSQ, CB_RSTD)
 
 
 @dataclass(frozen=True)
 class Blocking:
-    block_rows: int
-    block_w_tiles: int
-    input_depth_blocks: int
-    output_depth_rows: int
+    block_height: int
+    input_depth: int
+    tensor_w_tiles: int
+    in_tile_bytes: int
+    acc_tile_bytes: int
+    acc_dtype: object
+    has_residual: bool
     all_cores: object
-    assignment: tuple  # ((core, start_row_tile, core_rows, num_blocks), ...)
-
-
-def _tensor_row_tiles(shape):
-    leading = math.prod(shape[:-2]) if len(shape) > 2 else 1
-    return leading * _div_up(shape[-2], TILE)
-
-
-def select_blocking(input_tensor):
-    """Single source of every block knob: block_rows, block_w_tiles, buffer depths, core assignment."""
-    shape = list(input_tensor.shape)
-    tensor_row_tiles = _tensor_row_tiles(shape)
-    block_w_tiles = _div_up(shape[-1], TILE)
-
-    grid = input_tensor.device().compute_with_storage_grid_size()
-    _, all_cores, group_1, group_2, rows_g1, rows_g2 = ttnn.split_work_to_cores(grid, tensor_row_tiles, row_wise=True)
-
-    block_rows = min(rows_g1, BLOCK_ROWS_MAX)
-    max_num_blocks = _div_up(rows_g1, block_rows)
-    # A second slot is only ever live when a core owns more than one block / tile-row.
-    input_depth_blocks = min(INPUT_DEPTH_BLOCKS_MAX, max_num_blocks)
-    output_depth_rows = min(OUTPUT_DEPTH_ROWS, max_num_blocks * block_rows)
-
-    assignment = []
-    start = 0
-    for group, core_rows in ((group_1, rows_g1), (group_2, rows_g2)):
-        if core_rows == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, start, core_rows, _div_up(core_rows, block_rows)))
-            start += core_rows
-    assert start == tensor_row_tiles
-
-    return Blocking(
-        block_rows=block_rows,
-        block_w_tiles=block_w_tiles,
-        input_depth_blocks=input_depth_blocks,
-        output_depth_rows=output_depth_rows,
-        all_cores=all_cores,
-        assignment=tuple(assignment),
-    )
+    # ((core, start_row, num_blocks, last_block_extent), ...)
+    assignment: tuple
 
 
 def _float_bits(value):
     return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _split_rows(device, tensor_rows_tiles):
+    grid = device.compute_with_storage_grid_size()
+    _, all_cores, group_1, group_2, rows_g1, rows_g2 = ttnn.split_work_to_cores(grid, tensor_rows_tiles, row_wise=True)
+    cores_rows = []
+    for group, per_core in ((group_1, rows_g1), (group_2, rows_g2)):
+        if per_core == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            cores_rows.append((core, per_core))
+    return all_cores, cores_rows, rows_g1
+
+
+def _footprint(block_height, input_depth, *, Wt, in_bytes, acc_bytes, has_residual):
+    """Per-core CB bytes (l1_ledger.md, Footprint); the single source for the L1 cap."""
+    per_row = Wt * (input_depth * in_bytes * (1 + int(has_residual)) + acc_bytes) + acc_bytes
+    fixed = Wt * in_bytes * (2 + OUTPUT_DEPTH)
+    return block_height * per_row + fixed
+
+
+def _block_height_cap(input_depth, **geom):
+    fixed = _footprint(0, input_depth, **geom)
+    per_row = _footprint(1, input_depth, **geom) - fixed
+    return (CB_L1_BUDGET_BYTES - fixed) // per_row
+
+
+def derive_blocking(input_tensor, *, has_residual, fp32_dest_acc_en):
+    """Single source of every block knob. Returns None when row_resident's predicate fails."""
+    padded = list(input_tensor.padded_shape)
+    Wt = padded[-1] // TILE
+    tensor_rows_tiles = padded[0] * padded[1] * (padded[2] // TILE)
+
+    in_bytes = input_tensor.tile.get_tile_size(input_tensor.dtype)
+    acc_dtype = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+    acc_bytes = ttnn.tile_size(acc_dtype)
+    geom = dict(Wt=Wt, in_bytes=in_bytes, acc_bytes=acc_bytes, has_residual=has_residual)
+
+    if _block_height_cap(INPUT_DEPTH_MAX, **geom) < 1:
+        return None
+
+    all_cores, cores_rows, max_core_rows_tiles = _split_rows(input_tensor.device(), tensor_rows_tiles)
+    if max_core_rows_tiles <= _block_height_cap(1, **geom):
+        input_depth = 1
+        block_height = max_core_rows_tiles
+    else:
+        input_depth = INPUT_DEPTH_MAX
+        block_height = min(max_core_rows_tiles, _block_height_cap(INPUT_DEPTH_MAX, **geom))
+
+    assignment = []
+    start_row = 0
+    for core, core_rows_tiles in cores_rows:
+        num_blocks = -(-core_rows_tiles // block_height)
+        last_block_extent = core_rows_tiles - (num_blocks - 1) * block_height
+        assignment.append((core, start_row, num_blocks, last_block_extent))
+        start_row += core_rows_tiles
+
+    return Blocking(
+        block_height=block_height,
+        input_depth=input_depth,
+        tensor_w_tiles=Wt,
+        in_tile_bytes=in_bytes,
+        acc_tile_bytes=acc_bytes,
+        acc_dtype=acc_dtype,
+        has_residual=has_residual,
+        all_cores=all_cores,
+        assignment=tuple(assignment),
+    )
 
 
 def _cb(index, num_pages, page_size, data_format, cores):
@@ -108,81 +133,101 @@ def _cb(index, num_pages, page_size, data_format, cores):
     )
 
 
-def _affine_reader_args(affine):
-    """(is_tile, stick_elems, read_bytes, page_bytes) for one affine tensor's row-0 reads."""
-    half_row = affine_half_row_bytes(affine)
-    if affine.layout == ttnn.TILE_LAYOUT:
-        alignment = (
-            ttnn.get_dram_alignment()
-            if affine.memory_config().buffer_type == ttnn.BufferType.DRAM
-            else ttnn.get_l1_alignment()
-        )
-        # One read from offset 0 through face-1 row 0 (rounded to the NoC granule); rows other than row 0 of
-        # faces 0/1 are never read by the row broadcast.
-        read_bytes = _affine_face_bytes(affine) + max(half_row, alignment)
-        return [1, 0, read_bytes, affine.buffer_aligned_page_size()]
-    return [0, list(affine.shape)[-1], half_row, affine.buffer_aligned_page_size()]
+def _alias_group(indices, num_pages, page_size, data_format, cores):
+    return ttnn.CBDescriptor(
+        total_size=num_pages * page_size,
+        core_ranges=cores,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=page_size)
+            for index in indices
+        ],
+    )
 
 
-def create_program_descriptor(input_tensor, gamma, beta, output_tensor, blocking, *, epsilon, compute_kernel_config):
-    width = list(input_tensor.shape)[-1]
-    block_rows = blocking.block_rows
-    block_w_tiles = blocking.block_w_tiles
-    block_tiles = block_rows * block_w_tiles
+def _affine_ct_args(affine):
+    """(is_row_major, stick_elems, page_bytes): page geometry the writer needs to locate 32-element chunks."""
+    is_rm = affine.layout == ttnn.ROW_MAJOR_LAYOUT
+    stick_elems = list(affine.padded_shape)[-1] if is_rm else 0
+    return [int(is_rm), stick_elems, affine.buffer_aligned_page_size()]
+
+
+def create_program_descriptor(
+    input_tensor,
+    gamma,
+    beta,
+    residual_input_tensor,
+    output_tensor,
+    blocking,
+    *,
+    epsilon,
+    compute_kernel_config,
+):
     cores = blocking.all_cores
-
-    input_tile_bytes = input_tensor.tile.get_tile_size(input_tensor.dtype)
-    output_tile_bytes = output_tensor.tile.get_tile_size(output_tensor.dtype)
-    affine_tile_bytes = ttnn.tile_size(gamma.dtype)
-    assert ttnn.tile_size(beta.dtype) == affine_tile_bytes
-    intermediate_format = ttnn.float32 if compute_kernel_config.fp32_dest_acc_en else ttnn.bfloat16
-    intermediate_tile_bytes = ttnn.tile_size(intermediate_format)
+    Wt = blocking.tensor_w_tiles
+    block_height = blocking.block_height
+    in_bytes = blocking.in_tile_bytes
+    acc_bytes = blocking.acc_tile_bytes
+    has_residual = blocking.has_residual
+    width = list(input_tensor.shape)[-1]
+    block_tiles = block_height * Wt
 
     cbs = [
-        _cb(CB_INPUT_TILES, blocking.input_depth_blocks * block_tiles, input_tile_bytes, input_tensor.dtype, cores),
-        _cb(CB_GAMMA_ROWS, block_w_tiles, affine_tile_bytes, gamma.dtype, cores),
-        _cb(CB_BETA_ROWS, block_w_tiles, affine_tile_bytes, beta.dtype, cores),
-        _cb(CB_ROW_STAT, block_rows, intermediate_tile_bytes, intermediate_format, cores),
-        _cb(CB_RSTD, block_rows, intermediate_tile_bytes, intermediate_format, cores),
-        _cb(CB_CENTERED, block_tiles, intermediate_tile_bytes, intermediate_format, cores),
+        _cb(CB_INPUT_TILES, blocking.input_depth * block_tiles, in_bytes, input_tensor.dtype, cores),
+        _cb(CB_GAMMA_ROWS, Wt, ttnn.tile_size(gamma.dtype), gamma.dtype, cores),
+        _cb(CB_BETA_ROWS, Wt, ttnn.tile_size(beta.dtype), beta.dtype, cores),
+        _alias_group(WORK_GROUP, block_tiles, acc_bytes, blocking.acc_dtype, cores),
+        _alias_group(STATS_GROUP, block_height, acc_bytes, blocking.acc_dtype, cores),
         _cb(
             CB_OUTPUT_TILES,
-            blocking.output_depth_rows * block_w_tiles,
-            output_tile_bytes,
+            OUTPUT_DEPTH * Wt,
+            output_tensor.tile.get_tile_size(output_tensor.dtype),
             output_tensor.dtype,
             cores,
         ),
     ]
+    if has_residual:
+        cbs.append(
+            _cb(CB_RESIDUAL_TILES, blocking.input_depth * block_tiles, in_bytes, residual_input_tensor.dtype, cores)
+        )
 
-    reader_ct_args = [
-        CB_INPUT_TILES,
+    reader_ct_args = [CB_INPUT_TILES, CB_RESIDUAL_TILES, Wt, block_height, in_bytes, int(has_residual)]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct_args.extend(
+        ttnn.TensorAccessorArgs(residual_input_tensor).get_compile_time_args()
+        if has_residual
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
+
+    writer_ct_args = [
+        CB_OUTPUT_TILES,
         CB_GAMMA_ROWS,
         CB_BETA_ROWS,
-        block_rows,
-        block_w_tiles,
-        input_tile_bytes,
-        _affine_face_bytes(gamma),
-        affine_half_row_bytes(gamma),
+        Wt,
+        block_height,
+        output_tensor.tile.get_tile_size(output_tensor.dtype),
     ]
-    reader_ct_args.extend(_affine_reader_args(gamma))
-    reader_ct_args.extend(_affine_reader_args(beta))
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
-
-    writer_ct_args = [CB_OUTPUT_TILES, block_rows, block_w_tiles, output_tile_bytes]
+    writer_ct_args.extend(_affine_ct_args(gamma))
+    writer_ct_args.extend(_affine_ct_args(beta))
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
 
     compute_ct_args = [
         CB_INPUT_TILES,
+        CB_RESIDUAL_TILES,
         CB_GAMMA_ROWS,
         CB_BETA_ROWS,
-        CB_ROW_STAT,
-        CB_RSTD,
+        CB_XSUM,
         CB_CENTERED,
+        CB_NORMED,
+        CB_SCALED,
+        CB_MEAN,
+        CB_SUMSQ,
+        CB_RSTD,
         CB_OUTPUT_TILES,
-        block_rows,
-        block_w_tiles,
+        Wt,
+        block_height,
+        int(has_residual),
         width,
         _float_bits(1.0 / width),
     ]
@@ -191,23 +236,15 @@ def create_program_descriptor(input_tensor, gamma, beta, output_tensor, blocking
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
     in_addr = input_tensor.buffer_address()
+    res_addr = residual_input_tensor.buffer_address() if has_residual else 0
     out_addr = output_tensor.buffer_address()
     gamma_addr = gamma.buffer_address()
     beta_addr = beta.buffer_address()
     eps_bits = _float_bits(epsilon)
-    for core_idx, (core, start_row_tile, core_rows, num_blocks) in enumerate(blocking.assignment):
-        affine_first_col = core_idx % block_w_tiles
-        reader_rt[core.x][core.y] = [
-            in_addr,
-            gamma_addr,
-            beta_addr,
-            start_row_tile,
-            core_rows,
-            num_blocks,
-            affine_first_col,
-        ]
-        writer_rt[core.x][core.y] = [out_addr, start_row_tile, core_rows, num_blocks]
-        compute_rt[core.x][core.y] = [num_blocks, eps_bits]
+    for core, start_row, num_blocks, last_block_extent in blocking.assignment:
+        reader_rt[core.x][core.y] = [in_addr, res_addr, start_row, num_blocks, last_block_extent]
+        writer_rt[core.x][core.y] = [out_addr, gamma_addr, beta_addr, start_row, num_blocks, last_block_extent]
+        compute_rt[core.x][core.y] = [num_blocks, last_block_extent, eps_bits]
 
     kernels = [
         ttnn.KernelDescriptor(

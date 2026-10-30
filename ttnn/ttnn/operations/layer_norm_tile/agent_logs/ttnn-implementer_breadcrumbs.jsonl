@@ -3,3 +3,4 @@
 {"event":"fix_applied","detail":"P3 packer L1-acc -> DEST PerRow accumulate, one chain per block; correct on BH; modest win","ts":"2026-10-30T14:15:01+00:00"}
 {"event":"fix_applied","detail":"TILE affine: one 576B read per tile (face0 + face1 row0) instead of 2x64B; per-core start column rotation; R=128 tile_dram 50.4->~42.5us","ts":"2026-10-30T14:15:01+00:00"}
 {"event":"hypothesis","detail":"trid-tagged non-blocking affine fetch: issue-first hurt L1/32-core shapes (row 0 delayed), issue-after-row0 regressed R=248 rm 47->55-59us; reverted","ts":"2026-10-30T14:15:01+00:00"}
+{"event":"test_run","result":"pass","mode":"dev+prod","count":"80/80","notes":"row_resident regime, helper-only compute, alias groups work/stats, writer fetches affine row-0 chunks","ts":"2026-10-30T16:55:29+00:00"}
