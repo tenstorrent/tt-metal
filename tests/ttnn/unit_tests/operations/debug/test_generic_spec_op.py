@@ -10,6 +10,7 @@ import os
 import pytest
 import torch
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 CLONE_KERNELS = "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels"
 READER_SOURCE = f"{CLONE_KERNELS}/read_kernel_sharded.cpp"
@@ -458,3 +459,150 @@ def test_generic_spec_op_scratchpad(device, shard_grid):
     result = ttnn.to_torch(ttnn.generic_op([src, dst], spec, run_args)).to(torch.int32)
 
     assert torch.equal(result, torch_input + addend)
+
+
+# Negative tests: specs that tt-metal rejects must reach Python as a RuntimeError that names the problem.
+# Several are Quasar (Gen2) rules that Wormhole / Blackhole accept.
+
+EMPTY_KERNEL_SOURCE = "void kernel_main() {}\n"
+
+
+def dm_kernel(unique_id, dfb_bindings=(), num_threads=1, hw_config=None):
+    return ttnn.KernelSpec(
+        unique_id=unique_id,
+        source_code=EMPTY_KERNEL_SOURCE,
+        hw_config=hw_config or ttnn.DataMovementHardwareConfig.reader(),
+        num_threads=num_threads,
+        dfb_bindings=list(dfb_bindings),
+    )
+
+
+def producer(dfb_name):
+    return ttnn.DFBBinding(dfb_spec_name=dfb_name, accessor_name=dfb_name, endpoint_type=ttnn.DFBEndpointType.PRODUCER)
+
+
+def consumer(dfb_name):
+    return ttnn.DFBBinding(dfb_spec_name=dfb_name, accessor_name=dfb_name, endpoint_type=ttnn.DFBEndpointType.CONSUMER)
+
+
+def small_dfb(unique_id, dtype=ttnn.bfloat16):
+    return ttnn.DataflowBufferSpec(unique_id=unique_id, entry_size=2048, num_entries=2, data_format=dtype)
+
+
+def run_on_one_core(device, kernels, dataflow_buffers=(), scratchpads=()):
+    """Runs a spec of the given kernels on core (0, 0); every test below expects it to be rejected."""
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+    )
+    spec = ttnn.ProgramSpec(
+        name="invalid",
+        kernels=kernels,
+        dataflow_buffers=list(dataflow_buffers),
+        scratchpads=list(scratchpads),
+        work_units=[
+            ttnn.WorkUnitSpec(name="main", kernels=[k.unique_id for k in kernels], target_nodes=ttnn.CoreCoord(0, 0))
+        ],
+    )
+    ttnn.generic_op([output], spec, ttnn.ProgramSpecRunArgs())
+
+
+def test_generic_spec_op_rejects_source_and_source_code(expect_error):
+    with expect_error(RuntimeError, "give exactly one of source"):
+        ttnn.KernelSpec(
+            unique_id="k",
+            source=READER_SOURCE,
+            source_code=EMPTY_KERNEL_SOURCE,
+            hw_config=ttnn.DataMovementHardwareConfig.reader(),
+        )
+
+
+def test_generic_spec_op_rejects_tensor_outside_io_tensors(device, expect_error):
+    output = ttnn.allocate_tensor_on_device(ttnn.Shape([32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    stray = ttnn.allocate_tensor_on_device(ttnn.Shape([32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    spec = ttnn.ProgramSpec(
+        name="stray_tensor",
+        kernels=[dm_kernel("k")],
+        tensor_parameters=[ttnn.TensorParameter(unique_id="t", spec=stray.spec)],
+        work_units=[ttnn.WorkUnitSpec(name="main", kernels=["k"], target_nodes=ttnn.CoreCoord(0, 0))],
+    )
+    with expect_error(RuntimeError, "the tensor bound to TensorParameter 't' is not in io_tensors"):
+        ttnn.generic_op([output], spec, ttnn.ProgramSpecRunArgs(tensor_args={"t": stray}))
+
+
+def test_generic_spec_op_rejects_fp32_unpack_to_dest_without_32_bit_dest(device, expect_error):
+    compute = ttnn.KernelSpec(
+        unique_id="compute",
+        source_code=EMPTY_KERNEL_SOURCE,
+        hw_config=ttnn.ComputeHardwareConfig(
+            enable_32_bit_dest=False, unpack_modes={"in": ttnn.UnpackMode.UnpackToDest}
+        ),
+        dfb_bindings=[consumer("in")],
+    )
+    with expect_error(RuntimeError, "specifies UnpackToDest, but the DFB entries use a 32-bit format"):
+        run_on_one_core(
+            device,
+            [dm_kernel("reader", [producer("in")]), compute],
+            dataflow_buffers=[
+                ttnn.DataflowBufferSpec(unique_id="in", entry_size=4096, num_entries=2, data_format=ttnn.float32)
+            ],
+        )
+
+
+def skip_unless_quasar():
+    if not is_quasar():
+        pytest.skip("Quasar (Gen2) rule; Wormhole / Blackhole accept this spec")
+
+
+def test_generic_spec_op_rejects_dm_self_loop_on_quasar(device, expect_error):
+    skip_unless_quasar()
+    with expect_error(RuntimeError, "Self-loop DFBs are not supported for data-movement kernels on Gen2"):
+        run_on_one_core(device, [dm_kernel("loop", [producer("buf"), consumer("buf")])], [small_dfb("buf")])
+
+
+def test_generic_spec_op_rejects_two_producers(device, expect_error):
+    kernels = [
+        dm_kernel("producer_a", [producer("buf")]),
+        dm_kernel("producer_b", [producer("buf")], hw_config=ttnn.DataMovementHardwareConfig.writer()),
+        dm_kernel("consumer", [consumer("buf")]),
+    ]
+    with expect_error(RuntimeError, "must run exactly one producer and one consumer kernel instance"):
+        run_on_one_core(device, kernels, [small_dfb("buf")])
+
+
+# The spec may place at most 32 DFBs on a core. DM-to-DM DFBs run out sooner, when the program is built: each takes
+# 2 of the 24 NoC transaction IDs reserved for DFBs, so a core holds at most 12 (before its 16 tile counters run out).
+@pytest.mark.parametrize(
+    "num_dfbs, message",
+    [(33, "supports at most 32 device slots per core"), (13, "TxnIdAllocator exhausted")],
+    ids=["slots", "noc_transaction_ids"],
+)
+def test_generic_spec_op_rejects_too_many_dfbs_on_quasar(device, expect_error, num_dfbs, message):
+    skip_unless_quasar()
+    names = [f"buf{i}" for i in range(num_dfbs)]
+    kernels = [
+        dm_kernel("producer", [producer(n) for n in names]),
+        dm_kernel("consumer", [consumer(n) for n in names], hw_config=ttnn.DataMovementHardwareConfig.writer()),
+    ]
+    dfbs = [ttnn.DataflowBufferSpec(unique_id=n, entry_size=32, num_entries=2) for n in names]
+    with expect_error(RuntimeError, message):
+        run_on_one_core(device, kernels, dfbs)
+
+
+def test_generic_spec_op_rejects_too_many_dm_threads(device, expect_error):
+    # Quasar caps the threads per data movement kernel; Wormhole / Blackhole allow only one.
+    message = "too many data movement threads" if is_quasar() else "does not support multi-threaded kernels"
+    with expect_error(RuntimeError, message):
+        run_on_one_core(device, [dm_kernel("wide", num_threads=16)])
+
+
+def test_generic_spec_op_rejects_uint32_scratchpad_on_quasar(device, expect_error):
+    skip_unless_quasar()
+    pad = ttnn.ScratchpadSpec(unique_id="pad", size_per_node=4096, data_format=ttnn.uint32)
+    kernel = ttnn.KernelSpec(
+        unique_id="k",
+        source_code=EMPTY_KERNEL_SOURCE,
+        hw_config=ttnn.DataMovementHardwareConfig.reader(),
+        scratchpad_bindings=[ttnn.ScratchpadBinding(scratchpad_spec_name="pad", accessor_name="pad")],
+    )
+    with expect_error(RuntimeError, "has data format 'UInt32' which is not supported on architecture quasar"):
+        run_on_one_core(device, [kernel], scratchpads=[pad])
