@@ -19,13 +19,16 @@ from models.common.sampling.generator import SamplingParams, format_sampling_par
 from models.demos.muse_glimmer_30b.tt.model import DECODE_B_PAD, MuseGlimmerModel
 from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs
 
-# Per-device KV budget when MUSE_VLLM_KV_TOKENS is unset. KV per token per device: 52 layers x 1 KV head x 128 x 2 (K,V),
-# 26.6 KB in bf16 (MUSE_LOW_PRECISION=0) or ~14 KB in the default BFP8; 262144 tokens is ~3.7-7 GB of each chip's DRAM.
-DEFAULT_KV_TOKENS = 262144
+# Per-device KV budget when MUSE_VLLM_KV_TOKENS is unset. vLLM's pool backs only the 13 full-attention layers (the 39
+# sliding layers keep fixed per-slot rings, see allocate_kv_cache): 13 x 1 KV head x 128 x 2 (K,V) per token per device,
+# ~3.5 KB in the default BFP8. 24 users x 128K is ~11 GB of each chip's DRAM.
+DEFAULT_KV_TOKENS = 24 * 131072
 
 # Decode traces are captured per active-slot bucket so paged SDPA splits its cores over the slots in use only, as the
 # native batch-1 path does (decode_forward slices SDPA inputs to args.max_batch_size rows).
 SLOT_BUCKETS = (1, 2, 4, 8, 16, 32)
+# Sliding ring slot that no request owns: empty decode rows and warmup write there.
+RING_SPARE = DECODE_B_PAD
 SLOT_TRACES = os.environ.get("MUSE_VLLM_SLOT_TRACES", "1") == "1"
 # Decode reload contract v1 + async decode (vllm-tt-plugin docs/DECODE_RELOAD_CONTRACT.md); MUSE_VLLM_V1=0 keeps the
 # legacy every-step reload for A/B runs.
@@ -94,6 +97,10 @@ class MuseGlimmerForConditionalGeneration:
         self._prefill_warm = False
         self._slots = DECODE_B_PAD
         self._active = []
+        # Sliding-layer ring of each decode row. A request keeps its ring when the plugin moves it to another row
+        # (slot_remap), so this is a permutation of the DECODE_B_PAD rings, not the identity.
+        self._row_ring = list(range(DECODE_B_PAD))
+        self._ring_rows = None
 
     # vLLM's registry inspects these; execution only goes through prefill_forward / decode_forward.
     def embed_input_ids(self, input_ids):
@@ -143,10 +150,13 @@ class MuseGlimmerForConditionalGeneration:
             raise ValueError(f"vLLM asks for {num_layers} KV layers, model has {self.args.n_layers}")
         self.args.block_size = block_size
         self.n_blocks = self.args.max_num_blocks_per_user
+        # Sliding layers keep a ring of sliding_kv_blocks per slot instead of vLLM's blocks: DECODE_B_PAD slots plus a
+        # spare for empty decode rows and warmup. The KV-update ops need at least one page-table row of blocks.
+        ring_blocks = max((DECODE_B_PAD + 1) * self.args.sliding_kv_blocks, self.n_blocks)
         cache = [
             tuple(
                 ttnn.zeros(
-                    list(kv_cache_shape),
+                    [ring_blocks if self.args.is_sliding(i) else num_blocks, kv_heads, block_size, head_dim],
                     device=self.mesh_device,
                     dtype=self.args.kv_cache_dtype,
                     layout=ttnn.TILE_LAYOUT,
@@ -154,11 +164,61 @@ class MuseGlimmerForConditionalGeneration:
                 )
                 for _ in range(2)
             )
-            for _ in range(num_layers)
+            for i in range(num_layers)
         ]
         self.model.kv_caches = cache
         self.decode_inputs = self.model.allocate_decode_inputs(self.batch_size, self.n_blocks)
+        ttnn.deallocate(self.model.sliding_page_table)
+        self.model.sliding_page_table = ttnn.from_torch(
+            self._ring_table([RING_SPARE] * DECODE_B_PAD),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._ring_rows = [RING_SPARE] * DECODE_B_PAD
         return cache
+
+    def _ring_table(self, slots) -> torch.Tensor:
+        """Sliding page table rows [len(slots), n_blocks]: slot s owns ring blocks [s*n, (s+1)*n), wrapping."""
+        n = self.args.sliding_kv_blocks
+        return (torch.tensor(slots)[:, None] * n + torch.arange(self.n_blocks) % n).to(torch.int32)
+
+    def _remap_rings(self, remap):
+        """remap[i] = j: row i now holds the request that was at row j; its ring moves with it."""
+        new = [None] * DECODE_B_PAD
+        taken = set()
+        for i, j in enumerate(remap):
+            if j != i:
+                new[i] = self._row_ring[j]
+                taken.add(new[i])
+        spare = [r for r in self._row_ring if r not in taken]
+        for i, j in enumerate(remap):
+            if j == i:
+                r = self._row_ring[i]
+                new[i] = r if r not in taken else None
+                if new[i] is not None:
+                    taken.add(r)
+                    spare.remove(r)
+        for i in range(DECODE_B_PAD):
+            if new[i] is None:  # a row whose request moved away and nothing moved in: give it an unowned ring
+                new[i] = spare.pop(0)
+        self._row_ring = new
+
+    def _update_ring_rows(self, start: torch.Tensor):
+        """Point each live decode row's sliding table row at its request's ring; empty rows at the spare."""
+        rows = [self._row_ring[r] if p >= 0 else RING_SPARE for r, p in enumerate(start.tolist()[:DECODE_B_PAD])]
+        rows += [RING_SPARE] * (DECODE_B_PAD - len(rows))
+        if rows != self._ring_rows:
+            host = ttnn.from_torch(
+                self._ring_table(rows),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(host, self.model.sliding_page_table)
+            self._ring_rows = rows
 
     def _device_params(self, sampling_params, rows):
         """vLLM per-row sampling params -> device SamplingParams for lanes 0..len(rows)-1."""
@@ -197,15 +257,20 @@ class MuseGlimmerForConditionalGeneration:
                 return b
         raise ValueError(f"Prompt of {length} tokens exceeds max_prefill_len {self.args.max_prefill_len}")
 
-    def _prefill_one(self, tokens: torch.Tensor, page_row: torch.Tensor):
+    def _prefill_one(self, tokens: torch.Tensor, page_row: torch.Tensor, ring: int = RING_SPARE):
         pad_len = self._bucket(tokens.shape[0])
         # The last real row lies past the previous bucket, so within the last (pad_len - previous bucket) rows.
         i = self.buckets.index(pad_len)
         tail = pad_len - self.buckets[i - 1] if i else pad_len
         # Padded rows past the request's blocks map to block 0, vLLM's never-allocated null block.
         pt = self._page_table_tt(page_row, -(-pad_len // self.args.block_size))
-        logits = self.model.prefill_forward_logits_tt(tokens, 0, pt, pad_len=pad_len, tail=tail)
+        ring_row = self._ring_table([ring])
+        ring_tt = self._page_table_tt(ring_row[0], ring_row.shape[1])
+        logits = self.model.prefill_forward_logits_tt(
+            tokens, 0, pt, pad_len=pad_len, tail=tail, sliding_pt=(ring_tt, 0)
+        )
         ttnn.deallocate(pt)
+        ttnn.deallocate(ring_tt)
         return logits
 
     def prefill_forward(
@@ -224,9 +289,16 @@ class MuseGlimmerForConditionalGeneration:
             raise ValueError("Muse-Glimmer prefill starts at position 0 (no chunked prefill or prefix caching)")
         n = len(prompt_lens)
         lens = [int(x) for x in torch.as_tensor(prompt_lens).flatten().tolist()]
+        # empty_slots[i] is the decode row (state slot) request i will decode in; it takes the ring now at that row,
+        # which the plugin guarantees no live request owns.
+        rows = (
+            [int(x) for x in torch.as_tensor(empty_slots).flatten().tolist()]
+            if empty_slots is not None
+            else list(range(n))
+        )
         out = []
         for i in range(n):
-            logits = self._prefill_one(tokens[i, : lens[i]], page_table[i])
+            logits = self._prefill_one(tokens[i, : lens[i]], page_table[i], self._row_ring[rows[i]])
             if sampling_params is not None:
                 self._load_sampling(sampling_params, [i])
                 tok = self.model.sample_on_device(logits, None)
@@ -287,6 +359,7 @@ class MuseGlimmerForConditionalGeneration:
     def _copy_decode_inputs(self, tokens, start_pos, page_table):
         b = min(tokens.shape[0], self.batch_size)
         pt = self._page_table_host(page_table, b)
+        self._update_ring_rows(start_pos.reshape(-1)[:b])
         host = self.model.prepare_decode_inputs_host(tokens.reshape(-1)[:b], start_pos.reshape(-1)[:b], pt)
         self.model.copy_decode_inputs(host, self.decode_inputs)
 
@@ -368,7 +441,8 @@ class MuseGlimmerForConditionalGeneration:
             if remap != list(range(DECODE_B_PAD)):
                 if not reload_inputs:
                     raise ValueError("A slot remap requires reload_inputs=True")
-                # Model state is paged by page table, not slot-indexed; only the sampler holds slot state.
+                # Full-attention KV is paged by page table; the sliding rings and the sampler are slot state.
+                self._remap_rings(remap)
                 if self.model.sampling is not None:
                     self.model.sampling.apply_slot_remap(remap)
                 self._sampling_key = None
