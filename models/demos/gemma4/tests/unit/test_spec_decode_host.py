@@ -2287,12 +2287,12 @@ def _row(cond, alpha=0.2):
     return stats
 
 
-def _served(policy, steps=10000, widths=(2048, 1024)):
-    """``policy`` on an engine whose rungs served ``steps`` plain steps since any failed run there: the rung's
-    exploration budget admits a reseeding entry (``SpecPolicy.rung_clock``), as it does not on a rung that
-    served nothing yet (every reseeding entry out of the plain regime waits for the budget)."""
+def _served(policy, widths=(2048, 1024)):
+    """``policy`` on an engine whose rungs served plain time enough: their exploration buckets are full
+    (``SpecPolicy.rung_bucket``; the first plain decision caps them at the rung's capacity) and admit a reseeding
+    entry, as a cold rung's bucket does not (every exploration out of the plain regime draws on it)."""
     for width in widths:
-        policy.rung_clock[width] = int(steps)
+        policy.rung_bucket[width] = 1e6
     return policy
 
 
@@ -2539,22 +2539,19 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
         )
         is None
     )
-    # a rung that served nothing yet admits no reseeding entry, however good the statistics: the exploration
-    # budget (GEMMA4_SPEC_RETRY_OVERHEAD of the plain time the rung served since its last failed run) must cover
-    # the entry priced with every draft rejected -- 900 + 3 x (35 - 20) = 945 ms at 1 % of 20 ms steps: 4725
+    # a rung that served nothing yet admits no reseeding entry, however good the statistics: the rung's
+    # exploration bucket, which fills at GEMMA4_SPEC_RETRY_OVERHEAD of every plain step's cost (0.2 ms a 20 ms
+    # step) up to 1.5 trials (the trial priced with every draft rejected: 900 + 3 x (35 - 20) = 945, so 1417.5),
+    # must hold the entry's expected loss, 945 ms on a rung without a pool: 4725 plain steps
     cold = SpecPolicy(SpecPolicyConfig(), 5)
     assert cold.decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True) is None
-    assert cold.last_reason == "budget" and cold.rung_clock == {2048: 1}
+    assert cold.last_reason == "budget" and cold.rung_bucket == {2048: pytest.approx(0.2)}
+    assert cold.rung_cap == {2048: pytest.approx(1417.5)}
+    cold.rung_bucket[2048] = 944.9
+    assert cold.decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True) is None
+    cold.rung_bucket[2048] = 945.0
     assert (
-        _served(cold, 4700).decide(
-            [RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True
-        )
-        is None
-    )
-    assert (
-        _served(cold, 4750)
-        .decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True)
-        .reason
+        cold.decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [_row([0.7] * 5)], _PLAIN, 3, fresh=True).reason
         == "enter"
     )
     # every cost is a line in the position, read at the step's top position
@@ -2615,7 +2612,7 @@ def _policy_the_cost_table_is_consumed_as_measured(expect_error=None):
     # ... but a rung never measured prices its first trial on the freshest pool of the draft length anywhere
     # (the acceptance is the text's, not the rung's): the 256K pool at 2.8 for a 2048 trial at K=5, none at K=3
     assert skew.pool_credit_any(5) == pytest.approx(2.8) and skew.pool_credit_any(3) is None
-    assert skew.tokens_rows_sum == pytest.approx(14.0), "the tokens per row every interval committed"
+    assert skew.tokens_rows_sum == pytest.approx(14.0) and skew.served_intervals == 5, "every served interval's tokens"
     skew.note_step(("step", (5, 5), 263168), 200.0, 10, True, 200.0, 5)  # 2 per row joins the pool
     assert skew.tokens_per_row(("step", (1, 5), 263168)) == pytest.approx(16 / 6)
     # a switch (or a prefill) inside the interval moves the wall, not the acceptance: the replay continues the
@@ -2830,68 +2827,95 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert again.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "retry"
     again.calibration.note_step(k1, 30.0, 2, True, 30.0, 1)
     assert again.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "gain" and not again.trial
-    # A reseeding retry is exploration within the rung's budget: its expected loss plus the rung's debt within
-    # GEMMA4_SPEC_RETRY_OVERHEAD of the plain time the rung served since its last failed run -- not of the plain
-    # steps since the last record step, a cadence that re-entered four times inside eight 128-token random
-    # requests on the 12B QB2 (2026-10-30). Mid-request the retry is priced as served under asynchronous
+    # A reseeding retry is exploration drawing on the rung's bucket, which fills at GEMMA4_SPEC_RETRY_OVERHEAD
+    # of every plain step's cost (0.6 ms a 20 ms step at 3 %) up to 1.5 trials -- the trial priced with every
+    # draft rejected: the cheapest reseeding record's entry (30) plus one record step at its cost over the plain
+    # step (10), 40 ms, so a 60 ms bucket -- pays every failed run's realized loss and is never reset (the old
+    # cadence, 3 % of the plain steps since the last record step, re-entered four times inside eight 128-token
+    # random requests on the 12B QB2, 2026-10-30). Mid-request the retry is priced as served under asynchronous
     # scheduling: the expected reseeds before its replay takes (1 / the row's 0.4 first-position acceptance =
-    # 2.5) times the cycle ((30 + 30 - 20) on the table), plus one record step at every draft rejected (10):
-    # 110 ms, at 3 % of 20 ms steps 184 of them, so the retry is the 185th decision whatever retry_steps says
+    # 2.5) times the cycle (the 40 ms reseed interval on the table), plus the record step, 110 ms: more than
+    # the bucket can hold, so a row accepting that little never explores mid-request
     reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
-    first = next(i for i in range(1, 300) if policy.decide(reseeding, [row], _PLAIN, 5) is not None)
-    assert first == 185 and policy.last_reason == "retry" and policy.last_k == 1
+    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(300))
+    assert policy.last_reason == "budget" and policy.rung_bucket == {1024: 60.0} and policy.rung_cap == {1024: 60.0}
     k1_choice = rank_records([RecordCandidate((16, 1), 1024, 30.0, 30.0)], [row], _PLAIN)[0]
-    assert policy.entry_cost(k1_choice, _PLAIN) == pytest.approx(100.0) and policy.rung_clock == {1024: 184}
+    assert policy.trial_estimate(reseeding, _PLAIN) == 40.0 and policy.entry_cost(k1_choice, _PLAIN) == 100.0
     assert policy.explore_cost(k1_choice, _PLAIN, 1) == pytest.approx(110.0)
+    # at a request's first proposal (a fresh row at its first step) the replay is verified and the trial costs
+    # the 40 ms: the bucket holds it after 67 plain steps, so the retry is the 68th decision
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    first = next(
+        i for i in range(1, 300) if policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is not None
+    )
+    assert first == 68 and policy.last_reason == "retry" and policy.last_k == 1 and policy._at_start
+    assert policy.rung_bucket[1024] == pytest.approx(40.2)
     # the retry served one step at one token (the interval noted as the adapter would) and the hold rule
-    # declined: the run's realized loss, (30 + 30) charged less the 20 ms its token would have cost plain, is
-    # the rung's debt and its clock restarts; with the measured async walls (the reseed interval 80, the plain
-    # step after a record step 45) the next cycle is 2.5 x (60 + 25) + 10 = 222.5, so 40 + 222.5 at 3 % needs
-    # 438 plain steps (the declined one counts): the next retry is the 438th decision after
+    # declined: the run's realized loss, (30 + 30) charged less the 20 ms its token would have cost plain, comes
+    # out of the bucket (0.8 ms left); with the measured async walls (the reseed interval 80, the plain step
+    # after a record step 45) the trial is priced 65 (the reload is part of it, and of the 97.5 ms capacity), so
+    # the next first-proposal retry is the 108th decision after
     policy.calibration.note_step(("step", (16, 1), 1024), 80.0, 1, False, 30.0, 1, cause="reseed")
-    assert policy.decide(reseeding, [row], _PLAIN, 5) is None and policy.last_reason == "declined"
-    assert policy.rung_debt == {1024: pytest.approx(40.0)} and policy.rung_clock == {1024: 1}
+    assert (
+        policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is None and policy.last_reason == "declined"
+    )
+    assert policy.rung_bucket[1024] == pytest.approx(0.8)
     policy.calibration.note_step(("plain", 1), 45.0, 1, False, 20.0, 1, cause="switch")
     assert policy.retry_cycle_ms(k1_choice, _PLAIN) == pytest.approx(85.0)
-    assert next(i for i in range(1, 600) if policy.decide(reseeding, [row], _PLAIN, 5) is not None) == 438
+    assert (
+        next(i for i in range(1, 400) if policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is not None)
+        == 108
+    )
+    assert policy.trial_estimate(reseeding, _PLAIN) == 65.0 and policy.rung_cap == {1024: pytest.approx(97.5)}
     # an entry-free record (nothing to amortize) retries at retry_steps, and a declined one-step trial the
     # calibration saw no interval of measures no loss: the 4th and the 8th decision, as before
-    free = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
+    free = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
     kinds = [free.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None for _ in range(8)]
-    assert kinds == [False, False, False, True, False, False, False, True] and free.rung_debt == {}
-    # a reseed is part of the cycle: 2.5 x (900 + 30 - 20) + 10 = 2285 over 0.4 of the plain time needs 286 steps
+    assert kinds == [False, False, False, True, False, False, False, True] and free.rung_cap == {}
+    # a reseed is part of the trial: 900 + 10 = 910 over 0.4 of the plain step cost (8 ms a step) needs 114 steps
     policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.4, probe_steps=0, trial_steps=1), 5)
     reseeding = [RecordCandidate(s, 1024, ms, 900.0) for s, ms in _COSTS.items()]
-    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(286))
-    assert policy.decide(reseeding, [row], _PLAIN, 5).reason == "retry"
-    # a three-step trial charges three record steps: 2.5 x 40 + 30 = 130 over 3 % needs 217 plain steps
+    assert all(policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is None for _ in range(114))
+    assert policy.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True).reason == "retry"
+    assert policy.rung_cap == {1024: pytest.approx(1365.0)}
+    # a three-step trial charges three record steps: 30 + 30 = 60 at 3 % needs 100 plain steps
     longer = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=3), 5)
     reseeding = [RecordCandidate(s, 1024, ms, 30.0) for s, ms in _COSTS.items()]
-    assert next(i for i in range(1, 300) if longer.decide(reseeding, [row], _PLAIN, 5) is not None) == 218
-    # a record serving has measured at break-even or better re-enters on that evidence, outside the budget while
-    # the rung has no debt, once its cycle pays over the horizon (the 12B QB2 prose c1 waited 337 plain steps
-    # after a 1.1x run under the overhead bound alone): (8,3) measured at 2.0 tokens (1.14x) with a 230 ms
-    # reseed saves 5 ms a step, 320 over the horizon; for a row accepting its first draft at 0.8 the cycle is
-    # 1.25 x 245 = 306 and the retry is the 4th decision, for the 0.4 row it is 2.5 x 245 = 612 and the record
-    # is exploration under the budget like any other: 612 (its measured 2.0 tokens cost nothing a step) at 3 %
-    # needs 1021 plain steps
+    assert (
+        next(i for i in range(1, 300) if longer.decide(reseeding, [_row([0.4] * 5)], _PLAIN, 5, fresh=True) is not None)
+        == 101
+    )
+    assert longer.rung_cap == {1024: pytest.approx(90.0)}
+    # a record serving has measured at break-even or better re-enters on that evidence, outside the bucket,
+    # once its entry as served pays over the horizon (the 12B QB2 prose c1 waited 337 plain steps after a 1.1x
+    # run under the overhead bound alone): (8,3) measured at 2.0 tokens (1.14x) with a 230 ms reseed saves 5 ms
+    # a step, 320 over the horizon; for a row accepting its first draft at 0.8 the mid-request cycle is 1.25 x
+    # 245 = 306 and the retry is the 4th decision; for the 0.4 row it is 2.5 x 245 = 612, beyond the horizon and
+    # beyond the bucket's 367.5 ms capacity (exploration, mid-request: never), while at a first proposal the
+    # reseed alone (230) pays and the record re-enters on evidence at the 4th decision too
     paid = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.0)]
     steady = _row([0.8, 0.4, 0.4, 0.4, 0.4])
     quick = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
     assert [quick.decide(paid, [steady], _PLAIN, 3) is None for _ in range(3)] == [True] * 3
     assert quick.decide(paid, [steady], _PLAIN, 3).reason == "retry"
     unsure = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
-    assert all(unsure.decide(paid, [row], _PLAIN, 3) is None for _ in range(1021))
-    assert unsure.decide(paid, [row], _PLAIN, 3).reason == "retry"
-    # at 1.6 tokens (0.91x) it is exploration too: the cycle plus one record step as a loss, 2.5 x 245 + 3 = 615.5
+    assert all(unsure.decide(paid, [row], _PLAIN, 3) is None for _ in range(2000)) and unsure.last_reason == "budget"
+    assert unsure.rung_bucket == {2048: pytest.approx(367.5)} and unsure.rung_cap == {2048: pytest.approx(367.5)}
+    starts = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
+    assert (
+        next(i for i in range(1, 50) if starts.decide(paid, [_row([0.4] * 5)], _PLAIN, 3, fresh=True) is not None) == 4
+    )
+    assert starts.last_reason == "retry" and starts.measured_pays(
+        rank_records(paid, [_row([0.4] * 5)], _PLAIN)[0], _PLAIN
+    )
+    # at 1.6 tokens (0.91x) it is exploration too, 2.5 x 245 + 3 = 615.5 mid-request: never
     short = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=1.6)]
     slow = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.03, probe_steps=0, trial_steps=1), 5)
-    assert all(slow.decide(short, [row], _PLAIN, 3) is None for _ in range(1026))
-    assert slow.decide(short, [row], _PLAIN, 3).reason == "retry"
+    assert all(slow.decide(short, [row], _PLAIN, 3) is None for _ in range(2000)) and slow.last_reason == "budget"
     # ... unless its last run failed (the pool's older samples describe the text before it: prose, then random
     # prompts) or its measured run length cannot amortize the cycle (marginal random prompts: runs of a few steps)
-    # -- then the record is exploration like any other: the budget decides (a cold rung waits), not the credit
+    # -- then the record is exploration like any other: the bucket decides (a cold rung waits), not the credit
     failed = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
     for _ in range(2):
         failed.calibration.note_step(("step", (8, 3), 2048), 35.0, 1, True, 35.0, 1)
@@ -2899,7 +2923,7 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     assert failed.calibration.last_run_mean(("step", (8, 3), 2048)) == 1.0
     assert all(failed.decide(paid, [steady], _PLAIN, 3) is None for _ in range(10)) and failed.last_reason == "budget"
     assert not failed.measured_pays(rank_records(paid, [steady], _PLAIN)[0], _PLAIN)
-    assert _served(failed).decide(paid, [steady], _PLAIN, 3).reason == "retry", "served: an exploration"
+    assert _served(failed).decide(paid, [steady], _PLAIN, 3).reason == "retry", "a full bucket: an exploration"
     brief = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0, trial_steps=1), 5)
     for _ in range(3):
         brief.calibration.note_step(("step", (8, 3), 2048), 35.0, 2, True, 35.0, 1)
@@ -3016,7 +3040,16 @@ def _policy_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_leng
     wave = tuple(range(7))
     assert rank_records(measured8, batch, _PLAIN, optimistic=wave)[0].expected_tokens == pytest.approx(8 * 1.46)
     assert eight.decide(measured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "declined"
-    assert eight.decide([RecordCandidate((8, 3), 2048, 35.0, 230.0)], batch, _PLAIN, 3, fresh=wave).reason == "trial"
+    # ... the unmeasured record is their trial in principle, but mid-batch it reseeds eight rows 2.33 times over
+    # (571 ms) plus a record step: more than the rung's bucket holds (1.5 trials of 245), so the trial waits
+    # for a first proposal, where the reseed is verified at once (245 within 367.5)
+    unmeasured8 = [RecordCandidate((8, 3), 2048, 35.0, 230.0)]
+    assert eight.decide(unmeasured8, batch, _PLAIN, 3, fresh=wave) is None and eight.last_reason == "budget"
+    assert eight.rung_cap[2048] == pytest.approx(367.5)
+    assert (
+        eight.decide(unmeasured8, [_row([0.9, 0.1, 0.1, 0.1, 0.1]) for _ in range(8)], _PLAIN, 3, fresh=True).reason
+        == "trial"
+    )
     good = [RecordCandidate((8, 3), 2048, 35.0, 230.0, tokens_per_row=2.4)]  # measured above the bar: an entry
     assert eight.decide(good, batch, _PLAIN, 3, fresh=wave).reason == "enter"
     assert (
@@ -3218,26 +3251,28 @@ def _policy_prose_dwells_on_its_record_and_random_text_stays_plain(expect_error=
     assert loss < -0.25 * steps * plain, "a quarter of the plain time saved at least"
     # the record delivered: (1,5) at 55.5 ms commits ~3.8 tokens a step against the 21.5 ms plain step
     assert policy.calibration.tokens_per_row(("step", (1, 5), 2048)) > 3.0
-    assert policy.rung_debt.get(2048, 0.0) == 0.0, "every run paid: no debt"
+    assert policy.rung_bucket[2048] == pytest.approx(policy.rung_cap[2048]), "every run paid: the bucket is full"
     # random text: a draft lands now and then (1.2 tokens a step); the first request enters on the prose credit
-    # and fails, and that run's realized loss (the reseed, the overtaken replay, the steps at one token) is the
-    # rung's debt: no reseeding entry until the budget covers it, whatever the next requests' first proposals
-    # say -- within 1 % of plain over the eight requests
+    # (evidence: the last run paid) and fails, and that run's realized loss (the reseed, the replay, the steps
+    # at one token) comes out of the rung's bucket; with the credit's last run failed every next entry is an
+    # exploration priced on that run's tokens, admitted once the bucket refilled at 1 % of the plain time --
+    # the one trial per ~15 s the bucket allows, so the eight requests cost at most a trial on evidence plus
+    # that rate (1.5 % here; 1 % in the long run)
     noise = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 1]
     random_text = noise * 7
     steps, spec, episodes, entries, loss = _serve(policy, [[random_text]] * 8, 127, costs, reseeds, plain)
-    assert spec / steps < 0.05 and entries <= 2, (steps, spec, episodes, entries, loss)
-    assert 0.0 < loss <= 0.01 * steps * plain, (loss, steps)
-    assert policy.rung_debt[2048] > 100.0 and policy.rung_clock[2048] > 900, "the debt, the plain steps since"
-    # prose after random: the exploration retry waits for the budget (the debt plus its own expected loss at
-    # 1 % of the plain time since the failed run: order 1100 plain steps, so the first prose request runs
-    # plain), then re-enters the record (its own steps clear the exit gain) and the next requests enter at
-    # once on the run's measured credit
-    waited = _serve(policy, [[prose]], 255, costs, reseeds, plain)
-    assert waited[:2] == (255, 0) and policy.last_reason == "budget", waited
+    assert spec / steps < 0.05 and entries <= 4, (steps, spec, episodes, entries, loss)
+    assert 0.0 < loss <= 0.015 * steps * plain, (loss, steps)
+    assert policy.rung_bucket[2048] < policy.rung_cap[2048], "a trial's worth drawn, refilling"
+    # prose after random: the exploration waits for the bucket (the random trials left it in overdraft, and the
+    # trial priced on the failed run's tokens, ~90 ms, refills at 1 % of 21.5 ms steps: up to three plain prose
+    # requests), re-enters the record (its own steps clear the exit gain) and from then on every request enters
+    # at once on the run's measured credit
+    waited = _serve(policy, [[prose]] * 4, 255, costs, reseeds, plain)
+    assert waited[3] >= 1 and waited[1] >= 100 and waited[2] <= 2, waited
     steps, spec, episodes, entries, loss = _serve(policy, [[prose]] * 3, 255, costs, reseeds, plain)
-    assert spec / steps >= 0.9 and episodes <= 1 and entries <= 3, (steps, spec, episodes, entries)
-    assert loss < 0.0 and policy.rung_debt[2048] == 0.0, "the runs paid: the debt is cleared"
+    assert spec / steps >= 0.9 and entries <= 3, (steps, spec, episodes, entries)
+    assert loss < 0.0 and policy.rung_bucket[2048] >= 0.95 * policy.rung_cap[2048], "paid: the bucket (re)filled"
     # the 256K rung, never measured: plain 33.1 ms, (1,5) at 136 (4.1x), reseeds 33; two 128-token random
     # requests (the 1 user 256K point) admit no trial -- priced at every draft rejected, the trial needs ~1000
     # plain steps of budget at 1 % -- and cost nothing over plain (the v49 policy entered on the prior the
@@ -3248,6 +3283,7 @@ def _policy_prose_dwells_on_its_record_and_random_text_stays_plain(expect_error=
     far.prior.cond, far.prior.informed, far.prior.observed = [1.0] * 5, [True] * 5, [20] * 5  # all-accept text
     steps, spec, episodes, entries, loss = _serve(far, [[random_text]] * 2, 127, top, top_reseeds, 33.1, width=263168)
     assert (steps, spec, entries, loss) == (254, 0, 0, 0.0) and far.last_reason == "budget"
+    assert far.rung_bucket[263168] == pytest.approx(254 * 0.01 * 33.1) and far.rung_cap[263168] > 400
     # ... and where the 256K record pays (2.2x the plain step: 73 ms) on an engine whose prior says prose
     # (0.75 a position: (1,5) at 1.49x, an entry), the rung still serves its budget first -- the entry priced at
     # every draft rejected, 33 + 3 x (73 - 33) = 153 ms, is 1 % of 461 plain steps at 256K -- so prose reaches
@@ -3256,7 +3292,7 @@ def _policy_prose_dwells_on_its_record_and_random_text_stays_plain(expect_error=
     near = SpecPolicy(SpecPolicyConfig(), 5)
     near.prior.cond, near.prior.informed, near.prior.observed = [0.75] * 5, [True] * 5, [100] * 5
     served = [_serve(near, [[prose]], 255, cheap, top_reseeds, 33.1, width=263168) for _ in range(3)]
-    assert [(r[0], r[1]) for r in served[:2]] == [(255, 0), (255, 0)] and near.rung_clock[263168] >= 510, served
+    assert [(r[0], r[1]) for r in served[:2]] == [(255, 0), (255, 0)] and near.rung_bucket[263168] > 100, served
     assert served[2][1] >= 0.9 * served[2][0] and served[2][4] < 0.0 and served[2][3] == 1, served[2]
 
 

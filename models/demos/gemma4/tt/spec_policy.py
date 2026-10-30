@@ -89,58 +89,58 @@ Retrying
 While the plain step serves, no draft is verified and the statistics do not
 move. Every reseeding entry out of the plain regime -- an enter on the
 credit, a new request's trial, a retry -- is first priced as served and then
-admitted by its rung's *exploration budget*. At a batch's first proposal
-(every row at its first step) the entry costs the reseed and its replay is
-verified; mid-request, under asynchronous scheduling, the plain step the
-runner has in flight overtakes the replay, which takes only when every
-row's first draft matches the token it committed, so the entry costs the
-retry cycle (the reseed interval as measured per shape, else the table's
-entry plus step, and the reload of the plain step after a record step, each
-less the plain step it stands in for) times the reseeds expected before it
-takes, ``1 / prod_r c_r[1]`` (an eight-row prose wave at 0.8 a row: six;
-the 12B QB2 prose c8 re-entered at the tail of every wave and every replay
-missed on some row). ``entry_pays`` reads that cost. The budget per rung
-(verify width) keeps a *clock*, the plain steps served at the rung since
-its last failed run (a new request does not reset it), and a *debt*, the
-realized loss of the failed runs there since the rung last paid (a run's
-charged costs -- the entry, every step -- less what its tokens would have
-cost plain, plus the reload; a paying run clears it). An entry is admitted
-when
+either rests on evidence or draws on its rung's *exploration bucket*. At a
+batch's first proposal (every row at its first step) the entry costs the
+reseed and its replay is verified; mid-request, under asynchronous
+scheduling, the plain step the runner has in flight overtakes the replay,
+which takes only when every row's first draft matches the token it
+committed, so the entry costs the retry cycle (the reseed interval as
+measured per shape, else the table's entry plus step, and the reload of the
+plain step after a record step, each less the plain step it stands in for)
+times the reseeds expected before it takes, ``1 / prod_r c_r[1]`` (an
+eight-row prose wave at 0.8 a row: six; the 12B QB2 prose c8 re-entered at
+the tail of every wave and every replay missed on some row). ``entry_pays``
+reads that cost. An entry rests on evidence (``measured_pays``) when serving
+measured the record at break-even or better at the rung, the last run on
+its pool paid as a whole (however it ended: a dip, a probe, the request's
+end) and its entry as served pays over the horizon: such an entry is free,
+and the prose c1 re-enters on it at every request. Any other entry is
+exploration, admitted when the rung's bucket holds its expected loss:
 
-    debt + expected loss of the entry <= GEMMA4_SPEC_RETRY_OVERHEAD * clock * plain
+    bucket(rung) >= entry cost + GEMMA4_SPEC_TRIAL_STEPS * max(0, step - credit * plain)
 
-where the expected loss is the entry cost plus ``GEMMA4_SPEC_TRIAL_STEPS``
-steps (one from an uninformed prior) at the record's cost over the credit
-the rung has: the rung's measured credit, else the freshest pool of the
-draft length at any rung (the acceptance is the text's, not the rung's),
-else every draft rejected -- never the per-position prior, which two
-11-token coherence requests left at 1.0 on the 12B QB2 and whose 256K
-record then served 0.63x for 20 steps. So a rung never measured (the long
-rungs' first visit) waits until its trial, priced with every draft
-rejected, is within the bound (the 256K rung: ~1000 plain steps at 1 %, so
-two 128-token requests cost nothing over plain), a failed trial on random
-text charges its loss and the next entry there waits order 1000 plain
-tokens a row, and a record once profitable that fails on the current text
-re-enters no sooner than any other. Outside the budget: an entry on the
-rung's measured credit while the rung has no debt (``measured_pays``:
-serving measured the record at break-even or better, its last run did not
-fail, its entry as served pays over the horizon -- the prose c1 re-entered
-on it every request), a speculating batch's switch, the plain probe's
-resume, and an entry-free record. A retry needs at least
+where the credit is the rung's measured credit (the last run's own mean
+when that run failed), else the freshest pool of the draft length at any
+rung (the acceptance is the text's, not the rung's), else one draft
+rejected after another -- never the per-position prior, which two 11-token
+coherence requests left at 1.0 on the 12B QB2 and whose 256K record then
+served 0.63x for 20 steps. The bucket (ms, per verify width) fills at
+``GEMMA4_SPEC_RETRY_OVERHEAD`` of every plain step's cost the rung serves,
+holds ``BUCKET_TRIALS`` trials at most (the trial priced with every draft
+rejected), pays every failed run's realized loss (the costs the decisions
+charged less what the run's tokens would have cost plain, plus the reload)
+and is never reset: continuous random text trials once per the refill of a
+trial (~15 s at 1 %, by construction), a prose request arriving after any
+such stretch trials at its first proposal, and a rung never measured (the
+long rungs' first visit) waits until its trial has filled (the 256K rung:
+~1000 plain steps, so two 128-token requests cost nothing over plain). A
+run the calibration saw no served interval of (the runner's trailing
+proposal for a released request, which the adapter no longer answers)
+measured nothing and pays nothing. A retry needs at least
 ``GEMMA4_SPEC_RETRY_STEPS`` plain steps since the last speculative one and
 never reseeds while the batch cools after an exit: the best record
 ``measured_pays`` admits (a re-entry on the pool's credit: the trial that
 follows measures it again before the hold), else the cheapest candidate
-(entry plus step) as exploration under the budget; a candidate the
-statistics already rule out (gain under ``min_gain / 4``) is not worth a
-replay. On the MTP rail a declined row reseeds and resumes within the
-request; on the dFlash rail a plain step gives the drafter no residual tap,
-so a decline ends the request's session and the retry lands on the first
-step of a later request (``note_plain_steps`` counts the plain steps in
-between, on every rung's clock). A new request gets one *trial* at its
-first proposal: the cheapest candidate replays once when its gain estimate
-clears ``GEMMA4_SPEC_TRIAL_GAIN`` -- ``GEMMA4_SPEC_MIN_GAIN`` once serving
-has ``calib_min`` samples of the record at the rung, fresh or stale: its
+(entry plus step) as exploration; a candidate the statistics already rule
+out (gain under ``min_gain / 4``) is not worth a replay. On the MTP rail a
+declined row reseeds and resumes within the request; on the dFlash rail a
+plain step gives the drafter no residual tap, so a decline ends the
+request's session and the retry lands on the first step of a later request
+(``note_plain_steps`` counts the plain steps in between, into every rung's
+bucket). A new request gets one *trial* at its first proposal: the cheapest
+candidate replays once when its gain estimate clears
+``GEMMA4_SPEC_TRIAL_GAIN`` -- ``GEMMA4_SPEC_MIN_GAIN`` once serving has
+``calib_min`` samples of the record at the rung, fresh or stale: its
 measured tokens per row are not argued with wave after wave, and the prior
 the model falls back to on a stale pool was learned from the same text --
 and its reseed pays over the horizon at that estimate. A prior below the
@@ -298,6 +298,10 @@ EXIT_STEPS = 2
 RETRY_MIN_GAIN_FRACTION = 0.25
 #: Runs of a shape (steps between its reseeds) the entry horizon's run-length cap looks back over.
 RUN_LENGTH_RUNS = 4
+#: A rung's exploration bucket holds this many trials' worth of ms (the trial priced with every draft rejected).
+BUCKET_TRIALS = 1.5
+#: The hold's credit while a run serves: an EWMA at this weight of the run's own samples (None: their mean).
+RUN_CREDIT_ALPHA = None
 
 
 def _env_float(env, name, default, *, low, high=None):
@@ -850,9 +854,11 @@ class Calibration:
         # step right after a record step (the runner's reload and the drained pipeline bubble); [count, ms].
         self.reseed_steps = {}
         self.after_record = [0, 0.0]
-        # The tokens per live row every noted interval committed (idle ones apart), summed over the engine life:
-        # the policy reads its growth over a run to price what the run delivered against the plain step.
+        # The tokens per live row every noted interval committed (idle ones apart), summed over the engine life,
+        # and the count of those served intervals: the policy reads their growth over a run to price what the
+        # run delivered against the plain step (a run with no served interval measured nothing).
         self.tokens_rows_sum = 0.0
+        self.served_intervals = 0
 
     def note_step(self, mode, wall_ms, tokens, clean, table_ms, live_rows=1, cause=None, idle=False):
         """One served step of ``mode`` (``("plain", bucket)`` or ``("step", shape, width)``) whose wall is
@@ -864,6 +870,7 @@ class Calibration:
             clean, cause = False, "idle"
         else:
             self.tokens_rows_sum += float(tokens) / max(int(live_rows), 1)
+            self.served_intervals += 1
         probe = mode[0] == "plain" and cause == "switch"
         # A plain step right after a record step (the probe a speculating batch serves, or the first step after an
         # exit) carries the runner's input reload and the drained pipeline bubble: 44-49 ms against a 35 ms plain
@@ -902,10 +909,12 @@ class Calibration:
             pool[1] += 1
             pool[2] = self.intervals
             if mode[0] == "step":
-                run = self.run.setdefault(key, [collections.deque(maxlen=CALIB_WINDOW), 0, 0.0])
+                run = self.run.setdefault(key, [collections.deque(maxlen=CALIB_WINDOW), 0, 0.0, None])
                 run[0].append(per_row)
                 run[1] += 1
                 run[2] += per_row
+                alpha = RUN_CREDIT_ALPHA
+                run[3] = per_row if (run[3] is None or alpha is None) else run[3] + alpha * (per_row - run[3])
         for total in (self.total, self.window_total):
             total[0] += 1
             total[1] += float(wall_ms)
@@ -927,7 +936,7 @@ class Calibration:
         the run fed keeps the run's mean as its last run, and the steps served on each shape since the last run
         ended are one run of the shape for ``run_length`` -- unless the run was a ``trial`` that failed: a
         declined trial is exploration, not a record the batch kept leaving."""
-        for key, (_window, count, total) in self.run.items():
+        for key, (_window, count, total, _ewma) in self.run.items():
             self.last_run[key] = (total / count, count)
         self.run = {}
         for runs in self.shape_runs.values():
@@ -1081,6 +1090,8 @@ class Calibration:
         key = self._tokens_pool_key(mode)
         run = self.run.get(key)
         if run is not None and run[1] > 0:
+            if RUN_CREDIT_ALPHA is not None:
+                return run[3]
             return sum(run[0]) / len(run[0])
         pool = self.tokens_pool.get(key)
         if pool is not None and pool[0] and pool[1] >= self.min_samples:
@@ -1198,18 +1209,19 @@ class SpecPolicy:
         self.trial_limit = int(config.trial_steps)  # steps the current trial holds (one from an uninformed prior)
         self.since_exit = None  # plain steps since the batch left a record (the entry cooldown); None once back in
         self.probing = False  # the last decision was the plain probe of a hold: the next resumes the record
-        # The exploration budget per rung (verify width): ``rung_clock`` counts the plain steps served at the rung
-        # since its last failed run (never reset by a request), ``rung_debt`` the realized loss (ms) of the failed
-        # runs there since its last paying one. A run is the steps from an entry out of the plain regime to the
-        # exit: ``run_cost`` sums the costs the decisions charged (the entry, every step), ``run_tokens_at`` is the
-        # calibration's tokens-per-row sum when it began.
-        self.rung_clock = {}
-        self.rung_debt = {}
+        # The exploration budget per rung (verify width), a token bucket in ms: ``rung_bucket`` fills at
+        # GEMMA4_SPEC_RETRY_OVERHEAD of every plain step's cost the rung serves, up to ``rung_cap`` (BUCKET_TRIALS
+        # trials priced with every draft rejected), never resets, and pays the realized loss of every run that
+        # failed. A run is the steps from an entry out of the plain regime to the exit: ``run_cost`` sums the
+        # costs the decisions charged (the entry, every step), ``run_tokens_at`` / ``run_served_at`` the
+        # calibration's tokens-per-row sum and served-interval count when it began.
+        self.rung_bucket = {}
+        self.rung_cap = {}
         self.run_open = False
         self.run_width = None
         self.run_cost = 0.0
         self.run_tokens_at = 0.0
-        self.run_intervals_at = 0
+        self.run_served_at = 0
         self.pending_entry_ms = 0.0  # the entry would_speculate admitted, charged to the run decide opens
         self._at_start = True  # the step being decided is every row's first proposal (no plain step in flight)
         self._attempts = 1.0  # expected reseeds before a mid-request entry's first draft matches on every row
@@ -1225,15 +1237,16 @@ class SpecPolicy:
 
     def note_plain_steps(self, n=1):
         """Count ``n`` plain steps the policy was not asked about (no session could speculate) toward the retry
-        and every rung's exploration clock."""
+        and every rung's exploration bucket (at the last decision's plain step cost)."""
         self.declined += int(n)
         if self.since_exit is not None:
             self.since_exit += int(n)
         if self.speculating or self.probing:
             self.calibration.end_run(trial=self.trial)
             self._close_run(self._plain_ms)
-        for width in self.rung_clock:
-            self.rung_clock[width] += int(n)
+        if self._plain_ms is not None:
+            for width in self.rung_bucket:
+                self._refill_rung(width, int(n) * self.config.retry_overhead * self._plain_ms)
         self.below_cap = 0
         self.below_exit = 0
         self.last_k = 0
@@ -1270,13 +1283,17 @@ class SpecPolicy:
             return float(choice.entry_ms)
         return self._attempts * self.retry_cycle_ms(choice, plain_ms)
 
-    def _credit_for(self, choice):
+    def _credit_for(self, choice, plain_ms):
         """The tokens per row an exploration of ``choice`` is expected to deliver: the measured credit of its
-        rung's pool, else of the freshest pool of its draft length at any rung (the acceptance is the text's,
-        not the rung's), else one (every draft rejected): the per-position prior is not read here -- the 12B
-        QB2's 256K record was entered at 1.7x on a prior two 11-token coherence requests had left at 1.0 and
+        rung's pool -- the last run's own mean when that run failed (the pool's older samples describe the text
+        before it: after prose, random text re-entered three requests running on the prose window's 3.4 tokens,
+        2026-10-30 replay) -- else of the freshest pool of its draft length at any rung (the acceptance is the
+        text's, not the rung's), else one (every draft rejected): the per-position prior is not read here -- the
+        12B QB2's 256K record was entered at 1.7x on a prior two 11-token coherence requests had left at 1.0 and
         served 0.63x (2026-10-30)."""
         if choice.measured:
+            if self.last_run_failed(choice, plain_ms):
+                return float(self.calibration.last_run_mean(("step", choice.shape, choice.width)))
             return float(choice.tokens_per_row)
         credit = self.calibration.pool_credit_any(int(choice.shape[1]))
         return 1.0 if credit is None else float(credit)
@@ -1286,7 +1303,7 @@ class SpecPolicy:
         credit the rung has (``_credit_for``): the entry cost, each step's cost over what its tokens would cost
         plain, and at a first proposal the reload of the plain step after (mid-request the cycle carries it)."""
         plain_ms = float(plain_ms)
-        credit = self._credit_for(choice)
+        credit = self._credit_for(choice, plain_ms)
         loss = max(0.0, float(choice.cost_ms) - credit * plain_ms)
         cost = self.entry_cost(choice, plain_ms) + int(steps) * loss
         if self._at_start:
@@ -1295,47 +1312,64 @@ class SpecPolicy:
         return cost
 
     def budget_ok(self, choice, plain_ms, steps):
-        """Whether the rung's exploration budget admits entering ``choice`` from the plain regime: its debt (the
-        realized loss of the failed runs since the rung last paid) plus this entry's expected loss within
-        ``GEMMA4_SPEC_RETRY_OVERHEAD`` of the plain time the rung served since it last failed."""
-        width = int(choice.width)
-        clock = self.rung_clock.get(width, 0)
-        debt = self.rung_debt.get(width, 0.0)
-        return debt + self.explore_cost(choice, plain_ms, steps) <= self.config.retry_overhead * clock * float(plain_ms)
+        """Whether the rung's exploration bucket holds this entry's expected loss."""
+        return self.rung_bucket.get(int(choice.width), 0.0) >= self.explore_cost(choice, plain_ms, steps)
 
-    def _tick_clocks(self, candidates):
-        """A plain step at the rung(s) of ``candidates``: their exploration clocks advance."""
+    def trial_estimate(self, candidates, plain_ms):
+        """The rung's trial priced with every draft rejected, at a first proposal: the cheapest reseeding
+        candidate's entry, ``trial_steps`` steps at its cost over the plain step and the reload of the plain step
+        after (as measured), i.e. what ``explore_cost`` charges such a trial (None without a reseeding candidate)."""
+        plain_ms = float(plain_ms)
+        entering = [c for c in candidates if float(c.entry_ms) > 0.0]
+        if not entering:
+            return None
+        cheapest = min(entering, key=lambda c: (float(c.entry_ms) + float(c.cost_ms), tuple(c.shape)))
+        after = self.calibration.after_record_ms()
+        reload = max(0.0, after - plain_ms) if after is not None else 0.0
+        return (
+            float(cheapest.entry_ms) + self.config.trial_steps * max(0.0, float(cheapest.cost_ms) - plain_ms) + reload
+        )
+
+    def _refill_rung(self, width, ms):
+        cap = self.rung_cap.get(width)
+        level = self.rung_bucket.get(width, 0.0) + float(ms)
+        self.rung_bucket[width] = level if cap is None else min(float(cap), level)
+
+    def _refill(self, candidates, plain_ms):
+        """A plain step at the rung(s) of ``candidates``: their buckets fill by ``retry_overhead`` of its cost, up
+        to BUCKET_TRIALS trials as the step's candidates price one (the cap follows the batch they are costed for)."""
+        estimate = self.trial_estimate(candidates, plain_ms)
         for width in {int(c.width) for c in candidates}:
-            self.rung_clock[width] = self.rung_clock.get(width, 0) + 1
+            if estimate is not None:
+                self.rung_cap[width] = BUCKET_TRIALS * estimate
+            self._refill_rung(width, self.config.retry_overhead * float(plain_ms))
 
     def _open_run(self, choice):
         self.run_open = True
         self.run_width = int(choice.width)
         self.run_cost = 0.0
         self.run_tokens_at = self.calibration.tokens_rows_sum
-        self.run_intervals_at = self.calibration.intervals
+        self.run_served_at = self.calibration.served_intervals
 
     def _close_run(self, plain_ms):
         """The run ends: its charged costs against what its tokens would have cost plain (plus the reload of the
-        plain step after a record step, as measured) is its realized loss. A failed run adds the loss to its
-        rung's debt and restarts the rung's clock; a paying run clears the debt. A run the calibration saw no
-        interval of (nothing served between the decisions) measures nothing."""
+        plain step after a record step, as measured) is its realized loss. A failed run pays the loss out of its
+        rung's bucket (into overdraft if it must: the next entry there waits for the refill); a paying run owes
+        nothing. A run the calibration saw no served interval of (the runner's trailing proposal for a released
+        request, dropped by the next prefill; nothing served between the decisions) measured nothing."""
         if not self.run_open:
             return
         self.run_open = False
-        if plain_ms is None or self.calibration.intervals == self.run_intervals_at:
+        if plain_ms is None or self.calibration.served_intervals == self.run_served_at:
             return
         plain_ms = float(plain_ms)
         tokens = self.calibration.tokens_rows_sum - self.run_tokens_at
         after = self.calibration.after_record_ms()
         reload = max(0.0, after - plain_ms) if after is not None else 0.0
         loss = self.run_cost - tokens * plain_ms + reload
-        width = self.run_width
         if loss > 0.0:
-            self.rung_debt[width] = self.rung_debt.get(width, 0.0) + loss
-            self.rung_clock[width] = 0
-        else:
-            self.rung_debt[width] = 0.0
+            width = self.run_width
+            self.rung_bucket[width] = self.rung_bucket.get(width, 0.0) - loss
 
     def note_overtaken(self):
         """The last decision's replay was never verified: an ordinary decode the runner had in flight committed
@@ -1520,7 +1554,8 @@ class SpecPolicy:
         """Whether ``decide`` would replay a record now, without changing any counter (the dFlash bootstrap gate);
         ``fresh`` names the rows that are new requests without a trial yet (``True``: every row)."""
         for width in {int(c.width) for c in candidates}:
-            self.rung_clock.setdefault(width, 0)  # the rung is known: note_plain_steps advances its clock
+            self.rung_bucket.setdefault(width, 0.0)  # the rung is known: note_plain_steps fills its bucket
+        self._plain_ms = float(plain_ms)  # ... at this plain step cost (the dFlash rail's plain steps)
         candidates = self.viable(candidates, plain_ms)
         if not candidates:
             return False
@@ -1561,12 +1596,13 @@ class SpecPolicy:
         """Whether ``choice``, decided for a batch in the plain regime, is admitted by its rung's exploration
         budget: a reseeding entry is, when the budget covers the steps it will hold (``trial_steps``, one from an
         uninformed prior). Not budgeted: an entry-free record (nothing to lose), a speculating batch's switch or
-        the plain probe's resume (the hold goes on), and an entry on the rung's measured credit while the rung
-        has no debt (the last run there paid: the credit is evidence, and the prose c1 re-entered on it every
-        request; once a run on it fails, the debt gates the next like any exploration)."""
+        the plain probe's resume (the hold goes on), and an entry on the rung's measured credit (``measured_pays``:
+        the last run on the record paid as a whole, however it ended -- a dip, a probe, the request's end -- so
+        the credit is evidence, and the prose c1 re-enters on it every request; a run on it that fails leaves no
+        such credit, and the next entry there is an exploration the bucket must cover)."""
         if choice.entry_ms <= 0.0 or self.speculating or self.probing or choice.reason == "resume":
             return True
-        if self.measured_pays(choice, plain_ms) and self.rung_debt.get(int(choice.width), 0.0) <= 0.0:
+        if self.measured_pays(choice, plain_ms):
             return True
         steps = self.config.trial_steps if (informed or choice.measured) else 1
         return self.budget_ok(choice, plain_ms, steps)
@@ -1657,7 +1693,7 @@ class SpecPolicy:
             if self.speculating or self.probing:
                 self.calibration.end_run(trial=self.trial)
                 self._close_run(plain_ms)
-            self._tick_clocks(offered)
+            self._refill(offered, plain_ms)
             self.below_cap = 0
             self.below_exit = 0
             self.last_k = 0
@@ -1724,11 +1760,11 @@ class SpecPolicy:
                     hypothetical = self._hypothetical(self._tag_runs(candidates), rows, plain_ms, fresh)
                     choice = self.trial_choice(ranked, plain_ms, hypothetical, remaining)
         # Every reseeding entry out of the plain regime (an enter on the credit, a trial, a retry) is within the
-        # rung's exploration budget or it waits (reason "budget"): the realized loss of the rung's failed runs
-        # since it last paid plus this entry's expected loss, against GEMMA4_SPEC_RETRY_OVERHEAD of the plain time
-        # the rung served since its last failed run. A new request does not reset that clock, a record once
-        # profitable that fails on the text re-enters no sooner than any other, and a rung never measured (the
-        # long rungs' first visit) waits until its trial, priced with every draft rejected, is within the bound.
+        # rung's exploration bucket or it waits (reason "budget"): the bucket fills at GEMMA4_SPEC_RETRY_OVERHEAD
+        # of the plain time the rung serves, holds BUCKET_TRIALS trials at most, pays every failed run's realized
+        # loss and never resets, so random text trials once per the refill of a trial (~15 s at 1 %), a prose
+        # request after any such stretch trials at its first proposal, and a rung never measured (the long rungs'
+        # first visit) waits until its trial, priced with every draft rejected, has filled.
         if choice is not None and not self._within_budget(choice, plain_ms, informed):
             choice, reason = None, "budget"
         if choice is not None and choice.reason in ("gain", "hold") and self.plain_probe_due(choice, plain_ms):
@@ -1744,7 +1780,7 @@ class SpecPolicy:
                 self._close_run(plain_ms)
             elif reason == "calibrate":
                 self.run_cost += float(plain_ms)  # the probe is a step of the run
-            self._tick_clocks(candidates)
+            self._refill(candidates, plain_ms)
             self.probing = reason == "calibrate"
             self.below_cap = 0
             if reason != "calibrate":

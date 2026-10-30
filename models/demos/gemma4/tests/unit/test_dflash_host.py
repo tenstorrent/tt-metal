@@ -3386,10 +3386,10 @@ def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
     return model
 
 
-def _costed(adapter, monkeypatch, served=10000):
+def _costed(adapter, monkeypatch, served=True):
     """A contract model with the CI leg's costs, a three-step retry at a 1.2 overhead (the cycle: the bootstrap
-    replay and one record step) and no probe, on a rung that served ``served`` plain steps (0: a cold rung,
-    whose exploration budget admits no entry yet)."""
+    replay and one record step) and no probe, on a rung whose exploration bucket is full (``served``; False: a
+    cold rung, whose bucket admits no entry yet)."""
     env = {
         "GEMMA4_SPEC_RETRY_STEPS": "3",
         "GEMMA4_SPEC_RETRY_OVERHEAD": "1.2",  # the gate charges the whole one-step trial cycle
@@ -3401,12 +3401,15 @@ def _costed(adapter, monkeypatch, served=10000):
     return _served(_with_costs(build_model(adapter, monkeypatch, env=env)), served)
 
 
-def _served(model, steps=10000):
-    """``model`` on an engine whose rungs served ``steps`` plain steps since any failed run there: the rung's
-    exploration budget (``SpecPolicy.rung_clock``) admits a reseeding entry, as a cold rung's does not."""
+def _served(model, full=True):
+    """``model`` on an engine whose rungs served plain time enough: every rung's exploration bucket is full
+    (``SpecPolicy.rung_bucket``; the first plain decision caps it at the rung's capacity) and admits a reseeding
+    entry, as a cold rung's does not."""
+    if not full:
+        return model
     for key in model._spec_costs or {}:
         if key[0] == "step":
-            model._spec_policy.rung_clock[int(key[2])] = int(steps)
+            model._spec_policy.rung_bucket[int(key[2])] = 1e6
     return model
 
 
@@ -3462,19 +3465,20 @@ def _dflash_without_a_cost_table_every_solo_greedy_request_speculates_and_a_warn
 def _dflash_the_first_request_speculates_from_the_optimistic_prior_and_the_counts_feed_its_ewma(
     adapter, monkeypatch, expect_error=None
 ):
-    """The optimistic prior's one-step trial waits for the rung's exploration budget like every reseeding entry:
-    priced at every draft rejected (the bootstrap 46.9 and the step's 46.9 - 34 = 59.8 ms) it needs 1.2 x 34 ms
-    x 2 plain steps at the fixture's overhead, so a cold rung's first request runs plain (reason "budget", the
-    taps dropped) and two plain proposals later the next request bootstraps; with the rung served the first
-    request does at once, and its verify's counts feed the row's and the prior's EWMAs."""
-    cold = _costed(adapter, monkeypatch, served=0)
+    """The optimistic prior's one-step trial draws on the rung's exploration bucket like every reseeding entry:
+    priced at every draft rejected (the bootstrap 46.9 and the step's 46.9 - 34 = 59.8 ms) it needs two plain
+    steps' refill at the fixture's 1.2 overhead (40.8 ms each), so a cold rung's first request runs plain
+    (reason "budget", the taps dropped) and two plain proposals later the next request bootstraps; with the
+    rung's bucket full the first request does at once, and its verify's counts feed the row's and the prior's
+    EWMAs."""
+    cold = _costed(adapter, monkeypatch, served=False)
     _prefill(cold, prompt_len=2, key=10)
     assert _ordinary(cold, [3], [2], [10], result="device") == "device" and _names(cold, "bootstrap") == []
-    assert cold._spec_policy.last_reason == "budget" and cold._spec_policy.rung_clock == {1024: 0}
+    assert cold._spec_policy.last_reason == "budget" and cold._spec_policy.rung_bucket == {1024: 0.0}
     for pos in (3, 4):
         proposal = _propose(cold, [[pos] + [-1] * 5], [[pos] + [-1] * 5])
         assert proposal.num_valid.tolist() == [0]
-    assert cold._spec_policy.rung_clock == {1024: 2}
+    assert cold._spec_policy.rung_bucket == {1024: pytest.approx(2 * 1.2 * 34.0)}
     cold.release_request(0)
     assert _dflash_rounds(cold, [2], key=20) == [5, 5], "the budget covers the trial: the bootstrap"
     costed = _costed(adapter, monkeypatch)
@@ -3816,21 +3820,22 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
     """One verify at five accepted, then rejections of the first draft only, with 20 ms reseeds. The optimistic
     prior's first proposal is a one-step trial of (1,5); the per-position EWMA at 0.1 keeps (8,3) (1.75x) the
     best record, then (16,1) is held, and the record's OWN steps (one token each) end the hold after two
-    decisions below the exit gain. That run lost 15 ms (the reseed and five record steps, 215 ms, for ten
-    tokens): the rung's debt, which with the entry's own expected loss (one record step at every draft
-    rejected, 30) the budget covers after the cooldown and two more plain steps at the fixture's 0.4
-    overhead. The model, whose deep positions were observed accepted once and never reached again, still
-    rates (1,5) at 1.71x, so the row re-enters (the fixture never calibrates a pool: in serving the measured
-    credit would refuse it) and falls out the same way, now owing 130 ms: the exploration retry of the
-    cheapest record, (16,1), priced as served (2.58 reseeds expected before its overtaken replay takes, 30 each,
-    plus one record step, 10) waits 27 plain steps of budget, not the five of the old cadence."""
+    decisions below the exit gain. That run lost 7 ms (the reseed and five record steps for ten tokens), paid
+    from the rung's bucket, which the first plain decision caps at 1.5 trials (a 20 ms reseed and one (16,1)
+    step over plain: 45 ms). The model, whose deep positions were observed accepted once and never reached
+    again, still rates (1,5) at 1.71x after the cooldown's three plain steps, so the row re-enters (the
+    fixture never calibrates a pool: in serving the measured credit would refuse it) -- the exploration costs
+    one record step at every draft rejected, 30 ms, within the 45 the bucket holds -- and falls out the same
+    way, now 62 ms in overdraft; the cheapest record's retry, (16,1), priced as served (2.58 reseeds expected
+    before its overtaken replay takes, 30 each, plus one record step, 10: 87 ms) is more than the bucket can
+    ever hold mid-request, so the request runs plain to its end (the bucket refilling 8 ms a step)."""
     adaptive = _mtp_adaptive(adapter, monkeypatch)
     adaptive._spec_costs.update({("reseed", shape): CostLine.flat(20.0) for shape in mh.DEFAULT_SHAPES})
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
     monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
     offered = _mtp_rounds(adaptive, [5] + [0] * 21)
-    assert offered == [5, 5, 3, 1, 1, 0, 0, 0, 0, 0, 0, 5, 3, 5, 1, 1, 0, 0, 0, 0, 0, 0, 0]
+    assert offered == [5, 5, 3, 1, 1, 0, 0, 0, 0, 5, 3, 5, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     assert [s[1] for s in mh._steps(adaptive)] == [(1, 5), (1, 5), (8, 3), (16, 1), (16, 1)] + [
         (1, 5),
         (8, 3),
@@ -3842,8 +3847,8 @@ def _mtp_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_
     assert [r[1:3] for r in _names(adaptive, "reseed")] == [((1, 5), [0]), ((1, 5), [0])]
     assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**9)
     policy = adaptive._spec_policy
-    assert policy.declined == 7 and not policy.trial and policy.last_reason == "budget"
-    assert policy.rung_debt == {1024: pytest.approx(130.0)} and policy.rung_clock[1024] == 7
+    assert policy.declined == 9 and not policy.trial and policy.last_reason == "budget"
+    assert policy.rung_cap[1024] == pytest.approx(45.0) and policy.rung_bucket[1024] == pytest.approx(2.0)
     reasons = [
         re.search(r"\((\w+); was", line).group(1) for line in messages if line.startswith("Gemma4MTP adaptive K:")
     ]
@@ -3967,6 +3972,22 @@ def _mtp_a_row_continuing_in_the_last_replay_pays_no_reseed(
     assert not cls._mtp_seed_continues(session, 1, adaptive._mtp_last_replay), "a moved slot reseeds"
     mh._ordinary(adaptive, [150], [3], [10], result=_tensor([151]))
     assert not cls._mtp_seed_continues(session, 0, adaptive._mtp_last_replay), "a plain step drops the proposal"
+    # the runner proposes once more for a released request (its last committed block) before the next prefill:
+    # no session opens for it and nothing replays (the policy entered such a row on the measured credit -- a
+    # reseed and a replay nobody verifies after every speculating prose request on the 12B QB2 -- and booked it
+    # as a failed run when the prefill dropped it, 2026-10-30); the prefill clears the mark and the slot's next
+    # request proposes as any other
+    adaptive.release_request(0)
+    assert adaptive._mtp_released_slots == {0} and 0 not in adaptive._mtp_sessions
+    reseeds = len(_names(adaptive, "reseed"))
+    trailing = mh._propose(adaptive, [[151, 152, 153, -1, -1, -1]], [mh._positions(4, 3)], counts=[3])
+    assert trailing.num_valid.tolist() == [0] and 0 not in adaptive._mtp_sessions
+    assert len(_names(adaptive, "reseed")) == reseeds, "no replay, no reseed: the policy was not asked"
+    mh._prefill(adaptive, key=20)
+    assert adaptive._mtp_released_slots == set()
+    mh._ordinary(adaptive, [3], [2], [20], result=_tensor([150]))
+    proposal = mh._propose(adaptive, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and 0 in adaptive._mtp_sessions
 
 
 def _mtp_without_a_cost_table_the_rows_based_record_serves_and_a_warning_says_so_once(

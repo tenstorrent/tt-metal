@@ -6571,13 +6571,13 @@ SPEC_DRAFT_LEN_ENV = "GEMMA4_SPEC_DRAFT_LEN"
 #                                 mid-request the cycle -- reseed, overtaken replay, reload -- times the reseeds
 #                                 expected before every row's first draft matches) pays over the horizon,
 #                                 unless its last run failed; else the cheapest record is exploration...
-#   GEMMA4_SPEC_RETRY_OVERHEAD=0.01  ...within the rung's budget, like every reseeding entry out of the plain
-#                                 regime but one on the measured credit of a rung without debt: the realized loss
-#                                 of the rung's failed runs since it last paid plus the entry's expected loss
-#                                 (GEMMA4_SPEC_TRIAL_STEPS steps at the rung's credit, every draft rejected on a
-#                                 rung never measured) is at most this fraction of the plain time the rung served
-#                                 since its last failed run (a new request does not reset that clock); the
-#                                 log's reason "budget" is a step that waits for it
+#   GEMMA4_SPEC_RETRY_OVERHEAD=0.01  ...drawing on the rung's exploration bucket, like every reseeding entry out
+#                                 of the plain regime but one on measured credit whose last run paid: the bucket
+#                                 fills at this fraction of every plain step's cost the rung serves, holds 1.5
+#                                 trials at most (the trial priced with every draft rejected), pays every failed
+#                                 run's realized loss and is never reset, so random text trials once per the
+#                                 refill of a trial (~15 s) and a rung never measured waits until its trial has
+#                                 filled; the log's reason "budget" is a step that waits for it
 #   GEMMA4_SPEC_TRIAL_GAIN=0.6    a new request's first proposal replays the cheapest record once (its trial)
 #                                 when the gain estimate is at least this -- GEMMA4_SPEC_MIN_GAIN once serving has
 #                                 GEMMA4_SPEC_CALIB_MIN samples of the record at the rung, fresh or stale -- and
@@ -7026,6 +7026,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_widths = {}  # record -> verify-width ladder
         self._mtp_max_rows = 0
         self._mtp_sessions = {}  # state slot -> MTPSession
+        self._mtp_trailing_logged = 0
+        # Slots released since their last prefill: the runner proposes once more for a released request (its
+        # last committed block), and that proposal nobody verifies must open no session and replay nothing.
+        self._mtp_released_slots = set()
         self._mtp_last_replay = None  # the latest ServingStepResult
         # Counts the decoder calls that rewrite its shared verify-logits buffer
         # (one bump per proposal that reseeds and/or replays).
@@ -7244,9 +7248,11 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             session.owner = (new, session.owner[1])
             sessions[new] = session
         self._mtp_sessions = sessions
+        self._mtp_released_slots = {moved.get(slot, slot) for slot in self._mtp_released_slots}
 
     def _spec_release_slot(self, row):
         self._mtp_drop_session(row, "release")
+        self._mtp_released_slots.add(int(row))
 
     def _spec_release_all(self):
         for slot in list(self._mtp_sessions):
@@ -7286,6 +7292,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         for slot in list(empty_slots) if empty_slots is not None else ():
             self._mtp_drop_session(int(slot), "prefill")
             self._spec_close_slot_generation(int(slot))
+            self._mtp_released_slots.discard(int(slot))
         self._spec_note_prefill()
         return super().prefill_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
 
@@ -7919,6 +7926,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         committed_rows = committed.reshape(int(rows), -1).tolist()
         targets = []  # (row, session, anchor, position)
         overtaken = 0  # live rows whose last proposal an in-flight ordinary decode committed past (s.4d)
+        trailing = []  # rows whose request was released and no prefill followed: the runner's trailing proposal
         for r in live:
             block = [int(x) for x in committed_rows[r]]
             n = int(counts_rows[r]) if counts_rows is not None else 1
@@ -7929,7 +7937,17 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 raise ValueError(
                     f"Gemma4MTP speculative contract: row {r} committed {n} tokens but column {n - 1} has position -1"
                 )
-            session = self._mtp_session_at(r) or self._mtp_open_session(r)
+            session = self._mtp_session_at(r)
+            if session is None and r in self._mtp_released_slots:
+                # The request on this slot was released and nothing prefilled into it since: the runner's
+                # proposal carries the released request's last committed block, and no verify will follow.
+                # Opened as a session it was a fresh row at its first proposal, which the policy entered on the
+                # measured credit (a reseed and a replay for nothing, ~70 ms after every speculating prose
+                # request on the 12B QB2) and booked as a failed run when the next prefill dropped it
+                # (2026-10-30, the v50 run: three prose requests plain after the one that paid).
+                trailing.append(r)
+                continue
+            session = session or self._mtp_open_session(r)
             session.steps += 1
             session.committed += n
             retained = session.retained
@@ -7966,6 +7984,14 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 else:
                     session.retained = None
             targets.append((r, session, anchor, position, n))
+        if trailing and self._mtp_trailing_logged < 8:
+            self._mtp_trailing_logged += 1
+            logger.debug(
+                f"Gemma4MTP speculative contract: rows {trailing} proposed after their release and before a "
+                "prefill (the runner's trailing proposal): no session, no replay"
+            )
+        if not targets:
+            return self._spec_decline(rows, k)
         if self._mtp_decoder is None or not self._mtp_captured:
             return self._mtp_decline_step(rows, k, live, "the verify records are not captured (warmup incomplete)")
         # The record is chosen by the PROPOSING rows, never by the wire batch:
